@@ -1023,35 +1023,68 @@ function payloadWordRanges(segments, out = []) {
   return out;
 }
 
-const SCRIPT_RUNNER_HEADS = new Set(["sh", "bash", "zsh", "dash", "ksh", "node", "bun", "python", "python3", "perl", "ruby", ".", "source"]);
-const segmentHead = (seg) => (seg.words.find((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op)?.value ?? "").split("/").pop();
-/** Words a `cat`/`tee` segment writes to: the word after a `>`/`>>`/`>|` operator, an attached `>file`, and every `tee` operand. */
+const SCRIPT_RUNNER_HEADS = new Set(["sh", "bash", "zsh", "dash", "ksh", "node", "bun", "python", "python3", "perl", "ruby", ".", "source", "eval"]);
+const rawHead = (seg) => seg.words.find((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op)?.value ?? "";
+const segmentHead = (seg) => rawHead(seg).split("/").pop();
+/** Words a `cat`/`tee` segment writes to: the word after a `>`/`>>`/`>|`/`&>`/`&>>` operator, an attached `>file`, and every `tee` operand. */
 function writeTargets(seg) {
   const targets = [];
   seg.words.forEach((w, k) => {
-    const attached = /^\d*>>?\|?(.*)$/s.exec(w.value);
+    const attached = /^\d*&?>>?\|?(.*)$/s.exec(w.value);
     if (attached) targets.push(attached[1] || seg.words[k + 1]?.value);
     else if (segmentHead(seg) === "tee" && k > 0 && !w.op && !w.value.startsWith("-")) targets.push(w.value);
   });
-  return targets.filter(Boolean).map((t) => t.replace(/^\.\//, ""));
+  return targets.filter((t) => t && !t.startsWith("&")).map((t) => t.replace(/^\.\//, "")); // `2>&1` duplicates a descriptor, it writes no file
+}
+
+/** Every segment of SEGMENTS, nested substitutions included. */
+function allSegments(segments, out = []) {
+  for (const seg of segments) { out.push(seg); for (const w of seg.words) for (const sub of w.subs) allSegments(sub.segments, out); }
+  return out;
+}
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/**
+ * Fail closed: true when the file SEG writes may be run elsewhere in ROOT. That holds when a target is a variable, `~`, glob or `..` path;
+ * when another segment is headed by a script runner, `eval` or a path-like command; or when any other word or heredoc body names a target
+ * (or its basename) as a path-bounded substring (`bash -c 'bash tmp/l.sh'`, `chmod +x tmp/l.sh`).
+ */
+function writtenFileMayRun(seg, targets, root) {
+  if (targets.some((t) => /[$~*?]|(?:^|\/)\.\.(?:\/|$)/.test(t))) return true;
+  const others = allSegments(root).filter((s) => s !== seg);
+  if (others.some((s) => SCRIPT_RUNNER_HEADS.has(segmentHead(s)) || /[/$~*?]/.test(rawHead(s)))) return true;
+  const own = new Set(seg.words);
+  const texts = [...allWords(root).filter((w) => !own.has(w)).map((w) => w.value), ...others.flatMap((s) => s.heredocs.map((h) => h.body))];
+  const names = targets.flatMap((t) => [t, t.split("/").pop()]).filter(Boolean).map((t) => new RegExp(`(?<![\\w.-])${escapeRe(t)}(?![\\w.-])`));
+  return texts.some((text) => names.some((re) => re.test(text)));
+}
+
+const TEXT_FLAG_RE = /^(?:-m|--message|--body|--title|--notes)$/;
+const TEXT_FLAG_ATTACHED_RE = /^--(?:message|body|title|notes)=/;
+/** Whether the substitution in word K of SEG (headed by HEAD) is inert text: a plain `echo`/`printf` argument or the value of a `git`/`gh` text flag, never an env-assignment word or `printf -v`. */
+function substitutionIsInert(seg, k, head) {
+  const w = seg.words[k];
+  if (ENV_ASSIGNMENT_WORD_RE.test(w.raw)) return false;
+  if (head === "echo" || head === "printf") return !seg.words.some((x) => head === "printf" && x.value === "-v");
+  return TEXT_FLAG_RE.test(seg.words[k - 1]?.value ?? "") || TEXT_FLAG_ATTACHED_RE.test(w.raw);
 }
 
 /**
- * Heredocs whose body is data (issue 2442 item 8): a `cat`, `tee`, `git`, `gh`, `echo` or `printf` heredoc that is closed, whose delimiter is quoted
- * or whose body has no `$(`/backtick, whose segment is not piped onward, that sits in no `-c`/`eval`/here-string payload, and
- * whose written target is not run by a later `sh`/`bash`/interpreter segment. Every other body executes and stays visible.
+ * Heredocs whose body is data (issue 2442 item 8): a `cat` or `tee` heredoc that is closed, whose delimiter is quoted or whose body has no
+ * `$(`/backtick, whose segment is not piped onward, that sits in no `-c`/`eval`/here-string payload, and whose written file may not run
+ * (`writtenFileMayRun`: no other segment is headed by a script runner, `eval` or a path, and no other word or heredoc body names the file).
+ * Inside a `$(...)` the host must be an inert `echo`/`printf`/`git`/`gh` segment that writes no file (`substitutionIsInert`).
+ * Every other body executes and stays visible.
  * @returns {object[]}
  */
 function dataHeredocs(segments, inPayload = false, out = [], root = segments, inertParent = true) {
   segments.forEach((seg) => {
     const head = segmentHead(seg);
-    const inert = inertParent && !seg.pipedOut && INERT_SUBSTITUTION_HOSTS.has(head);
-    seg.words.forEach((w, k) => w.subs.forEach((sub) => dataHeredocs(sub.segments, inPayload || isPayloadWord(seg.words, k), out, root, inert)));
-    if (!inertParent || inPayload || seg.pipedOut || (head !== "cat" && head !== "tee" && !INERT_SUBSTITUTION_HOSTS.has(head))) return; // gh/git/echo/printf read the body as text (`gh pr comment --body-file -`)
+    const hostOk = inertParent && !seg.pipedOut && INERT_SUBSTITUTION_HOSTS.has(head) && writeTargets(seg).length === 0;
+    seg.words.forEach((w, k) => w.subs.forEach((sub) => dataHeredocs(sub.segments, inPayload || isPayloadWord(seg.words, k), out, root, hostOk && substitutionIsInert(seg, k, head))));
+    if (!inertParent || inPayload || seg.pipedOut || (head !== "cat" && head !== "tee")) return; // git/gh/echo/printf only host a substitution; `git -c alias.r='!sh' r <<EOF` runs its body
     if (seg.words.some((w) => /^\d*[<>]*\(/.test(w.value))) return; // process substitution `>(sh)` or a `(`-target: the body is piped to a command
     const targets = writeTargets(seg);
-    const own = new Set(seg.words);
-    const runsTarget = targets.length > 0 && allWords(root).some((w) => !own.has(w) && targets.some((t) => matchesTarget(w.value, t)));
+    const runsTarget = targets.length > 0 && writtenFileMayRun(seg, targets, root);
     for (const h of seg.heredocs) if (h.closed && !runsTarget && (h.quoted || !/\$\(|`/.test(h.body))) out.push(h);
   });
   return out;
@@ -1059,11 +1092,6 @@ function dataHeredocs(segments, inPayload = false, out = [], root = segments, in
 
 /** Heads whose `$(...)` argument is inert text (a commit message, a PR body, echoed text); a heredoc in any other substitution (`x=$(cat <<EOF ...)`) may flow into `eval`. */
 const INERT_SUBSTITUTION_HOSTS = new Set(["git", "gh", "echo", "printf"]);
-/** True when WORD names TARGET, ignoring a leading `./` and any directory prefix on either side, whatever command the word follows. */
-function matchesTarget(word, target) {
-  const a = word.replace(/^\.\//, "");
-  return a === target || a.endsWith(`/${target}`) || target.endsWith(`/${a}`);
-}
 
 /** COMMAND with the data heredoc bodies blanked to same-length whitespace (newlines kept), so offsets still index the input. Incomplete input is returned unchanged. */
 function blankDataHeredocs(command, tok = tokenizeShellCommand(command)) {

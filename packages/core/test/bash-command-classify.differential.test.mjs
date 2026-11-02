@@ -87,26 +87,28 @@ const HEREDOC_BODY_WRAPPERS = [
 /** Quote-pairing hazards the old regex mispaired; the head must not allow any of them where the frozen copy denies. */
 const HAZARD_LOOP = "while true; do gh pr view 5; sleep 5; done";
 const LOOP_PREDICATES = ["commandContainsDetachedWaitTool", "commandIsSleepPollLoop"];
-/** Each shape lists the only predicates whose frozen-allow/head-deny flip it may exempt. */
+/** Marks a hazard shape whose loop sits inside quotes (data): its allowed rows are intended removals. The other shapes hold a real loop and must stay denied. */
+const DATA = "data";
+/** Each shape lists the only predicates whose frozen-allow/head-deny flip it may exempt, and optionally `DATA`. */
 const HAZARD_SHAPES = [
-  [(f) => `# it's\necho '${f}'`, LOOP_PREDICATES, "apostrophe in a # comment: the regex paired it across lines and blanked the loop; the stripper now blanks nothing"],
-  [(f) => `echo "a \\" ; ${f}"`, LOOP_PREDICATES, "escaped quote: the regex mispaired the quotes; the stripper now blanks nothing"],
-  [(f) => `echo $'a\\' ; ${f} '`, LOOP_PREDICATES, "escaped quote in an ANSI-C string: the regex mispaired the quotes; the stripper now blanks nothing"],
-  [(f) => `cat <<'EOF'\nit's\nEOF\necho '${f}'`, LOOP_PREDICATES, "quote in a heredoc body: the regex paired it with later quotes; the stripper now blanks nothing"],
-  [(f) => `echo it\\'s; echo '${f}'`, LOOP_PREDICATES, "escaped apostrophe: the regex mispaired the quotes; the stripper now blanks nothing"],
+  [(f) => `# it's\necho '${f}'`, LOOP_PREDICATES, "apostrophe in a # comment: the regex paired it across lines and blanked the loop; the stripper now blanks nothing", DATA],
+  [(f) => `echo "a \\" ; ${f}"`, LOOP_PREDICATES, "escaped quote: the regex mispaired the quotes; the stripper now blanks nothing", DATA],
+  [(f) => `echo $'a\\' ; ${f} '`, LOOP_PREDICATES, "escaped quote in an ANSI-C string: the regex mispaired the quotes; the stripper now blanks nothing", DATA],
+  [(f) => `cat <<'EOF'\nit's\nEOF\necho '${f}'`, LOOP_PREDICATES, "quote in a heredoc body: the regex paired it with later quotes; the stripper now blanks nothing", DATA],
+  [(f) => `echo it\\'s; echo '${f}'`, LOOP_PREDICATES, "escaped apostrophe: the regex mispaired the quotes; the stripper now blanks nothing", DATA],
   [() => "while :; do `true '`; 'sleep' 5; gh pr view 5; done", LOOP_PREDICATES, "apostrophe inside a backtick span: the regex mispaired the quotes; the stripper now blanks nothing"],
   [() => "echo \\` ; while :; do `true '`; 'sleep' 5; gh pr view 5; done", LOOP_PREDICATES, "escaped backtick before a backtick span holding an apostrophe: the regex mispaired the quotes; the stripper now blanks nothing"],
   // wrapped in a double-quoted --notes/-m, the lone backtick opens an unterminated substitution, so the inline-interpreter scan also fails closed
   [() => "# `\nwhile :; do `true '`; 'sleep' 5; gh pr view 5; done", [...LOOP_PREDICATES, "commandContainsInlineInterpreter"], "backtick in a # comment followed by a backtick span holding an apostrophe: the stripper now blanks nothing"],
   [() => "echo '`' \"'\" ; while :; do `true '`; 'sleep' 5; gh pr view 5; done", [...LOOP_PREDICATES, "commandContainsInlineInterpreter"], "quoted backtick and apostrophe before a backtick span holding an apostrophe: the stripper now blanks nothing"],
-  [() => 'while [ ! -f tmp/d ]; do echo "a \\"; sleep 2"; done', ["commandContainsDetachedWaitTool", "commandIsFileMarkerPollLoop"], "escaped quote inside a double-quoted word: the regex mispaired the quotes; the stripper now blanks nothing"],
+  [() => 'while [ ! -f tmp/d ]; do echo "a \\"; sleep 2"; done', ["commandContainsDetachedWaitTool", "commandIsFileMarkerPollLoop"], "escaped quote inside a double-quoted word: the regex mispaired the quotes; the stripper now blanks nothing", DATA],
   [() => "gh api repos/mfittko/dev-loops/pulls/5 -f body=x it\\'s -X GET 'y'", [], "escaped apostrophe: the stripper blanks nothing (no predicate flips)"],
   [() => "gh pr edit 5 --title it\\'s --repo other/x 'y' --body z", ["commandContainsRawPrBodyEdit"], "escaped apostrophe: the stripper blanks nothing, so the flag-looking text stays visible"],
   // wrapped in a quoted --notes/-m, the inner quote re-pairs and leaves an unterminated substitution, so the inline-interpreter scan also fails closed
-  [(f) => `echo "$(echo "'")" ; echo '${f}'`, [...LOOP_PREDICATES, "commandContainsInlineInterpreter"], "double-quoted $(...) holding a nested apostrophe: the regex paired the inner apostrophe with a later one; the stripper now blanks nothing"],
+  [(f) => `echo "$(echo "'")" ; echo '${f}'`, [...LOOP_PREDICATES, "commandContainsInlineInterpreter"], "double-quoted $(...) holding a nested apostrophe: the regex paired the inner apostrophe with a later one; the stripper now blanks nothing", DATA],
   [() => `gh pr edit 5 --title "$(echo "'")" --add-label 'x --body y'`, ["commandContainsInlineInterpreter"], "double-quoted $(...) holding a nested apostrophe inside a quoted wrapper leaves an unterminated substitution: the inline-interpreter scan fails closed (the PR-body edit is denied by both copies)"],
-  [(f) => 'echo "`echo "\'"`" ; echo \'' + f + "'", LOOP_PREDICATES, "double-quoted backtick span holding a nested apostrophe: the stripper now blanks nothing"],
-  [(f) => "echo `echo \"'\" '`; echo '" + f + "'", LOOP_PREDICATES, "top-level backtick span holding interleaved even-count quotes: the regex paired a span quote with a later one; the stripper now blanks nothing"],
+  [(f) => 'echo "`echo "\'"`" ; echo \'' + f + "'", LOOP_PREDICATES, "double-quoted backtick span holding a nested apostrophe: the stripper now blanks nothing", DATA],
+  [(f) => "echo `echo \"'\" '`; echo '" + f + "'", LOOP_PREDICATES, "top-level backtick span holding interleaved even-count quotes: the regex paired a span quote with a later one; the stripper now blanks nothing", DATA],
 ];
 const hazardRowsOf = (shape) => [shape(HAZARD_LOOP), ...[...LIVE_WRAPPERS, ...QUOTED_WRAPPERS].map((wrap) => wrap(shape(HAZARD_LOOP)))];
 const HAZARD_ROWS = [...new Set(HAZARD_SHAPES.flatMap(([shape]) => hazardRowsOf(shape)))];
@@ -181,6 +183,23 @@ const SALVAGED_DENY_ROWS = [
   "cat > tmp/x <<'EOF'\nnode -e y",
   "cat > tmp/x <<EOF\n`while true; do gh pr view 5; sleep 5; done`\nEOF",
   "tee tmp/x <<-EOF\n$(while true; do gh pr view 5; sleep 5; done)\nEOF",
+  // write-then-run guard and inert-host rows (draft_gate round 3029): runner payloads, globs, aliases, host redirects, git/env hosts
+  "cat > tmp/l.sh <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF\nbash -c 'bash tmp/l.sh'",
+  "cat > tmp/l.sh <<'EOF'\nnode -e 1\nEOF\neval \"sh tmp/l.sh\"",
+  "cat > tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash <<'X'\nbash tmp/l.sh\nX",
+  "cat > tmp/r.sh <<'EOF'\nnode -e 'x'\nEOF\nbash tmp/r.s?",
+  "echo \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\" > tmp/r.sh\nbash tmp/r.sh",
+  "echo \"$(cat <<EOF\nnode -e 1\nEOF\n)\" > tmp/l.sh; bash tmp/l.sh",
+  "printf -v x \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"; eval \"$x\"",
+  "cat &> tmp/l.sh <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF\nbash tmp/l.sh",
+  "cat &>> tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash tmp/l.sh",
+  "cat > $F <<'EOF'\nnode -e 1\nEOF\nbash tmp/l.sh",
+  "cat > tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash tmp/*.sh",
+  "git rebase -x \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\" HEAD~1",
+  "GIT_SSH_COMMAND=\"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\" git fetch",
+  "git -c alias.r='!sh' r <<'EOF'\nnode -e x\nEOF",
+  "echo \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\" | bash",
+  "cat <<'EOF' |& sh\nnode -e 'x'\nEOF",
 ];
 
 /** Hook-verdict row from test/loop/check-retro-tooling.test.mjs: `EOF)` is not a delimiter line, so origin/main allowed it and the head denies it. */
@@ -220,8 +239,7 @@ const SLICE1_FAIL_CLOSED_FLIPS = new Map();
  */
 const INTENDED_REMOVALS = new Map();
 const REMOVAL_PREDICATES = ["commandContainsInlineInterpreter", "commandContainsDetachedWaitTool", "commandIsSleepPollLoop", "commandIsFileMarkerPollLoop"];
-/** Hazard shapes whose loop sits inside quotes (data); the others hold a real loop and must stay denied. */
-const DATA_HAZARD_SHAPE_INDEXES = new Set([0, 1, 2, 3, 4, 9, 12, 14, 15]);
+const PINNED_REMOVAL_COUNTS = [2, 24, 116, 166]; // per reason, ascending
 const SED_BACKTICK_ROW = "sed -n 's/`gh pr view 5`/while sleep 5/p' f"; // joins the corpus through buildCorpus
 const R_QUOTE_WRAP = "the form sits in a quoted --notes/-m/echo argument: quoted text is inert data (item 9)";
 const R_HEREDOC_WRAP = "the form is the body of a cat/tee heredoc (quoted delimiter) written to a temp path: the body is data (item 8)";
@@ -267,7 +285,7 @@ const PREDICATES = [
     for (const wrap of QUOTED_WRAPPERS) removeIf(wrap(row), R_QUOTE_WRAP);
     for (const wrap of HEREDOC_BODY_WRAPPERS) removeIf(wrap(row), R_HEREDOC_WRAP);
   }
-  HAZARD_SHAPES.forEach(([shape], index) => { if (DATA_HAZARD_SHAPE_INDEXES.has(index)) for (const row of hazardRowsOf(shape)) removeIf(row, R_HAZARD_DATA); });
+  for (const [shape, , , flag] of HAZARD_SHAPES) if (flag === DATA) for (const row of hazardRowsOf(shape)) removeIf(row, R_HAZARD_DATA);
   removeIf(SED_BACKTICK_ROW, R_SED_BACKTICK);
 }
 
@@ -303,6 +321,13 @@ test("differential: every row origin/main denies and the head allows is a listed
   for (const key of INTENDED_REMOVALS.keys()) assert.ok(REMOVAL_PREDICATES.some((name) => key.startsWith(`${name}: `)), key);
 });
 
+// Pinned so a head that newly allows a row (the removal set is derived from the head's own output) fails here: raise the count only with a reviewed reason.
+test("differential: the intended-removal set has the pinned size per reason", () => {
+  const counts = {};
+  for (const reason of INTENDED_REMOVALS.values()) counts[reason] = (counts[reason] ?? 0) + 1;
+  assert.deepEqual(Object.values(counts).sort((a, b) => a - b), PINNED_REMOVAL_COUNTS);
+});
+
 test("differential: the sed backtick row is in the corpus and removed only by the wait predicate", () => {
   assert.equal(main.commandContainsDetachedWaitTool(SED_BACKTICK_ROW), true);
   assert.equal(head.commandContainsDetachedWaitTool(SED_BACKTICK_ROW), false);
@@ -323,8 +348,8 @@ test("differential: a frozen-allow/head-deny row is listed in SLICE1_FAIL_CLOSED
     }
   }
   assert.deepEqual(unlisted, []);
-  for (const [index, [shape, targets]] of HAZARD_SHAPES.entries()) {
-    if (DATA_HAZARD_SHAPE_INDEXES.has(index)) continue; // data shapes are intended removals, not fail-closed flips
+  for (const [shape, targets, , flag] of HAZARD_SHAPES) {
+    if (flag === DATA) continue; // data shapes are intended removals, not fail-closed flips
     for (const name of targets) assert.ok(hazardRowsOf(shape).some((cmd) => GENERATED_FLIPS.has(rowKey(name, cmd))), `hazard shape targets ${name} but flips no row: ${JSON.stringify(shape(HAZARD_LOOP))}`);
   }
   assert.deepEqual([...SLICE1_FAIL_CLOSED_FLIPS.keys()].filter((k) => !seen.has(k)), []);

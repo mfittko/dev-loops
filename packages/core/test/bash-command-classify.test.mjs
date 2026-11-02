@@ -1647,7 +1647,7 @@ test("slice 2: the wait predicate ignores operators and names in data, and still
   ]) assert.equal(commandContainsDetachedWaitTool(c), true, c);
 });
 
-test("slice 2: a written script run through any wrapper, an eval-ed substitution heredoc and process substitution stay visible (#2442)", () => {
+test("slice 2: a written script run through a wrapper, runner payload, glob or alias, an eval-ed or piped substitution heredoc, a git/env host and process substitution stay visible (#2442)", () => {
   const LOOP = "while true; do gh pr view 5; sleep 5; done";
   for (const c of [
     `cat > tmp/l.sh <<'EOF'\n${LOOP}\nEOF\ntimeout 600 bash tmp/l.sh`,
@@ -1658,6 +1658,9 @@ test("slice 2: a written script run through any wrapper, an eval-ed substitution
     `tee >(sh) <<'EOF'\n${LOOP}\nEOF`,
     `cat <<'EOF' > >(bash)\n${LOOP}\nEOF`,
     `echo "$(cat <<'EOF'\n${LOOP}\nEOF)rest"`,
+    `cat > tmp/l.sh <<'EOF'\n${LOOP}\nEOF\nbash -c 'bash tmp/l.sh'`,
+    `echo "$(cat <<'EOF'\n${LOOP}\nEOF\n)" > tmp/l.sh; bash tmp/l.sh`,
+    `cat &> tmp/l.sh <<'EOF'\n${LOOP}\nEOF\nbash tmp/l.sh`,
   ]) assert.equal(commandIsSleepPollLoop(c), true, c);
   for (const c of [
     "cat > tmp/l.sh <<EOF\nnode -e 1\nEOF\ntimeout 600 bash tmp/l.sh",
@@ -1665,6 +1668,22 @@ test("slice 2: a written script run through any wrapper, an eval-ed substitution
     "x=$(cat <<EOF\nnode -e 1\nEOF\n); eval \"$x\"",
     "tee >(sh) <<EOF\nnode -e 1\nEOF",
     "cat <<EOF > >(bash)\nnode -e 1\nEOF",
+    "cat > tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash -c 'bash tmp/l.sh'",
+    "cat > tmp/l.sh <<'EOF'\nnode -e 1\nEOF\neval \"sh tmp/l.sh\"",
+    "cat > tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash <<'X'\nbash tmp/l.sh\nX",
+    "cat > tmp/r.sh <<'EOF'\nnode -e 'x'\nEOF\nbash tmp/r.s?",
+    "cat > tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash tmp/*.sh",
+    "cat &> tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash tmp/l.sh",
+    "cat &>> tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash tmp/l.sh",
+    "cat > $F <<'EOF'\nnode -e 1\nEOF\nbash tmp/l.sh",
+    "echo \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\" > tmp/r.sh\nbash tmp/r.sh",
+    "echo \"$(cat <<EOF\nnode -e 1\nEOF\n)\" > tmp/l.sh; bash tmp/l.sh",
+    "printf -v x \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"; eval \"$x\"",
+    "git rebase -x \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\" HEAD~1",
+    "GIT_SSH_COMMAND=\"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\" git fetch",
+    "git -c alias.r='!sh' r <<'EOF'\nnode -e x\nEOF",
+    "echo \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\" | bash",
+    "cat <<'EOF' |& sh\nnode -e 'x'\nEOF",
   ]) assert.equal(commandContainsInlineInterpreter(c), true, c);
 });
 
@@ -1672,6 +1691,7 @@ test("slice 2: quoted literals and cat/tee heredoc bodies that name an interpret
   for (const c of [
     "cat > tmp/f <<'EOF'\nnode -e 'x'\nEOF",
     "cat > tmp/f <<'EOF'\npython3 -c x\nEOF",
+    "cat > tmp/f <<'EOF'\ndetect-copilot-loop-state.mjs &\nEOF",
     "tee tmp/f <<EOF\nnode -e x\nEOF",
     "git commit -m \"$(cat <<'EOF'\nuse node -e and sed -i here\nEOF\n)\"",
     "gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\"",
