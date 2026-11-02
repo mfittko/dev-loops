@@ -20,7 +20,7 @@ export const sequenceClosurePath = (tmpRoot, baselineHead, executionIdentity) =>
  * Runs `fn` holding a lock per baseline head (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC), taken sorted and released in reverse.
  * The suffix must not end with `.sequence`: listBaselines reads that suffix as a marker.
  * ponytail: a mkdir lock with an owner token file; release removes only a lock whose token still matches. A stale lock is stolen under a separate `.steal` mkdir lock: re-check the age, read the owner token, rename the lock to a unique name, and remove it only when its token is the stale token; a fresh lock caught by the rename is renamed back and never removed.
- * Ceilings: a holder that stalls past `staleMs` and runs on can still overlap a stealer; a holder that dies blocks for at most `staleMs`; a fresh holder that acquires between the stealer's token read and its rename loses the path until the rename-back, and if a contender took the path in that window the two overlap (the stolen lock is left on disk, never deleted); a stealer that dies holding the `.steal` lock blocks stealing until that directory is removed.
+ * Ceilings: a holder that stalls past `staleMs` and runs on can still overlap a stealer; a holder that dies blocks for at most `staleMs`; a fresh holder that acquires between the stealer's token read and its rename loses the path until the rename-back, and if a contender took the path in that window the two overlap (the stolen lock is left on disk, never deleted); a stealer that dies holding the `.steal` lock blocks stealing for at most `staleMs`, after which the next contender removes that directory by age.
  */
 export async function withSequenceLock(tmpRoot, baselineHeads, fn, { staleMs = 60000, waitMs = 10000, beforeStealRename, afterStealLock } = {}) {
   const held = [];
@@ -37,7 +37,10 @@ export async function withSequenceLock(tmpRoot, baselineHeads, fn, { staleMs = 6
             // Stealers serialize on a steal lock; the stolen directory is removed only when its owner token is the stale token read before the rename. A fresh lock is never removed.
             const stealLock = `${lock}.steal`;
             let stealing = false;
-            try { mkdirSync(stealLock); stealing = true; } catch { /* another stealer is active: wait below */ }
+            try { mkdirSync(stealLock); stealing = true; } catch {
+              // A steal lock older than staleMs was left by a stealer that died inside the steal (a window of milliseconds): remove it and retry.
+              try { if (Date.now() - statSync(stealLock).mtimeMs > staleMs) { rmSync(stealLock, { recursive: true, force: true }); continue; } } catch { continue; /* released meanwhile: retry */ }
+            }
             if (stealing) {
               try {
                 const readOwner = (dir) => { try { return readFileSync(path.join(dir, "owner"), "utf8"); } catch { return ""; } };
@@ -60,7 +63,7 @@ export async function withSequenceLock(tmpRoot, baselineHeads, fn, { staleMs = 6
               continue;
             }
           }
-          if (Date.now() >= deadline) throw Object.assign(new Error(`the sequence lock ${lock} is held by a concurrent close or pull; rerun once it finishes, or remove ${lock}.steal if a crashed stealer left it (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC)`), { code: "SEQUENCE_LOCK_BUSY" });
+          if (Date.now() >= deadline) throw Object.assign(new Error(`the sequence lock ${lock} is held by a concurrent close or pull; rerun once it finishes (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC)`), { code: "SEQUENCE_LOCK_BUSY" });
           await sleep(25);
         }
       }

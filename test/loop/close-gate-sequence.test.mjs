@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { test } from "bun:test";
+import { afterAll, test } from "bun:test";
 import { readSequenceMarker, recoveryHint, sequenceClosurePath, sequenceMarkerPath, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../../cli/index.mjs";
@@ -11,7 +11,11 @@ import { branchReflogMs, closeGateSequence, defaultActor, fixerGraceMs, localCom
 import { SANCTIONED_COMMANDS } from "../../scripts/loop/sanctioned-commands.mjs";
 import { withTempDir } from "../_helpers.mjs";
 
+// Pin the grace to the default: the 60 second activity offsets below must fall inside it whatever the host exports.
+const HOST_STALE_MAX_AGE = process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+delete process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
 const FIXER_GRACE_MS = fixerGraceMs();
+afterAll(() => { if (HOST_STALE_MAX_AGE !== undefined) process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = HOST_STALE_MAX_AGE; });
 
 const HEAD = "a".repeat(40);
 const MOVED = "b".repeat(40);
@@ -291,9 +295,38 @@ test("withSequenceLock never removes a fresh lock a holder took before the steal
   });
 });
 
+const plantSteal = (tmpRoot, ageMs) => {
+  const steal = path.join(tmpRoot, "gate-delta", `${HEAD}.sequence-lock.steal`);
+  mkdirSync(steal, { recursive: true });
+  const when = new Date(Date.now() - ageMs);
+  utimesSync(steal, when, when);
+  return steal;
+};
+
+test("withSequenceLock removes a steal directory left by a dead stealer and acquires the stale lock", async () => {
+  await withTempDir(async (tmpRoot) => {
+    plantLock(tmpRoot, "dead", 120_000);
+    const steal = plantSteal(tmpRoot, 120_000);
+    let ran = false;
+    await withSequenceLock(tmpRoot, [HEAD], () => { ran = true; });
+    assert.equal(ran, true);
+    assert.equal(existsSync(steal), false);
+  });
+});
+
+test("withSequenceLock leaves a fresh steal directory in place and refuses SEQUENCE_LOCK_BUSY", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const lock = plantLock(tmpRoot, "dead", 120_000);
+    const steal = plantSteal(tmpRoot, 0);
+    await assert.rejects(withSequenceLock(tmpRoot, [HEAD], () => { throw new Error("must not run"); }, { waitMs: 150 }), (error) => error.code === "SEQUENCE_LOCK_BUSY");
+    assert.equal(existsSync(steal), true);
+    assert.equal(readFileSync(path.join(lock, "owner"), "utf8"), "dead");
+  });
+});
+
 test("branchReflogMs reads the reflog mtime of a branch committed in a temp repository, and null for an absent branch", async () => {
   await withTempDir(async (dir) => {
-    const git = (...args) => assert.equal(spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: dir }).status, 0, args.join(" "));
+    const git = (...args) => assert.equal(spawnSync("git", ["-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: dir }).status, 0, args.join(" "));
     git("init", "-b", "feat");
     git("commit", "--allow-empty", "-m", "c");
     const cwd = process.cwd();

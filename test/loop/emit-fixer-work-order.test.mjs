@@ -306,6 +306,24 @@ test("a held sequence lock refuses the pull as retryable sequence_lock_busy and 
   });
 });
 
+test("pullWorkOrder admits through the head lock: a held lock refuses sequence_lock_busy and writes no receipt", async () => {
+  const { pullWorkOrder } = await import("../../scripts/github/_work-order-protocol.mjs");
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    const unit = await emitCommitOnly(emit, files);
+    const tmpRoot = path.join(root, "tmp");
+    const lock = path.join(tmpRoot, "gate-delta", `${head}.sequence-lock`);
+    await mkdir(lock, { recursive: true });
+    const future = new Date(Date.now() + 86_400_000);
+    utimesSync(lock, future, future); // never stale
+    const realNow = Date.now;
+    Date.now = () => realNow() + 11_000; // past the 10 second wait
+    try {
+      await assert.rejects(pullWorkOrder({ ref: unit.workOrderRef, digest: unit.workOrderDigest, execution: unit.executionIdentity, cwd: wt, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot }), (error) => error.refusal === "sequence_lock_busy" && error.retryable === true);
+    } finally { Date.now = realNow; }
+    assert.equal(existsSync(pullReceiptPath(tmpRoot, unit.workOrderRef)), false);
+  });
+});
+
 test("a commit_only emit under a held head lock refuses sequence_lock_busy and leaves no current plan and no marker", async () => {
   const { sequenceMarkerPath } = await import("@dev-loops/core/loop/fix-push-authority");
   await withFixture(async ({ root, head, files, emit }) => {
@@ -389,6 +407,28 @@ test("THREAD no_commit and head_moved close an authenticated sequence and allow 
     assert.equal(result.nextStep, "push_to_gate");
     assert.equal(existsSync(marker), false);
     assert.equal(checkFixPushAuthority(wt).ok, true);
+  });
+});
+
+test("the no_commit close under a held head lock throws SEQUENCE_LOCK_BUSY and leaves the marker in place", async () => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    const unit = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    assert.equal(pull(unit, root).status, 0);
+    const output = unit.workOrder.outputRefs[0];
+    await mkdir(path.dirname(output), { recursive: true });
+    await writeFile(output, JSON.stringify({ headSha: head, dispositions: [] }));
+    const args = ["--threads-file", files.threads, "--repo", REPO, "--pr", String(PR), "--baseline", head, "--spec-identity", "s", "--fixer-plan", unit.planPath, "--site-coverage", output, "--worktree", wt];
+    const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
+    const lock = path.join(root, "tmp", "gate-delta", `${head}.sequence-lock`);
+    await mkdir(lock, { recursive: true });
+    const future = new Date(Date.now() + 86_400_000);
+    utimesSync(lock, future, future); // never stale
+    const realNow = Date.now;
+    Date.now = () => realNow() + 11_000; // past the 10 second wait
+    try {
+      await assert.rejects(runCli(args, { stdout: { write() {} } }), (error) => error.code === "SEQUENCE_LOCK_BUSY");
+    } finally { Date.now = realNow; }
+    assert.equal(existsSync(marker), true);
   });
 });
 
