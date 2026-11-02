@@ -1007,7 +1007,7 @@ function allWords(segments, out = []) {
 }
 const EXEC_FLAG_RE = /^(?:-[a-z]*c[a-z]*|--command)$/i;
 const ENV_ASSIGNMENT_WORD_RE = /^[A-Za-z_]\w*=/;
-const GIT_EXEC_WORD = { rebase: /^(?:--exec|-[A-Za-z]*x)/, "filter-branch": /^--[a-z-]*filter/, submodule: /^foreach$/ }; // git subcommand to the word whose next words run as shell
+const GIT_EXEC_WORD = { rebase: /^(?:--exec|-[A-Za-z]*x)/, "filter-branch": /^--[a-z-]*filter/, submodule: /^foreach$/, difftool: /^(?:--extcmd|-[A-Za-z]*x)/, fetch: /^--upload-pack/ }; // git subcommand to the word whose next words run as shell
 /** Index of the first payload word of a segment: every word after `eval` or a `-c`-containing short-flag cluster (origin/main's coarse rule) is executable text. */
 const payloadFrom = (words) => {
   const hi = words.findIndex((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op);
@@ -1016,7 +1016,7 @@ const payloadFrom = (words) => {
   if (run >= 0) return run + 1; // every argument of `watch`/`trap` (also behind a wrapper) is command text the shell runs
   const gitSub = base === "git" && words.map((w) => w.value).find((v) => Object.hasOwn(GIT_EXEC_WORD, v));
   const at = words.findIndex((w) => !w.op && (w.value === "eval" || EXEC_FLAG_RE.test(w.value) || (gitSub && GIT_EXEC_WORD[gitSub].test(w.value))));
-  return at < 0 ? words.length : at + 1;
+  return at < 0 ? words.length : at + (gitSub && !EXEC_FLAG_RE.test(words[at].value) && words[at].value !== "eval" ? 0 : 1); // a git exec word's own attached value (`--exec='x; node -e y'`, `-x'...'`) is payload too
 };
 /** Words that the shell executes as command text: after `-c`/`--command`/`eval`, or the target of a `<<<` here-string. */
 const isPayloadWord = (words, k) => k >= payloadFrom(words) || words[k - 1]?.op === "<<<";
