@@ -212,6 +212,7 @@ export function parseJudgePassCliArgs(argv) {
     coverageMap: undefined,
     jq: undefined,
     silent: false,
+    args: [...argv],
   };
   const { tokens } = parseArgs({
     args: [...argv],

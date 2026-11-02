@@ -1751,9 +1751,11 @@ test("judge-pass J5: a plan that does not reproduce across two code trees names 
     await writeFile(path.join(emitter, "package.json"), JSON.stringify({ name: "dev-loops", version: "9.9.9" }));
     const indexFile = executionIndexPath(path.join(root, "tmp"), plan.executionIdentity);
     await writeFile(indexFile, JSON.stringify({ ...JSON.parse(await readFile(indexFile, "utf8")), emitterRoot: emitter }));
-    const argv = ["--judge-plan", "./forged plan.json", "--gate", "pre_approval_gate"];
+    const argv = ["--repo", "mfittko/dev-loops", "--pr", "1", "--gate", "draft_gate", "--head-sha", HEAD, "--findings-file", "./ledger.json", "--judge-verdict", plan.workOrder.outputRefs[0], "--judge-plan", "./forged plan.json", "--out", "./act out.json"];
+    const parsed = parseJudgePassCliArgs(argv);
+    assert.deepEqual(parsed.args, argv);
     {
-      const err = await runPass({ judgePlan: "./forged-plan.json", args: argv }).then(() => assert.fail("expected a refusal"), (e) => e);
+      const err = await runPass({ args: parsed.args, judgePlan: "./forged-plan.json" }).then(() => assert.fail("expected a refusal"), (e) => e);
       for (const part of [emitter, "dev-loops 9.9.9", TOOLCHAIN_ROOT, `dev-loops ${pullerVersion}`, `node ${shellQuote(path.join(emitter, "scripts/loop/judge-pass.mjs"))} ${argv.map(shellQuote).join(" ")}`]) assert.ok(err.message.includes(part), part);
       assert.doesNotMatch(err.message, /<the same arguments>/);
       await mkdir(path.join(emitter, "scripts/loop"), { recursive: true });
