@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -17,7 +18,9 @@ import { hasReopenLine, rejectClosingRefRemoval, sliceLinkageIssues } from "../.
 import { readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { resolveDraftRoundCap } from "../../scripts/github/write-gate-context.mjs";
 import { dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
-import { pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
+import { shellQuote } from "../../scripts/lib/checkout-delegation-refusal.mjs";
+import { TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
+import { executionIndexPath, pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { bindEvidenceToPrBody, deliverJudge, seedJudgeSources, writeVerdictAfterPull } from "./_judge-delivery-fixture.mjs";
 
@@ -1735,6 +1738,44 @@ test("judge-pass J5: a plan with forged authority or a saved copy of a supersede
   await writeVerdictAfterPull(roundA.workOrder.outputRefs[0], JSON.stringify(verdict()));
   await assert.rejects(runPass({ judgePlan: "./saved-plan-a.json" }), /is not the current emission.*superseded/);
   assert.equal(existsSync(path.join(root, "act.json")), false);
+});
+
+test("judge-pass J5: a plan that does not reproduce across two code trees names the skew (#2662 AC6)", async () => {
+  const { root, plan, runPass } = await deliveryCase();
+  const forged = { ...plan, workOrder: { ...plan.workOrder, authority: { ...plan.workOrder.authority, findingsDigest: "0".repeat(64) } } };
+  await writeFile(path.join(root, "forged-plan.json"), JSON.stringify(forged));
+  await assert.rejects(runPass({ judgePlan: "./forged-plan.json" }), (err) => /does not reproduce the work order/.test(err.message) && !/code-tree skew/.test(err.message));
+  const emitter = await mkdtemp(path.join(os.tmpdir(), "judge-pass-emitter-"));
+  const pullerVersion = JSON.parse(await readFile(path.join(TOOLCHAIN_ROOT, "package.json"), "utf8")).version;
+  try {
+    await writeFile(path.join(emitter, "package.json"), JSON.stringify({ name: "dev-loops", version: "9.9.9" }));
+    const indexFile = executionIndexPath(path.join(root, "tmp"), plan.executionIdentity);
+    await writeFile(indexFile, JSON.stringify({ ...JSON.parse(await readFile(indexFile, "utf8")), emitterRoot: emitter }));
+    const argv = ["--repo", "mfittko/dev-loops", "--pr", "1", "--gate", "draft_gate", "--head-sha", HEAD, "--findings-file", "./ledger.json", "--judge-verdict", plan.workOrder.outputRefs[0], "--judge-plan", "./forged plan.json", "--out", "./act out.json"];
+    const parsed = parseJudgePassCliArgs(argv);
+    assert.deepEqual(parsed.args, argv);
+    {
+      const err = await runPass({ args: parsed.args, judgePlan: "./forged-plan.json" }).then(() => assert.fail("expected a refusal"), (e) => e);
+      for (const part of [emitter, "dev-loops 9.9.9", TOOLCHAIN_ROOT, `dev-loops ${pullerVersion}`, `node ${shellQuote(path.join(emitter, "scripts/loop/judge-pass.mjs"))} ${argv.map(shellQuote).join(" ")}`]) assert.ok(err.message.includes(part), part);
+      assert.doesNotMatch(err.message, /<the same arguments>/);
+      await mkdir(path.join(emitter, "scripts/loop"), { recursive: true });
+      await writeFile(path.join(emitter, "scripts/loop/judge-pass.mjs"), "console.log(JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2) }));\n");
+      const out = JSON.parse(execFileSync("sh", ["-c", err.message.match(/`(node [^`]+)`/)[1]], { cwd: root, encoding: "utf8" }));
+      assert.deepEqual({ ...out, cwd: await realpath(out.cwd) }, { cwd: await realpath(root), args: argv });
+      assert.match(err.message, /does not reproduce the work order/);
+    }
+    {
+      // With --repo-root the suggested rerun drops the flag (the emitter's guard would refuse it) and starts in the resolved root.
+      const rooted = [...argv, "--repo-root", root];
+      const err = await runPass({ args: rooted, judgePlan: "./forged-plan.json", repoRoot: root }).then(() => assert.fail("expected a refusal"), (e) => e);
+      const command = err.message.match(/`(cd [^`]+)`/)[1];
+      assert.ok(!command.includes("--repo-root"), command);
+      const out = JSON.parse(execFileSync("sh", ["-c", command], { cwd: os.tmpdir(), encoding: "utf8" }));
+      assert.deepEqual({ ...out, cwd: await realpath(out.cwd) }, { cwd: await realpath(root), args: argv });
+    }
+  } finally {
+    await rm(emitter, { recursive: true, force: true });
+  }
 });
 
 test("judge-pass J5: a non-ledger required read changed after the pull refuses at acceptance", async () => {

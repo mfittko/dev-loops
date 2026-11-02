@@ -10,8 +10,10 @@
  * (vendored into the Claude hooks) and are re-exported here. `materializationHash` is the
  * sha256 of the exact local work-order bytes.
  */
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { TOOLCHAIN_ROOT } from "../loop/_repo-root-resolver.mjs";
+import { shellQuote } from "../lib/checkout-delegation-refusal.mjs";
 import { writeJson } from "@dev-loops/core/loop/phase-files";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { DISPATCH_POINTER_MAX_BYTES, EXECUTION_IDENTITY_RE, executionIndexPath, workOrderDigest } from "@dev-loops/core/loop/work-order-digest";
@@ -37,9 +39,9 @@ export function buildDispatchPointer({ workOrderRef, workOrderDigest: digest, ex
 }
 
 /** Write one emitted unit's execution index entry (wx); an existing entry with other content refuses the emission. */
-export async function writeExecutionIndex(tmpRoot, { executionIdentity, workOrderRef, workOrderDigest: digest }) {
+export async function writeExecutionIndex(tmpRoot, { executionIdentity, workOrderRef, workOrderDigest: digest, emitterRoot = TOOLCHAIN_ROOT }) {
   const file = executionIndexPath(tmpRoot, executionIdentity);
-  const text = `${JSON.stringify({ executionIdentity, workOrderRef, workOrderDigest: digest })}\n`;
+  const text = `${JSON.stringify({ executionIdentity, workOrderRef, workOrderDigest: digest, emitterRoot })}\n`;
   await mkdir(path.dirname(file), { recursive: true });
   try {
     await writeFile(file, text, { flag: "wx" });
@@ -47,6 +49,23 @@ export async function writeExecutionIndex(tmpRoot, { executionIdentity, workOrde
     if (err?.code !== "EEXIST") throw err;
     if (await readFile(file, "utf8") !== text) throw new WorkOrderRefusal("execution_index_collision", `execution index ${file} already names a different unit; emit a new execution identity`);
   }
+}
+
+const real = (p) => realpath(p).catch(() => path.resolve(p));
+const versionOf = async (root) => JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version ?? "unknown";
+
+/** A sentence naming a code-tree skew (ADR 0232) when `execution`'s index entry was emitted by another toolchain root, else "". Best effort, never throws. */
+export async function codeTreeSkewNote({ execution, tmpRoots, script, args = "", env = "", toolchainRoot = TOOLCHAIN_ROOT }) {
+  try {
+    for (const tmpRoot of tmpRoots) {
+      let emitterRoot = null;
+      try { emitterRoot = JSON.parse(await readFile(executionIndexPath(tmpRoot, execution), "utf8")).emitterRoot; } catch { continue; }
+      if (typeof emitterRoot !== "string" || await real(emitterRoot) === await real(toolchainRoot)) continue;
+      const version = (root) => versionOf(root).catch(() => "unknown");
+      return `; code-tree skew: emitted by ${emitterRoot} (dev-loops ${await version(emitterRoot)}), pulled by ${toolchainRoot} (dev-loops ${await version(toolchainRoot)}), and the work-order identity code may differ; rerun from the same directory with \`${env}node ${shellQuote(path.join(emitterRoot, script))} ${args}\` (refusal rule WORK-ORDER-CODE-TREE-SKEW)`;
+    }
+  } catch { /* best effort: the plain refusal stands */ }
+  return "";
 }
 
 const IDENTITY_ROLES = { r: "review", j: "judge", f: "fixer", c: "coordinator" };
@@ -100,7 +119,7 @@ export const pullReceiptPath = (receiptTmpRoot, workOrderRef) => path.join(recei
  * the ref and digest resolve through the execution index. Returns { workOrderText, receipt,
  * receiptPath }; throws WorkOrderRefusal.
  */
-export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, receiptTmpRoot }) {
+export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, receiptTmpRoot, rerunTmpRoot }) {
   const fromIndex = ref === undefined;
   if (fromIndex) ({ workOrderRef: ref, workOrderDigest: digest } = await resolveExecutionIndex(execution, tmpRoots));
   const role = String(ref).split(":", 1)[0];
@@ -116,7 +135,7 @@ export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, rec
     const refusal = WORK_ORDER_ROLES.has(unit.workOrder?.role) ? "dispatch_identity_mismatch" : "unknown_role";
     throw new WorkOrderRefusal(refusal, `work order header role ${JSON.stringify(unit.workOrder?.role)} does not match ref role ${JSON.stringify(role)}`);
   }
-  if (workOrderDigest(unit.workOrder) !== unit.workOrderDigest) throw new WorkOrderRefusal("semantic_identity_mismatch", `the canonical work order for ${ref} no longer reproduces workOrderDigest ${unit.workOrderDigest}; fail closed and re-emit against current authority`);
+  if (workOrderDigest(unit.workOrder) !== unit.workOrderDigest) throw new WorkOrderRefusal("semantic_identity_mismatch", `the canonical work order for ${ref} no longer reproduces workOrderDigest ${unit.workOrderDigest}; fail closed and re-emit against current authority${await codeTreeSkewNote({ execution, tmpRoots, env: "DEV_LOOPS_PULL_DELEGATED=1 ", script: "scripts/github/pull-work-order.mjs", args: `${execution}${rerunTmpRoot ? ` --tmp-root ${shellQuote(rerunTmpRoot)}` : ""}` })}`);
   const invalid = adapter.validate(unit.workOrder);
   if (invalid) throw new WorkOrderRefusal("invalid_work_order", invalid);
   const workOrderText = await readFile(unit.materializationPath, "utf8").catch(() => null);
