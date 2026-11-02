@@ -9223,6 +9223,24 @@ test("clearingChainWalk keeps the seed-proof heads when a sealed record is rewri
   }
 });
 
+// A sealed A to B to C chain whose B record loses its seal has no trusted end: B is not reported as the chain end.
+test("clearingChainWalk and clearingChainLastCandidates return no end when a mid-chain record is unsealed", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const C = "8".repeat(40);
+    await seedClosedRounds(repoRoot, 67, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    await writeDeltaRecord(repoRoot, A, B);
+    await writeDeltaRecord(repoRoot, B, C);
+    const args = { tmpRoot: path.join(repoRoot, "tmp"), capHead: A, repo: "owner/repo", pr: 67, baseRefName: "main", repoRoot, baseOnlyMerge: async () => false };
+    assert.deepEqual((await clearingChainWalk(args)).ends, [C], "the intact chain ends at C");
+    await rm(path.join(repoRoot, "tmp", "gate-delta", `${B}.json.seal`));
+    assert.deepEqual((await clearingChainWalk(args)).ends, [], "an unsealed B record leaves no end");
+    assert.deepEqual(await clearingChainLastCandidates(args), [], "the emitter seam agrees");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // A cyclic chain A to B to C to B has no valid end: C must not seed a base-only merge of C.
 test("clearingChainLastCandidates returns no end for a cyclic chain and seeds nothing from it", async () => {
   const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();

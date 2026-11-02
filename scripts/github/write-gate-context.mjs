@@ -2074,6 +2074,8 @@ function clearingChainEnd(tmpRoot, start, visited) {
     last = next;
     visited?.add(next);
     record = clearingDeltaRecord(tmpRoot, next);
+    // A record at the candidate that exists but is not verifiably sealed (corrupt or seal removed) breaks the chain: its end is not trusted.
+    if (!record && isUnsealedDeltaRecord(tmpRoot, next)) return undefined;
   }
   return last;
 }
@@ -2142,6 +2144,7 @@ export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefNam
       last = next;
       heads.add(next);
       record = clearingDeltaRecord(tmpRoot, next);
+      if (!record && isUnsealedDeltaRecord(tmpRoot, next)) { last = undefined; break; }
     }
     if (last) ends.push(last);
   }
