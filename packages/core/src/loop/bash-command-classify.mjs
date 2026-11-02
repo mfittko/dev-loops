@@ -1062,6 +1062,7 @@ export function tokenizeShellCommand(command) {
     let level = 2;
     let inner = -1;
     for (let j = i + 3; j < n; j++) {
+      if (level === 1 && /[;|&]/.test(command[j])) return null; // `$((a);(b))` is a substitution of subshells; fail closed on any separator between the parens
       if (command[j] === "(") level++;
       else if (command[j] === ")") {
         level--;
