@@ -1,4 +1,4 @@
-# 0225. The CLI delegates gate, loop and pr to the source checkout
+# 0226. The CLI delegates gate, loop and pr to the source checkout
 
 ## Status
 
