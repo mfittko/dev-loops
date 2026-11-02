@@ -13,6 +13,7 @@ import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs
 import { seedJudgeSources } from "../loop/_judge-delivery-fixture.mjs";
 import { withTempDir } from "../_helpers.mjs";
 import { findRetirementAfter, main as pullMain, pullDelegationTarget, shouldRetryFixerPullLocally } from "../../scripts/github/pull-work-order.mjs";
+import { shellQuote } from "../../scripts/lib/checkout-delegation-refusal.mjs";
 import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
 import { decideFixerWriteGuard } from "../../packages/core/src/claude/hook-decisions.mjs";
 import { TOOLCHAIN_ROOT, resolveGateArtifactTmpRoot, resolveMainWorktreeRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
@@ -278,6 +279,7 @@ test("a digest mismatch across two code trees names both roots, both versions an
     await withDir(async (emitter) => {
       await mkdir(path.join(emitter, "scripts"));
       await writeFile(path.join(emitter, "package.json"), JSON.stringify({ name: "dev-loops", version: "9.9.9" }), "utf8");
+      const pullerVersion = JSON.parse(await readFile(path.join(TOOLCHAIN_ROOT, "package.json"), "utf8")).version;
       const unit = await emitRound(root);
       const entryFile = indexPath(root, unit);
       const entry = JSON.parse(await readFile(entryFile, "utf8"));
@@ -297,8 +299,12 @@ test("a digest mismatch across two code trees names both roots, both versions an
         const body = refusal(result);
         assert.equal(body.refusal, "semantic_identity_mismatch");
         assert.match(body.error, /no longer reproduces workOrderDigest/);
-        for (const part of [emitter, "dev-loops 9.9.9", TOOLCHAIN_ROOT, `dev-loops-run --repo-root ${emitter} scripts/github/pull-work-order.mjs ${unit.executionIdentity}`]) assert.ok(body.error.includes(part), part);
+        for (const part of [emitter, "dev-loops 9.9.9", TOOLCHAIN_ROOT, `dev-loops ${pullerVersion}`, `dev-loops-run --repo-root ${shellQuote(emitter)} scripts/github/pull-work-order.mjs ${unit.executionIdentity}`]) assert.ok(body.error.includes(part), part);
       }
+      // A caller-supplied --tmp-root rides the rerun command as an absolute, quoted path.
+      const tmpRoot = path.join(root, "tmp");
+      const scoped = refusal(run("pull-work-order.mjs", [unit.executionIdentity, "--tmp-root", tmpRoot], root));
+      assert.ok(scoped.error.includes(`scripts/github/pull-work-order.mjs ${unit.executionIdentity} --tmp-root ${shellQuote(tmpRoot)}`), scoped.error);
     });
   });
 });

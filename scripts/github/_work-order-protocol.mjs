@@ -119,7 +119,7 @@ export const pullReceiptPath = (receiptTmpRoot, workOrderRef) => path.join(recei
  * the ref and digest resolve through the execution index. Returns { workOrderText, receipt,
  * receiptPath }; throws WorkOrderRefusal.
  */
-export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, receiptTmpRoot }) {
+export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, receiptTmpRoot, rerunTmpRoot }) {
   const fromIndex = ref === undefined;
   if (fromIndex) ({ workOrderRef: ref, workOrderDigest: digest } = await resolveExecutionIndex(execution, tmpRoots));
   const role = String(ref).split(":", 1)[0];
@@ -135,7 +135,7 @@ export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, rec
     const refusal = WORK_ORDER_ROLES.has(unit.workOrder?.role) ? "dispatch_identity_mismatch" : "unknown_role";
     throw new WorkOrderRefusal(refusal, `work order header role ${JSON.stringify(unit.workOrder?.role)} does not match ref role ${JSON.stringify(role)}`);
   }
-  if (workOrderDigest(unit.workOrder) !== unit.workOrderDigest) throw new WorkOrderRefusal("semantic_identity_mismatch", `the canonical work order for ${ref} no longer reproduces workOrderDigest ${unit.workOrderDigest}; fail closed and re-emit against current authority${await codeTreeSkewNote({ execution, tmpRoots, rerun: `scripts/github/pull-work-order.mjs ${execution}` })}`);
+  if (workOrderDigest(unit.workOrder) !== unit.workOrderDigest) throw new WorkOrderRefusal("semantic_identity_mismatch", `the canonical work order for ${ref} no longer reproduces workOrderDigest ${unit.workOrderDigest}; fail closed and re-emit against current authority${await codeTreeSkewNote({ execution, tmpRoots, rerun: `scripts/github/pull-work-order.mjs ${execution}${rerunTmpRoot ? ` --tmp-root ${shellQuote(rerunTmpRoot)}` : ""}` })}`);
   const invalid = adapter.validate(unit.workOrder);
   if (invalid) throw new WorkOrderRefusal("invalid_work_order", invalid);
   const workOrderText = await readFile(unit.materializationPath, "utf8").catch(() => null);

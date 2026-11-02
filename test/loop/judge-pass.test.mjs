@@ -17,6 +17,8 @@ import { hasReopenLine, rejectClosingRefRemoval, sliceLinkageIssues } from "../.
 import { readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { resolveDraftRoundCap } from "../../scripts/github/write-gate-context.mjs";
 import { dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
+import { shellQuote } from "../../scripts/lib/checkout-delegation-refusal.mjs";
+import { TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { executionIndexPath, pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { bindEvidenceToPrBody, deliverJudge, seedJudgeSources, writeVerdictAfterPull } from "./_judge-delivery-fixture.mjs";
@@ -1743,12 +1745,13 @@ test("judge-pass J5: a plan that does not reproduce across two code trees names 
   await writeFile(path.join(root, "forged-plan.json"), JSON.stringify(forged));
   await assert.rejects(runPass({ judgePlan: "./forged-plan.json" }), (err) => /does not reproduce the work order/.test(err.message) && !/code-tree skew/.test(err.message));
   const emitter = await mkdtemp(path.join(os.tmpdir(), "judge-pass-emitter-"));
+  const pullerVersion = JSON.parse(await readFile(path.join(TOOLCHAIN_ROOT, "package.json"), "utf8")).version;
   try {
     await writeFile(path.join(emitter, "package.json"), JSON.stringify({ name: "dev-loops", version: "9.9.9" }));
     const indexFile = executionIndexPath(path.join(root, "tmp"), plan.executionIdentity);
     await writeFile(indexFile, JSON.stringify({ ...JSON.parse(await readFile(indexFile, "utf8")), emitterRoot: emitter }));
     await assert.rejects(runPass({ judgePlan: "./forged-plan.json" }), (err) => {
-      for (const part of [emitter, "dev-loops 9.9.9", `dev-loops-run --repo-root ${emitter} scripts/loop/judge-pass.mjs`]) assert.ok(err.message.includes(part), part);
+      for (const part of [emitter, "dev-loops 9.9.9", TOOLCHAIN_ROOT, `dev-loops ${pullerVersion}`, `dev-loops-run --repo-root ${shellQuote(emitter)} scripts/loop/judge-pass.mjs`]) assert.ok(err.message.includes(part), part);
       return /does not reproduce the work order/.test(err.message);
     });
   } finally {
