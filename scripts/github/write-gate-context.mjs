@@ -2063,7 +2063,7 @@ const isUnsealedDeltaRecord = (tmpRoot, head) => {
 };
 
 /** The last candidate head of the sealed clearing chain that begins at `start`. */
-function clearingChainEnd(tmpRoot, start) {
+function clearingChainEnd(tmpRoot, start, visited, { allowUnsealedEnd = false } = {}) {
   const seen = new Set();
   let last;
   for (let record = start; record;) {
@@ -2072,7 +2072,10 @@ function clearingChainEnd(tmpRoot, start) {
     if (!next || seen.has(next)) return undefined;
     seen.add(next);
     last = next;
+    visited?.add(next);
     record = clearingDeltaRecord(tmpRoot, next);
+    // A record at the candidate that exists but is not verifiably sealed (corrupt or seal removed) breaks the chain: its end is not trusted.
+    if (!record && isUnsealedDeltaRecord(tmpRoot, next)) { return allowUnsealedEnd ? last : undefined; } // allowUnsealedEnd: extend-cap-round-chain needs the end of the sealed prefix to refuse record_not_clearing
   }
   return last;
 }
@@ -2086,8 +2089,9 @@ function clearingChainEnd(tmpRoot, start) {
 async function capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge }) {
   const direct = clearingDeltaRecord(tmpRoot, capHead);
   const starts = direct ? [direct] : [];
+  const seedHeads = new Set();
   let baseOnlyUnsealed = false;
-  if (typeof baseRefName !== "string" || !baseRefName) return { starts, baseOnlyUnsealed };
+  if (typeof baseRefName !== "string" || !baseRefName) return { starts, baseOnlyUnsealed, seedHeads };
   const records = listGateDeltaRecords(tmpRoot).sort((a, b) => (String(a.reviewBaselineHead) < String(b.reviewBaselineHead) ? -1 : 1));
   const seeded = new Set(direct ? [capHead] : []);
   const fromHeads = [capHead];
@@ -2095,7 +2099,7 @@ async function capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, re
   for (let i = 0; i < fromHeads.length; i += 1) {
     const fromHead = fromHeads[i];
     // A direct record at the cap-round head already makes it a start; base-only seeding of the cap-round head applies only without one.
-    if (i === 0 && direct) { const end = clearingChainEnd(tmpRoot, direct); if (end && !fromHeads.includes(end)) fromHeads.push(end); continue; }
+    if (i === 0 && direct) { const end = clearingChainEnd(tmpRoot, direct, seedHeads); if (end && !fromHeads.includes(end)) fromHeads.push(end); continue; }
     for (const { reviewBaselineHead: raw } of records) {
       const merged = normalizeSha(raw);
       if (!merged || merged === fromHead || seeded.has(merged) || existsSync(buildLogPath({ repo, pr, gate: "draft_gate", headSha: merged, tmpRoot }))) continue;
@@ -2104,21 +2108,38 @@ async function capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, re
       if (!candidate) { if (isUnsealedDeltaRecord(tmpRoot, merged) && await isBaseOnly()) baseOnlyUnsealed = true; continue; }
       if (!await isBaseOnly()) continue;
       seeded.add(merged);
+      seedHeads.add(merged);
       starts.push(candidate);
-      const end = clearingChainEnd(tmpRoot, candidate);
+      const end = clearingChainEnd(tmpRoot, candidate, seedHeads);
       if (end && !fromHeads.includes(end)) fromHeads.push(end);
     }
   }
-  return { starts, baseOnlyUnsealed };
+  return { starts, baseOnlyUnsealed, seedHeads };
 }
 
 /**
  * The last candidate head of every sealed clearing chain of the cap round `capHead` (ADR 0218), seeded as resolveCapRoundFixed seeds them; empty when no chain starts.
  * The emitter seam skips the `covers` filter on purpose: it must admit a base-only merge M of a chain end before the fixer's record for M exists.
  */
-export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, covering = () => true }) {
-  const { starts } = await capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
-  return starts.filter(covering).map((start) => clearingChainEnd(tmpRoot, start)).filter(Boolean);
+export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, covering = () => true, allowUnsealedEnd = false }) {
+  return (await clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge, covering, allowUnsealedEnd })).ends;
+}
+
+/** The chain ends and every head the sealed clearing chains of the cap round `capHead` visit after it (each seeded merge, each record candidate head and each chain end), from one walk: each start's end is collected in the same loop that fills the heads, so a record rewrite cannot split them. */
+export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, covering = () => true, allowUnsealedEnd = false }) {
+  const { starts, seedHeads } = await capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
+  const ends = [];
+  // The heads the seed proof visited stay in the set even if a concurrent rewrite changes a record before the traversal below.
+  const heads = new Set(seedHeads);
+  // `covering` drops a start that does not name every act item of the cap round (the emitter seam passes none).
+  for (const start of starts.filter(covering)) {
+    const seededFrom = normalizeSha(start.reviewBaselineHead);
+    if (seededFrom && seededFrom !== normalizeSha(capHead)) heads.add(seededFrom);
+    // The end and the visited heads come from one read of each record, in the shared clearingChainEnd.
+    const last = clearingChainEnd(tmpRoot, start, heads, { allowUnsealedEnd });
+    if (last) ends.push(last);
+  }
+  return { ends, heads: [...heads] };
 }
 
 /**
@@ -2155,7 +2176,7 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
       if (seen.has(next)) return false;
       seen.add(next);
       const following = clearing(next);
-      if (!following) return Boolean(head && typeof options.baseRefName === "string" && options.baseRefName && await baseOnlyMerge({ fromHead: next, head, mainRef: `origin/${options.baseRefName}`, repoRoot }).catch(() => false));
+      if (!following) return !isUnsealedDeltaRecord(tmpRoot, next) && Boolean(head && typeof options.baseRefName === "string" && options.baseRefName && await baseOnlyMerge({ fromHead: next, head, mainRef: `origin/${options.baseRefName}`, repoRoot }).catch(() => false));
       record = following;
     }
     return false;

@@ -28,7 +28,7 @@
  * Pure result checks live in @dev-loops/core/loop/pre-push-delta-review.
  */
 import { execFile, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
@@ -51,12 +51,14 @@ import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { fixerPlanPath, locateFixerUnit } from "./emit-fixer-work-order.mjs";
+import { clearingChainWalk } from "../github/write-gate-context.mjs";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { writeGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { createGitClient, main as validateChangelog } from "../docs/validate-changelog-completeness.mjs";
+import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
@@ -76,7 +78,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --spec-identity <id>    Current spec identity passed to the reviewer (required without --result)
   --site-coverage <path>  The fixer's commit_only handback { headSha, siteCoverage: [...] } (the work order's outputRef)
   --fixer-plan <path>     Canonical current pulled commit_only plan; pair with --site-coverage for ACT/THREAD closure (required for ACT input/result)
-  --findings-log <path>   Required on the act-list route, input mode: the reviewed gate round's findings log (its headSha must equal --baseline);
+  --findings-log <path>   Required on the act-list route, input mode: the reviewed gate round's findings log (its headSha must equal --baseline, or its sealed clearing chain or a base-only merge must reach --baseline: PRE-PUSH-DELTA-INPUT-CAP-CHAIN);
                           its provenance.perAngle angles join the surface hints (PRE-PUSH-DELTA-INPUT). Refused with --threads-file.
   --handback              The fixer handbackCheck run: waives the --findings-log requirement (it validates --site-coverage, no reviewer input is used)
   --result <path>         The reviewer's DeltaPrePushReviewResult JSON
@@ -228,6 +230,12 @@ function gitIsAncestor(worktree, ancestor, descendant) {
   throw new Error(`git merge-base --is-ancestor failed in ${worktree}: ${out.stderr.trim()}`);
 }
 
+function gitRevList(worktree, from, to) {
+  const out = spawnSync("git", ["-C", worktree, "rev-list", `${from}..${to}`], { encoding: "utf8", env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
+  if (out.status !== 0) throw new Error(`git rev-list ${from}..${to} failed in ${worktree}: ${out.stderr.trim()}`);
+  return out.stdout.split("\n").filter(Boolean);
+}
+
 function gitChangedPaths(worktree, baseline, head) {
   const out = spawnSync("git", ["diff", "--name-only", "-z", "--no-renames", "--no-relative", "--no-ext-diff", `${baseline}..${head}`], {
     cwd: resolveRepoRoot(worktree), env: gitEnvNoDirOverrides(), encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
@@ -267,8 +275,9 @@ export function gitStaleSurfaceHits(worktreeArg, baseline, head) {
 }
 
 // The findings log writer stamps `headSha`; the log must be the baseline round's and carry provenance.perAngle.
-// A log at an earlier head is accepted when the baseline is a base-only merge of it (the closure round after a cap round, ADR 0197); any error fails closed.
-async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerge }) {
+// A log at an earlier head is accepted when the baseline is a base-only merge of it (the closure round after a cap round, ADR 0197), equals the end of its sealed clearing chain,
+// or is a base-only merge of the log head or a chain end (PRE-PUSH-DELTA-INPUT-CAP-CHAIN, ADR 0225); any error fails closed.
+async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerge, revList, tmpRoot, target }) {
   if (!findingsLogPath) return [];
   const log = JSON.parse(readFileSync(findingsLogPath, "utf8"));
   const perAngle = log?.provenance?.perAngle;
@@ -278,10 +287,25 @@ async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerg
     && await Promise.resolve().then(async () => {
       const { config, errors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(worktree) });
       if (errors?.length) throw new Error(`.devloops failed to load (${errors.length} error(s)): the earlier-head findings log fails closed`);
-      return baseOnlyMerge({ fromHead: logHead, head: baseline, mainRef: `origin/${resolveBaseBranch(config, { cwd: worktree })}`, repoRoot: worktree });
+      const baseRefName = resolveBaseBranch(config, { cwd: worktree });
+      const merged = (fromHead) => baseOnlyMerge({ fromHead, head: baseline, mainRef: `origin/${baseRefName}`, repoRoot: worktree });
+      if (await merged(logHead)) return true;
+      if (typeof log.repo !== "string" || !Number.isInteger(log.pr)) return false;
+      // The probes read repo and pr from the log: they must be the authenticated plan target's.
+      if (!target || log.repo !== target.repo || log.pr !== target.pr) return false;
+      const chainArgs = { tmpRoot, capHead: logHead, repo: log.repo, pr: log.pr, baseRefName, repoRoot: worktree, baseOnlyMerge };
+      // clearingChainWalk collects each chain end in the same loop that fills the visited heads, so a concurrent record rewrite cannot split the two decisions across two chains.
+      const { ends, heads } = await clearingChainWalk(chainArgs);
+      // A draft_gate findings log at the baseline or at any head the chain visits means a later full round superseded this one.
+      const roundAt = (headSha) => existsSync(buildLogPath({ repo: log.repo, pr: log.pr, gate: "draft_gate", headSha, tmpRoot }));
+      if ([baseline, ...heads].some(roundAt)) return false;
+      if (ends.includes(baseline)) return true;
+      // A draft_gate log at a commit between the chain end and the baseline also superseded this round; a git failure fails closed.
+      for (const end of ends) if (await merged(end) && !revList(worktree, end, baseline).some((sha) => sha !== baseline && roundAt(sha))) return true;
+      return false;
     }).catch(() => false);
   if (!sameHead && !earlierHead) {
-    throw new Error(`--findings-log ${findingsLogPath} records head ${log?.headSha ?? "(none)"}, not the baseline ${baseline}: pass the findings log of the reviewed round`);
+    throw new Error(`--findings-log ${findingsLogPath} records head ${log?.headSha ?? "(none)"}, not the baseline ${baseline}: pass the findings log recorded at the baseline, or the log of the cap round (it must carry repo and pr) whose sealed clearing chain (gate-delta records under the gate tmp root, written by this command) reaches the baseline directly or through a base-only merge of the base branch (PRE-PUSH-DELTA-INPUT-CAP-CHAIN)`);
   }
   // An inline_single_agent round writes no provenance: take the angles of its findings.
   if (log.executionMode === "inline_single_agent" && !Array.isArray(perAngle)) {
@@ -330,12 +354,12 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
   refuse(raw.headSha === (result ? result.candidateHead : currentHead)
     && isAncestor(options.worktree, sequence.reviewBaselineHead, raw.headSha)
     && isAncestor(options.worktree, raw.headSha, currentHead), "handback candidate is not the reviewed contained commit");
-  return options.threadsFile ? null : { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex(raw.siteCoverage).slice(7), handbackBytesDigest: sha256Hex(reportBytes).slice(7), origin };
+  return { target, coverageBinding: options.threadsFile ? null : { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex(raw.siteCoverage).slice(7), handbackBytesDigest: sha256Hex(reportBytes).slice(7), origin } };
 }
 
 export async function runCli(
   argv = process.argv.slice(2),
-  { revParse = gitRevParse, diffPatch = gitDiffPatch, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, changedPaths = gitChangedPaths, validateChangelog: changelog = validateChangelog, baseOnlyMerge = isBaseOnlyMergeSince, stdout = process.stdout, tmpRoot } = {},
+  { revParse = gitRevParse, diffPatch = gitDiffPatch, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, changedPaths = gitChangedPaths, validateChangelog: changelog = validateChangelog, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, stdout = process.stdout, tmpRoot } = {},
 ) {
   const options = parseCheckPrePushDeltaArgs(argv);
   if (options.help) {
@@ -363,7 +387,7 @@ export async function runCli(
   // The fixer's commit_only handback. Without it every act item with a site query reports a coverage gap.
   const result = options.result ? JSON.parse(readFileSync(options.result, "utf8")) : null;
   if (options.threadsFile && deltaCoverageBinding(result)) throw new Error("THREAD cannot opt into ACT coverage binding");
-  let siteCoverage = [], validationCoverage = [], coverageBinding;
+  let siteCoverage = [], validationCoverage = [], coverageBinding, authenticatedTarget;
   if (options.siteCoverage) {
     const reportBytes = readFileSync(options.siteCoverage);
     const raw = JSON.parse(reportBytes);
@@ -392,7 +416,7 @@ export async function runCli(
       if (gaps.length > 0) throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: the disposition handoff leaves site coverage incomplete: ${gaps.join("; ")}`);
     }
     // Only the validation view discards stale coverage; the reviewed raw identity stays bound.
-    if (options.fixerPlan && !options.threadsFile) coverageBinding = await authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor);
+    if (options.fixerPlan && !options.threadsFile) ({ coverageBinding, target: authenticatedTarget } = await authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor));
     siteCoverage = options.fixerPlan && !options.threadsFile ? raw.siteCoverage : record.headSha === currentHead ? record.siteCoverage ?? [] : [];
     validationCoverage = record.headSha === currentHead ? record.siteCoverage ?? [] : [];
   }
@@ -438,7 +462,9 @@ export async function runCli(
       mkdirSync(path.dirname(patchPath), { recursive: true });
       writeFileSync(patchPath, diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead));
     }
-    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE }), ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge }), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
+    // The target authenticateCoverage verified binds the log's repo and pr; without an authenticated plan the chain path refuses.
+    const target = authenticatedTarget;
+    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE }), ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target }), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
   }
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
   return payload;
