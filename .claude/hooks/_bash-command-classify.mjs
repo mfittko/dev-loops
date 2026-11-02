@@ -656,6 +656,23 @@ export function extractRepoFlagsFromGhPrReadySegments(command) {
   return extractRepoFlagsFromGhSubcmdVerbSegments(command, "pr", "ready");
 }
 
+/**
+ * Return one `{ segment, explicitRepo, prNumber }` entry for EVERY `gh pr ready` segment (ignoring
+ * --help/-h). The draft-gate evidence probe covers ONE PR, so a caller that will generalize that
+ * evidence to the whole command needs each ready segment's OWN target: the command-wide
+ * `extractPrNumberFromGhPrReadyAnywhere` reads the segment that carries a repo flag, which may be a
+ * proven-foreign one, and applying its result to a different in-scope PR let that PR leave draft
+ * unprobed. `prNumber` is the segment's own positional PR number, or null when it carries none.
+ * @param {string} command
+ * @returns {{ segment: string, explicitRepo: string|null, prNumber: number|null }[]}
+ */
+export function extractGhPrReadyTargets(command) {
+  return extractRepoFlagsFromGhPrReadySegments(command).map((entry) => ({
+    ...entry,
+    prNumber: extractPrNumberFromSegment(entry.segment, "ready"),
+  }));
+}
+
 /** @param {string} command @returns {number|null} */
 export function extractPrNumberFromGhPrMerge(command) {
   return extractPrNumberFromGhPrVerb(command, "merge");

@@ -53,7 +53,10 @@ const tempTest = (name, fn) =>
 /**
  * Register the real extension on a Pi double whose `exec` answers the repo-identity, config and
  * draft-gate probes. Returns the `tool_call` handler, the recorded exec calls, and a mutable `state`
- * (flip `state.unmanaged` to make the same cwd become a repo between calls).
+ * describing what the NEXT identity read answers: flip `state.unmanaged` to make the same cwd become
+ * a repo between calls, move `state.repoRoot` to make it resolve to a different root (a repo created
+ * below the cached one, or the cwd itself after `git init`), change `state.slug` for a changed
+ * origin, or set `state.remoteDown` for a remote lookup that fails.
  */
 function register({
   repoRoot,
@@ -86,7 +89,7 @@ function register({
 } = {}) {
   const events = new Map();
   const execCalls = [];
-  const state = { unmanaged: Boolean(unmanaged) };
+  const state = { unmanaged: Boolean(unmanaged), repoRoot: null, slug: null, remoteDown: false };
   const exec = async (tool, args, opts) => {
     const command = args[args.length - 1];
     execCalls.push({ command, cwd: opts?.cwd });
@@ -98,11 +101,12 @@ function register({
       if (toplevel === "throws") throw new Error("spawn git ENOENT");
       if (toplevel === "killed") return { code: null, stdout: "", stderr: "", killed: true };
       if (toplevel === "noisy") return { code: 0, stdout: `profile banner written by .zprofile\n${repoRoot}\n`, stderr: "" };
-      return { code: 0, stdout: `${repoRoot}\n`, stderr: "" };
+      return { code: 0, stdout: `${state.repoRoot ?? repoRoot}\n`, stderr: "" };
     }
     if (command === "git config --get remote.origin.url") {
       if (remoteLookup) remoteLookup();
-      return { code: 0, stdout: `https://github.com/${slug}.git\n`, stderr: "" };
+      if (state.remoteDown) return { code: 128, stdout: "", stderr: "" };
+      return { code: 0, stdout: `https://github.com/${state.slug ?? slug}.git\n`, stderr: "" };
     }
     if (command.includes("pre-pr-ready-gate.mjs")) {
       if (probeThrows) throw new Error("spawn node ENOENT");
@@ -364,6 +368,38 @@ tempTest("Pi tool_call denies an unscopable gh pr ready instead of probing with 
   }
 });
 
+tempTest("Pi tool_call probes the IN-SCOPE gh pr ready target, not the command's first ready segment", async (tmp) => {
+  clearCoordinatorFlag();
+  const gate = register({ repoRoot: managedRepoRoot(tmp) });
+  // The command-wide reading takes the PR number from the segment that carries the repo flag — here
+  // the PROVEN-FOREIGN `other/repo 7`. Probing that and applying the answer to the command authorized
+  // a different, in-scope PR that had no evidence of its own (#2965 review).
+  const denied = await callAs(gate, "developer", "gh pr ready --repo other/repo 7 && gh pr ready 8");
+  const probe = gate.execCalls.find((call) => call.command.includes("pre-pr-ready-gate.mjs"));
+  assert.ok(probe, "the in-scope ready target must be probed");
+  assert.match(probe.command, new RegExp(`--repo ${SLUG} --pr 8$`), "the probe must check the in-scope PR");
+  assert.equal(denied.block, true);
+  assert.match(denied.reason, /draft-gate evidence check failed/);
+});
+
+tempTest("Pi tool_call denies a gh pr ready naming several in-scope PRs without spending the probe", async (tmp) => {
+  clearCoordinatorFlag();
+  // `readyGate` is ONE fact about ONE probed PR, and the shared decision authorizes every ready
+  // segment in the command from it: no single probe can answer for two in-scope targets, and PR #7's
+  // clean record must never clear #8's draft status. Deny before the probe — the answer is not the
+  // fact that is missing here.
+  const gate = register({ repoRoot: managedRepoRoot(tmp), readyGate: { code: 0 } });
+  const decision = await callAs(gate, "developer", "gh pr ready 7 && gh pr ready 8");
+  assert.equal(decision.block, true);
+  assert.match(decision.reason, /GATE-COMMENT-DRAFT-REQUIREMENTS/);
+  assert.match(decision.reason, /probed for exactly ONE PR/);
+  assert.equal(
+    gate.execCalls.some((call) => call.command.includes("pre-pr-ready-gate.mjs")),
+    false,
+    "neither PR's evidence can authorize the other, so the probe is not the fact to gather",
+  );
+});
+
 tempTest("Pi tool_call probes with the dev-loops package's own script, not the consumer repo's", async (tmp) => {
   clearCoordinatorFlag();
   const root = managedRepoRoot(tmp);
@@ -388,18 +424,23 @@ tempTest("Pi tool_call runs the draft-gate probe only for a gated gh pr ready", 
   assert.equal(gate.execCalls.some((call) => call.command.includes("pre-pr-ready-gate.mjs")), false);
 });
 
-tempTest("Pi tool_call caches the repo facts per cwd", async (tmp) => {
+tempTest("Pi tool_call caches the repo facts per cwd and revalidates the git identity on every call", async (tmp) => {
   clearCoordinatorFlag();
   const gate = register({ repoRoot: managedRepoRoot(tmp, { humanMergeOnly: true }) });
   await callAs(gate, "developer", "git status");
   await callAs(gate, "developer", MERGE);
+  // The git IDENTITY is re-read on EVERY call, deliberately: a cached slug that no longer matches the
+  // repo makes an in-scope body write read as PROVEN FOREIGN, and a managed repo created below a
+  // cached unmanaged root leaves every managed-repo deny switched off — neither is visible in the
+  // config-source signature, so this cheap local re-probe is what keeps the entry honest. What stays
+  // cached is the expensive half: the merged config load behind those facts.
   const repoToplevel = gate.execCalls.filter((call) => call.command === PROBE_COMMAND);
-  assert.equal(repoToplevel.length, 1, "repo identity must resolve once per cwd, not once per tool call");
+  assert.equal(repoToplevel.length, 2, "the identity probe answers once per tool call");
   // The FULL sequence, in order: fact resolution must not grow a call (an extra git read, a second
   // probe) without a test failing — neither command carries a ready verb, so no probe belongs here.
   assert.deepEqual(
     gate.execCalls.map((call) => call.command),
-    [PROBE_COMMAND, "git config --get remote.origin.url"],
+    [PROBE_COMMAND, "git config --get remote.origin.url", PROBE_COMMAND, "git config --get remote.origin.url"],
   );
 });
 
@@ -458,11 +499,67 @@ tempTest("Pi tool_call re-reads the facts when a config file appears during the 
     /STOP-HUMAN-MERGE-001/,
     "the read must settle on the managed answer the sources now report, not the stale unmanaged one",
   );
-  // And the settled answer is pinned, not re-read: the retry must not cost a probe per tool call.
+  // And the settled answer is served, not re-derived: the next call costs ONE identity revalidation
+  // probe (the per-call git read the cache above pins) and no retry loop, because the settled facts
+  // and the sources agree — a second read would show up here as a third probe.
   const probes = () => gate.execCalls.filter((call) => call.command === PROBE_COMMAND).length;
   const before = probes();
   assert.match((await callAs(gate, "developer", MERGE)).reason, /STOP-HUMAN-MERGE-001/, "the settled answer must be served next call");
-  assert.equal(probes(), before, "the settled answer must be cached, not re-probed");
+  assert.equal(probes(), before + 1, "the settled answer must be served after one revalidation, not re-derived");
+});
+
+tempTest("Pi tool_call revalidates the cached slug when the repo's origin changes (no stale foreign escape)", async (tmp) => {
+  clearCoordinatorFlag();
+  const gate = register({ repoRoot: managedRepoRoot(tmp, { humanMergeOnly: false }) });
+  assert.match((await callAs(gate, "developer", WAIVER_WRITE)).reason, /ADR-TRIPWIRE-STANDING-WAIVER/);
+  // The origin changes under the same cwd (a renamed remote, a fresh clone over the same path). A
+  // body write to the repo the cwd is ACTUALLY in must stay denied: a cached `acme/widgets` made the
+  // new `fork/renamed` target read as a PROVEN-FOREIGN repo, which switched the tripwire waiver deny
+  // off for the rest of the session while the config sources were untouched.
+  gate.state.slug = "fork/renamed";
+  const denied = await callAs(gate, "developer", "gh pr edit 7 --repo fork/renamed --body 'adr-tripwire:allow standing waiver'");
+  assert.equal(denied.block, true);
+  assert.match(denied.reason, /ADR-TRIPWIRE-STANDING-WAIVER/);
+});
+
+tempTest("Pi tool_call re-reads the facts when a managed repo appears below the cached unmanaged root", async (tmp) => {
+  clearCoordinatorFlag();
+  const ancestor = path.join(tmp, `nested-${(repoSeq += 1)}`);
+  const nested = path.join(ancestor, "sub");
+  fs.mkdirSync(nested, { recursive: true });
+  // The cwd is `nested`, but its first identity answer is the UNMANAGED ancestor above it (no
+  // `.devloops` there), and those facts are cached under `nested` — keyed to the ANCESTOR's config
+  // sources. Deliberately NOT a git repo fixture: only the resolved root and the managed-context
+  // answer move, which is exactly what the config-source signature cannot see.
+  const gate = register({ repoRoot: nested });
+  gate.state.repoRoot = ancestor;
+  assert.deepEqual(await callAs(gate, "developer", MERGE), { block: false }, "an unmanaged checkout stays unrestricted");
+  // A dev-loops-managed repo is created BELOW that cached root. Nothing in the ancestor changes, so
+  // the signature keeps matching while the cwd is now a managed checkout: serving the cached
+  // `inManagedContext: false` left RAW-GH-PR-MERGE-BYPASS and STOP-HUMAN-MERGE-001 switched off.
+  fs.writeFileSync(path.join(nested, ".devloops"), "version: 1\nautonomy:\n  humanMergeOnly: false\n", "utf8");
+  gate.state.repoRoot = nested;
+  assert.match((await callAs(gate, "developer", MERGE)).reason, /RAW-GH-PR-MERGE-BYPASS/);
+});
+
+tempTest("Pi tool_call recovers the repo identity after a transient remote lookup failure", async (tmp) => {
+  clearCoordinatorFlag();
+  const root = managedRepoRoot(tmp);
+  const gate = register({ repoRoot: root, readyGate: { code: 0 }, });
+  gate.state.remoteDown = true;
+  // The remote lookup fails once. The facts stay fail-closed (a managed context whose slug cannot be
+  // resolved still gates), so no probe is spawned with a junk scope — and this entry must not pin the
+  // session: a cached `repoSlug: null` used to keep the ready verb denied for good, because nothing in
+  // the config sources ever changed to invalidate it.
+  const unresolved = await callAs(gate, "developer", "gh pr ready 7");
+  assert.equal(unresolved.block, true, "an unresolved slug must fail closed");
+  assert.match(unresolved.reason, /no visible clean draft_gate/);
+  gate.state.remoteDown = false;
+  assert.deepEqual(
+    await callAs(gate, "developer", "gh pr ready 7"),
+    { block: false },
+    "the resolved slug must be re-read, not served from the cached null-slug entry",
+  );
 });
 
 tempTest("Pi tool_call blocks the coordinator's inline verification under DEVLOOPS_COORDINATOR_READONLY=1", async (tmp) => {

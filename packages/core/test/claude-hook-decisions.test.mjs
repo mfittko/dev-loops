@@ -141,6 +141,25 @@ test("decideBashGate allows gh pr ready when the draft gate passed", () => {
   assert.equal(decideBashGate({ command: "gh pr ready 17", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, gatePassed: true }).decision, "allow");
 });
 
+test("decideBashGate scopes the gate-passed escape to the ONE PR its evidence describes (#2965 review)", () => {
+  const passed = { repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, gatePassed: true };
+  // ONE in-scope target behind a proven-foreign leading segment: the probe's result decides.
+  assert.equal(
+    decideBashGate({ command: "gh pr ready --repo other/repo 1 && gh pr ready 17", ...passed }).decision,
+    "allow",
+    "the escape belongs to the in-scope PR the evidence was probed for",
+  );
+  // SEVERAL in-scope targets: the single fact `gatePassed` carries cannot authorize the command, so
+  // #17's clean record must not clear #18's draft status without evidence of its own.
+  const several = decideBashGate({ command: "gh pr ready 17 && gh pr ready 18", ...passed });
+  assert.equal(several.decision, "deny");
+  assert.match(several.reason, /GATE-COMMENT-DRAFT-REQUIREMENTS/);
+  assert.match(several.reason, /probed for exactly ONE PR/);
+  // An in-scope ready segment that names no PR number has no evidence of its own either, even when
+  // a proven-foreign leading segment supplies the number the command-wide reading reports.
+  assert.equal(decideBashGate({ command: "gh pr ready --repo other/repo 1 && gh pr ready", ...passed }).decision, "deny");
+});
+
 test("decideBashGate passes through when not in the target repo", () => {
   assert.equal(decideBashGate({ command: "gh pr ready 17", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, gatePassed: false }).decision, "allow");
   assert.equal(decideBashGate({ command: "gh pr ready 17", repoSlug: null, inManagedContext: true, managedRepoSlug: TARGET, gatePassed: false }).decision, "allow");

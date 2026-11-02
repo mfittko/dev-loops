@@ -4,13 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONFIG_FILE_VARIANTS, loadDevLoopConfig, resolveHumanMergeOnly } from '@dev-loops/core/config';
-import {
-  commandContainsGhPrReady,
-  deriveInManagedRepo,
-  extractPrNumberFromGhPrReadyAnywhere,
-  isCleanRepoSlug,
-} from '@dev-loops/core/loop/bash-command-classify';
-import { prReadySegmentsProvenForeign } from '@dev-loops/core/loop/bash-gate-decisions';
+import { commandContainsGhPrReady, deriveInManagedRepo, isCleanRepoSlug } from '@dev-loops/core/loop/bash-command-classify';
+import { inScopeGhPrReadyPrNumbers, prReadySegmentsProvenForeign } from '@dev-loops/core/loop/bash-gate-decisions';
 import type { ExtensionHarnessAdapter } from './harness-types.ts';
 import { PRE_PR_READY_GATE_SCRIPT, PR_READY_GATE_TIMEOUT_MS, defaultResolveRepoContext, type RepoContext } from './post-merge-update.ts';
 import type { PiBashGateFacts } from './readonly-role-gate.ts';
@@ -43,8 +38,9 @@ import type { PiBashGateFacts } from './readonly-role-gate.ts';
  * schema-rejected repo layer is dropped while every merged layer underneath it stays in effect, so
  * the packaged `autonomy.humanMergeOnly: true` default still binds (mirrors the Claude edge's
  * `scripts/loop/resolve-human-merge-only.mjs`). Repo and config facts are cached per resolved cwd,
- * so a session pays for the git/config reads once per working directory — and the cache is
- * revalidated on every call against a signature of that repo's own `.devloops` and
+ * so a session pays for the merged config read once per working directory — and the cache is
+ * revalidated on every call against TWO independent things, because either one alone leaves a stale
+ * permissive entry servable. The first is a signature of that repo's own `.devloops` and
  * `.pi/dev-loop/defaults` variants (a content digest of each file that exists), so an edit to one of
  * those files is never served from the cache — not even a same-size rewrite inside one filesystem
  * timestamp tick (a stale `humanMergeOnly: false` would fail OPEN on STOP-HUMAN-MERGE-001, the rule
@@ -52,10 +48,14 @@ import type { PiBashGateFacts } from './readonly-role-gate.ts';
  * taken before the facts, and a read whose own presence bit or signature disagrees with the sources
  * is repeated (`resolveRepoFacts`), so a `.devloops` created while the probe's remote-URL lookup
  * awaits — visible to the signature, invisible to the probe's earlier presence check — can never be
- * cached next to the `inManagedContext: false` that was read before it existed. That signature does
- * not cover the packaged extension-defaults layer
- * the loader always merges, nor the git remote the slug derives from; an unresolved (non-repo) cwd is
- * not cached at all, so a directory that becomes a repo later is re-probed on the next call.
+ * cached next to the `inManagedContext: false` that was read before it existed. The second is the
+ * GIT IDENTITY the entry was resolved from, re-probed on every call (`cachedFactsStillHold`):
+ * neither a changed remote (which makes this repo's own PR-body write name a "foreign" repo and
+ * switches ADR-TRIPWIRE-STANDING-WAIVER off) nor a managed repo created BELOW a cached unmanaged
+ * ancestor root (whose own config sources are unchanged, so the signature keeps matching while every
+ * managed-repo deny stays off) is visible in that signature. That config signature does not cover
+ * the packaged extension-defaults layer the loader always merges; an unresolved (non-repo) cwd is not
+ * cached at all, so a directory that becomes a repo later is re-probed on the next call.
  */
 
 type RepoFacts = Pick<PiBashGateFacts, 'inManagedContext' | 'managedRepoSlug' | 'repoSlug' | 'humanMergeOnly'>;
@@ -314,9 +314,18 @@ async function resolveReadyGate(
   // so the resolved fact is handed over unchanged: the rule has one home, not a copy here that could
   // stop agreeing with the decision it predicts.
   if (prReadySegmentsProvenForeign(command, facts.managedRepoSlug)) return null;
-  const prNumber = extractPrNumberFromGhPrReadyAnywhere(command);
-  // No PR number or no clean slug to probe: deny fail-closed with the decider's own message.
-  if (prNumber === null || !facts.repoSlug || !isCleanRepoSlug(facts.repoSlug)) return NO_READY_GATE;
+  // The fact this probe produces describes ONE PR, and the shared decider authorizes the command
+  // only from THAT PR's evidence. Scope the probe to the PR the command's IN-SCOPE ready segments
+  // name — never the command's first ready segment, which may be a proven-foreign one whose result
+  // used to be applied to every ready segment in the command (`gh pr ready --repo other/repo 7 &&
+  // gh pr ready 8` probed managed PR #7 here and let #8 leave draft with no evidence of its own). An
+  // in-scope segment that names no PR number, or several different in-scope numbers, has no single
+  // fact to resolve: deny fail-closed, exactly as the shared decision does.
+  const inScopePrNumbers = inScopeGhPrReadyPrNumbers(command, facts.managedRepoSlug);
+  if (inScopePrNumbers.length !== 1 || inScopePrNumbers[0] === null) return NO_READY_GATE;
+  const prNumber = inScopePrNumbers[0];
+  // No clean slug to probe: deny fail-closed with the decider's own message.
+  if (!facts.repoSlug || !isCleanRepoSlug(facts.repoSlug)) return NO_READY_GATE;
   const inManagedRepo = deriveInManagedRepo({
     inManagedContext: facts.inManagedContext,
     managedRepoSlug: facts.managedRepoSlug,
@@ -363,13 +372,44 @@ export function createPiBashGateFactsResolver({
 }): (call: { cwd: string; command: string }) => Promise<PiBashGateFacts> {
   const probeRepoContext = resolveRepoContext ?? ((cwd: string) => defaultResolveRepoContext(exec, cwd));
   const cache = new Map<string, CachedRepoFacts>();
+  /**
+   * Whether a cached entry still describes THIS cwd. Its config-source signature alone does not: the
+   * GIT IDENTITY it was resolved from can move with the config sources untouched, and a stale
+   * identity is not a cosmetic mismatch. A cwd whose origin changed (`git remote set-url`, a renamed
+   * remote, a fresh clone over the same path) keeps a slug that no longer matches the repo, so an
+   * in-scope PR-body write reads as a proven-foreign repo and ADR-TRIPWIRE-STANDING-WAIVER stops
+   * applying. A managed repo created BELOW the cached ancestor root is worse: the ancestor's own
+   * `.devloops`/`.pi/dev-loop/defaults` are unchanged, so the signature keeps matching while every
+   * managed-repo deny (STOP-HUMAN-MERGE-001 and the raw merge among them) stays off for the session.
+   * The identity read is local git (`rev-parse`, `config`), so the entry is reused only when the
+   * probe still answers (`identityProbe: 'ok'`) and still reports the same root, slug and
+   * managed-context answer the facts were resolved from. The merged config LOAD stays cached: that is
+   * the expensive half, and the two readings above are what decide which rules are armed.
+   */
+  async function cachedFactsStillHold(cwd: string, cached: CachedRepoFacts): Promise<boolean> {
+    if (cached.configSignature !== configSourceSignature(cached.repoRoot)) return false;
+    let fresh: RepoContext | null;
+    try {
+      fresh = await probeRepoContext(cwd);
+    } catch {
+      return false;
+    }
+    return (
+      fresh?.identityProbe === 'ok' &&
+      fresh.repoRoot === cached.repoRoot &&
+      fresh.repoSlug === cached.repoSlug &&
+      fresh.inManagedContext === cached.inManagedContext
+    );
+  }
   async function cachedRepoFacts(cwd: string): Promise<ResolvedRepoFacts> {
     const cached = cache.get(cwd);
-    // Revalidate a resolved repo against its config sources: the same cwd may hold a different
-    // `.devloops` than the one the cached facts were resolved from (a branch switch, a config edit
-    // in a live session). An unresolved cwd has no config source to compare and is NOT cached, so a
-    // directory that becomes a repo later is re-probed instead of serving permissive facts forever.
-    if (cached && cached.configSignature === configSourceSignature(cached.repoRoot)) return cached;
+    // Revalidate a resolved repo against its config sources AND its git identity: the same cwd may
+    // hold a different `.devloops` than the one the cached facts were resolved from (a branch switch,
+    // a config edit in a live session), and it may resolve to a different repo than the one the
+    // cached facts describe (see `cachedFactsStillHold`). An unresolved cwd has no config source to
+    // compare and is NOT cached, so a directory that becomes a repo later is re-probed instead of
+    // serving permissive facts forever.
+    if (cached && (await cachedFactsStillHold(cwd, cached))) return cached;
     const facts = await resolveRepoFacts(probeRepoContext, cwd);
     // Only a probe-backed entry is cached: a degraded (unresolved-identity) or rootless answer is
     // re-probed on the next call, so a transient probe failure never pins the session. The entry

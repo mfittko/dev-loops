@@ -22,11 +22,13 @@ import {
   commandContainsGhPrMerge,
   commandContainsGhPrCreate,
   extractPrNumberFromGhPrMergeAnywhere,
+  extractPrNumberFromGhPrReadyAnywhere,
   extractRepoFlagFromGhPrMergeAnywhere,
   extractRepoFlagFromGhPrCreateAnywhere,
   extractRepoFlagsFromGhPrCreateSegments,
   extractRepoFlagsFromGhPrMergeSegments,
   extractRepoFlagsFromGhPrReadySegments,
+  extractGhPrReadyTargets,
   commandContainsRawExternalWrite,
   extractRepoFlagsFromExternalWriteSegments,
   commandContainsGitStash,
@@ -241,6 +243,39 @@ test("extractRepoFlagsFromGhPrReadySegments returns every ready segment's --repo
     [{ segment: "gh pr ready --repo=a/b 3", explicitRepo: "a/b" }],
   );
   assert.deepEqual(extractRepoFlagsFromGhPrReadySegments("echo hi"), []);
+});
+
+test("extractGhPrReadyTargets pairs every ready segment with its OWN PR number", () => {
+  // The command-wide `extractPrNumberFromGhPrReadyAnywhere` reports 1 here — the segment that carries
+  // the repo flag — so a caller that generalizes its draft-gate evidence to the whole command needs
+  // the per-segment reading instead (#2965 review: managed PR 2 left draft with no evidence).
+  assert.equal(
+    extractPrNumberFromGhPrReadyAnywhere("gh pr ready --repo other/x 1 && gh pr ready 2"),
+    1,
+    "the command-wide reading answers with the repo-flagged segment, never the in-scope target",
+  );
+  assert.deepEqual(
+    extractGhPrReadyTargets("gh pr ready --repo other/x 1 && gh pr ready 2"),
+    [
+      { segment: "gh pr ready --repo other/x 1", explicitRepo: "other/x", prNumber: 1 },
+      { segment: "gh pr ready 2", explicitRepo: null, prNumber: 2 },
+    ],
+  );
+  // The same command read per segment: the in-scope target is 2, not the foreign-led 1.
+  assert.deepEqual(
+    extractGhPrReadyTargets("gh pr ready --repo other/x 1 && gh pr ready 2").map((t) => t.prNumber),
+    [1, 2],
+  );
+  // A segment that names no PR number reads as null, never as a neighbouring segment's number.
+  assert.deepEqual(extractGhPrReadyTargets("gh pr ready 1 && gh pr ready"), [
+    { segment: "gh pr ready 1", explicitRepo: null, prNumber: 1 },
+    { segment: "gh pr ready", explicitRepo: null, prNumber: null },
+  ]);
+  // --help segments and non-ready segments are excluded, as in the flag extractor it mirrors.
+  assert.deepEqual(extractGhPrReadyTargets("git push && gh pr ready --help && gh pr ready --repo=a/b 3"), [
+    { segment: "gh pr ready --repo=a/b 3", explicitRepo: "a/b", prNumber: 3 },
+  ]);
+  assert.deepEqual(extractGhPrReadyTargets("echo hi"), []);
 });
 
 test("commandContainsRawExternalWrite detects raw issue/pr create+comment in any segment", () => {

@@ -295,6 +295,20 @@ test("the Claude and Pi adapters agree on every Bash-gate fixture (AC3, #1086)",
   const passed = { ...MANAGED, readyGate: { passed: true, error: null } };
   assert.equal(claudeAllows("gh pr ready 5", null, passed), !piBlocks("gh pr ready 5", null, passed));
   assert.equal(piBlocks("gh pr ready 5", null, passed), false);
+  // The escape is scoped to the ONE PR that evidence describes, on both harnesses: one in-scope
+  // target behind a proven-foreign leading segment still follows the probe result ...
+  assert.equal(claudeAllows("gh pr ready --repo other/repo 1 && gh pr ready 5", null, passed), true);
+  assert.equal(piBlocks("gh pr ready --repo other/repo 1 && gh pr ready 5", null, passed), false);
+  // ... while a command naming SEVERAL in-scope PRs is refused before the single fact is read, so
+  // one PR's clean draft_gate record can never clear another PR's draft status (#2965 review).
+  for (const command of [
+    "gh pr ready 5 && gh pr ready 6",
+    "gh pr ready 5 && gh pr ready --repo other/repo 1 && gh pr ready 6",
+    "gh pr ready --repo other/repo 1 && gh pr ready",
+  ]) {
+    assert.equal(claudeAllows(command, null, passed), false, `Claude Code must deny: ${command}`);
+    assert.equal(piBlocks(command, null, passed), true, `Pi must deny: ${command}`);
+  }
 });
 
 // The seam is the public surface a third adapter would call next, so a fact it forgets to inject

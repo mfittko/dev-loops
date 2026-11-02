@@ -39,6 +39,7 @@ import {
   commandContainsGhPrMerge,
   commandContainsGhPrCreate,
   extractPrNumberFromGhPrReadyAnywhere,
+  extractGhPrReadyTargets,
   extractPrNumberFromGhPrMergeAnywhere,
   extractRepoFlagsFromGhPrCreateSegments,
   extractRepoFlagsFromGhPrMergeSegments,
@@ -189,12 +190,39 @@ export function prReadySegmentsProvenForeign(command, managedSlug = null) {
 }
 
 /**
+ * The distinct PR numbers the command's IN-SCOPE `gh pr ready` segments target, in first-seen order
+ * (`null` for an in-scope segment that names no PR number). In scope means NOT proven foreign — no
+ * explicit `--repo`/`-R`, or one naming the managed slug — read with the SAME `normalizeSlugFact`
+ * rule the decider applies to the same fact, so a padded or case-drifted explicit repo cannot read
+ * as foreign here while the decision treats that segment as in scope.
+ *
+ * The draft-gate evidence fact covers exactly ONE PR, so a caller may authorize a ready command only
+ * when this list is exactly one real number. `gh pr ready --repo other/repo 7 && gh pr ready 8`
+ * probed managed PR #7 (the command's first ready segment) and applied its clean evidence to #8,
+ * which then left draft with no evidence of its own; a second distinct number, or an in-scope
+ * segment carrying none, has evidence that one probe cannot supply — fail closed.
+ * @param {string} command @param {string|null} [managedSlug] @returns {(number|null)[]}
+ */
+export function inScopeGhPrReadyPrNumbers(command, managedSlug = null) {
+  const slug = normalizeSlugFact(managedSlug);
+  const numbers = [];
+  for (const target of extractGhPrReadyTargets(command)) {
+    const explicitRepo = normalizeSlugFact(target.explicitRepo);
+    if (explicitRepo !== null && slug !== null && explicitRepo !== slug) continue;
+    if (!numbers.includes(target.prNumber)) numbers.push(target.prNumber);
+  }
+  return numbers;
+}
+
+/**
  * Decide whether a Bash command must be denied by a dev-loop gate boundary.
  *
  * Gated commands on the managed repo (each rationale sits inline at its check):
  *   - `gh pr create` — blocked outright; PR creation must flow through the canonical wrapper
  *     (`scripts/github/create-pr.mjs` / `dev-loops-run cli/index.mjs pr create`), which always drafts and self-assigns.
- *   - `gh pr ready` — blocked without clean draft_gate evidence.
+ *   - `gh pr ready` — blocked without clean draft_gate evidence for the ONE in-scope PR the command
+ *     names, so a command that readies several in-scope PRs (or carries an in-scope ready segment
+ *     naming none) is refused before that single-PR fact is read.
  *   - `gh pr merge` — blocked outright, and blocked earlier still under `humanMergeOnly`
  *     (STOP-HUMAN-MERGE-001). The sanctioned path is `scripts/github/merge-pr.mjs`; its gate
  *     evidence check requires a clean draft_gate transition record + current-head pre_approval_gate
@@ -565,6 +593,23 @@ export function decideBashGateDeny(facts = {}) {
         (alsoWritesEvidence
           ? " This command also writes gate evidence, but hooks evaluate before the command runs — never chain an evidence write with the merge."
           : ""),
+    };
+  }
+
+  // The evidence fact (`readyGate`) describes ONE probed PR, so a command that readies SEVERAL
+  // in-scope PRs must not be authorized by any one of them: `gh pr ready --repo other/repo 7 &&
+  // gh pr ready 8` probes managed PR #7 and let #8 leave draft with no evidence of its own. Require
+  // exactly one in-scope PR number per ready command, and refuse an in-scope ready segment that
+  // names none, BEFORE the single-PR gate result is read (GATE-COMMENT-DRAFT-REQUIREMENTS).
+  const inScopeReadyPrNumbers = inScopeGhPrReadyPrNumbers(command, managedSlug);
+  if (inScopeReadyPrNumbers.length !== 1 || inScopeReadyPrNumbers[0] === null) {
+    return {
+      ruleId: "GATE-COMMENT-DRAFT-REQUIREMENTS",
+      reason:
+        "gh pr ready blocked: draft-gate evidence is probed for exactly ONE PR, but this command " +
+        "readies several in-scope PRs, or an in-scope ready segment names no PR number. Run one " +
+        "`gh pr ready <number>` per PR so each is checked against its own draft_gate evidence " +
+        "(GATE-COMMENT-DRAFT-REQUIREMENTS).",
     };
   }
 

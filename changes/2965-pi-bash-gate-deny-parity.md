@@ -8,3 +8,5 @@
 - The shared Bash-gate deny decision refuses a call that omits or mistypes an adapter fact instead of defaulting permissively, and the Pi signature follows the config loader's variant list (#2965)
 - The unresolve owner allowlist moved into the shared deny decision, so Pi refuses `unresolve-review-thread.mjs` for the same non-owner roles as Claude Code (#2965)
 - A Pi repo identity probe that cannot answer (killed, rejected, noisy) fails closed instead of reading as "not managed" (#2965)
+- The `gh pr ready` draft-gate probe is scoped to the one in-scope PR a command names; a command readying several in-scope PRs is refused (#2965)
+- The Pi Bash-gate fact cache revalidates the cwd's git identity every call, so a changed remote or a managed repo nested below a cached root still denies (#2965)
