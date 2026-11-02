@@ -981,7 +981,7 @@ test("decideBashGate scopes unresolve-review-thread to the orchestrator and coor
   const gate = (agentType) => decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType });
   assert.equal(gate(null).decision, "allow");
   assert.equal(gate("dev-loop").decision, "allow");
-  for (const agentType of ["fixer", "review", "judge", "dev-loops:fixer"]) {
+  for (const agentType of ["fixer", "review", "judge", "dev-loops:fixer", "developer", "gate-coordinator"]) {
     const d = gate(agentType);
     assert.equal(d.decision, "deny", agentType);
     assert.match(d.reason, /orchestrator.*dev-loop coordinator/);
@@ -994,11 +994,25 @@ test("decideBashGate scopes unresolve-review-thread to the orchestrator and coor
   }
 });
 
+test("decideBashGate denies every accepted unresolve invocation form for the fixer (issue 2577)", () => {
+  const args = "--repo o/r --pr 5 --thread-id T1";
+  for (const command of [
+    `node scripts/github/unresolve-review-thread.mjs ${args}`,
+    `dev-loops-run scripts/github/unresolve-review-thread.mjs ${args}`,
+    `bun scripts/github/unresolve-review-thread.mjs ${args}`,
+    `cd x && node scripts/github/unresolve-review-thread.mjs ${args}`,
+  ]) {
+    assert.equal(decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "fixer" }).decision, "deny", command);
+  }
+});
+
 test("decideBashGate allows non-executing mentions of unresolve-review-thread for the fixer (issue 2577)", () => {
   for (const command of [
     "git diff -- scripts/github/unresolve-review-thread.mjs",
     "grep -rn unresolve-review-thread scripts",
     "bun test test/github/unresolve-review-thread.test.mjs",
+    "bun test packages/core/test/claude-hook-decisions.test.mjs && git add scripts/github/unresolve-review-thread.mjs",
+    "node a.mjs; cat scripts/github/unresolve-review-thread.mjs",
   ]) {
     assert.equal(decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "fixer" }).decision, "allow", command);
   }

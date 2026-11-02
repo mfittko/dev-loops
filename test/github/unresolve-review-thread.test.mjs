@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
-import { unresolveReviewThread } from "../../scripts/github/unresolve-review-thread.mjs";
+import { parseCliArgs, unresolveReviewThread } from "../../scripts/github/unresolve-review-thread.mjs";
 
 const target = { repo: "owner/repo", pr: 7, threadId: "T1" };
 
-function fakeRun({ isResolved = true, state = "OPEN", number = 7, login = "copilot-pull-request-reviewer", reviewBody = "" } = {}) {
+function fakeRun({ isResolved = true, state = "OPEN", number = 7, nameWithOwner = "owner/repo", login = "copilot-pull-request-reviewer", reviewBody = "" } = {}) {
   const calls = [];
   const run = async (args) => {
     const query = args.find((a) => a.startsWith("query="));
@@ -14,7 +14,7 @@ function fakeRun({ isResolved = true, state = "OPEN", number = 7, login = "copil
     }
     return JSON.stringify({ data: { node: {
       id: "T1", isResolved,
-      pullRequest: { number, state, repository: { nameWithOwner: "owner/repo" } },
+      pullRequest: { number, state, repository: { nameWithOwner } },
       comments: { nodes: [{ author: { login }, pullRequestReview: { body: reviewBody } }] },
     } } });
   };
@@ -62,6 +62,7 @@ test("regression: a wrongly resolved thread now has a sanctioned unresolve path"
 for (const [name, opts, reason, remedy] of [
   ["an unresolved thread", { isResolved: false }, "thread_not_resolved", /fixer/],
   ["a thread on another PR", { number: 8 }, "thread_not_on_pr", /capture-threads/],
+  ["a thread on another repository with the same PR number", { nameWithOwner: "other/repo" }, "thread_not_on_pr", /capture-threads/],
   ["a closed PR", { state: "MERGED" }, "pr_closed_or_merged", /follow-up issue/],
   ["a human-authored thread", { login: "someone" }, "thread_author_not_reviewer", /operator/],
 ]) {
@@ -71,3 +72,14 @@ for (const [name, opts, reason, remedy] of [
     assert.equal(mutated(calls), false);
   });
 }
+
+test("a nameWithOwner that differs only in case is accepted", async () => {
+  const { run } = fakeRun({ nameWithOwner: "Owner/Repo" });
+  assert.equal((await unresolveReviewThread(target, { run })).ok, true);
+});
+
+test("parseCliArgs trims a padded --repo and --thread-id", () => {
+  const parsed = parseCliArgs(["--repo", " owner/repo ", "--pr", "7", "--thread-id", " T1 "]);
+  assert.equal(parsed.repo, "owner/repo");
+  assert.equal(parsed.threadId, "T1");
+});

@@ -67,9 +67,10 @@ function commandContainsEvidenceWrite(command) {
  */
 export const DEV_LOOP_AGENT_TYPE = "dev-loop";
 
-/** Agent types denied scripts/github/unresolve-review-thread.mjs (issue 2577). */
-const UNRESOLVE_DENIED_AGENT_TYPES = new Set(["fixer", "review", "judge"]);
-const UNRESOLVE_INVOCATION = /(?:^|[\s;&|(])(?:node|dev-loops-run|bun)\s+(?:\S+\s+)*?\S*unresolve-review-thread\.mjs(?=$|[\s;&|)])/;
+// Intermediate tokens exclude shell separators so a compound command that only names the file is not an invocation.
+const UNRESOLVE_INVOCATION = /(?:^|[\s;&|(])(?:node|dev-loops-run|bun)\s+(?:[^\s;&|()]+\s+)*?\S*unresolve-review-thread\.mjs(?=$|[\s;&|)])/;
+/** True when the command runs scripts/github/unresolve-review-thread.mjs (issue 2577). */
+export const isUnresolveInvocation = (command) => typeof command === "string" && UNRESOLVE_INVOCATION.test(command);
 
 /** The gate-round capsule agent (GATE-EXEC-GATE-COORDINATOR, ADR 0112). */
 export const GATE_COORDINATOR_AGENT_TYPE = "gate-coordinator";
@@ -182,11 +183,13 @@ export function decideBashGate({
 }) {
   // Unresolve is owned by the orchestrator and the dev-loop coordinator (issue 2577).
   // ponytail: token match only. Quote splitting, globs or variable expansion bypass it; this is a guardrail for cooperative agents.
-  if (UNRESOLVE_DENIED_AGENT_TYPES.has(normalizeAgentType(agentType)) && UNRESOLVE_INVOCATION.test(String(command))) {
+  // Owner allowlist: only the main agent (no agent type) and the dev-loop coordinator pass.
+  const unresolveCaller = normalizeAgentType(agentType);
+  if (unresolveCaller != null && unresolveCaller !== DEV_LOOP_AGENT_TYPE && isUnresolveInvocation(command)) {
     return {
       decision: "deny",
       reason:
-        `The ${normalizeAgentType(agentType)} agent may not unresolve review threads: scripts/github/unresolve-review-thread.mjs ` +
+        `The ${unresolveCaller} agent may not unresolve review threads: scripts/github/unresolve-review-thread.mjs ` +
         "is owned by the orchestrator (main agent) and the dev-loop coordinator. Report the wrongly resolved thread in your hand-back and let the owner run it.",
     };
   }

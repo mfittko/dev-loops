@@ -86,7 +86,7 @@ function parseError(message) {
   return Object.assign(new Error(message), { usage: USAGE });
 }
 
-function parseCliArgs(argv) {
+export function parseCliArgs(argv) {
   let values;
   try {
     ({ values } = parseArgs({
@@ -108,11 +108,13 @@ function parseCliArgs(argv) {
   for (const name of ["repo", "pr", "thread-id"]) {
     if (!values[name]) throw parseError(`Missing required option: --${name}`);
   }
-  parseRepoSlug(values.repo);
+  const { owner, name } = parseRepoSlug(values.repo);
+  const threadId = values["thread-id"].trim();
+  if (!threadId) throw parseError("Missing required option: --thread-id");
   return {
-    repo: values.repo,
+    repo: `${owner}/${name}`,
     pr: parsePositiveInteger(values.pr, "--pr", parseError),
-    threadId: values["thread-id"],
+    threadId,
     jq: values.jq,
     silent: values.silent === true,
   };

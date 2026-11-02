@@ -48,6 +48,16 @@ test("the exact short pull line from a fixer is allowed and records the binding 
   });
 });
 
+test("the real Bash hook denies unresolve-review-thread for fixer, review, developer and gate-coordinator (issue 2577)", async () => {
+  await withRepo(async (root) => {
+    const command = "dev-loops-run scripts/github/unresolve-review-thread.mjs --repo o/r --pr 5 --thread-id T1";
+    for (const agentType of ["fixer", "review", "developer", "gate-coordinator"]) {
+      assert.equal(bash(root, command, agentType).decision, "deny", agentType);
+    }
+    assert.equal(bash(root, command, "dev-loop").decision, "allow");
+  });
+});
+
 test("a suffixed, prefixed or redirected fixer pull line is denied with the exact line and records no binding", async () => {
   await withRepo(async (root) => {
     for (const command of [`${LINE}; echo "EXIT $?"`, `cd ${root} && ${LINE}`, `${LINE} >/dev/null`]) {
