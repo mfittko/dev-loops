@@ -88,11 +88,11 @@ test("a malformed artifact yields the empty set", async () => {
     "not json",
     '{"declaredKeys":"a"}',
     '{"declaredKeys":[1]}',
-    '["bad key!"]',
-    '["a..b"]',
-    '[""]',
-    JSON.stringify(["x".repeat(201)]),
-    JSON.stringify(["x".repeat(300 * 1024)]),
+    '{"declaredKeys":["bad key!"]}',
+    '{"declaredKeys":["a..b"]}',
+    '{"declaredKeys":[""]}',
+    JSON.stringify({ declaredKeys: ["x".repeat(101)] }),
+    JSON.stringify({ declaredKeys: ["x".repeat(300 * 1024)] }),
   ]) {
     assert.deepEqual(await run({ zipText }), [], zipText.slice(0, 40));
   }
