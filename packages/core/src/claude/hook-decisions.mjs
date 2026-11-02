@@ -66,6 +66,12 @@ function commandContainsEvidenceWrite(command) {
  */
 export const DEV_LOOP_AGENT_TYPE = "dev-loop";
 
+// Intermediate tokens exclude shell separators so a compound command that only names the file is not an invocation.
+// The interpreter may carry a path prefix and follow a backtick; the script path itself also matches as a command head.
+const UNRESOLVE_INVOCATION = /(?:(?:^|[\s;&|(`])(?:[^\s;&|()`]*\/)?(?:node\s+(?:(?!(?:--check|-c)\s)[^\s;&|()`]+\s+)*?|(?:dev-loops-run|bun)\s+(?:[^\s;&|()`]+\s+)*?)|(?:^|[\n;&|(`])\s*)[^\s;&|()`]*unresolve-review-thread\.mjs(?=$|[\s;&|)`<>"'}])/;
+/** True when the command runs scripts/github/unresolve-review-thread.mjs (issue 2577). */
+export const isUnresolveInvocation = (command) => typeof command === "string" && UNRESOLVE_INVOCATION.test(command);
+
 /** The gate-round capsule agent (GATE-EXEC-GATE-COORDINATOR, ADR 0112). */
 export const GATE_COORDINATOR_AGENT_TYPE = "gate-coordinator";
 /** Callers that hold the coordinator write and verify boundaries: the gate coordinator never loosens them. */
@@ -175,6 +181,18 @@ export function decideBashGate({
   humanMergeOnly = false,
   enforceCoordinator = false,
 }) {
+  // Unresolve is owned by the orchestrator and the dev-loop coordinator (issue 2577).
+  // ponytail: token match only. Quote splitting, globs or variable expansion bypass it; this is a guardrail for cooperative agents.
+  // Owner allowlist: only the main agent (no agent type) and the dev-loop coordinator pass.
+  const unresolveCaller = normalizeAgentType(agentType);
+  if (unresolveCaller != null && unresolveCaller !== DEV_LOOP_AGENT_TYPE && isUnresolveInvocation(command)) {
+    return {
+      decision: "deny",
+      reason:
+        `The ${unresolveCaller} agent may not unresolve review threads: scripts/github/unresolve-review-thread.mjs ` +
+        "is owned by the orchestrator (main agent) and the dev-loop coordinator. Report the wrongly resolved thread in your hand-back and let the owner run it.",
+    };
+  }
   if (normalizeAgentType(agentType) === JUDGE_AGENT_TYPE) {
     return parseSanctionedPullLine(command) || isJudgeDecisionCheckLine(command) ? ALLOW : {
       decision: "deny",
@@ -305,7 +323,9 @@ export function decideBashGate({
       reason:
         "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER: ad-hoc thread-reply mutations are blocked. Resolve review " +
         "threads via scripts/github/reply-resolve-review-thread.mjs (one thread) or " +
-        "reply-resolve-review-threads.mjs (multiple threads, --message-map), not raw gh api/graphql.",
+        "reply-resolve-review-threads.mjs (multiple threads, --message-map), not raw gh api/graphql. " +
+        "To reopen a wrongly resolved thread, the orchestrator or dev-loop coordinator runs " +
+        "scripts/github/unresolve-review-thread.mjs (never raw unresolveReviewThread).",
     };
   }
 

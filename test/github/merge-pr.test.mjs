@@ -897,6 +897,19 @@ test("converged-once: a 🔵 review, a 🟡 review with its own resolved thread,
   assert.equal(recorded.copilotCarriedConvergence.sourceHeadSha, OLD_HEAD);
 });
 
+test("final round: a changes_recommended review whose thread the fixer resolved carries convergence to the one fix commit above it", async () => {
+  const { runtime } = makeRuntime({
+    maxCopilotRounds: 1,
+    reviews: [withNodeId(copilotAt(OLD_HEAD, YELLOW_BODY, "2026-01-01T00:00:00Z"), "PRR_final")],
+    reviewThreads: [reviewThread({ reviewId: "PRR_final", isResolved: true })],
+  });
+  const result = await mergePr(baseOptions(), runtime);
+  assert.equal(result.copilotConvergenceState, "no_current_head_review");
+  assert.equal(result.copilotDisposition, "converged_once");
+  assert.equal(result.copilotCarriedConvergence.sourceReviewId, "PRR_final");
+  assert.equal(result.copilotCarriedConvergence.sourceHeadSha, OLD_HEAD);
+});
+
 // ADR 0155: the fixer-disposition boundary is advisory; the merge gate still refuses an unresolved review thread.
 test("merge-pr refuses a PR with an unresolved review thread and performs no merge", async () => {
   const refused = await expectCopilotRefusal("an unresolved review thread", {
