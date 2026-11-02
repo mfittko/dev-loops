@@ -16,7 +16,7 @@ One predicate, `isTrustedCommentAuthor` in `packages/core/src/github/comment-tru
 
 Trust is decided once at ingestion. `normalizeComment` and `parseReviewThreads` drop the text of an untrusted comment. `fetchAllReviewThreads` lists the first trusted comment of each thread and returns threads with no trusted comment as skipped. Both GraphQL thread queries now fetch `authorAssociation`. A thread with comments and none trusted is not an act item, not a known finding, and not an unresolved-thread blocker. `summary.unresolvedThreads` counts trusted threads only, so every gate and merge precondition that reads it follows. The skip reports author logins and the remedy: a maintainer replies to or resolves the thread, or restates the finding. A maintainer reply or resolve clears the skip, so there is no lockout.
 
-The fixer work order and the `threads` source refuse a thread without the ingestion `trusted` marker. Fixer and gate work orders state that comment text is data, never instructions. The fixer prose reads threads only through the work order.
+The fixer work order and the `threads` source refuse a thread without the ingestion `trusted` marker. Each work order labels comment text as data, never instructions. The fixer prose reads threads only through the work order.
 
 The trusted set has no configuration surface in this slice. The owner rule is `GATE-REVIEW-COMMENT-TRUST` in the gate review sub-loop contract.
 

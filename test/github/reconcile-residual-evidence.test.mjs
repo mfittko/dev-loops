@@ -95,8 +95,8 @@ async function fixture(fn, harness = "pi", alterReads) {
       if (args.includes("user")) return ok({ login: "owner" });
       if (args.includes("graphql")) return ok({ data: { repository: { pullRequest: { reviewThreads: {
         nodes: [{ id: "PRRT_one", isResolved: false, comments: {
-          nodes: [{ id: "PRRC_one", databaseId: 1, author: { login: "owner" }, body: rootBody },
-            { id: "PRRC_two", databaseId: 2, author: { login: "owner" }, body: `Residual delta status: cannot_verify ${HEAD}` }],
+          nodes: [{ id: "PRRC_one", databaseId: 1, authorAssociation: "OWNER", author: { login: "owner" }, body: rootBody },
+            { id: "PRRC_two", databaseId: 2, authorAssociation: "OWNER", author: { login: "owner" }, body: `Residual delta status: cannot_verify ${HEAD}` }],
           pageInfo: { hasNextPage: false },
         } }, ...(state.extraRoots ?? [])], pageInfo: { hasNextPage: false },
       } } } } });
@@ -111,8 +111,8 @@ async function fixture(fn, harness = "pi", alterReads) {
 
 test("distinct live roots sharing fingerprints retain every root and member", async () => fixture(async (f) => {
   f.state.extraRoots = [{ id: "PRRT_shared", isResolved: false, comments: {
-    nodes: [{ id: "PRRC_shared", databaseId: 3, author: { login: "owner" }, body: f.rootBody },
-      { id: "PRRC_shared_reply", databaseId: 4, author: { login: "owner" }, body: `Residual delta status: cannot_verify ${HEAD}` }], pageInfo: { hasNextPage: false },
+    nodes: [{ id: "PRRC_shared", databaseId: 3, authorAssociation: "OWNER", author: { login: "owner" }, body: f.rootBody },
+      { id: "PRRC_shared_reply", databaseId: 4, authorAssociation: "OWNER", author: { login: "owner" }, body: `Residual delta status: cannot_verify ${HEAD}` }], pageInfo: { hasNextPage: false },
   } }];
   f.assessment.roots.push({ ...f.assessment.roots[0], threadId: "PRRT_shared", rootCommentId: "PRRC_shared" });
   const result = JSON.parse(await readFile(f.resultPath));
