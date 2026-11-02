@@ -38,6 +38,8 @@ test("editIssue (#2898): refuses to untick a checked row unless --allow-untick",
   assert.equal((await attempt("## AC\n- [x] Tests pass\n- [x] Docs\n- [ ] New")).length, 1);
   assert.equal((await attempt("## AC\n- [ ] Tests pass\n- [x] Docs", { allowUntick: true })).length, 1);
   assert.equal(parseEditIssueCliArgs(["--repo", "o/n", "--issue", "1", "--body", "x", "--allow-untick"]).allowUntick, true);
+  assert.equal(parseEditIssueCliArgs(["--repo", "o/n", "--issue", "1", "--body", "x", "--allow-untick=true"]).allowUntick, true);
+  assert.equal(parseEditIssueCliArgs(["--repo", "o/n", "--issue", "1", "--body", "x", "--allow-untick=false"]).allowUntick, false);
 });
 
 test("parseEditIssueCliArgs: requires --repo, --issue and at least one edit", () => {

@@ -67,7 +67,7 @@ Exit codes:
   2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
 
-const booleanFlagValue = (v) => v === undefined || v === true || /^(?:true|1)$/iu.test(String(v));
+export const booleanFlagValue = (v) => v === undefined || v === true || /^(?:true|1)$/iu.test(String(v));
 
 export function parseEditPrCliArgs(argv) {
   const { tokens } = parseArgs({

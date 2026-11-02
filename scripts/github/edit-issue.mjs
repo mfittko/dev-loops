@@ -7,7 +7,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { editIssue as coreEditIssue } from "@dev-loops/core/github/issue-ops";
 import { detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
-import { untickedRows } from "./edit-pr.mjs";
+import { booleanFlagValue, untickedRows } from "./edit-pr.mjs";
 import { parseArgs } from "node:util";
 import {
   JQ_OUTPUT_PARSE_OPTIONS,
@@ -191,7 +191,7 @@ export function parseEditIssueCliArgs(argv) {
       continue;
     }
     if (token.name === "allow-untick") {
-      options.allowUntick = true;
+      options.allowUntick = booleanFlagValue(token.value);
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
