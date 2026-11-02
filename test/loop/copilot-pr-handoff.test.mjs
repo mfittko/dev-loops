@@ -341,7 +341,7 @@ test("copilot-pr-handoff places the request and carries fixerDispositionWarning 
     await writeFile(path.join(repoRoot, ".devloops"), await readFile(path.join(capFixtureRepoRoot, ".devloops"), "utf8"), "utf8");
     const logPath = path.join(repoRoot, buildLogPath({ repo: "owner/repo", pr: 17, gate: "fixer-disposition", headSha: head, tmpRoot: "tmp" }));
     await mkdir(path.dirname(logPath), { recursive: true });
-    await writeFile(logPath, JSON.stringify({ headSha: head, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: "fed9876543", disposition: "tackled" }] }));
+    await writeFile(logPath, JSON.stringify({ headSha: head, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: "fed9876543fed9876543fed9876543fed9876543", disposition: "tackled" }] }));
     const prView = ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"];
     const requestedReviewers = ["api", "repos/owner/repo/pulls/17/requested_reviewers"];
     const threads = JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [] } }] } } } } });
@@ -352,7 +352,7 @@ test("copilot-pr-handoff places the request and carries fixerDispositionWarning 
       { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
       { assertArgs: requestedReviewers, stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: prView, stdout: withHead + "\n" },
-      { assertArgs: ["api", `repos/owner/repo/compare/fed9876543...${head}`], stdout: '{"status":"diverged"}\n' },
+      { assertArgs: ["api", `repos/owner/repo/compare/fed9876543fed9876543fed9876543fed9876543...${head}`], stdout: '{"status":"diverged"}\n' },
       { assertArgs: ["api", "graphql"], stdout: threads + "\n" },
       { assertArgs: [...requestedReviewers, "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
       { assertArgs: requestedReviewers, stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },

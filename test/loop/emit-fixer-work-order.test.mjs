@@ -1275,10 +1275,126 @@ test("an act-list item with a missing or non-canonical fingerprint refuses", asy
   });
 });
 
+// --review-id source: one PR review body, read live and pinned by node id and body hash.
+const reviewFor = (head, over = {}) => ({ node_id: "PRR_H1", state: "CHANGES_REQUESTED", body: "Please rename foo to bar.\n", commit_id: head, submitted_at: "2026-11-01T10:00:00Z",
+  user: { login: "alice", type: "User" }, author_association: "COLLABORATOR", ...over });
+const copilotReviewFor = (head, over = {}) => reviewFor(head, { node_id: "PRR_C1", state: "COMMENTED", body: "Copilot found a problem.", submitted_at: "2026-11-01T11:00:00Z",
+  user: { login: "copilot-pull-request-reviewer", type: "Bot" }, author_association: "NONE", ...over });
+const compareAs = (status) => async () => ({ code: 0, stdout: JSON.stringify({ status }), stderr: "" });
+const emitReview = (emit, reviews, over = {}) => emit({ actListFile: undefined, gate: undefined, deltaResult: undefined, reviewId: reviews[0].node_id, phase: "full",
+  fetchReview: async () => reviews, runChild: compareAs("ahead"), ...over });
+
+test("AC1/AC2/AC5: --review-id emits a review-body work order whose snapshot, digest and dispatch pointer are pinned", async () => {
+  await withFixture(async ({ root, head, emit }) => {
+    const review = reviewFor(head);
+    const unit = await emitReview(emit, [review]);
+    const { workOrder } = unit;
+    assert.equal(workOrder.source, "review-body");
+    assert.equal(workOrder.requiredReads.length, 1);
+    const [read] = workOrder.requiredReads;
+    assert.equal(read.kind, "review-body");
+    const bytes = await readFile(read.path);
+    assert.equal(read.sha256, createHash("sha256").update(bytes).digest("hex"));
+    assert.deepEqual(JSON.parse(bytes), { repo: REPO, pr: PR, reviewId: "PRR_H1", state: "CHANGES_REQUESTED", commitId: head, author: "alice", authorAssociation: "COLLABORATOR",
+      submittedAt: review.submitted_at, body: review.body, bodySha256: createHash("sha256").update(review.body).digest("hex") });
+    assert.deepEqual(workOrder.mutationAuthority, { repo: REPO, pr: PR, branch: "issue-1", allowedPaths: ["."] });
+    for (const harness of ["claude", "pi"]) assertFixerDispatchPayload({ harness, payload: buildFixerDispatchPayload({ harness, plan: unit }), plan: unit });
+    assert.match(await readFile(unit.promptPath, "utf8"), /No thread exists to reply to or resolve[\s\S]*posts the reply comment/);
+    // The same review ID with another body is another work order.
+    const edited = await emitReview(emit, [reviewFor(head, { body: "Please rename foo to baz.\n" })]);
+    assert.notEqual(edited.workOrderDigest, unit.workOrderDigest);
+    // Only the execution identity and tmp root differ: the digest stays.
+    const other = await emitReview(emit, [review], { tmpRoot: path.join(root, "alt-tmp") });
+    assert.equal(other.workOrderDigest, unit.workOrderDigest);
+  });
+});
+
+test("AC5: the review-body task shares the full-phase steps, so it refuses a branch git rejects and names the ci_unknown hand-back", async () => {
+  await withFixture(async ({ head, emit }) => {
+    const review = reviewFor(head);
+    const text = await readFile((await emitReview(emit, [review])).promptPath, "utf8");
+    assert.match(text, /hand back `ci_pending` \(`ci_unknown` when the checks cannot be read\)/);
+    assert.match(text, /reports `stuck` or `changed`/);
+    await assert.rejects(emitReview(emit, [review], { fetchPr: async () => ({ headRefName: "bad..branch", headRefOid: head }) }), /refusing to render a branch name git rejects/);
+  });
+});
+
+test("AC3: exactly one source; --gate and --delta-result refuse with --review-id", async () => {
+  await withFixture(async ({ head, files, emit }) => {
+    const review = reviewFor(head);
+    await assert.rejects(emit({ actListFile: undefined, gate: undefined, deltaResult: undefined }), /exactly one of --act-list-file, --threads-file and --review-id/);
+    await assert.rejects(emitReview(emit, [review], { threadsFile: files.threads }), /exactly one of --act-list-file, --threads-file and --review-id/);
+    await assert.rejects(emitReview(emit, [review], { actListFile: files.actList, gate: "draft_gate" }), /exactly one of/);
+    await assert.rejects(emitReview(emit, [review], { gate: "draft_gate" }), /--gate applies only to an --act-list-file source/);
+    await assert.rejects(emitReview(emit, [review], { deltaResult: files.delta }), /--delta-result applies only to an --act-list-file source/);
+  });
+});
+
+test("AC4: the review source refuses an unknown review, a wrong state, an empty body, another bot, an untrusted human and an uncontained commit", async () => {
+  await withFixture(async ({ head, emit }) => {
+    const refuses = (reviews, pattern, over = {}) => assert.rejects(emitReview(emit, reviews, over), pattern);
+    await refuses([reviewFor(head)], /no review of o\/r#7 has node id PRR_NOPE/, { reviewId: "PRR_NOPE" });
+    for (const state of ["APPROVED", "DISMISSED", "PENDING"]) await refuses([reviewFor(head, { state })], new RegExp(`has state ${state}`));
+    await refuses([reviewFor(head, { body: "  \n" })], /empty body/);
+    await refuses([reviewFor(head, { user: { login: "dependabot[bot]", type: "Bot" } })], /by the bot dependabot\[bot\]/);
+    await refuses([reviewFor(head, { author_association: "CONTRIBUTOR" })], /association CONTRIBUTOR/);
+    await refuses([reviewFor(head, { user: { login: "copilot-lookalike", type: "User" } })], /association COLLABORATOR|only an OWNER/);
+    await refuses([reviewFor(head, { commit_id: "d".repeat(40) })], /does not contain/, { runChild: compareAs("diverged") });
+    // A human review on an earlier commit of the PR stays valid.
+    const earlier = await emitReview(emit, [reviewFor(head, { commit_id: "d".repeat(40) })], { runChild: compareAs("ahead") });
+    assert.equal(earlier.workOrder.source, "review-body");
+    // A different --head-sha still refuses as for the other sources.
+    await refuses([reviewFor(head)], /conflicting authority/, { fetchPr: async () => ({ headRefName: "issue-1", headRefOid: "b".repeat(40) }) });
+  });
+});
+
+test("AC15: a Copilot review emits only when it is the latest one on the PR head", async () => {
+  await withFixture(async ({ head, emit }) => {
+    const copilot = copilotReviewFor(head);
+    assert.equal((await emitReview(emit, [copilot])).workOrder.source, "review-body");
+    await assert.rejects(emitReview(emit, [copilotReviewFor("d".repeat(40))]), /on d{40}, not the PR head/);
+    const newer = copilotReviewFor(head, { node_id: "PRR_C2", submitted_at: "2026-11-01T12:00:00Z" });
+    await assert.rejects(emitReview(emit, [copilot, newer]), /not the latest Copilot review.*PRR_C2/);
+    // A newer human lookalike login is not a Copilot candidate: the real Copilot review stays the latest.
+    const lookalike = reviewFor(head, { node_id: "PRR_L1", submitted_at: "2026-11-01T12:00:00Z", user: { login: "copilot-lookalike", type: "User" } });
+    assert.equal((await emitReview(emit, [copilot, lookalike], { reviewId: "PRR_C1" })).workOrder.source, "review-body");
+    await assert.rejects(emitReview(emit, [copilotReviewFor(head, { body: "" })]), /empty body/);
+    await assert.rejects(emitReview(emit, [reviewFor(head, { node_id: "PRR_B1", user: { login: "some-app[bot]", type: "Bot" } })]), /by the bot some-app\[bot\]/);
+  });
+});
+
+test("AC15: two Copilot body-only blocking reviews that share one submitted_at refuse as not the latest", async () => {
+  await withFixture(async ({ head, emit }) => {
+    const first = copilotReviewFor(head, { state: "CHANGES_REQUESTED" });
+    const tied = copilotReviewFor(head, { node_id: "PRR_C2", state: "CHANGES_REQUESTED" });
+    // PRR_C2 is the review resolveLatestCopilotReview selects (later position wins a tie), so only the ambiguousBlockingTie guard can refuse.
+    await assert.rejects(emitReview(emit, [first, tied], { reviewId: "PRR_C2" }), /not the latest Copilot review/);
+  });
+});
+
+test("--review-id refuses --phase commit_only and a review id the handoff normalizer would reject", async () => {
+  await withFixture(async ({ head, emit }) => {
+    await assert.rejects(emitReview(emit, [reviewFor(head)], { phase: "commit_only" }), /--review-id takes only --phase full.*re-run with --phase full/);
+    await assert.rejects(emitReview(emit, [reviewFor(head, { node_id: Buffer.from("017:PullRequestReview80").toString("base64") })]), /is not a review node id \(PRR_\.\.\.\)/);
+    assert.equal((await emitReview(emit, [reviewFor(head, { node_id: "PRR_kwDOabc123" })])).workOrder.source, "review-body");
+  });
+});
+
+test("AC6: a review-body unit pulls, and an edited snapshot makes it stale_dispatch", async () => {
+  await withFixture(async ({ root, head, emit }) => {
+    const unit = await emitReview(emit, [reviewFor(head)]);
+    const pulled = pull(unit, root);
+    assert.equal(pulled.status, 0, pulled.stderr);
+    assert.equal(pulled.stdout, await readFile(unit.promptPath, "utf8"));
+    await writeFile(unit.workOrder.requiredReads[0].path, "{}");
+    assert.equal(refusal(pull(unit, root)), "stale_dispatch");
+  });
+});
+
 test("F1: missing or conflicting source and authority refuse before dispatch", async () => {
   await withFixture(async ({ root, wt, head, files, emit }) => {
     await assert.rejects(emit({ actListFile: path.join(wt, "missing.json") }), /required fixer source act-list is missing/);
-    await assert.rejects(emit({ actListFile: undefined }), /exactly one of --act-list-file and --threads-file/);
+    await assert.rejects(emit({ actListFile: undefined }), /exactly one of --act-list-file, --threads-file and --review-id/);
     await assert.rejects(emit({ threadsFile: files.threads }), /exactly one of/);
     await assert.rejects(emit({ gate: undefined }), /needs --gate/);
     await assert.rejects(emit({ actListFile: files.threads }), /not a non-empty judge-pass --out array/);
@@ -2842,5 +2958,15 @@ test("ADR 0218: a clearing chain that ends at the head itself does not read as a
     await writeFile(path.join(fx.root, "tmp", "gate-delta", `${fx.head}.json`), text);
     await writeFile(path.join(fx.root, "tmp", "gate-delta", `${fx.head}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`);
     await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
+  });
+});
+
+test("review source: a non-array review list, a missing commit_id, an empty id and a null user refuse with a next action", async () => {
+  await withFixture(async ({ head, emit }) => {
+    await assert.rejects(emitReview(emit, [reviewFor(head)], { fetchReview: async () => ({ message: "rate limited" }) }), /is not an array.*--threads-file/);
+    await assert.rejects(emitReview(emit, [reviewFor(head, { commit_id: null })]), /has no commit_id.*re-review the head/);
+    await assert.rejects(emitReview(emit, [reviewFor(head)], { reviewId: "" }), /--review-id must be a review node id/);
+    await assert.rejects(emitReview(emit, [reviewFor(head, { user: null })]), /unknown author.*--threads-file/);
+    await assert.rejects(emitReview(emit, [copilotReviewFor("d".repeat(40))]), /re-review the head and pass the new node id/);
   });
 });
