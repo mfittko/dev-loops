@@ -1,6 +1,6 @@
 // close-gate-sequence: a sanctioned close of an abandoned fix sequence; a live sequence is never closable.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { afterAll, test } from "bun:test";
@@ -321,6 +321,19 @@ test("withSequenceLock leaves a fresh steal directory in place and refuses SEQUE
     await assert.rejects(withSequenceLock(tmpRoot, [HEAD], () => { throw new Error("must not run"); }, { waitMs: 150 }), (error) => error.code === "SEQUENCE_LOCK_BUSY");
     assert.equal(existsSync(steal), true);
     assert.equal(readFileSync(path.join(lock, "owner"), "utf8"), "dead");
+  });
+});
+
+test("withSequenceLock refuses SEQUENCE_LOCK_BUSY, without spinning, when a stale steal directory cannot be removed", async () => {
+  if (process.getuid?.() === 0) return; // root ignores directory permissions
+  await withTempDir(async (tmpRoot) => {
+    plantLock(tmpRoot, "dead", 120_000);
+    plantSteal(tmpRoot, 120_000);
+    const dir = path.join(tmpRoot, "gate-delta");
+    chmodSync(dir, 0o500);
+    try {
+      await assert.rejects(withSequenceLock(tmpRoot, [HEAD], () => { throw new Error("must not run"); }, { waitMs: 150 }), (error) => error.code === "SEQUENCE_LOCK_BUSY");
+    } finally { chmodSync(dir, 0o700); }
   });
 });
 

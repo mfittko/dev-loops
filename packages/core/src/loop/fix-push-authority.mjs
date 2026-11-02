@@ -39,7 +39,8 @@ export async function withSequenceLock(tmpRoot, baselineHeads, fn, { staleMs = 6
             let stealing = false;
             try { mkdirSync(stealLock); stealing = true; } catch {
               // A steal lock older than staleMs was left by a stealer that died inside the steal (a window of milliseconds): remove it and retry.
-              try { if (Date.now() - statSync(stealLock).mtimeMs > staleMs) { rmSync(stealLock, { recursive: true, force: true }); continue; } } catch { continue; /* released meanwhile: retry */ }
+              // Only a vanished steal lock (ENOENT) retries at once; any other error (an unremovable directory) falls through to the deadline check so the loop stays bounded.
+              try { if (Date.now() - statSync(stealLock).mtimeMs > staleMs) { rmSync(stealLock, { recursive: true, force: true }); continue; } } catch (stealError) { if (stealError?.code === "ENOENT") continue; }
             }
             if (stealing) {
               try {
