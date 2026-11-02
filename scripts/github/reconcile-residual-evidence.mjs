@@ -130,7 +130,8 @@ export async function verifyResidualEvidenceSnapshot(options, {
     "foreign reviewer materialization path/reference");
     const prompt = await capture(promptPath);
     requireProof(materializationHash(prompt) === unit.materializationHash, "changed reviewer materialization");
-    const index = await json(executionIndexPath(tmpRoot, unit.executionIdentity));
+    // emitterRoot is skew provenance (ADR 0232), not identity
+    const { emitterRoot: _emitterRoot, ...index } = await json(executionIndexPath(tmpRoot, unit.executionIdentity));
     const identity = { executionIdentity: unit.executionIdentity,
       workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest };
     requireProof(isDeepStrictEqual(index, identity), "foreign execution index");
