@@ -14,7 +14,7 @@ A judge searched the source tree to learn the spec-authority verdict shape, trie
 
 1. `SPEC_AUTHORITY_VERDICT_SCHEMA` in `packages/core/src/loop/spec-authority.mjs` lists the required and conditional verdict fields. Its value sets derive from the validator constants (`DIGEST_RE`, `HEAD_SHA_RE`, `SPEC_AUTHORITY_OUTCOME_VALUES`, `SPEC_AUTHORITY_CONFLICT_OUTCOMES`, `DEFECT_KINDS`). The field list and shape rules are maintained beside the validators.
 2. The judge work order carries `outputSchemas`, keyed by the file name of each `outputRefs` path.
-3. The pull owns the digest check. A changed read arrives as a pull refusal. The judge computes no digest and stops only when a read is missing or unreadable.
+3. The pull owns the digest check. A changed read arrives as a pull refusal. A Pi or Claude judge computes no digest for its required reads and stops only when a read is missing or unreadable. The Codex after-pull setup still governs a Codex judge.
 4. The judge denial names `Read` as the always-available file tool, and Grep and Glob only when available.
 5. The read-only boundary is unchanged: the judge still cannot run a digest tool.
 
