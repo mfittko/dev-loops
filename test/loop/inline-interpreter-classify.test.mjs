@@ -90,3 +90,7 @@ test("nested heredoc and ANSI-C quoted words fail closed (#2943 slice 2)", () =>
   }
   assert.equal(commandContainsInlineInterpreter("node --title $'a\\' b' script.mjs"), false);
 });
+
+test("out-of-range ANSI-C code point does not throw and still denies (#3024)", () => {
+  assert.equal(commandContainsInlineInterpreter(": $'\\U00110000'; node -e 1"), true);
+});
