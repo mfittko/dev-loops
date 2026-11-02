@@ -433,6 +433,15 @@ test("head-declared-keys is the only job that checks out a PR head, with no perm
       assert.equal(s.with.ref, "${{ github.event.repository.default_branch }}", "detector jobs check out only the default branch");
     }
   }
+  // Same-run jobs share the merge-ref cache scope: no job may restore or write a cache.
+  const allSteps = [keysJob, runnerJob, reporterJob].flatMap((j) => j.steps);
+  const bunSteps = allSteps.filter((s) => String(s.uses ?? "").startsWith("oven-sh/setup-bun@"));
+  assert.equal(bunSteps.length, 3, "one setup-bun step per job");
+  for (const s of bunSteps) assert.equal(s.with["no-cache"], true, "setup-bun restores and writes no cache");
+  for (const s of allSteps.filter((x) => String(x.uses ?? "").startsWith("actions/setup-node@"))) {
+    assert.equal(s.with["package-manager-cache"], false, "setup-node auto-cache is off");
+  }
+  assert.ok(!allSteps.some((s) => String(s.uses ?? "").startsWith("actions/cache")), "no actions/cache step");
   assert.ok(runnerJob.needs.includes("head-declared-keys"));
   assert.ok(reporterJob.needs.includes("head-declared-keys") && reporterJob.needs.includes("gate-evidence-runner"));
   for (const job of [runnerJob, reporterJob]) {

@@ -45,6 +45,9 @@ jobs:
   # `bun install` / head config.mjs there would hold the default-branch Actions
   # runtime/cache token and could poison the default-branch cache. On
   # pull_request* GitHub isolates fork runs (read-only, merge-ref cache scope).
+  # Jobs of one run share that merge-ref cache scope, so no job restores or
+  # writes a cache: every setup-bun step sets `no-cache: true`, setup-node
+  # sets `package-manager-cache: false`, and no actions/cache step is used.
   # issue_comment runs instead download the declared keys this job uploads as an
   # artifact and treat them as data (scripts/github/fetch-head-declared-keys.mjs).
   head-declared-keys:
@@ -77,12 +80,14 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 24
+          package-manager-cache: false
 
       - name: Set up Bun
         continue-on-error: true
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.1
+          no-cache: true
 
       - name: Install PR head dependencies (no credentials, no secrets)
         continue-on-error: true
@@ -215,12 +220,14 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 24
+          package-manager-cache: false
 
       - name: Set up Bun
         if: steps.pr.outputs.draft == 'false'
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.1
+          no-cache: true
 
       - name: Install workspace dependencies
         if: steps.pr.outputs.draft == 'false'
@@ -384,12 +391,14 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 24
+          package-manager-cache: false
 
       - name: Set up Bun
         if: steps.decide.outputs.recompute == 'true' && steps.pr.outputs.draft == 'false'
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.1
+          no-cache: true
 
       - name: Install workspace dependencies
         if: steps.decide.outputs.recompute == 'true' && steps.pr.outputs.draft == 'false'

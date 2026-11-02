@@ -25,7 +25,7 @@ Running the PR head's schema in the credential-bearing jobs would break the trus
 
 ## Threat model
 
-The declared set is fully attacker-controlled, whether it comes from the head schema, a direct `$GITHUB_OUTPUT` write or an uploaded artifact. This is safe only because stripping a key the default branch does not know cannot change default-branch behavior. The trusted fetch step additionally binds the artifact to the PR's current head SHA and a strict schema. `stripConfigKeyPaths` follows own properties only, so a `__proto__` path cannot reach `Object.prototype`.
+The declared set is fully attacker-controlled, whether it comes from the head schema, a direct `$GITHUB_OUTPUT` write or an uploaded artifact. This is safe only because stripping a key the default branch does not know cannot change default-branch behavior. The trusted fetch step additionally binds the artifact to the PR's current head SHA and a strict schema. `stripConfigKeyPaths` follows own properties only, so a `__proto__` path cannot reach `Object.prototype`. Jobs of one run share the merge-ref cache scope, so no job restores or writes a cache: every setup-bun step sets `no-cache: true` and setup-node disables its package-manager cache.
 
 ## Job failure and limits
 
