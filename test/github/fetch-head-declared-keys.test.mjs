@@ -5,6 +5,7 @@ import { test } from "bun:test";
 import { stripConfigKeyPaths } from "@dev-loops/core/config";
 import { fetchHeadDeclaredKeys, parseDeclaredKeysStrict, selectHeadKeysArtifact } from "../../scripts/github/fetch-head-declared-keys.mjs";
 import { parseHeadDeclaredKeys } from "../../scripts/github/head-declared-keys-schema.mjs";
+import { parseDetectCheckpointEvidenceCliArgs } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 
 const SHA = "a".repeat(40);
 const OTHER = "b".repeat(40);
@@ -66,9 +67,10 @@ test("the detector and fetcher share one strict schema", () => {
   assert.deepEqual(parseHeadDeclaredKeys('["a","bad key"]'), []);
 });
 
-test("a failed keys job (empty HEAD_DECLARED_KEYS env) parses to the empty set", () => {
-  assert.deepEqual(parseHeadDeclaredKeys(""), []);
-  assert.deepEqual(parseHeadDeclaredKeys(undefined), []);
+test("a failed keys job (empty --head-declared-keys value) parses to the empty set, not a CLI error", () => {
+  const base = ["--repo", "o/r", "--pr", "1"];
+  assert.deepEqual(parseDetectCheckpointEvidenceCliArgs([...base, "--head-declared-keys="]).headDeclaredKeys, []);
+  assert.deepEqual(parseDetectCheckpointEvidenceCliArgs([...base, "--head-declared-keys"]).headDeclaredKeys, []);
 });
 
 test("stripConfigKeyPaths never touches Object.prototype through a __proto__ path", () => {

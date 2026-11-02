@@ -214,7 +214,7 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       continue;
     }
     if (token.name === "head-declared-keys") {
-      options.headDeclaredKeys = parseHeadDeclaredKeys(requireTokenValue(token, parseError));
+      options.headDeclaredKeys = parseHeadDeclaredKeys(token.value ?? "");
       continue;
     }
     if (token.name === "base-ref-name") {

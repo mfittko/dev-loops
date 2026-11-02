@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   # Trust boundary (docs/decisions/0034, 0076, 0234): PR head code runs ONLY in
-  # this credential-less job (permissions: {}, no secrets, no API call). The
+  # this credential-less job (permissions: {}, no secrets; the only API use is the artifact upload via the runtime token, which head code can also reach, so the declared set is attacker-controlled). The
   # write-credential jobs below run ONLY default-branch code. This job's output
   # is a JSON list of config keys the PR head's own schema declares; the
   # detector treats it as DATA (env variable, never spliced into a shell) and
@@ -93,7 +93,7 @@ jobs:
         continue-on-error: true
         run: |
           keys='{"declaredKeys":[]}'
-          out="$(node trusted/scripts/github/report-head-declared-keys.mjs --head-root head 2>/dev/null | head -n1 | head -c 262144)" && [ -n "$out" ] && keys="$out"
+          out="$(node trusted/scripts/github/report-head-declared-keys.mjs --head-root head 2>/dev/null | head -n1 | head -c 65536)" && [ -n "$out" ] && keys="$out"
           delim="EOF_$(openssl rand -hex 16)"
           {
             echo "declared_keys<<${delim}"
@@ -231,7 +231,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          keys="$(node scripts/github/fetch-head-declared-keys.mjs --repo "${{ github.repository }}" --pr "${{ steps.pr.outputs.number }}" --head-sha "${{ steps.pr.outputs.head_sha }}" | head -n1 | head -c 262144)"
+          keys="$(node scripts/github/fetch-head-declared-keys.mjs --repo "${{ github.repository }}" --pr "${{ steps.pr.outputs.number }}" --head-sha "${{ steps.pr.outputs.head_sha }}" | head -n1 | head -c 65536)"
           delim="EOF_$(openssl rand -hex 16)"
           {
             echo "declared_keys<<${delim}"
@@ -395,7 +395,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          keys="$(node scripts/github/fetch-head-declared-keys.mjs --repo "${{ github.repository }}" --pr "${{ steps.pr.outputs.number }}" --head-sha "${{ steps.pr.outputs.head_sha }}" | head -n1 | head -c 262144)"
+          keys="$(node scripts/github/fetch-head-declared-keys.mjs --repo "${{ github.repository }}" --pr "${{ steps.pr.outputs.number }}" --head-sha "${{ steps.pr.outputs.head_sha }}" | head -n1 | head -c 65536)"
           delim="EOF_$(openssl rand -hex 16)"
           {
             echo "declared_keys<<${delim}"

@@ -66,7 +66,7 @@ test("parseHeadDeclaredKeys accepts an array or object and treats bad or oversiz
   assert.deepEqual(parseHeadDeclaredKeys('["a","b.c"]'), ["a", "b.c"]);
   assert.deepEqual(parseHeadDeclaredKeys('{"declaredKeys":["a"]}'), ["a"]);
   assert.deepEqual(parseHeadDeclaredKeys("not json"), []);
-  assert.deepEqual(parseHeadDeclaredKeys(JSON.stringify(["x".repeat(300 * 1024)])), []);
+  assert.deepEqual(parseHeadDeclaredKeys(JSON.stringify(["x".repeat(70 * 1024)])), []);
 });
 
 test("stripConfigKeyPaths removes nested paths from a bare file and stays loadable", () => {
