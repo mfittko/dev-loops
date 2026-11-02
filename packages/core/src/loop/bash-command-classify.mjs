@@ -928,7 +928,7 @@ export function commandContainsCopilotSummonComment(command) {
 }
 
 /**
- * Blank the CONTENTS of quoted string literals ('...' and "...") to a space, EXCEPT a quote that is
+ * Blank the CONTENTS of quoted string literals ('...' and "...") to a space (a command with a quote-pairing hazard is returned unchanged), EXCEPT a quote that is
  * the payload of an executable-code flag — a short-flag cluster CONTAINING `c` ANYWHERE in the
  * cluster (`sh -c '…'`, `bash -c '…'`, `bash -lc '…'`, `bash -ec '…'`, `bash -cl '…'`, `bash -ci '…'`,
  * `bash -cx '…'`) — bash treats ANY `-c`-containing short-flag cluster as command-execution
@@ -956,8 +956,8 @@ export function commandContainsCopilotSummonComment(command) {
  * benign false positive, because tightening the exemption to a shell-interpreter anchor would risk a
  * fail-open (missing a real `sh -c` poll loop), the worse direction.
  *
- * Quote spans come from `tokenizeShellCommand`, so an escaped quote, a quote in a `#` comment and a
- * quote nested in `$(...)` never pair across the wrong characters. Text from an unterminated quote,
+ * When `hasQuotePairingHazard(command)` is true the function returns the command unchanged (fail
+ * closed); otherwise it blanks the quote spans from `tokenizeShellCommand`. Text from an unterminated quote,
  * `$(` or heredoc onward is left as raw executable text (deny direction). Accepted ceiling: a
  * deliberately quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is
  * blanked like any other quoted literal and can therefore evade the ban.
@@ -988,8 +988,12 @@ function stripQuotedLiterals(command) {
  * @param {string} command @returns {boolean}
  */
 function hasQuotePairingHazard(command) {
-  const { segments, ticks, comments } = tokenizeShellCommand(command);
-  return /\\['"]/.test(command) || ticks.some((span) => [`'`, `"`].some((q) => span.split(q).length % 2 === 0)) || comments.some((text) => /['"]/.test(text)) || segmentsHaveQuotedHeredoc(segments);
+  const { segments, ticks, comments, spans } = tokenizeShellCommand(command);
+  const nestedQuote = spans.some(({ start, end, kind }) => {
+    const inner = command.slice(start + 1, end - 1);
+    return kind === "double" && /\$\(|`/.test(inner) && (inner.includes("'") || inner.split('"').length % 2 === 0); // a substitution holding a nested quote the old regex mispaired
+  });
+  return nestedQuote || /\\['"]/.test(command) ||ticks.some((span) => [`'`, `"`].some((q) => span.split(q).length % 2 === 0)) || comments.some((text) => /['"]/.test(text)) || segmentsHaveQuotedHeredoc(segments);
 }
 
 /** Whether any heredoc body (including inside `$(...)`) contains a quote character. */

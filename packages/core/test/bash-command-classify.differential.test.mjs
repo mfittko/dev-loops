@@ -77,6 +77,7 @@ const LIVE_WRAPPERS = [
   (f) => `${f} # it's`,
   (f) => `echo $'a\\'b'; ${f}`,
   (f) => `echo "$(echo "x")"; ${f}`,
+  (f) => `echo "$(echo "'")"; ${f}`,
 ];
 const HEREDOC_BODY_WRAPPERS = [
   (f) => `cat > tmp/x.md <<'EOF'\n${f}\nEOF`,
@@ -89,29 +90,26 @@ const HAZARD_LOOP = "while true; do gh pr view 5; sleep 5; done";
 const LOOP_PREDICATES = ["commandContainsDetachedWaitTool", "commandIsSleepPollLoop"];
 /** Each shape lists the only predicates whose frozen-allow/head-deny flip it may exempt. */
 const HAZARD_SHAPES = [
-  [(f) => `# it's\necho '${f}'`, LOOP_PREDICATES],
-  [(f) => `echo "a \\" ; ${f}"`, LOOP_PREDICATES],
-  [(f) => `echo $'a\\' ; ${f} '`, LOOP_PREDICATES],
-  [(f) => `cat <<'EOF'\nit's\nEOF\necho '${f}'`, LOOP_PREDICATES],
-  [(f) => `echo it\\'s; echo '${f}'`, LOOP_PREDICATES],
-  [() => "while :; do `true '`; 'sleep' 5; gh pr view 5; done", LOOP_PREDICATES],
-  [() => "echo \\` ; while :; do `true '`; 'sleep' 5; gh pr view 5; done", LOOP_PREDICATES],
+  [(f) => `# it's\necho '${f}'`, LOOP_PREDICATES, "apostrophe in a # comment: the regex paired it across lines and blanked the loop; the stripper now blanks nothing"],
+  [(f) => `echo "a \\" ; ${f}"`, LOOP_PREDICATES, "escaped quote: the regex mispaired the quotes; the stripper now blanks nothing"],
+  [(f) => `echo $'a\\' ; ${f} '`, LOOP_PREDICATES, "escaped quote in an ANSI-C string: the regex mispaired the quotes; the stripper now blanks nothing"],
+  [(f) => `cat <<'EOF'\nit's\nEOF\necho '${f}'`, LOOP_PREDICATES, "quote in a heredoc body: the regex paired it with later quotes; the stripper now blanks nothing"],
+  [(f) => `echo it\\'s; echo '${f}'`, LOOP_PREDICATES, "escaped apostrophe: the regex mispaired the quotes; the stripper now blanks nothing"],
+  [() => "while :; do `true '`; 'sleep' 5; gh pr view 5; done", LOOP_PREDICATES, "apostrophe inside a backtick span: the regex mispaired the quotes; the stripper now blanks nothing"],
+  [() => "echo \\` ; while :; do `true '`; 'sleep' 5; gh pr view 5; done", LOOP_PREDICATES, "escaped backtick before a backtick span holding an apostrophe: the regex mispaired the quotes; the stripper now blanks nothing"],
   // wrapped in a double-quoted --notes/-m, the lone backtick opens an unterminated substitution, so the inline-interpreter scan also fails closed
-  [() => "# `\nwhile :; do `true '`; 'sleep' 5; gh pr view 5; done", [...LOOP_PREDICATES, "commandContainsInlineInterpreter"]],
-  [() => "echo '`' \"'\" ; while :; do `true '`; 'sleep' 5; gh pr view 5; done", [...LOOP_PREDICATES, "commandContainsInlineInterpreter"]],
-  [() => 'while [ ! -f tmp/d ]; do echo "a \\"; sleep 2"; done', ["commandContainsDetachedWaitTool", "commandIsFileMarkerPollLoop"]],
-  [() => "gh api repos/mfittko/dev-loops/pulls/5 -f body=x it\\'s -X GET 'y'", []],
-  [() => "gh pr edit 5 --title it\\'s --repo other/x 'y' --body z", ["commandContainsRawPrBodyEdit"]],
+  [() => "# `\nwhile :; do `true '`; 'sleep' 5; gh pr view 5; done", [...LOOP_PREDICATES, "commandContainsInlineInterpreter"], "backtick in a # comment followed by a backtick span holding an apostrophe: the stripper now blanks nothing"],
+  [() => "echo '`' \"'\" ; while :; do `true '`; 'sleep' 5; gh pr view 5; done", [...LOOP_PREDICATES, "commandContainsInlineInterpreter"], "quoted backtick and apostrophe before a backtick span holding an apostrophe: the stripper now blanks nothing"],
+  [() => 'while [ ! -f tmp/d ]; do echo "a \\"; sleep 2"; done', ["commandContainsDetachedWaitTool", "commandIsFileMarkerPollLoop"], "escaped quote inside a double-quoted word: the regex mispaired the quotes; the stripper now blanks nothing"],
+  [() => "gh api repos/mfittko/dev-loops/pulls/5 -f body=x it\\'s -X GET 'y'", [], "escaped apostrophe: the stripper blanks nothing (no predicate flips)"],
+  [() => "gh pr edit 5 --title it\\'s --repo other/x 'y' --body z", ["commandContainsRawPrBodyEdit"], "escaped apostrophe: the stripper blanks nothing, so the flag-looking text stays visible"],
+  // wrapped in a quoted --notes/-m, the inner quote re-pairs and leaves an unterminated substitution, so the inline-interpreter scan also fails closed
+  [(f) => `echo "$(echo "'")" ; echo '${f}'`, [...LOOP_PREDICATES, "commandContainsInlineInterpreter"], "double-quoted $(...) holding a nested apostrophe: the regex paired the inner apostrophe with a later one; the stripper now blanks nothing"],
+  [() => `gh pr edit 5 --title "$(echo "'")" --add-label 'x --body y'`, ["commandContainsInlineInterpreter"], "double-quoted $(...) holding a nested apostrophe inside a quoted wrapper leaves an unterminated substitution: the inline-interpreter scan fails closed (the PR-body edit is denied by both copies)"],
+  [(f) => 'echo "`echo "\'"`" ; echo \'' + f + "'", LOOP_PREDICATES, "double-quoted backtick span holding a nested apostrophe: the stripper now blanks nothing"],
 ];
-/** row -> predicates its shape may flip */
-const HAZARD_TARGETS = new Map();
 const hazardRowsOf = (shape) => [shape(HAZARD_LOOP), ...[...LIVE_WRAPPERS, ...QUOTED_WRAPPERS].map((wrap) => wrap(shape(HAZARD_LOOP)))];
-for (const [shape, targets] of HAZARD_SHAPES) {
-  for (const row of hazardRowsOf(shape)) {
-    HAZARD_TARGETS.set(row, new Set([...(HAZARD_TARGETS.get(row) ?? []), ...targets]));
-  }
-}
-const HAZARD_ROWS = [...HAZARD_TARGETS.keys()];
+const HAZARD_ROWS = [...new Set(HAZARD_SHAPES.flatMap(([shape]) => hazardRowsOf(shape)))];
 /** A `#N` inside quoted data is not a comment: the head must match the frozen copy on these rows. */
 const QUOTED_HASH_ROWS = [
   'gh pr edit 5 --repo other/x --body "Closes #12"',
@@ -215,6 +213,19 @@ const PREDICATES = [
   ["commandContainsRawPrBodyApiWrite", slug(main.commandContainsRawPrBodyApiWrite), slug(head.commandContainsRawPrBodyApiWrite)],
 ];
 
+// One SLICE1_FAIL_CLOSED_FLIPS entry per (predicate, row) a hazard shape actually flips, carrying the shape's reason.
+const GENERATED_FLIPS = new Set();
+for (const [shape, targets, reason] of HAZARD_SHAPES) {
+  for (const row of hazardRowsOf(shape)) {
+    for (const [name, mainFn, headFn] of PREDICATES) {
+      if (targets.includes(name) && !mainFn(row) && headFn(row)) {
+        SLICE1_FAIL_CLOSED_FLIPS.set(rowKey(name, row), reason);
+        GENERATED_FLIPS.add(rowKey(name, row));
+      }
+    }
+  }
+}
+
 test("differential: no row origin/main denies is allowed by the head (empty intended removals)", () => {
   assert.equal(INTENDED_REMOVALS.size, 0);
   const corpus = buildCorpus();
@@ -226,26 +237,22 @@ test("differential: no row origin/main denies is allowed by the head (empty inte
   assert.deepEqual(regressions, []);
 });
 
-test("differential: a frozen-allow/head-deny row is listed in SLICE1_FAIL_CLOSED_FLIPS or is a quote-pairing hazard row flipped only on its targeted predicates, and every exemption is real", () => {
+test("differential: a frozen-allow/head-deny row is listed in SLICE1_FAIL_CLOSED_FLIPS (hazard shapes generate their entries), and every entry is a real flip", () => {
   const corpus = buildCorpus();
   const seen = new Set();
-  const flipped = new Set();
   const unlisted = [];
   for (const [name, mainFn, headFn] of PREDICATES) {
     for (const cmd of corpus) {
       if (!mainFn(cmd) && headFn(cmd)) {
         const key = rowKey(name, cmd);
         seen.add(key);
-        if (SLICE1_FAIL_CLOSED_FLIPS.has(key)) continue;
-        // a quote-pairing hazard row is denied by design in slice 1 on the predicates its shape targets (the regex mispaired it; slice 2 makes the removal intended)
-        if (HAZARD_TARGETS.get(cmd)?.has(name)) flipped.add(key);
-        else unlisted.push(key);
+        if (!SLICE1_FAIL_CLOSED_FLIPS.has(key)) unlisted.push(key);
       }
     }
   }
   assert.deepEqual(unlisted, []);
   for (const [shape, targets] of HAZARD_SHAPES) {
-    for (const name of targets) assert.ok(hazardRowsOf(shape).some((cmd) => flipped.has(rowKey(name, cmd))), `hazard shape exempts ${name} but flips no row: ${JSON.stringify(shape(HAZARD_LOOP))}`);
+    for (const name of targets) assert.ok(hazardRowsOf(shape).some((cmd) => GENERATED_FLIPS.has(rowKey(name, cmd))), `hazard shape targets ${name} but flips no row: ${JSON.stringify(shape(HAZARD_LOOP))}`);
   }
   assert.deepEqual([...SLICE1_FAIL_CLOSED_FLIPS.keys()].filter((k) => !seen.has(k)), []);
   for (const reason of SLICE1_FAIL_CLOSED_FLIPS.values()) assert.ok(reason.length > 0);

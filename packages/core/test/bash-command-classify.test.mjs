@@ -1547,6 +1547,9 @@ test("tokenizeShellCommand: malformed input is incomplete and the classifier den
   // an unterminated quote leaves the rest of the command unquoted for the poll-loop classifiers
   assert.equal(commandIsSleepPollLoop("echo 'x; while true; do gh pr view 5; sleep 5; done"), true);
   assert.equal(commandIsSleepPollLoop("echo 'x' ; while true; do gh pr view 5; sleep 5; done"), true);
+  // a terminated quote span after the earliest unclosed opener stays raw executable text
+  assert.equal(commandIsSleepPollLoop("echo $(echo 'while true; do gh pr view 5; sleep 5; done'"), true);
+  assert.equal(commandIsSleepPollLoop("cat <<EOF 'while true; do gh pr view 5; sleep 5; done'\nx"), true);
 });
 
 test("tokenizeShellCommand: CRLF heredoc, real comments and nesting cap (#2442)", () => {
