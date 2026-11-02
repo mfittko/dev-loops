@@ -180,10 +180,12 @@ function hasCurrentHeadCopilotReview(prData, currentHeadSha) {
 // The Copilot gate has passed when a pre_approval_gate marker exists on the PR
 // for any head. The marker is read from both verdict surfaces (issue comments and
 // PR reviews, as every checkpoint consumer does). An unreadable comment stream
-// returns null (fail closed; finishCarry refuses with copilot_reviews_unreadable).
+// or PR-review stream returns null (fail closed; finishCarry refuses with
+// copilot_reviews_unreadable).
 async function isCopilotGatePassed({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   try {
-    const comments = await fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, runChild });
+    const { comments, surfaces } = await fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, runChild, reportSurfaces: true });
+    if (!surfaces.includes("review")) return null;
     return summarizeGateReviewCommentMarkers(comments).pre_approval_gate?.visible === true;
   } catch {
     return null;

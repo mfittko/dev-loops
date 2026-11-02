@@ -125,7 +125,7 @@ function scenario({ priorBody = "", threads = [], delta = DOCS_DELTA, prOwn = de
     commentsEntry(dispositions),
     ...(gatePassedRead ? [
       slurpEntry(`repos/${REPO}/issues/${PR}/comments?per_page=100`, gatePassedRead.issueComments ?? []),
-      slurpEntry(`repos/${REPO}/pulls/${PR}/reviews?per_page=100`, gatePassedRead.prReviews ?? []),
+      { ...slurpEntry(`repos/${REPO}/pulls/${PR}/reviews?per_page=100`, gatePassedRead.prReviews ?? []), ...(gatePassedRead.reviewsFail ? { exitCode: 1, stdout: "" } : {}) },
     ] : []),
   ];
   return { reviews, shared, gateComments: gatePassedRead?.issueComments ?? [] };
@@ -1327,6 +1327,13 @@ describe("a zero-file Copilot review is not clean (ADR 0237)", () => {
   it("an unreadable gate-evidence read refuses with copilot_reviews_unreadable", async () => {
     const own = [thread({ isResolved: true, reviewId: "PRR_prior" })];
     const refused = await carry({ priorBody: YELLOW, threads: own, gatePassedRead: null }, below);
+    assert.equal(refused.carried, false);
+    assert.match(refused.reason, /^copilot_reviews_unreadable/);
+  });
+
+  it("a failed PR-reviews read with a readable issue-comment stream refuses with copilot_reviews_unreadable", async () => {
+    const own = [thread({ isResolved: true, reviewId: "PRR_prior" })];
+    const refused = await carry({ priorBody: YELLOW, threads: own, gatePassedRead: { reviewsFail: true } }, below);
     assert.equal(refused.carried, false);
     assert.match(refused.reason, /^copilot_reviews_unreadable/);
   });
