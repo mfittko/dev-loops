@@ -146,6 +146,10 @@ test("the inline denies carry no rule id and keep their exact reason text", () =
  * Every consecutive pair in `BASH_GATE_RULES`, with one command that trips BOTH bodies. A command
  * matching two rules must report the EARLIER one, so a hand-swapped pair of adjacent rule bodies
  * fails here even though each rule still matches its own fixture in `RULE_FIXTURES`.
+ *
+ * Each entry also carries a `laterOnly` command that trips ONLY the entry's `later` rule under the
+ * entry's facts, so the table proves its own premise (both bodies still match) instead of assuming
+ * it — a silently narrowed `later` predicate then fails here rather than weakening the pair check.
  */
 const ORDER_PAIRS = [
   {
@@ -153,58 +157,69 @@ const ORDER_PAIRS = [
     later: "OPS-NO-INLINE-INTERPRETER",
     facts: { ...BASE, enforceCoordinator: true, role: "dev-loop" },
     command: "bun run verify && node -e 'x'",
+    laterOnly: "node -e 'console.log(1)'",
   },
   {
     earlier: "OPS-NO-INLINE-INTERPRETER",
     later: "COPILOT-FOLLOWUP-WAIT-TOOLS",
     command: "node -e 'x' && nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 &",
+    laterOnly: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 &",
   },
   {
     earlier: "COPILOT-FOLLOWUP-WAIT-TOOLS",
     later: "SUBISSUE-NO-ADHOC-BYPASS",
-    command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 & ; gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6",
+    command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 & gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6",
+    laterOnly: "gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6",
   },
   {
     earlier: "SUBISSUE-NO-ADHOC-BYPASS",
     later: "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER",
     command: "gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6 && gh api graphql -f query='mutation { resolveReviewThread }'",
+    laterOnly: "gh api graphql -f query='mutation { resolveReviewThread }'",
   },
   {
     earlier: "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER",
     later: "COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY",
     command: "gh api graphql -f query='mutation { resolveReviewThread }' && gh api -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers -f reviewers[]=copilot-swe-agent",
+    laterOnly: "gh api -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers -f reviewers[]=copilot-swe-agent",
   },
   {
     earlier: "COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY",
     later: "ADR-TRIPWIRE-STANDING-WAIVER",
     command: "gh api -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers -f reviewers[]=copilot-swe-agent && gh pr edit 5 --body hello",
+    laterOnly: "gh pr edit 5 --body hello",
   },
   {
     earlier: "ADR-TRIPWIRE-STANDING-WAIVER",
     later: "WORKTREE-NO-STASH",
     command: "gh pr edit 5 --body hello && git stash",
+    laterOnly: "git stash",
   },
   {
     earlier: "WORKTREE-NO-STASH",
     later: "STOP-HUMAN-MERGE-001",
     facts: { ...BASE, humanMergeOnly: true },
     command: "git stash && gh pr merge 5",
+    laterOnly: "gh pr merge 5",
   },
   {
     earlier: "STOP-HUMAN-MERGE-001",
     later: "OPS-DRAFT-FIRST-PR",
     facts: { ...BASE, humanMergeOnly: true },
     command: "gh pr merge 5 && gh pr create --fill",
+    laterOnly: "gh pr create --fill",
   },
   {
     earlier: "OPS-DRAFT-FIRST-PR",
     later: "RAW-GH-PR-MERGE-BYPASS",
     command: "gh pr create --fill && gh pr merge 5",
+    laterOnly: "gh pr merge 5",
   },
   {
     earlier: "RAW-GH-PR-MERGE-BYPASS",
     later: "GATE-COMMENT-DRAFT-REQUIREMENTS",
     command: "gh pr merge 5 && gh pr ready 5",
+    laterOnly: "gh pr ready 5",
   },
 ];
 
@@ -217,15 +232,40 @@ test("rule order is the evaluation order, not just the list order", () => {
     [...BASH_GATE_RULES].slice(0, -1).map((id, i) => [id, BASH_GATE_RULES[i + 1]]),
     "ORDER_PAIRS must cover exactly the consecutive pairs of BASH_GATE_RULES",
   );
-  for (const { earlier, later, command, facts } of ORDER_PAIRS) {
-    const decision = decideBashGateDeny({ ...BASE, ...facts, command });
+  for (const { earlier, later, command, laterOnly, facts } of ORDER_PAIRS) {
+    const entryFacts = facts ? { ...BASE, ...facts } : BASE;
+    const decision = decideBashGateDeny({ ...entryFacts, command });
     assert.ok(decision, `${earlier} vs ${later}: the shared command denied nothing`);
     assert.equal(
       decision.ruleId,
       earlier,
       `${earlier} must beat ${later} — the two rule bodies are swapped or reordered`,
     );
+    // The premise check that keeps the pair assertion meaningful: `laterOnly` must still trip the
+    // LATER rule on its own, so the pair above is a real order test and not two dead bodies.
+    assert.equal(
+      decideBashGateDeny({ ...entryFacts, command: laterOnly }).ruleId,
+      later,
+      `${later} did not deny its own laterOnly command — the ${earlier} vs ${later} pair proves nothing`,
+    );
   }
+  // A consecutive-pair table cannot express NON-ADJACENT order, so these three stay: each command
+  // pairs an EARLIER rule with a rule further down the list and must still report the earlier one.
+  assert.equal(
+    decideBashGateDeny({ ...BASE, command: "gh pr create --fill && node -e 'x'" }).ruleId,
+    "OPS-NO-INLINE-INTERPRETER",
+    "OPS-NO-INLINE-INTERPRETER (2) must beat OPS-DRAFT-FIRST-PR (10)",
+  );
+  assert.equal(
+    decideBashGateDeny({ ...BASE, humanMergeOnly: true, command: "node -e 'x' && gh pr merge 5" }).ruleId,
+    "OPS-NO-INLINE-INTERPRETER",
+    "OPS-NO-INLINE-INTERPRETER (2) must beat STOP-HUMAN-MERGE-001 (9)",
+  );
+  assert.equal(
+    decideBashGateDeny({ ...BASE, humanMergeOnly: true, command: "git stash && gh pr merge 5" }).ruleId,
+    "WORKTREE-NO-STASH",
+    "WORKTREE-NO-STASH (8) must beat STOP-HUMAN-MERGE-001 (9)",
+  );
 });
 
 test("the unresolve owner allowlist is the shared set's FIRST rule", () => {
@@ -240,8 +280,11 @@ test("the unresolve owner allowlist is the shared set's FIRST rule", () => {
     decideUnresolveOwnerDeny({ command, role: "judge" }).reason,
     "the shared decision must not reach the allowlist through another rule",
   );
-  // A command that ALSO trips a registered rule must still report the allowlist: if the allowlist
-  // block sank below the first registered rule, this combined command would report that rule instead.
+  // A command that ALSO trips a registered rule must still report the allowlist: this pins the
+  // allowlist above the first registered rule this command also trips (`WORKTREE-NO-STASH`). It can
+  // NOT be pinned against the FIRST registered rule at all — COORDINATOR-VERIFY-BOUNDARY needs
+  // `enforceCoordinator` plus a coordinator role, and that role owns unresolve, so such a command
+  // never reaches the allowlist.
   const combined = `${command} && git stash`;
   const allowlist = decideUnresolveOwnerDeny({ command: combined, role: "fixer" });
   assert.ok(allowlist, "the allowlist must deny this combined command");

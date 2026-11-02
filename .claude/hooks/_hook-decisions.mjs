@@ -82,7 +82,9 @@ export const isFixerPullAttempt = (command) => typeof command === "string" && co
  * every other command, including test/build entrypoints, is denied fail-closed.
  *
  * The gated-command inventory — each command with its rationale inline at its check — lives in
- * `../loop/bash-gate-decisions.mjs` (`decideBashGateDeny`); this seam owns only the gate-evidence probe.
+ * `../loop/bash-gate-decisions.mjs` (`decideBashGateDeny`) owns that shared inventory; this seam keeps
+ * only its Claude role boundaries above (the unresolve owner allowlist, the judge guard and the fixer
+ * pull-line boundary), and the hook-computed gate evidence is passed through as `gatePassed`/`gateError`.
  *   - `gh pr merge` — blocked outright; use scripts/github/merge-pr.mjs. The rule and its gate
  *     evidence check (a clean draft_gate transition record + current-head pre_approval_gate,
  *     GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md) live in the
