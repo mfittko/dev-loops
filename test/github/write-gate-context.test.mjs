@@ -47,6 +47,7 @@ import {
   resolveCapRound,
   resolveCapRoundFixed,
   clearingChainLastCandidates,
+  clearingChainWalk,
   readGateContext,
   renderBriefingEvidence,
   renderBriefingPrefix,
@@ -9192,6 +9193,31 @@ test("resolveCapRoundFixed seeds a chain from the record of a ledgerless base-on
     const selfMerge = async (args) => args.head === args.fromHead || merge(args);
     assert.ok((await failure(opts, { baseOnlyMerge: selfMerge })).result, "the covering record still holds with a permissive merge probe");
     assert.deepEqual(await clearingChainLastCandidates({ tmpRoot: path.join(repoRoot, "tmp"), capHead: A, repo: "owner/repo", pr: 63, baseRefName: "main", repoRoot, baseOnlyMerge: merge }), [B, C], "the emitter seam lists both chain ends");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// The seed proof's heads survive a record rewrite that lands during the base-only probe.
+test("clearingChainWalk keeps the seed-proof heads when a sealed record is rewritten during seeding", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const C = "8".repeat(40);
+    const M = "7".repeat(40);
+    const E = "6".repeat(40);
+    const D = "9".repeat(40);
+    await seedClosedRounds(repoRoot, 66, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    await writeDeltaRecord(repoRoot, A, B);
+    await writeDeltaRecord(repoRoot, B, C);
+    await writeDeltaRecord(repoRoot, M, E);
+    const merge = async (args) => {
+      if (args.fromHead !== C || args.head !== M) return false;
+      await writeDeltaRecord(repoRoot, B, D);
+      return true;
+    };
+    const walk = await clearingChainWalk({ tmpRoot: path.join(repoRoot, "tmp"), capHead: A, repo: "owner/repo", pr: 66, baseRefName: "main", repoRoot, baseOnlyMerge: merge });
+    assert.ok(walk.heads.includes(C), "C was proven by the seed walk before the rewrite");
+    assert.ok(walk.ends.includes(E), "the seeded M to E chain still ends at E");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
