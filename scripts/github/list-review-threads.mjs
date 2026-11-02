@@ -71,11 +71,11 @@ Optional:
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/name", "pr": N, "threads": [
     { "threadId": "...", "trusted": true, "commentId": N|null, "author": "..."|null,
-      "body": "...", "isResolved": bool, "isOutdated": bool,
+      "bodyCommentId": N|null, "body": "...", "isResolved": bool, "isOutdated": bool,
       "path": "..."|null, "line": N|null }, ...
   ], "skippedUntrusted": [ { "threadId": "...", "authors": [...], "isResolved": bool, "remedy": "..." } ] }
   commentId and author belong to the root (first) comment, the reply target; body is the
-  first trusted comment's text. "trusted": true is the ingestion marker consumers require.
+  first trusted comment's text; bodyCommentId is the id of that trusted comment. "trusted": true is the ingestion marker consumers require.
   Comments from authors who are not an OWNER, MEMBER or COLLABORATOR (the Copilot
   reviewer and comments the reading identity authored itself excepted) are never listed
   (ADR 0238); a thread with only such comments appears in skippedUntrusted (omitted
