@@ -316,7 +316,8 @@ test("pullWorkOrder admits through the head lock: a held lock refuses sequence_l
     const future = new Date(Date.now() + 86_400_000);
     utimesSync(lock, future, future); // never stale
     const realNow = Date.now;
-    Date.now = () => realNow() + 11_000; // past the 10 second wait
+    let clock = realNow();
+    Date.now = () => (clock += 2_000); // each read advances, so the 10 second wait expires
     try {
       await assert.rejects(pullWorkOrder({ ref: unit.workOrderRef, digest: unit.workOrderDigest, execution: unit.executionIdentity, cwd: wt, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot }), (error) => error.refusal === "sequence_lock_busy" && error.retryable === true);
     } finally { Date.now = realNow; }
@@ -424,7 +425,8 @@ test("the no_commit close under a held head lock throws SEQUENCE_LOCK_BUSY and l
     const future = new Date(Date.now() + 86_400_000);
     utimesSync(lock, future, future); // never stale
     const realNow = Date.now;
-    Date.now = () => realNow() + 11_000; // past the 10 second wait
+    let clock = realNow();
+    Date.now = () => (clock += 2_000); // each read advances, so the 10 second wait expires
     try {
       await assert.rejects(runCli(args, { stdout: { write() {} } }), (error) => error.code === "SEQUENCE_LOCK_BUSY");
     } finally { Date.now = realNow; }
