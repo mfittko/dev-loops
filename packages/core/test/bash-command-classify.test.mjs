@@ -1722,6 +1722,27 @@ test("slice 2: any multi-segment command keeps every heredoc body visible, whate
   assert.equal(commandContainsDetachedWaitTool("eval 'exec >l.sh'\ncat <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF\nbash l.sh"), true);
 });
 
+test("slice 2: the sanctioned single-segment shapes stay visible when an executor hides inside them, and executor arguments are payloads (#2442)", () => {
+  for (const c of [
+    "tee />(sh) <<'EOF'\nnode -e x\nEOF",
+    "cat <<'EOF' >/>(bash)\nnode -e x\nEOF",
+    "tee $NOPE>(sh) <<'EOF'\nnode -e 'x'\nEOF",
+    "tmp/cat <<'EOF'\nnode -e 'x'\nEOF",
+    "PATH=tmp:$PATH cat <<'EOF'\nnode -e 'x'\nEOF",
+    "git commit -m \"$(cat > .git/hooks/pre-commit <<'EOF'\nnode -e 'x'\nEOF\n)\"",
+    "git commit -m \"$(cat >> .git/config <<'EOF'\nnode -e 'x'\nEOF\n)\"",
+    "gh r --body \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
+    "gh pr create --body \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
+    "git rebase -x 'true; node -e y' HEAD~1",
+    "git rebase --exec 'true; node -e y' HEAD~1",
+    "watch 'true; node -e y'",
+    "trap 'true; node -e y' EXIT",
+  ]) assert.equal(commandContainsInlineInterpreter(c), true, c);
+  assert.equal(commandIsSleepPollLoop("tee />(sh) <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF"), true);
+  assert.equal(commandContainsDetachedWaitTool("tee />(sh) <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("git commit -m \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\""), false);
+});
+
 test("slice 2: quoted literals and cat/tee heredoc bodies that name an interpreter are data; payloads stay visible (#2442)", () => {
   for (const c of [
     "cat > tmp/f <<'EOF'\nnode -e 'x'\nEOF",

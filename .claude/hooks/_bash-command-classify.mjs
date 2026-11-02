@@ -1008,7 +1008,11 @@ const EXEC_FLAG_RE =/^(?:-[A-Za-z]*c[A-Za-z]*|--command)$/;
 const ENV_ASSIGNMENT_WORD_RE = /^[A-Za-z_]\w*=/;
 /** Index of the first payload word of a segment: every word after `eval` or a `-c`-containing short-flag cluster (origin/main's coarse rule) is executable text. */
 const payloadFrom = (words) => {
-  const at = words.findIndex((w) => !w.op && (w.value === "eval" || EXEC_FLAG_RE.test(w.value)));
+  const hi = words.findIndex((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op);
+  const base = words[hi]?.value.split("/").pop();
+  if (base === "watch" || base === "trap") return hi + 1; // every argument is command text the shell runs
+  const rebase = base === "git" && words.some((w) => w.value === "rebase"); // `git rebase -x/--exec CMD` runs CMD
+  const at = words.findIndex((w) => !w.op && (w.value === "eval" || EXEC_FLAG_RE.test(w.value) || (rebase && /^(?:-x|--exec)/.test(w.value))));
   return at < 0 ? words.length : at + 1;
 };
 /** Words that the shell executes as command text: after `-c`/`--command`/`eval`, or the target of a `<<<` here-string. */
@@ -1040,12 +1044,11 @@ function writeTargets(seg) {
 
 const TEXT_FLAG_RE = /^(?:-m|--message|--body|--title|--notes)$/;
 const TEXT_FLAG_ATTACHED_RE = /^--(?:message|body|title|notes)=/;
-/** Whether the substitution in word K of SEG (headed by HEAD) is inert text: a plain `echo`/`printf` argument or the value of a `git`/`gh` text flag, never an env-assignment word or `printf -v`. */
-function substitutionIsInert(seg, k, head) {
+/** Whether the substitution in word K of SEG (a `git commit` segment) is inert text: the value of a text flag, never an env-assignment word. */
+function substitutionIsInert(seg, k) {
   const w = seg.words[k];
   if (ENV_ASSIGNMENT_WORD_RE.test(w.raw)) return false;
-  if (head === "echo" || head === "printf") return !seg.words.some((x) => head === "printf" && /^-v/.test(x.value));
-  if (overridesConfig(seg) || (head === "git" && seg.words[1]?.value !== "commit")) return false;
+  if (overridesConfig(seg) || seg.words[1]?.value !== "commit") return false;
   const attached = TEXT_FLAG_ATTACHED_RE.exec(w.raw);
   const raw = attached ? w.raw.slice(attached[0].length) : w.raw;
   return /^(?:\$\(.*\)|"\$\(.*\)")$/s.test(raw) && (attached !== null || TEXT_FLAG_RE.test(seg.words[k - 1]?.value ?? ""));
@@ -1065,8 +1068,8 @@ function readsTextFromStdin(seg, head) {
 /**
  * Heredocs whose body is data (issue 2442 item 8): a `cat` or `tee` heredoc (or a `git commit -F -`/`gh pr comment --body-file -` message, `readsTextFromStdin`) that is closed, whose delimiter is quoted or whose body has no
  * `$(`/backtick, whose segment is not piped onward, and that sits in no `-c`/`eval`/here-string payload.
- * Structural rule, counted over the whole tree: the command is exactly one `cat`/`tee` heredoc segment, or one root `git`/`gh` segment holding exactly one substitution that holds exactly one `cat` segment. Anything else keeps every heredoc body visible, so a later segment or substitution that runs a written file never sees a blanked body.
- * The host must write no file, carry no env-assignment word and no `-c`/alias override (`substitutionIsInert`); `echo`/`printf` are not hosts.
+ * Structural rule, counted over the whole tree: the command is exactly one `cat`/`tee` heredoc segment, or one root `git commit` segment holding exactly one substitution that holds exactly one `cat` segment that writes no file. Anything else keeps every heredoc body visible, so a later segment or substitution that runs a written file never sees a blanked body.
+ * The host must write no file, carry no env-assignment word and no `-c`/alias override (`substitutionIsInert`); `echo`/`printf`/`gh` are not hosts. The `cat`/`tee` head is the bare name or a `/bin/` or `/usr/bin/` path, with no env-assignment word and no `<(`/`>(` anywhere in a word.
  * Every other body executes and stays visible.
  * @returns {object[]}
  */
@@ -1076,21 +1079,22 @@ function dataHeredocs(segments) {
   const head = segmentHead(seg);
   const dataBody = (s, h) => { // closed, not piped onward, no process-substitution word (`>(sh)`, a `(`-target)
     if (s.pipedOut || (h !== "cat" && h !== "tee" && !readsTextFromStdin(s, h))) return [];
-    if (s.words.some((w) => /^\d*[<>]*\(/.test(w.value))) return [];
+    if (s.words.some((w) => /[<>]\(/.test(w.raw) || /[<>]\(/.test(w.value))) return [];
+    if (h === "cat" || h === "tee") {
+      const bare = rawHead(s);
+      if (!/^(?:\/bin\/|\/usr\/bin\/)?(?:cat|tee)$/.test(bare) || s.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw))) return []; // a path-prefixed or PATH-overridden `cat` is an unknown program
+    }
     return s.heredocs.filter((x) => x.closed && (x.quoted || !/\$\(|`/.test(x.body)));
   };
   const subs = seg.words.flatMap((w, k) => w.subs.map((sub) => ({ sub, k })));
   if (subs.length === 0) return dataBody(seg, head);
-  // exactly one inert git/gh text-flag substitution holding exactly one substitution-free cat segment
-  if (subs.length !== 1 || !INERT_SUBSTITUTION_HOSTS.has(head) || seg.pipedOut || writeTargets(seg).length !== 0 || seg.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw))) return [];
+  // exactly one inert git commit text-flag substitution holding exactly one substitution-free, file-writing-free cat segment
+  if (subs.length !== 1 || head !== "git" || seg.pipedOut || writeTargets(seg).length !== 0 || seg.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw))) return [];
   const { sub, k } = subs[0];
-  if (isPayloadWord(seg.words, k) || !substitutionIsInert(seg, k, head) || sub.segments.length !== 1) return [];
+  if (isPayloadWord(seg.words, k) || !substitutionIsInert(seg, k) || sub.segments.length !== 1) return [];
   const inner = sub.segments[0];
-  return segmentHead(inner) === "cat" && inner.words.every((w) => w.subs.length === 0) ? dataBody(inner, "cat") : [];
+  return segmentHead(inner) === "cat" && writeTargets(inner).length === 0 && inner.words.every((w) => w.subs.length === 0) ? dataBody(inner, "cat") : [];
 }
-
-/** Heads whose `$(...)` text-flag argument is an inert commit message or PR body; a heredoc in any other substitution (`x=$(cat <<EOF ...)`, `echo "$(...)"`) may flow into `eval`. */
-const INERT_SUBSTITUTION_HOSTS = new Set(["git", "gh"]);
 
 /** COMMAND with the data heredoc bodies blanked to same-length whitespace (newlines kept), so offsets still index the input. Incomplete input is returned unchanged. */
 function blankDataHeredocs(command, tok = tokenizeShellCommand(command)) {
