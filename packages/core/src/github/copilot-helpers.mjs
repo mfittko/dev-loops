@@ -46,6 +46,7 @@ export const COPILOT_DISPOSITION = Object.freeze({
 });
 
 const COPILOT_REVIEW_ERROR_PREFIX_RE = /^copilot encountered an error/i;
+const COPILOT_ZERO_FILE_REVIEW_RE = /wasn['’]t able to review any files/i;
 
 /**
  * Classify a Copilot review's current-head body disposition. Text-matched (not
@@ -65,7 +66,9 @@ export function classifyCopilotReviewBodyDisposition(state, body) {
   // no body signal, so this is not a finding.
   // The header check runs first, so a header body never reads as an error review.
   if (!headerMatch) {
-    return COPILOT_REVIEW_ERROR_PREFIX_RE.test(body.trim()) ? COPILOT_DISPOSITION.REVIEW_ERROR : COPILOT_DISPOSITION.NONE;
+    if (COPILOT_REVIEW_ERROR_PREFIX_RE.test(body.trim())) return COPILOT_DISPOSITION.REVIEW_ERROR;
+    // A zero-file review is not a clean review (ADR 0237).
+    return COPILOT_ZERO_FILE_REVIEW_RE.test(body) ? COPILOT_DISPOSITION.UNRECOGNIZED : COPILOT_DISPOSITION.NONE;
   }
 
   const disposition = headerMatch[1]

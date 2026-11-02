@@ -180,13 +180,13 @@ function hasCurrentHeadCopilotReview(prData, currentHeadSha) {
 // The Copilot gate has passed when a pre_approval_gate marker exists on the PR
 // for any head. The marker is read from both verdict surfaces (issue comments and
 // PR reviews, as every checkpoint consumer does). An unreadable comment stream
-// counts as not passed.
+// returns null (fail closed; finishCarry refuses with copilot_reviews_unreadable).
 async function isCopilotGatePassed({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   try {
     const comments = await fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, runChild });
     return summarizeGateReviewCommentMarkers(comments).pre_approval_gate?.visible === true;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -215,7 +215,14 @@ async function finishCarry({ repo, pr, currentHeadSha, prData, sourceHeadSha, de
   const ownThread = reviewHasOwnThread(threadFacts.reviewThreads, sourceReviewId);
   // COPILOT-STATE-CONVERGED-BELOW-CAP: below the cap an unclean review never converges
   // before the Copilot gate passes; only an operator record on a body-only review does.
-  const belowCapUnclean = source === "converged_once" && belowCap && (bodyBlocking || ownThread) && !(await isCopilotGatePassed({ repo, pr }, runtime));
+  let belowCapUnclean = false;
+  if (source === "converged_once" && belowCap && (bodyBlocking || ownThread)) {
+    const gatePassed = await isCopilotGatePassed({ repo, pr }, runtime);
+    if (gatePassed === null) {
+      return { carried: false, reason: "copilot_reviews_unreadable: the gate-evidence comments could not be read; carried convergence refused (fail-closed)" };
+    }
+    belowCapUnclean = !gatePassed;
+  }
   if (belowCapUnclean && ownThread) {
     return { carried: false, reason: "convergence refused: the latest Copilot review has findings and the round cap is not reached; re-request Copilot (COPILOT-STATE-CONVERGED-BELOW-CAP)" };
   }
