@@ -181,16 +181,19 @@ practice:
 
 <!-- rule: MERGE-PRECOND-REQUIRED-CONTEXT-IS-STATUS -->
 `MERGE-PRECOND-REQUIRED-CONTEXT-IS-STATUS`: the `main` branch-protection
-required status is the `gate-evidence` commit status and MUST NEVER be either
-Gate-evidence job (`gate-evidence-runner` or `gate-evidence-reporter`). Superseded
-runs of either job leave `cancelled` check-runs that drive `mergeStateStatus` to
+required status is the `gate-evidence` commit status and MUST NEVER be a
+Gate-evidence job (any of `gate-evidence-runner`, `gate-evidence-reporter` or `head-declared-keys`). Superseded
+runs of the runner and the reporter leave `cancelled` check-runs that drive `mergeStateStatus` to
 `UNSTABLE`; requiring the always-settling status keeps those cancellations from
-blocking a merge. An `UNSTABLE` whose only non-success entries are superseded
-Gate-evidence job cancellations, with the `gate-evidence` status `success`, is benign:
+blocking a merge. Only `gate-evidence-runner` and `gate-evidence-reporter` have concurrency
+groups, so only they leave superseded `cancelled` check-runs; `head-declared-keys` is never
+superseded and a failed or cancelled run of it stays non-benign. An `UNSTABLE` whose only
+non-success entries are superseded `gate-evidence-runner` or `gate-evidence-reporter` cancellations,
+with the `gate-evidence` status `success`, is benign:
 `classifyBenignGateEvidenceUnstable` (`@dev-loops/core/loop/copilot-ci-status`) labels
 it for `loop info`. No committed branch-ruleset/config-audit surface exists yet; when
 one is added, it MUST assert the required contexts include `gate-evidence` and exclude
-both `gate-evidence-runner` and `gate-evidence-reporter`.
+all of `gate-evidence-runner`, `gate-evidence-reporter` and `head-declared-keys`.
 
 The server-side check verifies the same visible verdict fields as the client-side
 tooling, including the light-mode inline exception

@@ -1382,6 +1382,7 @@ export function resolveRoleModel(config, { role, harness, kind } = {}) {
  * @property {string} message - Error description
  * @property {"extensionDefaults"|"defaults"|"devloops"|"merged"} layer - Which config layer failed
  * @property {string[]} [unknownKeys] - Dotted paths of keys the running schema does not recognize
+ * @property {true} [unknownKeysOnly] - Set when every schema issue of the layer is an unrecognized key
  */
 
 const OWN_PACKAGE_JSON = new URL("../../package.json", import.meta.url);
@@ -1663,6 +1664,31 @@ function parseConfigContent(raw, filePath) {
   return parsed;
 }
 
+/**
+ * Remove dotted key paths from a config file's content. Returns JSON, which is
+ * valid YAML, so a bare `.devloops` stays loadable.
+ * @param {string} raw
+ * @param {string} filePath - used only for its extension and in error messages
+ * @param {string[]} keyPaths
+ * @returns {string}
+ */
+export function stripConfigKeyPaths(raw, filePath, keyPaths) {
+  // Deep clone to break YAML alias sharing: deleting through one alias must not delete the aliased setting.
+  const data = JSON.parse(JSON.stringify(parseConfigContent(raw, filePath)));
+  for (const keyPath of keyPaths) {
+    const parts = keyPath.split(".");
+    const last = parts.pop();
+    let node = data;
+    // Own-property guard: a `__proto__` path step must never reach Object.prototype.
+    for (const part of parts) {
+      if (node === null || typeof node !== "object" || !Object.hasOwn(node, part)) { node = null; break; }
+      node = node[part];
+    }
+    if (node !== null && typeof node === "object" && Object.hasOwn(node, last)) delete node[last];
+  }
+  return JSON.stringify(data);
+}
+
 async function readConfigFile(filePath) {
   let raw;
   try {
@@ -1840,6 +1866,7 @@ function applyParsedLayer(merged, filePath, data, layer, warnings, errors, repoR
       message: `${path.basename(filePath)}: Schema validation failed: ${validation.error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("; ")}.${guidance}`,
       layer,
       ...(unknownKeys.length ? { unknownKeys } : {}),
+      ...(validation.error.issues.every((i) => i.code === "unrecognized_keys") ? { unknownKeysOnly: true } : {}),
     });
     return merged;
   }
