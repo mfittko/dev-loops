@@ -988,7 +988,7 @@ function stripQuotedLiterals(command) {
  * @param {string} command @returns {boolean}
  */
 function hasQuotePairingHazard(command) {
-  return /\\['"]/.test(command) || [...command.matchAll(/`[^`]*`/g)].some(([span]) => [`'`, `"`].some((q) => span.split(q).length % 2 === 0)) || /(?:^|[\s;&|(])#[^\n]*['"]/.test(command) || segmentsHaveQuotedHeredoc(tokenizeShellCommand(command).segments);
+  return /\\['"]/.test(command) || [...command.replace(/\\[\s\S]/g, "  ").matchAll(/`[^`]*`/g)].some(([span]) => [`'`, `"`].some((q) => span.split(q).length % 2 === 0)) || /(?:^|[\s;&|(])#[^\n]*['"]/.test(command) || segmentsHaveQuotedHeredoc(tokenizeShellCommand(command).segments);
 }
 
 /** Whether any heredoc body (including inside `$(...)`) contains a quote character. */

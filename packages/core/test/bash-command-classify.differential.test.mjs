@@ -95,6 +95,7 @@ const HAZARD_SHAPES = [
   [(f) => `cat <<'EOF'\nit's\nEOF\necho '${f}'`, LOOP_PREDICATES],
   [(f) => `echo it\\'s; echo '${f}'`, LOOP_PREDICATES],
   [() => "while :; do `true '`; 'sleep' 5; gh pr view 5; done", LOOP_PREDICATES],
+  [() => "echo \\` ; while :; do `true '`; 'sleep' 5; gh pr view 5; done", LOOP_PREDICATES],
   [() => 'while [ ! -f tmp/d ]; do echo "a \\"; sleep 2"; done', ["commandContainsDetachedWaitTool", "commandIsFileMarkerPollLoop"]],
   [() => "gh api repos/mfittko/dev-loops/pulls/5 -f body=x it\\'s -X GET 'y'", []],
   [() => "gh pr edit 5 --title it\\'s --repo other/x 'y' --body z", ["commandContainsRawPrBodyEdit"]],
