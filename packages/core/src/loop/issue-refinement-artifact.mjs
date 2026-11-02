@@ -1442,6 +1442,13 @@ export function checklistSectionLineIndices(body, { acOnly = false } = {}) {
 }
 
 /**
+ * The one GFM checkbox-row grammar (CHECKLIST-SCOPE-ONE-MODEL): optional indent, blockquote
+ * prefix, a `-*+` or `N.`/`N)` marker, a `[ ]`/`[x]` box, then the label and an optional `\r`.
+ * Groups: 1 indent, 2 quote, 3 marker, 4 mark, 5 rest, 6 cr.
+ */
+export const CHECKBOX_ROW_RE = /^(\s*)((?:>\s*)*)([-*+]|\d+[.)])\s+\[([ xX])\]\s+(.*?)(\r?)$/u;
+
+/**
  * Per-line checklist scope of a body, indexed like `body.split(/\r?\n/)`:
  * "ac" or "dod" for a line under an Acceptance criteria / Definition of done
  * section (nearest matching ancestor wins, so a `### Definition of done`

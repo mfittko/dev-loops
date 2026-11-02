@@ -2,7 +2,7 @@
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, resolveBodyOrFile, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { checklistLineScopes, detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { CHECKBOX_ROW_RE, checklistLineScopes, detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-artifact";
 import {
   detectClosingKeyword,
   resolveExpectedIssueFromPrContext,
@@ -38,9 +38,10 @@ At least one edit:
                                 refuse a body that embeds grill
                                 transcript/synthesis/Q&A headings.
   --allow-untick                Allow a body that unticks or removes a checked
-                                \`[x]\` checkbox row (a flip to \`[ ]\`, a delete
-                                or a reworded label; refused by default, naming
-                                the rows).
+                                \`[x]\` checkbox row (a flip to \`[ ]\`, a delete,
+                                a reworded label, or a heading edit that moves
+                                the row out of or into its AC/DoD scope; refused
+                                by default, naming the rows).
   --allow-cross-issue           Waive the branch-derived closing-reference
                                 mismatch guard for a deliberate cross-issue
                                 reference. By default a new body whose closing
@@ -65,6 +66,8 @@ Exit codes:
   1  Argument error or gh failure
   2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
+
+const booleanFlagValue = (v) => v === undefined || v === true || /^(?:true|1)$/iu.test(String(v));
 
 export function parseEditPrCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -192,7 +195,7 @@ export function parseEditPrCliArgs(argv) {
       continue;
     }
     if (token.name === "allow-untick") {
-      options.allowUntick = token.value === undefined || token.value === true || /^(?:true|1)$/iu.test(String(token.value));
+      options.allowUntick = booleanFlagValue(token.value);
       continue;
     }
     if (token.name === "allow-cross-issue") {
@@ -200,8 +203,7 @@ export function parseEditPrCliArgs(argv) {
       // boolean, so honor an explicit `=false`/`=0` (disable) rather than
       // enabling on mere presence — enabling on `=false` would be a fail-open on
       // the guard's own escape hatch. Last occurrence wins.
-      const v = token.value;
-      options.allowCrossIssue = v === undefined || v === true || /^(?:true|1)$/iu.test(String(v));
+      options.allowCrossIssue = booleanFlagValue(token.value);
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -310,9 +312,6 @@ async function buildEditArgs(options) {
 // Labels of `[x]` rows in currentBody that nextBody no longer carries as `[x]`:
 // unticked, deleted or reworded rows, across every checkbox in the body. Counts
 // per label, so one lost occurrence of a duplicated label is reported.
-// The row grammar matches CHECKBOX_RE in tick-verified-checkboxes.mjs and the gate's checklist parser:
-// an optional blockquote prefix, then a [-*+] or N. or N) marker.
-const CHECKBOX_ROW = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[([ xX])\]\s+(.+?)\s*$/u;
 function untickedRows(currentBody, nextBody) {
   // Fence-aware and scope-keyed (CHECKLIST-SCOPE-ONE-MODEL): the key is the row's AC/DoD/other scope plus its label, from the
   // same checklistLineScopes the tick path uses. A rename inside one scope keeps the row; a heading edit that moves a
@@ -320,8 +319,9 @@ function untickedRows(currentBody, nextBody) {
   const checked = (body) => {
     const scopes = checklistLineScopes(body);
     return body.split(/\r?\n/u).flatMap((line, i) => {
-      const m = scopes[i] === undefined ? null : CHECKBOX_ROW.exec(line);
-      return m && m[1] !== " " ? [{ key: `${scopes[i]}\u0000${m[2]}`, label: m[2] }] : [];
+      const m = scopes[i] === undefined ? null : CHECKBOX_ROW_RE.exec(line);
+      const label = m?.[5].trim();
+      return m && m[4] !== " " && label ? [{ key: `${scopes[i]}\u0000${label}`, label }] : [];
     });
   };
   const remaining = new Map();
@@ -368,7 +368,7 @@ export async function editPr(
       if (waiverRefusal) throw new Error(waiverRefusal);
       const unticked = untickedRows(baseline, guardBody);
       if (unticked.length > 0 && !options.allowUntick) {
-        throw new Error(`CHECKLIST-SCOPE-ONE-MODEL: refusing to untick or remove ${unticked.length} checked row(s) on PR #${options.pr} (unticked, deleted or reworded): ${unticked.map((l) => JSON.stringify(l)).join("; ")}. Edit from the current body, or pass --allow-untick for a deliberate change.`);
+        throw new Error(`CHECKLIST-SCOPE-ONE-MODEL: refusing to untick or remove ${unticked.length} checked row(s) on PR #${options.pr} (unticked, deleted, reworded, or moved out of its AC/DoD scope):${unticked.map((l) => JSON.stringify(l)).join("; ")}. Edit from the current body, or pass --allow-untick for a deliberate change.`);
       }
     }
     if (!options.allowCrossIssue && detectClosingKeyword(guardBody)) {

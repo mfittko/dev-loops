@@ -15,7 +15,7 @@ import { ghGraphql as runGhGraphql, ghJson as runGhJson } from "@dev-loops/core/
 import { minimizeSupersededGateReviews } from "./_minimize-superseded-verdicts.mjs";
 import { loadPrGateCoordinationContext, loadRefinementArtifact } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
-import { checklistLineScopes, checklistSectionLineIndices, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { CHECKBOX_ROW_RE, checklistLineScopes,checklistSectionLineIndices, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { applyTick } from "./tick-verified-checkboxes.mjs";
 import { editPr } from "./edit-pr.mjs";
 import { editIssue } from "./edit-issue.mjs";
@@ -2358,12 +2358,15 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified,
     return !normalizedCriteria.some((c) => bounded.test(c));
   });
   const inSections = (body, options) => {
-    const indices = checklistSectionLineIndices(body, options);
-    if (!options?.byCategory) return (index) => indices.has(index);
+    if (!options?.byCategory) {
+      const indices = checklistSectionLineIndices(body, options);
+      return (index) => indices.has(index);
+    }
     // Per-category labels: an AC row ticks only for an AC label, a DoD row only for a DoD label, so a duplicate label in the other category is unaffected.
     // The nearest-heading scope puts a DoD section nested under Acceptance criteria in the DoD category.
+    // checklistLineScopes alone decides the PR-body scope: a null or undefined (fenced) scope matches no category.
     const scopes = checklistLineScopes(body);
-    return (index, label) => indices.has(index) && options.byCategory[scopes[index]]?.has(label) === true;
+    return (index, label) => options.byCategory[scopes[index]]?.has(label) === true;
   };
   const tick = async (body, labels, write, liveIssue, options) => {
     const result = await applyTick(body, labels, true, write, inSections(body, options));
@@ -2372,7 +2375,7 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified,
       // Each row carries its checklist scope, so a concurrent heading edit that moves rows into or out of AC/DoD also refuses.
       const checkboxRows = (b) => {
         const scopes = checklistLineScopes(b);
-        return b.split(/\r?\n/u).flatMap((l, i) => /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[ xX]\]\s/u.test(l) ? [`${scopes[i]}\u0000${l.trim()}`] : []);
+        return b.split(/\r?\n/u).flatMap((l, i) => CHECKBOX_ROW_RE.test(l) ? [`${scopes[i]}\u0000${l.trim()}`] : []);
       };
       const dryRows = checkboxRows(result.body);
       pendingWrites.push(async (preview = false) => {

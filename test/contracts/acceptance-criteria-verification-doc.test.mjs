@@ -27,6 +27,18 @@ test("acceptance owner describes the automatic ledger tick and keeps a parseable
   assert.deepEqual(parsed.verified, ["Verified-criterion"]);
 });
 
+test("step 5 consumers describe the dry-run then write-before-post tick and name the deferred-write refusal (#2898)", async () => {
+  const doc = await readRepo(OWNER);
+  const step5 = doc.split(/\n(?=\d+\. )/).find((text) => text.startsWith("5. "));
+  assert.ok(step5.includes("The checklist of PR N changed after the gate read it"));
+  for (const file of ["agents/review.agent.md", "skills/copilot-pr-followup/SKILL.md", "docs/decisions/0100-reviewer-verified-items-drive-the-pre-approval-tick.md"]) {
+    const text = await readRepo(file);
+    assert.ok(!text.includes("ticks exactly these labels before it composes"), `${file}: stale phrase`);
+    assert.ok(!text.includes("before it composes the verdict (step 5"), `${file}: stale phrase`);
+    assert.ok(!/ticks the ledger's `verifiedItems` before it composes the verdict/.test(text), `${file}: stale phrase`);
+  }
+});
+
 test("acceptance owner names both completeness fields and their verdict writer", async () => {
   const doc = await readRepo(OWNER);
   const step = doc.split(/\n(?=\d+\. )/).find((text) => text.includes('`prBodyUncheckedAcItems`'));

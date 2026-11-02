@@ -8,6 +8,7 @@ import { join } from "node:path";
 
 import { parseEditPrCliArgs, editPr as editPrRaw, runCli } from "../../scripts/github/edit-pr.mjs";
 import { checklistLineScopes } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { tickVerifiedCheckboxes } from "../../scripts/github/tick-verified-checkboxes.mjs";
 import { captureStream, makeGhStub } from "../_helpers.mjs";
 
 // A body edit reads the PR's current body (waiver-line baseline) through
@@ -485,11 +486,13 @@ test("editPr (#2898): the untick guard counts duplicate labels and reports a rem
   await assert.rejects(() => attempt(live.replace("\n- [x] Docs updated", "")), /untick or remove 1 checked row.*"Docs updated"/s);
 });
 
+const attemptEdit = (live, body) => editPr(
+  { repo: "o/n", pr: 5, body, addAssignees: [], removeAssignees: [] },
+  { run: stubGh().run, fetchPrContext: async () => ({ headRefName: "x", closingIssuesReferences: [], body: live }) },
+);
+
 test("editPr (#2898): the untick guard ignores fenced rows and scopes labels to their section", async () => {
-  const attempt = (live, body) => editPr(
-    { repo: "o/n", pr: 5, body, addAssignees: [], removeAssignees: [] },
-    { run: stubGh().run, fetchPrContext: async () => ({ headRefName: "x", closingIssuesReferences: [], body: live }) },
-  );
+  const attempt = attemptEdit;
   const fenced = "```\n- [x] Tests pass\n```";
   // unticking a real row while adding a fenced checked example: refused
   await assert.rejects(() => attempt("## AC\n- [x] Tests pass", `## AC\n- [ ] Tests pass\n${fenced}`), /untick or remove 1 checked row.*"Tests pass"/s);
@@ -499,16 +502,13 @@ test("editPr (#2898): the untick guard ignores fenced rows and scopes labels to 
   await assert.rejects(() => attempt("## AC\n- [x] Tests pass\n## Validation\n- [ ] Tests pass", "## AC\n- [ ] Tests pass\n## Validation\n- [x] Tests pass"), /untick or remove 1 checked row.*"Tests pass"/s);
 });
 
-const attemptEdit = (live, body) => editPr(
-  { repo: "o/n", pr: 5, body, addAssignees: [], removeAssignees: [] },
-  { run: stubGh().run, fetchPrContext: async () => ({ headRefName: "x", closingIssuesReferences: [], body: live }) },
-);
-
 test("editPr (#2898): a heading rename inside one scope is accepted; a heading-only edit that leaves the scope is refused", async () => {
   // rename inside the AC scope: accepted
   await attemptEdit("## AC\n- [x] Tests pass", "## Acceptance criteria\n- [x] Tests pass");
   // heading-only edit: the AC heading becomes a plain heading, the checked row leaves the AC scope
-  await assert.rejects(() => attemptEdit("## AC\n- [x] Tests pass", "## Criteria\n- [x] Tests pass"), /untick or remove 1 checked row.*"Tests pass"/s);
+  await assert.rejects(() => attemptEdit("## AC\n- [x] Tests pass", "## Criteria\n- [x] Tests pass"), /untick or remove 1 checked row.*moved out of its AC\/DoD scope.*"Tests pass"/s);
+  const help = spawnSync(process.execPath, [new URL("../../scripts/github/edit-pr.mjs", import.meta.url).pathname, "--help"], { encoding: "utf8" });
+  assert.match(help.stdout, /moves\s+the row out of or into its AC\/DoD scope/);
   // a plain heading nested into the AC scope moves its checked row into AC: its scope key changes, so it is refused
   await assert.rejects(() => attemptEdit("## AC\n- [x] A\n## Notes\n- [x] B", "## AC\n- [x] A\n### Notes\n- [x] B"), /untick or remove 1 checked row.*"B"/s);
 });
@@ -542,10 +542,7 @@ test("editPr (#2898): renaming both AC and DoD headings with a swap moves every 
 });
 
 test("editPr (#2898): the untick guard sees every checkbox row form the gate parser reads", async () => {
-  const attempt = (live, body) => editPr(
-    { repo: "o/n", pr: 5, body, addAssignees: [], removeAssignees: [] },
-    { run: stubGh().run, fetchPrContext: async () => ({ headRefName: "x", closingIssuesReferences: [], body: live }) },
-  );
+  const attempt = attemptEdit;
   for (const marker of ["-", "*", "+", "1.", "1)", "> -", "> 1."]) {
     await assert.rejects(() => attempt(`${marker} [x] Docs updated`, `${marker} [ ] Docs updated`), /untick or remove 1 checked row.*"Docs updated"/s, marker);
   }
@@ -553,4 +550,13 @@ test("editPr (#2898): the untick guard sees every checkbox row form the gate par
   for (const line of ["plain text line without a checkbox", "[x] Docs updated"]) {
     await attempt(line, line.replace("[x]", "[ ]"));
   }
+});
+
+test("editPr (#2898): tick-verified-checkboxes and the untick guard agree on one checkbox row set", async () => {
+  const live = ["## AC", "> - [ ] Quoted", "1) [ ] Ordered", "* [ ] Star"].join("\r\n");
+  const ticked = tickVerifiedCheckboxes(live, ["Quoted", "Ordered", "Star"]);
+  assert.deepEqual(ticked.flipped, ["Quoted", "Ordered", "Star"]);
+  assert.equal(ticked.body, live.replaceAll("[ ]", "[x]"));
+  // the guard sees the same three rows: unticking them again is refused for each
+  await assert.rejects(() => attemptEdit(ticked.body, live), /untick or remove 3 checked row/);
 });

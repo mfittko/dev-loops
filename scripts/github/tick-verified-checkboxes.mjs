@@ -12,6 +12,7 @@ import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseIssueNumber, parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { CHECKBOX_ROW_RE } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { editPr } from "./edit-pr.mjs";
 import { viewPr } from "./view-pr.mjs";
@@ -47,15 +48,7 @@ Exit codes:
   2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
 
-// GFM checklist line: optional indentation (or blockquote-nesting), a `-`/`*`/`+
-// bullet or an ordered `N.`/`N)` marker, a `[ ]`/`[x]` box, then the label.
-// Grammar parity with extractChecklistItems in packages/core/src/loop/
-// issue-refinement-artifact.mjs (#1877 round-1 grammar-parity fix): both accept
-// bullets, ordered markers, and blockquote-nested forms. Capture the leading
-// bytes (indent, blockquote prefix, marker) so they are preserved on flip, and
-// an optional trailing `\r` so CRLF bodies (as returned by `gh pr view`) round-
-// trip byte-for-byte instead of silently failing to match.
-const CHECKBOX_RE = /^(\s*)((?:>\s*)*)([-*+]|\d+[.)])\s+\[([ xX])\]\s+(.*?)(\r?)$/;
+// Row grammar: CHECKBOX_ROW_RE in core issue-refinement-artifact.mjs (captures indent, quote, marker and `\r` so a flip round-trips byte-for-byte).
 
 // PURE: flip only unchecked checklist lines whose trimmed label EXACTLY equals a
 // verified label. Never unchecks. Never touches non-checkbox text. Idempotent:
@@ -71,7 +64,7 @@ export function tickVerifiedCheckboxes(body, verifiedLabels, lineInScope = () =>
   const found = new Set();
   const lines = String(body).split("\n");
   const nextLines = lines.map((line, index) => {
-    const m = line.match(CHECKBOX_RE);
+    const m = line.match(CHECKBOX_ROW_RE);
     if (!m) return line;
     const [, indent, quote, marker, mark, rest, cr] = m;
     const label = rest.trim();
