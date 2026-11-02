@@ -864,6 +864,22 @@ async function resolveGateSettings(options, resolvedRoot) {
 }
 
 /**
+ * Rerun parts for a code-tree skew note: the emitter's script rejects `--repo-root` naming another
+ * checkout (toolchainRootMismatch), so the flag is dropped and the rerun starts in the resolved root.
+ */
+function skewRerun(options, resolvedRoot) {
+  const args = [];
+  let dropped = false;
+  const argv = options.args ?? [];
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === "--repo-root") { i += 1; dropped = true; continue; }
+    if (argv[i].startsWith("--repo-root=")) { dropped = true; continue; }
+    args.push(argv[i]);
+  }
+  return { script: "scripts/loop/judge-pass.mjs", args: args.map(shellQuote).join(" "), env: dropped ? `cd ${shellQuote(resolvedRoot)} && ` : "" };
+}
+
+/**
  * Pull transport binding (ADR 0106): a verdict counts only for the emitted judge
  * invocation that --judge-plan records, after a matching judge pull receipt, with
  * both verdict artifacts written after that pull, over the ledger the work order
@@ -904,7 +920,7 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
   }
   // The plan's work order must be exactly what the judge pulled: its digest and its rendered bytes.
   if (workOrderDigest(order) !== plan.workOrderDigest || materializationHash(renderWorkOrder(order)) !== receipt.materializationHash) {
-    throw new Error(`--judge-plan ${options.judgePlan} does not reproduce the work order execution ${plan.executionIdentity} pulled; pass the plan emit-judge-work-order.mjs wrote${await codeTreeSkewNote({ execution: plan.executionIdentity, tmpRoots: [planTmpRoot, path.resolve(receiptTmpRoot)], script: "scripts/loop/judge-pass.mjs", args: (options.args ?? []).map(shellQuote).join(" ") })}`);
+    throw new Error(`--judge-plan ${options.judgePlan} does not reproduce the work order execution ${plan.executionIdentity} pulled; pass the plan emit-judge-work-order.mjs wrote${await codeTreeSkewNote({ execution: plan.executionIdentity, tmpRoots: [planTmpRoot, path.resolve(receiptTmpRoot)], ...skewRerun(options, resolvedRoot) })}`);
   }
   const ledger = await readJsonArtifact(resolve(options.findingsFile), "--findings-file", parseError);
   if (sha256Hex(ledger) !== order.authority?.findingsDigest) {

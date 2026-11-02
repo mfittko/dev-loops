@@ -1764,6 +1764,15 @@ test("judge-pass J5: a plan that does not reproduce across two code trees names 
       assert.deepEqual({ ...out, cwd: await realpath(out.cwd) }, { cwd: await realpath(root), args: argv });
       assert.match(err.message, /does not reproduce the work order/);
     }
+    {
+      // With --repo-root the suggested rerun drops the flag (the emitter's guard would refuse it) and starts in the resolved root.
+      const rooted = [...argv, "--repo-root", root];
+      const err = await runPass({ args: rooted, judgePlan: "./forged-plan.json", repoRoot: root }).then(() => assert.fail("expected a refusal"), (e) => e);
+      const command = err.message.match(/`(cd [^`]+)`/)[1];
+      assert.ok(!command.includes("--repo-root"), command);
+      const out = JSON.parse(execFileSync("sh", ["-c", command], { cwd: os.tmpdir(), encoding: "utf8" }));
+      assert.deepEqual({ ...out, cwd: await realpath(out.cwd) }, { cwd: await realpath(root), args: argv });
+    }
   } finally {
     await rm(emitter, { recursive: true, force: true });
   }
