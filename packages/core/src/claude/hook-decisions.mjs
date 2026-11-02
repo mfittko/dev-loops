@@ -67,7 +67,8 @@ function commandContainsEvidenceWrite(command) {
 export const DEV_LOOP_AGENT_TYPE = "dev-loop";
 
 // Intermediate tokens exclude shell separators so a compound command that only names the file is not an invocation.
-const UNRESOLVE_INVOCATION = /(?:^|[\s;&|(])(?:node|dev-loops-run|bun)\s+(?:[^\s;&|()]+\s+)*?\S*unresolve-review-thread\.mjs(?=$|[\s;&|)])/;
+// The interpreter may carry a path prefix and follow a backtick; the script path itself also matches as a command head.
+const UNRESOLVE_INVOCATION = /(?:(?:^|[\s;&|(`])(?:[^\s;&|()`]*\/)?(?:node|dev-loops-run|bun)\s+(?:[^\s;&|()`]+\s+)*?|(?:^|[;&|(`])\s*)[^\s;&|()`]*unresolve-review-thread\.mjs(?=$|[\s;&|)`])/;
 /** True when the command runs scripts/github/unresolve-review-thread.mjs (issue 2577). */
 export const isUnresolveInvocation = (command) => typeof command === "string" && UNRESOLVE_INVOCATION.test(command);
 

@@ -29,6 +29,17 @@ test("unresolves a resolved Copilot thread and reports the new state", async () 
   assert.ok(mutated(calls));
 });
 
+test("a mutation response that leaves the thread resolved or null is refused", async () => {
+  for (const thread of [{ id: "T1", isResolved: true }, null]) {
+    const run = async (args) => {
+      const query = args.find((a) => a.startsWith("query="));
+      if (query.includes("unresolveReviewThread")) return JSON.stringify({ data: { unresolveReviewThread: { thread } } });
+      return fakeRun().run(args);
+    };
+    await assert.rejects(unresolveReviewThread(target, { run }), /did not unresolve/);
+  }
+});
+
 test("a null node maps to thread_not_on_pr", async () => {
   const run = async () => JSON.stringify({ data: { node: null } });
   await assert.rejects(unresolveReviewThread(target, { run }), (e) => e.reason === "thread_not_on_pr");
