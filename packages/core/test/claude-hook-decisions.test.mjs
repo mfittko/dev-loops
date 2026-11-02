@@ -1006,6 +1006,7 @@ test("decideBashGate denies every accepted unresolve invocation form for the fix
     `echo \`node scripts/github/unresolve-review-thread.mjs ${args}\``,
     `./scripts/github/unresolve-review-thread.mjs ${args}`,
     `cd /repo && scripts/github/unresolve-review-thread.mjs ${args}`,
+    `cd /repo\nscripts/github/unresolve-review-thread.mjs ${args}`,
   ]) {
     assert.equal(decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "fixer" }).decision, "deny", command);
   }
