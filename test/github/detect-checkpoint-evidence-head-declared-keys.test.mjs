@@ -75,6 +75,21 @@ test("one off-pattern entry among 600 valid entries keeps the valid ones", () =>
   assert.deepEqual(parseHeadDeclaredKeys(JSON.stringify([...valid, "bad key"])), valid);
 });
 
+test("the discard diagnostic is one JSON line without verdict fields", () => {
+  const orig = process.stderr.write;
+  let out = "";
+  process.stderr.write = (s) => { out += s; return true; };
+  try {
+    assert.deepEqual(parseHeadDeclaredKeys('["a","bad key"]'), ["a"]);
+  } finally {
+    process.stderr.write = orig;
+  }
+  assert.equal(out.endsWith("\n") && out.trim().split("\n").length, 1);
+  const parsed = JSON.parse(out);
+  assert.deepEqual(parsed, { headDeclaredKeysDiscarded: 1, of: 2 });
+  assert.equal("evidenceState" in parsed || "currentHeadSha" in parsed, false);
+});
+
 test("the declared set applies only to the head it was reported for", async () => {
   assert.deepEqual(bindHeadDeclaredKeys(["a"], "h1", "h1"), ["a"]);
   assert.deepEqual(bindHeadDeclaredKeys(["a"], "h1", "h2"), []);

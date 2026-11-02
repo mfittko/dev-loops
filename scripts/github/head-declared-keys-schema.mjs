@@ -13,7 +13,7 @@ export function parseHeadDeclaredKeys(text) {
     const list = Array.isArray(parsed) ? parsed : parsed?.declaredKeys;
     if (!Array.isArray(list)) return [];
     const valid = list.filter((k) => typeof k === "string" && k.length >= 1 && k.length <= MAX_ENTRY_LENGTH && KEY_PATTERN.test(k));
-    if (valid.length < list.length) process.stderr.write(`head-declared-keys: discarded ${list.length - valid.length} off-schema entries of ${list.length}\n`);
+    if (valid.length < list.length) process.stderr.write(`${JSON.stringify({ headDeclaredKeysDiscarded: list.length - valid.length, of: list.length })}\n`); // one JSON line, no evidenceState/currentHeadSha: the workflow's jq reads stderr as a JSON stream
     return valid;
   } catch {
     return [];
