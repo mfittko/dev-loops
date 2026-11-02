@@ -73,12 +73,14 @@ export async function extendCapRoundChain(options, {
   env = process.env, ghCommand = "gh", runChild, fetchPr = defaultFetchPr, git = defaultGit,
   fetchBaseBranch = defaultFetchOrigin, detectOriginSlug = detectRepoSlug, resolveProof = resolveCapRoundFixed, writeRecord = writeSealedGateDeltaRecord,
 } = {}) {
-  const { repo, pr } = options;
+  const { pr } = options;
   const cwd = options.worktree ?? process.cwd();
   const repoRoot = resolveRepoRoot(cwd);
   // The ledger and the record are read from this checkout, keyed by the --repo slug: it must be --repo.
   const originSlug = detectOriginSlug(repoRoot);
-  if (!originSlug || !repoSlugEquals(originSlug, repo)) return refuse("repo_mismatch", `the checkout origin (${originSlug ?? "unresolved"}) is not ${repo}; rerun with --repo ${originSlug ?? "<origin slug>"} from a clone of ${repo}`);
+  if (!originSlug || !repoSlugEquals(originSlug, options.repo)) return refuse("repo_mismatch", `the checkout origin (${originSlug ?? "unresolved"}) is not ${options.repo}; rerun with --repo ${originSlug ?? "<origin slug>"} from a clone of ${options.repo}`);
+  // Every later path (ledger directory, proof, messages) uses the origin slug, so a case variant of --repo cannot miss the ledger on a case-sensitive filesystem.
+  const repo = originSlug;
   const state = await fetchPr({ repo, pr }, { env, ghCommand, runChild });
   const prHead = typeof state?.headRefOid === "string" ? state.headRefOid.trim().toLowerCase() : "";
   const baseRefName = state?.baseRefName;

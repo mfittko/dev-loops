@@ -98,8 +98,8 @@ export function writeSealedGateDeltaRecord(tmpRoot, reviewBaselineHead, record, 
       rmSync(`${recordPath}.seal`, { force: true });
       writeFileSync(`${recordPath}.seal`, `${sha256(text)}\n`, "utf8");
     } catch (error) {
-      rmSync(recordPath, { force: true });
-      rmSync(`${recordPath}.seal`, { force: true });
+      // A cleanup failure must not mask the original error.
+      try { rmSync(recordPath, { force: true }); rmSync(`${recordPath}.seal`, { force: true }); } catch { /* keep the original error */ }
       throw error;
     }
     return recordPath;

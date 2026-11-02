@@ -370,8 +370,9 @@ test("a --repo that differs from the checkout origin refuses repo_mismatch and w
       const result = await extend(root, D, { detectOriginSlug: () => origin, fetchPr: async () => { throw new Error("fetchPr must not run"); } });
       assert.equal(result.reason, "repo_mismatch");
     }
-    // repoSlugEquals normalization: a case variant of the origin slug is accepted.
-    assert.equal((await extend(root, D, { detectOriginSlug: () => "Owner/Repo" })).action, "chain_extended");
+    // repoSlugEquals normalization: a case variant of --repo is accepted and the origin slug keys the ledger path.
+    const variant = await extendCapRoundChain({ repo: "Owner/Repo", pr: PR, worktree: root }, { detectOriginSlug: () => REPO, fetchPr: async () => ({ headRefOid: D, baseRefName: "main" }), fetchBaseBranch: () => {} });
+    assert.equal(variant.action, "chain_extended");
     assert.ok(readSealedGateDeltaRecord(path.join(root, "tmp"), B));
   } finally {
     await rm(root, { recursive: true, force: true });
