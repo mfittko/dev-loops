@@ -55,14 +55,14 @@ const real = (p) => realpath(p).catch(() => path.resolve(p));
 const versionOf = async (root) => JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version ?? "unknown";
 
 /** A sentence naming a code-tree skew (ADR 0232) when `execution`'s index entry was emitted by another toolchain root, else "". Best effort, never throws. */
-export async function codeTreeSkewNote({ execution, tmpRoots, rerun, toolchainRoot = TOOLCHAIN_ROOT }) {
+export async function codeTreeSkewNote({ execution, tmpRoots, script, args = "", env = "", toolchainRoot = TOOLCHAIN_ROOT }) {
   try {
     for (const tmpRoot of tmpRoots) {
       let emitterRoot = null;
       try { emitterRoot = JSON.parse(await readFile(executionIndexPath(tmpRoot, execution), "utf8")).emitterRoot; } catch { continue; }
       if (typeof emitterRoot !== "string" || await real(emitterRoot) === await real(toolchainRoot)) continue;
       const version = (root) => versionOf(root).catch(() => "unknown");
-      return `; code-tree skew: emitted by ${emitterRoot} (dev-loops ${await version(emitterRoot)}), pulled by ${toolchainRoot} (dev-loops ${await version(toolchainRoot)}), and the work-order identity code may differ; rerun with \`dev-loops-run --repo-root ${shellQuote(emitterRoot)} ${rerun}\` (refusal rule WORK-ORDER-CODE-TREE-SKEW)`;
+      return `; code-tree skew: emitted by ${emitterRoot} (dev-loops ${await version(emitterRoot)}), pulled by ${toolchainRoot} (dev-loops ${await version(toolchainRoot)}), and the work-order identity code may differ; rerun from the same directory with \`${env}node ${shellQuote(path.join(emitterRoot, script))} ${args}\` (refusal rule WORK-ORDER-CODE-TREE-SKEW)`;
     }
   } catch { /* best effort: the plain refusal stands */ }
   return "";
@@ -135,7 +135,7 @@ export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, rec
     const refusal = WORK_ORDER_ROLES.has(unit.workOrder?.role) ? "dispatch_identity_mismatch" : "unknown_role";
     throw new WorkOrderRefusal(refusal, `work order header role ${JSON.stringify(unit.workOrder?.role)} does not match ref role ${JSON.stringify(role)}`);
   }
-  if (workOrderDigest(unit.workOrder) !== unit.workOrderDigest) throw new WorkOrderRefusal("semantic_identity_mismatch", `the canonical work order for ${ref} no longer reproduces workOrderDigest ${unit.workOrderDigest}; fail closed and re-emit against current authority${await codeTreeSkewNote({ execution, tmpRoots, rerun: `scripts/github/pull-work-order.mjs ${execution}${rerunTmpRoot ? ` --tmp-root ${shellQuote(rerunTmpRoot)}` : ""}` })}`);
+  if (workOrderDigest(unit.workOrder) !== unit.workOrderDigest) throw new WorkOrderRefusal("semantic_identity_mismatch", `the canonical work order for ${ref} no longer reproduces workOrderDigest ${unit.workOrderDigest}; fail closed and re-emit against current authority${await codeTreeSkewNote({ execution, tmpRoots, env: "DEV_LOOPS_PULL_DELEGATED=1 ", script: "scripts/github/pull-work-order.mjs", args: `${execution}${rerunTmpRoot ? ` --tmp-root ${shellQuote(rerunTmpRoot)}` : ""}` })}`);
   const invalid = adapter.validate(unit.workOrder);
   if (invalid) throw new WorkOrderRefusal("invalid_work_order", invalid);
   const workOrderText = await readFile(unit.materializationPath, "utf8").catch(() => null);

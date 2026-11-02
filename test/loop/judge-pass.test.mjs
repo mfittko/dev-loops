@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -1750,10 +1751,17 @@ test("judge-pass J5: a plan that does not reproduce across two code trees names 
     await writeFile(path.join(emitter, "package.json"), JSON.stringify({ name: "dev-loops", version: "9.9.9" }));
     const indexFile = executionIndexPath(path.join(root, "tmp"), plan.executionIdentity);
     await writeFile(indexFile, JSON.stringify({ ...JSON.parse(await readFile(indexFile, "utf8")), emitterRoot: emitter }));
-    await assert.rejects(runPass({ judgePlan: "./forged-plan.json" }), (err) => {
-      for (const part of [emitter, "dev-loops 9.9.9", TOOLCHAIN_ROOT, `dev-loops ${pullerVersion}`, `dev-loops-run --repo-root ${shellQuote(emitter)} scripts/loop/judge-pass.mjs`]) assert.ok(err.message.includes(part), part);
-      return /does not reproduce the work order/.test(err.message);
-    });
+    const argv = ["--judge-plan", "./forged plan.json", "--gate", "pre_approval_gate"];
+    {
+      const err = await runPass({ judgePlan: "./forged-plan.json", args: argv }).then(() => assert.fail("expected a refusal"), (e) => e);
+      for (const part of [emitter, "dev-loops 9.9.9", TOOLCHAIN_ROOT, `dev-loops ${pullerVersion}`, `node ${shellQuote(path.join(emitter, "scripts/loop/judge-pass.mjs"))} ${argv.map(shellQuote).join(" ")}`]) assert.ok(err.message.includes(part), part);
+      assert.doesNotMatch(err.message, /<the same arguments>/);
+      await mkdir(path.join(emitter, "scripts/loop"), { recursive: true });
+      await writeFile(path.join(emitter, "scripts/loop/judge-pass.mjs"), "console.log(JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2) }));\n");
+      const out = JSON.parse(execFileSync("sh", ["-c", err.message.match(/`(node [^`]+)`/)[1]], { cwd: root, encoding: "utf8" }));
+      assert.deepEqual({ ...out, cwd: await realpath(out.cwd) }, { cwd: await realpath(root), args: argv });
+      assert.match(err.message, /does not reproduce the work order/);
+    }
   } finally {
     await rm(emitter, { recursive: true, force: true });
   }

@@ -42,6 +42,7 @@ import { codeTreeSkewNote, materializationHash, verifyPulledResult, workOrderDig
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { rejectClosingRefRemoval } from "./_slice-linkage.mjs";
+import { shellQuote } from "../lib/checkout-delegation-refusal.mjs";
 import { locateJudgeUnit, renderWorkOrder } from "./emit-judge-work-order.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import {
@@ -902,7 +903,7 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
   }
   // The plan's work order must be exactly what the judge pulled: its digest and its rendered bytes.
   if (workOrderDigest(order) !== plan.workOrderDigest || materializationHash(renderWorkOrder(order)) !== receipt.materializationHash) {
-    throw new Error(`--judge-plan ${options.judgePlan} does not reproduce the work order execution ${plan.executionIdentity} pulled; pass the plan emit-judge-work-order.mjs wrote${await codeTreeSkewNote({ execution: plan.executionIdentity, tmpRoots: [planTmpRoot, path.resolve(receiptTmpRoot)], rerun: "scripts/loop/judge-pass.mjs <the same arguments>" })}`);
+    throw new Error(`--judge-plan ${options.judgePlan} does not reproduce the work order execution ${plan.executionIdentity} pulled; pass the plan emit-judge-work-order.mjs wrote${await codeTreeSkewNote({ execution: plan.executionIdentity, tmpRoots: [planTmpRoot, path.resolve(receiptTmpRoot)], script: "scripts/loop/judge-pass.mjs", args: (options.args ?? []).map(shellQuote).join(" ") })}`);
   }
   const ledger = await readJsonArtifact(resolve(options.findingsFile), "--findings-file", parseError);
   if (sha256Hex(ledger) !== order.authority?.findingsDigest) {

@@ -299,12 +299,12 @@ test("a digest mismatch across two code trees names both roots, both versions an
         const body = refusal(result);
         assert.equal(body.refusal, "semantic_identity_mismatch");
         assert.match(body.error, /no longer reproduces workOrderDigest/);
-        for (const part of [emitter, "dev-loops 9.9.9", TOOLCHAIN_ROOT, `dev-loops ${pullerVersion}`, `dev-loops-run --repo-root ${shellQuote(emitter)} scripts/github/pull-work-order.mjs ${unit.executionIdentity}`]) assert.ok(body.error.includes(part), part);
+        for (const part of [emitter, "dev-loops 9.9.9", TOOLCHAIN_ROOT, `dev-loops ${pullerVersion}`, `DEV_LOOPS_PULL_DELEGATED=1 node ${shellQuote(path.join(emitter, "scripts/github/pull-work-order.mjs"))} ${unit.executionIdentity}`]) assert.ok(body.error.includes(part), part);
       }
       // A caller-supplied --tmp-root rides the rerun command as an absolute, quoted path.
       const tmpRoot = path.join(root, "tmp");
       const scoped = refusal(run("pull-work-order.mjs", [unit.executionIdentity, "--tmp-root", tmpRoot], root));
-      assert.ok(scoped.error.includes(`scripts/github/pull-work-order.mjs ${unit.executionIdentity} --tmp-root ${shellQuote(tmpRoot)}`), scoped.error);
+      assert.ok(scoped.error.includes(`node ${shellQuote(path.join(emitter, "scripts/github/pull-work-order.mjs"))} ${unit.executionIdentity} --tmp-root ${shellQuote(tmpRoot)}`), scoped.error);
     });
   });
 });
@@ -318,14 +318,22 @@ test("codeTreeSkewNote quotes the emitter root, says the identity code may diffe
     await mkdir(path.dirname(executionIndexPath(bad, execution)), { recursive: true });
     await writeFile(executionIndexPath(bad, execution), "{not json", "utf8");
     await writeExecutionIndex(good, { executionIdentity: execution, workOrderRef: "review:o/r#7:x", workOrderDigest: "sha256:0", emitterRoot: emitter });
-    const note = await codeTreeSkewNote({ execution, tmpRoots: [bad, good], rerun: `scripts/github/pull-work-order.mjs ${execution}` });
-    assert.ok(note.includes(`--repo-root '${emitter}' scripts/github/pull-work-order.mjs ${execution}`), note);
+    const note = await codeTreeSkewNote({ execution, tmpRoots: [bad, good], script: "scripts/github/pull-work-order.mjs", args: execution, env: "E=1 " });
+    assert.ok(note.includes(`E=1 node ${shellQuote(path.join(emitter, "scripts/github/pull-work-order.mjs"))} ${execution}`), note);
+    // The printed command runs as written from a separate consumer cwd and keeps that cwd (#2662 review).
+    await mkdir(path.join(emitter, "scripts/github"), { recursive: true });
+    await writeFile(path.join(emitter, "scripts/github/pull-work-order.mjs"), "console.log(JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2), env: process.env.E }));\n", "utf8");
+    const consumer = path.join(root, "consumer");
+    await mkdir(consumer);
+    const printed = note.match(/`(E=1 node [^`]+)`/)[1];
+    const out = JSON.parse(execFileSync("sh", ["-c", printed], { cwd: consumer, encoding: "utf8" }));
+    assert.deepEqual({ ...out, cwd: await realpath(out.cwd) }, { cwd: await realpath(consumer), args: [execution], env: "1" });
     assert.match(note, /identity code may differ/);
     assert.doesNotMatch(note, /identity code differs/);
     const linked = path.join(root, "linked-emitter");
     await symlink(root, linked);
     await writeExecutionIndex(path.join(root, "sym"), { executionIdentity: execution, workOrderRef: "review:o/r#7:x", workOrderDigest: "sha256:0", emitterRoot: linked });
-    assert.equal(await codeTreeSkewNote({ execution, tmpRoots: [path.join(root, "sym")], rerun: "x", toolchainRoot: root }), "");
+    assert.equal(await codeTreeSkewNote({ execution, tmpRoots: [path.join(root, "sym")], script: "x", toolchainRoot: root }), "");
   });
 });
 
