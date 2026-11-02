@@ -67,7 +67,7 @@ Exit codes:
   2  Invalid --jq filter`.trim();
 const parseError = buildParseError(USAGE);
 
-const booleanFlagValue = (v) => v === undefined || v === true || /^(?:true|1)$/iu.test(String(v));
+export const booleanFlagValue = (v) => v === undefined || v === true || /^(?:true|1)$/iu.test(String(v));
 
 export function parseEditPrCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -312,7 +312,7 @@ async function buildEditArgs(options) {
 // Labels of `[x]` rows in currentBody that nextBody no longer carries as `[x]`:
 // unticked, deleted, reworded or moved between scopes rows, across every checkbox in the body. Counts
 // per label, so one lost occurrence of a duplicated label is reported.
-function untickedRows(currentBody, nextBody) {
+export function untickedRows(currentBody, nextBody) {
   // Fence-aware and scope-keyed (CHECKLIST-SCOPE-ONE-MODEL): the key is the row's AC/DoD/other scope plus its label, from the
   // same checklistLineScopes the tick path uses. A rename inside one scope keeps the row; a heading edit that moves a
   // checked row into or out of a scope loses it. Rows inside fenced code have no scope and do not count.
