@@ -9114,6 +9114,22 @@ test("resolveCapRoundFixed follows a chain of sealed clearing records to the cur
   }
 });
 
+test("resolveCapRoundFixed refuses a base-only merge past an unsealed continuation record", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 59, gate: "draft_gate", headSha, baseRefName: "main" };
+    const fixer = "6".repeat(40);
+    await seedClosedRounds(repoRoot, 59, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    await writeDeltaRecord(repoRoot, baseSha, fixer);
+    const baseOnlyMerge = async (args) => args.fromHead === fixer && args.head === headSha;
+    assert.ok(await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge }), "a sealed chain end accepts the base-only merge");
+    await writeDeltaRecord(repoRoot, fixer, "8".repeat(40), "push", { seal: false });
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge }), null, "an unsealed continuation record is no valid chain end");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolveCapRoundFixed starts the chain at a ledgerless base-only merge of the cap-round head", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {

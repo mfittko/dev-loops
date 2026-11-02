@@ -2176,7 +2176,7 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
       if (seen.has(next)) return false;
       seen.add(next);
       const following = clearing(next);
-      if (!following) return Boolean(head && typeof options.baseRefName === "string" && options.baseRefName && await baseOnlyMerge({ fromHead: next, head, mainRef: `origin/${options.baseRefName}`, repoRoot }).catch(() => false));
+      if (!following) return !isUnsealedDeltaRecord(tmpRoot, next) && Boolean(head && typeof options.baseRefName === "string" && options.baseRefName && await baseOnlyMerge({ fromHead: next, head, mainRef: `origin/${options.baseRefName}`, repoRoot }).catch(() => false));
       record = following;
     }
     return false;
