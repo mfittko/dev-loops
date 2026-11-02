@@ -116,6 +116,7 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/loop/detect-copilot-loop-state.mjs` | Fail closed: `config_load_failed` |
 | `scripts/loop/copilot-pr-handoff.mjs` | Fail closed: `config_load_failed` |
 | `scripts/github/request-copilot-review.mjs` | Fail closed: `config_load_failed` |
+| `scripts/github/report-head-declared-keys.mjs` | Fail closed: loads the PR head's own schema in the credential-less job on purpose, and a load error yields the empty key set |
 | `scripts/github/write-gate-context.mjs` | Fail closed: `config_load_failed` |
 | `scripts/github/write-gate-findings-log.mjs` | Fail closed: `config_load_failed` |
 | `scripts/github/resolve-angle-carry-forward.mjs` | Fail closed: `config_load_failed` |
