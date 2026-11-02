@@ -153,6 +153,11 @@ const SALVAGED_DENY_ROWS = [
   "git submodule foreach 'true; node -e y'",
   "git filter-branch --tree-filter 'true; node -e y' HEAD",
   "git rebase -ix 'true; node -e y' HEAD~1",
+  "git rebase --exec='true; node -e y' HEAD~1",
+  "git rebase -x'true; node -e y' HEAD~1",
+  "git filter-branch --tree-filter='true; node -e y' HEAD",
+  "git difftool -x 'true; node -e y'",
+  "git fetch --upload-pack='true; node -e y' origin",
   "sudo watch 'true; node -e y'",
   "tmp/git commit -m \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
   // unit rows (packages/core/test/bash-command-classify.test.mjs)
