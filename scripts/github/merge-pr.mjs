@@ -855,6 +855,8 @@ export async function mergePr(options, runtime = {}) {
     // and every failure is collected instead of stopping at the first.
     // The sentinel approver is not a failure: the report names the approval path instead.
     const checkFailures = failures.filter((f) => !(f.precondition === "human_approver" && approverAssumed));
+    // GitHub blocks the merge (required check or ruleset) even when the CI projection is green; --check cannot know which rule, so it must not report ok.
+    if (prView?.mergeStateStatus === "BLOCKED") checkFailures.push({ precondition: "merge_state_blocked", reason: "GitHub reports mergeStateStatus BLOCKED (a required check or ruleset is unmet)" });
     if (humanMergeOnly) checkFailures.push({ precondition: "human_merge_only", reason: "autonomy.humanMergeOnly is set — merge is a human-only action; the agent hands off and does not run the merge" });
     if (fetchReason !== null) {
       checkFailures.push({ precondition: "base_not_integrated", reason: fetchReason });

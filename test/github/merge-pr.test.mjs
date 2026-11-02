@@ -1404,6 +1404,13 @@ test("--check without an approver passes a drain PR under a standing authorizati
   assert.equal(calls.runChild.length, 0);
 });
 
+test("--check is not ok when GitHub reports mergeStateStatus BLOCKED", async () => {
+  const { runtime } = makeRuntime({ prView: { mergeStateStatus: "BLOCKED" } });
+  const result = await mergePr(baseOptions({ check: true, humanApprovedBy: undefined }), runtime);
+  assert.equal(result.ok, false);
+  assert.ok(result.failures.some((f) => f.precondition === "merge_state_blocked"));
+});
+
 test("--check with unreadable gate evidence reports a null mergeClass and sizeClass and keeps the gate_evidence failure", async () => {
   const { runtime } = makeRuntime({ evidence: { ok: false, sizeOutcome: null, touchesT1: false, failures: ["gate evidence unreadable"] } });
   const result = await mergePr(baseOptions({ check: true, humanApprovedBy: "mfittko" }), runtime);
