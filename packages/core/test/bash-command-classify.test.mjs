@@ -1633,7 +1633,9 @@ test("tokenizeShellCommand: $((expr)) is arithmetic and DELIM) closes a heredoc 
   for (const c of ["EOF)rest", "EOF) && node -e 1"]) assert.equal(tokenizeShellCommand(`X=$(cat <<'EOF'\nbody\n${c}`).incomplete, true, c);
   const tabbed = "X=$(cat <<-'EOF'\n\tbody\n\tEOF)";
   assert.equal(tokenizeShellCommand(tabbed).incomplete, false);
-  assert.ok(JSON.stringify(tokenizeShellCommand(tabbed)).includes("\\tbody"), "<<- body kept");
+  const subs = tokenizeShellCommand(tabbed).segments[0].words[0].subs;
+  assert.equal(subs[0].segments[0].heredocs[0].body, "\tbody", "<<- body kept");
+  assert.ok(!subs[0].segments.some((s) => s.words.some((w) => w.value === "F")), "no stray word F");
   const closed = "echo \"$(cat <<'EOF'\nbody\nEOF)\"";
   assert.equal(tokenizeShellCommand(closed).incomplete, false);
   assert.equal(tokenizeShellCommand("cat <<'EOF'\nbody\nEOF)").incomplete, true); // outside a substitution `EOF)` is no delimiter
