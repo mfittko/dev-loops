@@ -26,6 +26,12 @@ test("tickVerifiedCheckboxes: flips only exact-matched unchecked items", () => {
   assert.deepEqual(out.flipped, ["Alpha"]);
 });
 
+test("tickVerifiedCheckboxes (#2898): flips a row ending in U+2028 under the shared row grammar", () => {
+  const out = tickVerifiedCheckboxes("- [ ] Docs \n", ["Docs"]);
+  assert.deepEqual(out.flipped, ["Docs"]);
+  assert.match(out.body, /^- \[x\] Docs/);
+});
+
 test("tickVerifiedCheckboxes: leaves other unchecked items untouched", () => {
   const body = "- [ ] Alpha\n- [ ] Beta\n";
   const out = tickVerifiedCheckboxes(body, ["Alpha"]);

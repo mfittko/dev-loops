@@ -6,6 +6,8 @@ Accepted — 2026-09-28 ([issue #2407](https://github.com/mfittko/dev-loops/issu
 
 This record amends no ADR. The bodies of ADR 0059, ADR 0078, ADR 0089 and ADR 0095 stay unchanged. No ADR covers the composed checkpoint verdict from issue #2389.
 
+Amended by [ADR 0230](0230-poster-ticks-after-refusal-checks.md) for the tick order: the poster ticks after every refusal check.
+
 ## Context
 
 The composed `pre_approval_gate` checkpoint verdict posts `blocked` while any PR-body Acceptance criteria or Definition of done box is unchecked. The procedure expected the conductor to tick the verified items with `tick-verified-checkboxes.mjs` before the post. On PR #2405 the runner posted first, so a round whose reviewers had verified every item still posted `blocked` with 22 unchecked items and cost one extra round. On PR #2501 the orchestrator ticked every unchecked label by hand, although no artifact mapped an item to a reviewer check.
