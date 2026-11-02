@@ -12,6 +12,12 @@
  *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
  *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
+ *   - raw PR/issue body writes (`gh pr edit --body`/`--body-file`, a `gh api` body-field write to
+ *     pulls/<n> or issues/<n>) — blocked actor-independently (`ADR-TRIPWIRE-STANDING-WAIVER`): the
+ *     sanctioned launcher writers are the only body route because they refuse a hand-written
+ *     `adr-tripwire:allow` line.
+ *   - `timeout N <sanctioned command>` — blocked outright: the wrapper hides the `dev-loops-run`
+ *     head from operator allow rules. Run the command bare; wait/probe tools bound themselves.
  *   - `git stash` — blocked outright: `refs/stash` is shared across every worktree over this
  *     repo's one `.git` directory (skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout).
  *   - `bun run verify` / `bun test` / `vitest` / `npm test` / `npm run test` / `bun run build` /
@@ -46,6 +52,9 @@ import {
   commandContainsCopilotRequestBypass,
   commandContainsCopilotSummonComment,
   commandContainsDetachedWaitTool,
+  commandContainsTimeoutWrappedSanctionedTool,
+  commandContainsRawPrBodyEdit,
+  commandContainsRawPrBodyApiWrite,
   commandContainsCodeVerificationEntrypoint,
   extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
@@ -114,6 +123,15 @@ const isReplyResolve =
 const isRequestApi = typeof command === "string" && commandContainsCopilotRequestBypass(command, managedRepoSlug);
 const isCopilotSummon = typeof command === "string" && commandContainsCopilotSummonComment(command);
 const isWaitTool = typeof command === "string" && commandContainsDetachedWaitTool(command);
+// The `timeout N <sanctioned command>` deny is decided in the shared decider; the pre-check only
+// detects the shape, because a shape it does not name reaches `emitAllow()` before the decider runs.
+const isTimeoutWrapped = typeof command === "string" && commandContainsTimeoutWrappedSanctionedTool(command);
+// The `ADR-TRIPWIRE-STANDING-WAIVER` raw PR/issue body write shapes are decided in the shared
+// decider and denied for EVERY actor, operator and main agent included. The pre-check must
+// nominate them too, or the non-match path allows what the decider would deny.
+const isBodyWrite =
+  typeof command === "string" &&
+  (commandContainsRawPrBodyEdit(command, managedRepoSlug) || commandContainsRawPrBodyApiWrite(command, managedRepoSlug));
 // COORDINATOR-VERIFY-BOUNDARY (#2082) — actor-scoped inside decideBashGate (agentType is
 // "dev-loop" or "gate-coordinator"), so the quick pre-check here only detects the command shape; the hook must not
 // short-circuit to allow before the decider applies the actor + enforceCoordinator scoping.
@@ -127,7 +145,7 @@ const isUnresolve = isUnresolveInvocation(command);
 if (
   !isReady && !isMerge && !isCreate && !isExternalWrite && !isStash &&
   !isInline && !isSubIssue && !isReplyResolve && !isRequestApi && !isCopilotSummon && !isWaitTool &&
-  !isVerifyEntrypoint && !isJudge && !isFixerPull && !isUnresolve
+  !isTimeoutWrapped && !isBodyWrite && !isVerifyEntrypoint && !isJudge && !isFixerPull && !isUnresolve
 ) {
   emitAllow();
 }
