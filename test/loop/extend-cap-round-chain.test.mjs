@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import { resolveCapRoundFixed } from "../../scripts/github/write-gate-context.mjs";
-import { readSealedGateDeltaRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
+import { gateDeltaRecordPath, readSealedGateDeltaRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { extendCapRoundChain, parseExtendCapRoundChainCliArgs, runCli } from "../../scripts/loop/extend-cap-round-chain.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 
@@ -41,7 +41,7 @@ async function capFixture({ findings = [] } = {}) {
   return { root, A, B };
 }
 
-const extend = (root, head, deps = {}) => extendCapRoundChain({ repo: REPO, pr: PR, worktree: root }, { fetchPr: async () => ({ headRefOid: head, baseRefName: "main" }), fetchBaseBranch: () => {}, ...deps });
+const extend = (root, head, deps = {}) => extendCapRoundChain({ repo: REPO, pr: PR, worktree: root }, { detectOriginSlug: () => REPO, fetchPr: async () => ({ headRefOid: head, baseRefName: "main" }), fetchBaseBranch: () => {}, ...deps });
 const proof = (root, head) => resolveCapRoundFixed({ repo: REPO, pr: PR, headSha: head, baseRefName: "main" }, { repoRoot: root });
 
 test("a docs-only commit on top of the sealed chain is proven only after the extension", async () => {
@@ -191,11 +191,11 @@ test("runCli maps a refusal and a thrown failure to a stderr JSON with exit 1", 
     const sink = () => { const chunks = []; return { chunks, write: (s) => { chunks.push(s); } }; };
     const stdout = sink();
     const stderr = sink();
-    const code = await runCli(["--repo", REPO, "--pr", String(PR), "--worktree", root], { stdout, stderr, fetchPr: async () => { throw new Error("gh down"); } });
+    const code = await runCli(["--repo", REPO, "--pr", String(PR), "--worktree", root], { stdout, stderr, detectOriginSlug: () => REPO, fetchPr: async () => { throw new Error("gh down"); } });
     assert.equal(code, 1);
     assert.deepEqual(JSON.parse(stderr.chunks.join("")), { ok: false, refused: true, reason: "writer_error", detail: "gh down" });
     const refusedErr = sink();
-    assert.equal(await runCli(["--repo", REPO, "--pr", String(PR), "--worktree", root], { stdout, stderr: refusedErr, fetchPr: async () => ({}) }), 1);
+    assert.equal(await runCli(["--repo", REPO, "--pr", String(PR), "--worktree", root], { stdout, stderr: refusedErr, detectOriginSlug: () => REPO, fetchPr: async () => ({}) }), 1);
     assert.equal(JSON.parse(refusedErr.chunks.join("")).reason, "pr_state_unreadable");
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -359,5 +359,34 @@ test("--worktree accepts a path in both forms and may be omitted; a blank value 
   assert.equal(parseExtendCapRoundChainCliArgs(base).worktree, undefined);
   for (const blank of [["--worktree", ""], ["--worktree", "   "], ["--worktree= "]]) {
     assert.throws(() => parseExtendCapRoundChainCliArgs([...base, ...blank]), /worktree/);
+  }
+});
+
+test("a --repo that differs from the checkout origin refuses repo_mismatch and writes no record", async () => {
+  const { root, B } = await capFixture();
+  try {
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
+    for (const origin of ["owner/other", "Owner/Repo-x", null]) {
+      const result = await extend(root, D, { detectOriginSlug: () => origin, fetchPr: async () => { throw new Error("fetchPr must not run"); } });
+      assert.equal(result.reason, "repo_mismatch");
+    }
+    // repoSlugEquals normalization: a case variant of the origin slug is accepted.
+    assert.equal((await extend(root, D, { detectOriginSlug: () => "Owner/Repo" })).action, "chain_extended");
+    assert.ok(readSealedGateDeltaRecord(path.join(root, "tmp"), B));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a failing seal write in the exclusive path removes the linked record and rethrows", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "seal-fail-"));
+  try {
+    const sha = "a".repeat(40);
+    const recordPath = gateDeltaRecordPath(root, sha);
+    await mkdir(`${recordPath}.seal`, { recursive: true }); // a directory at the seal path makes the seal removal throw
+    assert.throws(() => writeSealedGateDeltaRecord(root, sha, { reviewBaselineHead: sha }, { exclusive: true }));
+    assert.equal(existsSync(recordPath), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

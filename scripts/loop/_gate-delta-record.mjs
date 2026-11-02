@@ -93,8 +93,15 @@ export function writeSealedGateDeltaRecord(tmpRoot, reviewBaselineHead, record, 
   if (exclusive) {
     writeFileSync(tempPath, text, "utf8");
     try { linkSync(tempPath, recordPath); } finally { rmSync(tempPath, { force: true }); }
-    rmSync(`${recordPath}.seal`, { force: true });
-    writeFileSync(`${recordPath}.seal`, `${sha256(text)}\n`, "utf8");
+    // A failed seal write must not leave the linked record unsealed: remove both, then rethrow.
+    try {
+      rmSync(`${recordPath}.seal`, { force: true });
+      writeFileSync(`${recordPath}.seal`, `${sha256(text)}\n`, "utf8");
+    } catch (error) {
+      rmSync(recordPath, { force: true });
+      rmSync(`${recordPath}.seal`, { force: true });
+      throw error;
+    }
     return recordPath;
   }
   // Delete the seal first and write it last, as writeSealed does: a crash leaves an unsealed pair, never a stale seal.

@@ -16,7 +16,7 @@ import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { loadDevLoopConfigStrict, resolveClassifyRules } from "@dev-loops/core/config";
 import { ghJson } from "@dev-loops/core/github/gh";
 import { CAP_ROUND_REFUSAL } from "@dev-loops/core/loop/pr-gate-coordination";
-import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { detectRepoSlug, parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { capRoundCovers, clearingChainLastCandidates, resolveCapRound, resolveCapRoundFixed } from "../github/write-gate-context.mjs";
@@ -31,7 +31,7 @@ Refuses with a typed reason and writes nothing when any commit after the chain e
 logic file, when no cap-round chain exists, or when the proof does not reach the head afterwards.
 Output (stdout, JSON): { "ok": true, "action": "chain_extended" | "already_proven", "chainEnd" (null for already_proven), "candidateHead", "files" }
 Refusal (stderr, JSON, exit 1): { "ok": false, "refused": true, "reason": "<code>", "detail": "..." }
-Reasons: pr_state_unreadable, base_fetch_failed, head_mismatch, no_cap_round_chain, baseline_orphaned,
+Reasons: repo_mismatch, pr_state_unreadable, base_fetch_failed, head_mismatch, no_cap_round_chain, baseline_orphaned,
 logic_commit_in_range, record_exists, record_not_clearing, proof_not_reached; a thrown gh or git failure is "writer_error".
 ${JQ_OUTPUT_USAGE}`.trim();
 const parseError = buildParseError(USAGE);
@@ -71,11 +71,14 @@ const defaultFetchPr = ({ repo, pr }, { env, ghCommand, runChild }) => ghJson(["
 
 export async function extendCapRoundChain(options, {
   env = process.env, ghCommand = "gh", runChild, fetchPr = defaultFetchPr, git = defaultGit,
-  fetchBaseBranch = defaultFetchOrigin, resolveProof = resolveCapRoundFixed, writeRecord = writeSealedGateDeltaRecord,
+  fetchBaseBranch = defaultFetchOrigin, detectOriginSlug = detectRepoSlug, resolveProof = resolveCapRoundFixed, writeRecord = writeSealedGateDeltaRecord,
 } = {}) {
   const { repo, pr } = options;
   const cwd = options.worktree ?? process.cwd();
   const repoRoot = resolveRepoRoot(cwd);
+  // The ledger and the record are read from this checkout, keyed by the --repo slug: it must be --repo.
+  const originSlug = detectOriginSlug(repoRoot);
+  if (!originSlug || !repoSlugEquals(originSlug, repo)) return refuse("repo_mismatch", `the checkout origin (${originSlug ?? "unresolved"}) is not ${repo}; rerun with --repo ${originSlug ?? "<origin slug>"} from a clone of ${repo}`);
   const state = await fetchPr({ repo, pr }, { env, ghCommand, runChild });
   const prHead = typeof state?.headRefOid === "string" ? state.headRefOid.trim().toLowerCase() : "";
   const baseRefName = state?.baseRefName;
