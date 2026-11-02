@@ -1,5 +1,6 @@
 // SPEC-SLICE-PR-KEEPS-CLOSING-REF: the slice-PR linkage rule, shared by the spec context, the judge work order and the judge pass.
 import { resolvePrDescriptionSpec } from "@dev-loops/core/loop/spec-authority";
+import { stripFencesAndCodeSpans } from "@dev-loops/core/loop/issue-refinement-artifact";
 
 export const SLICE_LINKAGE_RULE_ID = "SPEC-SLICE-PR-KEEPS-CLOSING-REF";
 export const SLICE_LINKAGE_SENTENCE = `${SLICE_LINKAGE_RULE_ID}: a slice PR keeps its closing reference (Closes #N) and its Non-goals reopen line; changing Closes to Refs is never a remedy, because a Refs-only slice PR has no spec authority today. This rule is interim until Refs-only pr_body authority ships in a later slice of issue 2883, and the Refs plus verbatim slice body shape (dod:3) stays open.`;
@@ -23,7 +24,7 @@ const BODY_CLOSING = new RegExp(String.raw`\b${KW}\s*:?\s+(?:https?://github\.co
 export const closingRefs = (body, ownRepo) => {
   const own = String(ownRepo ?? "").toLowerCase();
   const refs = new Map();
-  for (const m of String(body ?? "").matchAll(BODY_CLOSING)) {
+  for (const m of stripFencesAndCodeSpans(String(body ?? "")).matchAll(BODY_CLOSING)) {
     const named = (m[1] ?? m[2] ?? "").toLowerCase();
     const repo = named === own ? "" : named;
     refs.set(`${repo}#${Number(m[3])}`, { repo, number: Number(m[3]) });

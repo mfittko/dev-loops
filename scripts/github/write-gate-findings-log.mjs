@@ -18,7 +18,8 @@ import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bou
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { capClosedFor } from "@dev-loops/core/loop/gate-fanin";
-import { listPriorActItems, resolveDraftRoundCap } from "./write-gate-context.mjs";
+import { rejectClosingRefRemoval } from "../loop/_slice-linkage.mjs";
+import { listPriorActItems,resolveDraftRoundCap } from "./write-gate-context.mjs";
 import { clusterFindings, clustersFromStampedIds, projectClusterDisposition } from "@dev-loops/core/loop/finding-cluster";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
@@ -65,6 +66,9 @@ Optional:
                                  byte-identical to the pre-executionMode shape.
   --emit-plan <path>             Legacy guard only. The keyed emit-fanout-dispatch plan under --context-tmp-root is verified automatically, so the sanctioned path omits this flag. When supplied, it fails closed unless the provenance matches the plan's round key and emitted fresh units exactly. An explicit --provenance must equal the keyed fan-in ledger provenance when that ledger exists. The plan is a guard only; it never supplies findings.
   --full-label                   The PR carries the gate:full label: dispatch groups resolve to one angle per unit, so any reviewer identity shared across fresh angles is rejected regardless of a declared "group" (mirrors write-gate-context.mjs's --full-label). Only meaningful when --provenance is supplied. Omitted (default false) keeps current behavior.
+  --judge-plan <path>            The judge work order plan judge-pass was given. With --judge-verdict, its pinned
+                                 sliceLinkageIssues apply the same SPEC-SLICE-PR-KEEPS-CLOSING-REF coercion judge-pass
+                                 applies, so the durable ledger matches the act list.
   --judge-verdict <path>         Path to the judge agent's verdict artifact (JSON). When supplied, the findings are
                                  enriched with the judge's relevance-based dispositions (judgeDisposition /
                                  judgeRationale / judgeCriterion / followUpDraft / judgeTitle / judgeDetail / judgeFix /
@@ -562,6 +566,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       "emit-plan": { type: "string" },
       "full-label": { type: "boolean" },
       "judge-verdict": { type: "string" },
+      "judge-plan": { type: "string" },
       "tmp-root": { type: "string" },
       "context-tmp-root": { type: "string" },
       "spec-authority": { type: "string" },
@@ -654,6 +659,12 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     }
     if (token.name === "full-label") {
       options.fullLabel = true;
+      continue;
+    }
+    if (token.name === "judge-plan") {
+      const judgePlan = requireTokenValue(token, parseError).trim();
+      if (judgePlan.length === 0) throw parseError("--judge-plan requires a non-empty path");
+      options.judgePlan = judgePlan;
       continue;
     }
     if (token.name === "judge-verdict") {
@@ -888,6 +899,15 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       : clusterFindings(enriched.findings, { headSha: options.headSha }).clusters;
     findings = projectClusterDisposition(enriched.findings, clusters);
     assertNoProjectedForbiddenDefer(findings, clusters);
+    if (options.judgePlan) {
+      let plan;
+      try {
+        plan = JSON.parse(await readFile(path.resolve(repoRoot, options.judgePlan), "utf8"));
+      } catch (error) {
+        throw parseError(`--judge-plan could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      rejectClosingRefRemoval(findings, plan?.workOrder?.sliceLinkageIssues);
+    }
     scopeDrift = enriched.scopeDrift;
     if (specAuthorityIdentity !== undefined) {
       findings = await applySiblingSpecAuthorityVerdict(findings, judgePath, specAuthorityIdentity);

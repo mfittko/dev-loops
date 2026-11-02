@@ -2267,6 +2267,9 @@ test("sliceLinkageIssues arms only for exactly one closing reference that a reop
   assert.deepEqual(sliceLinkageIssues([], body("Closes #10\nCloses acme/lib#10", "Reopen #10 on merge"), "o/r"), []);
   assert.deepEqual(sliceLinkageIssues([], body("Closes other/repo#2883", "Reopen #2883 on merge"), "o/r"), []);
   assert.deepEqual(sliceLinkageIssues([], body("Closes #10\nCloses o/r#10", "Reopen #10 on merge"), "o/r"), [10]);
+  // Inline code spans and fenced blocks do not close an issue on GitHub, so an example reference is not a second one.
+  assert.deepEqual(sliceLinkageIssues([], body("Closes #10\nUse `Closes #99` as an example.", "Reopen #10 on merge")), [10]);
+  assert.deepEqual(sliceLinkageIssues([], body("Closes #10\n```\nCloses #99\n```", "Reopen #10 on merge")), [10]);
 });
 
 async function sliceRound(tmpDir, { specNonGoals, prBody, specText }) {
