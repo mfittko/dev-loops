@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { CONFIG_FILE_VARIANTS } from "@dev-loops/core/config";
 import extension from "../extension/index.ts";
+import { createPiBashGateFactsResolver } from "../extension/bash-gate-facts.ts";
 import { DEV_LOOPS_ROLES, decidePiToolCall } from "../extension/readonly-role-gate.ts";
 import { withTempDir } from "./_helpers.mjs";
 
@@ -17,6 +18,16 @@ import { withTempDir } from "./_helpers.mjs";
 const SLUG = "acme/widgets";
 /** The repository root, for the source-level derivation assertions (the loader's one variant list). */
 const SOURCE_ROOT = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
+
+/**
+ * The identity probe's exact command. `LC_ALL=C` is load-bearing, not incidental: see the locale
+ * test below, which fails if the pin is ever dropped.
+ */
+const PROBE_COMMAND = "LC_ALL=C git rev-parse --show-toplevel";
+/** Git's own definitive "not a git repository" sentence — the matcher's ACCEPTED input form. */
+const NOT_A_REPO_EN = "fatal: not a git repository (or any of the parent directories): .git";
+/** The same sentence from an NLS git under a non-English locale — the matcher's REJECTED input form. */
+const NOT_A_REPO_DE = "fatal: Kein Git-Repository (oder irgendein übergeordnetes Verzeichnis): .git";
 
 let repoSeq = 0;
 /** A `.devloops` repo root under the test's temp dir, i.e. a dev-loops-managed repo root. */
@@ -58,6 +69,14 @@ function register({
   readyGate = { code: 1, stderr: '{"error":"no clean draft_gate record"}' },
   probeThrows = false,
   probeKilled = false,
+  /*
+   * An NLS git built with gettext prints git's "not a git repository" sentence TRANSLATED under a
+   * non-English locale. `'host'` models that host: the German line for the UNPINNED probe form, so a
+   * fixture asserting the permissive `not-a-repo` facts passes only while the probe pins its locale.
+   * `'always'` hands the German line over even to the pinned probe, so the matcher's REJECTED input
+   * form reaches the classifier directly and must fail closed.
+   */
+  localizedNotARepo = false,
 } = {}) {
   const events = new Map();
   const execCalls = [];
@@ -65,8 +84,11 @@ function register({
   const exec = async (tool, args, opts) => {
     const command = args[args.length - 1];
     execCalls.push({ command, cwd: opts?.cwd });
-    if (command === "git rev-parse --show-toplevel") {
-      if (state.unmanaged) return { code: 128, stdout: "", stderr: "fatal: not a git repository (or any parent)" };
+    if (localizedNotARepo && command === "git rev-parse --show-toplevel") {
+      return { code: 128, stdout: "", stderr: NOT_A_REPO_DE };
+    }
+    if (command === PROBE_COMMAND) {
+      if (state.unmanaged) return { code: 128, stdout: "", stderr: localizedNotARepo === "always" ? NOT_A_REPO_DE : NOT_A_REPO_EN };
       if (toplevel === "throws") throw new Error("spawn git ENOENT");
       if (toplevel === "killed") return { code: null, stdout: "", stderr: "", killed: true };
       if (toplevel === "noisy") return { code: 0, stdout: `profile banner written by .zprofile\n${repoRoot}\n`, stderr: "" };
@@ -180,11 +202,71 @@ tempTest("Pi tool_call fails CLOSED when the repo identity probe cannot answer (
       assert.match(waiver.reason, /ADR-TRIPWIRE-STANDING-WAIVER/, `${toplevel} / ${String(role)}: the waiver write must stay denied`);
     }
     // Never cached: the next call asks git again instead of serving a degraded answer all session.
-    const probes = () => gate.execCalls.filter((call) => call.command === "git rev-parse --show-toplevel").length;
+    const probes = () => gate.execCalls.filter((call) => call.command === PROBE_COMMAND).length;
     const before = probes();
     await callAs(gate, "developer", MERGE);
     assert.equal(probes(), before + 1, `${toplevel}: an unknown probe must be re-probed, not cached`);
   }
+});
+
+// The probe's definitive negative is git's own sentence, which git emits through gettext: an NLS
+// build under a non-English locale prints a TRANSLATED line instead, `NOT_A_REPO_RE` misses it, and
+// the definitive answer degrades to `unknown` — the same cwd+command is then denied on Pi while the
+// Claude edge, which reads whatever the host printed, allows it. The fix pins the LOCALE, not the
+// text, so the probe's answer depends on repo state instead of on the machine. The fixture models
+// the NLS host and hands the translated line over for the UNPINNED probe form only, so dropping the
+// pin flips the classification to the fail-closed branch and fails the assertion below.
+tempTest("Pi tool_call pins the identity probe's locale so a localized not-a-repository line cannot flip the verdict", async (tmp) => {
+  clearCoordinatorFlag();
+  const root = managedRepoRoot(tmp, { humanMergeOnly: true });
+  // ACCEPTED form: git's definitive English sentence stays permissive. The fixture is an NLS host,
+  // so this passes only while the probe pins its own locale instead of reading the host's output.
+  const nlsHost = register({ repoRoot: root, unmanaged: true, localizedNotARepo: "host" });
+  assert.deepEqual(
+    await callAs(nlsHost, undefined, MERGE),
+    { block: false },
+    `${NOT_A_REPO_EN} is git's DEFINITIVE negative and must stay permissive, whatever the host locale would print`,
+  );
+  assert.equal(
+    nlsHost.execCalls[0].command,
+    PROBE_COMMAND,
+    "the identity probe must pin LC_ALL=C so the machine locale cannot reach the classification",
+  );
+  assert.equal(
+    nlsHost.execCalls.some((call) => call.command === "git rev-parse --show-toplevel"),
+    false,
+    "no classification may ever be derived from the unpinned (localized) probe form",
+  );
+  // REJECTED form: the translated sentence is not git's definitive answer, so it must never be read
+  // as the permissive `not-a-repo` outcome — the managed-repo denies stay armed (fail closed).
+  const translated = register({ repoRoot: root, unmanaged: true, localizedNotARepo: "always" });
+  const armed = await callAs(translated, undefined, MERGE);
+  assert.equal(armed.block, true, "a translated not-a-repository line must never be read as the permissive answer");
+  assert.match(armed.reason, /STOP-HUMAN-MERGE-001|RAW-GH-PR-MERGE-BYPASS/);
+});
+
+// The tri-state identity fact is TOTAL: ONLY git's explicit `not-a-repo` answer is permissive. A
+// repo context wired through the injectable seam (`createPostMergeUpdateHook`'s stubs already return
+// `{ repoRoot, repoSlug, inManagedContext }`) carries NO `identityProbe` tag, and reading that
+// absence as "not a repository" is the fail-open this module exists to close: `repoRoot` becomes
+// null, EMPTY_REPO_FACTS comes back, and STOP-HUMAN-MERGE-001, RAW-GH-PR-MERGE-BYPASS,
+// WORKTREE-NO-STASH and the tripwire waiver deny all switch off.
+tempTest("Pi facts treat a repo context with no identityProbe tag as UNKNOWN, never as not-a-repo", async (tmp) => {
+  clearCoordinatorFlag();
+  const root = managedRepoRoot(tmp, { humanMergeOnly: true });
+  const resolveFacts = createPiBashGateFactsResolver({
+    exec: async () => {
+      throw new Error("the injected repo context must be used instead of exec");
+    },
+    env: {},
+    resolveRepoContext: async () => ({ repoRoot: root, repoSlug: SLUG, inManagedContext: false }),
+  });
+  const facts = await resolveFacts({ cwd: root, command: MERGE });
+  assert.equal(facts.inManagedContext, true, "an untagged context degrades to the managed walk (fail closed)");
+  assert.equal(facts.managedRepoSlug, null, "the identity stays unresolved, so every slug-scoped rule fails closed");
+  const decision = decidePiToolCall({ toolName: "bash", input: { command: MERGE }, agentType: null, facts });
+  assert.equal(decision.block, true, "the managed-repo denies must stay armed for an untagged context");
+  assert.match(decision.reason, /STOP-HUMAN-MERGE-001|RAW-GH-PR-MERGE-BYPASS/);
 });
 
 // Issue 2577's owner allowlist keys on the ROLE name alone, which Pi resolves from `active_agent`, so
@@ -304,13 +386,13 @@ tempTest("Pi tool_call caches the repo facts per cwd", async (tmp) => {
   const gate = register({ repoRoot: managedRepoRoot(tmp, { humanMergeOnly: true }) });
   await callAs(gate, "developer", "git status");
   await callAs(gate, "developer", MERGE);
-  const repoToplevel = gate.execCalls.filter((call) => call.command === "git rev-parse --show-toplevel");
+  const repoToplevel = gate.execCalls.filter((call) => call.command === PROBE_COMMAND);
   assert.equal(repoToplevel.length, 1, "repo identity must resolve once per cwd, not once per tool call");
   // The FULL sequence, in order: fact resolution must not grow a call (an extra git read, a second
   // probe) without a test failing — neither command carries a ready verb, so no probe belongs here.
   assert.deepEqual(
     gate.execCalls.map((call) => call.command),
-    ["git rev-parse --show-toplevel", "git config --get remote.origin.url"],
+    [PROBE_COMMAND, "git config --get remote.origin.url"],
   );
 });
 

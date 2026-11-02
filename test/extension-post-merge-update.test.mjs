@@ -1275,7 +1275,9 @@ function createFakeGitExec(repoRoot, { remoteUrl = "git@github.com:acme/widgets.
   const calls = [];
   const exec = async (command, options = {}) => {
     calls.push({ command, cwd: options.cwd });
-    if (command === "git rev-parse --show-toplevel") {
+    // The identity probe pins `LC_ALL=C` (git emits its "not a git repository" text through gettext,
+    // so an unpinned probe would let the host locale change the classification).
+    if (command === "LC_ALL=C git rev-parse --show-toplevel") {
       return { code: 0, stdout: `${repoRoot}\n`, stderr: "", killed: false };
     }
     if (command === "git config --get remote.origin.url") {
@@ -1348,7 +1350,7 @@ test("defaultResolveRepoContext fails closed when the remote-url lookup rejects 
     await writeFile(path.join(tempDir, ".devloops"), "{}\n");
     const gateCalls = [];
     const exec = async (command, options = {}) => {
-      if (command === "git rev-parse --show-toplevel") {
+      if (command === "LC_ALL=C git rev-parse --show-toplevel") {
         return { code: 0, stdout: `${tempDir}\n`, stderr: "", killed: false };
       }
       if (command === "git config --get remote.origin.url") {

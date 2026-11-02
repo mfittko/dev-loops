@@ -12,7 +12,7 @@ import {
 } from '@dev-loops/core/loop/bash-command-classify';
 import { prReadySegmentsProvenForeign } from '@dev-loops/core/loop/bash-gate-decisions';
 import type { ExtensionHarnessAdapter } from './harness-types.ts';
-import { PRE_PR_READY_GATE_SCRIPT, PR_READY_GATE_TIMEOUT_MS, defaultResolveRepoContext } from './post-merge-update.ts';
+import { PRE_PR_READY_GATE_SCRIPT, PR_READY_GATE_TIMEOUT_MS, defaultResolveRepoContext, type RepoContext } from './post-merge-update.ts';
 import type { PiBashGateFacts } from './readonly-role-gate.ts';
 
 /**
@@ -32,7 +32,9 @@ import type { PiBashGateFacts } from './readonly-role-gate.ts';
  * fail-closed (deny). A git identity probe that cannot answer at all — a rejected `exec`, the 5s cap
  * killing a slow login shell, a non-zero exit, or noisy stdout the single-line guard rejects — is
  * NOT read as "no managed context": that would switch every managed-repo deny off (the raw merge and
- * waiver-write rules included) for the session. The cwd is treated as a managed checkout when a
+ * waiver-write rules included) for the session. A `cwd` the resolver cannot use at all — a
+ * non-string, or an empty/blank string — is the same case, rejected before either `path.resolve` or
+ * `exec` sees it. The cwd is treated as a managed checkout when a
  * `.devloops` layer sits at it or above it, with the repo identity left unresolved so every
  * slug-scoped rule fails closed, and that entry is re-probed rather than cached (a login shell that
  * was slow once must not pin the session to a degraded answer). The Claude edge cannot hit this
@@ -156,10 +158,13 @@ function managedCheckoutRoot(cwd: string): string | null {
   }
 }
 
-async function resolveRepoFacts(exec: ExtensionHarnessAdapter['exec'], cwd: string): Promise<ResolvedRepoFacts> {
-  let repo;
+async function resolveRepoFacts(
+  probeRepoContext: (cwd: string) => Promise<RepoContext>,
+  cwd: string,
+): Promise<ResolvedRepoFacts> {
+  let repo: RepoContext | null;
   try {
-    repo = await defaultResolveRepoContext(exec, cwd);
+    repo = await probeRepoContext(cwd);
   } catch {
     repo = null;
   }
@@ -168,8 +173,13 @@ async function resolveRepoFacts(exec: ExtensionHarnessAdapter['exec'], cwd: stri
   // then treated as managed with its identity unresolved, so every slug-scoped rule keeps failing
   // closed. A definitive "not a git repository" answer is not unknown — it stays permissive, exactly
   // as on the Claude edge.
-  // A rejected `exec` (spawn failure, or the 5s cap rejecting) leaves `repo` null: also unknown.
-  const unknown = !probed && (repo == null || repo.identityProbe === 'unknown');
+  // The tri-state is TOTAL: ONLY the explicit `not-a-repo` answer is permissive. A rejected `exec`
+  // (spawn failure, or the 5s cap rejecting) leaves `repo` null (unknown), and a context that
+  // carries no `identityProbe` tag at all — the shape the injectable repo-context seam hands over —
+  // is unknown too. Reading a missing tag as "not a repository" would flip every managed-repo deny
+  // off (the fail-open this module closes), so anything but the explicit answer walks the config
+  // layer fail-closed.
+  const unknown = !probed && repo?.identityProbe !== 'not-a-repo';
   const repoRoot = probed ? repo!.repoRoot : unknown ? managedCheckoutRoot(cwd) : null;
   if (!repoRoot) return { ...EMPTY_REPO_FACTS, repoRoot: null, probed: false };
   const inManagedContext = probed ? repo!.inManagedContext : true;
@@ -252,10 +262,19 @@ async function resolveReadyGate(
 export function createPiBashGateFactsResolver({
   exec,
   env = process.env,
+  resolveRepoContext,
 }: {
   exec: ExtensionHarnessAdapter['exec'];
   env?: Record<string, string | undefined>;
+  /**
+   * The repo-context seam `createPostMergeUpdateHook` also exposes, for callers that already hold a
+   * resolved context. Defaults to the real `defaultResolveRepoContext(exec, cwd)`. Injecting a
+   * resolver does NOT relax the classification: a context carrying no `identityProbe` tag is
+   * UNKNOWN, never permissive (`resolveRepoFacts`).
+   */
+  resolveRepoContext?: (cwd: string) => Promise<RepoContext>;
 }): (call: { cwd: string; command: string }) => Promise<PiBashGateFacts> {
+  const probeRepoContext = resolveRepoContext ?? ((cwd: string) => defaultResolveRepoContext(exec, cwd));
   const cache = new Map<string, CachedRepoFacts>();
   async function cachedRepoFacts(cwd: string): Promise<ResolvedRepoFacts> {
     const cached = cache.get(cwd);
@@ -266,13 +285,33 @@ export function createPiBashGateFactsResolver({
     if (cached && cached.configSignature === configSourceSignature(cached.facts.repoRoot)) {
       return cached.facts;
     }
-    const facts = await resolveRepoFacts(exec, cwd);
+    const facts = await resolveRepoFacts(probeRepoContext, cwd);
     // Only a probe-backed entry is cached: a degraded (unresolved-identity) or rootless answer is
     // re-probed on the next call, so a transient probe failure never pins the session.
     if (facts.probed && facts.repoRoot) cache.set(cwd, { facts, configSignature: configSourceSignature(facts.repoRoot) });
     return facts;
   }
   return async function resolveBashGateFacts({ cwd, command }) {
+    // A cwd this resolver cannot probe must never reach `path.resolve` or `exec`: `path.resolve`
+    // throws on a non-string (rejecting the `tool_call` handler, so the command runs with no
+    // decision at all) and `exec` with an empty cwd would probe the HOST process directory and
+    // describe a different repo than the session's — either way STOP-HUMAN-MERGE-001,
+    // RAW-GH-PR-MERGE-BYPASS, WORKTREE-NO-STASH and the tripwire waiver write stop being enforced.
+    // Reject it up front with the fail-closed shape a degraded probe resolves to: a managed context
+    // with the identity unresolved, so every managed-repo deny stays armed. `humanMergeOnly` is the
+    // one value that must NOT default permissively here — the packaged default for a managed repo is
+    // `true`, and `false` would fail STOP-HUMAN-MERGE-001 open (`ADAPTER_FACTS`,
+    // `bash-gate-decisions.mjs`), one of the four denies this guard keeps armed.
+    if (typeof cwd !== 'string' || cwd.trim() === '') {
+      return {
+        inManagedContext: true,
+        managedRepoSlug: null,
+        repoSlug: null,
+        humanMergeOnly: true,
+        enforceCoordinator: env.DEVLOOPS_COORDINATOR_READONLY === '1',
+        readyGate: null,
+      };
+    }
     const repoFacts = await cachedRepoFacts(cwd);
     return {
       inManagedContext: repoFacts.inManagedContext,

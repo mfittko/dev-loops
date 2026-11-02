@@ -173,6 +173,44 @@ test("the real Claude hook and the real Pi fact resolver agree on the alternativ
   );
 });
 
+// The resolver is the exported seam a parity or third adapter calls with the session's `cwd`, and it
+// is the producer of the facts the shared decision reads. A cwd it cannot use must never reach
+// `path.resolve` (which throws on a non-string, rejecting the `tool_call` handler so the command
+// runs with no decision at all) or `exec` (an empty cwd resolves the HOST process directory, so the
+// facts would describe a different repo than the session's). Either way STOP-HUMAN-MERGE-001,
+// RAW-GH-PR-MERGE-BYPASS, WORKTREE-NO-STASH and the tripwire waiver deny stop being enforced.
+test("the Pi facts resolver fails closed on a cwd it cannot probe (empty, blank or missing)", async () => {
+  let execCalls = 0;
+  const resolveFacts = createPiBashGateFactsResolver({
+    exec: async () => {
+      execCalls += 1;
+      throw new Error("an unusable cwd must not reach exec");
+    },
+    env: {},
+  });
+  for (const cwd of ["", "   ", undefined]) {
+    const facts = await resolveFacts({ cwd, command: "gh pr merge 7 --squash" });
+    const label = JSON.stringify(cwd);
+    assert.equal(facts.inManagedContext, true, `${label}: the managed context must stay on`);
+    assert.equal(facts.managedRepoSlug, null, `${label}: the identity stays unresolved`);
+    assert.equal(facts.repoSlug, null, `${label}: the identity stays unresolved`);
+    // `humanMergeOnly = false` would fail STOP-HUMAN-MERGE-001 open (ADAPTER_FACTS), so the guard
+    // records the managed repo's packaged default instead of defaulting the invariant permissively.
+    assert.equal(facts.humanMergeOnly, true, `${label}: the human-merge invariant stays armed`);
+    for (const [command, reason] of [
+      ["gh pr merge 7 --squash", /STOP-HUMAN-MERGE-001/],
+      ["gh pr merge --repo other/repo 5", /STOP-HUMAN-MERGE-001/],
+      ["git stash", /git stash blocked/],
+      ["gh pr create --fill", /gh pr create blocked/],
+    ]) {
+      const decision = decidePiToolCall({ toolName: "bash", input: { command }, agentType: null, facts });
+      assert.equal(decision.block, true, `${label}: ${command} must stay denied`);
+      assert.match(decision.reason, reason, `${label}: ${command} deny reason`);
+    }
+  }
+  assert.equal(execCalls, 0, "neither the git probe nor path.resolve may see an unusable cwd");
+});
+
 test("every Bash-gate rule is enforced through the shared decision on Pi (AC2)", () => {
   for (const fixture of FIXTURES) {
     const role = fixture.role ?? null;

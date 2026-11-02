@@ -68,10 +68,12 @@ export type RepoContext = {
   inManagedContext: boolean;
   /**
    * How the git identity probe itself answered. `ok` is a single-line root; `not-a-repo` is git's own
-   * definitive "not a git repository" answer; `unknown` is everything else (a rejected `exec`, a probe
-   * killed at the timeout, another non-zero exit, or stdout the single-line guard rejects). The Pi
-   * Bash-gate facts resolver fails CLOSED on `unknown` and keeps `not-a-repo` permissive, matching the
-   * Claude edge, whose `execFileSync` probe has no login shell and no cap and so cannot answer `unknown`.
+   * definitive "not a git repository" answer (the probe pins `LC_ALL=C`, so that sentence is never
+   * localized); `unknown` is everything else (a rejected `exec`, a probe killed at the timeout,
+   * another non-zero exit, stdout the single-line guard rejects, or no tag at all — the tri-state is
+   * total, so only the explicit `not-a-repo` answer is permissive). The Pi Bash-gate facts resolver
+   * fails CLOSED on `unknown` and keeps `not-a-repo` permissive, matching the Claude edge, whose
+   * `execFileSync` probe has no login shell and no cap and so cannot answer `unknown`.
    */
   identityProbe: 'ok' | 'not-a-repo' | 'unknown';
 };
@@ -151,9 +153,15 @@ function notify(ctx: Pick<HarnessContext, 'hasUI' | 'ui'>, message: string, leve
  * "root": `existsSync(<blob>/.devloops)` is then false (every managed-repo deny switched off)
  * while the blob is a truthy path that a caller may cache for the whole session. Anything but one
  * line is an unresolved probe, which callers re-probe instead of caching.
+ *
+ * The probe PINS its own locale (`LC_ALL=C`): git emits its "not a git repository" sentence through
+ * gettext, so an NLS build under a non-English locale prints a translated line, `NOT_A_REPO_RE`
+ * misses it, and the DEFINITIVE negative degrades to `unknown` — which flips every managed-repo
+ * deny on for a cwd where the Claude edge, reading the same sentence, allows the identical command.
+ * Pinning this ONE exec makes the probe's answer a function of repo state, never of the host locale.
  */
 export async function defaultResolveRepoContext(exec: ExtensionHarnessAdapter['exec'], cwd: string): Promise<RepoContext> {
-  const rootResult = await exec('git rev-parse --show-toplevel', {
+  const rootResult = await exec('LC_ALL=C git rev-parse --show-toplevel', {
     cwd,
     timeout: REPO_RESOLUTION_TIMEOUT_MS,
   });
