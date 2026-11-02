@@ -191,7 +191,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
       priorVerdictDigests: priors.map((prior) => sha256Hex(parseSource(prior))),
     },
     contracts,
-    requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, ...priors.map((prior) => prior.read), ...(prBody ? [prBody.read] : []), ...(copilotBody ? [copilotBody.read] : [])],
+    requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, ...priors.map((prior) => prior.read), prBody.read,...(copilotBody ? [copilotBody.read] : [])],
     // Per-round paths: a superseded round's late verdict never lands where this round's is read.
     outputRefs: [path.join(dir, roundId, "judge-verdict.json"), path.join(dir, roundId, "spec-authority-verdict.json")],
     outputSchemas: {

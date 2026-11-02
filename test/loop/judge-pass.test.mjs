@@ -2196,6 +2196,10 @@ test("removesClosingRef accepts every Closes-to-Refs phrasing and rejects the re
     "Remove the closing reference Closes 10.",
     "Rewrite the footer so it says Refs 10 and drops Closes 10.",
     "The fix removes the Closes 10 line.",
+    "Change Closes #2883 to Refs.",
+    "Change Closes #2883 to a Refs reference.",
+    "Replace Closes with Refs #2883.",
+    "Fixes #2883 should become Refs #2883.",
   ]) assert.equal(coercedBy(fix), true, fix);
   for (const fix of [
     "Do not remove the Closes #10 line.",
@@ -2220,6 +2224,8 @@ test("removesClosingRef accepts every Closes-to-Refs phrasing and rejects the re
     "Remove the fixed sleep",
     "Keep Closes #10; do not change it to Refs #10.",
     "Tick AC3; do not remove the Closes #10 line.",
+    "Change Closes #999 to Refs.",
+    "Replace Closes with Refs #999.",
   ]) assert.equal(coercedBy(fix), false, fix);
   assert.equal(coercedBy("Replace `Refs #10` with `Closes #10`.", [10]), false);
   assert.equal(coercedBy("Replace `Closes #10` with `Refs #10`.", []), false);

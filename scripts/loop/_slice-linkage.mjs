@@ -29,14 +29,15 @@ export const sliceLinkageIssues = (specNonGoals, prBody) => {
 const CLOSING = String.raw`\b${KW}\b(?:\s+${REF})?`;
 const OPT_REF = String.raw`(?:\s+${REF})?`;
 // Closes [N], then a swap connector, then Refs [N]: the numbers (groups 1 and 2) must be equal, both absent counts as equal.
-const CLOSING_THEN_REFS = new RegExp(String.raw`${CLOSING}[^\n]*?(?:\bwith\b|\bto\b|\bby\b|\bfor\b|\bbecomes\b|\binto\b|->|→)[^\n]*?\brefs?\b${OPT_REF}`, "gi");
+const CLOSING_THEN_REFS = new RegExp(String.raw`${CLOSING}[^\n]*?(?:\bwith\b|\bto\b|\bby\b|\bfor\b|\bbecomes?\b|\binto\b|->|→)[^\n]*?\brefs?\b${OPT_REF}`, "gi");
 // Refs [N] instead of Closes [N]: group 1 is the Refs number, group 2 the Closes number.
 const REFS_INSTEAD_OF_CLOSING = new RegExp(String.raw`\brefs?\b${OPT_REF}[^\n]*?(?:\binstead\s+of\b|\brather\s+than\b|,\s*not\b)[^\n]*?${CLOSING}`, "gi");
 // A present-tense or imperative removal verb on a closing reference; past tense and gerunds narrate and do not remedy.
 const REMOVES_CLOSING = new RegExp(String.raw`\b(?:remov(?:e|es)|drops?|delet(?:e|es)|strips?)\s+(?:the\s+(?:closing\s+(?:reference|keyword)|line)\s+|the\s+)?${KW}\b${OPT_REF}`, "gi");
 // A number-less swap counts only in the PR reference forms (Closes/Fixes/Resolves and Refs, capitalized); "Resolve the path relative to the base ref" is a code fix.
 const PR_KEYWORD = /\b(?:Closes|Fixes|Resolves)\b/;
-const SAME_NUMBER = (m) => m[1] === m[2] && (m[1] !== undefined || (PR_KEYWORD.test(m[0]) && /\bRefs\b/.test(m[0])));
+// A swap with one numbered side counts; with both sides numbered the numbers must be equal.
+const SAME_NUMBER = (m) => (m[1] === undefined || m[2] === undefined || m[1] === m[2]) && ((m[1] ?? m[2]) !== undefined || (PR_KEYWORD.test(m[0]) && /\bRefs\b/.test(m[0])));
 
 // A negation that directly governs the remedy verb ("Do not change Closes to Refs") or a keep that directly governs the closing reference ("Keep Closes 10") ends the prefix.
 // An unrelated keep or negation earlier in the clause ("Never mind the nit, change ...", "To keep the parent open, replace ...") does not.
@@ -51,7 +52,7 @@ export const removesClosingRef = (finding, issues) => {
   // A keep or negation after the remedy is its reason ("Replace Closes with Refs to keep the parent open") and does not skip it.
   return finding.judgeFix.replace(/[`*"]|(?<!\w)'|'(?!\w)/g, "").split(/[;\n]|\.(?:\s|$)/).some((clause) => [
     [CLOSING_THEN_REFS, SAME_NUMBER], [REFS_INSTEAD_OF_CLOSING, SAME_NUMBER], [REMOVES_CLOSING, (m) => m[1] !== undefined || PR_KEYWORD.test(m[0])],
-  ].some(([re, accepts]) => [...clause.matchAll(re)].some((m) => accepts(m) && (!Array.isArray(issues) || m[1] === undefined || issues.includes(Number(m[1]))) && !GOVERNED.test(clause.slice(0, m.index)))));
+  ].some(([re, accepts]) => [...clause.matchAll(re)].some((m) => accepts(m) && (!Array.isArray(issues) || (m[1] ?? m[2]) === undefined || issues.includes(Number(m[1] ?? m[2]))) && !GOVERNED.test(clause.slice(0, m.index)))));
 };
 
 // Coerce an act finding whose judged remedy removes the PR's only closing reference to the reopened issue to reject; returns the number coerced.
