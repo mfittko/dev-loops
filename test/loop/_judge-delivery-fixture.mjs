@@ -34,12 +34,15 @@ export async function seedJudgeSources(root, { repo = "o/r", pr = 7, gate = "pre
   const identityFile = "judge-fixture/identity.json";
   await mkdir(path.join(root, "judge-fixture"), { recursive: true });
   await writeFile(path.join(root, identityFile), JSON.stringify({ specDigest: computeSpecDigest(spec), headSha, contentDigest, checkedCriteria: specCriterionIds(spec) }));
+  // The judge emitter requires a PR body file; the default body holds no closing reference, so it arms nothing.
+  const prBodyFile = "judge-fixture/pr-body.md";
+  await writeFile(path.join(root, prBodyFile), "Declared scope: fix the finding.\n");
   const evidence = "## PR body\nDeclared scope: fix the finding.\n";
   await writeFile(path.join(root, "judge-fixture", "evidence.md"), evidence);
   const contextPath = path.join(root, buildGateContextPath({ repo, pr, gate, headSha }));
   await mkdir(path.dirname(contextPath), { recursive: true });
   await writeFile(contextPath, JSON.stringify({ requiredReads: [{ kind: "evidence", path: "judge-fixture/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex"), bytes: evidence.length, required: true }] }));
-  return { repo, pr, gate, headSha, findingsFile, specFile, identityFile, cwd: root };
+  return { repo, pr, gate, headSha, findingsFile, specFile, identityFile, prBodyFile, cwd: root };
 }
 
 /**

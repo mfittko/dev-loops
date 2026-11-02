@@ -13,6 +13,7 @@ import {
   validateCliArgs,
 } from "../../scripts/loop/judge-pass.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
+import { hasReopenLine, rejectClosingRefRemoval, sliceLinkageIssues } from "../../scripts/loop/_slice-linkage.mjs";
 import { readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { resolveDraftRoundCap } from "../../scripts/github/write-gate-context.mjs";
 import { dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
@@ -32,7 +33,7 @@ async function judgePassCli(options, { pinned = {}, ...deps } = {}) {
     repo: options.repo, pr: Number(options.pr), gate: options.gate, headSha: options.headSha,
     findingsFile: options.findingsFile, specFile: pinned.specFile ?? options.specFile, contentDigest: pinned.contentDigest ?? options.contentDigest,
   });
-  const { plan, receiptTmpRoot } = await deliverJudge(root, sources);
+  const { plan, receiptTmpRoot } = await deliverJudge(root, { ...sources, ...(pinned.prBodyFile ? { prBodyFile: pinned.prBodyFile } : {}) });
   const delivered = { judgePlan: plan.planPath, ...options };
   for (const [key, ref] of [["judgeVerdict", plan.workOrder.outputRefs[0]], ["specAuthorityVerdict", plan.workOrder.outputRefs[1]]]) {
     if (options[key] === undefined) continue;
@@ -2130,5 +2131,178 @@ test("judgePassCli keeps the uncovered-finding code in the refusal message", asy
   await assert.rejects(
     clusterVerdictRun([]),
     (e) => /\[spec_authority_uncovered_finding\]/.test(e.message) && e.code === "spec_authority_uncovered_finding",
+  );
+});
+
+const actFix = (judgeFix, over = {}) => ({ ...finding(), judgeDisposition: "act", judgeFix, ...over });
+const coercedBy = (judgeFix, issues = [10, 2883], over = {}) => {
+  const f = actFix(judgeFix, over);
+  return rejectClosingRefRemoval([f], issues) === 1 && f.judgeDisposition === "reject";
+};
+
+test("a judge act that swaps Closes for Refs on a slice PR is coerced to reject naming SPEC-SLICE-PR-KEEPS-CLOSING-REF", () => {
+  const closesToRefs = actFix("Replace `Closes #10` with `Refs #10` in the PR body.", { summary: "AC unmet" });
+  const realFix = actFix("Guard the null branch.", { summary: "bug" });
+  assert.equal(rejectClosingRefRemoval([closesToRefs, realFix], [10]), 1);
+  assert.equal(closesToRefs.judgeDisposition, "reject");
+  assert.match(closesToRefs.judgeReason, /SPEC-SLICE-PR-KEEPS-CLOSING-REF/);
+  assert.equal(realFix.judgeDisposition, "act");
+  const noReopen = actFix("Replace `Closes #10` with `Refs #10`.");
+  assert.equal(rejectClosingRefRemoval([noReopen], []), 0);
+  assert.equal(noReopen.judgeDisposition, "act");
+});
+
+test("hasReopenLine accepts every reopen inflection with an issue number and rejects the rest", () => {
+  for (const line of [
+    "Reopen #2883 on merge: slices 2+ remain",
+    "AC1 ... are out of scope for this slice; 2971 is reopened after merge for slice 2.",
+    "Reopen issue #10 after the merge",
+    "Reopening 2883 on merge",
+    "Reopens #10 after the merge",
+    "#10 is reopened after the merge",
+    "Reopen [#10](https://github.com/o/r/issues/10) after the merge",
+    "Re-open 2883 after the merge",
+  ]) assert.equal(hasReopenLine([line]), true, line);
+  for (const line of [
+    "Cannot reopen #10","Do not reopen the old design decision.", "no build changes", "Reopen the discussion in a later slice", "Do not reopen the ADR 0123 decision.", "Do not reopen #500.", "Reopen ADR 0123 later"]) assert.equal(hasReopenLine([line]), false, line);
+  assert.equal(hasReopenLine(undefined), false);
+});
+
+test("removesClosingRef accepts every Closes-to-Refs phrasing and rejects the rest", () => {
+  for (const fix of [
+    "Replace `Closes #10` with `Refs #10` in the PR body.",
+    "Use `Refs 10` instead of `Closes 10`.",
+    "Change `Closes 10` -> `Refs 10`.",
+    "Closes 10 → Refs 10",
+    "Swap Closes 10 for Refs 10",
+    "Remove the `Closes 10` line; a slice PR must not close its parent.",
+    "Drop `Closes 10`; the body should say `Refs 10`.",
+    "Use `Refs 2883` instead of `Closes 2883`",
+    "Change `Closes 10` to `Refs 10`",
+    "Replace Closes #10 with Refs #10 to keep the parent issue open.",
+    "Remove the Closes 10 line, because a slice PR must not close its parent.",
+    "Remove the closes #10 line",
+    "Keep the AC table and replace `Closes 10` with `Refs 10`.",
+    "Never mind the nit, change Closes 10 to Refs 10",
+    "Closes 10 becomes Refs 10",
+    "To keep the parent open, replace Closes 10 with Refs 10",
+    "Change `Closes` to `Refs` in the PR body.",
+    "Replace Closes owner/repo#10 with Refs owner/repo#10",
+    "Replace Closes https://github.com/o/r/issues/10 with Refs https://github.com/o/r/issues/10",
+    "Remove \"Closes 10\" from the PR body.",
+    "Remove 'Closes 10' from the PR body.",
+    "Use Refs 10 rather than Closes 10.",
+    "Say Refs 10, not Closes 10.",
+    "Remove the closing reference Closes 10.",
+    "Rewrite the footer so it says Refs 10 and drops Closes 10.",
+    "The fix removes the Closes 10 line.",
+  ]) assert.equal(coercedBy(fix), true, fix);
+  for (const fix of [
+    "Do not remove the Closes #10 line.",
+    "Do not remove \"Closes 10\".",
+    "Use Closes 10 rather than Refs 10.",
+    "Remove the stale refs 10 line and keep Closes 10.",
+    "Removed the unused import; Closes 10 stays.",
+    "The previous fix removed Closes #10; restore it.",
+    "Removing Closes #10 would orphan the issue, so keep it.",
+    "Never change Closes 10 to Refs 10.",
+    "Do not change Closes to Refs.",
+    "Replace Closes owner/repo#10 with Refs owner/repo#11",
+    "Change `Refs` to `Closes` in the PR body.",
+    "Replace `Refs #10` with `Closes #10`.",
+    "Keep Closes 10; add a pointer to the parent via Refs 5",
+    "This fixes 2905 by adding the null guard; refs 2883 for context.",
+    "Fixes 10 by adding a guard; refs 11 for context",
+    "Move the Closes 10 check into the helper",
+    "Guard the null branch.",
+    "Resolve the path relative to the base ref",
+    "Fix the parser to handle refs",
+    "Remove the fixed sleep",
+    "Keep Closes #10; do not change it to Refs #10.",
+    "Tick AC3; do not remove the Closes #10 line.",
+  ]) assert.equal(coercedBy(fix), false, fix);
+  assert.equal(coercedBy("Replace `Refs #10` with `Closes #10`.", [10]), false);
+  assert.equal(coercedBy("Replace `Closes #10` with `Refs #10`.", []), false);
+});
+
+test("the coercion reads only judgeFix, so cluster members with one judgeFix share one disposition", () => {
+  const recommendation = "replace Closes 10 with Refs 10";
+  const members = [actFix("Tick the AC box"), actFix("Tick the AC box", { recommendation })];
+  assert.equal(rejectClosingRefRemoval(members, [10]), 0);
+  assert.deepEqual(members.map((m) => m.judgeDisposition), ["act", "act"]);
+  const dropped = actFix("Add the missing AC test", { recommendation: "Change `Closes 10` to `Refs 10`" });
+  assert.equal(rejectClosingRefRemoval([dropped], [10]), 0);
+  const shared = [actFix("Replace Closes #10 with Refs #10"), actFix("Replace Closes #10 with Refs #10", { recommendation })];
+  assert.equal(rejectClosingRefRemoval(shared, [10]), 2);
+});
+
+test("the coercion scopes to the reopened issue and the PR's only closing reference", () => {
+  // Accepted: a removal of the reopened issue's reference, number-less or numbered.
+  assert.equal(coercedBy("Replace Closes 10 with Refs 10", [10]), true);
+  assert.equal(coercedBy("Remove the Closes #10 line.", [10]), true);
+  assert.equal(coercedBy("Change `Closes` to `Refs` in the PR body.", [2883]), true);
+  // Rejected: a removal that names another issue number.
+  assert.equal(coercedBy("Remove the `Closes 99` line; 99 is unrelated to this PR.", [10]), false);
+  assert.equal(coercedBy("Replace Closes 11 with Refs 11", [10]), false);
+  assert.equal(coercedBy("Replace Closes 2883 with Refs 2883 and keep Closes 2990", [2990]), false);
+  assert.equal(rejectClosingRefRemoval([actFix("Replace Closes 10 with Refs 10")], undefined), 0);
+});
+
+test("sliceLinkageIssues arms only for exactly one closing reference that a reopen line names", () => {
+  const body = (closing, reopen) => `${closing}\n\n## Non-goals\n\n- ${reopen}\n`;
+  assert.deepEqual(sliceLinkageIssues([], body("Closes #10", "Reopen #10 on merge")), [10]);
+  assert.deepEqual(sliceLinkageIssues(["Reopen #10 on merge"], "Closes #10\n"), [10]);
+  assert.deepEqual(sliceLinkageIssues([], body("Closes #10\nCloses #99", "Reopen #10 on merge")), []);
+  assert.deepEqual(sliceLinkageIssues([], body("Closes #2883\nCloses #2990", "Reopen #2883 on merge")), []);
+  assert.deepEqual(sliceLinkageIssues([], body("Closes #10", "Reopen #12 later")), []);
+  assert.deepEqual(sliceLinkageIssues([], body("Refs #10", "Reopen #10 on merge")), []);
+});
+
+async function sliceRound(tmpDir, { specNonGoals, prBody, specText }) {
+  const spec = { ...SPEC_FIXTURE, nonGoals: specNonGoals };
+  const { computeSpecDigest, computeContentDigest, specCriterionIds } = await import("@dev-loops/core/loop/spec-authority");
+  const specDigest = computeSpecDigest(spec);
+  const contentDigest = computeContentDigest("reviewed-impl");
+  const criterionIds = specCriterionIds(spec);
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "Replace `Closes #10` with `Refs #10` in the PR body.", reason: "r", rationale: "in scope" }] })));
+  await writeFile(path.join(tmpDir, "spec.json"), specText ?? JSON.stringify(spec));
+  await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [{ index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q" }] }));
+  if (prBody !== undefined) await writeFile(path.join(tmpDir, "pr-body.md"), prBody);
+  const [options, deps] = specAuthorityArgs(tmpDir, contentDigest);
+  // The PR body is pinned in the judge work order; judge-pass takes no --pr-body-file.
+  return judgePassCli(options, { ...deps, ...(prBody !== undefined ? { pinned: { prBodyFile: "./pr-body.md" } } : {}) });
+}
+
+test("judgePassCli coerces a Closes-to-Refs act to reject from the spec Non-goals reopen line and the pinned PR body, and recounts", async () => {
+  const payload = await sliceRound(await mkdtemp(path.join(os.tmpdir(), "judge-pass-slice-")), { specNonGoals: ["Reopen #10 after the merge; later slices follow."], prBody: "Closes #10\n" });
+  assert.equal(payload.act.length, 0);
+  assert.equal(payload.counts.act, 0);
+  assert.equal(payload.counts.reject, 1);
+});
+
+test("judgePassCli leaves the act when the spec Non-goals reopen line is not backed by a pinned single closing reference", async () => {
+  for (const prBody of ["Declared scope.\n", "Closes #10\nCloses #11\n", "Closes #12\n"]) {
+    const payload = await sliceRound(await mkdtemp(path.join(os.tmpdir(), "judge-pass-slice-open-")), { specNonGoals: ["Reopen #10 after the merge; later slices follow."], prBody });
+    assert.equal(payload.act.length, 1, prBody);
+    assert.equal(payload.counts.reject, 0, prBody);
+  }
+});
+
+test("judgePassCli arms the coercion from the pinned work order sliceLinkage when an issue-derived spec has none and no PR body flag is passed", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-slice-body-"));
+  const body = "Closes #10\n\n## Non-goals\n\n- Reopen #10 on merge: slices 2+ remain.\n";
+  const payload = await sliceRound(dir, { specNonGoals: ["Do not flatten the decks' voice"], prBody: body });
+  assert.equal(payload.act.length, 0);
+  assert.equal(payload.counts.reject, 1);
+  const kept = await sliceRound(await mkdtemp(path.join(os.tmpdir(), "judge-pass-slice-nobody-")), { specNonGoals: ["Do not flatten the decks' voice"] });
+  assert.equal(kept.act.length, 1);
+  assert.equal(kept.counts.reject, 0);
+});
+
+test("judgePassCli reports a null --spec-file as the typed parse error, not a bare TypeError", async () => {
+  await assert.rejects(
+    sliceRound(await mkdtemp(path.join(os.tmpdir(), "judge-pass-slice-null-")), { specText: "null" }),
+    (e) => !(e instanceof TypeError) && /--spec-file/.test(e.message),
   );
 });

@@ -428,7 +428,7 @@ test("historical judge pull delegates to the index-owning new renderer and its p
     const emit = async (root) => {
       const sources = await seedJudgeSources(root, { headSha: HEAD, pr: 800000 + parseInt(randomBytes(3).toString("hex"), 16) });
       const result = spawnSync("node", [path.join(root, "scripts/loop/emit-judge-work-order.mjs"), "--repo", sources.repo, "--pr", String(sources.pr), "--gate", sources.gate, "--head-sha", HEAD,
-        "--findings-file", sources.findingsFile, "--spec-file", sources.specFile, "--identity-file", sources.identityFile], { cwd: root, encoding: "utf8" });
+        "--findings-file", sources.findingsFile, "--spec-file", sources.specFile, "--identity-file", sources.identityFile, ...(root === old ? [] : ["--pr-body-file", sources.prBodyFile])], { cwd: root, encoding: "utf8" });
       assert.equal(result.status, 0, result.stdout + result.stderr);
       return JSON.parse(await readFile(JSON.parse(result.stdout).planPath, "utf8"));
     };

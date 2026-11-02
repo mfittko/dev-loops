@@ -107,7 +107,7 @@ this skill dispatches the `review` agents directly.
    2. Resolve the spec in this order, with `--head-sha <sha>`, `--content-file
       <reviewed-content-path>`, `--spec-out <spec-path>` and `--identity-out
       <identity-path>` on each call: (a) exactly one closing issue (as resolved in step 1): `node
-      scripts/loop/spec-context.mjs --repo <issue-owner/issue-repo> --issue <closing-issue> ...`
+      scripts/loop/spec-context.mjs --repo <issue-owner/issue-repo> --issue <closing-issue> --pr-body-file <body-path> ...`
       with the closing issue's own repository (`specSource: "issue"`); when that call exits 1 because the issue body has
       no formal spec, or when the PR has zero or several closing issues, go on to
       (b). The no-formal-spec signal is a stderr JSON with no `code` field and an
@@ -122,7 +122,7 @@ this skill dispatches the `review` agents directly.
       with `--judge-spec-source none`.
    4. Otherwise run the lifecycle judge path with `--gate review`:
       `node scripts/loop/emit-judge-work-order.mjs --gate review --repo <owner/repo> --pr <n> --head-sha <sha>
-      --findings-file <ledger-out-path> --spec-file <spec-path> --identity-file <identity-path>`, dispatch the `judge` agent with
+      --findings-file <ledger-out-path> --spec-file <spec-path> --identity-file <identity-path> --pr-body-file <body-path>`, dispatch the `judge` agent with
       the printed `dispatchPrompt` (pull transport), then `node scripts/loop/judge-pass.mjs --gate
       review --repo <owner/repo> --pr <n> --judge-plan <plan> --findings-file <ledger-out-path> --judge-verdict <path>
       --spec-file <spec-path> --content-digest <digest> --spec-authority-verdict <path>
