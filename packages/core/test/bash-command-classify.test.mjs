@@ -43,6 +43,7 @@ import {
   commandIsFileMarkerPollLoop,
   commandContainsInlineInterpreter,
   commandContainsCodeVerificationEntrypoint,
+  tokenizeShellCommand,
 } from "../src/loop/bash-command-classify.mjs";
 import { decideBashGate } from "../src/claude/hook-decisions.mjs";
 
@@ -1479,4 +1480,144 @@ test("a plain heredoc closes only on an unindented delimiter, `<<-` on tab-inden
   for (const c of ["cat <<-EOF\n\ttext\n\tEOF\necho ok", "cat <<EOF\n$(echo hi)\nEOF\necho ok", "cat <<'EOF'\n $(node -e 1)\nEOF"]) {
     assert.equal(commandContainsInlineInterpreter(c), false, c);
   }
+});
+
+const words = (command, s = 0) => tokenizeShellCommand(command).segments[s].words.map((w) => w.value);
+
+test("tokenizeShellCommand: quoting forms (#2442)", () => {
+  const t = (c) => tokenizeShellCommand(c);
+  assert.deepEqual(words("echo 'a b' \"c d\""), ["echo", "a b", "c d"]);
+  assert.equal(t("echo 'a b'").segments[0].words[1].single, true);
+  assert.deepEqual(words('echo "a \\" $(echo "x y") b"'), ["echo", 'a " $(echo "x y") b']);
+  assert.equal(t('echo "a"').segments[0].words[1].double, true);
+  assert.deepEqual(words("echo $'a\\'b'"), ["echo", "a'b"]);
+  assert.equal(t("echo $'a'").segments[0].words[1].ansi, true);
+  assert.deepEqual(words("echo it\\'s"), ["echo", "it's"]);
+  assert.deepEqual(words("echo x\\ y"), ["echo", "x y"]);
+  assert.deepEqual(words("echo a # don't\necho b", 0), ["echo", "a"]);
+  assert.equal(t("echo a # don't\necho b").incomplete, false);
+  assert.equal(t("echo a # don't\necho b").segments.length, 2);
+});
+
+test("tokenizeShellCommand: segment separators and redirects (#2442)", () => {
+  const t = (c) => tokenizeShellCommand(c).segments.length;
+  assert.equal(t("a; b && c || d | e |& f & g\nh"), 8);
+  assert.equal(t("a 'x; y && z' b"), 1);
+  assert.equal(t("cat >| f"), 1);
+  assert.equal(t("a 2>&1 | b &> f"), 2);
+});
+
+test("tokenizeShellCommand: here-strings and heredocs (#2442)", () => {
+  const ops = (c) => tokenizeShellCommand(c).segments[0].words.map((w) => w.op ?? w.value);
+  assert.deepEqual(ops('bash <<< "a b"\'c\''), ["bash", "<<<", "a bc"]);
+  assert.deepEqual(ops("bash<<<'x'"), ["bash", "<<<", "x"]);
+  const heredoc = (c, i = 0) => tokenizeShellCommand(c).segments[0].heredocs[i];
+  assert.deepEqual([heredoc("cat <<'EOF'\nb\nEOF").delimiter, heredoc("cat <<'EOF'\nb\nEOF").quoted, heredoc("cat <<'EOF'\nb\nEOF").body], ["EOF", true, "b"]);
+  assert.equal(heredoc('cat <<"EOF"\nb\nEOF').quoted, true);
+  assert.equal(heredoc("cat <<\\EOF\nb\nEOF").quoted, true);
+  assert.equal(heredoc("cat <<EOF\nb\nEOF").quoted, false);
+  assert.equal(heredoc("cat <<-EOF\n\tb\n\tEOF").stripTabs, true);
+  assert.equal(heredoc("cat <<-EOF\n\tb\n\tEOF").body, "\tb");
+  const two = tokenizeShellCommand("cat <<A <<B\n1\nA\n2\nB");
+  assert.deepEqual(two.segments[0].heredocs.map((h) => [h.delimiter, h.body]), [["A", "1"], ["B", "2"]]);
+  assert.equal(two.incomplete, false);
+  const segs = tokenizeShellCommand("true; cat <<EOF\nb\nEOF\ntrue").segments;
+  assert.equal(segs[1].heredocs[0].segment, 1);
+  assert.equal(segs[0].heredocs.length, 0);
+  const sub =tokenizeShellCommand("git commit -m \"$(cat <<'EOF'\nmsg\nEOF\n)\"");
+  assert.equal(sub.incomplete, false);
+  assert.equal(sub.segments.length, 1);
+  assert.equal(sub.segments[0].words[3].subs[0].segments[0].heredocs[0].body, "msg");
+  const herestr = tokenizeShellCommand("bash <<< \"$(cat <<'EOF'\nx\nEOF\n)\"");
+  assert.equal(herestr.segments[0].words[2].subs[0].segments[0].heredocs[0].delimiter, "EOF");
+  const piped = tokenizeShellCommand("cat <<'EOF' | bash\nx\nEOF");
+  assert.deepEqual(piped.segments.map((s) => s.words[0].value), ["cat", "bash"]);
+  assert.equal(piped.segments[0].heredocs[0].body, "x");
+  const clobberCommand = "cat >| out.txt <<'EOF'\nx\nEOF";
+  assert.equal(tokenizeShellCommand(clobberCommand).segments.length, 1);
+});
+
+test("tokenizeShellCommand: malformed input is incomplete and the classifier denies it (#2442)", () => {
+  for (const c of ["node -e 'x", 'echo "$(gh pr view 5', "cat > tmp/x <<'EOF'\nnode -e y", "cat <<", "echo $(echo `x"]) {
+    assert.equal(tokenizeShellCommand(c).incomplete, true, c);
+  }
+  for (const c of ["node -e 'x", 'echo "$(gh pr view 5', "cat > tmp/x <<'EOF'\nnode -e y"]) {
+    assert.equal(commandContainsInlineInterpreter(c), true, c);
+  }
+  // an unterminated quote leaves the rest of the command unquoted for the poll-loop classifiers
+  assert.equal(commandIsSleepPollLoop("echo 'x; while true; do gh pr view 5; sleep 5; done"), true);
+  assert.equal(commandIsSleepPollLoop("echo 'x' ; while true; do gh pr view 5; sleep 5; done"), true);
+  // a terminated quote span after the earliest unclosed opener stays raw executable text
+  assert.equal(commandIsSleepPollLoop("echo $(echo 'while true; do gh pr view 5; sleep 5; done'"), true);
+  assert.equal(commandIsSleepPollLoop("cat <<EOF 'while true; do gh pr view 5; sleep 5; done'\nx"), true);
+  // a quote pair after an unclosed opener keeps the permissive callers (-X GET, foreign --repo) from allowing
+  assert.equal(commandContainsRawPrBodyApiWrite(`gh api repos/mfittko/dev-loops/pulls/5 -f body=x -f "title=$(echo ' -X GET ' ; true)"`, "mfittko/dev-loops"), true);
+  assert.equal(commandContainsRawPrBodyEdit(`gh pr edit 5 --body x --title "$(echo ' --repo other/x ' ; true)"`, "mfittko/dev-loops"), true);
+  // the same pairing after an unterminated plain quote
+  assert.equal(commandContainsRawPrBodyEdit(`gh pr edit 5 --body x --title "a ' --repo other/x ' b ; c"`, "mfittko/dev-loops"), true);
+  assert.equal(commandContainsRawPrBodyApiWrite(`gh api repos/mfittko/dev-loops/pulls/5 -f body=x -f "a ' -X GET ' b ; c"`, "mfittko/dev-loops"), true);
+});
+
+test("tokenizeShellCommand: CRLF heredoc, real comments and nesting cap (#2442)", () => {
+  assert.equal(tokenizeShellCommand("cat <<'EOF'\r\nx\r\nEOF\r\n").incomplete, false);
+  assert.equal(tokenizeShellCommand("cat <<'EOF'\r\nx\r\n").incomplete, true);
+  const cmdText = "echo a # it's\ngh pr edit 5 --body \"Closes #12\"";
+  const parsed = tokenizeShellCommand(cmdText);
+  assert.deepEqual(parsed.comments, ["# it's"]);
+  assert.equal(commandIsSleepPollLoop('git commit -m "docs: never poll (#12): while true; do gh pr view; sleep 5; done"'), false);
+  const nested = "node -e 'evil'\n: \"" + "$(".repeat(5000);
+  assert.equal(tokenizeShellCommand(nested).incomplete, true);
+  assert.equal(commandContainsInlineInterpreter(nested), true);
+});
+
+test("stripQuotedLiterals is built on tokenizeShellCommand and the regex pairing is gone (#2442)", () => {
+  const source = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/loop/bash-command-classify.mjs"), "utf8");
+  assert.equal(source.includes("/(['\"])((?:(?!\\1).)*)\\1/gs"), false);
+  assert.equal(source.includes("neutralizeQuoteNoise"), false);
+  assert.match(source, /function stripQuotedLiterals\(command\) \{\s*const \{[^}]*\} = tokenizeShellCommand\(command\)/);
+});
+
+test("stripQuotedLiterals callers keep their decisions on tokenizer-backed quoting (#2442)", () => {
+  // a quoted literal is data; an apostrophe inside a double-quoted word or comment does not pair across it
+  assert.equal(commandIsSleepPollLoop('gh issue create --body "while true; do gh pr view 5; sleep 5; done"'), false);
+  assert.equal(commandIsSleepPollLoop("# don't\nwhile true; do gh pr view 5; sleep 5; done # it's"), true);
+  assert.equal(commandIsSleepPollLoop('while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done'), true);
+  assert.equal(commandIsSleepPollLoop("bash -c 'while true; do gh pr view 5; sleep 5; done'"), true);
+  assert.equal(commandIsFileMarkerPollLoop("echo \"it's\"; while [ ! -f tmp/done ]; do sleep 2; done"), true);
+  assert.equal(commandIsFileMarkerPollLoop("echo 'while [ ! -f tmp/done ]; do sleep 2; done'"), false);
+});
+
+test("stripQuotedLiterals blanks nothing near quote-pairing hazards, slice 1 stays fail-closed (#2442)", () => {
+  const LOOP = "while true; do gh pr view 5; sleep 5; done";
+  for (const c of [
+    `# it's\necho 'LOOP'`.replace("LOOP", LOOP),
+    `echo "a \\" ; ${LOOP}"`,
+    `echo $'a\\' ; ${LOOP} '`,
+    `cat <<'EOF'\nit's\nEOF\necho '${LOOP}'`,
+    `echo it\\'s; echo '${LOOP}'`,
+  ]) assert.equal(commandIsSleepPollLoop(c), true, c);
+});
+
+test("an unmatched quote inside an unquoted backtick span is a quote-pairing hazard; balanced spans still blank (#2442)", () => {
+  // accepted: the old regex paired the quote inside the backticks with the quote before sleep
+  assert.equal(commandIsSleepPollLoop("while :; do `true '`; 'sleep' 5; gh pr view 5; done"), true);
+  // an escaped backtick before the span must not shift the span pairing
+  assert.equal(commandIsSleepPollLoop("echo \\` ; while :; do `true '`; 'sleep' 5; gh pr view 5; done"), true);
+  // rejected: a quote-free backtick span is no hazard, so a quoted loop still blanks
+  assert.equal(commandIsSleepPollLoop("echo 'while :; do gh pr view 5; sleep 5; done' `b`"), false);
+  assert.equal(commandIsSleepPollLoop("while :; do `true`; sleep 5; gh pr view 5; done"), true);
+});
+
+test("review fixes: hazard text keeps the body flag visible, nested quotes are a hazard, heredoc queue is per sequence, ANSI-C delimiters decode", () => {
+  // accepted: the frozen classifier denies both; retained quotes must not defeat the --body lookahead
+  assert.equal(commandContainsRawPrBodyEdit('gh pr edit 5 --body"" x # it\'s', "mfittko/dev-loops"), true);
+  assert.equal(commandContainsRawPrBodyEdit('gh pr edit 5 --body x --title "$(echo "x") --repo other/x "', "mfittko/dev-loops"), true);
+  // rejected form: a plain quoted title without --body stays allowed
+  assert.equal(commandContainsRawPrBodyEdit("gh pr edit 5 --title 'a'", "mfittko/dev-loops"), false);
+  // a newline inside a substitution does not consume the parent's heredoc
+  assert.equal(commandContainsInlineInterpreter(": <<EOF $(printf x\n)\nbody\nEOF"), false);
+  assert.equal(commandContainsInlineInterpreter(": <<EOF $(cat <<EOF2)\nbody\nEOF"), true);
+  // ANSI-C delimiter decoding
+  assert.equal(commandContainsInlineInterpreter(": <<$'\\x45OF'\nbody\nEOF"), false);
+  assert.equal(commandContainsInlineInterpreter(": <<$'EO\\x46'\nbody\nEOF"), false);
 });

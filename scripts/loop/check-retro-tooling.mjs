@@ -59,7 +59,7 @@ import { readFileSync } from "node:fs";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
-import { commandContainsInlineInterpreter, stripLeadingWrappers } from "@dev-loops/core/loop/bash-command-classify";
+import { scanInlineInterpreter, stripLeadingWrappers } from "@dev-loops/core/loop/bash-command-classify";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]
@@ -111,19 +111,19 @@ function splitSegments(line) {
  */
 function classifySegment(rawSegment) {
   // The shared matcher runs first, so an allowed head (`gh pr ready 5 $(node -e 1)`) never hides a substitution from it.
-  if (commandContainsInlineInterpreter(rawSegment)) {
+  if (scanInlineInterpreter(rawSegment)) {
     // The label names the matched form: a python head (plain, wrapped, or at the head of a substitution), else node inline.
     // Each candidate (the head up to its first substitution, and each substitution body) must itself hit the matcher, so a python script call beside a node hit never labels python.
     const candidates = [rawSegment.split(/\$\(|`/)[0], ...[...rawSegment.matchAll(/(?:\$\(|`)([^)`]*)/g)].map((m) => m[1])];
     // The digit comes from the stripped head that matched, never from a python path earlier in the raw text.
-    const py = candidates.map((c) => (/^(?:\S*\/)?python(3?)\b/.exec(stripLeadingWrappers(c.trim())) ?? [])[1]).find((d, i) => d !== undefined && commandContainsInlineInterpreter(candidates[i]));
+    const py = candidates.map((c) => (/^(?:\S*\/)?python(3?)\b/.exec(stripLeadingWrappers(c.trim())) ?? [])[1]).find((d, i) => d !== undefined && scanInlineInterpreter(candidates[i]));
     return { kind: "violation", tool: py === undefined ? "node inline" : `python${py}` };
   }
   const segment = stripLeadingWrappers(rawSegment);
   // `node scripts/....mjs` (or any script path) is allowed tooling; only inline
   // eval forms are violations. Check node first so script invocations pass.
   if (/^node\b/.test(segment)) {
-    return commandContainsInlineInterpreter(segment) ? { kind: "violation", tool: "node inline" } : { kind: "clean" };
+    return scanInlineInterpreter(segment) ? { kind: "violation", tool: "node inline" } : { kind: "clean" };
   }
   if (/^gh\b/.test(segment)) {
     if (ALLOWED_WRITE_OPS.some((re) => re.test(segment))) {
