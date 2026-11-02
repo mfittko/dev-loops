@@ -125,8 +125,39 @@ const RESIDUE_SHAPES = [
   `bash <<< x\\ y'; node -e y'`,
   `bash -c -e 'x; node -e y'`,
 ];
-/** Deny rows from the closed branch (draft_gate rounds 5 to 7, delta reviews) that hold on origin/main. */
+/** Deny rows from the closed branch (draft_gate rounds 5 to 7, delta reviews): every deny row of commits 1c48f4f46..5c68e78be. */
 const SALVAGED_DENY_ROWS = [
+  // shared fixture table rows (test/fixtures/inline-interpreter-forms.mjs)
+  "bash <<< 'x; node -e y'",
+  "sh <<< 'x; node -e y'",
+  "bash<<<'x; node -e y'",
+  "bash <<<$'x; node -e y'",
+  "bash <<< x'; node -e y'",
+  "bash <<< \"a\"'b; node -e y'",
+  "bash -c $'x; node -e y'",
+  "eval $'x; node -e y'",
+  "bash -c x'; node -e y'",
+  "bash -c 'x; node -e y'",
+  "node --require \"./setup.js\" -e 'console.log(1)'",
+  "python3 -W \"ignore\" -c 'x'",
+  "node --require=\"./setup.js\" -e 'x'",
+  "perl -I \"lib\" -pi -e 's/a/b/' f",
+  "ruby -C \"/tmp\" -e 'x'",
+  "bash -c \"cat > packages/a.mjs <<'EOF'\"",
+  "echo it\\'s; node -e 'x'",
+  "python3 -Ic 'x'",
+  // unit rows (packages/core/test/bash-command-classify.test.mjs)
+  "cat > tmp/n <<'EOF'\ndon't\nEOF\ngit commit -m \"a\nb\" && cat > packages/a.mjs <<EOF\nx\nEOF",
+  "# don't\necho \"a\nb\" ; cat > packages/a.mjs <<EOF\nx\nEOF",
+  "# don't\necho \"a\nb\" ; tee src/a.mjs <<'EOF'\nx\nEOF",
+  "echo x # don't\necho \"a\nb\" ; cat > packages/a.mjs <<EOF\nx\nEOF",
+  "git commit -F - <<EOF\ndon't\nEOF\necho \"a\nb\" ; cat > packages/a.mjs <<EOF\nx\nEOF",
+  "cat <<'EOF' | sh\ndon't\nEOF\necho \"a\nb\" ; cat > packages/a.mjs <<EOF\nx\nEOF",
+  "cat > tmp/n <<EOF\ndon't $(date)\nEOF\necho \"a\nb\" ; cat > packages/a.mjs <<EOF\nx\nEOF",
+  "git commit -F - <<EOF\nsay \"hi\nEOF\necho \"a\nb\" ; cat > packages/a.mjs <<EOF\nx\nEOF",
+  "echo \\\\'a\nb' ; cat > packages/a.mjs <<EOF\nx\nEOF",
+  "printf '%s\\n' 'a\\' 'b\nc' ; cat > packages/a.mjs <<EOF\nx\nEOF",
+  "bash <<'EOF'\nnode scripts/loop/probe-copilot-review.mjs --pr 5 &\nEOF",
   // a quote pair after an unclosed `$(` opener: the old regex still paired it, so the head must not read it as allowed
   `gh api repos/mfittko/dev-loops/pulls/5 -f body=x -f "title=$(echo ' -X GET ' ; true)"`,
   `gh pr edit 5 --body x --title "$(echo ' --repo other/x ' ; true)"`,
