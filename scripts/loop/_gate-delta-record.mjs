@@ -9,7 +9,7 @@
  * is `readSealedGateDeltaRecord`, which trusts only a record carrying its sha256 seal.
  */
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { deltaCoverageBinding } from "@dev-loops/core/loop/pre-push-delta-review";
 
@@ -78,10 +78,32 @@ export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocat
     nextStep: decision.nextStep,
     items,
   };
-  const recordPath = gateDeltaRecordPath(tmpRoot, sequence.reviewBaselineHead);
+  return writeSealedGateDeltaRecord(tmpRoot, sequence.reviewBaselineHead, record);
+}
+
+/**
+ * Write one record and its seal for a baseline head. Returns the record path.
+ * `exclusive: true` creates the record only when none exists (hard link, fails with EEXIST) and leaves an existing record and seal untouched.
+ */
+export function writeSealedGateDeltaRecord(tmpRoot, reviewBaselineHead, record, { exclusive = false } = {}) {
+  const recordPath = gateDeltaRecordPath(tmpRoot, reviewBaselineHead);
   mkdirSync(path.dirname(recordPath), { recursive: true });
   const tempPath = `${recordPath}.tmp-${process.pid}`;
   const text = `${JSON.stringify(record, null, 2)}\n`;
+  if (exclusive) {
+    writeFileSync(tempPath, text, "utf8");
+    try { linkSync(tempPath, recordPath); } finally { rmSync(tempPath, { force: true }); }
+    // A failed seal write must not leave the linked record unsealed: remove both, then rethrow.
+    try {
+      rmSync(`${recordPath}.seal`, { force: true });
+      writeFileSync(`${recordPath}.seal`, `${sha256(text)}\n`, "utf8");
+    } catch (error) {
+      // A cleanup failure must not mask the original error.
+      try { rmSync(recordPath, { force: true }); rmSync(`${recordPath}.seal`, { force: true }); } catch { /* keep the original error */ }
+      throw error;
+    }
+    return recordPath;
+  }
   // Delete the seal first and write it last, as writeSealed does: a crash leaves an unsealed pair, never a stale seal.
   rmSync(`${recordPath}.seal`, { force: true });
   writeFileSync(tempPath, text, "utf8");
