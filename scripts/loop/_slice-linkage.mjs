@@ -57,14 +57,14 @@ const VERB = String.raw`(?:remove|drop|delete|strip|change|replace|swap|switch|c
 const GOVERNED = new RegExp(String.raw`(?:\b(?:do\s+not|don't|never|must\s+not|should\s+not|shouldn't)\s+(?:${VERB}\s+)?(?:the\s+)?|\bkeep\s+(?:the\s+)?)$`, "i");
 
 // True when the judged remedy (judgeFix only, never the reviewer recommendation) removes a closing reference.
-// With `issues`, a removal that names another issue number is not coerced; a number-less removal is.
+// `issues` is required: a removal that names another issue number is not coerced; a number-less removal is.
 export const removesClosingRef = (finding, issues) => {
   if (typeof finding?.judgeFix !== "string") return false;
   // A clause whose remedy is directly negated ("Do not remove the Closes line") restates the rule and is skipped.
   // A keep or negation after the remedy is its reason ("Replace Closes with Refs to keep the parent open") and does not skip it.
   return finding.judgeFix.replace(/[`*"]|(?<!\w)'|'(?!\w)/g, "").split(/[;\n]|\.(?:\s|$)/).some((clause) => [
     [CLOSING_THEN_REFS, SAME_NUMBER], [REFS_INSTEAD_OF_CLOSING, SAME_NUMBER], [REMOVES_CLOSING, (m) => m[1] !== undefined || PR_KEYWORD.test(m[0])],
-  ].some(([re, accepts]) => [...clause.matchAll(re)].some((m) => accepts(m) && (!Array.isArray(issues) || (m[1] ?? m[2]) === undefined || issues.includes(Number(m[1] ?? m[2]))) && !GOVERNED.test(clause.slice(0, m.index)))));
+  ].some(([re, accepts]) => [...clause.matchAll(re)].some((m) => accepts(m) && ((m[1] ?? m[2]) === undefined || issues.includes(Number(m[1] ?? m[2]))) && !GOVERNED.test(clause.slice(0, m.index)))));
 };
 
 // Coerce an act finding whose judged remedy removes the PR's only closing reference to the reopened issue to reject; returns the number coerced.
