@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-11-02. Amends [ADR 0107](0107-fixer-write-guard-and-work-order-sources.md) (the decision there names two fixer sources; this record adds a third).
+Accepted — 2026-11-02. Amends [ADR 0107](0107-fixer-mutation-authority-bound-to-pulled-work-order.md) (the decision there names two fixer sources; this record adds a third).
 
 ## Context
 

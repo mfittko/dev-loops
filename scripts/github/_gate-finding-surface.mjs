@@ -879,6 +879,11 @@ function assertGhSuccess(result) {
 export const prReviewsApiPath = (repo, pr) => `repos/${repo}/pulls/${pr}/reviews?per_page=100`;
 export const prReviewsApiArgs = (repo, pr) => ["api", "--paginate", "--slurp", prReviewsApiPath(repo, pr)];
 
+/** The PR's raw REST reviews (node_id, user, author_association, commit_id, body kept), for readers that pin one review. */
+export async function listRestPrReviews({ repo, pr }, runtime) {
+  return flattenPaginatedSlurp(await runGhJson(prReviewsApiArgs(repo, pr), runtime));
+}
+
 export async function listPrReviews({ repo, pr }, { env, ghCommand, runChild }) {
   const payload = await runGhJson(prReviewsApiArgs(repo, pr), { env, ghCommand, runChild });
   // A PENDING (unsubmitted) review must never feed round resolution or

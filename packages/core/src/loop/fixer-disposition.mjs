@@ -19,6 +19,8 @@ export const FIXER_DISPOSITION_FAILED_STEP = Object.freeze({
   COMMIT_NOT_CONTAINED: "commit_not_contained",
   REPLY_MISSING: "reply_missing",
   NOT_RESOLVED: "not_resolved",
+  // The thread is resolved and its replies cite only a short SHA of the fixing commit.
+  RESOLVED_SHORT_SHA_REPLY: "resolved_short_sha_reply",
   // A delivered tackled handoff for the live head with no verification checkpoint: verify-fixer-disposition never completed.
   NOT_VERIFIED: "not_verified",
   // The delta review of the fix left the thread not_resolved or cannot_verify; the status rides in `deltaStatus`.
@@ -207,12 +209,26 @@ export function normalizeFixerDispositionHandoff(raw, { ruleIds } = {}) {
   }
   const rawDispositions = raw.dispositions ?? [];
   const seenThreadIds = new Set();
+  const seenReviewIds = new Set();
   const dispositions = rawDispositions.map((entry, index) => {
     if (!entry || typeof entry !== "object") {
       throw new Error(`Fixer disposition handoff entry ${index} must be an object`);
     }
+    if (entry.reviewId !== undefined) {
+      // A review-body entry: exactly one of threadId and reviewId.
+      if (entry.threadId !== undefined) throw new Error(`Fixer disposition handoff entry ${index} carries both threadId and reviewId; a review-body entry carries reviewId only`);
+      const reviewId = isNonEmptyString(entry.reviewId) ? entry.reviewId.trim() : "";
+      if (!/^PRR_[A-Za-z0-9_-]+$/.test(reviewId)) throw new Error(`Fixer disposition handoff entry ${index} reviewId is not a review node id (PRR_...)`);
+      if (seenReviewIds.has(reviewId)) throw new Error(`Fixer disposition handoff has a duplicate reviewId: ${reviewId}`);
+      seenReviewIds.add(reviewId);
+      // The marker comment cites the commit in full, so the entry must carry the full 40-character SHA.
+      if (!/^[0-9a-fA-F]{40}$/.test(String(entry.fixingCommitSha).trim())) throw new Error(`Fixer disposition handoff entry for review ${reviewId} needs fixingCommitSha as the full 40-character SHA (git rev-parse <commit>)`);
+      const disposition = isNonEmptyString(entry.disposition) ? entry.disposition.trim().toLowerCase() : "";
+      if (!Object.values(FIXER_DISPOSITION_KIND).includes(disposition)) throw new Error(`Fixer disposition handoff entry for review ${reviewId} has a missing or unrecognized disposition: ${disposition}`);
+      return { reviewId, fingerprint: null, fixingCommitSha: entry.fixingCommitSha.trim().toLowerCase(), disposition, validation: isNonEmptyString(entry.validation) ? entry.validation.trim() : null };
+    }
     if (!isNonEmptyString(entry.threadId)) {
-      throw new Error(`Fixer disposition handoff entry ${index} is missing threadId`);
+      throw new Error(`Fixer disposition handoff entry ${index} is missing threadId (or reviewId for a review-body entry)`);
     }
     const threadId = entry.threadId.trim();
     if (!/^PRRT_[A-Za-z0-9_-]+$/.test(threadId)) {
@@ -252,11 +268,17 @@ export function normalizeFixerDispositionHandoff(raw, { ruleIds } = {}) {
 
 function formatIncompleteReason(incomplete) {
   const parts = incomplete.map((entry) => (
-    `thread ${entry.threadId} (expected commit ${entry.expectedCommit ?? "unknown"}, failed step: ${entry.failedStep})`
+    `${entry.reviewId ? `review ${entry.reviewId}` : `thread ${entry.threadId}`} (expected commit ${entry.expectedCommit ?? "unknown"}, failed step: ${entry.failedStep})`
   ));
-  return `Fixer disposition is incomplete for ${incomplete.length} tackled thread(s): ${parts.join("; ")}. `
-    + `The only legal next action is ${COMPLETE_FIXER_DISPOSITION_ACTION}.`;
+  const shortSha = incomplete.some((entry) => entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.RESOLVED_SHORT_SHA_REPLY)
+    ? " A resolved thread whose replies cite only a short SHA needs the full 40-character SHA: run `dev-loops-run scripts/github/unresolve-review-thread.mjs --repo <owner/name> --pr <n> --thread-id <thread id>`, then re-run the verifier, which replies with the full SHA and resolves again."
+    : "";
+  return `Fixer disposition is incomplete for ${incomplete.length} tackled thread(s):${parts.join("; ")}. `
+    + `The only legal next action is ${COMPLETE_FIXER_DISPOSITION_ACTION}.${shortSha}`;
 }
+
+// A short hex token in a reply that is a prefix of the fixing commit.
+const citesShortSha = (body, commit) => (String(body).toLowerCase().match(/\b[0-9a-f]{7,39}\b/g) ?? []).some((token) => commit.toLowerCase().startsWith(token));
 
 /**
  * PURE evaluator: given a normalized handoff, the live thread state, and an
@@ -272,9 +294,10 @@ function formatIncompleteReason(incomplete) {
  * @param {Record<string, boolean>} [params.containment] - fixingCommitSha -> true when the observed PR head contains it
  * @returns {{ ok: boolean, incomplete: Array<{ threadId: string, expectedCommit: string|null, failedStep: string }>, forbiddenActions: string[], nextAction: string|null, reason: string|null }}
  */
-export function evaluateFixerDisposition({ handoff, liveThreads = [], containment = {} } = {}) {
+export function evaluateFixerDisposition({ handoff, liveThreads = [], containment = {}, liveReviews = [] } = {}) {
   const normalizedHandoff = normalizeFixerDispositionHandoff(handoff ?? {});
-  const handoffByThreadId = new Map(normalizedHandoff.dispositions.map((entry) => [entry.threadId, entry]));
+  const threadEntries = normalizedHandoff.dispositions.filter((entry) => entry.threadId);
+  const handoffByThreadId = new Map(threadEntries.map((entry) => [entry.threadId, entry]));
   const liveByThreadId = new Map(
     (Array.isArray(liveThreads) ? liveThreads : [])
       .filter((entry) => entry && typeof entry.threadId === "string")
@@ -286,7 +309,7 @@ export function evaluateFixerDisposition({ handoff, liveThreads = [], containmen
   // claim the CLI cross-referenced against live GitHub state) that has no
   // handoff counterpart at all — that gap is exactly missing_from_handoff.
   const tackledThreadIds = new Set();
-  for (const entry of normalizedHandoff.dispositions) {
+  for (const entry of threadEntries) {
     if (entry.disposition === FIXER_DISPOSITION_KIND.TACKLED) {
       tackledThreadIds.add(entry.threadId);
     }
@@ -318,12 +341,23 @@ export function evaluateFixerDisposition({ handoff, liveThreads = [], containmen
       typeof body === "string" && body.toLowerCase().includes(expectedCommit.toLowerCase())
     ));
     if (!hasEvidencedReply) {
-      incomplete.push({ threadId, expectedCommit, failedStep: FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING });
+      // A resolved thread cannot take the verifier's reply: name the short-SHA cause so the remedy is runnable.
+      const shortOnly = liveThread?.isResolved === true && replyBodies.some((body) => citesShortSha(body, expectedCommit));
+      incomplete.push({ threadId, expectedCommit, failedStep: shortOnly ? FIXER_DISPOSITION_FAILED_STEP.RESOLVED_SHORT_SHA_REPLY : FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING });
       continue;
     }
     if (liveThread?.isResolved !== true) {
       incomplete.push({ threadId, expectedCommit, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED });
     }
+  }
+
+  // A review body has no thread: its evidence is a trusted marker comment citing the fixing commit (`liveReviews[].markerCommits`).
+  const markersByReview = new Map((Array.isArray(liveReviews) ? liveReviews : []).map((review) => [review?.reviewId, review?.markerCommits ?? []]));
+  for (const entry of normalizedHandoff.dispositions.filter((e) => e.reviewId && e.disposition === FIXER_DISPOSITION_KIND.TACKLED)) {
+    const { reviewId, fixingCommitSha: expectedCommit } = entry;
+    const failedStep = containment?.[expectedCommit] !== true ? FIXER_DISPOSITION_FAILED_STEP.COMMIT_NOT_CONTAINED
+      : !(markersByReview.get(reviewId) ?? []).some((commit) => String(commit).toLowerCase() === expectedCommit.toLowerCase()) ? FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING : null;
+    if (failedStep) incomplete.push({ reviewId, expectedCommit, failedStep });
   }
 
   const ok = incomplete.length === 0;

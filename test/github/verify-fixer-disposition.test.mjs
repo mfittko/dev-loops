@@ -140,7 +140,7 @@ const REF = `fixer:${REPO}#${PR}:${HEAD_SHA}:f1-0000abcd`;
 // receipt under <repoRoot>/tmp, and the disposition handoff at the plan's outputRef.
 async function deliver(repoRoot, dispositions, {
   handoffHead = HEAD_SHA, orderHead = HEAD_SHA, phase = "full", receipt = {}, writeReceipt = true, writeHandoff = true, pulledAt = new Date(Date.now() - 1000).toISOString(),
-  receiptMtime = null, handoffText = null, actList = null, editActListAfter = false, threads = null, delta = null, decision = null, semanticAuthority = true,
+  receiptMtime = null, handoffText = null, actList = null, editActListAfter = false, threads = null, delta = null, decision = null, semanticAuthority = true, review = null,
 } = {}) {
   const dir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", `pr-${PR}`);
   const outputRef = path.join(dir, "f1-0000abcd", "fixer-disposition.json");
@@ -153,6 +153,14 @@ async function deliver(repoRoot, dispositions, {
     workOrder.authority = { sourceDigest: sha256Hex(threads).slice(7) };
     await mkdir(dir, { recursive: true });
     await writeFile(source, JSON.stringify(threads));
+    plan.workOrderDigest = workOrderDigest(workOrder);
+  }
+  if (review) {
+    // A review-body order pins the snapshot the emitter wrote (reviewId, bodySha256).
+    const source = path.join(dir, "review-body.json");
+    Object.assign(workOrder, { source: "review-body", authority: { sourceDigest: sha256Hex(review).slice(7) }, requiredReads: [{ kind: "review-body", path: source, sha256: createHash("sha256").update(JSON.stringify(review)).digest("hex") }] });
+    await mkdir(dir, { recursive: true });
+    await writeFile(source, JSON.stringify(review));
     plan.workOrderDigest = workOrderDigest(workOrder);
   }
   if (delta) {
@@ -201,6 +209,72 @@ async function boundFixture(root, writeHandoff = false, setup = {}) {
   if (writeHandoff) await utimes(receiptPath, 1, 1);
   return { plan, planPath, receiptPath, subject };
 }
+
+// A review-body order (emit-fixer-work-order.mjs --review-id): one pinned review, answered by a marker comment, never a thread.
+const REVIEW_BODY = "Rename foo to bar.";
+const REVIEW = { repo: REPO, pr: PR, reviewId: "PRR_R1", state: "CHANGES_REQUESTED", commitId: HEAD_SHA, author: "alice", authorAssociation: "COLLABORATOR",
+  submittedAt: "2026-11-01T10:00:00Z", body: REVIEW_BODY, bodySha256: createHash("sha256").update(REVIEW_BODY).digest("hex") };
+const REVIEW_HANDOFF = [{ reviewId: "PRR_R1", fixingCommitSha: FIX_SHA, disposition: "tackled" }];
+const claim = (entry) => ({ matchByClaims: true, ...entry });
+const reviewsEntry = (reviews = [{ node_id: "PRR_R1", body: REVIEW_BODY }]) => claim({ assertArgs: [`repos/${REPO}/pulls/${PR}/reviews?per_page=100`], stdout: JSON.stringify([reviews]) });
+const markerLine = (association = "OWNER") => JSON.stringify({ id: 5, user: { login: "op", type: "User" }, author_association: association,
+  body: `<!-- dev-loops:review-body-disposition review=PRR_R1 fix=${FIX_SHA} -->\nAddressed review PRR_R1 in commit ${FIX_SHA}.` });
+const commentsEntry = (stdout = "") => claim({ assertArgs: [`repos/${REPO}/issues/${PR}/comments`, "--paginate"], stdout });
+const markerPostEntry = claim({ assertArgs: [`repos/${REPO}/issues/${PR}/comments`, "-f"], assertArgContains: [`body=<!-- dev-loops:review-body-disposition review=PRR_R1 fix=${FIX_SHA} -->`], stdout: "{}" });
+const reviewBodyEntries = (...comments) => [reviewsEntry(), claim(liveHeadEntry()), claim(threadsCallEntry([])), ...ciEntries(HEAD_SHA).map(claim), claim(compareEntry(FIX_SHA, "ahead")), ...comments];
+const posts = (calls) => calls.filter((call) => call.args.includes("-f"));
+
+test("review-body: the verifier posts one marker comment citing the fixing commit, and re-entry posts nothing", async () => {
+  for (const reentry of [false, true]) await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, REVIEW_HANDOFF, { review: REVIEW });
+    const { deps, calls } = runtime(reviewBodyEntries(...(reentry ? [commentsEntry(markerLine())] : [commentsEntry(), markerPostEntry, commentsEntry(markerLine())])), repoRoot, { live: false });
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps);
+    assert.equal(result.complete, true, JSON.stringify(result));
+    assert.equal(posts(calls).length, reentry ? 0 : 1);
+    if (!reentry) assert.ok(posts(calls)[0].args.some((arg) => arg.includes(`Addressed review PRR_R1 in commit ${FIX_SHA}.`)));
+  });
+});
+
+test("review-body: a marker by an untrusted author, and --check without a marker, leave the entry reply_missing and post nothing", async () => {
+  for (const comments of [[commentsEntry(markerLine("CONTRIBUTOR"))], [commentsEntry()]]) await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, REVIEW_HANDOFF, { review: REVIEW });
+    const { deps, calls } = runtime(reviewBodyEntries(...comments), repoRoot, { live: false });
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check: true }, deps);
+    assert.equal(result.complete, false);
+    assert.deepEqual(result.incomplete, [{ reviewId: "PRR_R1", expectedCommit: FIX_SHA, failedStep: "reply_missing" }]);
+    assert.equal(posts(calls).length, 0);
+  });
+});
+
+test("review-body: a changed body, a vanished review and a missing handoff entry refuse with a named remedy", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, REVIEW_HANDOFF, { review: REVIEW });
+    for (const [reviews, pattern] of [[[{ node_id: "PRR_R1", body: "Rename foo to baz." }], /review PRR_R1 changed after the work order pinned its body; re-emit the work order: .*emit-fixer-work-order\.mjs --review-id PRR_R1/], [[], /review PRR_R1 is gone from the PR; re-emit/]]) {
+      const { deps } = runtime([reviewsEntry(reviews)], repoRoot, { live: false });
+      await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps), pattern);
+    }
+  });
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [], { review: REVIEW });
+    const { deps } = runtime([reviewsEntry()], repoRoot, { live: false });
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps), /missing_from_handoff: .*source review PRR_R1/);
+  });
+});
+
+test("an already resolved thread completes with a full-SHA reply and refuses resolved_short_sha_reply with a short-SHA reply", async () => {
+  for (const [body, complete] of [[`Fixed in commit ${FIX_SHA}.`, true], [`Fixed in commit ${FIX_SHA.slice(0, 7)}.`, false]]) await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, TACKLED);
+    const thread = { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body, author: { login: "bot", __typename: "User" } }] } };
+    const { deps, calls } = runtime([threadsCallEntry([thread]), compareEntry(FIX_SHA, "ahead")], repoRoot);
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps);
+    assert.equal(result.complete, complete, JSON.stringify(result));
+    assert.equal(ghCount(calls), 3, "no reply or resolve call");
+    if (!complete) {
+      assert.deepEqual(result.incomplete.map((entry) => entry.failedStep), ["resolved_short_sha_reply"]);
+      assert.match(result.reason, /unresolve-review-thread\.mjs/);
+    }
+  });
+});
 
 test("only successful normal verification stamps a checkpoint complete for descendant carry", async () => {
   for (const complete of [false, true]) await withRepoRoot(async (repoRoot) => {

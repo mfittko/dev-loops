@@ -43,12 +43,21 @@ const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 // Only bare markdown counts: fenced blocks, inline code spans, and `>` quote
 // lines are dropped before matching, so a quoted or code-formatted marker is
 // never a record.
+const bareMarkdown = (body) => stripMarkdownCodeForScan(body)
+  .split("\n")
+  .filter((bodyLine) => !/^\s*>/.test(bodyLine))
+  .join("\n");
+
+// The fixer-verifier reply on a review body: separate from the Copilot record above and never a record for it.
+const REVIEW_BODY_MARKER_RE = /<!--\s*dev-loops:review-body-disposition\s+review=(\S+)\s+fix=([0-9a-fA-F]{40})\s*-->/;
+export function parseReviewBodyDispositionMarker(body) {
+  const match = typeof body === "string" ? REVIEW_BODY_MARKER_RE.exec(bareMarkdown(body)) : null;
+  return match ? { reviewId: match[1], fixSha: match[2].toLowerCase() } : null;
+}
+
 export function parseCopilotBodyDispositionMarker(body) {
   if (typeof body !== "string") return null;
-  const bare = stripMarkdownCodeForScan(body)
-    .split("\n")
-    .filter((bodyLine) => !/^\s*>/.test(bodyLine))
-    .join("\n");
+  const bare = bareMarkdown(body);
   const match = MARKER_RE.exec(bare);
   if (!match) return null;
   return {
