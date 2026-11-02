@@ -1351,9 +1351,10 @@ test("AC15: a Copilot review emits only when it is the latest one on the PR head
 
 test("AC15: two Copilot body-only blocking reviews that share one submitted_at refuse as not the latest", async () => {
   await withFixture(async ({ head, emit }) => {
-    const first = copilotReviewFor(head);
-    const tied = copilotReviewFor(head, { node_id: "PRR_C2" });
-    await assert.rejects(emitReview(emit, [first, tied]), /not the latest Copilot review/);
+    const first = copilotReviewFor(head, { state: "CHANGES_REQUESTED" });
+    const tied = copilotReviewFor(head, { node_id: "PRR_C2", state: "CHANGES_REQUESTED" });
+    // PRR_C2 is the review resolveLatestCopilotReview selects (later position wins a tie), so only the ambiguousBlockingTie guard can refuse.
+    await assert.rejects(emitReview(emit, [first, tied], { reviewId: "PRR_C2" }), /not the latest Copilot review/);
   });
 });
 
