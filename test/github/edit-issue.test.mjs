@@ -140,7 +140,25 @@ test("editIssue: --body-file reads the body from a real file", async () => {
     { run },
   );
   assert.deepEqual(result.edited, ["body"]);
-  assert.deepEqual(calls[0], ["issue", "edit", "5", "--repo", "o/n", "--body-file", bodyPath]);
+  assert.deepEqual(calls[0], ["issue", "edit", "5", "--repo", "o/n", "--body", "Body from file\nsecond line"]);
+});
+
+test("editIssue (#2898): a --body-file changed during the baseline read cannot bypass the guard (checked body is forwarded inline)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "edit-issue-"));
+  const bodyPath = join(dir, "body.md");
+  writeFileSync(bodyPath, "## AC\n- [x] Docs");
+  const calls = [];
+  const run = (cmd, args) => {
+    if (args[1] === "view") {
+      writeFileSync(bodyPath, "## AC\n- [ ] Docs"); // file mutates after the guard read it
+      return Promise.resolve({ code: 0, stdout: JSON.stringify({ body: "## AC\n- [x] Docs" }), stderr: "" });
+    }
+    calls.push(args);
+    return Promise.resolve({ code: 0, stdout: "https://github.com/o/n/issues/5\n", stderr: "" });
+  };
+  await editIssue({ repo: "o/n", issue: 5, bodyFile: bodyPath, addAssignees: [], removeAssignees: [] }, { run });
+  assert.ok(!calls[0].includes("--body-file"));
+  assert.equal(calls[0][calls[0].indexOf("--body") + 1], "## AC\n- [x] Docs");
 });
 
 test("editIssue: --body-file - reads stdin and passes it inline as --body (never re-emits exhausted fd 0)", () => {

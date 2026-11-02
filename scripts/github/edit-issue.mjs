@@ -256,7 +256,9 @@ export async function editIssue(options, { env = process.env, ghCommand = "gh", 
     if (unticked.length > 0 && !options.allowUntick) {
       throw new Error(`CHECKLIST-SCOPE-ONE-MODEL: refusing to untick or remove ${unticked.length} checked row(s) on #${options.issue} (unticked, deleted, reworded, or moved into or out of its AC/DoD scope): ${unticked.map((l) => JSON.stringify(l)).join("; ")}. Edit from the current body, or pass --allow-untick for a deliberate change.`);
     }
-    if (options.bodyFile === "-") options = { ...options, body, bodyFile: undefined };
+    // Forward the body that was just checked (stdin or file) inline, so the
+    // core edit cannot re-read a file that changed after the guard ran.
+    if (options.bodyFile !== undefined) options = { ...options, body, bodyFile: undefined };
   }
   // GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628): behind the --enforce-grill opt-in,
   // refuse to write a body that embeds grill transcript/synthesis/Q&A headings.
