@@ -75,4 +75,10 @@ export const INLINE_DENY_ROWS = [
   "git filter-branch --setup 'true; node -e y' HEAD",
   "git filter-branch --msg-filter 'true; node -e y' HEAD",
   "trap 'true; node -e y' EXIT",
+  "git bisect run 'true; node -e y'",
+  "git grep -O'true; node -e y' pat",
+  "git send-email --sendmail-cmd='true; node -e y' f",
+  "xargs git rebase --exec 'true; node -e y'",
+  "time git rebase --exec 'true; node -e y' HEAD~1",
+  "GIT_EDITOR='true; node -e y' git commit",
 ];
