@@ -583,6 +583,7 @@ test("2678: the Judgment section leaves the digest check to the pull", async () 
     const result = pull(plan, root);
     const judgment = result.stdout.slice(result.stdout.indexOf("## Judgment"), result.stdout.indexOf("## Required reads"));
     assert.doesNotMatch(judgment, /sha256 differs/);
-    assert.match(judgment, /pull refusal, so compute no digest/);
+    assert.match(judgment, /pull refusal, so Pi and Claude judges compute no digest of a required read/);
+    assert.match(judgment, /the Codex after-pull setup above still governs Codex/);
   });
 });
