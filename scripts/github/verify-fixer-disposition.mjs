@@ -70,7 +70,10 @@ Required:
                         --review-id) takes a { reviewId, fixingCommitSha,
                         disposition } entry written by the fixer; the verifier
                         re-reads the review live (a changed body or a vanished
-                        review refuses), then posts one
+                        review refuses), checks commit_not_contained, then
+                        fix_not_after_review (the cited commit is already
+                        contained by the reviewed commit; commit the fix after
+                        it, push, rewrite the handoff, re-run), then posts one
                         dev-loops:review-body-disposition marker comment citing the
                         fixing commit unless a marker for it is already live. An
                         untrusted marker the verifier's own identity posted fails
