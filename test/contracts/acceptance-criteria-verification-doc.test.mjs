@@ -31,12 +31,14 @@ test("step 5 consumers describe the dry-run then write-before-post tick and name
   const doc = await readRepo(OWNER);
   const step5 = doc.split(/\n(?=\d+\. )/).find((text) => text.startsWith("5. "));
   assert.ok(step5.includes("The checklist of PR N changed after the gate read it"));
-  for (const file of ["agents/review.agent.md", "skills/copilot-pr-followup/SKILL.md", "docs/decisions/0100-reviewer-verified-items-drive-the-pre-approval-tick.md"]) {
+  for (const file of ["agents/review.agent.md", "skills/copilot-pr-followup/SKILL.md"]) {
     const text = await readRepo(file);
     assert.ok(!text.includes("ticks exactly these labels before it composes"), `${file}: stale phrase`);
     assert.ok(!text.includes("before it composes the verdict (step 5"), `${file}: stale phrase`);
     assert.ok(!/ticks the ledger's `verifiedItems` before it composes the verdict/.test(text), `${file}: stale phrase`);
   }
+  const adr = await readRepo("docs/decisions/0230-poster-ticks-after-refusal-checks.md");
+  assert.ok(adr.includes("0100"));
 });
 
 test("acceptance owner names both completeness fields and their verdict writer", async () => {
