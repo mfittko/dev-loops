@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { realpathSync, readFileSync, constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
+import { checkoutDelegationRefusal } from "../scripts/lib/checkout-delegation-refusal.mjs";
 import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -765,7 +766,7 @@ function delegateToCheckout({ argv, cwd, env, stdout, stderr, spawnMaxBuffer, ex
     return 1;
   }
   if (result.error) {
-    writeLines(stderr, [`cli_version_skew: installed ${installed}, checkout ${checkout.version}; the checkout CLI did not start (${result.error.code ?? result.error.message}). Rerun: dev-loops-run --repo-root ${checkout.root} cli/index.mjs ${argv.map(quoteRerunArg).join(" ")}`]);
+    writeLines(stderr, [checkoutDelegationRefusal({ installed, checkoutVersion: checkout.version, root: checkout.root, code: result.error.code ?? result.error.message, argvText: argv.map(quoteRerunArg).join(" ") })]);
     return 1;
   }
   if (result.stdout) stdout.write(result.stdout);
