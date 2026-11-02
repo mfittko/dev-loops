@@ -288,7 +288,7 @@ export function evaluateCopilotConvergence({ currentHeadSha = null, reviews = []
     return { ok: false, state: findings, disposition: latestDisposition, reviewId: latestReviewId, reason: `current-head Copilot review is "Changes recommended" (🟡, actionable non-approval); converge to "Approval recommended" (🟢) or resolve the feedback before merge` };
   }
   if (latestDisposition === COPILOT_DISPOSITION.UNRECOGNIZED) {
-    return { ok: false, state: findings, disposition: latestDisposition, reviewId: latestReviewId, reason: `current-head Copilot review carries an unrecognized disposition header (fail closed); a recognized "Approval recommended" (🟢) is required` };
+    return { ok: false, state: findings, disposition: latestDisposition, reviewId: latestReviewId, reason: `current-head Copilot review carries an unrecognized disposition header, or a review that reports zero reviewed files (ADR 0237) (fail closed); a recognized "Approval recommended" (🟢) is required` };
   }
   // CLEAN, NONE, and NEEDS_CLOSER_LOOK (🔵, conductor-overridable) pass.
   return { ok: true, state: COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_CLEAN, disposition: latestDisposition, reviewId: latestReviewId, reason: null };

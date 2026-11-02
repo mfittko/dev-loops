@@ -31,7 +31,7 @@ const COPILOT_NEEDS_CLOSER_LOOK_DISPOSITION = "needs a closer look";
 // Canonical current-head Copilot review body dispositions. `changes_recommended`
 // (🟡) and `unrecognized` are actionable non-approvals; `needs_closer_look` (🔵)
 // is a soft, conductor-overridable non-approval; `clean` (🟢) and `none` (no
-// disposition header) are not findings. Both the loop-block signal
+// disposition header, except a zero-file review, which is `unrecognized`) are not findings. Both the loop-block signal
 // (copilotReviewBodySignalsChanges) and the merge-convergence precondition read
 // the SAME classification, so the two can never drift.
 export const COPILOT_DISPOSITION = Object.freeze({
@@ -46,7 +46,7 @@ export const COPILOT_DISPOSITION = Object.freeze({
 });
 
 const COPILOT_REVIEW_ERROR_PREFIX_RE = /^copilot encountered an error/i;
-const COPILOT_ZERO_FILE_REVIEW_RE = /wasn['’]t able to review any files/i;
+const COPILOT_ZERO_FILE_REVIEW_RE = /wasn['’]t able to review any files|reviewed 0 out of \d+ changed files/i;
 
 /**
  * Classify a Copilot review's current-head body disposition. Text-matched (not
@@ -63,7 +63,7 @@ export function classifyCopilotReviewBodyDisposition(state, body) {
 
   const headerMatch = body.match(COPILOT_DISPOSITION_HEADER_RE);
   // No disposition header at all (empty body, generic footer, legacy format):
-  // no body signal, so this is not a finding.
+  // no body signal, so this is not a finding, except a zero-file review.
   // The header check runs first, so a header body never reads as an error review.
   if (!headerMatch) {
     if (COPILOT_REVIEW_ERROR_PREFIX_RE.test(body.trim())) return COPILOT_DISPOSITION.REVIEW_ERROR;

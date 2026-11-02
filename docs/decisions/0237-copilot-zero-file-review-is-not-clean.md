@@ -14,10 +14,10 @@ The carry also reads the `pre_approval_gate` marker comments to decide whether t
 
 ## Decision
 
-A headerless Copilot review whose body states that Copilot reviewed no files classifies as `unrecognized` in `classifyCopilotReviewBodyDisposition`. It is therefore a body-only review with findings. Below the effective round cap it converges only when an `operator`-form disposition record names it for the current head (ADR 0215). At the cap the existing round-cap fallback applies. Other headerless reviews keep their current classification.
+A headerless Copilot review whose body states that Copilot reviewed no files classifies as `unrecognized` in `classifyCopilotReviewBodyDisposition`. The zero-file wording covers both "wasn't able to review any files" and "reviewed 0 out of N changed files". Such a review is therefore a body-only review with findings. Below the effective round cap it converges only when an `operator`-form disposition record names it for the current head (ADR 0215). At the cap the existing round-cap fallback applies. Other headerless reviews keep their current classification.
 
 When the read of the `pre_approval_gate` marker comments fails, the carry refuses with a typed reason that starts with `copilot_reviews_unreadable`. This reason is distinct from the not-converged reason.
 
 ## Consequences
 
-A zero-file review no longer passes the Copilot phase on its own. A marker read failure names itself in the refusal. The rules are `COPILOT-STATE-CARRIED-CONVERGENCE` and `COPILOT-STATE-CONVERGED-BELOW-CAP` in the Copilot loop state graph.
+A zero-file review no longer passes the Copilot phase on its own. A marker read failure names itself in the refusal. The `copilot_reviews_unreadable` refusal is stricter than before. A failed gate-evidence read now blocks the carry even where an operator disposition record would otherwise decide it. This fails closed. The rules are `COPILOT-STATE-CARRIED-CONVERGENCE` and `COPILOT-STATE-CONVERGED-BELOW-CAP` in the Copilot loop state graph.

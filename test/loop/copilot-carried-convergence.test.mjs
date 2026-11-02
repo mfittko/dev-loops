@@ -1300,7 +1300,7 @@ describe("a zero-file Copilot review is not clean (ADR 0237)", () => {
     const refused = await carry({ gatePassedRead: {} }, below);
     assert.equal(refused.carried, false);
     const request = await runRequestTool(scenario({ priorBody: ZERO, delta: CODE_DELTA, gatePassedRead: {} }), { root: convergedOnceWideRoot });
-    assert.notEqual(request.status, "suppressed_post_convergence");
+    assert.equal(request.status, "requested");
   });
 
   it("an operator record for the current head converges it below the cap", async () => {
