@@ -114,7 +114,7 @@ test("real delta CLI refuses committed invalid inputs concealed by uncommitted c
       fs.writeFileSync(path.join(dir, correction), correction === "CHANGELOG.md" ? `# Changelog\n\n## Unreleased\n\n${body}` : body);
     }
     const args = ["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", baseline, "--worktree", dir];
-    const input = (await runDeltaCli([...args, "--spec-identity", "spec@1"], { ...quiet })).input;
+    const input = (await runDeltaCli([...args, "--spec-identity", "spec@1", "--result-path", path.join(dir, "input-result.json")], { ...quiet })).input;
     const resultPath = path.join(dir, "review.json");
     fs.writeFileSync(resultPath, JSON.stringify({ ...input.resultShape,
       actionableItems: input.actItems.map(({ ref }) => ({ ref, status: "resolved", evidence: ["checked"] })),
@@ -158,7 +158,7 @@ test("result-mode changelog ignores inherited Git directory overrides", async ()
     runGitFixture(target, ["add", "."]);
     runGitFixture(target, ["commit", "-qm", "fix(local): invalid fragment"]);
     const args = ["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", baseline, "--worktree", target];
-    const input = (await runDeltaCli([...args, "--spec-identity", "spec@1"], quiet)).input;
+    const input = (await runDeltaCli([...args, "--spec-identity", "spec@1", "--result-path", path.join(target, "input-result.json")], quiet)).input;
     const resultPath = path.join(dir, "review.json");
     fs.writeFileSync(resultPath, JSON.stringify({ ...input.resultShape,
       actionableItems: input.actItems.map(({ ref }) => ({ ref, status: "resolved", evidence: ["checked"] })),
@@ -217,7 +217,7 @@ test("the real patch file holds the cumulative baseline..candidate git diff", as
     runGitFixture(dir, ["add", "."]);
     runGitFixture(dir, ["commit", "-qm", "fix(local): two"]);
     const head = runGitFixture(dir, ["rev-parse", "HEAD"]);
-    const out = await runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", baseline, "--worktree", dir, "--spec-identity", "spec@1"], quiet);
+    const out = await runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", baseline, "--worktree", dir, "--spec-identity", "spec@1", "--result-path", path.join(dir, "input-result.json")], quiet);
     assert.equal(out.input.patchPath, deltaPatchPath(resolveGateArtifactTmpRoot(dir), baseline, head));
     const patch = fs.readFileSync(out.input.patchPath, "utf8");
     assert.match(patch, /^diff --git a\/one\.mjs b\/one\.mjs$/m);
@@ -236,7 +236,7 @@ test("the real patch keeps a committed gitlink change under diff.ignoreSubmodule
     const baseline = runGitFixture(dir, ["rev-parse", "HEAD"]);
     runGitFixture(dir, ["update-index", "--add", "--cacheinfo", `160000,${baseline},sub`]);
     runGitFixture(dir, ["commit", "-qm", "fix(local): gitlink"]);
-    const out = await runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", baseline, "--worktree", dir, "--spec-identity", "spec@1"], quiet);
+    const out = await runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", baseline, "--worktree", dir, "--spec-identity", "spec@1", "--result-path", path.join(dir, "input-result.json")], quiet);
     assert.match(fs.readFileSync(out.input.patchPath, "utf8"), /^\+Subproject commit /m);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
@@ -343,7 +343,7 @@ test("baseline equality refuses invocations that cannot authenticate input-only 
   for (const extra of [[], ["--fixer-plan", "missing.json"], ["--fixer-plan", "missing.json", "--site-coverage", "missing.json", "--result", result, "--invocation", "1"]]) {
     const seam = headAt(A);
     const marker = writeSequenceMarker({ tmpRoot: seam.tmpRoot, baselineHead: A, branch: "issue-1" });
-    await assert.rejects(runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", A, "--spec-identity", "s", ...extra], seam), /no delta review applies \(worktree HEAD \w+, baseline \w+, \d+ item\(s\)\)/);
+    await assert.rejects(runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", A, "--spec-identity", "s", ...(extra.includes("--result") ? [] : ["--result-path", "r.json"]), ...extra], seam), /no delta review applies \(worktree HEAD \w+, baseline \w+, \d+ item\(s\)\)/);
     assert.equal(fs.existsSync(marker), true);
     assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`)), false);
     assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta", `${A}-${A}.patch`)), false);
@@ -674,8 +674,8 @@ test("--findings-log is refused on the thread route and validated on the act-lis
   await assert.rejects(runCli([...sha256Args, "--findings-log", logWith({ headSha: "e".repeat(64), ...perAngle })], headAt(B)), /stale|no longer contains/);
   await assert.rejects(runCli([...base, "--findings-log", logWith({ headSha: "not-a-sha", ...perAngle })], headAt(B)), /not the baseline/);
   const { threadsFile } = threadsFixture();
-  assert.throws(() => parseCheckPrePushDeltaArgs([...threadArgs(threadsFile), "--spec-identity", "s", "--findings-log", good]), /refused with --threads-file/);
-  assert.equal(parseCheckPrePushDeltaArgs([...threadArgs(threadsFile), "--spec-identity", "s"]).findingsLog, null);
+  assert.throws(() => parseCheckPrePushDeltaArgs([...threadArgs(threadsFile), "--spec-identity", "s", "--result-path", "r.json", "--findings-log", good]), /refused with --threads-file/);
+  assert.equal(parseCheckPrePushDeltaArgs([...threadArgs(threadsFile), "--spec-identity", "s", "--result-path", "r.json"]).findingsLog, null);
 });
 
 test("input mode accepts the cap-round findings log at an earlier head after a base-only merge", async () => {

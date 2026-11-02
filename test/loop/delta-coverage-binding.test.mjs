@@ -80,7 +80,7 @@ test("pulled coverage binding preserves raw identity through the input, result a
   for (const key of Object.keys(fixture.binding)) { assert.deepEqual(input[key], fixture.binding[key]); assert.deepEqual(input.resultShape[key], fixture.binding[key]); }
   const result = path.join(coverageRepo, "delta.json");
   fs.writeFileSync(result, JSON.stringify({ ...input.resultShape, actionableItems: [{ ref: act.fingerprint, status: "resolved", evidence: ["tested"] }], newFindings: [], widenedReads: [], outcome: "locally_clear" }));
-  const resultArgs = [...fixture.args, "--result", result, "--invocation", "1"];
+  const resultArgs = [...fixture.args.filter((arg, i, all) => arg !== "--result-path" && all[i - 1] !== "--result-path"), "--result", result, "--invocation", "1"];
   const seal = () => sealDeltaFixture(fixture.tmpRoot, result);
   seal();
   await runCli(resultArgs, options);

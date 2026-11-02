@@ -229,7 +229,7 @@ async function withFixture(fn) {
       const log = path.join(path.dirname(files.actList), "findings.json");
       await writeFile(log, JSON.stringify({ headSha: head, provenance: { perAngle: [{ angle: "correctness" }] } }));
       const args = ["--act-list", files.actList, "--baseline", head, "--worktree", wt, "--fixer-plan", prior.planPath, "--site-coverage", prior.workOrder.outputRefs[0]];
-      const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", log], { stdout: { write() {} } });
+      const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", log, "--result-path", path.join(path.dirname(log), "delta-result.json")], { stdout: { write() {} } });
       const result = { ...input.input.resultShape, actionableItems: input.input.actItems.map(({ ref }) => ({ ref, status: "resolved", evidence: ["focused check"] })), newFindings: [], widenedReads: [], outcome: "locally_clear" };
       if (bounded) { git(wt, "commit", "-q", "--allow-empty", "-m", "candidate B"); result.outcome = "bounded_out"; }
       await writeFile(files.delta, JSON.stringify(result));
@@ -410,7 +410,7 @@ test("THREAD no_commit and head_moved close an authenticated sequence and allow 
     const located = await locateFixerUnit({ ref: unit.workOrderRef, cwd: wt, tmpRoots: [path.join(root, "tmp")] });
     if (move === "amended") assert.match(located.stale, /no longer contains/);
     else assert.equal(located.stale, undefined);
-    const args = ["--threads-file", files.threads, "--repo", REPO, "--pr", String(PR), "--baseline", head, "--spec-identity", "s", "--fixer-plan", unit.planPath, "--site-coverage", output, "--worktree", wt];
+    const args = ["--threads-file", files.threads, "--repo", REPO, "--pr", String(PR), "--baseline", head, "--spec-identity", "s", "--result-path", path.join(wt, "delta-result.json"), "--fixer-plan", unit.planPath, "--site-coverage", output, "--worktree", wt];
     if (move !== "amended") assert.equal(checkFixPushAuthority(wt).ok, false);
     const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
     const original = await readFile(marker);
@@ -433,7 +433,7 @@ test("the no_commit close under a held head lock throws SEQUENCE_LOCK_BUSY and l
     const output = unit.workOrder.outputRefs[0];
     await mkdir(path.dirname(output), { recursive: true });
     await writeFile(output, JSON.stringify({ headSha: head, dispositions: [] }));
-    const args = ["--threads-file", files.threads, "--repo", REPO, "--pr", String(PR), "--baseline", head, "--spec-identity", "s", "--fixer-plan", unit.planPath, "--site-coverage", output, "--worktree", wt];
+    const args = ["--threads-file", files.threads, "--repo", REPO, "--pr", String(PR), "--baseline", head, "--spec-identity", "s", "--result-path", path.join(wt, "delta-result.json"), "--fixer-plan", unit.planPath, "--site-coverage", output, "--worktree", wt];
     const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
     const lock = path.join(root, "tmp", "gate-delta", `${head}.sequence-lock`);
     await mkdir(lock, { recursive: true });
@@ -542,7 +542,7 @@ test("ordinary full emission carries genuine pulled coverage from reviewed A thr
     const log = path.join(path.dirname(files.actList), "findings.json");
     await writeFile(log, JSON.stringify({ headSha: head, provenance: { perAngle: [{ angle: "correctness" }] } }));
     const args = ["--act-list", files.actList, "--baseline", head, "--worktree", wt, "--fixer-plan", prior.planPath, "--site-coverage", prior.workOrder.outputRefs[0]];
-    const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", log], { stdout: { write() {} } });
+    const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", log, "--result-path", path.join(path.dirname(log), "delta-result.json")], { stdout: { write() {} } });
     await writeFile(files.delta, JSON.stringify({ ...input.input.resultShape, actionableItems: [{ ref: ACT_REF, status: "resolved", evidence: ["query returned no sites"] }], newFindings: [], widenedReads: [], outcome: "locally_clear" }));
     sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta);
     const decision = await runCli([...args, "--result", files.delta, "--invocation", "1"], { stdout: { write() {} } });

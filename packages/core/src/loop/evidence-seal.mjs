@@ -30,12 +30,12 @@ export function deltaEvidenceKey(reviewBaselineHead, candidateHead, runId) {
   return `delta-${reviewBaselineHead}-${candidateHead}-${runId}`;
 }
 
-// The real path of a file, or of its directory plus name when the file is not written yet.
+// The real path of a file, or of its directory plus name when the file is not written yet (the directory must exist).
 function canonicalPath(filePath) {
   const resolved = path.resolve(filePath);
   try { return realpathSync(resolved); } catch (error) {
     if (error?.code !== "ENOENT") throw error;
-    try { return path.join(realpathSync(path.dirname(resolved)), path.basename(resolved)); } catch { return resolved; }
+    return path.join(realpathSync(path.dirname(resolved)), path.basename(resolved));
   }
 }
 
@@ -45,6 +45,8 @@ export function createEvidenceRun(tmpRoot, key, expected, resultPath) {
   // An existing record stays intact: a seal is final.
   if (existsSync(file)) return;
   mkdirSync(path.dirname(file), { recursive: true });
+  // The briefed directory exists before it is resolved, so a symlinked prefix is always realpathed.
+  if (resultPath) mkdirSync(path.dirname(path.resolve(resultPath)), { recursive: true });
   writeFileSync(file, `${JSON.stringify({ key, expected, ...(resultPath ? { resultPath: canonicalPath(resultPath) } : {}), sealed: null })}\n`);
 }
 

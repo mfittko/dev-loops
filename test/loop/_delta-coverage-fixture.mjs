@@ -33,6 +33,8 @@ export async function boundArgs(argv, seam = {}, { seal = true } = {}) {
 async function bindArgs(argv, seam) {
   const args = [...argv];
   if (!args.includes("--worktree")) args.push("--worktree", coverageRepo);
+  // The reviewer-input run requires the briefed result path.
+  if (!["--result", "--result-path", "--handback", "--help"].some((flag) => args.includes(flag))) args.push("--result-path", path.join(os.tmpdir(), `delta-result-${++next}.json`));
   if (!args.includes("--act-list") || args.includes("--handback")) return { args, seam };
   const get = (flag) => args[args.indexOf(flag) + 1];
   const cwd = get("--worktree"), actList = get("--act-list");

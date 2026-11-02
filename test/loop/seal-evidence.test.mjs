@@ -266,3 +266,27 @@ test("the delta reviewer brief names input.sealCommand and the result path bindi
   assert.match(contract, /`--result-path`/);
   assert.match(contract, /prints none of `patchPath`, `evidenceRule` or `sealCommand`/);
 });
+
+test("a briefed result directory that does not exist yet is realpathed through a symlinked prefix", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seal-evidence-late-dir-"));
+  const link = path.join(os.tmpdir(), `seal-evidence-late-link-${process.pid}-${Date.now()}`);
+  fs.symlinkSync(dir, link);
+  try {
+    createEvidenceRun(dir, KEY, EXPECTED, path.join(link, "later", "result.json"));
+    const file = path.join(dir, "later", "result.json");
+    fs.writeFileSync(file, JSON.stringify(result()));
+    sealEvidence(dir, KEY, file, result());
+    verify(dir, KEY, file, result());
+  } finally { fs.rmSync(link, { force: true }); }
+});
+
+test("the reviewer-input run refuses to start without --result-path", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seal-evidence-nopath-"));
+  const actList = path.join(dir, "act-list.json");
+  fs.writeFileSync(actList, JSON.stringify(ACT_LIST));
+  const findingsLog = path.join(dir, "findings.json");
+  fs.writeFileSync(findingsLog, JSON.stringify({ headSha: A, provenance: { perAngle: [{ angle: "correctness" }] } }));
+  const bound = await boundArgs(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", findingsLog]);
+  const args = bound.args.filter((arg, i, all) => arg !== "--result-path" && all[i - 1] !== "--result-path");
+  await assert.rejects(runDeltaCli(args, { ...bound.seam, ...quiet }), /--result-path <path> is required/);
+});

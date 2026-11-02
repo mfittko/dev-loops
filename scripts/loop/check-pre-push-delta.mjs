@@ -84,7 +84,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
                           its provenance.perAngle angles join the surface hints (PRE-PUSH-DELTA-INPUT). Refused with --threads-file.
   --handback              The fixer handbackCheck run: waives the --findings-log requirement (it validates --site-coverage, no reviewer input is used)
   --result <path>         The reviewer's DeltaPrePushReviewResult JSON
-  --result-path <path>    Reviewer-input run: the absolute path briefed to the delta reviewer for its result; the run record binds it and seal-evidence refuses any other path (GATE-EXEC-EVIDENCE-SEALED)
+  --result-path <path>    Required on the reviewer-input run: the absolute path briefed to the delta reviewer for its result; the run record binds it and seal-evidence refuses any other path (GATE-EXEC-EVIDENCE-SEALED)
   --invocation <n>        1-based delta review invocation in this sequence (max 3)
   --worktree <dir>        Worktree whose HEAD is the candidate (default: cwd)
 
@@ -476,12 +476,13 @@ export async function runCli(
   } else {
     const patchPath = deltaPatchPath(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), sequence.reviewBaselineHead, currentHead);
     let runId;
+    if (!options.handback && !options.resultPath) throw parseError("--result-path <path> is required on the reviewer-input run: the run record binds the briefed result path and seal-evidence refuses any other path (GATE-EXEC-EVIDENCE-SEALED)");
     if (!options.handback) { // the fixer handbackCheck stays write-free
       mkdirSync(path.dirname(patchPath), { recursive: true });
       writeFileSync(patchPath, diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead));
       // Every input run opens its own unsealed record, so a re-run of the producer at the same heads can seal again.
       runId = mintEvidenceRunId();
-      createEvidenceRun(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaEvidenceKey(sequence.reviewBaselineHead, currentHead, runId), { reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead, actSetId: sequence.actSetId, runId }, options.resultPath ? path.resolve(options.worktree, options.resultPath) : undefined);
+      createEvidenceRun(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaEvidenceKey(sequence.reviewBaselineHead, currentHead, runId), { reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead, actSetId: sequence.actSetId, runId }, path.resolve(options.worktree, options.resultPath));
     }
     // The target authenticateCoverage verified binds the log's repo and pr; without an authenticated plan the chain path refuses.
     const target = authenticatedTarget;

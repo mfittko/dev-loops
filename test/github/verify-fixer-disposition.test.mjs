@@ -1968,7 +1968,7 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   await writeFile(originPath, JSON.stringify({ headSha: fixing, siteCoverage }));
   await writeFile(logPath, JSON.stringify({ headSha: baseline, provenance: { perAngle: [{ angle: "correctness" }] } }));
   const args = ["--act-list", actPath, "--baseline", baseline, "--worktree", repoRoot, "--fixer-plan", prior.planPath, "--site-coverage", originPath];
-  const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", logPath], { stdout: { write() {} } });
+  const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", logPath, "--result-path", path.join(tmpRoot, "delta-result.json")], { stdout: { write() {} } });
   if (residual) git("commit", "-q", "--allow-empty", "-m", "candidate B");
   const candidate = git("rev-parse", "HEAD"), items = input.input.actItems.map(({ ref }, index) => ({ ref, status: isResidual(index) ? "cannot_verify" : "resolved", evidence: ["focused check"] }));
   const delta = { ...input.input.resultShape, candidateHead: residual ? fixing : candidate, actionableItems: items, newFindings: [], widenedReads: [], outcome: residual ? "bounded_out" : "locally_clear" };
