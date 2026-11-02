@@ -227,7 +227,7 @@ const posts = (calls) => calls.filter((call) => call.args.includes("-f"));
 test("review-body: the verifier posts one marker comment citing the fixing commit, and re-entry posts nothing", async () => {
   for (const reentry of [false, true]) await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, REVIEW_HANDOFF, { review: REVIEW });
-    const { deps, calls } = runtime(reviewBodyEntries(...(reentry ? [commentsEntry(markerLine())] : [commentsEntry(), markerPostEntry, commentsEntry(markerLine())])), repoRoot, { live: false });
+    const { deps, calls } = runtime(reviewBodyEntries(...(reentry ? [commentsEntry(markerLine())] : [commentsEntry(), commentsEntry(), markerPostEntry, commentsEntry(markerLine())])), repoRoot, { live: false });
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps);
     assert.equal(result.complete, true, JSON.stringify(result));
     assert.equal(posts(calls).length, reentry ? 0 : 1);
@@ -279,10 +279,35 @@ test("review-body: a posted marker that the trusted-author filter ignores fails 
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, REVIEW_HANDOFF, { review: REVIEW });
     const postedAs = claim({ ...markerPostEntry, stdout: JSON.stringify({ user: { login: "some-bot" } }) });
-    const { deps } = runtime(reviewBodyEntries(commentsEntry(), postedAs, commentsEntry(markerLine("CONTRIBUTOR"))), repoRoot, { live: false });
+    const { deps } = runtime(reviewBodyEntries(commentsEntry(), commentsEntry(), postedAs, commentsEntry(markerLine("CONTRIBUTOR"))), repoRoot, { live: false });
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps);
     assert.equal(result.ok, false);
-    assert.match(result.incomplete.find((entry) => entry.failedStep === "marker_author_untrusted").error, /marker comment by some-bot is not a trusted author.*OWNER, MEMBER or COLLABORATOR identity/);
+    assert.match(result.incomplete.find((entry) => entry.failedStep === "marker_author_untrusted").error, /marker comment by some-bot for review PRR_R1 is not by a trusted author.*OWNER, MEMBER or COLLABORATOR identity/);
+  });
+});
+
+test("review-body: an untrusted marker that is already live is never posted again and reports marker_author_untrusted without a re-run remedy", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, REVIEW_HANDOFF, { review: REVIEW });
+    const { deps, calls } = runtime(reviewBodyEntries(commentsEntry(markerLine("CONTRIBUTOR")), commentsEntry(markerLine("CONTRIBUTOR")), commentsEntry(markerLine("CONTRIBUTOR"))), repoRoot, { live: false });
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps);
+    assert.equal(posts(calls).length, 0);
+    assert.equal(result.ok, false);
+    assert.match(result.incomplete.find((entry) => entry.failedStep === "marker_author_untrusted").error, /comment by op for review PRR_R1/);
+    assert.match(result.reason, /review PRR_R1: marker_author_untrusted/);
+    assert.doesNotMatch(`${result.reason} ${result.error}`, /re-run the verifier/);
+  });
+});
+
+test("review-body: a trusted post that the immediate re-read misses is a re-run residual, not an untrusted author", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, REVIEW_HANDOFF, { review: REVIEW });
+    const postedAs = claim({ ...markerPostEntry, stdout: JSON.stringify({ user: { login: "op", type: "User" }, author_association: "OWNER" }) });
+    const { deps } = runtime(reviewBodyEntries(commentsEntry(), commentsEntry(), postedAs, commentsEntry()), repoRoot, { live: false });
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps);
+    assert.equal(result.ok, false);
+    assert.equal(result.incomplete.some((entry) => entry.failedStep === "marker_author_untrusted"), false);
+    assert.match(result.incomplete.find((entry) => entry.error).error, /trusted marker comment by op.*not listed yet; re-run the verifier/);
   });
 });
 

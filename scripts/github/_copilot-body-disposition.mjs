@@ -42,10 +42,11 @@ const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
 // Only bare markdown counts: fenced blocks, inline code spans, and `>` quote
 // lines are dropped before matching, so a quoted or code-formatted marker is
-// never a record.
-const bareMarkdown = (body) => stripMarkdownCodeForScan(body)
+// never a record. The review-body marker also drops 4-space and tab indented
+// lines (`dropIndented`); the Copilot record keeps them, as before.
+const bareMarkdown = (body, { dropIndented = false } = {}) => stripMarkdownCodeForScan(body)
   .split("\n")
-  .filter((bodyLine) => !/^\s*>/.test(bodyLine) && !/^(?: {4}|\t)/.test(bodyLine))
+  .filter((bodyLine) => !/^\s*>/.test(bodyLine) && !(dropIndented && /^(?: {4}|\t)/.test(bodyLine)))
   .join("\n");
 
 // The fixer-verifier reply on a review body: separate from the Copilot record above and never a record for it.
@@ -53,7 +54,24 @@ const REVIEW_BODY_MARKER_RE = /<!--\s*dev-loops:review-body-disposition\s+review
 // Every bare marker in the comment: one comment may name several reviews.
 export function parseReviewBodyDispositionMarkers(body) {
   if (typeof body !== "string") return [];
-  return [...bareMarkdown(body).matchAll(REVIEW_BODY_MARKER_RE)].map((match) => ({ reviewId: match[1], fixSha: match[2].toLowerCase() }));
+  return [...bareMarkdown(body, { dropIndented: true }).matchAll(REVIEW_BODY_MARKER_RE)].map((match) => ({ reviewId: match[1], fixSha: match[2].toLowerCase() }));
+}
+
+// Every review-body marker on the PR's issue comments for `reviewIds`, trusted or not, so a caller can
+// tell "no marker" from "marker by an untrusted author". Throws on a gh failure.
+export async function readReviewBodyMarkers(reviewIds, { repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+  if (!reviewIds.length) return [];
+  const result = await runChild(ghCommand, ["api", `repos/${repo}/issues/${pr}/comments`, "--paginate", "--jq", ".[]"], env);
+  if (result.code !== 0) throw new Error(`gh command failed: ${result.stderr.trim() || `exit code ${result.code}`}`);
+  return result.stdout.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)).flatMap((comment) => parseReviewBodyDispositionMarkers(comment.body)
+    .filter((marker) => reviewIds.includes(marker.reviewId))
+    .map((marker) => ({ ...marker, trusted: isTrustedDispositionAuthor(comment), author: comment?.user?.login ?? null })));
+}
+
+// The evaluateFixerDisposition `liveReviews` shape: the fixing commits trusted markers cite per review.
+export async function readReviewMarkerCommits(reviewIds, ctx, runtime) {
+  const markers = await readReviewBodyMarkers(reviewIds, ctx, runtime);
+  return reviewIds.map((reviewId) => ({ reviewId, markerCommits: markers.filter((m) => m.trusted && m.reviewId === reviewId).map((m) => m.fixSha) }));
 }
 
 export function parseCopilotBodyDispositionMarker(body) {

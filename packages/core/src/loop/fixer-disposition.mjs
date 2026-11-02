@@ -25,7 +25,12 @@ export const FIXER_DISPOSITION_FAILED_STEP = Object.freeze({
   NOT_VERIFIED: "not_verified",
   // The delta review of the fix left the thread not_resolved or cannot_verify; the status rides in `deltaStatus`.
   DELTA_BLOCKED: "delta_blocked",
+  // A review-body marker comment exists for the fixing commit, but its author is not a trusted one (OWNER, MEMBER or COLLABORATOR human).
+  MARKER_AUTHOR_UNTRUSTED: "marker_author_untrusted",
 });
+
+/** The review node id a review-body handoff entry and `emit-fixer-work-order.mjs --review-id` both accept. */
+export const REVIEW_NODE_ID_PATTERN = /^PRR_[A-Za-z0-9_-]+$/;
 
 // The only legal next action while disposition is incomplete. Kept as a plain
 // literal (not imported from pr-gate-coordination.mjs) so this module stays a
@@ -218,11 +223,11 @@ export function normalizeFixerDispositionHandoff(raw, { ruleIds } = {}) {
       // A review-body entry: exactly one of threadId and reviewId.
       if (entry.threadId !== undefined) throw new Error(`Fixer disposition handoff entry ${index} carries both threadId and reviewId; a review-body entry carries reviewId only`);
       const reviewId = isNonEmptyString(entry.reviewId) ? entry.reviewId.trim() : "";
-      if (!/^PRR_[A-Za-z0-9_-]+$/.test(reviewId)) throw new Error(`Fixer disposition handoff entry ${index} reviewId is not a review node id (PRR_...)`);
+      if (!REVIEW_NODE_ID_PATTERN.test(reviewId)) throw new Error(`Fixer disposition handoff entry ${index} reviewId is not a review node id (PRR_...)`);
       if (seenReviewIds.has(reviewId)) throw new Error(`Fixer disposition handoff has a duplicate reviewId: ${reviewId}`);
       seenReviewIds.add(reviewId);
       // The marker comment cites the commit in full, so the entry must carry the full 40-character SHA.
-      if (!/^[0-9a-fA-F]{40}$/.test(String(entry.fixingCommitSha).trim())) throw new Error(`Fixer disposition handoff entry for review ${reviewId} needs fixingCommitSha as the full 40-character SHA (git rev-parse <commit>)`);
+      if (!isNonEmptyString(entry.fixingCommitSha) || !/^[0-9a-fA-F]{40}$/.test(entry.fixingCommitSha.trim())) throw new Error(`Fixer disposition handoff entry for review ${reviewId} needs fixingCommitSha as the full 40-character SHA (git rev-parse <commit>)`);
       const disposition = isNonEmptyString(entry.disposition) ? entry.disposition.trim().toLowerCase() : "";
       if (!Object.values(FIXER_DISPOSITION_KIND).includes(disposition)) throw new Error(`Fixer disposition handoff entry for review ${reviewId} has a missing or unrecognized disposition: ${disposition}`);
       return { reviewId, fingerprint: null, fixingCommitSha: entry.fixingCommitSha.trim().toLowerCase(), disposition, validation: isNonEmptyString(entry.validation) ? entry.validation.trim() : null };
@@ -295,7 +300,8 @@ const citesShortSha = (body, commit) => (String(body).toLowerCase().match(/\b[0-
  * @param {{ headSha: string, dispositions: Array<object> }} params.handoff - raw or already-normalized; ALWAYS re-validated via normalizeFixerDispositionHandoff (idempotent on already-normalized input), so a malformed array-bearing handoff can never bypass schema+enum validation just by already carrying an array
  * @param {Array<{ threadId: string, isResolved: boolean, replyBodies?: string[], claimedTackled?: boolean }>} [params.liveThreads]
  * @param {Record<string, boolean>} [params.containment] - fixingCommitSha -> true when the observed PR head contains it
- * @returns {{ ok: boolean, incomplete: Array<{ threadId: string, expectedCommit: string|null, failedStep: string }>, forbiddenActions: string[], nextAction: string|null, reason: string|null }}
+ * @param {Array<{ reviewId: string, markerCommits: string[] }>} [params.liveReviews] - per review-body entry, the fixing commits that trusted marker comments cite
+ * @returns {{ ok: boolean, incomplete: Array<{ threadId: string, expectedCommit: string|null, failedStep: string } | { reviewId: string, expectedCommit: string|null, failedStep: string }>, forbiddenActions: string[], nextAction: string|null, reason: string|null }}
  */
 export function evaluateFixerDisposition({ handoff, liveThreads = [], containment = {}, liveReviews = [] } = {}) {
   const normalizedHandoff = normalizeFixerDispositionHandoff(handoff ?? {});

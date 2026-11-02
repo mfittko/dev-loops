@@ -17,7 +17,7 @@ import { VALID_SEVERITIES, isPastRoundCap, pastCapBlockers } from "@dev-loops/co
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
 import { deltaCoverageBinding, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
-import { normalizeFixerDispositionHandoff } from "@dev-loops/core/loop/fixer-disposition";
+import { normalizeFixerDispositionHandoff, REVIEW_NODE_ID_PATTERN } from "@dev-loops/core/loop/fixer-disposition";
 import { sequenceClosurePath, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
@@ -46,7 +46,9 @@ or the unresolved review threads (list-review-threads.mjs --unresolved-only), pl
 optional pre-push delta result (dev-loops loop pre-push-delta). --review-id <node id> takes the body of one PR
 review (CHANGES_REQUESTED or COMMENTED) by an OWNER/MEMBER/COLLABORATOR human or by the latest Copilot review on the PR head,
 read live from the PR and pinned as review-body.json; it refuses a bot other than Copilot, an empty body and an unknown ID,
-and takes no --gate or --delta-result. --phase full needs a clearing
+and takes no --gate or --delta-result. A review-body source has no delta-review route: it
+takes only --phase full, needs no delta decision, ignores any delta record for the head, and
+refuses --phase commit_only. For the other sources --phase full needs a clearing
 delta decision for the head: an act-list source passes the clearing --delta-result, a
 threads source needs a thread-bound clearing record under <tmp-root>/gate-delta/ (written by
 check-pre-push-delta --result), and any non-clearing record for the head refuses; use
@@ -334,6 +336,8 @@ export async function emitFixerWorkOrder({
   if (!/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Refusal(`--head-sha must be a full 40- or 64-char lowercase SHA, got ${headSha}`);
   if (!FIXER_PHASES.includes(phase)) throw new Refusal(`--phase must be one of ${FIXER_PHASES.join(", ")}, got ${phase}`);
   if (reviewId === "") throw new Refusal("--review-id must be a review node id, got an empty value; pass the id that scripts/github/view-pr.mjs --json reviews reports");
+  if (reviewId !== undefined && !REVIEW_NODE_ID_PATTERN.test(reviewId)) throw new Refusal(`--review-id ${reviewId} is not a review node id (PRR_...); pass the id that scripts/github/view-pr.mjs --json reviews reports`);
+  if (reviewId && phase === "commit_only") throw new Refusal("--review-id takes only --phase full: a review body has no delta-review route, so there is no commit_only continuation; re-run with --phase full");
   if ([actListFile, threadsFile, reviewId].filter(Boolean).length !== 1) throw new Refusal("pass exactly one of --act-list-file, --threads-file and --review-id");
   if (actListFile && !GATE_NAMES.includes(gate)) throw new Refusal(`--act-list-file needs --gate ${GATE_NAMES.join("|")}, got ${gate}`);
   if (!actListFile && gate) throw new Refusal("--gate applies only to an --act-list-file source");

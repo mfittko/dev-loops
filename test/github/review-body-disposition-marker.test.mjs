@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
-import { parseReviewBodyDispositionMarkers } from "../../scripts/github/_copilot-body-disposition.mjs";
+import { parseCopilotBodyDispositionMarker, parseReviewBodyDispositionMarkers } from "../../scripts/github/_copilot-body-disposition.mjs";
 
 const FIX = "b".repeat(40);
 const marker = (review = "PRR_R1", fix = FIX) => `<!-- dev-loops:review-body-disposition review=${review} fix=${fix} -->`;
@@ -25,4 +25,12 @@ test("a marker inside an inline code span, a backtick fence, a tilde fence, an i
 test("one comment returns every bare marker, so the caller filters by review id", () => {
   const found = parseReviewBodyDispositionMarkers(`${marker("PRR_OTHER", "c".repeat(40))}\n${marker()}`);
   assert.deepEqual(found, [{ reviewId: "PRR_OTHER", fixSha: "c".repeat(40) }, { reviewId: "PRR_R1", fixSha: FIX }]);
+});
+
+test("a review-body marker on a 4-space list-continuation line is no marker, while a Copilot record on that line still parses", () => {
+  assert.deepEqual(parseReviewBodyDispositionMarkers(`- note\n    ${marker()}`), []);
+  const copilot = "<!-- dev-loops:copilot-body-disposition review=PRR_x head=0123456789abcdef0123456789abcdef01234567 operator -->";
+  assert.equal(parseCopilotBodyDispositionMarker(`- note\n    ${copilot}`)?.operator, true);
+  assert.equal(parseCopilotBodyDispositionMarker(`\`\`\`\n${copilot}\n\`\`\``), null);
+  assert.equal(parseCopilotBodyDispositionMarker(`> ${copilot}`), null);
 });

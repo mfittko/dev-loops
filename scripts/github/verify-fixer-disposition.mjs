@@ -11,7 +11,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { fingerprintFinding, listRestPrReviews } from "./_gate-finding-surface.mjs";
-import { isTrustedDispositionAuthor, parseReviewBodyDispositionMarkers } from "./_copilot-body-disposition.mjs";
+import { isTrustedDispositionAuthor, readReviewBodyMarkers, readReviewMarkerCommits } from "./_copilot-body-disposition.mjs";
 import { selectActThreadBinding } from "./_fixer-act-thread-bindings.mjs";
 import { resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
@@ -59,20 +59,28 @@ Required:
   --fixer-plan <path>   The fixer-emit-plan.json the full-phase fixer was dispatched
                         from (emit-fixer-work-order.mjs, ADR 0106). The disposition
                         handoff { headSha, dispositions } is read from the plan's
-                        outputRef. Each dispositions entry is { threadId,
+                        outputRef. Each dispositions entry is { threadId | reviewId,
                         fixingCommitSha, disposition: "tackled"|"deferred",
-                        fingerprint?, validation? }; threadId, fixingCommitSha
-                        and disposition are required on every entry.
+                        fingerprint?, validation? }; each entry carries exactly one
+                        of threadId or reviewId, plus fixingCommitSha and
+                        disposition. A tackled entry needs fixingCommitSha as the
+                        full 40-character SHA.
+                        A review-body work order (emit-fixer-work-order.mjs
+                        --review-id) takes a { reviewId, fixingCommitSha,
+                        disposition } entry written by the fixer; the verifier
+                        re-reads the review live (a changed body or a vanished
+                        review refuses), then posts one
+                        dev-loops:review-body-disposition marker comment citing the
+                        fixing commit unless a marker for it is already live. An
+                        untrusted author's marker fails marker_author_untrusted and
+                        is never posted again. A resolved thread whose replies cite
+                        only a short SHA fails resolved_short_sha_reply; a full-SHA
+                        reply on a resolved thread completes.
                         The handoff counts only with a matching fixer pull receipt,
                         when written at or after that pull. Its candidate head X
                         may precede live --head-sha H only after containment and
                         per-commit historical thread-site checks; uncertainty
                         names the thread for pre_approval_gate --known-findings.
-A review-body work order (emit-fixer-work-order.mjs --review-id) takes a handoff entry { reviewId,
-fixingCommitSha (full 40-char SHA), disposition } written by the fixer; the verifier re-reads the review
-live (a changed body or a vanished review refuses), then posts one dev-loops:review-body-disposition marker
-comment citing the fixing commit unless a trusted one is already live. A resolved thread whose replies cite
-only a short SHA fails resolved_short_sha_reply; a full-SHA reply on a resolved thread completes.
 Optional:
   --construct                 Construct the full worker's canonical report (ACT: from
                                authenticated completion input; THREAD: from the threads
@@ -616,17 +624,6 @@ function buildLiveThreads(parsed) {
   }));
 }
 
-// The fixing commits that trusted bare marker comments cite for `reviewId`, in the shape evaluateFixerDisposition reads.
-async function readReviewMarkerCommits(reviewId, { repo, pr }, { env, ghCommand, runChild }) {
-  if (!reviewId) return [];
-  const result = await runChild(ghCommand, ["api", `repos/${repo}/issues/${pr}/comments`, "--paginate", "--jq", ".[]"], env);
-  if (result.code !== 0) throw new Error(`gh command failed: ${result.stderr.trim() || `exit code ${result.code}`}`);
-  const markers = result.stdout.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
-    .filter((comment) => isTrustedDispositionAuthor(comment)).flatMap((comment) => parseReviewBodyDispositionMarkers(comment.body))
-    .filter((marker) => marker.reviewId === reviewId);
-  return [{ reviewId, markerCommits: markers.map((marker) => marker.fixSha) }];
-}
-
 // A judge-act item whose fingerprint marks an open inline gate thread is resolved by the fix
 // cycle: the handoff needs a disposition entry for that thread, never a threadless claim.
 // Gate-authored is the authenticated login on the thread ROOT comment, never marker text alone;
@@ -894,7 +891,7 @@ async function verifyFixerDispositionCore(
     handoff,
     liveThreads: buildLiveThreads(liveSnapshot),
     containment,
-    liveReviews: await readReviewMarkerCommits(reviewId, options, runtime),
+    liveReviews: await readReviewMarkerCommits(reviewId ? [reviewId] : [], options, runtime),
   });
   let evaluation = await evaluate();
 
@@ -1019,23 +1016,34 @@ async function verifyFixerDispositionCore(
   const postedBy = new Map();
   const unreplied = evaluation.incomplete.filter((entry) => entry.reviewId === reviewId && entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING);
   if (!options.check && unreplied.length > 0) {
+    const untrustedMarker = (id, expectedCommit, author) => ({ reviewId: id, expectedCommit, failedStep: FIXER_DISPOSITION_FAILED_STEP.MARKER_AUTHOR_UNTRUSTED, error: `the marker comment by ${author} for review ${id} is not by a trusted author (OWNER, MEMBER or COLLABORATOR); post the marker as an OWNER, MEMBER or COLLABORATOR identity and run the verifier under that identity; re-running under this identity changes nothing` });
+    const existing = await readReviewBodyMarkers([reviewId], options, runtime);
     for (const { reviewId: id, expectedCommit } of unreplied) {
+      // A marker for this review and commit that is live but not trusted never counts: post no second one.
+      const prior = existing.find((marker) => marker.reviewId === id && marker.fixSha === expectedCommit.toLowerCase());
+      if (prior) {
+        if (!prior.trusted) residualFailures.push(untrustedMarker(id, expectedCommit, prior.author ?? "an unknown identity"));
+        continue;
+      }
       try {
         const body = `<!-- dev-loops:review-body-disposition review=${id} fix=${expectedCommit} -->\nAddressed review ${id} in commit ${expectedCommit}.`;
         const posted = await runChild(ghCommand, ["api", `repos/${options.repo}/issues/${options.pr}/comments`, "-f", `body=${body}`], env);
         if (posted.code !== 0) throw new Error(posted.stderr.trim() || `exit code ${posted.code}`);
-        let login = "the posting identity";
-        try { login = JSON.parse(posted.stdout).user.login || login; } catch { /* the post response has no author */ }
-        postedBy.set(id, login);
+        // The trust decision reads the POST response, not a comment list that can lag behind the write.
+        let comment = null;
+        try { comment = JSON.parse(posted.stdout); } catch { /* the post response is unreadable: not trusted */ }
+        postedBy.set(id, { login: comment?.user?.login || "the posting identity", trusted: comment !== null && isTrustedDispositionAuthor(comment) });
         actions.push({ reviewId: id, ok: true, step: "marker_comment_posted" });
       } catch (error) {
         actions.push({ reviewId: id, ok: false, error: error instanceof Error ? error.message : String(error) });
       }
     }
     evaluation = await evaluate();
-    // The marker is live-read through trusted authors only: a post that did not count names its author and the remedy.
     for (const { reviewId: id, expectedCommit } of evaluation.incomplete.filter((entry) => entry.reviewId === reviewId && entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING && postedBy.has(entry.reviewId))) {
-      residualFailures.push({ reviewId: id, expectedCommit, failedStep: "marker_author_untrusted", error: `the marker comment by ${postedBy.get(id)} is not a trusted author (OWNER, MEMBER or COLLABORATOR); post the marker as a OWNER, MEMBER or COLLABORATOR identity, then re-run the verifier` });
+      const { login, trusted } = postedBy.get(id);
+      residualFailures.push(trusted
+        ? { reviewId: id, expectedCommit, failedStep: FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING, error: `the trusted marker comment by ${login} for review ${id} is not listed yet; re-run the verifier` }
+        : untrustedMarker(id, expectedCommit, login));
     }
   }
 
@@ -1049,7 +1057,7 @@ async function verifyFixerDispositionCore(
   return {
     // A failed residual-status reply is not delivered: nonzero exit naming the thread.
     ok: residualFailures.length === 0,
-    ...(residualFailures.length ? { error: `residual-status reply failed for thread(s) ${residualFailures.map((failure) => failure.threadId ?? failure.reviewId).join(", ")}; re-run the verifier` } : {}),
+    ...(residualFailures.length ? { error: residualReason(residualFailures) } : {}),
     repo: options.repo,
     pr: options.pr,
     headSha: options.headSha,
@@ -1059,10 +1067,19 @@ async function verifyFixerDispositionCore(
     incomplete,
     forbiddenActions: evaluation.forbiddenActions,
     nextAction: evaluation.nextAction,
-    reason: residualFailures.length > 0 ? `residual-status reply failed for thread(s) ${residualFailures.map((failure) => failure.threadId ?? failure.reviewId).join(", ")}; re-run the verifier`
+    reason: residualFailures.length > 0 ? residualReason(residualFailures)
       : deltaBlocked.size > 0 ? deltaBlockedReason(incomplete) : evaluation.reason,
     actions,
   };
+}
+
+// A thread residual names its threads; a review-body residual names the review and carries its own remedy.
+function residualReason(failures) {
+  const threads = failures.filter((failure) => failure.threadId);
+  return [
+    ...(threads.length ? [`residual-status reply failed for thread(s) ${threads.map((failure) => failure.threadId).join(", ")}; re-run the verifier`] : []),
+    ...failures.filter((failure) => !failure.threadId).map((failure) => `review ${failure.reviewId}: ${failure.failedStep}: ${failure.error}`),
+  ].join("; ");
 }
 
 // Re-derived from the remapped incomplete list so one output never carries two failedStep values.

@@ -427,6 +427,7 @@ test("normalizeFixerDispositionHandoff accepts a reviewId entry and refuses both
   assert.throws(handoff(reviewEntry(), reviewEntry()), /duplicate reviewId: PRR_R1/);
   assert.throws(handoff(reviewEntry({ fixingCommitSha: "ccccccc" })), /full 40-character SHA/);
   assert.throws(handoff(reviewEntry({ reviewId: "PRRT_T1" })), /not a review node id/);
+  assert.throws(handoff(reviewEntry({ fixingCommitSha: [FULL] })), /full 40-character SHA/);
 });
 
 test("a tackled thread entry needs the full 40-character SHA; a short SHA never reaches the evaluator", () => {

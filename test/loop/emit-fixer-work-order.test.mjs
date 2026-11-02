@@ -1349,6 +1349,22 @@ test("AC15: a Copilot review emits only when it is the latest one on the PR head
   });
 });
 
+test("AC15: two Copilot body-only blocking reviews that share one submitted_at refuse as not the latest", async () => {
+  await withFixture(async ({ head, emit }) => {
+    const first = copilotReviewFor(head);
+    const tied = copilotReviewFor(head, { node_id: "PRR_C2" });
+    await assert.rejects(emitReview(emit, [first, tied]), /not the latest Copilot review/);
+  });
+});
+
+test("--review-id refuses --phase commit_only and a review id the handoff normalizer would reject", async () => {
+  await withFixture(async ({ head, emit }) => {
+    await assert.rejects(emitReview(emit, [reviewFor(head)], { phase: "commit_only" }), /--review-id takes only --phase full.*re-run with --phase full/);
+    await assert.rejects(emitReview(emit, [reviewFor(head, { node_id: Buffer.from("017:PullRequestReview80").toString("base64") })]), /is not a review node id \(PRR_\.\.\.\)/);
+    assert.equal((await emitReview(emit, [reviewFor(head, { node_id: "PRR_kwDOabc123" })])).workOrder.source, "review-body");
+  });
+});
+
 test("AC6: a review-body unit pulls, and an edited snapshot makes it stale_dispatch", async () => {
   await withFixture(async ({ root, head, emit }) => {
     const unit = await emitReview(emit, [reviewFor(head)]);
