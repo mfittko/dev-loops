@@ -988,7 +988,8 @@ function stripQuotedLiterals(command) {
  * @param {string} command @returns {boolean}
  */
 function hasQuotePairingHazard(command) {
-  return /\\['"]/.test(command) || [...command.replace(/\\[\s\S]/g, "  ").matchAll(/`[^`]*`/g)].some(([span]) => [`'`, `"`].some((q) => span.split(q).length % 2 === 0)) || /(?:^|[\s;&|(])#[^\n]*['"]/.test(command) || segmentsHaveQuotedHeredoc(tokenizeShellCommand(command).segments);
+  const { segments, ticks } = tokenizeShellCommand(command);
+  return /\\['"]/.test(command) || ticks.some((span) => [`'`, `"`].some((q) => span.split(q).length % 2 === 0)) || /(?:^|[\s;&|(])#[^\n]*['"]/.test(command) || segmentsHaveQuotedHeredoc(segments);
 }
 
 /** Whether any heredoc body (including inside `$(...)`) contains a quote character. */
@@ -1013,6 +1014,7 @@ function segmentsHaveQuotedHeredoc(segments) {
 export function tokenizeShellCommand(command) {
   const n = command.length;
   const spans = [];
+  const ticks = []; // terminated backtick substitutions the tokenizer actually reads (not inert backticks in quotes' literals or comments)
   const pending = [];
   let i = 0;
   let incompleteAt = -1;
@@ -1023,6 +1025,7 @@ export function tokenizeShellCommand(command) {
     for (i++; i < n && command[i] !== "`"; i += command[i] === "\\" ? 2 : 1);
     if (i >= n) { fail(start); return command.slice(start); }
     i++;
+    ticks.push(command.slice(start, i));
     return command.slice(start, i);
   };
   const readSub = (word) => {
@@ -1149,7 +1152,7 @@ export function tokenizeShellCommand(command) {
   }
 
   const { segments } = parseSeq(false);
-  return { segments, spans, incomplete: incompleteAt >= 0, incompleteAt };
+  return { segments, spans, ticks, incomplete: incompleteAt >= 0, incompleteAt };
 }
 
 /**
