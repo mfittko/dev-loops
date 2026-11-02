@@ -107,6 +107,7 @@ const HAZARD_SHAPES = [
   [(f) => `echo "$(echo "'")" ; echo '${f}'`, [...LOOP_PREDICATES, "commandContainsInlineInterpreter"], "double-quoted $(...) holding a nested apostrophe: the regex paired the inner apostrophe with a later one; the stripper now blanks nothing"],
   [() => `gh pr edit 5 --title "$(echo "'")" --add-label 'x --body y'`, ["commandContainsInlineInterpreter"], "double-quoted $(...) holding a nested apostrophe inside a quoted wrapper leaves an unterminated substitution: the inline-interpreter scan fails closed (the PR-body edit is denied by both copies)"],
   [(f) => 'echo "`echo "\'"`" ; echo \'' + f + "'", LOOP_PREDICATES, "double-quoted backtick span holding a nested apostrophe: the stripper now blanks nothing"],
+  [(f) => "echo `echo \"'\" '`; echo '" + f + "'", LOOP_PREDICATES, "top-level backtick span holding interleaved even-count quotes: the regex paired a span quote with a later one; the stripper now blanks nothing"],
 ];
 const hazardRowsOf = (shape) => [shape(HAZARD_LOOP), ...[...LIVE_WRAPPERS, ...QUOTED_WRAPPERS].map((wrap) => wrap(shape(HAZARD_LOOP)))];
 const HAZARD_ROWS = [...new Set(HAZARD_SHAPES.flatMap(([shape]) => hazardRowsOf(shape)))];

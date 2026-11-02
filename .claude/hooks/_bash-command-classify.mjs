@@ -994,7 +994,7 @@ function hasQuotePairingHazard(command) {
     const inner = command.slice(start + 1, end - 1);
     return kind === "double" && /\$\(|`/.test(inner) && (inner.includes("'") || inner.split('"').length % 2 === 0); // a substitution holding a nested quote the old regex mispaired
   });
-  return nestedQuote || /\\['"]/.test(command) ||ticks.some((span) => [`'`, `"`].some((q) => span.split(q).length % 2 === 0)) || comments.some((text) => /['"]/.test(text)) || segmentsHaveQuotedHeredoc(segments);
+  return nestedQuote || /\\['"]/.test(command) || ticks.some((span) => /['"]/.test(span)) || comments.some((text) => /['"]/.test(text)) || segmentsHaveQuotedHeredoc(segments);
 }
 
 /** Whether any heredoc body (including inside `$(...)`) contains a quote character. */
