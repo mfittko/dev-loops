@@ -1045,9 +1045,23 @@ function allSegments(segments, out = []) {
   for (const seg of segments) { out.push(seg); for (const w of seg.words) for (const sub of w.subs) allSegments(sub.segments, out); }
   return out;
 }
-const GROUPING_WORDS = new Set(["{", "}", "(", ")", "do", "done", "then", "else", "elif", "fi", "case", "esac", ";;"]);
-/** Whether SEG opens or closes a group or compound body (`{ }`, `( )`, `do`/`done`, `then`/`fi`, `case`/`esac`, `f() {`): a pipe or redirect on the closer applies to the whole group. */
-const isGroupingSegment = (seg) => GROUPING_WORDS.has(rawHead(seg)) || /^[(}]|\(\)$/.test(rawHead(seg));
+const GROUPING_WORDS = new Set(["{", "}", "(", ")", "do", "done", "then", "else", "elif", "fi", "case", "esac", ";;", "time", "coproc", "function"]);
+/** Whether the raw word RAW holds an unquoted `(`, `)`, `{` or `}` outside a quote, `$(...)`, `${...}` or backtick span (`true)`, `f()(`, `{`). */
+function hasBareGrouping(raw) {
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (c === "\\") i++;
+    else if (c === "'") { const e = raw.indexOf("'", i + 1); if (e < 0) return false; i = e; }
+    else if (c === '"') { for (i++; i < raw.length && raw[i] !== '"'; i++) if (raw[i] === "\\") i++; }
+    else if (c === "`") { const e = raw.indexOf("`", i + 1); if (e < 0) return false; i = e; }
+    else if (c === "$" && raw[i + 1] === "{") { const e = raw.indexOf("}", i); if (e < 0) return false; i = e; }
+    else if (c === "$" && raw[i + 1] === "(") { let d = 0; for (i++; i < raw.length; i++) { if (raw[i] === "(") d++; else if (raw[i] === ")" && --d === 0) break; } }
+    else if ("(){}".includes(c)) return true;
+  }
+  return false;
+}
+/** Whether SEG opens or closes a group or compound body (`{ }`, `( )`, `do`/`done`, `then`/`fi`, `case`/`esac`, `f() {`, `time (`, `true)`): a pipe or redirect on the closer applies to the whole group. Any unquoted word counts, not only the head. */
+const isGroupingSegment = (seg) => seg.words.some((w) => GROUPING_WORDS.has(w.raw) || hasBareGrouping(w.raw));
 /** Pure read or file-handling heads that never run a file they are given. Every other head (`find -exec`, `make`, `xargs`, `git` and `gh`, which read config, hooks and aliases from disk) may reach the written file, so the body stays visible. */
 const FILE_SAFE_HEADS = new Set(["", "cat", "tee", "echo", "printf", "ls", "chmod", "rm", "mkdir", "cd", "touch", "mv", "cp", "true", "false", "test", "[", "wc", "grep", "head", "tail", "pwd"]);
 const escapeRe =(s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

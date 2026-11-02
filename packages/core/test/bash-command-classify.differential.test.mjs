@@ -224,6 +224,11 @@ const SALVAGED_DENY_ROWS = [
     `f() {\ncat <<'EOF'\n${body}\nEOF\n}\nf | sh`,
     `{\necho "$(cat <<'EOF'\n${body}\nEOF\n)"\n} | sh`,
     `{\necho "$(cat <<'EOF'\n${body}\nEOF\n)"\n} > l.sh; bash l.sh`,
+    // prefix-keyword subshells closed by an attached `)` (residue of the group-opener list)
+    `! (\ncat <<'EOF'\n${body}\nEOF\ntrue) | sh`,
+    `time (\ncat <<'EOF'\n${body}\nEOF\ntrue) | sh`,
+    `f()(\ncat <<'EOF'\n${body}\nEOF\ntrue)\nf | sh`,
+    `function f (\ncat <<'EOF'\n${body}\nEOF\ntrue)\nf | sh`,
   ]),
 ];
 
