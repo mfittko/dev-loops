@@ -206,8 +206,10 @@ test("runCli: --issue ticks the linked issue body via gh issue edit", async () =
   let editedBody;
   const runCapturing = async (cmd, args, env) => {
     if (args[0] === "issue" && args[1] === "edit") {
+      const inline = args.indexOf("--body");
       const idx = args.indexOf("--body-file");
-      if (idx !== -1) editedBody = readFileSync(args[idx + 1], "utf8");
+      if (inline !== -1) editedBody = args[inline + 1];
+      else if (idx !== -1) editedBody = readFileSync(args[idx + 1], "utf8");
     }
     return run(cmd, args, env);
   };
