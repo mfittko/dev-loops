@@ -62,6 +62,17 @@ test("a docs-only commit on top of the sealed chain is proven only after the ext
   }
 });
 
+test("a non-ASCII docs filename is classified by its real path, not a C-quoted one", async () => {
+  const { root, B } = await capFixture();
+  try {
+    const D = await commit(root, { "docs/café.md": "c\n" }, "docs");
+    const result = await extend(root, D);
+    assert.deepEqual({ ...result }, { ok: true, action: "chain_extended", chainEnd: B, candidateHead: D, files: ["docs/café.md"] });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a tests-only commit extends the chain", async () => {
   const { root } = await capFixture();
   try {
