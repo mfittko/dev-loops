@@ -695,11 +695,11 @@ export async function mergePr(options, runtime = {}) {
 
   const baseRefName = typeof prView?.baseRefName === "string" ? prView.baseRefName.trim() : "";
   const repoRoot = resolveRepoRoot(cwd);
-  const refuseBaseNotIntegrated = (reason, mergeClass) => {
+  const refuseBaseNotIntegrated = (reason, mergeClass, classFields = { mergeClass }) => {
     const error = new Error(`Merge preconditions not satisfied: base_not_integrated (${reason})`);
     error.mergePrFailure = {
       ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
-      mergeClass, failures: [{ precondition: "base_not_integrated", reason }],
+      ...classFields, failures: [{ precondition: "base_not_integrated", reason }],
     };
     throw error;
   };
@@ -741,8 +741,7 @@ export async function mergePr(options, runtime = {}) {
 
   // The only base + PR-head fetch of the merge; the ADR tripwire and the ancestry check reuse it.
   const fetchReason = resolveBaseFetchRefusal({ options, baseRefName, headSha: currentHeadSha, repoRoot, fetchPrHead, detectOriginSlug });
-  // --check collects this failure with the rest instead of stopping at it.
-  if (fetchReason !== null && !options.check) refuseBaseNotIntegrated(fetchReason, null);
+  // --check collects this failure with the rest; a real run raises it after the verdict so an escalated refusal names the approval.
 
   // A standing authorization is NOT established by config alone
   // (autonomy.humanMergeOnly:false authorizes nothing). The orchestrator asserts
@@ -840,7 +839,16 @@ export async function mergePr(options, runtime = {}) {
       ? { ...f, reason: `${f.reason}. If this PR was light-dispatched (and only then), re-run merge-pr with --lightweight so the composed lightweight round cap applies` }
       : f))
     : verdict.failures;
-  const approval = describeApproval({ verdict, headSha: currentHeadSha, sizeClass: evidence.sizeOutcome });
+  // Unreadable evidence, or evidence for another head, has no size outcome for this head: sizeClass is unknown, and so is mergeClass unless a stable release forces escalated.
+  const approval = {
+    ...describeApproval({ verdict, headSha: currentHeadSha, sizeClass: evidence.sizeOutcome }),
+    ...(evidenceHeadMismatch || (evidence.ok !== true && !evidence.sizeOutcome)
+      ? { sizeClass: null, ...(options.stableRelease === true ? {} : { mergeClass: null }) }
+      : {}),
+  };
+  // Escalated with no head-pinned approval: name the class, the exact approval line and the size class.
+  const refusalClassFields = verdict.mergeClass === MERGE_CLASS.ESCALATED ? approval : { mergeClass: approval.mergeClass };
+  if (fetchReason !== null && !options.check) refuseBaseNotIntegrated(fetchReason, null, refusalClassFields);
 
   if (options.check) {
     // Read-only: the same remaining steps run, but the ADR waiver re-issue (a PR body write) is refused,
@@ -869,10 +877,6 @@ export async function mergePr(options, runtime = {}) {
       headSha: currentHeadSha,
       approvedBy: options.humanApprovedBy ?? null,
       ...approval,
-      // Unreadable evidence, or evidence for another head, has no size outcome for this head: sizeClass is unknown, and so is mergeClass unless a stable release forces escalated.
-      ...(evidenceHeadMismatch || (evidence.ok !== true && !evidence.sizeOutcome)
-        ? { sizeClass: null, ...(options.stableRelease === true ? {} : { mergeClass: null }) }
-        : {}),
       ...(humanMergeOnly ? { humanMergeOnly: true } : {}),
       approverAssumed,
       approvalVia: verdict.approvalVia,
@@ -891,8 +895,7 @@ export async function mergePr(options, runtime = {}) {
       pr: options.pr,
       headSha: currentHeadSha,
       approvedBy: options.humanApprovedBy,
-      // Escalated with no head-pinned approval: name the class, the exact approval line and the size class.
-      ...(verdict.mergeClass === MERGE_CLASS.ESCALATED ? approval : { mergeClass: verdict.mergeClass }),
+      ...refusalClassFields,
       failures,
       copilotConvergenceState: verdict.copilotConvergenceState,
       copilotDisposition: verdict.copilotDisposition,

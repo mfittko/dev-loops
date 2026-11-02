@@ -1432,6 +1432,30 @@ test("a refused non-check run on the PR 2928 shape names escalated, the exact li
   assert.equal(mergeCalls(calls).length, 0);
 });
 
+test("a non-check run on the PR 2928 shape with a failing PR head fetch still names the approval line and size class", async () => {
+  const { runtime, calls } = makeRuntime({ evidence: ESCALATED_EVIDENCE });
+  runtime.fetchPrHead = () => { throw new Error("network down"); };
+  let threw = null;
+  try { await mergePr(baseOptions({ standingAuthorization: false }), runtime); } catch (e) { threw = e; }
+  const failure = threw.mergePrFailure;
+  assert.equal(failure.failures[0].precondition, "base_not_integrated");
+  assert.equal(failure.mergeClass, "escalated");
+  assert.equal(failure.approvalPath, "comment_marker");
+  assert.equal(failure.approveMergeLine, `approve merge ${HEAD}`);
+  assert.equal(failure.sizeClass, "escalate");
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("a non-check refusal with evidence for another head reports null sizeClass and mergeClass", async () => {
+  const { runtime } = makeRuntime({ evidence: ESCALATED_EVIDENCE, evidenceHead: "b".repeat(40) });
+  let threw = null;
+  try { await mergePr(baseOptions({ standingAuthorization: false }), runtime); } catch (e) { threw = e; }
+  const failure = threw.mergePrFailure;
+  assert.ok(failure.failures.some((f) => f.precondition === "gate_evidence"));
+  assert.equal(failure.sizeClass ?? null, null);
+  assert.equal(failure.mergeClass, null);
+});
+
 test("main --check exits 0 and prints the JSON when preconditions fail", async () => {
   const { runtime } = makeRuntime({ evidence: ESCALATED_EVIDENCE });
   const out = captureStream();
