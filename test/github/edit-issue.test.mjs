@@ -26,6 +26,20 @@ test("editIssue: refuses a body write that adds an adr-tripwire:allow line (PR b
   assert.equal(calls.length, 0);
 });
 
+test("editIssue (#2898): refuses to untick a checked row unless --allow-untick", async () => {
+  const live = "## AC\n- [x] Tests pass\n- [x] Docs";
+  const attempt = (body, extra = {}) => {
+    const stub = makeGhStub([{ code: 0, stdout: "u\n", stderr: "" }], { repeatLastOnOverflow: true });
+    const run = (cmd, args, env) =>
+      args[1] === "view" ? Promise.resolve({ code: 0, stdout: JSON.stringify({ body: live }), stderr: "" }) : stub.run(cmd, args, env);
+    return editIssue({ repo: "o/n", issue: 7, body, addAssignees: [], removeAssignees: [], ...extra }, { run }).then(() => stub.calls);
+  };
+  await assert.rejects(() => attempt("## AC\n- [ ] Tests pass\n- [x] Docs"), /CHECKLIST-SCOPE-ONE-MODEL.*1 checked row.*#7.*"Tests pass"/s);
+  assert.equal((await attempt("## AC\n- [x] Tests pass\n- [x] Docs\n- [ ] New")).length, 1);
+  assert.equal((await attempt("## AC\n- [ ] Tests pass\n- [x] Docs", { allowUntick: true })).length, 1);
+  assert.equal(parseEditIssueCliArgs(["--repo", "o/n", "--issue", "1", "--body", "x", "--allow-untick"]).allowUntick, true);
+});
+
 test("parseEditIssueCliArgs: requires --repo, --issue and at least one edit", () => {
   assert.throws(() => parseEditIssueCliArgs(["--repo", "o/n"]), /requires both --repo/);
   assert.throws(() => parseEditIssueCliArgs(["--repo", "o/n", "--issue", "1"]), /at least one of/);

@@ -7,6 +7,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { editIssue as coreEditIssue } from "@dev-loops/core/github/issue-ops";
 import { detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
+import { untickedRows } from "./edit-pr.mjs";
 import { parseArgs } from "node:util";
 import {
   JQ_OUTPUT_PARSE_OPTIONS,
@@ -40,6 +41,8 @@ At least one edit:
   --reason <completed|not_planned>
                                 Close reason; only valid together with
                                 --state closed
+  --allow-untick                Allow a body that unticks or removes a checked
+                                row (CHECKLIST-SCOPE-ONE-MODEL, #2898)
   --enforce-grill               Opt-in GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628):
                                 refuse a body that embeds grill
                                 transcript/synthesis/Q&A headings.
@@ -72,6 +75,7 @@ export function parseEditIssueCliArgs(argv) {
       state: { type: "string" },
       reason: { type: "string" },
       "enforce-grill": { type: "boolean" },
+      "allow-untick": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -91,6 +95,7 @@ export function parseEditIssueCliArgs(argv) {
     state: undefined,
     reason: undefined,
     enforceGrill: false,
+    allowUntick: false,
     jq: undefined,
     silent: false,
   };
@@ -185,6 +190,10 @@ export function parseEditIssueCliArgs(argv) {
       options.enforceGrill = true;
       continue;
     }
+    if (token.name === "allow-untick") {
+      options.allowUntick = true;
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -243,6 +252,10 @@ export async function editIssue(options, { env = process.env, ghCommand = "gh", 
     }
     const waiverRefusal = waiverLineChangeRefusal({ currentBody: baseline, nextBody: body, action: "write" });
     if (waiverRefusal) throw new Error(waiverRefusal);
+    const unticked = untickedRows(baseline, body);
+    if (unticked.length > 0 && !options.allowUntick) {
+      throw new Error(`CHECKLIST-SCOPE-ONE-MODEL: refusing to untick or remove ${unticked.length} checked row(s) on #${options.issue} (unticked, deleted, reworded, or moved into or out of its AC/DoD scope): ${unticked.map((l) => JSON.stringify(l)).join("; ")}. Edit from the current body, or pass --allow-untick for a deliberate change.`);
+    }
     if (options.bodyFile === "-") options = { ...options, body, bodyFile: undefined };
   }
   // GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628): behind the --enforce-grill opt-in,
