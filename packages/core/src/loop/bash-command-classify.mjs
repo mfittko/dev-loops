@@ -1061,7 +1061,7 @@ function hasBareGrouping(raw) {
   return false;
 }
 /** Whether SEG opens or closes a group or compound body (`{ }`, `( )`, `do`/`done`, `then`/`fi`, `case`/`esac`, `f() {`, `time (`, `true)`): a pipe or redirect on the closer applies to the whole group. Any unquoted word counts, not only the head. */
-const isGroupingSegment = (seg) => seg.words.some((w) => GROUPING_WORDS.has(w.raw) || hasBareGrouping(w.raw));
+const isGroupingSegment = (seg) => seg.words.some((w) => GROUPING_WORDS.has(w.raw) || GROUPING_WORDS.has(w.raw.split(/[<>&]/)[0]) || hasBareGrouping(w.raw)); // the tokenizer keeps `<`, `>` in a word: `do>&2`, `done>l.sh` still hold a reserved word
 /** Pure read or file-handling heads that never run a file they are given. Every other head (`find -exec`, `make`, `xargs`, `git` and `gh`, which read config, hooks and aliases from disk) may reach the written file, so the body stays visible. */
 const FILE_SAFE_HEADS = new Set(["", "cat", "tee", "echo", "printf", "ls", "chmod", "rm", "mkdir", "cd", "touch", "mv", "cp", "true", "false", "test", "[", "wc", "grep", "head", "tail", "pwd"]);
 const escapeRe =(s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1120,7 +1120,7 @@ function dataHeredocs(segments, inPayload = false, out = [], root = segments, in
     if (seg.words.some((w) => /^\d*[<>]*\(/.test(w.value))) return; // process substitution `>(sh)` or a `(`-target: the body is piped to a command
     const targets = writeTargets(seg);
     // the check runs for any redirect word (parsed or not) and under any `exec` segment, which can redirect the whole shell
-    const runsTarget = (targets.length > 0 || hasRedirect(seg) || allSegments(root).some((s) => segmentHead(s) === "exec")) && writtenFileMayRun(seg, targets, root);
+    const runsTarget = (targets.length > 0 || hasRedirect(seg) || allSegments(root).some((s) => s.words.some((x) => x.raw.split(/[<>&]/)[0] === "exec" || /^[^'"]*>/.test(x.raw)))) && writtenFileMayRun(seg, targets, root);
     for (const h of seg.heredocs) if (h.closed && !runsTarget && (h.quoted || !/\$\(|`/.test(h.body))) out.push(h);
   });
   return out;
