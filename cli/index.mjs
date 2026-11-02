@@ -717,8 +717,73 @@ function parseTopLevelCommand(argv) {
   return { kind: "malformed", message: `Unrecognized command: ${cmd}.` };
 }
 
+// CLI-CHECKOUT-DELEGATION: an installed CLI runs the source checkout's CLI for these categories.
+const CHECKOUT_DELEGATED_CATEGORIES = new Set(["gate", "loop", "pr"]);
+
+export function findSkewedCheckout(cwd) {
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    let pkg = null;
+    try { pkg = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")); } catch { /* no package.json here */ }
+    if (pkg?.name === "dev-loops" && typeof pkg.version === "string") {
+      const version = pkg.version;
+      try {
+        realpathSync(path.join(dir, "cli/index.mjs"));
+        const root = realpathSync(dir);
+        return root === realpathSync(REPO_ROOT) ? null : { root, version };
+      } catch { /* no CLI entry: keep walking */ }
+    }
+    if (path.dirname(dir) === dir) return null;
+  }
+}
+
+// Interactive routes (loop claude-launch) need the real TTY; injected streams get the piped path.
+export function delegationStdio(stdout, stderr) {
+  return stdout === process.stdout && stderr === process.stderr ? "inherit" : ["ignore", "pipe", "pipe"];
+}
+
+// Ctrl-C reaches the whole foreground group; an inherited-stdio child owns the terminal, so this wrapper must stay alive.
+export function withSigintGuard(stdio, fn) {
+  if (stdio !== "inherit") return fn();
+  const ignoreSigint = () => {};
+  process.on("SIGINT", ignoreSigint);
+  try { return fn(); } finally { process.off("SIGINT", ignoreSigint); }
+}
+
+async function delegateToCheckout({ argv, cwd, env, stdout, stderr, spawnMaxBuffer, execPath, alreadyDelegated }) {
+  if (alreadyDelegated || !CHECKOUT_DELEGATED_CATEGORIES.has(argv[0])) return null;
+  const checkout = findSkewedCheckout(cwd);
+  if (checkout === null) return null;
+  const installed = readOwnVersion() ?? "unknown";
+  const entry = path.join(checkout.root, "cli/index.mjs");
+  if (installed !== checkout.version) {
+    writeLines(stderr, [`[dev-loops] version skew: installed ${installed}, checkout ${checkout.version}; running ${entry} (CLI-CHECKOUT-DELEGATION).`]);
+  }
+  const stdio = delegationStdio(stdout, stderr);
+  const result = withSigintGuard(stdio, () => spawnSync(execPath, [entry, ...argv], {
+    cwd,
+    encoding: "utf8",
+    stdio,
+    maxBuffer: spawnMaxBuffer,
+    env: { ...env, DEVLOOPS_CHECKOUT_DELEGATED: "1" },
+  }));
+  if (result.error?.code === "ENOBUFS") {
+    writeLines(stderr, [`child_output_too_large: the checkout CLI output exceeded the ${spawnMaxBuffer}-byte wrapper buffer.`]);
+    return 1;
+  }
+  if (result.error) {
+    // Lazy: the refusal module loads only on this error path and has no @dev-loops/core dependency.
+    const { checkoutDelegationRefusal } = await import("../scripts/lib/checkout-delegation-refusal.mjs");
+    writeLines(stderr, [checkoutDelegationRefusal({ installed, checkoutVersion: checkout.version, root: checkout.root, code: result.error.code ?? result.error.message, argv })]);
+    return 1;
+  }
+  if (result.stdout) stdout.write(result.stdout);
+  if (result.stderr) stderr.write(result.stderr);
+  return result.status ?? 1;
+}
+
 export async function runCli({
   argv = process.argv.slice(2),
+  env = process.env,
   stdout = process.stdout,
   stderr = process.stderr,
   runtime,
@@ -728,7 +793,14 @@ export async function runCli({
   fetchLatestVersion,
   // Child-output buffer for routed subcommands.
   spawnMaxBuffer = SPAWN_MAX_BUFFER,
+  // Test-only seam: a nonexistent path forces a checkout start failure.
+  execPath = process.execPath,
 } = {}) {
+  // The guard must not reach grandchildren: read it, then drop it from the process env.
+  const alreadyDelegated = Boolean(env.DEVLOOPS_CHECKOUT_DELEGATED);
+  if (env === process.env) delete process.env.DEVLOOPS_CHECKOUT_DELEGATED;
+  const delegated = await delegateToCheckout({ argv, cwd, env, stdout, stderr, spawnMaxBuffer, execPath, alreadyDelegated });
+  if (delegated !== null) return delegated;
   const fromTop = parseTopLevelCommand(argv);
 
   switch (fromTop.kind) {
