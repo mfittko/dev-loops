@@ -952,7 +952,7 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
   if (granted) return ALLOW;
   return deny(grants.length === 0
     ? "no current fixer work-order pull grants a mutation authority. A pull line run with a prefix, suffix, redirect or `cd` records no grant; run the exact dispatched pull line again, alone. " +
-      "The coordinator emits the work order and dispatches its pointer: `dev-loops-run scripts/loop/emit-fixer-work-order.mjs` with `--act-list-file <path> --gate <gate>`, `--threads-file <path>` or `--review-id <review node id>`"
+      "The coordinator emits the work order and dispatches its pointer: `dev-loops-run scripts/loop/emit-fixer-work-order.mjs` with `--act-list-file <path> --gate <gate>`, `--threads-file <path>`, `--review-id <review node id>` or `--ci-file <path>`"
     : `no current pull grants path ${JSON.stringify(rel)} on branch ${JSON.stringify(checkout.branch)}`);
 }
 
