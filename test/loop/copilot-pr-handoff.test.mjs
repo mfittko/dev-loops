@@ -3065,6 +3065,9 @@ test("runHandoff never enters a CI-wait on a DIRTY branch — stops, integration
     assert.equal(result.requestWatchContract.watchEntryConfirmed, false);
     assert.match(result.nextAction, /cannot enter a CI-wait/);
     assert.match(result.nextAction, /FACADE-NEVER-CI-WAIT-WHILE-DIRTY/);
+    // No env run id: the blocked base pickup still surfaces the skipped release and its remedy.
+    assert.equal(result.runnerRelease.status, "skipped_no_async_run_id");
+    assert.match(result.runnerRelease.remedy, /handoff --repo owner\/repo --pr 17 --run-id/);
   } finally {
     process.env.PATH = originalPath;
   }

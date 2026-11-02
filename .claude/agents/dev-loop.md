@@ -119,7 +119,7 @@ Prefix every `gate ...` writer call (`gate upsert-verdict`, `gate detect-evidenc
 
 ### Releasing the PR claim at a terminal stop
 
-Prefix every `loop handoff`, `loop gate-coordination` and other terminal-reaching call with `DEVLOOPS_RUN_ID=<the id used at claim>`, so the automatic release at the terminal stop finds your identity. When a terminal result carries `runnerRelease.status: skipped_no_async_run_id` and you claimed the PR, run the explicit handoff below with `--run-id` and record its status in the hand-back (the handoff is a safe no-op, status `handoff_noop`, when you hold no claim) (`RUNNER-HANDOFF-TEARDOWN` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
+Prefix every `loop handoff`, `loop gate-coordination` and other terminal-reaching call with `DEVLOOPS_RUN_ID=<the id used at claim>`, so the automatic release at the terminal stop finds your identity. When a terminal result carries `runnerRelease.status: skipped_no_async_run_id` and you claimed the PR, run the explicit handoff below with `--run-id` and record its status in the hand-back (the handoff writes nothing when you hold no claim: status `handoff_noop` with no owner, `ownership_lost` with exit 1 when another run holds the claim) (`RUNNER-HANDOFF-TEARDOWN` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
 
 ### Releasing the PR claim before the hand-back
 

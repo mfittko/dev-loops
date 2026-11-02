@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { realpathSync } from "node:fs";
+import { constants as fsConstants, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -2074,11 +2074,12 @@ test("native Codex handoff with no id at all names the verified thread identity,
 // Each read has its own FIFO: the next one is renamed over the path while the current writer still holds
 // its end open, so the reader sees EOF only after the path already points at the next FIFO. A writer
 // open blocks until its reader opens. The order is a data-flow guarantee, with no timing.
-async function feedStateFileReads(filePath, contents) {
+// A read-count drift fails `done` with a named message after `timeoutMs` and releases any blocked FIFO open.
+async function feedStateFileReads(filePath, contents, { timeoutMs = 5000 } = {}) {
   await rm(filePath);
   await execFileAsync("mkfifo", [filePath]);
   // Resolves to `{ done }`: the FIFO exists before the caller starts the reader; `done` settles after the last write.
-  const done = (async () => {
+  const writer = (async () => {
     for (const [index, content] of contents.entries()) {
       const handle = await open(filePath, "w");
       try {
@@ -2093,8 +2094,29 @@ async function feedStateFileReads(filePath, contents) {
       }
     }
   })();
+  writer.catch(() => {}); // a writer failing after the timeout is already reported by `done`
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(async () => {
+      // A non-blocking read-write open releases a writer or reader open that waits on the current FIFO.
+      try { (await open(filePath, fsConstants.O_RDWR | fsConstants.O_NONBLOCK)).close(); } catch { /* nothing pending */ }
+      reject(new Error(`feedStateFileReads: the code under test did not read the state file exactly ${contents.length} time(s)`));
+    }, timeoutMs);
+  });
+  const done = Promise.race([writer, timeout]).finally(() => clearTimeout(timer));
   return { done };
 }
+
+test("feedStateFileReads fails with a named message when the code reads fewer times than fed", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-feed-drift-"));
+  try {
+    const filePath = path.join(cwd, "state.json");
+    await writeFile(filePath, "x");
+    const { done } = await feedStateFileReads(filePath, ["a", "b"], { timeoutMs: 200 });
+    assert.equal(await readFile(filePath, "utf8"), "a");
+    await assert.rejects(done, /did not read the state file exactly 2 time\(s\)/);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
 
 test("locked re-check ownership_lost refusal names the owner liveness", async () => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-locked-verdict-"));
@@ -2184,13 +2206,15 @@ test("pinObservedClaim coerces a non-string member to null", () => {
 test("the coordinator prompt prefixes terminal-reaching calls with the claim run id and runs the explicit handoff when the release was skipped", async () => {
   const prompt = await readFile(new URL("../../agents/dev-loop.agent.md", import.meta.url), "utf8");
   assert.match(prompt, /Prefix every `loop handoff`, `loop gate-coordination`[^\n]*`DEVLOOPS_RUN_ID=<the id used at claim>`/);
-  assert.match(prompt, /runnerRelease\.status: skipped_no_async_run_id/);
+  assert.match(prompt, /skipped_no_async_run_id[^\n]*run the explicit handoff[^\n]*--run-id/);
+  assert.match(prompt, /`handoff_noop` with no owner, `ownership_lost` with exit 1 when another run holds the claim/);
 });
 
 test("a skipped automatic release names the explicit handoff command", async () => {
   const skipped = await releaseAsyncRunnerOwnership({ repo: "owner/repo", pr: 17, env: {} });
   assert.equal(skipped.status, "skipped_no_async_run_id");
   assert.match(skipped.remedy, /pr-runner-coordination\.mjs handoff --repo owner\/repo --pr 17 --run-id/);
+  assert.match(skipped.remedy, /`handoff_noop` with no owner, `ownership_lost` with a foreign owner/);
 });
 
 test("claim refusal wording follows the injected clock and max age, not the host", async () => {
