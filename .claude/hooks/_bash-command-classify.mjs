@@ -1024,7 +1024,6 @@ function payloadWordRanges(segments, out = []) {
   return out;
 }
 
-const SCRIPT_RUNNER_HEADS = new Set(["sh", "bash", "zsh", "dash", "ksh", "node", "bun", "python", "python3", "perl", "ruby", ".", "source", "eval"]);
 const rawHead = (seg) => seg.words.find((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op)?.value ?? "";
 const segmentHead = (seg) => rawHead(seg).split("/").pop();
 const REDIRECT_RE = /^\d*(?:&>>?|<>|>>?&?)\|?(.*)$/s;
@@ -1037,49 +1036,6 @@ function writeTargets(seg) {
     else if (segmentHead(seg) === "tee" && k > 0 && !w.op && !w.value.startsWith("-")) targets.push(w.value);
   });
   return targets.filter((t) => t && !/^\d+$|^-$/.test(t)).map((t) => t.replace(/^\.\//, ""));
-}
-/** Whether SEG carries a redirect word, parsed to a target or not. */
-const hasRedirect = (seg) => seg.words.some((w) => REDIRECT_RE.test(w.value));
-
-/** Every segment of SEGMENTS, nested substitutions included. */
-function allSegments(segments, out = []) {
-  for (const seg of segments) { out.push(seg); for (const w of seg.words) for (const sub of w.subs) allSegments(sub.segments, out); }
-  return out;
-}
-const GROUPING_WORDS = new Set(["{", "}", "(", ")", "do", "done", "then", "else", "elif", "fi", "case", "esac", ";;", "time", "coproc", "function"]);
-/** Whether the raw word RAW holds an unquoted `(`, `)`, `{` or `}` outside a quote, `$(...)`, `${...}` or backtick span (`true)`, `f()(`, `{`). */
-function hasBareGrouping(raw) {
-  for (let i = 0; i < raw.length; i++) {
-    const c = raw[i];
-    if (c === "\\") i++;
-    else if (c === "'") { const e = raw.indexOf("'", i + 1); if (e < 0) return false; i = e; }
-    else if (c === '"') { for (i++; i < raw.length && raw[i] !== '"'; i++) if (raw[i] === "\\") i++; }
-    else if (c === "`") { const e = raw.indexOf("`", i + 1); if (e < 0) return false; i = e; }
-    else if (c === "$" && raw[i + 1] === "{") { const e = raw.indexOf("}", i); if (e < 0) return false; i = e; }
-    else if (c === "$" && raw[i + 1] === "(") { let d = 0; for (i++; i < raw.length; i++) { if (raw[i] === "(") d++; else if (raw[i] === ")" && --d === 0) break; } }
-    else if ("(){}".includes(c)) return true;
-  }
-  return false;
-}
-/** Whether SEG opens or closes a group or compound body (`{ }`, `( )`, `do`/`done`, `then`/`fi`, `case`/`esac`, `f() {`, `time (`, `true)`): a pipe or redirect on the closer applies to the whole group. Any unquoted word counts, not only the head. */
-const isGroupingSegment = (seg) => seg.words.some((w) => GROUPING_WORDS.has(w.raw) || GROUPING_WORDS.has(w.raw.split(/[<>&]/)[0]) || hasBareGrouping(w.raw)); // the tokenizer keeps `<`, `>` in a word: `do>&2`, `done>l.sh` still hold a reserved word
-/** Pure read or file-handling heads that never run a file they are given. Every other head (`find -exec`, `make`, `xargs`, `git` and `gh`, which read config, hooks and aliases from disk) may reach the written file, so the body stays visible. */
-const FILE_SAFE_HEADS = new Set(["", "cat", "tee", "echo", "printf", "ls", "chmod", "rm", "mkdir", "cd", "touch", "mv", "cp", "true", "false", "test", "[", "wc", "grep", "head", "tail", "pwd"]);
-const escapeRe =(s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-/**
- * Fail closed: true when the file SEG writes may be run elsewhere in ROOT. That holds when a target is a variable, `~`, glob or `..` path;
- * when any other segment is headed by a command outside FILE_SAFE_HEADS (a script runner, `eval`, a path, `git`, `exec`); or when any other
- * word or heredoc body names a target (or its basename) as a path-bounded substring (`bash -c 'bash tmp/l.sh'`, `chmod +x tmp/l.sh`).
- * A heredoc body is therefore data only when every other segment is a cat/tee heredoc or a pure read head.
- */
-function writtenFileMayRun(seg, targets, root) {
-  if (targets.some((t) => /[$~*?]|(?:^|\/)\.\.(?:\/|$)/.test(t))) return true;
-  const others = allSegments(root).filter((s) => s !== seg);
-  if (others.some((s) => SCRIPT_RUNNER_HEADS.has(segmentHead(s)) || /[/$~*?]/.test(rawHead(s)) || !FILE_SAFE_HEADS.has(segmentHead(s)))) return true;
-  const own = new Set(seg.words);
-  const texts = [...allWords(root).filter((w) => !own.has(w)).map((w) => w.value), ...others.flatMap((s) => s.heredocs.map((h) => h.body))];
-  const names = targets.flatMap((t) => [t, t.split("/").pop()]).filter(Boolean).map((t) => new RegExp(`(?<![\\w.-])${escapeRe(t)}(?![\\w.-])`));
-  return texts.some((text) => names.some((re) => re.test(text)));
 }
 
 const TEXT_FLAG_RE = /^(?:-m|--message|--body|--title|--notes)$/;
@@ -1105,24 +1061,21 @@ function readsTextFromStdin(seg, head) {
 
 /**
  * Heredocs whose body is data (issue 2442 item 8): a `cat` or `tee` heredoc (or a `git commit -F -`/`gh pr comment --body-file -` message, `readsTextFromStdin`) that is closed, whose delimiter is quoted or whose body has no
- * `$(`/backtick, whose segment is not piped onward, that sits in no `-c`/`eval`/here-string payload, and whose written file may not run
- * (`writtenFileMayRun`, run for any redirect or `exec`: every other segment is a cat/tee heredoc or a pure read head, and no other word or heredoc body names the file).
+ * `$(`/backtick, whose segment is not piped onward, and that sits in no `-c`/`eval`/here-string payload.
+ * Structural rule: the whole command is that one segment (or the one `cat` segment inside the one `git commit -m "$(...)"` segment). Any multi-segment command keeps every heredoc body visible, so a later segment that runs a written file never sees a blanked body.
  * Inside a `$(...)` the host must be an inert `echo`/`printf`/`git`/`gh` segment that writes no file and carries no `-c`/alias override (`substitutionIsInert`).
  * Every other body executes and stays visible.
  * @returns {object[]}
  */
 function dataHeredocs(segments, inPayload = false, out = [], root = segments, inertParent = true) {
-  if (root === segments && allSegments(root).some(isGroupingSegment)) return out; // fail closed: the tokenizer does not model groups, so a closer's pipe or redirect would reach a blanked body
+  if (segments.length !== 1) return out; // multi-segment: a later segment may run what the heredoc writes
   segments.forEach((seg) => {
     const head = segmentHead(seg);
     const hostOk = inertParent && !seg.pipedOut && INERT_SUBSTITUTION_HOSTS.has(head) && writeTargets(seg).length === 0;
     seg.words.forEach((w, k) => w.subs.forEach((sub) => dataHeredocs(sub.segments, inPayload || isPayloadWord(seg.words, k), out, root, hostOk && substitutionIsInert(seg, k, head))));
     if (!inertParent || inPayload || seg.pipedOut || (head !== "cat" && head !== "tee" && !readsTextFromStdin(seg, head))) return; // `git -c alias.r='!sh' r <<EOF` runs its body
     if (seg.words.some((w) => /^\d*[<>]*\(/.test(w.value))) return; // process substitution `>(sh)` or a `(`-target: the body is piped to a command
-    const targets = writeTargets(seg);
-    // the check runs for any redirect word (parsed or not) and under any `exec` segment, which can redirect the whole shell
-    const runsTarget = (targets.length > 0 || hasRedirect(seg) || allSegments(root).some((s) => s.words.some((x) => x.raw.split(/[<>&]/)[0] === "exec" || /^[^'"]*>/.test(x.raw)))) && writtenFileMayRun(seg, targets, root);
-    for (const h of seg.heredocs) if (h.closed && !runsTarget && (h.quoted || !/\$\(|`/.test(h.body))) out.push(h);
+    for (const h of seg.heredocs) if (h.closed && (h.quoted || !/\$\(|`/.test(h.body))) out.push(h);
   });
   return out;
 }

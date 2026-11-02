@@ -1699,6 +1699,22 @@ test("slice 2: a written script run through a wrapper, runner payload, glob or a
   ]) assert.equal(commandContainsInlineInterpreter(c), true, c);
 });
 
+test("slice 2: any multi-segment command keeps every heredoc body visible, whatever hides the exec redirect (#2442)", () => {
+  for (const c of [
+    "eval 'exec >l.sh'\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
+    "eval \"exec >l.sh\"\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
+    ". /dev/stdin <<< 'exec >l.sh'\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
+    "source /dev/stdin <<< 'exec >l.sh'\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
+    "x='exec >l.sh'; $x\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
+    "bash -c 'exec >l.sh'\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
+    "e'x'ec \">\"l.sh\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
+    "x='exec >l.sh'; eval \"$x\"\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
+    "exec >l.sh; echo \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"; bash l.sh",
+  ]) assert.equal(commandContainsInlineInterpreter(c), true, c);
+  assert.equal(commandIsSleepPollLoop("eval 'exec >l.sh'\ncat <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF\nbash l.sh"), true);
+  assert.equal(commandContainsDetachedWaitTool("eval 'exec >l.sh'\ncat <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF\nbash l.sh"), true);
+});
+
 test("slice 2: quoted literals and cat/tee heredoc bodies that name an interpreter are data; payloads stay visible (#2442)", () => {
   for (const c of [
     "cat > tmp/f <<'EOF'\nnode -e 'x'\nEOF",
