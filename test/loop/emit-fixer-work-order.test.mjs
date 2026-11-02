@@ -29,7 +29,11 @@ import { sealDeltaFixture } from "./_seal-fixture.mjs";
 
 // Seals a delta result file that exists and parses as an object with heads; fixtures that pin malformed results stay unsealed.
 const sealIfPresent = (tmpRoot, file) => {
-  try { if (file && JSON.parse(readFileSync(file, "utf8")).reviewBaselineHead) sealDeltaFixture(tmpRoot, file); } catch { /* not a sealable fixture */ }
+  let parsed;
+  try { parsed = file ? JSON.parse(readFileSync(file, "utf8")) : null; } catch (error) {
+    if (error?.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error; // only an absent or unparsable fixture stays unsealed
+  }
+  if (parsed?.reviewBaselineHead) sealDeltaFixture(tmpRoot, file); // a seal failure surfaces
 };
 
 const EMITTER = path.resolve("scripts/loop/emit-fixer-work-order.mjs");
@@ -2315,6 +2319,7 @@ for (const route of ["THREAD", "ACT", "HISTORICAL_CONSTRUCT", "LEGACY", "AUTHORI
       await writeFile(files.actList, JSON.stringify(act));
       const coverageIdentity = completion && !legacy ? { siteCoverageDigest: sha256Hex(completion.siteCoverage).slice(7) } : {};
       await writeFile(files.delta, JSON.stringify(deltaResultFor(head, { actSetId, actionableItems, ...legacy ? { candidateHead: candidate, outcome: "locally_clear" } : {}, ...coverageIdentity })));
+      sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta); // the sealed bytes are final before the historical emitter reads them
       await writeRecord({ candidateHead: candidate, actSetId, invocation: legacy ? 2 : 3, outcome: legacy ? "locally_clear" : "bounded_out", nextStep: legacy ? "push" : "push_to_gate", items: actionableItems.map(({ ref, status }) => ({ ref, status })), ...coverageIdentity });
     }
     let unit = await oldEmitter.emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, phase: "full", ...(route === "THREAD" ? { threadsFile: files.threads } : { actListFile: files.actList, gate: "draft_gate", deltaResult: files.delta }), cwd: wt, executionIdentity: nextExecution(), fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });

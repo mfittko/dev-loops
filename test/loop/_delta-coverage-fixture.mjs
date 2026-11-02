@@ -23,10 +23,10 @@ export const B = git(coverageRepo, "rev-parse", "HEAD");
 let next = 0;
 
 // Actual emission, registered canonical pull and an output written AFTER the pull.
-export async function boundArgs(argv, seam = {}) {
+export async function boundArgs(argv, seam = {}, { seal = true } = {}) {
   const bound = await bindArgs(argv, seam);
   const at = (flag) => bound.args[bound.args.indexOf(flag) + 1];
-  if (bound.args.includes("--result")) sealDeltaFixture(seam.tmpRoot ?? resolveGateArtifactTmpRoot(at("--worktree")), at("--result"));
+  if (seal && bound.args.includes("--result")) sealDeltaFixture(seam.tmpRoot ?? resolveGateArtifactTmpRoot(at("--worktree")), at("--result"));
   return bound;
 }
 

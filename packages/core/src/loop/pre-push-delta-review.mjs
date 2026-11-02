@@ -221,7 +221,7 @@ export function startDeltaSequence({ reviewBaselineHead, actList } = {}) {
  * the reviewer reads the recorded skip reasons from it.
  * @param {{ sequence: ReturnType<typeof startDeltaSequence>, candidateHead: string, specIdentity?: string|null, siteCoverage?: object[] }} input
  */
-export function buildDeltaInput({ sequence, candidateHead, specIdentity = null, siteCoverage = [], coverageBinding, roundAngles = [], staleSurfaceHits = [], staleSurfaceTruncated = false, truncatedNeedles = [] } = {}) {
+export function buildDeltaInput({ sequence, candidateHead, runId, specIdentity = null, siteCoverage = [], coverageBinding, roundAngles = [], staleSurfaceHits = [], staleSurfaceTruncated = false, truncatedNeedles = [] } = {}) {
   if (!sequence || !nonEmpty(sequence.reviewBaselineHead)) throw new Error("buildDeltaInput requires a delta sequence");
   if (!nonEmpty(candidateHead)) throw new Error("buildDeltaInput requires candidateHead");
   const head = candidateHead.trim();
@@ -234,6 +234,8 @@ export function buildDeltaInput({ sequence, candidateHead, specIdentity = null, 
     candidateHead: head,
     diffRange: `${sequence.reviewBaselineHead}..${head}`,
     actSetId: sequence.actSetId,
+    // The producing run's id (GATE-EXEC-EVIDENCE-SEALED): the reviewer copies it into its result unchanged.
+    ...(runId ? { runId } : {}),
     actItems: sequence.actItems.map((item) => ({ ...item })),
     specIdentity: nonEmpty(specIdentity) ? specIdentity.trim() : null,
     siteCoverage,
@@ -251,6 +253,7 @@ export function buildDeltaInput({ sequence, candidateHead, specIdentity = null, 
       reviewBaselineHead: sequence.reviewBaselineHead,
       candidateHead: head,
       actSetId: sequence.actSetId,
+      ...(runId ? { runId } : {}),
       actionableItems: [{ ref: "<act item ref>", status: DELTA_ITEM_STATUSES.join("|"), evidence: ["<non-empty string>"] }],
       newFindings: [{
         severity: [...VALID_SEVERITIES].join("|"),

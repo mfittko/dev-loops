@@ -3,7 +3,7 @@
  * seal-evidence
  *
  * Seals a review evidence file to the run that produced it (GATE-EXEC-EVIDENCE-SEALED).
- * Kind `delta`: the file is a DeltaPrePushReviewResult; the run key derives from its heads.
+ * Kind `delta`: the file is a DeltaPrePushReviewResult; the run key derives from its heads and its runId.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -18,14 +18,16 @@ const USAGE = `Usage: seal-evidence.mjs --kind delta --file <path> [--tmp-root <
 
 Seals the reviewer's result file to its producing run. Run it right after writing the file.
 ${JQ_OUTPUT_USAGE}
-Exit codes: 0 sealed, 2 refused (typed reason: evidence_run_missing, evidence_foreign_run) or bad input.`;
+Exit codes: 0 sealed, 2 refused (typed reason: evidence_run_missing, evidence_foreign_run, evidence_malformed) or bad input.`;
 
 export function runCli(argv = process.argv.slice(2), { stdout = process.stdout, cwd = process.cwd() } = {}) {
   const { values } = parseArgs({ args: argv, options: { kind: { type: "string" }, file: { type: "string" }, "tmp-root": { type: "string" }, ...JQ_OUTPUT_PARSE_OPTIONS }, strict: true });
   if (values.kind !== "delta" || !values.file) throw new Error("--kind delta and --file are required");
-  const parsed = JSON.parse(readFileSync(values.file, "utf8"));
+  const file = path.resolve(cwd, values.file);
+  const parsed = JSON.parse(readFileSync(file, "utf8"));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${values.file} must hold a JSON object (a DeltaPrePushReviewResult)`);
   const tmpRoot = values["tmp-root"] ? path.resolve(cwd, values["tmp-root"]) : resolveGateArtifactTmpRoot(cwd);
-  const sealed = sealEvidence(tmpRoot, deltaEvidenceKey(parsed.reviewBaselineHead, parsed.candidateHead), values.file, parsed);
+  const sealed = sealEvidence(tmpRoot, deltaEvidenceKey(parsed.reviewBaselineHead, parsed.candidateHead, parsed.runId), file, parsed);
   process.exitCode = emitResult({ ok: true, sealed }, { jq: values.jq, silent: values.silent, fields: values.fields, stdout });
 }
 

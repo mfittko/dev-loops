@@ -28,12 +28,13 @@
  * Pure result checks live in @dev-loops/core/loop/pre-push-delta-review.
  */
 import { execFile, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
 import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
-import { createEvidenceRun, deltaEvidenceKey, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
+import { createEvidenceRun, deltaEvidenceKey, mintEvidenceRunId, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { clearSequenceMarker, readSequenceMarker, withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
 import {
   DELTA_MAX_INVOCATIONS,
@@ -83,6 +84,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
                           its provenance.perAngle angles join the surface hints (PRE-PUSH-DELTA-INPUT). Refused with --threads-file.
   --handback              The fixer handbackCheck run: waives the --findings-log requirement (it validates --site-coverage, no reviewer input is used)
   --result <path>         The reviewer's DeltaPrePushReviewResult JSON
+  --result-path <path>    Reviewer-input run: the absolute path briefed to the delta reviewer for its result; the run record binds it and seal-evidence refuses any other path (GATE-EXEC-EVIDENCE-SEALED)
   --invocation <n>        1-based delta review invocation in this sequence (max 3)
   --worktree <dir>        Worktree whose HEAD is the candidate (default: cwd)
 
@@ -150,6 +152,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
         "findings-log": { type: "string" },
         handback: { type: "boolean" },
         result: { type: "string" },
+        "result-path": { type: "string" },
         invocation: { type: "string" },
         worktree: { type: "string" },
         ...JQ_OUTPUT_PARSE_OPTIONS,
@@ -173,6 +176,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
     throw parseError(`--invocation must be an integer in 1..${DELTA_MAX_INVOCATIONS}`);
   }
   if (values.result && invocation === null) throw parseError("--result requires --invocation <1-3>");
+  if (values["result-path"] && (values.result || values.handback)) throw parseError("--result-path belongs to the reviewer-input run only; the --result run names its file with --result and the --handback run writes nothing");
   const specIdentity = values["spec-identity"]?.trim() || null;
   if (!values.result && !specIdentity) throw parseError("--spec-identity <id> is required without --result");
   if (values.handback && !(values["act-list"] && values["site-coverage"] && !values.result)) throw parseError("--handback is the fixer handbackCheck flag: it requires --act-list and --site-coverage and refuses --result; the coordinator input run never passes it");
@@ -192,6 +196,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
     fixerPlan: values["fixer-plan"] ?? null,
     findingsLog: values["findings-log"] ?? null,
     result: values.result ?? null,
+    resultPath: values["result-path"] ?? null,
     handback: values.handback === true,
     invocation,
     worktree: values.worktree ?? process.cwd(),
@@ -388,7 +393,9 @@ export async function runCli(
     if (!(options.fixerPlan && options.siteCoverage && !options.result && !options.handback)) throw new Error(`no delta review applies (worktree HEAD ${currentHead}, baseline ${sequence.reviewBaselineHead}, ${sequence.actItems.length} item(s)): pass the current pulled --fixer-plan and --site-coverage in input-only mode to close its sequence`);
   }
   // The fixer's commit_only handback. Without it every act item with a site query reports a coverage gap.
-  const result = options.result ? JSON.parse(readFileSync(options.result, "utf8")) : null;
+  // One read: the same bytes are parsed and digested for the seal check (GATE-EXEC-EVIDENCE-SEALED).
+  const resultBytes = options.result ? readFileSync(options.result) : null;
+  const result = resultBytes ? JSON.parse(resultBytes.toString("utf8")) : null;
   if (options.threadsFile && deltaCoverageBinding(result)) throw new Error("THREAD cannot opt into ACT coverage binding");
   let siteCoverage = [], validationCoverage = [], coverageBinding, authenticatedTarget;
   if (options.siteCoverage) {
@@ -439,7 +446,7 @@ export async function runCli(
     for (const field of ["reviewBaselineHead", "candidateHead"]) {
       if (typeof result?.[field] !== "string" || !result[field]) throw new Error(`delta result ${options.result} is malformed: ${field} must be a non-empty string`);
     }
-    verifyEvidence(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaEvidenceKey(result.reviewBaselineHead, result.candidateHead), options.result, result);
+    verifyEvidence(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaEvidenceKey(result.reviewBaselineHead, result.candidateHead, result.runId), options.result, result, createHash("sha256").update(resultBytes).digest("hex"));
     // A truncated hit list blocks locally_clear until a finding or a skipped site names the gap.
     const decision = decideDeltaNextStep({
       sequence, result, invocation: options.invocation, currentHead, siteCoverage, validationCoverage, coverageBinding,
@@ -468,14 +475,17 @@ export async function runCli(
     payload = { ok: true, ...decision };
   } else {
     const patchPath = deltaPatchPath(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), sequence.reviewBaselineHead, currentHead);
+    let runId;
     if (!options.handback) { // the fixer handbackCheck stays write-free
       mkdirSync(path.dirname(patchPath), { recursive: true });
       writeFileSync(patchPath, diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead));
-      createEvidenceRun(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaEvidenceKey(sequence.reviewBaselineHead, currentHead), { reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead, actSetId: sequence.actSetId });
+      // Every input run opens its own unsealed record, so a re-run of the producer at the same heads can seal again.
+      runId = mintEvidenceRunId();
+      createEvidenceRun(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaEvidenceKey(sequence.reviewBaselineHead, currentHead, runId), { reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead, actSetId: sequence.actSetId, runId }, options.resultPath ? path.resolve(options.worktree, options.resultPath) : undefined);
     }
     // The target authenticateCoverage verified binds the log's repo and pr; without an authenticated plan the chain path refuses.
     const target = authenticatedTarget;
-    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE, sealCommand: deltaSealCommand(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), resolveGateArtifactTmpRoot(options.worktree)) }), ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target }), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
+    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE, sealCommand: deltaSealCommand(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), resolveGateArtifactTmpRoot(options.worktree)) }), ...buildDeltaInput({ sequence, candidateHead: currentHead, runId, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target }), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
   }
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
   return payload;
