@@ -63,16 +63,20 @@ test("an error that is not unknown-keys-only still fails closed even with the ke
   await rejectsConfigLoadFailed(enforceWithHead("futureKey: 1\nstrategy: 42\n", ["futureKey"]));
 });
 
-test("parseHeadDeclaredKeys accepts an array or object and treats bad or oversized input as empty", () => {
-  assert.deepEqual(parseHeadDeclaredKeys('["a","b.c"]'), ["a", "b.c"]);
-  assert.deepEqual(parseHeadDeclaredKeys('{"declaredKeys":["a"]}'), ["a"]);
+test("parseHeadDeclaredKeys accepts only the declaredKeys object and treats bare arrays, bad or oversized input as empty", () => {
+  assert.deepEqual(parseHeadDeclaredKeys('{"declaredKeys":["a","b.c"]}'), ["a", "b.c"]);
+  assert.deepEqual(parseHeadDeclaredKeys('{"declaredKeys":[]}'), []);
+  assert.deepEqual(parseHeadDeclaredKeys('["validation"]'), []);
+  assert.deepEqual(parseHeadDeclaredKeys("[]"), []);
+  assert.deepEqual(parseHeadDeclaredKeys("{}"), []);
+  assert.deepEqual(parseHeadDeclaredKeys(""), []);
   assert.deepEqual(parseHeadDeclaredKeys("not json"), []);
-  assert.deepEqual(parseHeadDeclaredKeys(JSON.stringify(["x".repeat(70 * 1024)])), []);
+  assert.deepEqual(parseHeadDeclaredKeys(JSON.stringify({ declaredKeys: ["x".repeat(70 * 1024)] })), []);
 });
 
 test("one off-pattern entry among 600 valid entries keeps the valid ones", () => {
   const valid = Array.from({ length: 600 }, (_, i) => `k${i}`);
-  assert.deepEqual(parseHeadDeclaredKeys(JSON.stringify([...valid, "bad key"])), valid);
+  assert.deepEqual(parseHeadDeclaredKeys(JSON.stringify({ declaredKeys: [...valid, "bad key"] })), valid);
 });
 
 test("the discard diagnostic is one JSON line without verdict fields", () => {
@@ -80,7 +84,7 @@ test("the discard diagnostic is one JSON line without verdict fields", () => {
   let out = "";
   process.stderr.write = (s) => { out += s; return true; };
   try {
-    assert.deepEqual(parseHeadDeclaredKeys('["a","bad key"]'), ["a"]);
+    assert.deepEqual(parseHeadDeclaredKeys('{"declaredKeys":["a","bad key"]}'), ["a"]);
   } finally {
     process.stderr.write = orig;
   }

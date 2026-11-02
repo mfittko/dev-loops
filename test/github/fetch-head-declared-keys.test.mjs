@@ -100,8 +100,8 @@ test("a malformed artifact yields the empty set", async () => {
 
 test("the detector and fetcher share one strict schema", () => {
   assert.equal(parseDeclaredKeysStrict, parseHeadDeclaredKeys);
-  assert.deepEqual(parseHeadDeclaredKeys('["a","b.c"]'), ["a", "b.c"]);
-  assert.deepEqual(parseHeadDeclaredKeys('["a","bad key"]'), ["a"]);
+  assert.deepEqual(parseHeadDeclaredKeys('{"declaredKeys":["a","b.c"]}'), ["a", "b.c"]);
+  assert.deepEqual(parseHeadDeclaredKeys('{"declaredKeys":["a","bad key"]}'), ["a"]);
 });
 
 test("a failed keys job (empty --head-declared-keys value) parses to the empty set, not a CLI error", () => {

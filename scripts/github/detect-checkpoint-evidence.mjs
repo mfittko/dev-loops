@@ -57,8 +57,8 @@ Required:
   --pr <number>         Pull request number
 Optional:
   --base-ref-name <name>  PR base branch; lets a sealed cap-round-fixed proof stand in for the clean draft_gate comment
-  --head-declared-keys <json>  Dotted config key paths the PR head's own schema declares (JSON array or
-                          {"declaredKeys":[...]}); a head-only unknown key listed there is tolerated
+  --head-declared-keys <json>  Dotted config key paths the PR head's own schema declares
+                          ({"declaredKeys":[...]}); a head-only unknown key listed there is tolerated
   --head-declared-keys-sha <sha>  Head SHA the declared keys were reported for; the keys apply only when it
                           equals the evaluated head, otherwise the declared set is empty
   --skip-fanout-ledger-check  Skip the fan-out findings-log ledger/provenance/
