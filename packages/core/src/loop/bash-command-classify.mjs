@@ -1044,7 +1044,10 @@ function substitutionIsInert(seg, k, head) {
   const w = seg.words[k];
   if (ENV_ASSIGNMENT_WORD_RE.test(w.raw)) return false;
   if (head === "echo" || head === "printf") return !seg.words.some((x) => head === "printf" && /^-v/.test(x.value));
-  return !overridesConfig(seg) && (TEXT_FLAG_RE.test(seg.words[k - 1]?.value ?? "") || TEXT_FLAG_ATTACHED_RE.test(w.raw));
+  if (overridesConfig(seg) || (head === "git" && seg.words[1]?.value !== "commit")) return false;
+  const attached = TEXT_FLAG_ATTACHED_RE.exec(w.raw);
+  const raw = attached ? w.raw.slice(attached[0].length) : w.raw;
+  return /^(?:\$\(.*\)|"\$\(.*\)")$/s.test(raw) && (attached !== null || TEXT_FLAG_RE.test(seg.words[k - 1]?.value ?? ""));
 }
 
 /** A `-c`/`--config` override or `alias.` word (any case): git/gh run a shell alias from it. */
