@@ -603,6 +603,22 @@ test("a --pr-body-file that is empty or differs from the pinned evidence PR body
   });
 });
 
+test("an empty --pr-body-file is accepted when the evidence records the PR body as absent, and arms no slice linkage", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    await bindEvidenceToPrBody(root, sources, "");
+    for (const body of ["", "  \n"]) {
+      await writeFile(path.join(root, "pr-body.md"), body);
+      const { workOrder } = await emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" });
+      assert.equal(workOrder.sliceLinkage, undefined);
+    }
+    // Rejected: a non-empty file against an absent evidence body.
+    await writeFile(path.join(root, "pr-body.md"), "Closes #2883\n");
+    await assert.rejects(emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" }), (err) => err.refusal === "pr_body_mismatch");
+    // Rejected: an empty file against a fenced non-empty evidence body (kept by the test above); the fenced form equal to the file is accepted by the arming tests.
+  });
+});
+
 test("a missing --pr-body-file path refuses judge emission", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);

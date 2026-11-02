@@ -19,7 +19,7 @@ import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "..
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildLogPath } from "../github/_gate-artifact-paths.mjs";
-import { listPriorActItems, renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { PR_BODY_ABSENT_SENTINEL, listPriorActItems, renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { copilotBodyJudgePath } from "../github/_copilot-body-disposition.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { OUT_OF_BAND_WRITE, readSealed } from "../github/_gate-artifact-seal.mjs";
@@ -165,7 +165,10 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   // Bind the body file to this round: it must be non-empty and equal the fenced `## PR body` section of the pinned evidence read (write-gate-context.mjs), so a stale, truncated, foreign or placeholder file cannot disarm the coercion.
   const prBodyText = prBody.bytes.toString("utf8");
   const evidencePrBody = evidence.bytes.toString("utf8").match(/^## PR body\n\n(`{3,})\n([\s\S]*?)\n\1(?:\n|$)/m)?.[2] ?? null;
-  if (prBodyText.trim() === "" || prBodyText.trim() !== evidencePrBody) throw Object.assign(new Refusal(`--pr-body-file ${prBodyFile} is empty or differs from the \`## PR body\` section of the pinned gate-context evidence; if the PR body changed after the round context was built, rebuild the round context with write-gate-context.mjs, then rewrite the file with view-pr.mjs --jq '.pr.body'`), { refusal: "pr_body_mismatch" });
+  // An empty PR body renders as PR_BODY_ABSENT_SENTINEL (no fence); it has no closing reference, so an empty file matches it and arms nothing.
+  const evidenceBodyAbsent = evidencePrBody === null && evidence.bytes.toString("utf8").split("\n").some((line, i, all) => i > 1 && all[i - 2] === "## PR body" && all[i - 1] === "" && line === PR_BODY_ABSENT_SENTINEL);
+  const bodyMatches = evidenceBodyAbsent ? prBodyText.trim() === "" : prBodyText.trim() !== "" && prBodyText.trim() === evidencePrBody;
+  if (!bodyMatches) throw Object.assign(new Refusal(`--pr-body-file ${prBodyFile} is empty or differs from the \`## PR body\` section of the pinned gate-context evidence; if the PR body changed after the round context was built, rebuild the round context with write-gate-context.mjs, then rewrite the file with view-pr.mjs --jq '.pr.body'`), { refusal: "pr_body_mismatch" });
   const linkageIssues = sliceLinkageIssues(parseSource(spec).nonGoals, prBodyText, repo);
   const contracts = await Promise.all(JUDGE_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
   const workOrder = {
