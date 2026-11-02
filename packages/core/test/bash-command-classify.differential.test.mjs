@@ -203,6 +203,14 @@ const SALVAGED_DENY_ROWS = [
   "printf -vx \"$(cat <<'EOF'\nnode -e 1\nEOF\n)\"; eval \"$x\"",
   "cat > tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nfind tmp -name 'l*' -exec sh {} \\;",
   "cat > Makefile <<'EOF'\nall:\n\tnode -e 1\nEOF\nmake",
+  "cat >& tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash tmp/l.sh",
+  "cat >&tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash tmp/l.sh",
+  "cat 1<>tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash tmp/l.sh",
+  "exec >tmp/l.sh; cat <<'EOF'\nnode -e 1\nEOF\nbash tmp/l.sh",
+  "echo \"$(cat <<'EOF'\nnode -e 1\nEOF\n)\" >& tmp/l.sh; bash tmp/l.sh",
+  "cat >> .git/config <<'EOF'\n[alias]\n\tr = !f\nnode -e 1\nEOF\ngit r",
+  "cat >> .git/hooks/pre-commit <<'EOF'\nnode -e 1\nEOF\ngit commit -m x",
+  "git -c alias.x='!f(){ eval \"$2\"; }; f' x -m \"$(cat <<'EOF'\nnode -e 1\nEOF\n)\"",
 ];
 
 /** Hook-verdict row from test/loop/check-retro-tooling.test.mjs: `EOF)` is not a delimiter line, so origin/main allowed it and the head denies it. */
@@ -242,12 +250,12 @@ const SLICE1_FAIL_CLOSED_FLIPS = new Map();
  */
 const INTENDED_REMOVALS = new Map();
 const REMOVAL_PREDICATES = ["commandContainsInlineInterpreter", "commandContainsDetachedWaitTool", "commandIsSleepPollLoop", "commandIsFileMarkerPollLoop"];
-const PINNED_REMOVAL_COUNTS = [2, 24, 116, 166]; // per reason, ascending
 const SED_BACKTICK_ROW = "sed -n 's/`gh pr view 5`/while sleep 5/p' f"; // joins the corpus through buildCorpus
 const R_QUOTE_WRAP = "the form sits in a quoted --notes/-m/echo argument: quoted text is inert data (item 9)";
 const R_HEREDOC_WRAP = "the form is the body of a cat/tee heredoc (quoted delimiter) written to a temp path: the body is data (item 8)";
 const R_HAZARD_DATA = "the loop sits in quotes next to a quote-pairing hazard (comment apostrophe, escaped quote, heredoc quote): the tokenizer pairs the quotes correctly, so the loop is data";
 const R_SED_BACKTICK = "backtick inside a single-quoted sed expression is literal text, not a substitution";
+const PINNED_REMOVAL_COUNTS = { [R_QUOTE_WRAP]: 24, [R_HEREDOC_WRAP]: 116, [R_HAZARD_DATA]: 166, [R_SED_BACKTICK]: 2 }; // rows removed per reason
 
 function buildCorpus() {
   const corpus = new Set([SED_BACKTICK_ROW, ...RESIDUE_SHAPES,...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW, ...ARITH_SHIFT_ROWS]);
@@ -328,7 +336,7 @@ test("differential: every row origin/main denies and the head allows is a listed
 test("differential: the intended-removal set has the pinned size per reason", () => {
   const counts = {};
   for (const reason of INTENDED_REMOVALS.values()) counts[reason] = (counts[reason] ?? 0) + 1;
-  assert.deepEqual(Object.values(counts).sort((a, b) => a - b), PINNED_REMOVAL_COUNTS);
+  assert.deepEqual(counts, PINNED_REMOVAL_COUNTS);
 });
 
 test("differential: the sed backtick row is in the corpus and removed only by the wait predicate", () => {

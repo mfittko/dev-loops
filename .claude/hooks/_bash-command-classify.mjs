@@ -1027,29 +1027,33 @@ function payloadWordRanges(segments, out = []) {
 const SCRIPT_RUNNER_HEADS = new Set(["sh", "bash", "zsh", "dash", "ksh", "node", "bun", "python", "python3", "perl", "ruby", ".", "source", "eval"]);
 const rawHead = (seg) => seg.words.find((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op)?.value ?? "";
 const segmentHead = (seg) => rawHead(seg).split("/").pop();
-/** Words a `cat`/`tee` segment writes to: the word after a `>`/`>>`/`>|`/`&>`/`&>>` operator, an attached `>file`, and every `tee` operand. */
+const REDIRECT_RE = /^\d*(?:&>>?|<>|>>?&?)\|?(.*)$/s;
+/** Words a `cat`/`tee` segment writes to: the word after any `>`, `>>`, `>|`, `>&`, `&>`, `&>>` or `<>` operator, an attached `>file`, and every `tee` operand. `>&2`/`>&-` duplicate a descriptor and write no file. */
 function writeTargets(seg) {
   const targets = [];
   seg.words.forEach((w, k) => {
-    const attached = /^\d*&?>>?\|?(.*)$/s.exec(w.value);
+    const attached = REDIRECT_RE.exec(w.value);
     if (attached) targets.push(attached[1] || seg.words[k + 1]?.value);
     else if (segmentHead(seg) === "tee" && k > 0 && !w.op && !w.value.startsWith("-")) targets.push(w.value);
   });
-  return targets.filter((t) => t && !t.startsWith("&")).map((t) => t.replace(/^\.\//, "")); // `2>&1` duplicates a descriptor, it writes no file
+  return targets.filter((t) => t && !/^\d+$|^-$/.test(t)).map((t) => t.replace(/^\.\//, ""));
 }
+/** Whether SEG carries a redirect word, parsed to a target or not. */
+const hasRedirect = (seg) => seg.words.some((w) => REDIRECT_RE.test(w.value));
 
 /** Every segment of SEGMENTS, nested substitutions included. */
 function allSegments(segments, out = []) {
   for (const seg of segments) { out.push(seg); for (const w of seg.words) for (const sub of w.subs) allSegments(sub.segments, out); }
   return out;
 }
-/** Heads that never run a file they are given; any other head (`find -exec`, `make`, `xargs`) may reach the written file, so the body stays visible. */
-const FILE_SAFE_HEADS = new Set(["", "cat", "tee", "echo", "printf", "ls", "chmod", "rm", "mkdir", "cd", "touch", "mv", "cp", "git", "gh", "true", "false", "test", "[", "wc", "grep", "head", "tail", "pwd"]);
+/** Pure read or file-handling heads that never run a file they are given. Every other head (`find -exec`, `make`, `xargs`, `git` and `gh`, which read config, hooks and aliases from disk) may reach the written file, so the body stays visible. */
+const FILE_SAFE_HEADS = new Set(["", "cat", "tee", "echo", "printf", "ls", "chmod", "rm", "mkdir", "cd", "touch", "mv", "cp", "true", "false", "test", "[", "wc", "grep", "head", "tail", "pwd"]);
 const escapeRe =(s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /**
  * Fail closed: true when the file SEG writes may be run elsewhere in ROOT. That holds when a target is a variable, `~`, glob or `..` path;
- * when another segment is headed by a script runner, `eval` or a path-like command; or when any other word or heredoc body names a target
- * (or its basename) as a path-bounded substring (`bash -c 'bash tmp/l.sh'`, `chmod +x tmp/l.sh`).
+ * when any other segment is headed by a command outside FILE_SAFE_HEADS (a script runner, `eval`, a path, `git`, `exec`); or when any other
+ * word or heredoc body names a target (or its basename) as a path-bounded substring (`bash -c 'bash tmp/l.sh'`, `chmod +x tmp/l.sh`).
+ * A heredoc body is therefore data only when every other segment is a cat/tee heredoc or a pure read head.
  */
 function writtenFileMayRun(seg, targets, root) {
   if (targets.some((t) => /[$~*?]|(?:^|\/)\.\.(?:\/|$)/.test(t))) return true;
@@ -1068,23 +1072,25 @@ function substitutionIsInert(seg, k, head) {
   const w = seg.words[k];
   if (ENV_ASSIGNMENT_WORD_RE.test(w.raw)) return false;
   if (head === "echo" || head === "printf") return !seg.words.some((x) => head === "printf" && /^-v/.test(x.value));
-  return TEXT_FLAG_RE.test(seg.words[k - 1]?.value ?? "") || TEXT_FLAG_ATTACHED_RE.test(w.raw);
+  return !overridesConfig(seg) && (TEXT_FLAG_RE.test(seg.words[k - 1]?.value ?? "") || TEXT_FLAG_ATTACHED_RE.test(w.raw));
 }
 
+/** A `-c`/`--config` override or `alias.` word: git/gh run a shell alias from it. */
+const overridesConfig = (seg) => seg.words.some((w) => /^(?:-c|--config)|alias\./.test(w.value));
 const STDIN_TEXT_SUBCOMMANDS = { git: new Set(["commit", "tag", "notes"]), gh: new Set(["pr", "issue", "release", "gist"]) };
 /** A top-level `git commit -F -` / `gh pr comment --body-file -` segment: a text subcommand of git/gh with a `-F -`/`--body-file -` operand, no `-c`, no env assignment. Its heredoc is message text. */
 function readsTextFromStdin(seg, head) {
   const sub = STDIN_TEXT_SUBCOMMANDS[head];
   const vals = seg.words.map((w) => w.value);
-  if (!sub || vals[0] !== head || !sub.has(vals[1]) || seg.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw) || /^(?:-c|--config)|alias\./.test(w.value))) return false;
+  if (!sub || vals[0] !== head || !sub.has(vals[1]) || seg.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw)) || overridesConfig(seg)) return false;
   return vals.some((v, i) => /^(?:-F|--file|--body-file|--notes-file)$/.test(v) && vals[i + 1] === "-");
 }
 
 /**
  * Heredocs whose body is data (issue 2442 item 8): a `cat` or `tee` heredoc (or a `git commit -F -`/`gh pr comment --body-file -` message, `readsTextFromStdin`) that is closed, whose delimiter is quoted or whose body has no
  * `$(`/backtick, whose segment is not piped onward, that sits in no `-c`/`eval`/here-string payload, and whose written file may not run
- * (`writtenFileMayRun`: no other segment is headed by a script runner, `eval` or a path, and no other word or heredoc body names the file).
- * Inside a `$(...)` the host must be an inert `echo`/`printf`/`git`/`gh` segment that writes no file (`substitutionIsInert`).
+ * (`writtenFileMayRun`, run for any redirect or `exec`: every other segment is a cat/tee heredoc or a pure read head, and no other word or heredoc body names the file).
+ * Inside a `$(...)` the host must be an inert `echo`/`printf`/`git`/`gh` segment that writes no file and carries no `-c`/alias override (`substitutionIsInert`).
  * Every other body executes and stays visible.
  * @returns {object[]}
  */
@@ -1096,7 +1102,8 @@ function dataHeredocs(segments, inPayload = false, out = [], root = segments, in
     if (!inertParent || inPayload || seg.pipedOut || (head !== "cat" && head !== "tee" && !readsTextFromStdin(seg, head))) return; // `git -c alias.r='!sh' r <<EOF` runs its body
     if (seg.words.some((w) => /^\d*[<>]*\(/.test(w.value))) return; // process substitution `>(sh)` or a `(`-target: the body is piped to a command
     const targets = writeTargets(seg);
-    const runsTarget = targets.length > 0 && writtenFileMayRun(seg, targets, root);
+    // the check runs for any redirect word (parsed or not) and under any `exec` segment, which can redirect the whole shell
+    const runsTarget = (targets.length > 0 || hasRedirect(seg) || allSegments(root).some((s) => segmentHead(s) === "exec")) && writtenFileMayRun(seg, targets, root);
     for (const h of seg.heredocs) if (h.closed && !runsTarget && (h.quoted || !/\$\(|`/.test(h.body))) out.push(h);
   });
   return out;
