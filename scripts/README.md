@@ -504,7 +504,7 @@ Contract:
 
 Success output shape:
 - `{ "ok": true, "action": "watch"|"fix"|"stop", "state": "...", "allowedTransitions": [...], "nextAction": "...", "snapshot": {...}, "reviewRequestStatus"?: "...", "fixerDispositionWarning"?: { "warning": "...", "incomplete": [...] }, "watchStatus"?: "...", "autoRerequestEligible": true|false, "sameHeadCleanConverged": true|false, "loopDisposition": "...", "terminal": true|false, "requestWatchContract": { "action": "...", "nextAction": "...", "requestStatus": "requested"|"already-requested"|"unavailable"|"failed"|"none", "routingState": "copilot_request_confirmed_waiting"|"ready_state_needs_copilot_request"|"draft_reset_requires_ready_state_reentry"|"non_ready_state", "watchEntryConfirmed": true|false, "watchArgs": { ... }|null, "stopState"?: "unavailable"|"blocked"|"draft_requires_ready_state_reentry"|"no_automatic_next_step" }, "watchTimeoutPolicy"?: { "classification": "external_healthy_wait", "minimumTimeoutMs": 1800000, "defaultTimeoutMs": 1800000 }, "watchArgs"?: { ... }, "runnerRelease"?: { "status": "...", "remedy"?: "..." } }`
-- `runnerRelease` (`{ "status": "...", "remedy"?: "..." }`) is emitted on every terminal result; a `skipped_no_async_run_id` status carries a `remedy`
+- `runnerRelease` (`{ "status": "...", "remedy"?: "..." }`) is emitted on every terminal result except the runner-ownership conflict stop, where the run holds no claim; a `skipped_no_async_run_id` status carries a `remedy`
 
 Failure behavior:
 - malformed arguments and unexpected `gh` failures emit `{ "ok": false, "error": "..." }` on stderr and exit non-zero
