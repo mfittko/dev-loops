@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { parseIssueNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -229,7 +231,8 @@ export async function editIssue(options, { env = process.env, ghCommand = "gh", 
   // ADR-TRIPWIRE-STANDING-WAIVER: a PR is also an issue, so `gh issue edit` can
   // rewrite a PR body. A body write may not add, change or remove an
   // `adr-tripwire:allow` line; fail closed when the current body is unreadable.
-  // The body is resolved once and forwarded inline so stdin is read a single time.
+  // The body is resolved once so stdin is read a single time.
+  let snapshotDir;
   if (options.body !== undefined || options.bodyFile !== undefined) {
     let body = options.body;
     if (body === undefined) {
@@ -256,10 +259,25 @@ export async function editIssue(options, { env = process.env, ghCommand = "gh", 
     if (unticked.length > 0 && !options.allowUntick) {
       throw new Error(`CHECKLIST-SCOPE-ONE-MODEL: refusing to untick or remove ${unticked.length} checked row(s) on #${options.issue} (unticked, deleted, reworded, or moved into or out of its AC/DoD scope): ${unticked.map((l) => JSON.stringify(l)).join("; ")}. Edit from the current body, or pass --allow-untick for a deliberate change.`);
     }
-    // Forward the body that was just checked (stdin or file) inline, so the
-    // core edit cannot re-read a file that changed after the guard ran.
-    if (options.bodyFile !== undefined) options = { ...options, body, bodyFile: undefined };
+    // Forward the body that was just checked, never a re-read of the caller's
+    // file (it may change after the guard ran). Stdin goes inline; a file body
+    // goes through a private temp snapshot so a large body cannot exceed argv limits.
+    if (options.bodyFile === "-") options = { ...options, body, bodyFile: undefined };
+    else if (options.bodyFile !== undefined) {
+      snapshotDir = await mkdtemp(join(tmpdir(), "edit-issue-"));
+      const snapshot = join(snapshotDir, "body.md");
+      await writeFile(snapshot, body, { mode: 0o600 });
+      options = { ...options, bodyFile: snapshot };
+    }
   }
+  try {
+    return await editWithGrillCheck(options, { env, ghCommand, run });
+  } finally {
+    if (snapshotDir !== undefined) await rm(snapshotDir, { recursive: true, force: true });
+  }
+}
+
+async function editWithGrillCheck(options, { env, ghCommand, run }) {
   // GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628): behind the --enforce-grill opt-in,
   // refuse to write a body that embeds grill transcript/synthesis/Q&A headings.
   if (options.enforceGrill && (options.body !== undefined || options.bodyFile !== undefined)) {

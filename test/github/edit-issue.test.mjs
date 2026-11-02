@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -134,31 +134,57 @@ test("editIssue: --body-file reads the body from a real file", async () => {
   const dir = mkdtempSync(join(tmpdir(), "edit-issue-"));
   const bodyPath = join(dir, "body.md");
   writeFileSync(bodyPath, "Body from file\nsecond line");
-  const { run, calls } = stubGh();
+  const { run: base, calls } = stubGh();
+  const snapshots = [];
+  const run = (cmd, args, env) => {
+    if (args.includes("--body-file")) snapshots.push(readFileSync(args[args.indexOf("--body-file") + 1], "utf8"));
+    return base(cmd, args, env);
+  };
   const result = await editIssue(
     { repo: "o/n", issue: 5, bodyFile: bodyPath, addAssignees: [], removeAssignees: [] },
     { run },
   );
   assert.deepEqual(result.edited, ["body"]);
-  assert.deepEqual(calls[0], ["issue", "edit", "5", "--repo", "o/n", "--body", "Body from file\nsecond line"]);
+  assert.equal(calls[0][calls[0].indexOf("--body-file") + 1] === bodyPath, false, "forwards a private snapshot, not the caller's file");
+  assert.ok(!calls[0].includes("--body"));
+  assert.equal(snapshots[0], "Body from file\nsecond line");
+});
+
+test("editIssue: a large multibyte --body-file goes to gh as a private 0600 temp file removed afterwards (no argv blowup)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "edit-issue-"));
+  const bodyPath = join(dir, "body.md");
+  const big = "漢".repeat(200_000);
+  writeFileSync(bodyPath, big);
+  let seen;
+  const run = (cmd, args) => {
+    if (args[1] === "view") return Promise.resolve({ code: 0, stdout: JSON.stringify({ body: "" }), stderr: "" });
+    const file = args[args.indexOf("--body-file") + 1];
+    seen = { args, file, mode: statSync(file).mode & 0o777, body: readFileSync(file, "utf8") };
+    return Promise.resolve({ code: 0, stdout: "https://github.com/o/n/issues/5\n", stderr: "" });
+  };
+  await editIssue({ repo: "o/n", issue: 5, bodyFile: bodyPath, addAssignees: [], removeAssignees: [] }, { run });
+  assert.ok(!seen.args.includes("--body"));
+  assert.ok(seen.args.join(" ").length < 1000);
+  assert.equal(seen.mode, 0o600);
+  assert.equal(seen.body, big);
+  assert.equal(existsSync(seen.file), false);
 });
 
 test("editIssue (#2898): a --body-file changed during the baseline read cannot bypass the guard (checked body is forwarded inline)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "edit-issue-"));
   const bodyPath = join(dir, "body.md");
   writeFileSync(bodyPath, "## AC\n- [x] Docs");
-  const calls = [];
+  let sent;
   const run = (cmd, args) => {
     if (args[1] === "view") {
       writeFileSync(bodyPath, "## AC\n- [ ] Docs"); // file mutates after the guard read it
       return Promise.resolve({ code: 0, stdout: JSON.stringify({ body: "## AC\n- [x] Docs" }), stderr: "" });
     }
-    calls.push(args);
+    sent = readFileSync(args[args.indexOf("--body-file") + 1], "utf8");
     return Promise.resolve({ code: 0, stdout: "https://github.com/o/n/issues/5\n", stderr: "" });
   };
   await editIssue({ repo: "o/n", issue: 5, bodyFile: bodyPath, addAssignees: [], removeAssignees: [] }, { run });
-  assert.ok(!calls[0].includes("--body-file"));
-  assert.equal(calls[0][calls[0].indexOf("--body") + 1], "## AC\n- [x] Docs");
+  assert.equal(sent, "## AC\n- [x] Docs");
 });
 
 test("editIssue: --body-file - reads stdin and passes it inline as --body (never re-emits exhausted fd 0)", () => {
