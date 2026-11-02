@@ -908,6 +908,8 @@ dev-loops-run scripts/loop/emit-judge-work-order.mjs --repo <owner/name> --pr <N
 dev-loops-run scripts/github/view-pr.mjs --repo <owner/name> --pr <N> --jq '.pr.body' > <pr-body-path>
 ```
 
+The producer also refuses (`pr_body_mismatch`) when the trimmed body file is empty or differs from the `## PR body` section of the pinned gate-context evidence. If the PR body changed after the round context was built, rebuild the round context with `write-gate-context.mjs`; rewriting the body file cannot clear this refusal.
+
 A slice PR's reopen line lives in the PR body Non-goals when the spec comes from the linked issue. The producer pins the body and, when it holds exactly one closing reference whose number a reopen line names, carries `sliceLinkage` and `sliceLinkageIssues` in the work order. `judge-pass` arms its coercion from those pinned fields only (`SPEC-SLICE-PR-KEEPS-CLOSING-REF`).
 Write the `--operator-focus-file` JSON only when the operator supplied round context for the judge (`GATE-EXEC-OPERATOR-FOCUS`).
 
