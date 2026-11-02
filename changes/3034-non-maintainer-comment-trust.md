@@ -1,3 +1,3 @@
 ### Fixed
 
-- Comment text from non-maintainers no longer reaches a fixer or gate agent; threads are trusted only from OWNER, MEMBER, COLLABORATOR and the sanctioned Copilot reviewer, and an untrusted-only thread no longer counts as unresolved (#3034)
+- Non-maintainer comment text no longer reaches a fixer or gate agent; only OWNER, MEMBER, COLLABORATOR and Copilot threads are trusted, and untrusted-only threads are not unresolved (#3034)
