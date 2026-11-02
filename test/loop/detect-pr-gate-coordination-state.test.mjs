@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { initGitFixture, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
-import { detectPrGateCoordinationState, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, countPrChangedLines, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, countPrChangedLines, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
@@ -4463,6 +4463,24 @@ test("detect-pr-gate-coordination-state (ADR 0218): an unreadable cap-round ledg
     assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
     assert.ok(result.reason.includes("Condition cap_round_unresolved:"), result.reason);
     assert.ok(!result.reason.includes("no_clearing_record"), result.reason);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// Issue 2787 C11: a ci-failure fixer plan has no thread to verify, so the ADR 0155 advisory check skips it.
+for (const [source, advisory] of [["ci-failure", false], ["threads", true]]) test(`an active full ${source} plan ${advisory ? "raises" : "raises no"} unverified_active_fixer advisory`, async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-ci-failure-"));
+  try {
+    initGitFixture(tempDir);
+    const head = "a".repeat(40);
+    const fixerDir = path.join(tempDir, "tmp", "gate-fixer", "owner-repo", "pr-9");
+    await mkdir(path.join(fixerDir, "f1-0000abcd"), { recursive: true });
+    const workOrder = { role: "fixer", phase: "full", source, target: { repo: "owner/repo", pr: 9 }, headSha: head, outputRefs: [path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json")], requiredReads: [] };
+    await writeFile(path.join(fixerDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder, workOrderDigest: workOrderDigest(workOrder), executionIdentity: "f1-0000abcd" }));
+    const result = await resolveFixerDispositionInput({ repo: "owner/repo", pr: 9, currentHeadSha: head, parsedThreads: { threads: [], comments: [] } }, { repoRoot: tempDir });
+    if (advisory) assert.match(result.incomplete[0].failedStep, /^unverified_active_fixer/);
+    else assert.equal(result, null);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

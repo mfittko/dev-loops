@@ -818,3 +818,17 @@ test("input mode refuses the chain log for each failing chain condition", async 
   assert.ok((await run({ to: "e".repeat(40) })).includes("e".repeat(40))); // chain ends elsewhere: its end is tried and fails
   assert.ok((await run({ merge: false })).includes(B)); // chain reaches B, the merge of B is not base-only
 });
+
+test("issue 2787 C12: the sealed delta record carries findings[] only when a fixer must act on one", async () => {
+  const { writeGateDeltaRecord, readSealedGateDeltaRecord } = await import("../../scripts/loop/_gate-delta-record.mjs");
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "delta-findings-"));
+  try {
+    const sequence = { reviewBaselineHead: B, actSetId: "set" };
+    const write = (newFindings) => writeGateDeltaRecord({ tmpRoot, sequence, candidateHead: C, invocation: 1, decision: { outcome: "needs_fix", nextStep: "fix_and_rereview" },
+      result: { actionableItems: [{ ref: "T1", status: "resolved" }], newFindings } });
+    write([{ severity: "low", summary: "nit", evidence: ["e"] }]);
+    assert.equal("findings" in readSealedGateDeltaRecord(tmpRoot, B), false);
+    write([{ severity: "high", summary: "new bug", evidence: ["a", "b"], site: "x.mjs:1" }]);
+    assert.deepEqual(readSealedGateDeltaRecord(tmpRoot, B).findings, [{ severity: "high", summary: "new bug", evidence: "a; b", site: "x.mjs:1" }]);
+  } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
+});
