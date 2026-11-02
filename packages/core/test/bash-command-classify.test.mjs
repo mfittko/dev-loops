@@ -1549,6 +1549,18 @@ test("tokenizeShellCommand: malformed input is incomplete and the classifier den
   assert.equal(commandIsSleepPollLoop("echo 'x' ; while true; do gh pr view 5; sleep 5; done"), true);
 });
 
+test("tokenizeShellCommand: CRLF heredoc, real comments and nesting cap (#2442)", () => {
+  assert.equal(tokenizeShellCommand("cat <<'EOF'\r\nx\r\nEOF\r\n").incomplete, false);
+  assert.equal(tokenizeShellCommand("cat <<'EOF'\r\nx\r\n").incomplete, true);
+  const cmdText = "echo a # it's\ngh pr edit 5 --body \"Closes #12\"";
+  const parsed = tokenizeShellCommand(cmdText);
+  assert.deepEqual(parsed.comments, ["# it's"]);
+  assert.equal(commandIsSleepPollLoop('git commit -m "docs: never poll (#12): while true; do gh pr view; sleep 5; done"'), false);
+  const nested = "node -e 'evil'\n: \"" + "$(".repeat(5000);
+  assert.equal(tokenizeShellCommand(nested).incomplete, true);
+  assert.equal(commandContainsInlineInterpreter(nested), true);
+});
+
 test("stripQuotedLiterals is built on tokenizeShellCommand and the regex pairing is gone (#2442)", () => {
   const source = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/loop/bash-command-classify.mjs"), "utf8");
   assert.equal(source.includes("/(['\"])((?:(?!\\1).)*)\\1/gs"), false);

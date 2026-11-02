@@ -988,8 +988,8 @@ function stripQuotedLiterals(command) {
  * @param {string} command @returns {boolean}
  */
 function hasQuotePairingHazard(command) {
-  const { segments, ticks } = tokenizeShellCommand(command);
-  return /\\['"]/.test(command) || ticks.some((span) => [`'`, `"`].some((q) => span.split(q).length % 2 === 0)) || /(?:^|[\s;&|(])#[^\n]*['"]/.test(command) || segmentsHaveQuotedHeredoc(segments);
+  const { segments, ticks, comments } = tokenizeShellCommand(command);
+  return /\\['"]/.test(command) || ticks.some((span) => [`'`, `"`].some((q) => span.split(q).length % 2 === 0)) || comments.some((text) => /['"]/.test(text)) || segmentsHaveQuotedHeredoc(segments);
 }
 
 /** Whether any heredoc body (including inside `$(...)`) contains a quote character. */
@@ -998,24 +998,26 @@ function segmentsHaveQuotedHeredoc(segments) {
 }
 
 /**
- * Shell-word tokenizer for the classifier. Returns `{ segments, spans, incomplete, incompleteAt }`.
+ * Shell-word tokenizer for the classifier. Returns `{ segments, spans, ticks, comments, incomplete, incompleteAt }`.
  * A segment ends at an unquoted `;`, `&&`, `||`, `|`, `|&`, `&` or newline (`>|`, `>&`, `&>` are
  * redirects). Each segment has `words` (`raw`, unquoted `value`, `single`/`double`/`ansi` quoting
  * flags, `subs` for `$(...)`, `op` for `<<`/`<<<` operator words) and `heredocs` (`delimiter`,
- * `quoted`, `stripTabs`, `body`, `segment` index). Models single/double/ANSI-C quotes, backslash
+ * `quoted`, `stripTabs`, `body`, `start`, `segment` index). Models single/double/ANSI-C quotes, backslash
  * escapes, word-start `#` comments, here-strings, heredocs and `$(...)`/backtick substitutions.
- * `spans` lists every terminated quote span (`start`/`end` offsets in COMMAND). An unterminated
+ * `spans` lists every terminated quote span (`start`/`end` offsets in COMMAND). `ticks` lists the texts of terminated backtick substitutions and `comments` the texts of real unquoted `#` comments. Substitution nesting deeper than 64 levels sets `incomplete`. An unterminated
  * quote, `$(`, backtick or heredoc sets `incomplete`; `incompleteAt` is the offset of the earliest
  * unclosed opener, and callers treat the text from there on as unquoted executable text.
  * ponytail: arithmetic, `${...}` quoting and subshell grouping are not modelled; a stray `<<` fails closed.
  * @param {string} command
- * @returns {{ segments: object[], spans: {start:number,end:number,kind:string}[], incomplete: boolean, incompleteAt: number }}
+ * @returns {{ segments: object[], spans: {start:number,end:number,kind:string}[], ticks: string[], comments: string[], incomplete: boolean, incompleteAt: number }}
  */
 export function tokenizeShellCommand(command) {
   const n = command.length;
   const spans = [];
   const ticks = []; // terminated backtick substitutions the tokenizer actually reads (not inert backticks in quotes' literals or comments)
+  const comments = []; // texts of real unquoted `#` comments
   const pending = [];
+  let depth = 0;
   let i = 0;
   let incompleteAt = -1;
   const fail = (at) => { incompleteAt = incompleteAt < 0 ? at : Math.min(incompleteAt, at); i = n; };
@@ -1030,8 +1032,11 @@ export function tokenizeShellCommand(command) {
   };
   const readSub = (word) => {
     const start = i;
+    if (depth >= 64) { fail(start); return command.slice(start); } // bounded recursion: past the cap the input is incomplete, so the gate denies
     i += 2;
+    depth++;
     const { segments, closed } = parseSeq(true);
+    depth--;
     if (!closed) fail(start);
     word.subs.push({ start, end: i, segments });
     return command.slice(start, i);
@@ -1127,7 +1132,7 @@ export function tokenizeShellCommand(command) {
       if (inSub && c === ")") { endSeg(); i++; return { segments, closed: true }; }
       if (c === " " || c === "\t") { endWord(); i++; }
       else if (c === "\n") { endSeg(); i++; readHeredocBodies(); }
-      else if (c === "#" && !word) { while (i < n && command[i] !== "\n") i++; }
+      else if (c === "#" && !word) { const at = i; while (i < n && command[i] !== "\n") i++; comments.push(command.slice(at, i)); }
       else if (c === "&" && next === "&") { endSeg(); i += 2; }
       else if (c === "|" && next === "|") { endSeg(); i += 2; }
       else if (c === "|" && next === "&") { endSeg(); i += 2; }
@@ -1138,7 +1143,7 @@ export function tokenizeShellCommand(command) {
         const stripTabs = command[i + 2] === "-";
         operator("<<", stripTabs ? 3 : 2);
         while (command[i] === " " || command[i] === "\t") i++;
-        while (i < n && !/[\s;&|()<>]/.test(command[i])) wordUnit();
+        while (i < n && !/[ \t\n;&|()<>]/.test(command[i])) wordUnit();
         const delimiter = word;
         endWord();
         if (!delimiter) { fail(start); continue; }
@@ -1152,7 +1157,7 @@ export function tokenizeShellCommand(command) {
   }
 
   const { segments } = parseSeq(false);
-  return { segments, spans, ticks, incomplete: incompleteAt >= 0, incompleteAt };
+  return { segments, spans, ticks, comments, incomplete: incompleteAt >= 0, incompleteAt };
 }
 
 /**

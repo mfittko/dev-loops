@@ -112,6 +112,13 @@ for (const [shape, targets] of HAZARD_SHAPES) {
   }
 }
 const HAZARD_ROWS = [...HAZARD_TARGETS.keys()];
+/** A `#N` inside quoted data is not a comment: the head must match the frozen copy on these rows. */
+const QUOTED_HASH_ROWS = [
+  'gh pr edit 5 --repo other/x --body "Closes #12"',
+  'git commit -m "docs: never poll (#12): while true; do gh pr view; sleep 5; done"',
+  "gh pr comment 1 --body 'see #3 and \"x\"'",
+  "cat <<'EOF'\r\nx\r\nEOF\r\n",
+];
 /** The four shapes the closed PR #2741 head allowed and origin/main denies. */
 const RESIDUE_SHAPES = [
   `bash <<< "a b"'; node -e y'`,
@@ -180,7 +187,7 @@ const SLICE1_FAIL_CLOSED_FLIPS = new Map();
 const INTENDED_REMOVALS = new Set();
 
 function buildCorpus() {
-  const corpus = new Set([...RESIDUE_SHAPES, ...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, EOF_PAREN_ROW]);
+  const corpus = new Set([...RESIDUE_SHAPES, ...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW]);
   const forms = [...INLINE_FORMS, ...WAIT_FORMS, ...PR_BODY_FORMS];
   for (const f of forms) {
     for (const sep of SEPARATORS) for (const suf of SUFFIXES) corpus.add(`${sep}${f}${suf}`);
@@ -242,6 +249,12 @@ test("differential: a frozen-allow/head-deny row is listed in SLICE1_FAIL_CLOSED
   }
   assert.deepEqual([...SLICE1_FAIL_CLOSED_FLIPS.keys()].filter((k) => !seen.has(k)), []);
   for (const reason of SLICE1_FAIL_CLOSED_FLIPS.values()) assert.ok(reason.length > 0);
+});
+
+test("differential: quoted #N and CRLF heredoc rows keep the frozen decision on every predicate", () => {
+  for (const cmd of QUOTED_HASH_ROWS) {
+    for (const [name, mainFn, headFn] of PREDICATES) assert.equal(headFn(cmd), mainFn(cmd), rowKey(name, cmd));
+  }
 });
 
 test("differential: both the frozen copy and the head deny the four PR #2741 residue shapes", () => {
