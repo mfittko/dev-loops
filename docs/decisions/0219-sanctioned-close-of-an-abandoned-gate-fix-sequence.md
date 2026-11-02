@@ -6,20 +6,22 @@ Accepted, 2026-11-01 ([issue 2999](https://github.com/mfittko/dev-loops/issues/2
 
 Amends ADR 0143 and ADR 0213. Accepted records remain unchanged.
 
+Amended by [ADR 0228](0228-close-sequence-admission-is-atomic-and-liveness-is-activity-based.md) for the command spelling (`dev-loops-run cli/index.mjs gate close-sequence ...`), the grace period (the runner TTL, `resolveStaleRunnerMaxAgeMs`) and the activity-based liveness rule.
+
 ## Context
 
 Under `PRE-PUSH-DELTA-PUSH-AUTHORITY`, a gate fix sequence writes the marker `tmp/gate-delta/<baseline>.sequence`. While the marker is active and not granted, the `pre-push` hook refuses pushes to the marker's branch. A sequence can be abandoned: the fixer is never dispatched, the fixer dies, or the PR head moves outside the loop. The abandoned marker then locks pushes. Before this record, the only recovery was to delete the marker file by hand, and the refusal reason told the operator to do that. An agent had no sanctioned way to end the lock.
 
 ## Decision
 
-`dev-loops-run cli/index.mjs gate close-sequence --head <baseline sha> --repo <owner/name> --pr <number>` (`scripts/loop/close-gate-sequence.mjs`) closes a marker only when it proves one abandonment condition from authoritative state:
+`dev-loops gate close-sequence --head <baseline> --repo <owner/name> --pr <number>` (`scripts/loop/close-gate-sequence.mjs`) closes a marker only when it proves one abandonment condition from authoritative state:
 
 - `HEAD_MOVED`: the PR head read from GitHub differs from the marker baseline, on the branch the marker names.
-- `FIXER_NEVER_PULLED`: the marker names a fixer execution, no pull receipt exists for its work order, and the marker is at least the grace period old.
+- `FIXER_NEVER_PULLED`: the marker names a fixer execution, no pull receipt exists for its work order, and the marker is at least 30 minutes old.
 
-The grace period is the runner-lock TTL itself (`resolveStaleRunnerMaxAgeMs`, 30 minutes by default, `DEVLOOPS_STALE_RUNNER_MAX_AGE_MS` overrides it). A dispatch or a fixer younger than the grace may be live.
+The 30 minute grace equals the runner-lock TTL. A dispatch or a fixer younger than the grace may be live.
 
-A live sequence is never cleared. The command refuses `sequence_live`, `fixer_running`, `abandonment_unproven`, `baseline_unknown` and `sequence_absent`, and each refusal names a remedy. `baseline_unknown` applies to a marker that names no work order ref when its baseline is not a commit in the local repository. The remedy is to run the close from a checkout of the marker's repository, or to ask the operator to delete the marker. A fixer that pulled its work order and has not handed back within the grace reads as running; [ADR 0228](0228-close-sequence-admission-is-atomic-and-liveness-is-activity-based.md) owns the activity rule. An unreadable pull receipt also reads as running. A marker rewritten while the PR head is read starts a new sequence and is refused.
+A live sequence is never cleared. The command refuses `sequence_live`, `fixer_running`, `abandonment_unproven`, `baseline_unknown` and `sequence_absent`, and each refusal names a remedy. `baseline_unknown` applies to a marker that names no work order ref when its baseline is not a commit in the local repository. The remedy is to run the close from a checkout of the marker's repository, or to ask the operator to delete the marker. A fixer that pulled its work order and has not handed back within the grace reads as running. An unreadable pull receipt also reads as running. A marker rewritten while the PR head is read starts a new sequence and is refused.
 
 The command writes the closure record `gate-delta/<baseline>.sequence-closed.<execution|none>.json` before it removes the marker. A failed write leaves the marker in place. A marker without an execution writes the suffix `none`, and a later execution-less close on the same head overwrites that record. The record names the baseline, the execution, the condition, the actor and the time. `emit-fixer-work-order.mjs` reads the record, so a later pull of the closed execution's work order is refused as `stale_dispatch`. The marker now carries the fixer execution identity so the command can bind the receipt and the record to one execution.
 

@@ -4,7 +4,7 @@
 
 Accepted — 2026-11-02 ([issue 2999](https://github.com/mfittko/dev-loops/issues/2999)).
 
-Extends [0219](0219-sanctioned-close-of-an-abandoned-gate-fix-sequence.md). Accepted records remain unchanged, except that the 0219 grace-period sentence is reworded to match the shipped tolerance.
+Amends [0219](0219-sanctioned-close-of-an-abandoned-gate-fix-sequence.md) in three places: the command spelling (decision 8), the grace period, which is the runner TTL `resolveStaleRunnerMaxAgeMs` (decision 7), and the liveness rule, which is activity-based (decision 6). Accepted records remain unchanged.
 
 ## Context
 

@@ -39,7 +39,7 @@ export async function withSequenceLock(tmpRoot, baselineHeads, fn, { staleMs = 6
             if (Date.now() - statSync(stolen).mtimeMs <= staleMs) { try { renameSync(stolen, lock); } catch { rmSync(stolen, { recursive: true, force: true }); } } else rmSync(stolen, { recursive: true, force: true });
             continue;
           }
-          if (Date.now() >= deadline) throw Object.assign(new Error(`the sequence lock ${lock} is held by a concurrent close or pull; rerun once it finishes`), { code: "SEQUENCE_LOCK_BUSY" });
+          if (Date.now() >= deadline) throw Object.assign(new Error(`the sequence lock ${lock} is held by a concurrent close or pull; rerun once it finishes (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC)`), { code: "SEQUENCE_LOCK_BUSY" });
           await sleep(25);
         }
       }
