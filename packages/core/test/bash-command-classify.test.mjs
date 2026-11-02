@@ -1521,7 +1521,10 @@ test("tokenizeShellCommand: here-strings and heredocs (#2442)", () => {
   const two = tokenizeShellCommand("cat <<A <<B\n1\nA\n2\nB");
   assert.deepEqual(two.segments[0].heredocs.map((h) => [h.delimiter, h.body]), [["A", "1"], ["B", "2"]]);
   assert.equal(two.incomplete, false);
-  const sub = tokenizeShellCommand("git commit -m \"$(cat <<'EOF'\nmsg\nEOF\n)\"");
+  const segs = tokenizeShellCommand("true; cat <<EOF\nb\nEOF\ntrue").segments;
+  assert.equal(segs[1].heredocs[0].segment, 1);
+  assert.equal(segs[0].heredocs.length, 0);
+  const sub =tokenizeShellCommand("git commit -m \"$(cat <<'EOF'\nmsg\nEOF\n)\"");
   assert.equal(sub.incomplete, false);
   assert.equal(sub.segments.length, 1);
   assert.equal(sub.segments[0].words[3].subs[0].segments[0].heredocs[0].body, "msg");
@@ -1561,4 +1564,15 @@ test("stripQuotedLiterals callers keep their decisions on tokenizer-backed quoti
   assert.equal(commandIsSleepPollLoop("bash -c 'while true; do gh pr view 5; sleep 5; done'"), true);
   assert.equal(commandIsFileMarkerPollLoop("echo \"it's\"; while [ ! -f tmp/done ]; do sleep 2; done"), true);
   assert.equal(commandIsFileMarkerPollLoop("echo 'while [ ! -f tmp/done ]; do sleep 2; done'"), false);
+});
+
+test("stripQuotedLiterals blanks nothing near quote-pairing hazards, slice 1 stays fail-closed (#2442)", () => {
+  const LOOP = "while true; do gh pr view 5; sleep 5; done";
+  for (const c of [
+    `# it's\necho 'LOOP'`.replace("LOOP", LOOP),
+    `echo "a \\" ; ${LOOP}"`,
+    `echo $'a\\' ; ${LOOP} '`,
+    `cat <<'EOF'\nit's\nEOF\necho '${LOOP}'`,
+    `echo it\\'s; echo '${LOOP}'`,
+  ]) assert.equal(commandIsSleepPollLoop(c), true, c);
 });

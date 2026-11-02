@@ -84,6 +84,24 @@ const HEREDOC_BODY_WRAPPERS = [
   (f) => `git commit -m "$(cat <<'EOF'\n${f}\nEOF\n)"`,
 ];
 
+/** Quote-pairing hazards the old regex mispaired; the head must not allow any of them where the frozen copy denies. */
+const HAZARD_LOOP = "while true; do gh pr view 5; sleep 5; done";
+const HAZARD_SHAPES = [
+  (f) => `# it's\necho '${f}'`,
+  (f) => `echo "a \\" ; ${f}"`,
+  (f) => `echo $'a\\' ; ${f} '`,
+  (f) => `cat <<'EOF'\nit's\nEOF\necho '${f}'`,
+  (f) => `echo it\\'s; echo '${f}'`,
+  () => 'while [ ! -f tmp/d ]; do echo "a \\"; sleep 2"; done',
+  () => "gh api repos/mfittko/dev-loops/pulls/5 -f body=x it\\'s -X GET 'y'",
+  () => "gh pr edit 5 --title it\\'s --repo other/x 'y' --body z",
+];
+const HAZARD_ROWS = [];
+for (const shape of HAZARD_SHAPES) {
+  HAZARD_ROWS.push(shape(HAZARD_LOOP));
+  for (const wrap of [...LIVE_WRAPPERS, ...QUOTED_WRAPPERS]) HAZARD_ROWS.push(wrap(shape(HAZARD_LOOP)));
+}
+const HAZARD_SET = new Set(HAZARD_ROWS);
 /** The four shapes the closed PR #2741 head allowed and origin/main denies. */
 const RESIDUE_SHAPES = [
   `bash <<< "a b"'; node -e y'`,
@@ -111,6 +129,8 @@ const SALVAGED_DENY_ROWS = [
   "sed -n 's/`gh pr view 5`/while sleep 5/p' f",
   'echo "$(gh pr view 5',
   "cat > tmp/x <<'EOF'\nnode -e y",
+  "cat > tmp/x <<EOF\n`while true; do gh pr view 5; sleep 5; done`\nEOF",
+  "tee tmp/x <<-EOF\n$(while true; do gh pr view 5; sleep 5; done)\nEOF",
 ];
 
 const rowKey = (name, cmd) => `${name}: ${JSON.stringify(cmd)}`;
@@ -127,6 +147,7 @@ const SLICE1_FAIL_CLOSED_FLIPS = new Map();
   const R_COMMENT = "apostrophe in a # comment: the regex paired it across lines and blanked the loop; the tokenizer skips the comment";
   const R_ESCAPE = 'escaped \\" inside a double-quoted word: the regex paired the quotes wrongly and blanked the loop; the tokenizer keeps the loop visible';
   const R_NESTED = 'quoted "$(...)" inside a $(...) heredoc body: the regex blanked the inner quotes; the tokenizer keeps the whole substitution';
+  flip("commandContainsRawPrBodyEdit", "trailing # comment with an apostrophe is a quote-pairing hazard: the stripper blanks nothing, so the flag-looking text in the quoted title stays visible", "gh pr edit 5 --title 'a --body b' # it's");
   flip("commandContainsInlineInterpreter", R_UNCLOSED, 'echo "$(gh pr view 5');
   for (const sep of SEPARATORS) {
     for (const f of ["cat > src/a.mjs <<'EOF'", "cat > tmp/r.mjs <<'EOF' && node tmp/r.mjs"]) flip("commandContainsInlineInterpreter", R_HEREDOC, `${sep}${f}\necho done`);
@@ -145,7 +166,7 @@ const SLICE1_FAIL_CLOSED_FLIPS = new Map();
 const INTENDED_REMOVALS = new Set();
 
 function buildCorpus() {
-  const corpus = new Set([...RESIDUE_SHAPES, ...SALVAGED_DENY_ROWS]);
+  const corpus = new Set([...RESIDUE_SHAPES, ...SALVAGED_DENY_ROWS, ...HAZARD_ROWS]);
   const forms = [...INLINE_FORMS, ...WAIT_FORMS, ...PR_BODY_FORMS];
   for (const f of forms) {
     for (const sep of SEPARATORS) for (const suf of SUFFIXES) corpus.add(`${sep}${f}${suf}`);
@@ -193,7 +214,8 @@ test("differential: a frozen-allow/head-deny row is listed in SLICE1_FAIL_CLOSED
       if (!mainFn(cmd) && headFn(cmd)) {
         const key = rowKey(name, cmd);
         seen.add(key);
-        if (!SLICE1_FAIL_CLOSED_FLIPS.has(key)) unlisted.push(key);
+        // a quote-pairing hazard row is denied by design in slice 1 (the regex mispaired it; slice 2 makes the removal intended)
+        if (!SLICE1_FAIL_CLOSED_FLIPS.has(key) && !HAZARD_SET.has(cmd)) unlisted.push(key);
       }
     }
   }

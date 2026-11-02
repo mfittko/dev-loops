@@ -876,7 +876,7 @@ export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
     res.some((re) => {
       if (!re.test(segment)) return false;
       // An explicit --repo/-R that is provably another repo is out of scope (fail closed otherwise).
-      const repoFlag = /(?:^|\s)(?:--repo|-R)(?:=|\s+)(\S+)/.exec(stripQuotedLiterals(segment));
+      const repoFlag = hasQuotePairingHazard(segment) ? null : /(?:^|\s)(?:--repo|-R)(?:=|\s+)(\S+)/.exec(stripQuotedLiterals(segment));
       if (repoFlag && explicitRepoProvenForeign(repoFlag[1], managedSlug)) return false;
       const flags = stripQuotedLiterals(segment.replace(re, " "));
       return /(?:^|\s)(?:--body(?:-file)?(?=[=\s]|$)|-[bF](?=[=\s]|\S|$))/.test(flags);
@@ -905,7 +905,7 @@ export function commandContainsRawPrBodyApiWrite(command, managedSlug = null) {
     // `--input` supplies the whole payload, so it is a write without a method flag (gh then POSTs).
     if (/(?:^|\s)--input(?:=|\s)/.test(stripQuotedLiterals(segment))) return true;
     // gh defaults to POST when a field is present, so only an explicit GET/HEAD makes a body field a read.
-    if (/(?:^|\s)(?:--method|-X|-m)(?:=|\s*)["']?(?:GET|HEAD)\b/i.test(stripQuotedLiterals(segment))) return false;
+    if (!hasQuotePairingHazard(segment) && /(?:^|\s)(?:--method|-X|-m)(?:=|\s*)["']?(?:GET|HEAD)\b/i.test(stripQuotedLiterals(segment))) return false;
     // Not quote-stripped: the field is usually quoted (`-f "body=..."`), so blanking would hide it.
     return /(?:^|\s)(?:-[fF]|--(?:raw-)?field)(?:=|\s*)["']?body=/.test(segment);
   });
@@ -965,6 +965,7 @@ export function commandContainsCopilotSummonComment(command) {
  */
 function stripQuotedLiterals(command) {
   const { spans, incompleteAt } = tokenizeShellCommand(command);
+  if (hasQuotePairingHazard(command)) return command;
   const limit = incompleteAt < 0 ? command.length : incompleteAt;
   let out = "";
   let pos = 0;
@@ -977,6 +978,22 @@ function stripQuotedLiterals(command) {
     pos = end;
   }
   return out + command.slice(pos);
+}
+
+/**
+ * Slice 1 stays strictly fail-closed (#2442): where the old regex mispaired quotes, `stripQuotedLiterals` blanks
+ * nothing, and a caller that would read the unblanked text as more permissive (a foreign `--repo`, an explicit
+ * `-X GET`) must not. Slice 2 turns these into intended removals.
+ * ponytail: coarse text hazards (an escaped quote anywhere, a `#` comment with a quote, a quoted heredoc body).
+ * @param {string} command @returns {boolean}
+ */
+function hasQuotePairingHazard(command) {
+  return /\\['"]/.test(command) || /(?:^|[\s;&|(])#[^\n]*['"]/.test(command) || segmentsHaveQuotedHeredoc(tokenizeShellCommand(command).segments);
+}
+
+/** Whether any heredoc body (including inside `$(...)`) contains a quote character. */
+function segmentsHaveQuotedHeredoc(segments) {
+  return segments.some((s) => s.heredocs.some((h) => /['"]/.test(h.body)) || s.words.some((w) => segmentsHaveQuotedHeredoc(w.subs.flatMap((x) => x.segments))));
 }
 
 /**
@@ -1088,6 +1105,7 @@ export function tokenizeShellCommand(command) {
           let eol = command.indexOf("\n", lineStart);
           if (eol < 0) eol = n;
           const line = command.slice(lineStart, eol);
+          // A delimiter line at end of input needs no trailing newline (bash accepts it); `EOF)` is not a delimiter (bash warns), so it stays incomplete.
           if ((h.stripTabs ? line.replace(/^\t+/, "") : line) === h.delimiter) {
             h.body = command.slice(bodyStart, Math.max(bodyStart, lineStart - 1));
             i = Math.min(eol + 1, n);
