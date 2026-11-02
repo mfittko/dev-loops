@@ -1581,7 +1581,9 @@ function interpreterScanParts(command) {
   const tok = tokenizeShellCommand(command);
   if (tok.incomplete) return { segments: shellSegments(command), nested: [] };
   // A quoted word is inert only behind a text head or a repo script runner; any other head keeps its quoted words visible (origin/main's raw split), so `git bisect run 'x; node -e y'` is still seen.
-  const inertQuotes = (s) => { const h = segmentHead(s); const arg = s.words.filter((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op)[1]?.value ?? ""; return /^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")); };
+  // The head must be the bare name (no path, no env prefix) and the command must define no function, since either can rebind the name to a program that runs its quoted words.
+  const definesFunction = tok.segments.some((s) => s.words.some((w) => w.value === "function" || /\(\)?$/.test(w.value)));
+  const inertQuotes = (s) => { const h = rawHead(s); const arg = s.words.filter((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op)[1]?.value ?? ""; return !definesFunction && !h.includes("/") && !s.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw)) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/"))); };
   const segments = tok.segments.filter((s) => s.words.length).flatMap((s) => { const text = command.slice(s.words[0].start, s.words.at(-1).end); return inertQuotes(s) ? [text] : shellSegments(text); });
   const nested = [];
   const bodies = (segs) => { // the substitution slices cut quoted-delimiter bodies out, so read every heredoc body from the token tree

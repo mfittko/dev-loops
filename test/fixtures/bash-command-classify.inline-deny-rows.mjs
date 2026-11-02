@@ -81,4 +81,8 @@ export const INLINE_DENY_ROWS = [
   "xargs git rebase --exec 'true; node -e y'",
   "time git rebase --exec 'true; node -e y' HEAD~1",
   "GIT_EDITOR='true; node -e y' git commit",
+  "grep() { bash -c \"$1\"; }; grep 'x; node -e y'",
+  "echo() { eval \"$*\"; }; echo 'x; node -e y'",
+  "tmp/echo 'x; node -e y'",
+  "PATH=tmp grep 'x; node -e y'",
 ];
