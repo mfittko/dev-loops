@@ -6,6 +6,8 @@ Accepted, 2026-11-01 ([issue 2999](https://github.com/mfittko/dev-loops/issues/2
 
 Amends ADR 0143 and ADR 0213. Accepted records remain unchanged.
 
+Amended by [ADR 0229](0229-close-sequence-admission-is-atomic-and-liveness-is-activity-based.md) for the command spelling (`dev-loops-run cli/index.mjs gate close-sequence ...`), the grace period (the runner TTL, `resolveStaleRunnerMaxAgeMs`) and the activity-based liveness rule.
+
 ## Context
 
 Under `PRE-PUSH-DELTA-PUSH-AUTHORITY`, a gate fix sequence writes the marker `tmp/gate-delta/<baseline>.sequence`. While the marker is active and not granted, the `pre-push` hook refuses pushes to the marker's branch. A sequence can be abandoned: the fixer is never dispatched, the fixer dies, or the PR head moves outside the loop. The abandoned marker then locks pushes. Before this record, the only recovery was to delete the marker file by hand, and the refusal reason told the operator to do that. An agent had no sanctioned way to end the lock.

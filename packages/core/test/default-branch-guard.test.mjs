@@ -463,7 +463,7 @@ test("renderGuardHook emits a runnable script that names what it refused", () =>
 });
 
 test("the pre-push fallback refusal names the runnable close-sequence invocation", () => {
-  assert.ok(renderGuardHook("pre-push", "main").includes("dev-loops-run scripts/loop/close-gate-sequence.mjs --head <baseline sha> --repo <owner/name> --pr <number>"));
+  assert.ok(renderGuardHook("pre-push", "main").includes("dev-loops-run cli/index.mjs gate close-sequence --head <baseline sha> --repo <owner/name> --pr <number>"));
 });
 
 // renderGuardHook is the function that actually interpolates the branch name

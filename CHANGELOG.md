@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.9-pre.3
+
+### Changed
+
+- Logic-change draft rounds now run the `state-concurrency` review angle, extended with precondition, ownership-binding and liveness checks (#3005)
+- The gate reviewer brief now asks for a sibling sweep after a finding: the opposite direction, concurrent invocation, alternate input forms and every call site of a fix (#3005)
+- The gate context adds importers and sibling functions of a changed exported function, state writer or guard, within the `gates.contextExpansion` cap; the briefing lists dropped files (#3005)
+
+### Fixed
+
+- The pre-push delta input accepts the cap-round findings log across the sealed fixer chain plus a base-only merge, and its refusal names the remedy (#2462)
+- Fixer join is final on write; a notification fallback waits for the final notification; `wait-for-units --artifact` needs `--after` to reject a stale file (#2462)
+- An installed `dev-loops` CLI runs the source checkout's CLI for `gate`, `loop` and `pr`, and names a version difference on stderr (#2662)
+- Judge work order carries the verdict schema, the denial names Read, and the pull owns the digest check so Pi and Claude judges compute none (#2678)
+- The judge no longer acts on removing a slice PR's only closing reference (#2883)
+- A PR runner claim is released at hand-back with an explicit run id, `status` reports owner liveness, and `takeover` refuses a live owner (#2884)
+- A terminal stop on Claude Code releases the PR runner claim with an explicit run id, and the takeover pin payload has one shared helper (#2884)
+- Closing an abandoned fix sequence is atomic with fixer pull admission; liveness uses branch activity. `close-sequence --head` must be a full 40 or 64 char lowercase hex SHA (#2999)
+- Gate coordination at the Copilot round cap returns `wait_for_ci` or the thread route, not a remedy-less `report_blocked`; an orphaned cap-round baseline names the restart (#3002)
+- `pr waive-adr-tripwire` accepts the cap-round-fixed proof, `gate extend-cap-round-chain` extends the sealed chain over docs/tests-only commits, refusals name remedies (#3010)
+
 ## 1.0.9-pre.2
 
 ### Changed

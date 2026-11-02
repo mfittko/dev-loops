@@ -9,8 +9,10 @@ import { test } from "bun:test";
 import { clearSequenceMarker, recoveryHint, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { renderGuardHook } from "@dev-loops/core/loop/default-branch-guard";
 import { checkFixPushAuthority, parsePushedShas } from "../../scripts/loop/check-fix-push-authority.mjs";
-import { FIXER_GRACE_MS, closeGateSequence } from "../../scripts/loop/close-gate-sequence.mjs";
+import { closeGateSequence, fixerGraceMs } from "../../scripts/loop/close-gate-sequence.mjs";
 import { withTempDir } from "../_helpers.mjs";
+
+const FIXER_GRACE_MS = fixerGraceMs();
 
 const env = { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
 
@@ -117,7 +119,8 @@ test("the refusal names the no-commit close command with the baseline head, and 
     assert.equal(refused.ok, false);
     assert.match(refused.reason, new RegExp(`check-pre-push-delta\\.mjs \\(--act-list <act-list> --findings-log <findings-log> \\| --threads-file <threads-file> --repo <owner/name> --pr <n>\\) --baseline ${head} .*--fixer-plan <fixer-plan> --site-coverage <handback>.*no_commit`));
     assert.doesNotMatch(refused.reason, /delete the marker|delet/i);
-    assert.match(refused.reason, /close-gate-sequence\.mjs/);
+    assert.match(refused.reason, /dev-loops-run cli\/index\.mjs gate close-sequence --head <baseline sha> --repo <owner\/name> --pr <number>/);
+    assert.doesNotMatch(refused.reason, /close-gate-sequence\.mjs/);
     clearSequenceMarker(path.join(root, "tmp"), head);
     assert.deepEqual(checkFixPushAuthority(root), { ok: true }, "a cleared marker (a commit_only round without a fix commit) guards nothing");
   });

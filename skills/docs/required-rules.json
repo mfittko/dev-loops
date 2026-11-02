@@ -807,6 +807,10 @@
       "enforcement": "runtime"
     },
     {
+      "id": "PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC",
+      "enforcement": "runtime"
+    },
+    {
       "id": "PRE-PUSH-DELTA-FRESHNESS",
       "enforcement": "doc"
     },

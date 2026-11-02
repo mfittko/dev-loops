@@ -123,7 +123,9 @@ export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, rec
   if (workOrderText === null || materializationHash(workOrderText) !== unit.materializationHash) throw new WorkOrderRefusal("local_materialization_integrity_failure", `local work order ${unit.materializationPath} is missing or no longer matches materializationHash while workOrderDigest still reproduces; never re-dispatch a different work order`);
   const receipt = { executionIdentity: execution, role, workOrderRef: ref, workOrderDigest: digest, materializationHash: unit.materializationHash, subject: unit.subject, pulledAt: new Date().toISOString() };
   const receiptPath = pullReceiptPath(receiptTmpRoot, ref);
-  await writeJson(receiptPath, receipt);
+  // An adapter may admit the write atomically with its own last staleness check (the fixer's closure record).
+  const writeReceipt = () => writeJson(receiptPath, receipt);
+  await (adapter.admit ? adapter.admit(unit, writeReceipt) : writeReceipt());
   return { workOrderText, receipt, receiptPath };
 }
 
