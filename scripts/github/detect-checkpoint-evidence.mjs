@@ -40,9 +40,8 @@ import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { carryFromPostedVerdict } from "./_carried-verdict.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { verifyFreshHumanApproval } from "@dev-loops/core/loop/merge-approval";
+import { verifyFreshHumanApproval, projectSubmittedReviewFacts } from "@dev-loops/core/loop/merge-approval";
 import { countUnresolvedHumanChangesRequested, resolveSizeBudgetHumanApprovalRequired } from "@dev-loops/core/loop/size-budget-merge-gate";
-import { SUBMITTED_REVIEW_STATES } from "@dev-loops/core/github/copilot-helpers";
 import { parseHeadDeclaredKeys } from "./head-declared-keys-schema.mjs";
 const USAGE = `Usage: detect-checkpoint-evidence.mjs --repo <owner/name> --pr <number>
 Fetch the live PR head SHA and visible PR issue comments, then summarize the
@@ -1159,11 +1158,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
       { env, ghCommand, runChild, restFallback: () => restGetPaginatedJson(prReviewsApiPath(options.repo, options.pr), env) },
     );
     prReviews = normalizePrReviewsPayload(reviewsRaw);
-    reviewFacts = flattenPaginatedSlurp(reviewsRaw)
-      .filter((r) => SUBMITTED_REVIEW_STATES.has(r?.state))
-      .map((r) => ({
-        login: r?.user?.login ?? null, state: r?.state ?? null, commit_id: r?.commit_id ?? null, type: r?.user?.type ?? null,
-      }));
+    reviewFacts = projectSubmittedReviewFacts(flattenPaginatedSlurp(reviewsRaw));
   } catch {
     // Graceful fallback for the comment/verdict summarizers below: PR reviews
     // fetch failure is non-fatal there, and they continue with issue comments

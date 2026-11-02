@@ -80,5 +80,5 @@ test("merge passes gate_evidence once the act list is empty", async () => {
   assert.equal(result.ok, true);
   assert.equal(result.merged, true);
   assert.equal(result.copilotDisposition, "copilot_gate_disabled");
-  assert.equal(calls.runChild.length, 1);
+  assert.equal(calls.runChild.filter((c) => c.args[1] === "merge").length, 1);
 });
