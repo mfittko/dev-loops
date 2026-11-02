@@ -583,6 +583,10 @@ Release-on-death & dead-claim supersession (#1706):
   nothing: the handoff stays fail-closed on the ownership conflict and writes no state. A claim
   whose `claimedAt`/`updatedAt` do not parse is corruption rather than an expired claim, so it
   refuses the same way instead of reporting a `stale_max_age` recovery.
+- Every takeover caller builds that pin with the shared `pinObservedClaim(activeRun)` helper, which
+  maps a non-string member to `null`. At a terminal stop with no env run id, the automatic release
+  reports `runnerRelease.status: skipped_no_async_run_id` with a `remedy` naming the explicit
+  `handoff --run-id` command (`RUNNER-HANDOFF-TEARDOWN`).
 - The takeover guard pins the claim the detection read observed, not only its owner: the claim
   helper accepts `expectPreviousRunId` (the observed run id) plus `expectPreviousClaim`
   (`{ claimedAt, updatedAt }`) and refuses with `active_run_exists`, writing no state, when the

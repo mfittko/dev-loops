@@ -16,6 +16,7 @@ import {
   ensureAsyncRunnerOwnership,
   handoffRunnerOwnership,
   loadRunnerCoordinationState,
+  pinObservedClaim,
   recordExitSignalForRunner,
   recordWatchClaim,
   releaseAsyncRunnerOwnership,
@@ -2073,14 +2074,15 @@ test("locked re-check ownership_lost refusal names the owner liveness", async ()
   const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-locked-verdict-"));
   try {
     const claim = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-R", cwd });
-    let pending;
-    await withStateFileLock(claim.filePath, async () => {
-      pending = assertRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-R", cwd, requireExisting: true });
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      const state = JSON.parse(await readFile(claim.filePath, "utf8"));
-      state.activeRun.runId = "run-S";
-      await writeFile(claim.filePath, JSON.stringify(state));
-    });
+    const stateR = await readFile(claim.filePath, "utf8");
+    const stateS = JSON.stringify({ ...JSON.parse(stateR), activeRun: { ...JSON.parse(stateR).activeRun, runId: "run-S" } });
+    // The state file becomes a FIFO: each read blocks until the test writes, so the lock-free read
+    // and the locked re-read are ordered by data flow, with no timing. A writer opens only once a reader waits.
+    await rm(claim.filePath);
+    await execFileAsync("mkfifo", [claim.filePath]);
+    const pending = assertRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-R", cwd, requireExisting: true });
+    await writeFile(claim.filePath, stateR);
+    await writeFile(claim.filePath, stateS);
     const result = await pending;
     assert.equal(result.error, "ownership_lost");
     assert.match(result.message, /now owned by run run-S/);
@@ -2129,6 +2131,47 @@ test("takeover of a stale corrupt-timestamp owner pins the owner run id", async 
     assert.equal(taken.status, "taken_over");
     assert.equal(taken.previousRun.runId, "owner");
   } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("CLI takeover pins the observed claim: a heartbeat between the read and the locked write refuses", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-takeover-cli-pin-"));
+  try {
+    const claim = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "owner", cwd });
+    const stale = JSON.parse(await readFile(claim.filePath, "utf8"));
+    stale.activeRun.updatedAt = "not-a-date";
+    const fresh = structuredClone(stale);
+    fresh.activeRun.updatedAt = new Date().toISOString();
+    // FIFO state file: reads are ordered by data flow. Read 1 (CLI pre-check) sees the stale owner,
+    // read 2 (locked write) sees the same owner after a heartbeat. Without the pin the takeover would succeed.
+    await rm(claim.filePath);
+    await execFileAsync("mkfifo", [claim.filePath]);
+    const pending = runPrRunnerCoordination({ command: "takeover", repo: "owner/repo", pr: 17, runId: "C" }, { env: {}, cwd });
+    await writeFile(claim.filePath, JSON.stringify(stale));
+    await writeFile(claim.filePath, JSON.stringify(fresh));
+    const result = await pending;
+    assert.equal(result.error, "active_run_exists");
+    assert.equal(result.activeRun.runId, "owner");
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("pinObservedClaim coerces a non-string member to null", () => {
+  assert.deepEqual(pinObservedClaim({ runId: "r", claimedAt: "a", updatedAt: 5 }), {
+    expectPreviousRunId: "r",
+    expectPreviousClaim: { claimedAt: "a", updatedAt: null },
+  });
+  assert.deepEqual(pinObservedClaim(null), { expectPreviousRunId: null, expectPreviousClaim: { claimedAt: null, updatedAt: null } });
+});
+
+test("the coordinator prompt prefixes terminal-reaching calls with the claim run id and runs the explicit handoff when the release was skipped", async () => {
+  const prompt = await readFile(new URL("../../agents/dev-loop.agent.md", import.meta.url), "utf8");
+  assert.match(prompt, /Prefix every `loop handoff`, `detect-pr-gate-coordination-state`[^\n]*`DEVLOOPS_RUN_ID=<the id used at claim>`/);
+  assert.match(prompt, /runnerRelease\.status: skipped_no_async_run_id/);
+});
+
+test("a skipped automatic release names the explicit handoff command", async () => {
+  const skipped = await releaseAsyncRunnerOwnership({ repo: "owner/repo", pr: 17, env: {} });
+  assert.equal(skipped.status, "skipped_no_async_run_id");
+  assert.match(skipped.remedy, /pr-runner-coordination\.mjs handoff --repo owner\/repo --pr 17 --run-id/);
 });
 
 test("claim refusal wording follows the injected clock and max age, not the host", async () => {
