@@ -1322,8 +1322,8 @@ test("AC5: the review-body task shares the full-phase steps, so it refuses a bra
 test("AC3: exactly one source; --gate and --delta-result refuse with --review-id", async () => {
   await withFixture(async ({ head, files, emit }) => {
     const review = reviewFor(head);
-    await assert.rejects(emit({ actListFile: undefined, gate: undefined, deltaResult: undefined }), /exactly one of --act-list-file, --threads-file and --review-id/);
-    await assert.rejects(emitReview(emit, [review], { threadsFile: files.threads }), /exactly one of --act-list-file, --threads-file and --review-id/);
+    await assert.rejects(emit({ actListFile: undefined, gate: undefined, deltaResult: undefined }), /exactly one of --act-list-file, --threads-file, --review-id and --ci-file/);
+    await assert.rejects(emitReview(emit, [review], { threadsFile: files.threads }), /exactly one of --act-list-file, --threads-file, --review-id and --ci-file/);
     await assert.rejects(emitReview(emit, [review], { actListFile: files.actList, gate: "draft_gate" }), /exactly one of/);
     await assert.rejects(emitReview(emit, [review], { gate: "draft_gate" }), /--gate applies only to an --act-list-file source/);
     await assert.rejects(emitReview(emit, [review], { deltaResult: files.delta }), /--delta-result applies only to an --act-list-file source/);
@@ -1394,7 +1394,7 @@ test("AC6: a review-body unit pulls, and an edited snapshot makes it stale_dispa
 test("F1: missing or conflicting source and authority refuse before dispatch", async () => {
   await withFixture(async ({ root, wt, head, files, emit }) => {
     await assert.rejects(emit({ actListFile: path.join(wt, "missing.json") }), /required fixer source act-list is missing/);
-    await assert.rejects(emit({ actListFile: undefined }), /exactly one of --act-list-file, --threads-file and --review-id/);
+    await assert.rejects(emit({ actListFile: undefined }), /exactly one of --act-list-file, --threads-file, --review-id and --ci-file/);
     await assert.rejects(emit({ threadsFile: files.threads }), /exactly one of/);
     await assert.rejects(emit({ gate: undefined }), /needs --gate/);
     await assert.rejects(emit({ actListFile: files.threads }), /not a non-empty judge-pass --out array/);
@@ -2968,5 +2968,105 @@ test("review source: a non-array review list, a missing commit_id, an empty id a
     await assert.rejects(emitReview(emit, [reviewFor(head)], { reviewId: "" }), /--review-id must be a review node id/);
     await assert.rejects(emitReview(emit, [reviewFor(head, { user: null })]), /unknown author.*--threads-file/);
     await assert.rejects(emitReview(emit, [copilotReviewFor("d".repeat(40))]), /re-review the head and pass the new node id/);
+  });
+});
+
+// --ci-file source (issue 2787 C11, ADR 0235): the wait-pr-checks JSON of a red head.
+const ciFailureFor = (head, over = {}) => ({ ok: true, status: "failure", ciStatus: "failure", settled: true, headSha: head, failedChecks: [{ name: "build (24)", conclusion: "failure" }], ...over });
+const emitCi = async (fx, over = {}, file = ciFailureFor(fx.head)) => {
+  const ciFile = path.join(path.dirname(fx.files.actList), "ci.json");
+  if (file !== null) await writeFile(ciFile, typeof file === "string" ? file : JSON.stringify(file));
+  return fx.emit({ actListFile: undefined, gate: undefined, deltaResult: undefined, ciFile, phase: "full", ...over });
+};
+
+test("issue 2787 C11: --ci-file emits a ci-failure order that names the failing checks, reads no delta record and grants the push", async () => {
+  await withFixture(async (fx) => {
+    const unit = await emitCi(fx, {}, ciFailureFor(fx.head, { failedChecks: [{ name: "build (24)" }, { name: "lint \"x\"" }] }));
+    const { workOrder } = unit;
+    assert.equal(workOrder.source, "ci-failure");
+    assert.deepEqual(workOrder.requiredReads.map((read) => read.kind), ["ci-failure"]);
+    const text = await readFile(unit.promptPath, "utf8");
+    assert.equal(text, renderWorkOrder(workOrder));
+    assert.match(text, /"build \(24\)"/);
+    assert.match(text, /"lint \\"x\\""/);
+    assert.match(text, /git ls-remote origin/);
+    assert.match(text, /wait-pr-checks\.mjs/);
+    assert.match(text, /hand back `ci_failed` with the failing check names/);
+    assert.match(text, /\{ "headSha": "<full pushed SHA>" \}/);
+    assert.match(text, /Edit and Write tools/);
+    assert.doesNotMatch(text, /--construct/);
+    assert.equal(JSON.parse(await readFile(path.join(fx.root, "tmp", "gate-delta", `${fx.head}.sequence`), "utf8")).fullGranted, true);
+    assert.equal(unit.joinRef, workOrder.outputRefs[0]);
+    assert.equal(pull(unit, fx.root).status, 0);
+  });
+});
+
+test("issue 2787 C17: a ci-failure plan emits the claude, pi and codex adapter payloads", async () => {
+  await withFixture(async (fx) => {
+    const unit = await emitCi(fx);
+    for (const [harness, textKey] of [["claude", "prompt"], ["pi", "task"], ["codex", "message"]]) {
+      const payload = buildFixerDispatchPayload({ harness, plan: unit, cwd: fx.wt });
+      assert.equal(payload[textKey], buildDispatchPointer(unit));
+      assertFixerDispatchPayload({ harness, payload, plan: unit, cwd: fx.wt });
+    }
+  });
+});
+
+test("issue 2787 C11: a ci-failure file that is missing, green, pending, for another head or empty refuses with a next action", async () => {
+  await withFixture(async (fx) => {
+    const { head } = fx;
+    await assert.rejects(emitCi(fx, { ciFile: path.join(fx.wt, "missing.json") }, null), /required fixer source ci-failure is missing/);
+    await assert.rejects(emitCi(fx, {}, "not json"), /ci-failure is not JSON/);
+    for (const bad of [{ ok: false }, { status: "success", ciStatus: "success" }, { status: "pending", ciStatus: "pending" }, { ciStatus: "pending" }]) {
+      await assert.rejects(emitCi(fx, {}, ciFailureFor(head, bad)), /wait-pr-checks.*nothing to fix|red head/);
+    }
+    await assert.rejects(emitCi(fx, {}, ciFailureFor("d".repeat(40))), /headSha.*not --head-sha.*wait-pr-checks/);
+    for (const failedChecks of [undefined, [], [{ name: "" }], [{ name: 7 }], [{ name: "ok" }, {}]]) {
+      await assert.rejects(emitCi(fx, {}, ciFailureFor(head, { failedChecks })), /non-empty failedChecks/);
+    }
+  });
+});
+
+test("issue 2787 C11: --ci-file takes only --phase full and no other source, --gate or --delta-result", async () => {
+  await withFixture(async (fx) => {
+    await assert.rejects(emitCi(fx, { phase: "commit_only" }), /--ci-file takes only --phase full.*re-run with --phase full/);
+    await assert.rejects(emitCi(fx, { threadsFile: fx.files.threads }), /exactly one of --act-list-file, --threads-file, --review-id and --ci-file/);
+    await assert.rejects(emitCi(fx, { actListFile: fx.files.actList, gate: "draft_gate" }), /exactly one of/);
+    await assert.rejects(emitCi(fx, { gate: "draft_gate" }), /--gate applies only to an --act-list-file source/);
+    await assert.rejects(emitCi(fx, { deltaResult: fx.files.delta }), /--delta-result applies only to an --act-list-file source/);
+  });
+});
+
+// Delta findings on the thread route (issue 2787 C12, ADR 0235).
+const FINDING = { severity: "high", summary: "new null deref in src/b.mjs", evidence: "src/b.mjs:9 reads x.y before the guard", site: "src/b.mjs:9" };
+const threadsCommitOnly = (fx, over = {}) => fx.emit({ actListFile: undefined, gate: undefined, deltaResult: undefined, threadsFile: fx.files.threads, phase: "commit_only", ...over });
+
+test("issue 2787 C12: a thread-route fix_and_rereview record with findings re-emits commit_only carrying them as act items", async () => {
+  await withFixture(async (fx) => {
+    const none = await threadsCommitOnly(fx);
+    assert.equal("deltaFindings" in none.workOrder, false);
+    assert.doesNotMatch(await readFile(none.promptPath, "utf8"), /Delta review findings/);
+    await fx.writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix", items: [{ ref: "T1", status: "resolved" }], findings: [FINDING] });
+    const unit = await threadsCommitOnly(fx);
+    assert.deepEqual(unit.workOrder.deltaFindings, [FINDING]);
+    const text = await readFile(unit.promptPath, "utf8");
+    assert.equal(text, renderWorkOrder(unit.workOrder));
+    assert.match(text, /Delta review findings to fix as act items:\n1\. high: "new null deref in src\/b\.mjs" \(evidence: "src\/b\.mjs:9 reads x\.y before the guard"\)/);
+    assert.notEqual(unit.workOrderDigest, none.workOrderDigest);
+    // The full phase still refuses the non-clearing record, and a clearing record replaces it.
+    await assert.rejects(fx.emit({ ...threadsOnlyFull(fx) }), /fix_and_rereview/);
+    await fx.writeRecord({});
+    assert.equal((await fx.emit({ ...threadsOnlyFull(fx) })).workOrder.phase, "full");
+  });
+});
+const threadsOnlyFull = (fx) => ({ actListFile: undefined, gate: undefined, deltaResult: undefined, threadsFile: fx.files.threads, phase: "full" });
+
+test("issue 2787 C12: malformed delta findings refuse", async () => {
+  await withFixture(async (fx) => {
+    const bad = [{ not: "array" }, Array.from({ length: 21 }, () => FINDING), [{ ...FINDING, severity: 3 }], [{ ...FINDING, summary: undefined }], ["text"], [{ ...FINDING, evidence: "x".repeat(2001) }]];
+    for (const findings of bad) {
+      await fx.writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix", findings });
+      await assert.rejects(threadsCommitOnly(fx), /delta record findings/);
+    }
   });
 });

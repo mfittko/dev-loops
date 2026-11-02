@@ -268,6 +268,24 @@ export function buildDeltaInput({ sequence, candidateHead, specIdentity = null, 
 }
 
 /**
+ * The findings a commit_only fixer must act on (agents/fixer.agent.md step 7): every medium-or-higher new finding without
+ * `residueOf` and every open residue, compact for the sealed delta record (ADR 0235).
+ * ponytail: at most 20 entries of at most 2000 characters, the emitter's intake bounds; raise both together.
+ * @param {{ newFindings?: object[] }} result
+ * @returns {Array<{severity: string, summary: string, evidence: string, residueOf?: string, site?: string}>}
+ */
+export function deltaFixerFindings(result) {
+  const findings = Array.isArray(result?.newFindings) ? result.newFindings : [];
+  return findings
+    .filter((f) => isOpenResidue(f) || (!nonEmpty(f?.residueOf) && severityRank(f?.severity) <= MEDIUM_RANK))
+    .slice(0, 20)
+    .map((f) => ({
+      severity: f.severity, summary: f.summary.slice(0, 2000), evidence: [].concat(f.evidence ?? []).join("; ").slice(0, 2000),
+      ...(nonEmpty(f.residueOf) ? { residueOf: f.residueOf } : {}), ...(nonEmpty(f.site) ? { site: f.site } : {}),
+    }));
+}
+
+/**
  * The outcome the item statuses and new findings imply: locally_clear only when
  * every act item is resolved and no new finding is medium or higher.
  * @param {{ actionableItems?: Array<{status?: string}>, newFindings?: Array<{severity?: string}> }} result
