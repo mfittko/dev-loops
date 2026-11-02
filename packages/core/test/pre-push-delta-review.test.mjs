@@ -7,6 +7,7 @@ import {
   DELTA_MAX_INVOCATIONS,
   buildDeltaInput,
   decideDeltaNextStep,
+  deltaFixerFindings,
   deriveDeltaOutcome,
   isDeltaResultFresh,
   resolveDeltaTrigger,
@@ -601,4 +602,27 @@ test("parseDiff reads a TAB-suffixed spaced path and fails closed on an unparsea
   assert.throws(() => collectStaleSurfaceHits({ diffText: quoted, grep }), /could not be parsed/);
   const orphan = ["diff --git a/x b/x", "@@ -1 +0,0 @@", `-${sentence}`].join("\n");
   assert.throws(() => collectStaleSurfaceHits({ diffText: orphan, grep }), /no parsed file header/);
+});
+
+test("deltaFixerFindings keeps medium-or-higher new findings and open residue, compactly", () => {
+  const f = (over) => ({ severity: "high", summary: "s", evidence: ["e1", "e2"], ...over });
+  const result = { newFindings: [
+    f({ summary: "high" }), f({ severity: "medium", summary: "medium", site: "a.mjs:1" }), f({ severity: "low", summary: "low" }),
+    f({ severity: "low", summary: "open residue", residueOf: "ref1" }), f({ severity: "low", summary: "skipped residue", residueOf: "ref1", skipReason: "why" }),
+    f({ severity: "high", summary: "high residue", residueOf: "ref2" }),
+  ] };
+  assert.deepEqual(deltaFixerFindings(result), [
+    { severity: "high", summary: "high", evidence: "e1; e2" },
+    { severity: "medium", summary: "medium", evidence: "e1; e2", site: "a.mjs:1" },
+    { severity: "low", summary: "open residue", evidence: "e1; e2", residueOf: "ref1" },
+    { severity: "high", summary: "high residue", evidence: "e1; e2", residueOf: "ref2" },
+  ]);
+  assert.deepEqual(deltaFixerFindings({ newFindings: [f({ severity: "low" })] }), []);
+  assert.deepEqual(deltaFixerFindings({}), []);
+  assert.deepEqual(deltaFixerFindings({ newFindings: [{ residueOf: "T1", summary: "s", evidence: ["e"] }, f({ severity: "bogus", residueOf: "T1" })] }), []);
+  assert.deepEqual(deltaFixerFindings({ newFindings: [{ severity: "high", evidence: ["x"] }, f({ summary: 5 })] }), []);
+  assert.equal(deltaFixerFindings({ newFindings: Array.from({ length: 25 }, () => f()) }).length, 20);
+  assert.equal(deltaFixerFindings({ newFindings: [f({ evidence: ["x".repeat(3000)] })] })[0].evidence.length, 2000);
+  assert.equal(deltaFixerFindings({ newFindings: [f({ site: "x".repeat(2001) })] })[0].site.length, 2000);
+  assert.equal(deltaFixerFindings({ newFindings: [f({ severity: "high" + " ".repeat(2001) })] })[0].severity, "high");
 });

@@ -862,7 +862,8 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
       const order = plan.workOrder;
       const foreign = (typeof order.target?.repo === "string" && order.target.repo !== repo)
         || (Number.isInteger(order.target?.pr) && order.target.pr !== pr);
-      if (!foreign && order.phase !== "commit_only") {
+      // A ci-failure plan (ADR 0235) has no thread to verify: its evidence is the settled green CI and the full gate round.
+      if (!foreign && order.phase !== "commit_only" && order.source !== "ci-failure") {
         if (order.role !== "fixer" || order.phase !== "full" || order.target?.repo !== repo || order.target?.pr !== pr || !order.headSha) {
           throw new Error("active fixer plan is not a full-phase fixer work order for this PR");
         }

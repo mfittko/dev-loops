@@ -1527,7 +1527,7 @@ test("decideFixerWriteGuard denies every in-checkout write without a current pul
 test("decideFixerWriteGuard no-grant deny names the emitter and its three sources; a grant on another path keeps its text", () => {
   const { reason } = fixer(`${FX_WT}/src/x.mjs`, { grants: [] });
   assert.match(reason, /dev-loops-run scripts\/loop\/emit-fixer-work-order\.mjs/);
-  for (const source of ["--act-list-file <path> --gate <gate>", "--threads-file <path>", "--review-id <review node id>"]) assert.ok(reason.includes(source), source);
+  for (const source of ["--act-list-file <path> --gate <gate>", "--threads-file <path>", "--review-id <review node id>", "--ci-file <path>"]) assert.ok(reason.includes(source), source);
   assert.doesNotMatch(fixer(`${FX_WT}/test/b.test.mjs`).reason, /emit-fixer-work-order/);
 });
 

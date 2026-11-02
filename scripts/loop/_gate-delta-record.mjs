@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto";
 import { linkSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { deltaCoverageBinding } from "@dev-loops/core/loop/pre-push-delta-review";
+import { deltaCoverageBinding, deltaFixerFindings } from "@dev-loops/core/loop/pre-push-delta-review";
 
 /** The next steps that authorize the committed candidate to be pushed. */
 export const DELTA_CLEARING_NEXT_STEPS = Object.freeze(["push", "push_to_gate"]);
@@ -68,6 +68,7 @@ export function listGateDeltaRecords(tmpRoot) {
 /** Write the decision of one `--result` run. Returns the record path. */
 export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocation, decision, result }) {
   const items = Array.isArray(result?.actionableItems) ? result.actionableItems.map((item) => ({ ref: item?.ref, status: item?.status })) : [];
+  const findings = deltaFixerFindings(result);
   const record = {
     ...deltaCoverageBinding(decision),
     reviewBaselineHead: sequence.reviewBaselineHead,
@@ -77,6 +78,7 @@ export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocat
     outcome: decision.outcome,
     nextStep: decision.nextStep,
     items,
+    ...(findings.length > 0 ? { findings } : {}),
   };
   return writeSealedGateDeltaRecord(tmpRoot, sequence.reviewBaselineHead, record);
 }
