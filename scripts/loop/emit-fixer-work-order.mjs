@@ -49,7 +49,7 @@ read live from the PR and pinned as review-body.json; it refuses a bot other tha
 and takes no --gate or --delta-result. A review-body source has no delta-review route: it
 takes only --phase full, needs no delta decision, ignores any delta record for the head, and
 refuses --phase commit_only. --ci-file <path> takes the wait-pr-checks.mjs JSON of a red head (status and ciStatus
-"failure", headSha equal to --head-sha, non-blank failedChecks[].name, at most 50 entries, names at most 200 characters) as a ci-failure source with the same shape:
+"failure", headSha equal to --head-sha, non-blank failedChecks[].name; the order carries the first 50 names cut at 200 characters and the omitted count) as a ci-failure source with the same shape:
 --phase full only, no delta record, no --gate or --delta-result; its handoff is { headSha } and joinRef is the outputRef.
 On the threads source a commit_only emission carries the delta record's findings[] as deltaFindings act items.
 For the other sources --phase full needs a clearing
@@ -205,7 +205,7 @@ const CI_UNSETTLED_HANDBACK = "hand back `ci_pending` (`ci_unknown` when the che
 function ciFailureFullTask(workOrder, dispositionPath) {
   const { branch, wait } = branchAndWait(workOrder);
   const checks = workOrder.requiredReads.find((read) => read.kind === "ci-failure");
-  return `Fix only what the failing checks report (${workOrder.failedChecks.map((name) => JSON.stringify(name)).join(", ")}), per agents/fixer.agent.md; the \`ci-failure\` read (${JSON.stringify(checks.path)}) holds the wait-pr-checks result. No thread exists: post no reply and resolve no thread.
+  return `Fix only what the failing checks report (${workOrder.failedChecks.map((name) => JSON.stringify(name)).join(", ")}${workOrder.failedChecksOmitted ? `, and ${workOrder.failedChecksOmitted} more failing checks not listed; the \`ci-failure\` read lists all of them` : ""}), per agents/fixer.agent.md; the \`ci-failure\` read (${JSON.stringify(checks.path)}) holds the wait-pr-checks result. No thread exists: post no reply and resolve no thread.
 Do these steps in this order; none may be skipped or reordered:
 1. Commit the fixes and push them to branch ${JSON.stringify(branch)}.
 2. Confirm the remote head equals the pushed commit: run \`git ls-remote origin\` with the ref ${JSON.stringify(`refs/heads/${branch}`)}; it must print the pushed commit SHA. If it does not, stop and report.
@@ -379,7 +379,6 @@ export async function emitFixerWorkOrder({
     if (ci?.ok !== true || ci.status !== "failure" || ci.ciStatus !== "failure") throw new Refusal(`ci file ${ciFile} is not a red wait-pr-checks result (status ${JSON.stringify(ci?.status)}, ciStatus ${JSON.stringify(ci?.ciStatus)}); a green, pending or failed read has nothing to fix; ${next}`);
     if (ci.headSha !== headSha) throw new Refusal(`ci file ${ciFile} is for headSha ${JSON.stringify(ci.headSha)}, not --head-sha ${headSha}; ${next}`);
     if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name.trim() !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`);
-    if (ci.failedChecks.length > 50 || ci.failedChecks.some((check) => check.name.length > 200)) throw new Refusal(`ci file ${ciFile} holds failedChecks of at most 50 entries with names of at most 200 characters; ${next}`);
   }
   const isActItem = (f) => f?.judgeDisposition === "act" && VALID_SEVERITIES.has(f.severity) && typeof f.summary === "string" && f.summary.trim() !== "";
   if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
@@ -467,7 +466,8 @@ export async function emitFixerWorkOrder({
   }
   await capture.read(gateDeltaRecordPath(tmpRoot, headSha));
   // ADR 0235: a commit_only thread-route re-dispatch carries the delta record's findings as act items.
-  const deltaFindings = threadsFile && phase === "commit_only" ? delta?.parsed?.findings : undefined;
+  // Only a record of this sequence counts: fix_and_rereview on a candidate that is the worktree HEAD. A record of a closed sequence is stale.
+  const deltaFindings = threadsFile && phase === "commit_only" && delta?.parsed?.nextStep === "fix_and_rereview" && delta.parsed.candidateHead === execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim() ? delta.parsed.findings : undefined;
   if (deltaFindings !== undefined) {
     const sealed = readSealedGateDeltaRecord(tmpRoot, headSha);
     if (!sealed || sha256(readFileSync(threadRecordPath)) !== delta.read.sha256) {
@@ -568,7 +568,7 @@ export async function emitFixerWorkOrder({
     phase,
     source: source.read.kind,
     gate: actListFile ? gate : undefined,
-    ...(ciFile ? { failedChecks: source.parsed.failedChecks.map((check) => check.name) } : {}),
+    ...(ciFile ? { failedChecks: source.parsed.failedChecks.slice(0, 50).map((check) => check.name.slice(0, 200)), ...(source.parsed.failedChecks.length > 50 ? { failedChecksOmitted: source.parsed.failedChecks.length - 50 } : {}) } : {}),
     ...(deltaFindings?.length ? { deltaFindings: deltaFindings.map(({ severity, summary, evidence, residueOf, site }) => ({ severity, summary, evidence, ...(residueOf === undefined ? {} : { residueOf }), ...(site === undefined ? {} : { site }) })) } : {}),
     ...(operatorFocus ? { operatorFocus, ...operatorFocusDigestEntry(operatorFocus) } : {}),
     configSha256: sha256(JSON.stringify(config ?? {})),

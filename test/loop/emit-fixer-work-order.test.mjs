@@ -3092,10 +3092,30 @@ test("issue 2787 C12: an unsealed delta record holding findings refuses with the
   });
 });
 
-test("issue 2787 C11: failedChecks beyond 50 entries or a name beyond 200 characters refuses", async () => {
+test("issue 2787 C11: a wide red result carries the first 50 names cut at 200 characters and renders the omitted count", async () => {
   await withFixture(async (fx) => {
-    const many = Array.from({ length: 51 }, (_, i) => ({ name: `c${i}` }));
-    await assert.rejects(emitCi(fx, {}, ciFailureFor(fx.head, { failedChecks: many })), /at most 50/);
-    await assert.rejects(emitCi(fx, {}, ciFailureFor(fx.head, { failedChecks: [{ name: "n".repeat(201) }] })), /at most 200 characters/);
+    const many = Array.from({ length: 60 }, (_, i) => ({ name: i === 0 ? "n".repeat(250) : `c${i}` }));
+    const unit = await emitCi(fx, {}, ciFailureFor(fx.head, { failedChecks: many }));
+    assert.equal(unit.workOrder.failedChecks.length, 50);
+    assert.equal(unit.workOrder.failedChecks[0], "n".repeat(200));
+    assert.equal(unit.workOrder.failedChecksOmitted, 10);
+    assert.match(await readFile(unit.promptPath, "utf8"), /and 10 more failing checks not listed/);
+  });
+});
+
+test("issue 2787 C11: a --review-id full emission refuses while an ungranted commit_only sequence is active and leaves the marker unchanged", async () => {
+  await withFixture(async (fx) => {
+    await fx.emit({ actListFile: undefined, gate: undefined, deltaResult: undefined, threadsFile: fx.files.threads, phase: "commit_only" });
+    const marker = path.join(fx.root, "tmp", "gate-delta", `${fx.head}.sequence`);
+    const before = await readFile(marker);
+    await assert.rejects(emitReview(fx.emit, [reviewFor(fx.head)]), /commit_only sequence is active.*--review-id full emission/);
+    assert.deepEqual(await readFile(marker), before);
+  });
+});
+
+test("issue 2787 C12: a sealed record whose candidate is not the worktree HEAD contributes no deltaFindings", async () => {
+  await withFixture(async (fx) => {
+    await fx.writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix", candidateHead: "c".repeat(40), items: [{ ref: "T1", status: "resolved" }], findings: [FINDING] }, { seal: true });
+    assert.equal("deltaFindings" in (await threadsCommitOnly(fx)).workOrder, false);
   });
 });
