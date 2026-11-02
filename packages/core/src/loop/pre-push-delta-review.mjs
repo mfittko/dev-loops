@@ -280,7 +280,7 @@ export function deltaFixerFindings(result) {
     .filter((f) => nonEmpty(f?.summary) && VALID_SEVERITIES.has(normalizeSeverity(f?.severity)) && (isOpenResidue(f) || (!nonEmpty(f?.residueOf) && severityRank(f?.severity) <= MEDIUM_RANK)))
     .slice(0, 20)
     .map((f) => ({
-      severity: f.severity, summary: f.summary.slice(0, 2000), evidence: [].concat(f.evidence ?? []).map(String).join("; ").slice(0, 2000),
+      severity: normalizeSeverity(f.severity), summary: f.summary.slice(0, 2000), evidence: [].concat(f.evidence ?? []).map(String).join("; ").slice(0, 2000),
       ...(nonEmpty(f.residueOf) ? { residueOf: f.residueOf.slice(0, 2000) } : {}), ...(nonEmpty(f.site) ? { site: f.site.slice(0, 2000) } : {}),
     }));
 }

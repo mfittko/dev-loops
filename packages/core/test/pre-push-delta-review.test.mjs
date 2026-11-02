@@ -624,4 +624,5 @@ test("deltaFixerFindings keeps medium-or-higher new findings and open residue, c
   assert.equal(deltaFixerFindings({ newFindings: Array.from({ length: 25 }, () => f()) }).length, 20);
   assert.equal(deltaFixerFindings({ newFindings: [f({ evidence: ["x".repeat(3000)] })] })[0].evidence.length, 2000);
   assert.equal(deltaFixerFindings({ newFindings: [f({ site: "x".repeat(2001) })] })[0].site.length, 2000);
+  assert.equal(deltaFixerFindings({ newFindings: [f({ severity: "high" + " ".repeat(2001) })] })[0].severity, "high");
 });
