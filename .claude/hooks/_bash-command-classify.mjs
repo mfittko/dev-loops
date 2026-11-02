@@ -879,7 +879,7 @@ export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
       // An explicit --repo/-R that is provably another repo is out of scope (fail closed otherwise).
       const repoFlag = hasQuotePairingHazard(segment) ? null : /(?:^|\s)(?:--repo|-R)(?:=|\s+)(\S+)/.exec(stripQuotedLiterals(segment));
       if (repoFlag && explicitRepoProvenForeign(repoFlag[1], managedSlug)) return false;
-      const flags = stripQuotedLiterals(segment.replace(re, " "));
+      const flags = blankQuotedForFlags(segment.replace(re, " "));
       return /(?:^|\s)(?:--body(?:-file)?(?=[=\s]|$)|-[bF](?=[=\s]|\S|$))/.test(flags);
     }));
 }
@@ -904,7 +904,7 @@ export function commandContainsRawPrBodyApiWrite(command, managedSlug = null) {
     if (endpoint && /^graphql$/i.test(endpoint)) return /updatePullRequest/.test(segment);
     if (!endpoint || !re.test(normalizeGhApiEndpoint(endpoint).replace(/\?.*$/, ""))) return false;
     // `--input` supplies the whole payload, so it is a write without a method flag (gh then POSTs).
-    if (/(?:^|\s)--input(?:=|\s)/.test(stripQuotedLiterals(segment))) return true;
+    if (/(?:^|\s)--input(?:=|\s)/.test(blankQuotedForFlags(segment))) return true;
     // gh defaults to POST when a field is present, so only an explicit GET/HEAD makes a body field a read.
     if (!hasQuotePairingHazard(segment) && /(?:^|\s)(?:--method|-X|-m)(?:=|\s*)["']?(?:GET|HEAD)\b/i.test(stripQuotedLiterals(segment))) return false;
     // Not quote-stripped: the field is usually quoted (`-f "body=..."`), so blanking would hide it.
@@ -926,6 +926,15 @@ export function commandContainsCopilotSummonComment(command) {
   // matches. The `re-review` form allows trailing modifiers (`/copilot re-review now`) so
   // appending a word cannot defeat the deny. Only `gh pr comment` segments reach here.
   return /(["'])\s*\/copilot(?:\s+re-review\b(?:\s+[^\s"']+)*|\s*(?:["']|$))/i.test(command);
+}
+
+/**
+ * Flag-lookup view of COMMAND: `stripQuotedLiterals`, except that on a quote-pairing hazard (where it returns the raw text)
+ * every quote character becomes a space, so retained quotes cannot defeat a flag lookahead (`--body""` stays `--body`).
+ * @param {string} command @returns {string}
+ */
+function blankQuotedForFlags(command) {
+  return hasQuotePairingHazard(command) ? command.replace(/['"]/g, " ") : stripQuotedLiterals(command);
 }
 
 /**
@@ -993,7 +1002,7 @@ function hasQuotePairingHazard(command) {
   const quoteAfterIncomplete = incompleteAt >= 0 && /['"]/.test(command.slice(incompleteAt + 1)); // the tokenizer records no spans past an unterminated opener, but the old regex still paired quotes there
   const nestedQuote = spans.some(({ start, end, kind }) => {
     const inner = command.slice(start + 1, end - 1);
-    return kind === "double" && /\$\(|`/.test(inner) && (inner.includes("'") || inner.split('"').length % 2 === 0); // a substitution holding a nested quote the old regex mispaired
+    return kind === "double" && /\$\(|`/.test(inner) && /['"]/.test(inner); // a substitution holding a nested quote the old regex mispaired
   });
   return quoteAfterIncomplete || nestedQuote || /\\['"]/.test(command) || ticks.some((span) => /['"]/.test(span)) || comments.some((text) => /['"]/.test(text)) || segmentsHaveQuotedHeredoc(segments);
 }
@@ -1018,11 +1027,18 @@ function segmentsHaveQuotedHeredoc(segments) {
  * @returns {{ segments: object[], spans: {start:number,end:number,kind:string}[], ticks: string[], comments: string[], incomplete: boolean, incompleteAt: number }}
  */
 export function tokenizeShellCommand(command) {
+  const ANSI_SIMPLE = { a: "\x07", b: "\b", e: "\x1b", E: "\x1b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v" };
+  // ANSI-C `$'...'` decoding: simple escapes, \xHH, \nnn, \uHHHH, \UHHHHHHHH; an unknown escape keeps its backslash.
+  const decodeAnsiC = (text) => text.replace(/\\(x[0-9a-fA-F]{1,2}|[0-7]{1,3}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8}|.)/gs, (m, e) => {
+    if (e in ANSI_SIMPLE) return ANSI_SIMPLE[e];
+    if (/^[xuU]/.test(e) && e.length > 1) return String.fromCodePoint(parseInt(e.slice(1), 16));
+    if (/^[0-7]/.test(e)) return String.fromCharCode(parseInt(e, 8) & 0xff);
+    return /^[\\'"?]$/.test(e) ? e : m;
+  });
   const n = command.length;
   const spans = [];
   const ticks = []; // terminated backtick substitutions the tokenizer actually reads (not inert backticks in quotes' literals or comments)
   const comments = []; // texts of real unquoted `#` comments
-  const pending = [];
   let depth = 0;
   let i = 0;
   let incompleteAt = -1;
@@ -1064,6 +1080,7 @@ export function tokenizeShellCommand(command) {
   };
 
   function parseSeq(inSub) {
+    const pending = []; // heredocs queued in THIS sequence: a newline inside a substitution must not consume its parent's heredoc
     const segments = [];
     let seg = { words: [], heredocs: [], start: i, end: i };
     let word = null;
@@ -1103,7 +1120,7 @@ export function tokenizeShellCommand(command) {
         while (j < n && command[j] !== "'") j += command[j] === "\\" ? 2 : 1;
         word.ansi = true;
         if (j >= n) { word.value += command.slice(i + 2); fail(i); return; }
-        word.value += command.slice(i + 2, j).replace(/\\(.)/gs, "$1");
+        word.value += decodeAnsiC(command.slice(i + 2, j));
         spans.push({ start: i + 1, end: j + 1, kind: "ansi" });
         i = j + 1;
       } else if (c === '"') word.value += readDouble(word);
@@ -1135,7 +1152,7 @@ export function tokenizeShellCommand(command) {
       const c = command[i];
       const next = command[i + 1];
       const redirectChar = word && (command[i - 1] === ">" || command[i - 1] === "<");
-      if (inSub && c === ")") { endSeg(); i++; return { segments, closed: true }; }
+      if (inSub && c === ")") { endSeg(); if (pending.length) fail(pending[0].start); i++; return { segments, closed: true }; }
       if (c === " " || c === "\t") { endWord(); i++; }
       else if (c === "\n") { endSeg(); i++; readHeredocBodies(); }
       else if (c === "#" && !word) { const at = i; while (i < n && command[i] !== "\n") i++; comments.push(command.slice(at, i)); }
