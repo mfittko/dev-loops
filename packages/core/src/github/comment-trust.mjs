@@ -7,7 +7,7 @@ export const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
 
 /**
  * @param {{ login?: unknown, type?: unknown, association?: unknown }} author
- * @param {{ allowCopilot?: boolean }} [options] allowCopilot admits the sanctioned Copilot reviewer (a Bot named copilot...).
+ * @param {{ allowCopilot?: boolean }} [options] allowCopilot admits the sanctioned Copilot reviewer (a Bot whose login matches isCopilotLogin).
  */
 export function isTrustedCommentAuthor({ login, type, association } = {}, { allowCopilot = false } = {}) {
   const name = typeof login === "string" ? login : "";

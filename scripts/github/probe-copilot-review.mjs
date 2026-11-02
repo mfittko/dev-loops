@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { resolveTimeoutMs } from "../lib/timeout-flag.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { isTrustedGraphqlComment } from "@dev-loops/core/github/comment-trust";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   DEFAULT_POLL_INTERVAL_MS,
@@ -67,6 +68,8 @@ const COPILOT_ACTIVITY_QUERY = [
   "            nodes {",
   "              id",
   "              body",
+  "              authorAssociation",
+  "              viewerDidAuthor",
   "              author {",
   "                login",
   "                __typename",
@@ -79,6 +82,8 @@ const COPILOT_ACTIVITY_QUERY = [
   "        nodes {",
   "          id",
   "          body",
+  "          authorAssociation",
+  "          viewerDidAuthor",
   "          author {",
   "            login",
   "            __typename",
@@ -89,6 +94,8 @@ const COPILOT_ACTIVITY_QUERY = [
   "        nodes {",
   "          id",
   "          body",
+  "          authorAssociation",
+  "          viewerDidAuthor",
   "          author {",
   "            login",
   "            __typename",
@@ -220,7 +227,7 @@ function extractCopilotReviews(payload) {
     return [];
   }
   return reviews
-    .filter((review) => isCopilotLogin(normalizeAuthorLogin(review?.author)))
+    .filter((review) => isCopilotLogin(normalizeAuthorLogin(review?.author)) && isTrustedGraphqlComment(review, { allowCopilot: true }))
     .map((review) => ({
       id: String(review?.id ?? ""),
       authorLogin: normalizeAuthorLogin(review?.author),
@@ -234,7 +241,7 @@ function extractCopilotIssueComments(payload) {
     return [];
   }
   return comments
-    .filter((comment) => isCopilotLogin(normalizeAuthorLogin(comment?.author)))
+    .filter((comment) => isCopilotLogin(normalizeAuthorLogin(comment?.author)) && isTrustedGraphqlComment(comment, { allowCopilot: true }))
     .map((comment) => ({
       id: String(comment?.id ?? ""),
       authorLogin: normalizeAuthorLogin(comment?.author),
