@@ -13,7 +13,7 @@ export const hasReopenLine = (nonGoals) => reopenLines(nonGoals).length > 0;
 export const reopenIssueNumbers = (nonGoals) => [...new Set(reopenLines(nonGoals).flatMap((text) => [...text.matchAll(/#(\d+)|\bissues?\s+(\d+)|(?<!\bADR\s)\b(\d{3,})\b/gi)].map((m) => Number(m[1] ?? m[2] ?? m[3]))))];
 
 // The Non-goals of a PR body; the reopen line lives there when the spec comes from the linked issue.
-export const prBodyNonGoals = (body) => resolvePrDescriptionSpec(String(body ?? "")).spec?.nonGoals;
+const prBodyNonGoals = (body) => resolvePrDescriptionSpec(String(body ?? "")).spec?.nonGoals;
 
 const KW = String.raw`(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)`;
 // An issue reference: N, #N, owner/repo#N or an issue URL; the number is capture group 1 of its pattern.
