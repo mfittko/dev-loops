@@ -1553,6 +1553,9 @@ test("tokenizeShellCommand: malformed input is incomplete and the classifier den
   // a quote pair after an unclosed opener keeps the permissive callers (-X GET, foreign --repo) from allowing
   assert.equal(commandContainsRawPrBodyApiWrite(`gh api repos/mfittko/dev-loops/pulls/5 -f body=x -f "title=$(echo ' -X GET ' ; true)"`, "mfittko/dev-loops"), true);
   assert.equal(commandContainsRawPrBodyEdit(`gh pr edit 5 --body x --title "$(echo ' --repo other/x ' ; true)"`, "mfittko/dev-loops"), true);
+  // the same pairing after an unterminated plain quote
+  assert.equal(commandContainsRawPrBodyEdit(`gh pr edit 5 --body x --title "a ' --repo other/x ' b ; c"`, "mfittko/dev-loops"), true);
+  assert.equal(commandContainsRawPrBodyApiWrite(`gh api repos/mfittko/dev-loops/pulls/5 -f body=x -f "a ' -X GET ' b ; c"`, "mfittko/dev-loops"), true);
 });
 
 test("tokenizeShellCommand: CRLF heredoc, real comments and nesting cap (#2442)", () => {

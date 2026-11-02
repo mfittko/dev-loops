@@ -970,7 +970,7 @@ function stripQuotedLiterals(command) {
   let out = "";
   let pos = 0;
   for (const { start, end } of [...spans].sort((a, b) => a.start - b.start)) {
-    if (start < pos || start >= limit) continue; // nested in a span already handled, or in the unterminated tail
+    if (start < pos || start >= limit) continue; // nested in a span already handled, or in the unterminated tail (kept as a guard: a backtick span can start past the opener without a quote)
     const kept =
       /\$\(|`/.test(command.slice(start + 1, end - 1)) || // executable code in quotes: preserve (fail-closed)
       /(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(command.slice(0, start)); // -c/eval payload: real shell syntax
@@ -989,7 +989,7 @@ function stripQuotedLiterals(command) {
  */
 function hasQuotePairingHazard(command) {
   const { segments, ticks, comments, spans, incompleteAt } = tokenizeShellCommand(command);
-  const quoteAfterIncomplete = incompleteAt >= 0 && spans.some(({ start }) => start >= incompleteAt); // the old regex skipped the unpaired opener and still paired this span
+  const quoteAfterIncomplete = incompleteAt >= 0 && /['"]/.test(command.slice(incompleteAt + 1)); // the tokenizer records no spans past an unterminated opener, but the old regex still paired quotes there
   const nestedQuote = spans.some(({ start, end, kind }) => {
     const inner = command.slice(start + 1, end - 1);
     return kind === "double" && /\$\(|`/.test(inner) && (inner.includes("'") || inner.split('"').length % 2 === 0); // a substitution holding a nested quote the old regex mispaired
