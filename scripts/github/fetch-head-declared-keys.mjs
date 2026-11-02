@@ -11,6 +11,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseHeadDeclaredKeys } from "./head-declared-keys-schema.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -24,7 +25,9 @@ export function selectHeadKeysArtifact(artifacts, headSha) {
   const matches = (Array.isArray(artifacts) ? artifacts : []).filter(
     (a) => a?.name === name && a.expired !== true && a.workflow_run?.head_sha === headSha,
   );
-  matches.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  // Newest created_at first (non-finite last), ties broken on numeric id descending.
+  const time = (a) => { const t = Date.parse(a.created_at); return Number.isFinite(t) ? t : -Infinity; };
+  matches.sort((a, b) => (time(b) === time(a) ? 0 : time(b) > time(a) ? 1 : -1) || Number(b.id) - Number(a.id));
   return matches[0] ?? null;
 }
 
@@ -34,6 +37,9 @@ const defaultExec = async (file, args) => (await execFileAsync(file, args, { enc
 export async function fetchHeadDeclaredKeys({ repo, pr, headSha, exec = defaultExec }) {
   let dir;
   try {
+    // Validate before interpolating into gh api paths; any mismatch yields the empty set.
+    parseRepoSlug(repo);
+    if (!/^[1-9]\d*$/.test(String(pr)) || !/^[0-9a-f]{40}$/.test(String(headSha))) return [];
     const gh = async (apiPath) => exec("gh", ["api", apiPath]);
     const current = JSON.parse((await gh(`repos/${repo}/pulls/${pr}`)).toString("utf8"));
     if (current?.head?.sha !== headSha) return [];

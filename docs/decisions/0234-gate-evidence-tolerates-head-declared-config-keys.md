@@ -31,6 +31,14 @@ The declared set is fully attacker-controlled, whether it comes from the head sc
 
 A job-level failure or timeout of `head-declared-keys` is possible (`timeout-minutes: 10`). The runner uses `!cancelled()` in its `if`, so a skipped or failed keys job does not skip the runner; this prevents a stale success after an approve-merge retraction. An empty output parses to the empty set and fails closed. A head with no artifact (no `pull_request` run yet, expired, or a private repository where the head cannot be fetched without credentials) gets the empty set. An approve-merge comment can arrive while the `pull_request` run for the same head is still running. The artifact is then missing, the declared set is empty and that run fails closed. A later event re-evaluates.
 
+Keys inside array elements are declared with the numeric index as the path segment (for example `gates.preApproval.angles.0.newProp`), which matches the base schema's `unknownKeys`. A key inside a union member (a zod `invalid_union` issue) is not an unknown-keys-only error and stays unsupported: it fails with `config_load_failed`.
+
+The keys job checks out the event's head SHA, so the artifact content, its name and `workflow_run.head_sha` refer to the same commit. The job writes the artifact file only after a successful report step, so a failed run never supersedes an earlier valid key list for the same head. Among several artifacts for one head, the newest `created_at` wins (a missing value ranks last), with ties broken on the highest artifact id.
+
+## Bootstrap limit for the introducing PR
+
+On `pull_request*` events GitHub runs the PR's own workflow YAML, while the runner and reporter check out the default-branch detector. Until this change merges, that detector rejects `--head-declared-keys` as an unknown argument. So the `pull_request` and `pull_request_review` runs of the introducing PR (3023) fail until it merges. `issue_comment` runs use the default-branch YAML, pass no flag and post the real verdict. The same applies to any other open PR that carries this YAML before merge.
+
 ## Consequences
 
 A PR that introduces a new config key passes gate evidence without an operator workaround. The declared set only widens what the detector tolerates and never what it trusts. The gate-evidence workflow gains one job and the reporter and runner depend on it.

@@ -6,6 +6,7 @@ name: Gate evidence
 #   docs/decisions/0034-server-side-gate-evidence-required-check.md
 #   docs/decisions/0043-gate-evidence-verdict-comment-refire.md
 #   docs/decisions/0076-gate-evidence-reporter-split-always-settles-required-status.md
+#   docs/decisions/0234-gate-evidence-tolerates-head-declared-config-keys.md
 on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize]
@@ -59,7 +60,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           path: head
-          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       # Trusted script source only; it is never given PR head scripts.
@@ -93,15 +94,19 @@ jobs:
         continue-on-error: true
         run: |
           keys='{"declaredKeys":[]}'
-          out="$(node trusted/scripts/github/report-head-declared-keys.mjs --head-root head 2>/dev/null | head -n1 | head -c 65536)" && [ -n "$out" ] && keys="$out"
+          ok=false
+          out="$(node trusted/scripts/github/report-head-declared-keys.mjs --head-root head 2>/dev/null | head -n1 | head -c 65536)" && [ -n "$out" ] && keys="$out" && ok=true
           delim="EOF_$(openssl rand -hex 16)"
           {
             echo "declared_keys<<${delim}"
             echo "$keys"
             echo "${delim}"
           } >> "$GITHUB_OUTPUT"
-          mkdir -p "$RUNNER_TEMP/keys"
-          printf '%s\n' "$keys" > "$RUNNER_TEMP/keys/head-declared-keys.json"
+          # Only a successful run writes the artifact file, so a failed run never supersedes earlier evidence for this head.
+          if [ "$ok" = true ]; then
+            mkdir -p "$RUNNER_TEMP/keys"
+            printf '%s\n' "$keys" > "$RUNNER_TEMP/keys/head-declared-keys.json"
+          fi
 
       - name: Upload declared keys for issue_comment runs (data only)
         continue-on-error: true

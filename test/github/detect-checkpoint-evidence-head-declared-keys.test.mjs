@@ -2,9 +2,10 @@
 // knows must not fail the trusted default-branch gate-evidence run with config_load_failed.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 import { loadDevLoopConfig, stripConfigKeyPaths } from "@dev-loops/core/config";
 import { buildFanoutEnforcement, parseHeadDeclaredKeys } from "../../scripts/github/detect-checkpoint-evidence.mjs";
@@ -74,10 +75,12 @@ test("stripConfigKeyPaths removes nested paths from a bare file and stays loadab
   assert.deepEqual(JSON.parse(out), { b: { d: 3 } });
 });
 
+const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
+
 async function headRoot(devloops) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-head-root-"));
-  await symlink(path.resolve("packages"), path.join(dir, "packages"));
-  await symlink(path.resolve("node_modules"), path.join(dir, "node_modules"));
+  await symlink(path.join(REPO_ROOT, "packages"), path.join(dir, "packages"));
+  await symlink(path.join(REPO_ROOT, "node_modules"), path.join(dir, "node_modules"));
   await writeFile(path.join(dir, "package.json"), "{}", "utf8");
   await writeFile(path.join(dir, ".devloops"), devloops, "utf8");
   return dir;
@@ -94,8 +97,34 @@ test("report-head-declared-keys lists every dotted key path of a valid head conf
 
 test("report-head-declared-keys reports an empty set when the head config does not load", async () => {
   const dir = await headRoot("version: 1\nfutureKey: 1\n");
+  const okDir = await headRoot("version: 1\ngates:\n  requireFanoutEvidence: true\n");
   try {
+    // The same headRoot setup resolves the real head schema, so the empty set is not a vacuous import failure.
+    assert.ok((await reportHeadDeclaredKeys(okDir)).length > 0);
     assert.deepEqual(await reportHeadDeclaredKeys(dir), []);
+  } finally {
+    await rm(okDir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Composition (AC7): the reporter's key paths must equal the base schema's unknownKeys paths,
+// including a key inside an array entry. The fake head schema loads cleanly, standing in for a
+// head schema that declares `newProp` on a gate angle entry; the base schema does not know it.
+test("reporter output for a key inside an array entry composes with the detector", async () => {
+  const devloops = "version: 1\ngates:\n  requireFanoutEvidence: true\n  preApproval:\n    angles:\n      - name: threat-model\n        newProp: 1\n";
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-head-array-"));
+  try {
+    await mkdir(path.join(dir, "packages/core/src/config"), { recursive: true });
+    await writeFile(path.join(dir, "packages/core/src/config/config.mjs"), "export async function loadDevLoopConfig() { return { errors: [] }; }\n", "utf8");
+    await symlink(path.join(REPO_ROOT, "node_modules"), path.join(dir, "node_modules"));
+    await writeFile(path.join(dir, "package.json"), "{}", "utf8");
+    await writeFile(path.join(dir, ".devloops"), devloops, "utf8");
+    const declared = await reportHeadDeclaredKeys(dir);
+    assert.ok(declared.includes("gates.preApproval.angles.0.newProp"), declared.join(","));
+    const enforcement = await enforceWithHead(devloops.slice(devloops.indexOf("  preApproval:")), declared);
+    assert.equal(enforcement.required, true);
+    await rejectsConfigLoadFailed(enforceWithHead(devloops.slice(devloops.indexOf("  preApproval:")), []));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

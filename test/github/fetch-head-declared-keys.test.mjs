@@ -45,6 +45,19 @@ test("selectHeadKeysArtifact picks the newest matching artifact", () => {
   assert.equal(selectHeadKeysArtifact(undefined, SHA), null);
 });
 
+test("selectHeadKeysArtifact ranks a missing created_at last and breaks ties on the higher id", () => {
+  assert.equal(selectHeadKeysArtifact([art({ id: 20, created_at: undefined }), art({ id: 5 })], SHA).id, 5);
+  assert.equal(selectHeadKeysArtifact([art({ id: 5 }), art({ id: 9 })], SHA).id, 9);
+});
+
+test("malformed --repo, --pr or --head-sha yield the empty set without calling gh", async () => {
+  const exec = async () => { throw new Error("must not be called"); };
+  const call = (over) => fetchHeadDeclaredKeys({ repo: "o/r", pr: 1, headSha: SHA, exec, ...over });
+  for (const repo of ["mfittko", "../x/y", ""]) assert.deepEqual(await call({ repo }), [], repo);
+  for (const pr of ["0", "12/../1", "abc", ""]) assert.deepEqual(await call({ pr }), [], pr);
+  for (const headSha of ["a86e10f", SHA.toUpperCase(), ""]) assert.deepEqual(await call({ headSha }), [], headSha);
+});
+
 test("a malformed artifact yields the empty set", async () => {
   for (const zipText of [
     "not json",

@@ -11,7 +11,8 @@ import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 
 function collectKeyPaths(value, prefix, out) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return;
+  // Arrays recurse with the numeric index as the path segment, matching the zod issue path of the base schema.
+  if (value === null || typeof value !== "object") return;
   for (const [key, child] of Object.entries(value)) {
     const keyPath = prefix ? `${prefix}.${key}` : key;
     out.push(keyPath);

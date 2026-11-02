@@ -422,7 +422,10 @@ test("head-declared-keys is the only job that checks out a PR head, with no perm
   assert.ok(String(runnerJob.if).replace(/\s+/gu, " ").startsWith("${{ !cancelled() && ("), "a skipped or failed keys job must not skip the runner");
   assert.ok(String(reporterJob.if).includes("always()"));
   const checkouts = (job) => job.steps.filter((s) => String(s.uses ?? "").startsWith("actions/checkout"));
-  assert.ok(checkouts(keysJob).some((s) => String(s.with.ref).startsWith("refs/pull/")), "the keys job checks out the PR head");
+  assert.ok(checkouts(keysJob).some((s) => s.with.ref === "${{ github.event.pull_request.head.sha }}"), "the keys job checks out the event head SHA, the same SHA its artifact is named for");
+  assert.ok(!JSON.stringify(keysJob).includes("refs/pull/"), "no moving PR ref in the keys job");
+  const report = keysJob.steps.find((s) => s.id === "report");
+  assert.ok(/if \[ "\$ok" = true \]; then\n\s+mkdir -p "\$RUNNER_TEMP\/keys"/u.test(report.run), "the artifact file is written only after a successful report step");
   for (const s of checkouts(keysJob)) assert.equal(s.with["persist-credentials"], false);
   for (const job of [runnerJob, reporterJob]) {
     for (const s of checkouts(job)) {
