@@ -83,6 +83,10 @@ export const INLINE_DENY_ROWS = [
   "GIT_EDITOR='true; node -e y' git commit",
   "grep() { bash -c \"$1\"; }; grep 'x; node -e y'",
   "echo() { eval \"$*\"; }; echo 'x; node -e y'",
+  "grep(){ bash -c \"$1\"; }; grep 'x; node -e y'",
+  "echo(){ eval \"$*\"; }; echo 'x; node -e y'",
+  "shopt -s expand_aliases\nalias grep='bash -c'\ngrep 'x; node -e y'",
+  "hash -p /bin/bash grep; grep 'x; node -e y'",
   "tmp/echo 'x; node -e y'",
   "PATH=tmp grep 'x; node -e y'",
 ];
