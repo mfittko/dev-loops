@@ -1,2 +1,2 @@
 ### Fixed
-- The installed `dev-loops` CLI runs the source checkout's CLI for `gate`, `loop` and `pr`, so an older installed CLI no longer decides gates with stale code; a version difference is named on stderr (#2662)
+- An installed `dev-loops` CLI runs the source checkout's CLI for `gate`, `loop` and `pr`, and names a version difference on stderr (#2662)
