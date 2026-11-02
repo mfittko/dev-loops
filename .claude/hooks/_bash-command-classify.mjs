@@ -1004,15 +1004,18 @@ function allWords(segments, out = []) {
   for (const seg of segments) for (const w of seg.words) { out.push(w); for (const sub of w.subs) allWords(sub.segments, out); }
   return out;
 }
-const EXEC_FLAG_RE =/^(?:-[A-Za-z]*c[A-Za-z]*|--command)$/;
+const EXEC_FLAG_RE = /^(?:-[a-z]*c[a-z]*|--command)$/i;
 const ENV_ASSIGNMENT_WORD_RE = /^[A-Za-z_]\w*=/;
+const GIT_EXEC_WORD = { rebase: /^(?:--exec|-[A-Za-z]*x)/, "filter-branch": /^--[a-z-]*filter/, submodule: /^foreach$/ }; // git subcommand to the word whose next words run as shell
 /** Index of the first payload word of a segment: every word after `eval` or a `-c`-containing short-flag cluster (origin/main's coarse rule) is executable text. */
 const payloadFrom = (words) => {
   const hi = words.findIndex((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op);
   const base = words[hi]?.value.split("/").pop();
-  if (base === "watch" || base === "trap") return hi + 1; // every argument is command text the shell runs
-  const rebase = base === "git" && words.some((w) => w.value === "rebase"); // `git rebase -x/--exec CMD` runs CMD
-  const at = words.findIndex((w) => !w.op && (w.value === "eval" || EXEC_FLAG_RE.test(w.value) || (rebase && /^(?:-x|--exec)/.test(w.value))));
+  const wrapped = /^(?:sudo|timeout|nice|nohup|env|exec|command)$/.test(base);
+  const run = words.findIndex((w, i) => i >= hi && (i === hi || wrapped) && /^(?:watch|trap)$/.test(w.value.split("/").pop()));
+  if (run >= 0) return run + 1; // every argument of `watch`/`trap` (also behind a wrapper) is command text the shell runs
+  const gitSub = base === "git" && words.map((w) => w.value).find((v) => Object.hasOwn(GIT_EXEC_WORD, v));
+  const at = words.findIndex((w) => !w.op && (w.value === "eval" || EXEC_FLAG_RE.test(w.value) || (gitSub && GIT_EXEC_WORD[gitSub].test(w.value))));
   return at < 0 ? words.length : at + 1;
 };
 /** Words that the shell executes as command text: after `-c`/`--command`/`eval`, or the target of a `<<<` here-string. */
@@ -1044,11 +1047,16 @@ function writeTargets(seg) {
 
 const TEXT_FLAG_RE = /^(?:-m|--message|--body|--title|--notes)$/;
 const TEXT_FLAG_ATTACHED_RE = /^--(?:message|body|title|notes)=/;
-/** Whether the substitution in word K of SEG (a `git commit` segment) is inert text: the value of a text flag, never an env-assignment word. */
+/** A `git commit` or `gh pr|issue comment|create|edit` segment whose head is the bare name: the only hosts whose text flag value is inert. */
+const isTextHost = (seg) => {
+  const [a, b, c] = seg.words.map((w) => w.value);
+  return (a === "git" && b === "commit") || (a === "gh" && /^(?:pr|issue)$/.test(b) && /^(?:comment|create|edit)$/.test(c));
+};
+/** Whether the substitution in word K of SEG (a `isTextHost` segment) is inert text: the value of a text flag, never an env-assignment word. */
 function substitutionIsInert(seg, k) {
   const w = seg.words[k];
   if (ENV_ASSIGNMENT_WORD_RE.test(w.raw)) return false;
-  if (overridesConfig(seg) || seg.words[1]?.value !== "commit") return false;
+  if (overridesConfig(seg) || !isTextHost(seg)) return false;
   const attached = TEXT_FLAG_ATTACHED_RE.exec(w.raw);
   const raw = attached ? w.raw.slice(attached[0].length) : w.raw;
   return /^(?:\$\(.*\)|"\$\(.*\)")$/s.test(raw) && (attached !== null || TEXT_FLAG_RE.test(seg.words[k - 1]?.value ?? ""));
@@ -1068,8 +1076,8 @@ function readsTextFromStdin(seg, head) {
 /**
  * Heredocs whose body is data (issue 2442 item 8): a `cat` or `tee` heredoc (or a `git commit -F -`/`gh pr comment --body-file -` message, `readsTextFromStdin`) that is closed, whose delimiter is quoted or whose body has no
  * `$(`/backtick, whose segment is not piped onward, and that sits in no `-c`/`eval`/here-string payload.
- * Structural rule, counted over the whole tree: the command is exactly one `cat`/`tee` heredoc segment, or one root `git commit` segment holding exactly one substitution that holds exactly one `cat` segment that writes no file. Anything else keeps every heredoc body visible, so a later segment or substitution that runs a written file never sees a blanked body.
- * The host must write no file, carry no env-assignment word and no `-c`/alias override (`substitutionIsInert`); `echo`/`printf`/`gh` are not hosts. The `cat`/`tee` head is the bare name or a `/bin/` or `/usr/bin/` path, with no env-assignment word and no `<(`/`>(` anywhere in a word.
+ * Structural rule, counted over the whole tree: the command is exactly one `cat`/`tee` heredoc segment, or one root `git commit` / `gh pr|issue comment|create|edit` segment (bare head) holding exactly one substitution that holds exactly one `cat` segment that writes no file. Anything else keeps every heredoc body visible, so a later segment or substitution that runs a written file never sees a blanked body.
+ * The host must write no file, carry no env-assignment word and no `-c`/alias override (`substitutionIsInert`); `echo`/`printf` are not hosts. The `cat`/`tee` head is the bare name or a `/bin/` or `/usr/bin/` path, with no env-assignment word and no `<(`/`>(` anywhere in a word.
  * Every other body executes and stays visible.
  * @returns {object[]}
  */
@@ -1088,8 +1096,8 @@ function dataHeredocs(segments) {
   };
   const subs = seg.words.flatMap((w, k) => w.subs.map((sub) => ({ sub, k })));
   if (subs.length === 0) return dataBody(seg, head);
-  // exactly one inert git commit text-flag substitution holding exactly one substitution-free, file-writing-free cat segment
-  if (subs.length !== 1 || head !== "git" || seg.pipedOut || writeTargets(seg).length !== 0 || seg.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw))) return [];
+  // exactly one inert git commit / gh text-flag substitution holding exactly one substitution-free, file-writing-free cat segment
+  if (subs.length !== 1 || !isTextHost(seg) || seg.pipedOut || writeTargets(seg).length !== 0 || seg.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw))) return [];
   const { sub, k } = subs[0];
   if (isPayloadWord(seg.words, k) || !substitutionIsInert(seg, k) || sub.segments.length !== 1) return [];
   const inner = sub.segments[0];

@@ -1732,7 +1732,6 @@ test("slice 2: the sanctioned single-segment shapes stay visible when an executo
     "git commit -m \"$(cat > .git/hooks/pre-commit <<'EOF'\nnode -e 'x'\nEOF\n)\"",
     "git commit -m \"$(cat >> .git/config <<'EOF'\nnode -e 'x'\nEOF\n)\"",
     "gh r --body \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
-    "gh pr create --body \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
     "git rebase -x 'true; node -e y' HEAD~1",
     "git rebase --exec 'true; node -e y' HEAD~1",
     "watch 'true; node -e y'",
@@ -1741,6 +1740,7 @@ test("slice 2: the sanctioned single-segment shapes stay visible when an executo
   assert.equal(commandIsSleepPollLoop("tee />(sh) <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF"), true);
   assert.equal(commandContainsDetachedWaitTool("tee />(sh) <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF"), true);
   assert.equal(commandContainsInlineInterpreter("git commit -m \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\""), false);
+  assert.equal(commandContainsInlineInterpreter("gh pr create --body \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\""), false);
 });
 
 test("slice 2: quoted literals and cat/tee heredoc bodies that name an interpreter are data; payloads stay visible (#2442)", () => {
