@@ -78,6 +78,8 @@ Optional:
                                whenever the preconditions could be evaluated
                                (ok:false carries the failures). --human-approved-by
                                is optional with --check. Any actor may run it.
+                               Without --human-approved-by the approval path assumes
+                               no approval exists (approverAssumed: true).
   --method <m>                Merge method: squash (default) | merge | rebase
   --stable-release             Mark this as a stable-release merge, forcing the
                                escalated approval class (a standing authorization
@@ -648,8 +650,9 @@ export function buildMergeRecordComment({ approvalVia, approvedBy, headSha, merg
   return `merge-pr record: merged head \`${headSha}\` (${mergeClass} merge); approvalVia \`${approvalVia}\`; approver \`${approvedBy}\`.`;
 }
 
-function defaultPostMergeComment({ repo, pr, body, env, ghCommand, runChild }) {
-  return runChild(ghCommand, ["pr", "comment", String(pr), "--repo", repo, "--body", body], env);
+async function defaultPostMergeComment({ repo, pr, body, env, ghCommand, runChild }) {
+  const result = await runChild(ghCommand, ["pr", "comment", String(pr), "--repo", repo, "--body", body], env);
+  if (!result || result.code !== 0) throw new Error(String(result?.stderr ?? "").trim() || "gh pr comment returned no result");
 }
 
 export async function mergePr(options, runtime = {}) {
@@ -853,6 +856,9 @@ export async function mergePr(options, runtime = {}) {
       headSha: currentHeadSha,
       approvedBy: options.humanApprovedBy ?? null,
       ...approval,
+      // Unreadable gate evidence has no size outcome: the class is unknown, not drain.
+      ...(evidence.ok !== true && !evidence.sizeOutcome ? { mergeClass: null, sizeClass: null } : {}),
+      approverAssumed: options.humanApprovedBy === undefined || options.humanApprovedBy === null,
       approvalVia: verdict.approvalVia,
       failures: checkFailures,
       copilotConvergenceState: verdict.copilotConvergenceState,

@@ -1401,7 +1401,17 @@ test("--check without an approver passes a drain PR under a standing authorizati
   assert.equal(result.mergeClass, "drain");
   assert.equal(result.approvalPath, "standing_authorization");
   assert.equal(result.approveMergeLine, null);
+  assert.equal(result.approverAssumed, true);
   assert.equal(calls.runChild.length, 0);
+});
+
+test("--check with unreadable gate evidence reports a null mergeClass and sizeClass and keeps the gate_evidence failure", async () => {
+  const { runtime } = makeRuntime({ evidence: { ok: false, sizeOutcome: null, touchesT1: false, failures: ["gate evidence unreadable"] } });
+  const result = await mergePr(baseOptions({ check: true, humanApprovedBy: "mfittko" }), runtime);
+  assert.equal(result.mergeClass, null);
+  assert.equal(result.sizeClass, null);
+  assert.equal(result.approverAssumed, false);
+  assert.ok(result.failures.some((f) => f.precondition === "gate_evidence"));
 });
 
 test("--check reports human_review when a head-pinned APPROVED review satisfies it", async () => {
@@ -1466,4 +1476,17 @@ test("a failing record comment never changes ok or merged", async () => {
   assert.equal(result.ok, true);
   assert.equal(result.merged, true);
   assert.match(stderr.get(), /merge record comment failed: comment api down/);
+});
+
+test("a non-zero default record comment logs one stderr line and never changes ok or merged", async () => {
+  const { runtime } = makeRuntime();
+  const inner = runtime.runChild;
+  runtime.runChild = async (cmd, args, env) => (args[0] === "pr" && args[1] === "comment" ? { stdout: "", stderr: "HTTP 403", code: 1 } : inner(cmd, args, env));
+  delete runtime.postMergeComment;
+  const stderr = captureStream();
+  const result = await mergePr(baseOptions(), { ...runtime, stderr });
+  assert.equal(result.ok, true);
+  assert.equal(result.merged, true);
+  assert.equal(stderr.get().split("\n").filter((l) => l.includes("merge record comment failed")).length, 1);
+  assert.match(stderr.get(), /merge record comment failed: HTTP 403/);
 });

@@ -48,7 +48,7 @@ export function projectSubmittedReviewFacts(apiReviews) {
   return (Array.isArray(apiReviews) ? apiReviews : []).filter((r) => SUBMITTED_REVIEW_STATES.has(r?.state)).map(toReviewFact);
 }
 
-export const MERGE_CLASS =Object.freeze({ DRAIN: "drain", ESCALATED: "escalated" });
+export const MERGE_CLASS = Object.freeze({ DRAIN: "drain", ESCALATED: "escalated" });
 
 /**
  * Classify the merge. An `escalate`/`block` size outcome, a T1-touching diff,
