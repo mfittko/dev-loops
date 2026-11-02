@@ -1,4 +1,4 @@
-// Strict schema for the head-declared config key list (issue #2662, docs/decisions/0234).
+// Strict schema for the head-declared config key list (docs/decisions/0234).
 // The list is attacker-controlled data; anything off-schema is the empty set.
 export const HEAD_DECLARED_KEYS_MAX_BYTES = 64 * 1024;
 const MAX_ENTRIES = 512;

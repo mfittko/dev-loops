@@ -397,7 +397,7 @@ test("required-context invariant (status not job) stays documented on the merge-
   );
 });
 
-// Pins #2662 AC7 (docs/decisions/0234): PR head code runs only in the credential-less
+// Pins docs/decisions/0234: PR head code runs only in the credential-less
 // head-declared-keys job; the write-credential detector jobs stay on the default branch
 // and receive the reported keys as data through env only.
 test("head-declared-keys is the only job that checks out a PR head, with no permissions, and feeds the detectors via env", async () => {

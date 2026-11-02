@@ -1,4 +1,4 @@
-// Issue #2662 AC7 (docs/decisions/0234): a PR head that adds a config key only its own schema
+// docs/decisions/0234: a PR head that adds a config key only its own schema
 // knows must not fail the trusted default-branch gate-evidence run with config_load_failed.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";

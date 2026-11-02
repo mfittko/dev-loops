@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Fetches the head-declared-keys artifact uploaded by a pull_request run and prints
-// `{"declaredKeys":[...]}` (issue #2662, docs/decisions/0234). Runs trusted default-branch
+// `{"declaredKeys":[...]}` (docs/decisions/0234). Runs trusted default-branch
 // code only, on issue_comment events. The artifact is DATA from an untrusted job: it must
 // match the PR's current head SHA and the strict schema, otherwise the result is the empty
 // set. Every failure prints the empty set and exits 0.

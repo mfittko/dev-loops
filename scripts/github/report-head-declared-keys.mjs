@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Reports the dotted config key paths a PR head's OWN schema accepts in its own
-// `.devloops` (issue #2662 AC7, docs/decisions/0234). Runs in the credential-less
+// `.devloops` (docs/decisions/0234). Runs in the credential-less
 // `head-declared-keys` job of .github/workflows/gate-evidence.yml. Its stdout is
 // treated as data by the trusted detector. Fails closed: any problem prints an
 // empty set and exits 0.

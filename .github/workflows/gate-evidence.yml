@@ -32,7 +32,7 @@ jobs:
   # is a JSON list of config keys the PR head's own schema declares; the
   # detector treats it as DATA (env variable, never spliced into a shell) and
   # uses it only to tolerate a head-only config key the default-branch schema
-  # does not know yet (issue 2662 AC7). The PR number comes from the event
+  # does not know yet (docs/decisions/0234). The PR number comes from the event
   # payload and the head is fetched as refs/pull/<n>/head, so no token is
   # needed (a private repository would need `contents: read` here and would
   # fail closed to an empty key set). Every step is continue-on-error and the

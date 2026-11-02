@@ -1,4 +1,4 @@
-// Issue #2662 (docs/decisions/0234): the issue_comment path reads head-declared keys from an
+// docs/decisions/0234: the issue_comment path reads head-declared keys from an
 // untrusted artifact; every anomaly must yield the empty set.
 import assert from "node:assert/strict";
 import { test } from "bun:test";
