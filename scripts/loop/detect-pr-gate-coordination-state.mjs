@@ -40,7 +40,7 @@ import { detectPostConvergenceSignificantChange } from "./_post-convergence-chan
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
 import { evaluateCopilotConvergence } from "@dev-loops/core/loop/merge-approval";
 import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "./_copilot-convergence-carry.mjs";
-import { copilotBodyJudgePath, resolveCurrentHeadBodyFeedback } from "../github/_copilot-body-disposition.mjs";
+import { copilotBodyJudgePath, readReviewMarkerCommits, resolveCurrentHeadBodyFeedback } from "../github/_copilot-body-disposition.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
@@ -819,6 +819,8 @@ async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot
     for (const entry of Array.isArray(handoff.dispositions) ? handoff.dispositions : []) {
       if (entry?.disposition === FIXER_DISPOSITION_KIND.TACKLED && typeof entry.threadId === "string") {
         incomplete.push({ threadId: entry.threadId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED });
+      } else if (entry?.disposition === FIXER_DISPOSITION_KIND.TACKLED && typeof entry.reviewId === "string") {
+        incomplete.push({ reviewId: entry.reviewId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED });
       }
     }
   }
@@ -831,7 +833,7 @@ async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot
 export async function resolveFixerDispositionInput(args, runtime = {}) {
   const result = await readFixerDispositionEvidence(args, runtime);
   if (!result || result.complete) return result;
-  const detail = result.incomplete.map((entry) => `thread ${entry.threadId}: ${entry.failedStep}`).join("; ");
+  const detail = result.incomplete.map((entry) => `${entry.reviewId ? `review ${entry.reviewId}` : `thread ${entry.threadId}`}: ${entry.failedStep}`).join("; ");
   return {
     ...result,
     warning: `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY (advisory): the fixer disposition for head ${args.currentHeadSha} is incomplete (${detail}). verify-fixer-disposition.mjs is optional; the merge gates are unchanged.`,
@@ -888,7 +890,7 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
               const threads = typeof parsedThreads === "function" ? await parsedThreads() : parsedThreads;
               const containment = await buildContainmentMap(handoff.dispositions.filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).map((entry) => entry.fixingCommitSha), { repo, headSha: currentHeadSha }, runtime);
               const liveThreads = threads.threads.map((thread) => ({ threadId: thread.id, isResolved: thread.isResolved, replyBodies: threads.comments.filter((comment) => comment.threadId === thread.id).map((comment) => comment.body) }));
-              const evaluation = evaluateFixerDisposition({ handoff, liveThreads, containment });
+              const evaluation = evaluateFixerDisposition({ handoff, liveThreads, containment, liveReviews: await readHandoffReviewMarkers(handoff, { repo, pr }, runtime) });
               if (!(await readFile(planPath)).equals(planBytes)) throw new Error("active fixer plan changed during carry verification");
               return { complete: evaluation.ok, incomplete: evaluation.incomplete, ...(evaluation.ok ? { carriedFromHead: head } : {}) };
             }
@@ -974,9 +976,21 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
     isResolved: thread.isResolved,
     replyBodies: threads.comments.filter((comment) => comment.threadId === thread.id).map((comment) => comment.body),
   }));
-  const evaluation = evaluateFixerDisposition({ handoff, liveThreads, containment });
+  let liveReviews;
+  try {
+    liveReviews = await readHandoffReviewMarkers(handoff, { repo, pr }, runtime);
+  } catch (error) {
+    return {
+      complete: false,
+      incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unverified_review_markers: ${error instanceof Error ? error.message : String(error)}` }],
+    };
+  }
+  const evaluation = evaluateFixerDisposition({ handoff, liveThreads, containment, liveReviews });
   return { complete: evaluation.ok, incomplete: evaluation.incomplete };
 }
+
+// The trusted marker commits for every review-body entry of the handoff; no review-body entry means no read.
+const readHandoffReviewMarkers = (handoff, ctx, runtime) => readReviewMarkerCommits(handoff.dispositions.filter((entry) => entry.reviewId).map((entry) => entry.reviewId), ctx, runtime);
 
 export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const prData = await fetchPrFactsWithSettledMergeable(options, runtime);

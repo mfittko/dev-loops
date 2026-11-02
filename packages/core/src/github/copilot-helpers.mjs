@@ -188,6 +188,11 @@ const COPILOT_SUMMON_WORD_BOUNDARY_RE = /(?:^|\W)(@copilot|\/copilot)(?:$|\W)/i;
 const INLINE_CODE_SPAN_RE = /(`+)[\s\S]*?\1(?!`)/g;
 const ZERO_WIDTH_JOINER = "\u200D";
 
+// CommonMark: a closing fence repeats the opening char, is at least as long, and has nothing after it.
+function closesFence(trimmed, opener) {
+  return trimmed.startsWith(opener) && new RegExp(`^\\${opener[0]}+$`).test(trimmed);
+}
+
 // Apply `transformLine` to every markdown line OUTSIDE a fenced code block
 // (```/~~~), leaving fence-delimiter lines and fenced content untouched.
 function transformNonFencedLines(text, transformLine) {
@@ -196,14 +201,14 @@ function transformNonFencedLines(text, transformLine) {
   let fencedDelimiter = "";
   const transformed = lines.map((line) => {
     const rawTrimmed = line.trim();
-    const fenceMatch = rawTrimmed.match(/^(```|~~~)/);
+    const fenceMatch = rawTrimmed.match(/^(`{3,}|~{3,})/);
     if (fenceMatch) {
       if (!inFencedBlock) {
         inFencedBlock = true;
         fencedDelimiter = fenceMatch[1];
         return line;
       }
-      if (rawTrimmed.startsWith(fencedDelimiter)) {
+      if (closesFence(rawTrimmed, fencedDelimiter)) {
         inFencedBlock = false;
         fencedDelimiter = "";
         return line;
@@ -282,12 +287,12 @@ export function stripMarkdownCodeForScan(text) {
   const kept = [];
   for (const line of lines) {
     const rawTrimmed = line.trim();
-    const fenceMatch = rawTrimmed.match(/^(```|~~~)/);
+    const fenceMatch = rawTrimmed.match(/^(`{3,}|~{3,})/);
     if (fenceMatch) {
       if (!inFencedBlock) {
         inFencedBlock = true;
         fencedDelimiter = fenceMatch[1];
-      } else if (rawTrimmed.startsWith(fencedDelimiter)) {
+      } else if (closesFence(rawTrimmed, fencedDelimiter)) {
         inFencedBlock = false;
         fencedDelimiter = "";
       }

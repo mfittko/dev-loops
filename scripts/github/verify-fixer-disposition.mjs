@@ -10,7 +10,8 @@ import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { fingerprintFinding } from "./_gate-finding-surface.mjs";
+import { fingerprintFinding, listRestPrReviews } from "./_gate-finding-surface.mjs";
+import { isTrustedDispositionAuthor, readReviewBodyMarkers, readReviewMarkerCommits } from "./_copilot-body-disposition.mjs";
 import { selectActThreadBinding } from "./_fixer-act-thread-bindings.mjs";
 import { resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
@@ -58,10 +59,29 @@ Required:
   --fixer-plan <path>   The fixer-emit-plan.json the full-phase fixer was dispatched
                         from (emit-fixer-work-order.mjs, ADR 0106). The disposition
                         handoff { headSha, dispositions } is read from the plan's
-                        outputRef. Each dispositions entry is { threadId,
-                        fixingCommitSha, disposition: "tackled"|"deferred",
-                        fingerprint?, validation? }; threadId, fixingCommitSha
-                        and disposition are required on every entry.
+                        outputRef. Each dispositions entry is { threadId | reviewId,
+                        fixingCommitSha, disposition: "tackled"|"deferred"|"rejected",
+                        fingerprint?, validation? }; each entry carries exactly one
+                        of threadId or reviewId, plus fixingCommitSha and
+                        disposition. A tackled threadId entry needs fixingCommitSha
+                        as the full 40-character SHA; a reviewId entry needs the
+                        full 40-character SHA for every disposition.
+                        A review-body work order (emit-fixer-work-order.mjs
+                        --review-id) takes a { reviewId, fixingCommitSha,
+                        disposition } entry written by the fixer; the verifier
+                        re-reads the review live (a changed body or a vanished
+                        review refuses), checks commit_not_contained, then
+                        fix_not_after_review (the cited commit is already
+                        contained by the reviewed commit; commit the fix after
+                        it, push, rewrite the handoff, re-run), then posts one
+                        dev-loops:review-body-disposition marker comment citing the
+                        fixing commit unless a marker for it is already live. An
+                        untrusted marker the verifier's own identity posted fails
+                        marker_author_untrusted and is never posted again (a
+                        foreign untrusted marker does not block the post); a
+                        --check run reports that state as reply_missing. A resolved thread whose replies cite
+                        only a short SHA fails resolved_short_sha_reply; a full-SHA
+                        reply on a resolved thread completes.
                         The handoff counts only with a matching fixer pull receipt,
                         when written at or after that pull. Its candidate head X
                         may precede live --head-sha H only after containment and
@@ -106,9 +126,10 @@ already resolved live is left alone.
 In --check mode checkpointPath is null and all evidence remains unchanged.
 Output for normal verification or --check (stdout, JSON):
   { "ok": true, "repo": "owner/name", "pr": 17, "headSha": "...", "checkpointPath": "...",
-    "complete": true|false, "incomplete": [{ threadId, expectedCommit, failedStep, deltaStatus?, deltaRecord? }],
+    "complete": true|false, "incomplete": [{ threadId | reviewId, expectedCommit, failedStep, error?, deltaStatus?, deltaRecord? }],
     "forbiddenActions": [...], "nextAction": "..."|null, "reason": "..."|null,
-    "actions": [{ threadId, ok, step? , error? }] }
+    "actions": [{ threadId | reviewId, ok, step? , error? }] }
+  A review-body run reports reviewId entries; its action step is marker_comment_posted.
 Output for --construct (stdout, JSON):
   { "ok": true, "constructed": true, "outputRef": "..." }
   complete and checkpointPath are absent; normal verification remains mandatory.
@@ -376,7 +397,8 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       const text = await readFile(handoffPath, "utf8");
       raw = JSON.parse(text);
       // Emitted plans carry a source: only the report this verifier's own --construct wrote counts.
-      if (order.source && await readFile(constructMarkPath(handoffPath), "utf8").catch(() => null) !== sha256Hex(text)) {
+      // A review-body handoff is the fixer's own write: no verifier --construct exists for it.
+      if (order.source && order.source !== "review-body" && await readFile(constructMarkPath(handoffPath), "utf8").catch(() => null) !== sha256Hex(text)) {
         throw Object.assign(new Error(`Fixer disposition handoff ${handoffPath} was not written by this verifier's --construct; never hand-write it; rm only this execution's refused report ${handoffPath} and its corresponding stale marker ${constructMarkPath(handoffPath)}, then run the verifier with --construct. Preserve accepted construction evidence and unrelated files`), { handWritten: true });
       }
     }
@@ -446,6 +468,34 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       if (extra.length) throw new Error(`complete handoff includes non-source thread(s) ${extra.join(", ")}`);
     }
   }
+  // A review-body order pins one review: the handoff needs its entry, and the live body must still be the pinned one.
+  let reviewId = null;
+  let reviewBodySha256 = null;
+  let reviewCommitId = null;
+  const reviewRead = (order.requiredReads ?? []).find((read) => read?.kind === "review-body");
+  if (reviewRead) {
+    const bytes = await readFile(reviewRead.path);
+    const snapshot = JSON.parse(bytes.toString("utf8"));
+    if (createHash("sha256").update(bytes).digest("hex") !== reviewRead.sha256 || sha256Hex(snapshot).slice(7) !== order.authority?.sourceDigest) {
+      throw new Error(`the work order's review snapshot ${reviewRead.path} differs from the sha256 or authority.sourceDigest the work order binds`);
+    }
+    reviewId = snapshot.reviewId;
+    reviewBodySha256 = snapshot.bodySha256;
+    reviewCommitId = snapshot.commitId ?? null;
+    const foreign = handoff.dispositions.filter((entry) => entry.reviewId && entry.reviewId !== reviewId).map((entry) => entry.reviewId);
+    if (foreign.length) throw new Error(`the handoff carries disposition entries for review(s) ${foreign.join(", ")}, not the pinned review ${reviewId}; remove them from the work order's outputRef`);
+    // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: a review-body order has no thread to reply to or resolve.
+    const stray = handoff.dispositions.filter((entry) => entry.reviewId !== reviewId);
+    if (stray.length) throw new Error(`the handoff for review-body order ${reviewId} must hold exactly one entry for the pinned review; remove the ${stray.length} other entr${stray.length === 1 ? "y" : "ies"} (a review-body order has no thread to reply to or resolve) from the work order's outputRef`);
+    if (!handoff.dispositions.some((entry) => entry.reviewId === reviewId)) {
+      throw new Error(`missing_from_handoff: the handoff has no disposition entry for source review ${reviewId}; write { reviewId, fixingCommitSha, disposition } to the work order's outputRef`);
+    }
+    const live = (await listRestPrReviews({ repo: options.repo, pr: options.pr }, runtime)).find((review) => review?.node_id === reviewId);
+    if (!live || createHash("sha256").update(String(live.body ?? ""), "utf8").digest("hex") !== snapshot.bodySha256) {
+      throw new Error(`review ${reviewId} ${live ? "changed after the work order pinned its body" : "is gone from the PR"}; re-emit the work order: dev-loops-run scripts/loop/emit-fixer-work-order.mjs --review-id ${reviewId} (with the original --repo, --pr, --head-sha, --phase and --harness)`);
+    }
+  }
+  if (!reviewRead && handoff.dispositions.some((entry) => entry.reviewId)) throw new Error("the handoff carries a reviewId entry but the work order pins no review body; remove the entry or re-emit the work order with --review-id");
   // GATE-EXEC-REMEDIATION-SITE-QUERY: an act-list work order's items with a siteQuery need a coverage record.
   const actRead = (order.requiredReads ?? []).find((read) => read?.kind === "act-list");
   let actList = null;
@@ -570,6 +620,9 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     deltaStatuses,
     completion,
     constructedReport: raw,
+    reviewId,
+    reviewBodySha256,
+    reviewCommitId,
     source: order.source,
     handoffPath,
     bindActiveFixer,
@@ -648,7 +701,7 @@ function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, delta
 export async function assertDescendantThreadSites({ repo, pr, candidateHead, headSha, handoff, parsed, repoRoot }, { env, ghCommand, runChild }) {
   const gitEnv = { ...env };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_DIFF_OPTS"]) delete gitEnv[key];
-  for (const entry of handoff.dispositions.filter((entry) => entry.disposition === "tackled")) {
+  for (const entry of handoff.dispositions.filter((entry) => entry.threadId && entry.disposition === "tackled")) {
     const refuse = (reason, changed = false) => { throw new Error(`thread_site_${changed ? "changed" : "unverifiable"}: ${entry.threadId} (${candidateHead} -> ${headSha}): ${reason}; run pre_approval_gate with this open thread in --known-findings`); };
     const git = async (...args) => {
       const result = await runChild("git", ["-C", repoRoot, "--literal-pathspecs", ...args], gitEnv).catch(() => refuse("history unavailable"));
@@ -754,7 +807,7 @@ async function verifyFixerDispositionCore(
   const logPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: "fixer-disposition", headSha: options.headSha, tmpRoot });
   const fullPath = path.resolve(repoRoot, logPath);
   const runtime = { env, ghCommand, runChild };
-  const { handoff, actList, deltaStatuses, completion, constructedReport, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
+  const { handoff, actList, deltaStatuses, completion, constructedReport, reviewId, reviewBodySha256, reviewCommitId, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
   // The observed head must be the live PR head, never a caller claim.
   const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,statusCheckRollup"], env);
   const livePayload = live.code === 0 ? (() => { try { return JSON.parse(live.stdout); } catch { return null; } })() : null;
@@ -849,11 +902,21 @@ async function verifyFixerDispositionCore(
   )];
   const containment = await buildContainmentMap(tackledShas, { repo: options.repo, headSha: options.headSha }, runtime);
 
-  let evaluation = evaluateFixerDisposition({
+  // A review-body fix must be strictly after the reviewed commit; an unknown or non-ancestor review commit fails closed.
+  const fixAfterReview = {};
+  for (const sha of new Set(handoff.dispositions.filter((entry) => entry.reviewId && entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).map((entry) => entry.fixingCommitSha))) {
+    fixAfterReview[sha] = typeof reviewCommitId === "string" && (await isCommitContainedByHead({ repo: options.repo, commitSha: reviewCommitId.toLowerCase(), headSha: sha, requireAhead: true }, runtime)).contained;
+  }
+
+  let liveSnapshot = initialSnapshot;
+  const evaluate = async () => evaluateFixerDisposition({
     handoff,
-    liveThreads: buildLiveThreads(initialSnapshot),
+    liveThreads: buildLiveThreads(liveSnapshot),
     containment,
+    fixAfterReview,
+    liveReviews: await readReviewMarkerCommits(reviewId ? [reviewId] : [], options, runtime),
   });
+  let evaluation = await evaluate();
 
   const actions = [];
   const residualFailures = [];
@@ -909,7 +972,7 @@ async function verifyFixerDispositionCore(
   // a claim with no ledger entry, is never evidence).
   // A thread the delta review of the fix left not_resolved or cannot_verify gets no "Fixed" reply.
   const deltaBlocked = new Map();
-  for (const entry of evaluation.incomplete.filter((e) => e.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING || e.failedStep === FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED)) {
+  for (const entry of evaluation.incomplete.filter((e) => e.threadId && (e.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING || e.failedStep === FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED))) {
     const blocked = await findDeltaBlockedFixedReply(
       [{ threadId: entry.threadId, body: `Fixed in commit ${entry.expectedCommit}.`, commit: entry.expectedCommit }],
       { repo: options.repo, pr: options.pr, parsed: initialSnapshot, tmpRoot: path.resolve(repoRoot, tmpRoot) },
@@ -917,7 +980,7 @@ async function verifyFixerDispositionCore(
     );
     if (blocked) deltaBlocked.set(entry.threadId, blocked);
   }
-  const actionable = evaluation.incomplete.filter((entry) => !deltaBlocked.has(entry.threadId) && (
+  const actionable = evaluation.incomplete.filter((entry) => entry.threadId && !deltaBlocked.has(entry.threadId) && (
     entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING
     || entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED
   ));
@@ -969,12 +1032,50 @@ async function verifyFixerDispositionCore(
     // Live re-read verify (invariant step 5): re-fetch rather than trust the
     // mutation responses, so a resolve that silently didn't stick still
     // surfaces as incomplete.
-    const refreshedSnapshot = await captureParsedReviewThreads({ repo: options.repo, pr: options.pr }, runtime);
-    evaluation = evaluateFixerDisposition({
-      handoff,
-      liveThreads: buildLiveThreads(refreshedSnapshot),
-      containment,
-    });
+    liveSnapshot = await captureParsedReviewThreads({ repo: options.repo, pr: options.pr }, runtime);
+    evaluation = await evaluate();
+  }
+  // A review body has no thread: post the one marker comment that cites the fixing commit, then re-read it. A live marker means nothing is posted.
+  const postedBy = new Map();
+  const unreplied = evaluation.incomplete.filter((entry) => entry.reviewId === reviewId && entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING);
+  if (!options.check && unreplied.length > 0) {
+    const untrustedMarker = (id, expectedCommit, author) => ({ reviewId: id, expectedCommit, failedStep: FIXER_DISPOSITION_FAILED_STEP.MARKER_AUTHOR_UNTRUSTED, error: `the marker comment by ${author} for review ${id} is not by a trusted author (OWNER, MEMBER or COLLABORATOR); post the marker as an OWNER, MEMBER or COLLABORATOR identity and run the verifier under that identity; re-running under this identity changes nothing` });
+    const existing = await readReviewBodyMarkers([reviewId], options, runtime);
+    for (const { reviewId: id, expectedCommit } of unreplied) {
+      // A marker for this review and commit that is live but not trusted never counts: post no second one.
+      const matches = existing.filter((marker) => marker.reviewId === id && marker.fixSha === expectedCommit.toLowerCase());
+      // Only this verifier's own untrusted marker blocks the post, wherever it sits in the comment order; a foreign untrusted marker must not lock out a trusted verifier. An unreadable login fails closed: no post.
+      const ownLogin = matches.some((marker) => !marker.trusted) ? await resolveAuthenticatedLogin(runtime).catch(() => null) : null;
+      const prior = matches.find((marker) => marker.trusted || ownLogin === null || (marker.author ?? "").toLowerCase() === ownLogin.toLowerCase());
+      if (prior) {
+        if (!prior.trusted) residualFailures.push(untrustedMarker(id, expectedCommit, prior.author ?? "an unknown identity"));
+        continue;
+      }
+      try {
+        // The body was checked once at load; re-check it now, so an edit made since then is never marked addressed.
+        const liveReview = (await listRestPrReviews({ repo: options.repo, pr: options.pr }, runtime)).find((review) => review?.node_id === id);
+        if (!liveReview || createHash("sha256").update(String(liveReview.body ?? ""), "utf8").digest("hex") !== reviewBodySha256) {
+          throw new Error(`review ${id} ${liveReview ? "changed after the work order pinned its body" : "is gone from the PR"}; re-emit the work order: dev-loops-run scripts/loop/emit-fixer-work-order.mjs --review-id ${id} (with the original --repo, --pr, --head-sha, --phase and --harness)`);
+        }
+        const body = `<!-- dev-loops:review-body-disposition review=${id} fix=${expectedCommit} -->\nAddressed review ${id} in commit ${expectedCommit}.`;
+        const posted = await runChild(ghCommand, ["api", `repos/${options.repo}/issues/${options.pr}/comments`, "-f", `body=${body}`], env);
+        if (posted.code !== 0) throw new Error(posted.stderr.trim() || `exit code ${posted.code}`);
+        // The trust decision reads the POST response, not a comment list that can lag behind the write.
+        let comment = null;
+        try { comment = JSON.parse(posted.stdout); } catch { /* the post response is unreadable: not trusted */ }
+        postedBy.set(id, { login: comment?.user?.login || "the posting identity", trusted: comment !== null && isTrustedDispositionAuthor(comment) });
+        actions.push({ reviewId: id, ok: true, step: "marker_comment_posted" });
+      } catch (error) {
+        actions.push({ reviewId: id, ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    evaluation = await evaluate();
+    for (const { reviewId: id, expectedCommit } of evaluation.incomplete.filter((entry) => entry.reviewId === reviewId && entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING && postedBy.has(entry.reviewId))) {
+      const { login, trusted } = postedBy.get(id);
+      residualFailures.push(trusted
+        ? { reviewId: id, expectedCommit, failedStep: FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING, error: `the trusted marker comment by ${login} for review ${id} is not listed yet; re-run the verifier` }
+        : untrustedMarker(id, expectedCommit, login));
+    }
   }
 
   const incomplete = [...evaluation.incomplete, ...residualFailures].map((entry) => (deltaBlocked.has(entry.threadId)
@@ -987,7 +1088,7 @@ async function verifyFixerDispositionCore(
   return {
     // A failed residual-status reply is not delivered: nonzero exit naming the thread.
     ok: residualFailures.length === 0,
-    ...(residualFailures.length ? { error: `residual-status reply failed for thread(s) ${residualFailures.map((failure) => failure.threadId).join(", ")}; re-run the verifier` } : {}),
+    ...(residualFailures.length ? { error: residualReason(residualFailures) } : {}),
     repo: options.repo,
     pr: options.pr,
     headSha: options.headSha,
@@ -997,10 +1098,19 @@ async function verifyFixerDispositionCore(
     incomplete,
     forbiddenActions: evaluation.forbiddenActions,
     nextAction: evaluation.nextAction,
-    reason: residualFailures.length > 0 ? `residual-status reply failed for thread(s) ${residualFailures.map((failure) => failure.threadId).join(", ")}; re-run the verifier`
+    reason: residualFailures.length > 0 ? residualReason(residualFailures)
       : deltaBlocked.size > 0 ? deltaBlockedReason(incomplete) : evaluation.reason,
     actions,
   };
+}
+
+// A thread residual names its threads; a review-body residual names the review and carries its own remedy.
+function residualReason(failures) {
+  const threads = failures.filter((failure) => failure.threadId);
+  return [
+    ...(threads.length ? [`residual-status reply failed for thread(s) ${threads.map((failure) => failure.threadId).join(", ")}; re-run the verifier`] : []),
+    ...failures.filter((failure) => !failure.threadId).map((failure) => `review ${failure.reviewId}: ${failure.failedStep}: ${failure.error}`),
+  ].join("; ");
 }
 
 // Re-derived from the remapped incomplete list so one output never carries two failedStep values.

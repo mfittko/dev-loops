@@ -12,7 +12,7 @@ import {
 } from "../src/loop/fixer-disposition.mjs";
 import { PR_CHECKPOINT_ACTION } from "../src/loop/pr-gate-coordination.mjs";
 
-const SHA = "abc1234def5670000000000000000000000000000";
+const SHA = "abc1234def567000000000000000000000000000";
 
 test("input forms stay strict except explicitly accounted authenticated residuals", () => {
   const items = [{ fingerprint: "fp", siteQuery: "query", acceptedForms: ["--flag"] }];
@@ -274,7 +274,7 @@ test("evaluateFixerDisposition names every incomplete thread, its expected commi
     headSha: SHA,
     dispositions: [
       { threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "tackled" },
-      { threadId: "PRRT_T2", fixingCommitSha: "0000000deadbeef000000000000000000000000", disposition: "tackled" },
+      { threadId: "PRRT_T2", fixingCommitSha: "0000000deadbeef0000000000000000000000000", disposition: "tackled" },
     ],
   });
   const result = evaluateFixerDisposition({
@@ -283,13 +283,13 @@ test("evaluateFixerDisposition names every incomplete thread, its expected commi
       { threadId: "PRRT_T1", isResolved: false, replyBodies: [`Fixed in commit ${SHA}.`] },
       { threadId: "PRRT_T2", isResolved: false, replyBodies: [] },
     ],
-    containment: { [SHA]: true, "0000000deadbeef000000000000000000000000": false },
+    containment: { [SHA]: true, "0000000deadbeef0000000000000000000000000": false },
   });
   assert.equal(result.ok, false);
   assert.equal(result.incomplete.length, 2);
   assert.equal(result.nextAction, COMPLETE_FIXER_DISPOSITION_ACTION);
-  assert.match(result.reason, /thread PRRT_T1 \(expected commit abc1234def5670000000000000000000000000000, failed step: not_resolved\)/);
-  assert.match(result.reason, /thread PRRT_T2 \(expected commit 0000000deadbeef000000000000000000000000, failed step: commit_not_contained\)/);
+  assert.match(result.reason, /thread PRRT_T1 \(expected commit abc1234def567000000000000000000000000000, failed step: not_resolved\)/);
+  assert.match(result.reason, /thread PRRT_T2 \(expected commit 0000000deadbeef0000000000000000000000000, failed step: commit_not_contained\)/);
   assert.match(result.reason, new RegExp(`only legal next action is ${COMPLETE_FIXER_DISPOSITION_ACTION}`));
 });
 
@@ -409,4 +409,52 @@ test("normalizeFixerDispositionHandoff keeps the empty-site relaxation confined 
   assert.throws(handoff({ returnedSites: [""] }), /non-empty strings/);
   const dup = { kind: "input_form", status: "fixed", test: "t" };
   assert.throws(handoff({ sites: [{ site: "", ...dup }, { site: "", ...dup }] }), /records site "" more than once/);
+});
+
+// ---------------------------------------------------------------------------
+// review-body entries (reviewId) and the resolved-thread full-SHA rule
+// ---------------------------------------------------------------------------
+
+const FULL = "c".repeat(40);
+const reviewEntry = (over = {}) => ({ reviewId: "PRR_R1", fixingCommitSha: FULL, disposition: "tackled", ...over });
+
+test("normalizeFixerDispositionHandoff accepts a reviewId entry and refuses both ids, neither id, a duplicate reviewId and a short SHA", () => {
+  const handoff = (...dispositions) => () => normalizeFixerDispositionHandoff({ headSha: FULL, dispositions });
+  assert.equal(handoff(reviewEntry())().dispositions[0].reviewId, "PRR_R1");
+  assert.equal(handoff(reviewEntry())().dispositions[0].threadId, undefined);
+  assert.throws(handoff(reviewEntry({ threadId: "PRRT_T1" })), /both threadId and reviewId/);
+  assert.throws(handoff({ fixingCommitSha: FULL, disposition: "tackled" }), /missing threadId \(or reviewId/);
+  assert.throws(handoff(reviewEntry(), reviewEntry()), /duplicate reviewId: PRR_R1/);
+  assert.throws(handoff(reviewEntry({ fixingCommitSha: "ccccccc" })), /full 40-character SHA/);
+  assert.throws(handoff(reviewEntry({ reviewId: "PRRT_T1" })), /not a review node id/);
+  assert.throws(handoff(reviewEntry({ fixingCommitSha: [FULL] })), /full 40-character SHA/);
+});
+
+test("a tackled thread entry needs the full 40-character SHA; a short SHA never reaches the evaluator", () => {
+  const entry = (over) => ({ threadId: "PRRT_T1", fixingCommitSha: FULL, disposition: "tackled", ...over });
+  const normalize = (over) => () => normalizeFixerDispositionHandoff({ headSha: FULL, dispositions: [entry(over)] });
+  assert.throws(normalize({ fixingCommitSha: "ccccccc" }), /thread PRRT_T1 needs fixingCommitSha as the full 40-character SHA/);
+  assert.equal(normalize({ fixingCommitSha: FULL })().dispositions[0].fixingCommitSha, FULL);
+  assert.equal(normalize({ fixingCommitSha: "ccccccc", disposition: "deferred" })().dispositions[0].disposition, "deferred");
+});
+
+test("evaluateFixerDisposition reports commit_not_contained, then reply_missing, for a tackled reviewId entry and never not_resolved", () => {
+  const handoff = { headSha: FULL, dispositions: [reviewEntry()] };
+  const steps = (params) => evaluateFixerDisposition({ handoff, ...params }).incomplete.map((e) => [e.reviewId, e.failedStep]);
+  assert.deepEqual(steps({ containment: {}, liveReviews: [{ reviewId: "PRR_R1", markerCommits: [FULL] }] }), [["PRR_R1", FIXER_DISPOSITION_FAILED_STEP.COMMIT_NOT_CONTAINED]]);
+  assert.deepEqual(steps({ containment: { [FULL]: true } }), [["PRR_R1", FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING]]);
+  assert.deepEqual(steps({ containment: { [FULL]: true }, liveReviews: [{ reviewId: "PRR_R1", markerCommits: ["d".repeat(40)] }] }), [["PRR_R1", FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING]]);
+  const done = evaluateFixerDisposition({ handoff, containment: { [FULL]: true }, liveReviews: [{ reviewId: "PRR_R1", markerCommits: [FULL] }] });
+  assert.equal(done.ok, true);
+});
+
+test("a resolved thread completes with a full-SHA reply and fails resolved_short_sha_reply with a short-SHA reply", () => {
+  const handoff = { headSha: FULL, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: FULL, disposition: "tackled" }] };
+  const run = (body, isResolved = true) => evaluateFixerDisposition({ handoff, containment: { [FULL]: true }, liveThreads: [{ threadId: "PRRT_T1", isResolved, replyBodies: [body] }] });
+  assert.equal(run(`Fixed in commit ${FULL}.`).ok, true);
+  const short = run("Fixed in commit ccccccc.");
+  assert.deepEqual(short.incomplete.map((e) => e.failedStep), [FIXER_DISPOSITION_FAILED_STEP.RESOLVED_SHORT_SHA_REPLY]);
+  assert.match(short.reason, /unresolve-review-thread\.mjs/);
+  // An unresolved thread keeps reply_missing: the verifier posts the full-SHA reply itself.
+  assert.deepEqual(run("Fixed in commit ccccccc.", false).incomplete.map((e) => e.failedStep), [FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING]);
 });

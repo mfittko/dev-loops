@@ -3649,7 +3649,7 @@ for (const [location, step] of [["main", "reply_missing"], ["linked", "reply_mis
   const REPO = "owner/repo";
   const PR = 3001;
   const HEAD_SHA = "abc1234567";
-  const FIX_SHA = "fed9876543";
+  const FIX_SHA = "fed9876543fed9876543fed9876543fed9876543";
 
   try {
     initGitFixture(tempDir);
@@ -3764,6 +3764,62 @@ for (const [location, step] of [["main", "reply_missing"], ["linked", "reply_mis
     assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
     assert.match(result.fixerDispositionWarning.warning, /T1/);
     assert.match(result.fixerDispositionWarning.warning, new RegExp(step));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+for (const withMarker of [true, false]) test(`detect-pr-gate-coordination-state ${withMarker ? "completes a review-body checkpoint when a trusted marker is live" : "names the review, not 'thread undefined', when no marker is live"}`, async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-fixer-disposition-review-"));
+  const REPO = "owner/repo";
+  const PR = 3001;
+  const HEAD_SHA = "abc1234567";
+  const FIX_SHA = "fed9876543fed9876543fed9876543fed9876543";
+
+  try {
+    initGitFixture(tempDir);
+    const { buildLogPath } = await import("../../scripts/github/write-gate-findings-log.mjs");
+    const { normalizeFixerDispositionHandoff } = await import("@dev-loops/core/loop/fixer-disposition");
+    const fullPath = path.join(tempDir, buildLogPath({ repo: REPO, pr: PR, gate: "fixer-disposition", headSha: HEAD_SHA, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(fullPath), { recursive: true });
+    const handoff = normalizeFixerDispositionHandoff({ headSha: HEAD_SHA, dispositions: [{ reviewId: "PRR_R1", fixingCommitSha: FIX_SHA, disposition: "tackled" }] });
+    await writeFile(fullPath, `${JSON.stringify(handoff, null, 2)}\n`, "utf8");
+    const marker = JSON.stringify({ id: 5, user: { login: "op", type: "User" }, author_association: "OWNER", body: `<!-- dev-loops:review-body-disposition review=PRR_R1 fix=${FIX_SHA} -->` });
+
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        stdout: jsonLine({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD_SHA, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], reviews: [] }),
+      },
+      { assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`], stdout: jsonLine({ users: [], teams: [] }) },
+      {
+        assertArgs: ["api", "graphql", `pr=${PR}`],
+        stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } }] } } } } }),
+      },
+      { assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid"], stdout: jsonLine({ headRefOid: HEAD_SHA }) },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/issues/${PR}/comments?per_page=100`],
+        stdout: jsonLine([[{
+          id: 11,
+          body: ["Gate review: draft_gate", `Reviewed head SHA: ${HEAD_SHA}`, "Verdict: clean", "Findings summary: no issues found", "Next action: mark ready for review"].join("\n"),
+          html_url: "https://example.test/comment/11",
+          updated_at: "2026-05-31T20:00:00Z",
+        }]]),
+      },
+      { assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/pulls/${PR}/reviews?per_page=100`], stdout: jsonLine([[]]) },
+      { assertArgs: ["api", `repos/${REPO}/compare/${FIX_SHA}...${HEAD_SHA}`], stdout: jsonLine({ status: "ahead" }) },
+      { assertArgs: ["api", `repos/${REPO}/issues/${PR}/comments`, "--paginate", "--jq", ".[]"], stdout: withMarker ? `${marker}\n` : "\n" },
+      { assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'], stdout: "\n" },
+    ]);
+
+    const result = await detectPrGateCoordinationState({ repo: REPO, pr: PR }, buildMockRuntime(env, { repoRoot: tempDir }));
+    assert.equal(result.ok, true);
+    if (withMarker) {
+      assert.equal(result.fixerDispositionWarning, undefined);
+    } else {
+      assert.match(result.fixerDispositionWarning.warning, /review PRR_R1: reply_missing/);
+      assert.doesNotMatch(result.fixerDispositionWarning.warning, /thread undefined/);
+    }
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -3996,7 +4052,7 @@ async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw, 
     }
     await writeFile(path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json"), handoffRaw ?? JSON.stringify({
       headSha: handoffHead ?? HEAD_SHA,
-      dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: "fed9876543", disposition: "tackled" }],
+      dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: "fed9876543fed9876543fed9876543fed9876543", disposition: "tackled" }],
     }));
     const checkerCalls = [];
     if (active) {
@@ -4089,6 +4145,17 @@ test("detect-pr-gate-coordination-state reports not_verified for a delivered tac
     assert.match(result.fixerDispositionWarning.warning, /not_verified/);
     assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
   });
+});
+
+test("detect-pr-gate-coordination-state reports not_verified for a tackled review-body handoff, and not for a deferred one", async () => {
+  for (const [key, id, disposition, warned] of [["reviewId", "PRR_R1", "tackled", true], ["reviewId", "PRR_R1", "deferred", false], ["threadId", "PRRT_x", "rejected", false]]) {
+    const handoffRaw = JSON.stringify({ headSha: "abc9988776", dispositions: [{ [key]: id, fixingCommitSha: "fed9876543fed9876543fed9876543fed9876543", disposition }] });
+    await runNotVerifiedFixture({ handoffRaw }, (result) => {
+      assert.equal(result.ok, true);
+      if (warned) assert.match(result.fixerDispositionWarning.warning, /review PRR_R1: not_verified/);
+      else assert.equal(result.fixerDispositionWarning ?? null, null);
+    });
+  }
 });
 
 test("detect-pr-gate-coordination-state keeps not_verified after a later commit_only emission overwrote the plan", async () => {
