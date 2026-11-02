@@ -127,6 +127,9 @@ const RESIDUE_SHAPES = [
 ];
 /** Deny rows from the closed branch (draft_gate rounds 5 to 7, delta reviews) that hold on origin/main. */
 const SALVAGED_DENY_ROWS = [
+  // a quote pair after an unclosed `$(` opener: the old regex still paired it, so the head must not read it as allowed
+  `gh api repos/mfittko/dev-loops/pulls/5 -f body=x -f "title=$(echo ' -X GET ' ; true)"`,
+  `gh pr edit 5 --body x --title "$(echo ' --repo other/x ' ; true)"`,
   "# don't\nnode -e 'console.log(1)'",
   "git commit -F - <<'MSG'\ndon't\nMSG\nnode -e 'x'",
   "# can't\nnode -e 'x'\n# don't",

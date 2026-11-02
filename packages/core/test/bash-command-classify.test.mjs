@@ -1550,6 +1550,9 @@ test("tokenizeShellCommand: malformed input is incomplete and the classifier den
   // a terminated quote span after the earliest unclosed opener stays raw executable text
   assert.equal(commandIsSleepPollLoop("echo $(echo 'while true; do gh pr view 5; sleep 5; done'"), true);
   assert.equal(commandIsSleepPollLoop("cat <<EOF 'while true; do gh pr view 5; sleep 5; done'\nx"), true);
+  // a quote pair after an unclosed opener keeps the permissive callers (-X GET, foreign --repo) from allowing
+  assert.equal(commandContainsRawPrBodyApiWrite(`gh api repos/mfittko/dev-loops/pulls/5 -f body=x -f "title=$(echo ' -X GET ' ; true)"`, "mfittko/dev-loops"), true);
+  assert.equal(commandContainsRawPrBodyEdit(`gh pr edit 5 --body x --title "$(echo ' --repo other/x ' ; true)"`, "mfittko/dev-loops"), true);
 });
 
 test("tokenizeShellCommand: CRLF heredoc, real comments and nesting cap (#2442)", () => {

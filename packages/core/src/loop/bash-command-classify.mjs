@@ -988,12 +988,13 @@ function stripQuotedLiterals(command) {
  * @param {string} command @returns {boolean}
  */
 function hasQuotePairingHazard(command) {
-  const { segments, ticks, comments, spans } = tokenizeShellCommand(command);
+  const { segments, ticks, comments, spans, incompleteAt } = tokenizeShellCommand(command);
+  const quoteAfterIncomplete = incompleteAt >= 0 && spans.some(({ start }) => start >= incompleteAt); // the old regex skipped the unpaired opener and still paired this span
   const nestedQuote = spans.some(({ start, end, kind }) => {
     const inner = command.slice(start + 1, end - 1);
     return kind === "double" && /\$\(|`/.test(inner) && (inner.includes("'") || inner.split('"').length % 2 === 0); // a substitution holding a nested quote the old regex mispaired
   });
-  return nestedQuote || /\\['"]/.test(command) || ticks.some((span) => /['"]/.test(span)) || comments.some((text) => /['"]/.test(text)) || segmentsHaveQuotedHeredoc(segments);
+  return quoteAfterIncomplete || nestedQuote || /\\['"]/.test(command) || ticks.some((span) => /['"]/.test(span)) || comments.some((text) => /['"]/.test(text)) || segmentsHaveQuotedHeredoc(segments);
 }
 
 /** Whether any heredoc body (including inside `$(...)`) contains a quote character. */
