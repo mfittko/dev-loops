@@ -1,4 +1,4 @@
-// Frozen differential oracle for #2442. Byte-identical copy of packages/core/src/loop/bash-command-classify.mjs
+// Frozen differential oracle for the quote stripper. Byte-identical copy of packages/core/src/loop/bash-command-classify.mjs
 // at origin/main commit 47fd3a4fd (the last classifier change). Everything below this header is
 // `git show 47fd3a4fd:packages/core/src/loop/bash-command-classify.mjs` unchanged; the file has no relative imports.
 // Do not edit. Re-freeze only from an origin/main commit.

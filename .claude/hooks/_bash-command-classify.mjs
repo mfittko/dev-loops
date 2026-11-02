@@ -982,9 +982,9 @@ function stripQuotedLiterals(command) {
 }
 
 /**
- * Slice 1 stays strictly fail-closed (#2442): where the old regex mispaired quotes, `stripQuotedLiterals` blanks
- * nothing, and a caller that would read the unblanked text as more permissive (a foreign `--repo`, an explicit
- * `-X GET`) must not. Slice 2 turns these into intended removals.
+ * The stripper stays strictly fail-closed against the frozen differential oracle: where the old regex mispaired
+ * quotes, `stripQuotedLiterals` blanks nothing, and a caller that would read the unblanked text as more permissive
+ * (a foreign `--repo`, an explicit `-X GET`) must not.
  * ponytail: coarse text hazards (an escaped quote anywhere, a `#` comment with a quote, a quoted heredoc body).
  * @param {string} command @returns {boolean}
  */
