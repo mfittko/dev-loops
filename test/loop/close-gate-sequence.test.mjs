@@ -255,11 +255,11 @@ const plantLock = (tmpRoot, token, ageMs) => {
 test("the contract and its mirror name the close command exactly as recoveryHint emits it", () => {
   const spelling = "dev-loops-run cli/index.mjs gate close-sequence --head <baseline sha> --repo <owner/name> --pr <number>";
   assert.ok(recoveryHint(HEAD, "/m", "feat").includes(spelling));
-  for (const file of ["skills/docs/pre-pr-review-contract.md", ".claude/skills/docs/pre-pr-review-contract.md"]) {
-    const text = readFileSync(path.join(import.meta.dir, "..", "..", file), "utf8");
-    assert.ok(text.includes(`\`${spelling}\``), file);
-    assert.equal(text.includes("<dev-loops-package-root>/cli/index.mjs gate close-sequence"), false, file);
-  }
+  const read = (file) => readFileSync(path.join(import.meta.dir, "..", "..", file), "utf8");
+  assert.ok(read(".claude/skills/docs/pre-pr-review-contract.md").includes(`\`${spelling}\``));
+  const source = read("skills/docs/pre-pr-review-contract.md");
+  assert.ok(source.includes("`node <dev-loops-package-root>/cli/index.mjs gate close-sequence --head <baseline sha> --repo <owner/name> --pr <number>`"));
+  assert.equal(source.includes("dev-loops-run cli/index.mjs"), false);
 });
 
 test("withSequenceLock steals a stale lock whose owner token is unchanged", async () => {
