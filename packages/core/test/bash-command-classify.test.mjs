@@ -1607,3 +1607,17 @@ test("an unmatched quote inside an unquoted backtick span is a quote-pairing haz
   assert.equal(commandIsSleepPollLoop("echo 'while :; do gh pr view 5; sleep 5; done' `b`"), false);
   assert.equal(commandIsSleepPollLoop("while :; do `true`; sleep 5; gh pr view 5; done"), true);
 });
+
+test("review fixes: hazard text keeps the body flag visible, nested quotes are a hazard, heredoc queue is per sequence, ANSI-C delimiters decode", () => {
+  // accepted: the frozen classifier denies both; retained quotes must not defeat the --body lookahead
+  assert.equal(commandContainsRawPrBodyEdit('gh pr edit 5 --body"" x # it\'s', "mfittko/dev-loops"), true);
+  assert.equal(commandContainsRawPrBodyEdit('gh pr edit 5 --body x --title "$(echo "x") --repo other/x "', "mfittko/dev-loops"), true);
+  // rejected form: a plain quoted title without --body stays allowed
+  assert.equal(commandContainsRawPrBodyEdit("gh pr edit 5 --title 'a'", "mfittko/dev-loops"), false);
+  // a newline inside a substitution does not consume the parent's heredoc
+  assert.equal(commandContainsInlineInterpreter(": <<EOF $(printf x\n)\nbody\nEOF"), false);
+  assert.equal(commandContainsInlineInterpreter(": <<EOF $(cat <<EOF2)\nbody\nEOF"), true);
+  // ANSI-C delimiter decoding
+  assert.equal(commandContainsInlineInterpreter(": <<$'\\x45OF'\nbody\nEOF"), false);
+  assert.equal(commandContainsInlineInterpreter(": <<$'EO\\x46'\nbody\nEOF"), false);
+});
