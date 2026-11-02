@@ -3649,7 +3649,7 @@ for (const [location, step] of [["main", "reply_missing"], ["linked", "reply_mis
   const REPO = "owner/repo";
   const PR = 3001;
   const HEAD_SHA = "abc1234567";
-  const FIX_SHA = "fed9876543";
+  const FIX_SHA = "fed9876543fed9876543fed9876543fed9876543";
 
   try {
     initGitFixture(tempDir);
@@ -3996,7 +3996,7 @@ async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw, 
     }
     await writeFile(path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json"), handoffRaw ?? JSON.stringify({
       headSha: handoffHead ?? HEAD_SHA,
-      dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: "fed9876543", disposition: "tackled" }],
+      dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: "fed9876543fed9876543fed9876543fed9876543", disposition: "tackled" }],
     }));
     const checkerCalls = [];
     if (active) {
