@@ -505,11 +505,15 @@ test("editPr (#2898): a heading rename inside one scope is accepted; a heading-o
   // rename inside the AC scope: accepted
   await attemptEdit("## AC\n- [x] Tests pass", "## Acceptance criteria\n- [x] Tests pass");
   // heading-only edit: the AC heading becomes a plain heading, the checked row leaves the AC scope
-  await assert.rejects(() => attemptEdit("## AC\n- [x] Tests pass", "## Criteria\n- [x] Tests pass"), /untick or remove 1 checked row.*moved out of its AC\/DoD scope.*"Tests pass"/s);
+  await assert.rejects(() => attemptEdit("## AC\n- [x] Tests pass", "## Criteria\n- [x] Tests pass"), /untick or remove 1 checked row.*moved into or out of its AC\/DoD scope.*"Tests pass"/s);
   const help = spawnSync(process.execPath, [new URL("../../scripts/github/edit-pr.mjs", import.meta.url).pathname, "--help"], { encoding: "utf8" });
   assert.match(help.stdout, /moves\s+the row out of or into its AC\/DoD scope/);
   // a plain heading nested into the AC scope moves its checked row into AC: its scope key changes, so it is refused
-  await assert.rejects(() => attemptEdit("## AC\n- [x] A\n## Notes\n- [x] B", "## AC\n- [x] A\n### Notes\n- [x] B"), /untick or remove 1 checked row.*"B"/s);
+  await assert.rejects(() => attemptEdit("## AC\n- [x] A\n## Notes\n- [x] B", "## AC\n- [x] A\n### Notes\n- [x] B"), /untick or remove 1 checked row.*moved into or out of its AC\/DoD scope.*"B"/s);
+});
+
+test("editPr (#2898): unticking a checked row that ends in U+2028 is refused", async () => {
+  await assert.rejects(() => attemptEdit("## AC\n- [x] Docs ", "## AC\n- [ ] Docs "), /untick or remove 1 checked row.*"Docs"/s);
 });
 
 test("editPr (#2898): a four-backtick fence holding a three-backtick line hides its checked rows", async () => {

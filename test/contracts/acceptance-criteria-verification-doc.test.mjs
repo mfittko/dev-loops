@@ -39,6 +39,8 @@ test("step 5 consumers describe the dry-run then write-before-post tick and name
   }
   const adr = await readRepo("docs/decisions/0230-poster-ticks-after-refusal-checks.md");
   assert.ok(adr.includes("0100"));
+  const adr0100 = await readRepo("docs/decisions/0100-reviewer-verified-items-drive-the-pre-approval-tick.md");
+  assert.ok(adr0100.includes("0230-poster-ticks-after-refusal-checks.md"));
 });
 
 test("acceptance owner names both completeness fields and their verdict writer", async () => {

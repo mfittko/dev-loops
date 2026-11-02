@@ -1356,7 +1356,7 @@ test("diffPrBodyAgainstIssue reads decorated AC and DoD headings on the PR side"
 
 test("CHECKBOX_ROW_RE is the one checkbox-row grammar (#2898)", async () => {
   const { CHECKBOX_ROW_RE } = await import("../src/loop/issue-refinement-artifact.mjs");
-  for (const line of ["- [ ] a", "* [x] a", "+ [X] a", "1. [ ] a", "2) [x] a", "> - [ ] a", "  > 1. [x] a\r"]) {
+  for (const line of ["- [ ] a", "* [x] a", "+ [X] a", "1. [ ] a", "2) [x] a", "> - [ ] a", "  > 1. [x] a\r", "- [x] Docs ", "- [x] Docs "]) {
     assert.ok(CHECKBOX_ROW_RE.test(line), line);
   }
   for (const line of ["[x] a", "plain", "- [] a", "-[ ] a"]) assert.ok(!CHECKBOX_ROW_RE.test(line), line);

@@ -310,7 +310,7 @@ async function buildEditArgs(options) {
 }
 
 // Labels of `[x]` rows in currentBody that nextBody no longer carries as `[x]`:
-// unticked, deleted or reworded rows, across every checkbox in the body. Counts
+// unticked, deleted, reworded or moved between scopes rows, across every checkbox in the body. Counts
 // per label, so one lost occurrence of a duplicated label is reported.
 function untickedRows(currentBody, nextBody) {
   // Fence-aware and scope-keyed (CHECKLIST-SCOPE-ONE-MODEL): the key is the row's AC/DoD/other scope plus its label, from the
@@ -368,7 +368,7 @@ export async function editPr(
       if (waiverRefusal) throw new Error(waiverRefusal);
       const unticked = untickedRows(baseline, guardBody);
       if (unticked.length > 0 && !options.allowUntick) {
-        throw new Error(`CHECKLIST-SCOPE-ONE-MODEL: refusing to untick or remove ${unticked.length} checked row(s) on PR #${options.pr} (unticked, deleted, reworded, or moved out of its AC/DoD scope): ${unticked.map((l) => JSON.stringify(l)).join("; ")}. Edit from the current body, or pass --allow-untick for a deliberate change.`);
+        throw new Error(`CHECKLIST-SCOPE-ONE-MODEL: refusing to untick or remove ${unticked.length} checked row(s) on PR #${options.pr} (unticked, deleted, reworded, or moved into or out of its AC/DoD scope): ${unticked.map((l) => JSON.stringify(l)).join("; ")}. Edit from the current body, or pass --allow-untick for a deliberate change.`);
       }
     }
     if (!options.allowCrossIssue && detectClosingKeyword(guardBody)) {
