@@ -393,6 +393,14 @@ the full run.
   `-C <dir>`, `-S <str>`, `--`, a bare `-`, and their long forms) before the real executable
   (`env -u DEVLOOPS_COORDINATOR_READONLY bun run verify` is still denied), on top of the bare
   leading-assignment and `nice`/`timeout` wrapper forms already covered.
+  The VERIFY half of this boundary is harness-neutral (issue #2965): the Pi `tool_call` gate runs the
+  same shared Bash deny decision, so a coordinator whose `active_agent` tag is `dev-loop` or
+  `gate-coordinator` is refused the same entrypoints when `DEVLOOPS_COORDINATOR_READONLY=1` is in the
+  Pi process environment. The WRITE half stays Claude-only: it is a `PreToolUse` Write/Edit guard, and
+  Pi bounds a session's writes by its active-agent roster (the read-only roles) instead. So exporting
+  the flag in a shell that also launches Pi buys the verify boundary only — it is not a way to get the
+  full coordinator boundary on Pi, and it is not the inverse asymmetry of a coordinator that may write
+  but not verify: on Pi the flag never grants writes, because nothing but the roster gates them.
 - **Guarded surface and deliberate ceilings.** Both coordinator boundaries are non-bypassable BY
   THE AGENT only for their GUARDED SURFACE: a dispatched coordinator's (`agent_type: "dev-loop"` or `"gate-coordinator"`)
   `Write`/`Edit` tracked-file mutations and its use of a recognized code-verification/build

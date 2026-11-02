@@ -25,7 +25,9 @@
  *     means "not probed", which gates `gh pr ready` and still denies a raw merge.
  *
  * The Claude-only extras (the judge command restriction and the fixer pull-line / grant binding)
- * stay at the Claude edge: they key on Claude role machinery with no Pi equivalent.
+ * stay at the Claude edge: they key on Claude role machinery with no Pi equivalent. The unresolve
+ * owner allowlist is NOT one of them — it keys on the role name alone, which both harnesses
+ * resolve — so it lives here with the rest of the shared set.
  *
  * Pure and side-effect free.
  */
@@ -88,6 +90,12 @@ export function normalizeAgentType(agentType) {
   return idx === -1 ? agentType : agentType.slice(idx + 1);
 }
 
+// Intermediate tokens exclude shell separators so a compound command that only names the file is not an invocation.
+// The interpreter may carry a path prefix and follow a backtick; the script path itself also matches as a command head.
+const UNRESOLVE_INVOCATION = /(?:(?:^|[\s;&|(`])(?:[^\s;&|()`]*\/)?(?:node\s+(?:(?!(?:--check|-c)\s)[^\s;&|()`]+\s+)*?|(?:dev-loops-run|bun)\s+(?:[^\s;&|()`]+\s+)*?)|(?:^|[\n;&|(`])\s*)[^\s;&|()`]*unresolve-review-thread\.mjs(?=$|[\s;&|)`<>"'}])/;
+/** True when the command runs scripts/github/unresolve-review-thread.mjs (issue 2577). */
+export const isUnresolveInvocation = (command) => typeof command === "string" && UNRESOLVE_INVOCATION.test(command);
+
 /**
  * Whether the command string also invokes an evidence-writing script (findings-log ledger or
  * checkpoint-verdict upsert). Used only to enrich the merge-block message — a compound
@@ -108,9 +116,10 @@ function commandContainsEvidenceWrite(command) {
  * pins this list against the contract matrix, so a new deny rule cannot be added without deciding
  * its Pi verdict.
  *
- * Two denies below are inline denials with no registered rule ID — the `timeout`-wrapped sanctioned
- * command deny and the subagent ad-hoc external-write deny — so they return `ruleId: null` and stay
- * out of this list: listing them would mint rule IDs the rule registry does not own.
+ * Three denies below are inline denials with no registered rule ID — the unresolve owner allowlist,
+ * the `timeout`-wrapped sanctioned command deny and the subagent ad-hoc external-write deny — so they
+ * return `ruleId: null` and stay out of this list: listing them would mint rule IDs the rule registry
+ * does not own.
  */
 export const BASH_GATE_RULES = Object.freeze([
   Object.freeze({ id: "COORDINATOR-VERIFY-BOUNDARY", pi: "enforced" }),
@@ -195,7 +204,7 @@ export function prReadySegmentsProvenForeign(command, managedSlug = null) {
  *     flow through node wrappers; the MAIN AGENT / operator (role null) retains direct access.
  *   - the actor-independent guard rules (inline interpreters, detached wait tools, `timeout`-wrapped
  *     sanctioned tools, ad-hoc sub-issue / thread-reply / Copilot-request writes, raw PR/issue body
- *     writes, `git stash`) and the coordinator verify boundary.
+ *     writes, `git stash`), the coordinator verify boundary, and the unresolve owner allowlist.
  *
  * @param {Object} params
  * @param {string} params.command - The Bash command string.
@@ -213,7 +222,7 @@ export function prReadySegmentsProvenForeign(command, managedSlug = null) {
  * @param {{passed: boolean, error: string|null}|null} [params.readyGate] - Draft-gate evidence
  *   probe result for the command's PR; null when the adapter did not probe.
  * @returns {{ruleId: string|null, reason: string}|null} The deny decision, or null to allow.
- *   `ruleId` is null for the two inline denies that carry no registered rule ID and for the
+ *   `ruleId` is null for the three inline denies that carry no registered rule ID and for the
  *   missing-facts deny.
  */
 export function decideBashGateDeny(facts = {}) {
@@ -235,6 +244,22 @@ export function decideBashGateDeny(facts = {}) {
   const { role, repoSlug, managedRepoSlug, inManagedContext, humanMergeOnly, enforceCoordinator, readyGate = null } = facts;
   const gatePassed = readyGate?.passed === true;
   const gateError = readyGate?.error ?? null;
+
+  // Unresolve ownership (issue 2577): reopening a resolved review thread is owned by the main agent
+  // (no role) and the dev-loop coordinator. The discriminator is the ROLE name alone, which both
+  // harnesses resolve (Claude `agent_type`, Pi `active_agent`), so the check belongs here rather than
+  // at the Claude edge: kept there, a Pi fixer/developer/quality/gate-coordinator child could run
+  // the script that Claude denies. Inline deny with no registered rule ID (see BASH_GATE_RULES).
+  // ponytail: token match only. Quote splitting, globs or variable expansion bypass it; this is a guardrail for cooperative agents.
+  const actor = normalizeAgentType(role);
+  if (actor != null && actor !== DEV_LOOP_AGENT_TYPE && isUnresolveInvocation(command)) {
+    return {
+      ruleId: null,
+      reason:
+        `The ${actor} agent may not unresolve review threads: scripts/github/unresolve-review-thread.mjs ` +
+        "is owned by the orchestrator (main agent) and the dev-loop coordinator. Report the wrongly resolved thread in your hand-back and let the owner run it.",
+    };
+  }
 
   // COORDINATOR-VERIFY-BOUNDARY: a known code-verification/build entrypoint (bun run
   // verify/test, vitest, npm test/run test/run build, ...) run inline by the dev-loop COORDINATOR

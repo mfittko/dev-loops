@@ -981,11 +981,18 @@ test("decideBashGate scopes unresolve-review-thread to the orchestrator and coor
   const gate = (agentType) => decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType });
   assert.equal(gate(null).decision, "allow");
   assert.equal(gate("dev-loop").decision, "allow");
-  for (const agentType of ["fixer", "review", "judge", "dev-loops:fixer", "developer", "gate-coordinator"]) {
+  for (const agentType of ["fixer", "review", "dev-loops:fixer", "developer", "gate-coordinator"]) {
     const d = gate(agentType);
     assert.equal(d.decision, "deny", agentType);
     assert.match(d.reason, /orchestrator.*dev-loop coordinator/);
   }
+  // The judge is denied one step earlier by its own read-only boundary (every command but the pull
+  // line and the decision check), so its reason is that boundary's, not this rule's — the owner
+  // allowlist itself now lives in the shared deny set (packages/core/src/loop/bash-gate-decisions.mjs),
+  // which the judge branch precedes.
+  const judge = gate("judge");
+  assert.equal(judge.decision, "deny");
+  assert.match(judge.reason, /Judge read-only boundary/);
   const raw = "gh api graphql -f query='mutation { unresolveReviewThread(input:{threadId:\"T1\"}) { thread { id } } }'";
   for (const agentType of [null, "dev-loop", "fixer"]) {
     const d = decideBashGate({ command: raw, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType });

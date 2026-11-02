@@ -60,8 +60,8 @@ you set them (CI config, shell profiles, runner scripts):
 `DEVLOOPS_MAIN_AGENT_READONLY` (opt-in main-agent read-only enforcement) was already
 `DEVLOOPS_`-prefixed and is unchanged.
 
-`DEVLOOPS_COORDINATOR_READONLY` is a new opt-in flag (#2082): under the Claude Code harness it
-enforces the coordinator→worker delegation boundary one level down from
+`DEVLOOPS_COORDINATOR_READONLY` is a new opt-in flag (#2082, #2965): it enforces the
+coordinator→worker delegation boundary one level down from
 `DEVLOOPS_MAIN_AGENT_READONLY` — a coordinator agent (the dev-loop agent or the gate-coordinator agent) must not make
 tracked-file implementation edits or run targeted code-verification/build commands inline. The
 dev-loop agent delegates them to a fresh worker subagent; the gate coordinator runs the round's
@@ -74,6 +74,20 @@ enabled, the guard decision logic is **fail-closed and non-bypassable by the dis
 (`agent_type: "dev-loop"` or `"gate-coordinator"`) for its guarded surface** — Write/Edit on tracked files and recognized
 verify/build entrypoints; see [Main Agent Contract](../skills/docs/main-agent-contract.md) for the
 full boundary contract.
+
+Only the **verify/Bash half** of that boundary is harness-neutral. Under Pi the extension's
+`tool_call` gate runs the same shared Bash deny decision, so a coordinator tagged
+`active_agent: dev-loop`/`gate-coordinator` is refused `bun run verify` and the other recognized
+entrypoints when the flag is in the Pi process environment. The **Write/Edit half is Claude-only**:
+no Pi hook implements the coordinator write guard, and Pi bounds a session's writes by its
+active-agent roster (read-only roles) rather than by this flag. Exporting the flag in a shell that
+also launches Pi therefore buys the verify boundary and nothing more — it is not a way to get the
+full boundary outside Claude Code.
+
+The unresolve owner allowlist (only the main agent and the dev-loop coordinator may run
+`scripts/github/unresolve-review-thread.mjs`, #2577) is shared rather than Claude-only for the same
+reason: it keys on the role name, which both harnesses resolve, so a Pi fixer, developer, quality or
+gate-coordinator child is refused exactly as on Claude Code.
 
 ### Pi harness users: these `PI_*` vars are unchanged
 

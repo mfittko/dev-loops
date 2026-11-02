@@ -23,7 +23,7 @@ import {
 // The harness-neutral Bash-gate deny rules and the agent-name helpers live in
 // ../loop/bash-gate-decisions.mjs so the Pi `tool_call` handler enforces the same list
 // (decision record 0206). Re-exported here so this module's public surface is unchanged.
-export { BASH_GATE_RULES, COORDINATOR_AGENT_TYPES, DEV_LOOP_AGENT_TYPE, GATE_COORDINATOR_AGENT_TYPE, decideBashGateDeny, normalizeAgentType } from "../loop/bash-gate-decisions.mjs";
+export { BASH_GATE_RULES, COORDINATOR_AGENT_TYPES, DEV_LOOP_AGENT_TYPE, GATE_COORDINATOR_AGENT_TYPE, decideBashGateDeny, isUnresolveInvocation, normalizeAgentType } from "../loop/bash-gate-decisions.mjs";
 
 /**
  * @typedef {Object} HookDecision
@@ -35,11 +35,6 @@ export { BASH_GATE_RULES, COORDINATOR_AGENT_TYPES, DEV_LOOP_AGENT_TYPE, GATE_COO
 
 const ALLOW = Object.freeze({ decision: "allow" });
 
-// Intermediate tokens exclude shell separators so a compound command that only names the file is not an invocation.
-// The interpreter may carry a path prefix and follow a backtick; the script path itself also matches as a command head.
-const UNRESOLVE_INVOCATION = /(?:(?:^|[\s;&|(`])(?:[^\s;&|()`]*\/)?(?:node\s+(?:(?!(?:--check|-c)\s)[^\s;&|()`]+\s+)*?|(?:dev-loops-run|bun)\s+(?:[^\s;&|()`]+\s+)*?)|(?:^|[\n;&|(`])\s*)[^\s;&|()`]*unresolve-review-thread\.mjs(?=$|[\s;&|)`<>"'}])/;
-/** True when the command runs scripts/github/unresolve-review-thread.mjs (issue 2577). */
-export const isUnresolveInvocation = (command) => typeof command === "string" && UNRESOLVE_INVOCATION.test(command);
 /** Worker agents that keep write access to tracked worktree files under the main-agent read-only boundary. */
 const WORKER_AGENT_TYPES = new Set(["developer", "fixer", "quality", "docs"]);
 /** A worker by bare name or the `dev-loops:` plugin namespace only; `otherplugin:docs` is not a worker. */
@@ -127,18 +122,9 @@ export function decideBashGate({
   humanMergeOnly = false,
   enforceCoordinator = false,
 }) {
-  // Unresolve is owned by the orchestrator and the dev-loop coordinator (issue 2577).
-  // ponytail: token match only. Quote splitting, globs or variable expansion bypass it; this is a guardrail for cooperative agents.
-  // Owner allowlist: only the main agent (no agent type) and the dev-loop coordinator pass.
-  const unresolveCaller = normalizeAgentType(agentType);
-  if (unresolveCaller != null && unresolveCaller !== DEV_LOOP_AGENT_TYPE && isUnresolveInvocation(command)) {
-    return {
-      decision: "deny",
-      reason:
-        `The ${unresolveCaller} agent may not unresolve review threads: scripts/github/unresolve-review-thread.mjs ` +
-        "is owned by the orchestrator (main agent) and the dev-loop coordinator. Report the wrongly resolved thread in your hand-back and let the owner run it.",
-    };
-  }
+  // The unresolve owner allowlist (issue 2577) now lives in the shared deny set with the other
+  // harness-neutral rules: it keys on the role name alone, which Pi resolves too, so keeping it here
+  // denied on Claude Code while a Pi child ran the same script.
   if (normalizeAgentType(agentType) === JUDGE_AGENT_TYPE) {
     return parseSanctionedPullLine(command) || isJudgeDecisionCheckLine(command) ? ALLOW : {
       decision: "deny",

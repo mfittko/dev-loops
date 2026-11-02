@@ -58,12 +58,22 @@ export const PRE_PR_READY_GATE_SCRIPT = 'node scripts/loop/pre-pr-ready-gate.mjs
 const MERGE_COMMAND_TIMEOUT_MS = 15 * 60 * 1000;
 const POST_MERGE_UPDATE_TIMEOUT_MS = 10 * 60 * 1000;
 const REPO_RESOLUTION_TIMEOUT_MS = 5_000;
+/** Git's own "this cwd is not a work tree" answer — the one non-zero exit that is a definitive negative. */
+const NOT_A_REPO_RE = /not a git repository/i;
 export const PR_READY_GATE_TIMEOUT_MS = 30_000;
 
 export type RepoContext = {
   repoRoot: string | null;
   repoSlug: string | null;
   inManagedContext: boolean;
+  /**
+   * How the git identity probe itself answered. `ok` is a single-line root; `not-a-repo` is git's own
+   * definitive "not a git repository" answer; `unknown` is everything else (a rejected `exec`, a probe
+   * killed at the timeout, another non-zero exit, or stdout the single-line guard rejects). The Pi
+   * Bash-gate facts resolver fails CLOSED on `unknown` and keeps `not-a-repo` permissive, matching the
+   * Claude edge, whose `execFileSync` probe has no login shell and no cap and so cannot answer `unknown`.
+   */
+  identityProbe: 'ok' | 'not-a-repo' | 'unknown';
 };
 
 type RunCommandArgs = {
@@ -135,19 +145,36 @@ function notify(ctx: Pick<HarnessContext, 'hasUI' | 'ui'>, message: string, leve
  *
  * Shared with the Pi Bash-gate facts resolver (`extension/bash-gate-facts.ts`), which needs the
  * same three fields the post-merge hooks use.
+ *
+ * `--show-toplevel` must answer with exactly ONE line. The Pi `exec` seam runs through `bash -lc`,
+ * so a login-shell profile that prints to stdout would otherwise make the multi-line blob the
+ * "root": `existsSync(<blob>/.devloops)` is then false (every managed-repo deny switched off)
+ * while the blob is a truthy path that a caller may cache for the whole session. Anything but one
+ * line is an unresolved probe, which callers re-probe instead of caching.
  */
 export async function defaultResolveRepoContext(exec: ExtensionHarnessAdapter['exec'], cwd: string): Promise<RepoContext> {
   const rootResult = await exec('git rev-parse --show-toplevel', {
     cwd,
     timeout: REPO_RESOLUTION_TIMEOUT_MS,
   });
+  if (rootResult.killed) {
+    return { repoRoot: null, repoSlug: null, inManagedContext: false, identityProbe: 'unknown' };
+  }
   if (rootResult.code !== 0) {
-    return { repoRoot: null, repoSlug: null, inManagedContext: false };
+    // Only git's own "not a git repository" answer is DEFINITIVE; any other exit (dubious ownership, a
+    // truncated login shell, ...) leaves the identity unknown so a gating caller can fail closed.
+    return {
+      repoRoot: null,
+      repoSlug: null,
+      inManagedContext: false,
+      identityProbe: NOT_A_REPO_RE.test(`${rootResult.stderr ?? ''}`) ? 'not-a-repo' : 'unknown',
+    };
   }
 
-  const repoRoot = trimToNull(rootResult.stdout);
+  const rootLines = `${rootResult.stdout ?? ''}`.split('\n').map((line) => line.trim()).filter((line) => line !== '');
+  const repoRoot = rootLines.length === 1 ? trimToNull(rootLines[0]) : null;
   if (!repoRoot) {
-    return { repoRoot: null, repoSlug: null, inManagedContext: false };
+    return { repoRoot: null, repoSlug: null, inManagedContext: false, identityProbe: 'unknown' };
   }
 
   const inManagedContext = CONFIG_FILE_VARIANTS.some((ext) => fs.existsSync(path.join(repoRoot, `.devloops${ext}`)));
@@ -164,16 +191,17 @@ export async function defaultResolveRepoContext(exec: ExtensionHarnessAdapter['e
       timeout: REPO_RESOLUTION_TIMEOUT_MS,
     });
   } catch {
-    return { repoRoot, repoSlug: null, inManagedContext };
+    return { repoRoot, repoSlug: null, inManagedContext, identityProbe: 'ok' };
   }
   if (remoteResult.code !== 0) {
-    return { repoRoot, repoSlug: null, inManagedContext };
+    return { repoRoot, repoSlug: null, inManagedContext, identityProbe: 'ok' };
   }
 
   return {
     repoRoot,
     repoSlug: normalizeGitHubRepoSlug(remoteResult.stdout ?? ''),
     inManagedContext,
+    identityProbe: 'ok',
   };
 }
 

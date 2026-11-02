@@ -1,12 +1,16 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { decideBashGate } from "@dev-loops/core/claude/hook-decisions";
 import { BASH_GATE_RULES, decideBashGateDeny, prReadySegmentsProvenForeign } from "@dev-loops/core/loop/bash-gate-decisions";
+import { createPiBashGateFactsResolver } from "../../extension/bash-gate-facts.ts";
 import { decidePiToolCall } from "../../extension/readonly-role-gate.ts";
+import { runIdFreeEnv, withTempDir } from "../_helpers.mjs";
 
 // Issue #2965 AC2/AC3. One shared deny decision (loop/bash-gate-decisions.mjs) backs both the
 // Claude PreToolUse Bash gate and the Pi `tool_call` handler, so the two harnesses must return the
@@ -79,6 +83,96 @@ function claudeAllows(command, role, facts) {
 
 const piBlocks = (command, role, facts) => decidePiToolCall({ toolName: "bash", input: { command }, agentType: role, facts }).block;
 
+const BASH_HOOK = path.join(repoRoot, ".claude/hooks/pre-tool-use-bash-gate.mjs");
+const hookEnv = () => ({ ...runIdFreeEnv(), GIT_DIR: undefined, GIT_WORK_TREE: undefined });
+
+/**
+ * The REAL Claude PreToolUse hook script, driven through its stdin payload — the same harness
+ * `test/loop/bash-gate-hook-precheck.test.mjs` uses.
+ */
+function claudeHookDecision(cwd, command, agentType) {
+  const input = { tool_name: "Bash", tool_input: { command }, cwd };
+  if (agentType !== undefined) input.agent_type = agentType;
+  const result = spawnSync("node", [BASH_HOOK], { input: JSON.stringify(input), encoding: "utf8", env: hookEnv() });
+  assert.equal(result.status, 0, result.stderr);
+  const out = result.stdout.trim() ? JSON.parse(result.stdout).hookSpecificOutput : null;
+  return { allows: (out?.permissionDecision ?? "allow") === "allow", reason: out?.permissionDecisionReason ?? "" };
+}
+
+/**
+ * The Pi `exec` seam as a real shell, so `createPiBashGateFactsResolver` performs the REAL reads:
+ * real `git` for the identity, the real `.devloops` probe and the real config load.
+ */
+const shellExec = async (command, options = {}) => {
+  try {
+    const stdout = execFileSync("/bin/sh", ["-c", command], {
+      cwd: options.cwd,
+      encoding: "utf8",
+      timeout: options.timeout,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { code: 0, stdout, stderr: "", killed: false };
+  } catch (error) {
+    return {
+      code: typeof error?.status === "number" ? error.status : 1,
+      stdout: `${error?.stdout ?? ""}`,
+      stderr: `${error?.stderr ?? ""}`,
+      killed: Boolean(error?.signal),
+    };
+  }
+};
+
+/**
+ * Every other test in this file hands both "adapters" the SAME hand-built facts object, so it cannot
+ * see the place the harnesses actually diverge: fact GATHERING. This one drives the real Claude hook
+ * script and the real Pi fact resolver against ONE managed-repo fixture, for the alternative deny
+ * shapes the one-command-per-rule fixtures above do not carry (a graphql resolve mutation, the
+ * `/copilot` summon comment, and a `gh api` body-field write).
+ */
+test("the real Claude hook and the real Pi fact resolver agree on the alternative deny shapes (#2965)", async () => {
+  await withTempDir(
+    async (dir) => {
+      const root = path.join(await realpath(dir), "repo");
+      await mkdir(root);
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root, env: hookEnv() });
+      execFileSync("git", ["remote", "add", "origin", `https://github.com/${SLUG}.git`], { cwd: root, env: hookEnv() });
+      fs.writeFileSync(path.join(root, ".devloops"), "version: 1\nautonomy:\n  humanMergeOnly: false\n", "utf8");
+      const resolveFacts = createPiBashGateFactsResolver({ exec: shellExec, env: {} });
+      const piDecision = async (command, role) =>
+        decidePiToolCall({ toolName: "bash", input: { command }, agentType: role, facts: await resolveFacts({ cwd: root, command }) });
+      // The Pi facts are resolved for real, not handed over: the fixture really is a managed repo.
+      const resolved = await resolveFacts({ cwd: root, command: "gh pr view 7" });
+      assert.deepEqual(
+        { inManagedContext: resolved.inManagedContext, managedRepoSlug: resolved.managedRepoSlug },
+        { inManagedContext: true, managedRepoSlug: SLUG },
+      );
+      // Each shape names the rule that must deny it on BOTH sides, so the agreement cannot come from
+      // some other deny masking a harness that let the command through.
+      for (const [command, ruleId] of [
+        [`gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "PRRT_x"}) { thread { isResolved } } }'`, "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER"],
+        ["gh pr comment 7 --body '/copilot re-review'", "COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY"],
+        [`gh api -X PATCH repos/${SLUG}/pulls/7 -f body=x`, "ADR-TRIPWIRE-STANDING-WAIVER"],
+      ]) {
+        for (const role of [undefined, "developer", "review"]) {
+          const claude = claudeHookDecision(root, command, role);
+          assert.equal(claude.allows, false, `${command} as ${String(role)} on Claude`);
+          assert.match(claude.reason, new RegExp(ruleId), `${command} as ${String(role)} on Claude names ${ruleId}`);
+          const pi = await piDecision(command, role ?? null);
+          assert.equal(pi.block, true, `${command} as ${String(role)} on Pi`);
+          assert.match(pi.reason, new RegExp(ruleId), `${command} as ${String(role)} on Pi names ${ruleId}`);
+        }
+      }
+      for (const command of ["gh pr view 7", "grep -n body README.md"]) {
+        for (const role of [undefined, "developer"]) {
+          assert.equal(claudeHookDecision(root, command, role).allows, true, `${command} as ${String(role)} on Claude`);
+          assert.equal((await piDecision(command, role ?? null)).block, false, `${command} as ${String(role)} on Pi`);
+        }
+      }
+    },
+    { prefix: "dev-loops-pi-parity-" },
+  );
+});
+
 test("every Bash-gate rule is enforced through the shared decision on Pi (AC2)", () => {
   for (const fixture of FIXTURES) {
     const role = fixture.role ?? null;
@@ -108,6 +202,42 @@ test("the two inline denies without a registered rule ID still block on both har
     const facts = { ...MANAGED, ...fixture.facts };
     assert.equal(piBlocks(fixture.command, role, facts), true, fixture.command);
     assert.equal(claudeAllows(fixture.command, role, facts), false, fixture.command);
+  }
+});
+
+// The unresolve owner allowlist (issue 2577) is one of those inline denies, and it keys on the ROLE
+// name alone — which both harnesses resolve — so it is shared rather than a Claude-edge rule. Pinned
+// here because a Claude-only copy let a Pi fixer/developer/quality/gate-coordinator child run the
+// script Claude denies.
+test("the unresolve owner allowlist holds on both harnesses for every role (issue 2577)", () => {
+  const command = `dev-loops-run scripts/github/unresolve-review-thread.mjs --repo ${SLUG} --pr 7 --thread-id T1`;
+  for (const role of ["fixer", "developer", "quality", "docs", "review", "gate-coordinator"]) {
+    const facts = { ...MANAGED };
+    assert.equal(piBlocks(command, role, facts), true, `${role} on Pi`);
+    assert.equal(claudeAllows(command, role, facts), false, `${role} on Claude`);
+  }
+  for (const role of [null, "dev-loop"]) {
+    assert.equal(piBlocks(command, role, MANAGED), false, `${String(role)} owns the script`);
+    assert.equal(claudeAllows(command, role, MANAGED), true, `${String(role)} owns the script`);
+  }
+});
+
+// The ONE documented divergence, pinned with an explicit verdict on both sides instead of left to
+// chance. The reviewer's shell-inert read/search form is decided BEFORE the shared deny on Pi (a
+// quoted search text that spells a gated verb stays a read), while the shared classifiers split
+// shell segments without quote awareness — so the Claude edge denies the same command. `PARITY_ROLES`
+// excludes the read-only roles for exactly this reason, which is why the divergence needs its own
+// assertion here and the matching sentence in the contract.
+test("the reviewer's quoted read form is the one documented harness divergence (#2965)", () => {
+  const command = "grep '; gh pr merge 42 ;' README.md";
+  assert.equal(claudeAllows(command, "review", MANAGED), false, "the quote-blind shared classifier reads it as a merge on Claude");
+  assert.equal(piBlocks(command, "review", MANAGED), false, "the Pi read/search decision runs first and keeps it a read");
+  const contract = fs.readFileSync(CONTRACT, "utf8");
+  assert.ok(contract.includes(command), "the cross-harness contract must name this exact command");
+  assert.match(contract, /stays a read/, "the contract must state why the Pi side keeps it a read");
+  // Outside that quoted-read escape the read-only roles agree exactly.
+  for (const role of ["review", "judge"]) {
+    assert.equal(claudeAllows("gh pr merge 42", role, MANAGED), !piBlocks("gh pr merge 42", role, MANAGED), String(role));
   }
 });
 

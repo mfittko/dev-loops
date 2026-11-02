@@ -48,6 +48,13 @@ function register({
   repoRoot,
   slug = SLUG,
   unmanaged = false,
+  /*
+   * How the repo IDENTITY probe answers, beyond the happy path: `noisy` appends a login-shell banner
+   * to `--show-toplevel` stdout, `killed` reports the 5s cap firing, `throws` rejects the exec. All
+   * three are UNKNOWN outcomes (the Pi adapter fails closed); `unmanaged` above is git's DEFINITIVE
+   * "not a repository" answer, which stays permissive.
+   */
+  toplevel = 'ok',
   readyGate = { code: 1, stderr: '{"error":"no clean draft_gate record"}' },
   probeThrows = false,
   probeKilled = false,
@@ -59,7 +66,11 @@ function register({
     const command = args[args.length - 1];
     execCalls.push({ command, cwd: opts?.cwd });
     if (command === "git rev-parse --show-toplevel") {
-      return state.unmanaged ? { code: 128, stdout: "", stderr: "not a git repository" } : { code: 0, stdout: `${repoRoot}\n`, stderr: "" };
+      if (state.unmanaged) return { code: 128, stdout: "", stderr: "fatal: not a git repository (or any parent)" };
+      if (toplevel === "throws") throw new Error("spawn git ENOENT");
+      if (toplevel === "killed") return { code: null, stdout: "", stderr: "", killed: true };
+      if (toplevel === "noisy") return { code: 0, stdout: `profile banner written by .zprofile\n${repoRoot}\n`, stderr: "" };
+      return { code: 0, stdout: `${repoRoot}\n`, stderr: "" };
     }
     if (command === "git config --get remote.origin.url") {
       return { code: 0, stdout: `https://github.com/${slug}.git\n`, stderr: "" };
@@ -146,6 +157,51 @@ tempTest("Pi tool_call leaves the same commands alone outside a managed repo (th
   // the reachable form of "the facts, not the command alone, decide".)
   const managed = register({ repoRoot: managedRepoRoot(tmp, { humanMergeOnly: false }) });
   assert.deepEqual(await callAs(managed, "developer", "gh pr merge --repo other/repo 7"), { block: false });
+});
+
+// The repo identity probe is the ONE fact that can switch every managed-repo deny off at once. The
+// Pi `exec` seam runs through `bash -lc` with a 5s cap, so unlike the Claude edge's `execFileSync`
+// (no login shell, no cap) it can fail: a killed probe leaves `repoRoot` null, and a login-shell
+// banner makes it non-single-line. Neither may be read as "not a managed repo" — that fails OPEN on
+// STOP-HUMAN-MERGE-001 and ADR-TRIPWIRE-STANDING-WAIVER for the rest of the session. An UNKNOWN
+// outcome therefore gates on the config layer at or above the cwd (identity unresolved, so the
+// slug-scoped rules still fail closed) and is never cached. `unmanaged` above is git's DEFINITIVE
+// "not a repository" answer and stays permissive, matching Claude.
+tempTest("Pi tool_call fails CLOSED when the repo identity probe cannot answer (killed, noisy, thrown)", async (tmp) => {
+  clearCoordinatorFlag();
+  const root = managedRepoRoot(tmp, { humanMergeOnly: true });
+  for (const toplevel of ["killed", "noisy", "throws"]) {
+    const gate = register({ repoRoot: root, toplevel });
+    for (const role of [undefined, "developer"]) {
+      const merge = await callAs(gate, role, MERGE);
+      assert.equal(merge.block, true, `${toplevel} / ${String(role)}: a raw merge must stay denied`);
+      assert.match(merge.reason, /STOP-HUMAN-MERGE-001|RAW-GH-PR-MERGE-BYPASS/, toplevel);
+      const waiver = await callAs(gate, role, WAIVER_WRITE);
+      assert.match(waiver.reason, /ADR-TRIPWIRE-STANDING-WAIVER/, `${toplevel} / ${String(role)}: the waiver write must stay denied`);
+    }
+    // Never cached: the next call asks git again instead of serving a degraded answer all session.
+    const probes = () => gate.execCalls.filter((call) => call.command === "git rev-parse --show-toplevel").length;
+    const before = probes();
+    await callAs(gate, "developer", MERGE);
+    assert.equal(probes(), before + 1, `${toplevel}: an unknown probe must be re-probed, not cached`);
+  }
+});
+
+// Issue 2577's owner allowlist keys on the ROLE name alone, which Pi resolves from `active_agent`, so
+// it belongs in the shared deny set: kept at the Claude edge it denied on Claude Code while a Pi
+// fixer/developer/quality/gate-coordinator child ran the same script.
+tempTest("Pi tool_call enforces the unresolve owner allowlist for every role (issue 2577)", async (tmp) => {
+  clearCoordinatorFlag();
+  const gate = register({ repoRoot: managedRepoRoot(tmp, { humanMergeOnly: false }) });
+  const command = "dev-loops-run scripts/github/unresolve-review-thread.mjs --repo acme/widgets --pr 7 --thread-id T1";
+  for (const role of [undefined, "dev-loop"]) {
+    assert.equal((await callAs(gate, role, command)).block, false, `${String(role)} owns the script`);
+  }
+  for (const role of ["fixer", "developer", "quality", "docs", "review", "gate-coordinator", ""]) {
+    const decision = await callAs(gate, role, command);
+    assert.equal(decision.block, true, `${String(role)} must not reopen a resolved thread`);
+    assert.match(decision.reason, /unresolve-review-thread\.mjs/, `${String(role)}: the deny names the script`);
+  }
 });
 
 tempTest("Pi tool_call surfaces the draft-gate probe's own error instead of \"no clean record\"", async (tmp) => {

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONFIG_FILE_VARIANTS, loadDevLoopConfig, resolveHumanMergeOnly } from '@dev-loops/core/config';
@@ -27,9 +28,15 @@ import type { PiBashGateFacts } from './readonly-role-gate.ts';
  *     the coordinator write boundary read;
  *   - the `gh pr ready` draft-gate probe, run only when that verb appears in a managed repo.
  *
- * A repo that cannot be resolved and a probe that cannot run fail the way the Claude hook fails:
- * the repo facts stay permissive (no managed context, no human-merge invariant), while a resolved
- * managed repo with an unreadable PR number or a failed probe stays fail-closed (deny). The
+ * A resolved managed repo with an unreadable PR number or a failed draft-gate probe stays
+ * fail-closed (deny). A git identity probe that cannot answer at all — a rejected `exec`, the 5s cap
+ * killing a slow login shell, a non-zero exit, or noisy stdout the single-line guard rejects — is
+ * NOT read as "no managed context": that would switch every managed-repo deny off (the raw merge and
+ * waiver-write rules included) for the session. The cwd is treated as a managed checkout when a
+ * `.devloops` layer sits at it or above it, with the repo identity left unresolved so every
+ * slug-scoped rule fails closed, and that entry is re-probed rather than cached (a login shell that
+ * was slow once must not pin the session to a degraded answer). The Claude edge cannot hit this
+ * case: it probes with `execFileSync('git', …)`, no login shell and no cap. The
  * human-merge invariant is read from the merged config the loader returns, errors included: a
  * schema-rejected repo layer is dropped while every merged layer underneath it stays in effect, so
  * the packaged `autonomy.humanMergeOnly: true` default still binds (mirrors the Claude edge's
@@ -45,6 +52,8 @@ import type { PiBashGateFacts } from './readonly-role-gate.ts';
  */
 
 type RepoFacts = Pick<PiBashGateFacts, 'inManagedContext' | 'managedRepoSlug' | 'repoSlug' | 'humanMergeOnly'>;
+/** Repo facts plus the root they were resolved from, and whether the git probe itself answered. */
+type ResolvedRepoFacts = RepoFacts & { repoRoot: string | null; probed: boolean };
 
 const EMPTY_REPO_FACTS: RepoFacts = Object.freeze({
   inManagedContext: false,
@@ -125,16 +134,46 @@ function configSourceSignature(repoRoot: string): string {
   return parts.join('|');
 }
 
-type CachedRepoFacts = { facts: RepoFacts & { repoRoot: string }; configSignature: string };
+type CachedRepoFacts = { facts: ResolvedRepoFacts & { repoRoot: string }; configSignature: string };
 
-async function resolveRepoFacts(exec: ExtensionHarnessAdapter['exec'], cwd: string): Promise<RepoFacts & { repoRoot: string | null }> {
+/**
+ * The nearest directory at `cwd` or above it that carries a repo-local config layer (`.devloops`),
+ * probed in the loader's own `CONFIG_FILE_VARIANTS` order — i.e. a directory that LOOKS like a
+ * dev-loops-managed checkout. Only consulted when the git identity probe cannot answer, so a failed
+ * probe still gates the managed-repo rules instead of failing open. The walk stops before the home
+ * directory (and at the filesystem root): a `~/.devloops` is an operator-level config, not evidence
+ * that an arbitrary cwd belongs to a managed checkout.
+ */
+function managedCheckoutRoot(cwd: string): string | null {
+  const home = os.homedir();
+  let dir = path.resolve(cwd);
+  for (;;) {
+    if (dir === home) return null;
+    if (CONFIG_FILE_VARIANTS.some((ext) => fs.existsSync(path.join(dir, `.devloops${ext}`)))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+async function resolveRepoFacts(exec: ExtensionHarnessAdapter['exec'], cwd: string): Promise<ResolvedRepoFacts> {
   let repo;
   try {
     repo = await defaultResolveRepoContext(exec, cwd);
   } catch {
-    return { ...EMPTY_REPO_FACTS, repoRoot: null };
+    repo = null;
   }
-  if (!repo.repoRoot) return { ...EMPTY_REPO_FACTS, repoRoot: null };
+  const probed = repo?.identityProbe === 'ok';
+  // An UNKNOWN probe outcome falls back to the config-layer walk (see the module header): the cwd is
+  // then treated as managed with its identity unresolved, so every slug-scoped rule keeps failing
+  // closed. A definitive "not a git repository" answer is not unknown — it stays permissive, exactly
+  // as on the Claude edge.
+  // A rejected `exec` (spawn failure, or the 5s cap rejecting) leaves `repo` null: also unknown.
+  const unknown = !probed && (repo == null || repo.identityProbe === 'unknown');
+  const repoRoot = probed ? repo!.repoRoot : unknown ? managedCheckoutRoot(cwd) : null;
+  if (!repoRoot) return { ...EMPTY_REPO_FACTS, repoRoot: null, probed: false };
+  const inManagedContext = probed ? repo!.inManagedContext : true;
+  const repoSlug = probed ? repo!.repoSlug : null;
   // Resolve the invariant from the merged config exactly as the Claude edge's
   // `scripts/loop/resolve-human-merge-only.mjs` does — it ignores `errors` too. A schema-rejected
   // `.devloops` drops only its own layer; every layer merged underneath it (including the packaged
@@ -144,20 +183,21 @@ async function resolveRepoFacts(exec: ExtensionHarnessAdapter['exec'], cwd: stri
   // Only read inside a managed context: STOP-HUMAN-MERGE-001 is the sole consumer and it also
   // requires a managed repo, so this skips the parse without changing any decision (fail-closed
   // semantics unchanged — the catch below leaves the same `false`).
-  if (repo.inManagedContext) {
+  if (inManagedContext) {
     try {
-      const { config } = await loadDevLoopConfig({ repoRoot: repo.repoRoot });
+      const { config } = await loadDevLoopConfig({ repoRoot });
       humanMergeOnly = resolveHumanMergeOnly(config);
     } catch {
       humanMergeOnly = false;
     }
   }
   return {
-    inManagedContext: repo.inManagedContext,
-    managedRepoSlug: repo.inManagedContext ? repo.repoSlug : null,
-    repoSlug: repo.repoSlug,
+    inManagedContext,
+    managedRepoSlug: inManagedContext ? repoSlug : null,
+    repoSlug,
     humanMergeOnly,
-    repoRoot: repo.repoRoot,
+    repoRoot,
+    probed,
   };
 }
 
@@ -167,7 +207,7 @@ async function resolveRepoFacts(exec: ExtensionHarnessAdapter['exec'], cwd: stri
  */
 async function resolveReadyGate(
   exec: ExtensionHarnessAdapter['exec'],
-  facts: RepoFacts & { repoRoot: string | null },
+  facts: ResolvedRepoFacts,
   command: string,
 ): Promise<PiBashGateFacts['readyGate']> {
   if (!commandContainsGhPrReady(command)) return null;
@@ -217,7 +257,7 @@ export function createPiBashGateFactsResolver({
   env?: Record<string, string | undefined>;
 }): (call: { cwd: string; command: string }) => Promise<PiBashGateFacts> {
   const cache = new Map<string, CachedRepoFacts>();
-  async function cachedRepoFacts(cwd: string): Promise<RepoFacts & { repoRoot: string | null }> {
+  async function cachedRepoFacts(cwd: string): Promise<ResolvedRepoFacts> {
     const cached = cache.get(cwd);
     // Revalidate a resolved repo against its config sources: the same cwd may hold a different
     // `.devloops` than the one the cached facts were resolved from (a branch switch, a config edit
@@ -227,7 +267,9 @@ export function createPiBashGateFactsResolver({
       return cached.facts;
     }
     const facts = await resolveRepoFacts(exec, cwd);
-    if (facts.repoRoot) cache.set(cwd, { facts, configSignature: configSourceSignature(facts.repoRoot) });
+    // Only a probe-backed entry is cached: a degraded (unresolved-identity) or rootless answer is
+    // re-probed on the next call, so a transient probe failure never pins the session.
+    if (facts.probed && facts.repoRoot) cache.set(cwd, { facts, configSignature: configSourceSignature(facts.repoRoot) });
     return facts;
   }
   return async function resolveBashGateFacts({ cwd, command }) {
