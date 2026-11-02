@@ -295,8 +295,8 @@ export function parseMarkdownSections(body) {
 /**
  * Parse bullet/checkbox items from a section body into item states. A checkbox
  * item — any GFM/CommonMark task-list marker (`-`/`*`/`+` bullets, ordered
- * `N.`/`N)`, blockquote-nested `> - [ ]`; parity with
- * tick-verified-checkboxes.mjs) — becomes `{ text, checked }`, where `checked`
+ * `N.`/`N)`, blockquote-nested `> - [ ]`; marker grammar as in
+ * CHECKBOX_ROW_RE) — becomes `{ text, checked }`, where `checked`
  * is true only for a ticked `[x]`/`[X]` marker read from the captured marker
  * group, never a whole-line re-test. A top-level plain bullet (`- text`, dash
  * at column 0) becomes `{ text, checked: null }` — it has no checkbox. Empty
@@ -325,9 +325,9 @@ function parseChecklistItems(sectionBody, { anyMarker = false } = {}) {
       continue;
     }
     // Checklist item: GFM/CommonMark task-list markers (`-`/`*`/`+` bullets,
-    // ordered `N.`/`N)`, blockquote-nested `> - [ ]`) — grammar parity with
-    // tick-verified-checkboxes.mjs so every form surfaced as unchecked is
-    // flippable by the tick tool. Push only when the line carries text, so
+    // ordered `N.`/`N)`, blockquote-nested `> - [ ]`) — marker grammar as in
+    // CHECKBOX_ROW_RE (this file); the gate parser keeps its own `.+?` label
+    // group. Push only when the line carries text, so
     // empty placeholders are skipped. The tick state comes from the CAPTURED
     // marker group, never a second whole-line re-test: an unanchored
     // `/\[[xX]\]/.test(line)` would read an unchecked box whose label merely

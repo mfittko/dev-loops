@@ -30,7 +30,7 @@ test("acceptance owner describes the automatic ledger tick and keeps a parseable
 test("step 5 consumers describe the dry-run then write-before-post tick and name the deferred-write refusal (#2898)", async () => {
   const doc = await readRepo(OWNER);
   const step5 = doc.split(/\n(?=\d+\. )/).find((text) => text.startsWith("5. "));
-  assert.ok(step5.includes("The checklist of PR N changed after the gate read it"));
+  assert.ok(step5.includes("The checklist of PR N (or issue N) changed after the gate read it"));
   for (const file of ["agents/review.agent.md", "skills/copilot-pr-followup/SKILL.md"]) {
     const text = await readRepo(file);
     assert.ok(!text.includes("ticks exactly these labels before it composes"), `${file}: stale phrase`);
