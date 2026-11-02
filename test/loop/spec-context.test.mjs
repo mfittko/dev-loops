@@ -708,6 +708,7 @@ test("--issue with --pr-body-file states the slice-linkage rule from the PR body
     const base = ["--repo", "o/r", "--content-file", "c.txt"];
     assert.equal(parseSpecContextCliArgs([...base, "--issue", "7", "--pr-body-file", "b.md"]).prBodyFile, "b.md");
     assert.throws(() => parseSpecContextCliArgs([...base, "--pr", "7", "--pr-body-file", "b.md"]), /--pr-body-file requires --issue/);
+    for (const value of ["", "   "]) assert.throws(() => parseSpecContextCliArgs([...base, "--issue", "7", "--pr-body-file", value]), /--pr-body-file requires a non-empty path|Missing value for --pr-body-file/);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

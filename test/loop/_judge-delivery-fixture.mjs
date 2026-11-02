@@ -12,6 +12,16 @@ import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs
 
 export const JUDGE_SPEC = { acceptanceCriteria: ["Fix the finding"], definitionOfDone: ["Verdicts are valid"], nonGoals: ["No new schema"] };
 
+// The judge emitter binds --pr-body-file to the PR body of the gate-context evidence read; write both from one body.
+export async function bindEvidenceToPrBody(root, { repo, pr, gate, headSha }, body) {
+  const evidence = `## PR body\n${body}`;
+  await mkdir(path.join(root, "judge-fixture"), { recursive: true });
+  await writeFile(path.join(root, "judge-fixture", "evidence.md"), evidence);
+  const contextPath = path.join(root, buildGateContextPath({ repo, pr, gate, headSha }));
+  await mkdir(path.dirname(contextPath), { recursive: true });
+  await writeFile(contextPath, JSON.stringify({ requiredReads: [{ kind: "evidence", path: "judge-fixture/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex"), bytes: evidence.length, required: true }] }));
+}
+
 /**
  * Write the sources the producer reads under `root` and return the producer
  * arguments. `findingsFile`/`specFile` default to fixture files; an existing
@@ -37,11 +47,7 @@ export async function seedJudgeSources(root, { repo = "o/r", pr = 7, gate = "pre
   // The judge emitter requires a PR body file; the default body holds no closing reference, so it arms nothing.
   const prBodyFile = "judge-fixture/pr-body.md";
   await writeFile(path.join(root, prBodyFile), "Declared scope: fix the finding.\n");
-  const evidence = "## PR body\nDeclared scope: fix the finding.\n";
-  await writeFile(path.join(root, "judge-fixture", "evidence.md"), evidence);
-  const contextPath = path.join(root, buildGateContextPath({ repo, pr, gate, headSha }));
-  await mkdir(path.dirname(contextPath), { recursive: true });
-  await writeFile(contextPath, JSON.stringify({ requiredReads: [{ kind: "evidence", path: "judge-fixture/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex"), bytes: evidence.length, required: true }] }));
+  await bindEvidenceToPrBody(root, { repo, pr, gate, headSha }, "Declared scope: fix the finding.\n");
   return { repo, pr, gate, headSha, findingsFile, specFile, identityFile, prBodyFile, cwd: root };
 }
 

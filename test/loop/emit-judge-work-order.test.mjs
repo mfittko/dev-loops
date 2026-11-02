@@ -11,7 +11,7 @@ import { buildGateContextPath, buildLogPath } from "../../scripts/github/_gate-a
 import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { withTempDir } from "../_helpers.mjs";
-import { seedJudgeSources } from "./_judge-delivery-fixture.mjs";
+import { bindEvidenceToPrBody, seedJudgeSources } from "./_judge-delivery-fixture.mjs";
 import { SPEC_AUTHORITY_OUTCOME_VALUES, SPEC_AUTHORITY_VERDICT_SCHEMA, validateSpecAuthorityVerdict } from "../../packages/core/src/loop/spec-authority.mjs";
 
 const HEAD = "d".repeat(40);
@@ -547,13 +547,16 @@ test("J1b: a sealed findings ledger edited out of band refuses judge emission (v
 
 const armedBy = async (root, sources, body) => {
   await writeFile(path.join(root, "pr-body.md"), body);
+  await bindEvidenceToPrBody(root, sources, body);
   return (await emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" })).workOrder;
 };
 
 test("a PR body Non-goals reopen line puts the slice-linkage sentence and issue into the work order and its rendering", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
-    await writeFile(path.join(root, "pr-body.md"), "Closes #2883\n\n## Non-goals\n\n- Reopen #2883 on merge: slices 2+ remain.\n");
+    const sliceBody = "Closes #2883\n\n## Non-goals\n\n- Reopen #2883 on merge: slices 2+ remain.\n";
+    await writeFile(path.join(root, "pr-body.md"), sliceBody);
+    await bindEvidenceToPrBody(root, sources, sliceBody);
     const plan = await emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" });
     assert.match(plan.workOrder.sliceLinkage, /^SPEC-SLICE-PR-KEEPS-CLOSING-REF: a slice PR keeps its closing reference/);
     assert.deepEqual(plan.workOrder.sliceLinkageIssues, [2883]);
@@ -583,6 +586,16 @@ test("an omitted --pr-body-file refuses judge emission instead of skipping the s
     const { prBodyFile, ...withoutBody } = await seed(root);
     await assert.rejects(emitJudgeWorkOrder(withoutBody), (err) => err.refusal === "pr_body_file_required" && /--pr-body-file/.test(err.message) && /view-pr\.mjs/.test(err.message));
     await assert.rejects(emitJudgeWorkOrder({ ...withoutBody, prBodyFile: "" }), (err) => err.refusal === "pr_body_file_required");
+  });
+});
+
+test("a --pr-body-file that is empty or differs from the pinned evidence PR body refuses with pr_body_mismatch", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    for (const body of ["", "   \n", "Closes #2883\n\n## Non-goals\n\n- Reopen #2883 on merge.\n"]) {
+      await writeFile(path.join(root, "pr-body.md"), body);
+      await assert.rejects(emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" }), (err) => err.refusal === "pr_body_mismatch", JSON.stringify(body));
+    }
   });
 });
 

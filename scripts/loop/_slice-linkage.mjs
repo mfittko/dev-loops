@@ -18,12 +18,23 @@ const KW = String.raw`(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)`;
 // An issue reference: N, #N, owner/repo#N or an issue URL; the number is capture group 1 of its pattern.
 const REF = String.raw`(?:https?://github\.com/[\w.-]+/[\w.-]+/issues/|[\w.-]+/[\w.-]+#|#)?(\d+)\b`;
 // The distinct issue numbers a PR body closes (Closes #N, owner/repo#N or an issue URL).
-const BODY_CLOSING = new RegExp(String.raw`\b${KW}\s*:?\s+(?:https?://github\.com/[\w.-]+/[\w.-]+/issues/|[\w.-]+/[\w.-]+#|#)(\d+)\b`, "gi");
-export const closingRefNumbers = (body) => [...new Set([...String(body ?? "").matchAll(BODY_CLOSING)].map((m) => Number(m[1])))];
-// The reopened issue the slice PR closes: armed only when the PR body holds exactly one closing reference and it names an issue a Non-goals reopen line (spec or PR body) names; [] otherwise.
-export const sliceLinkageIssues = (specNonGoals, prBody) => {
-  const closing = closingRefNumbers(prBody);
-  return closing.length === 1 && reopenIssueNumbers([...(Array.isArray(specNonGoals) ? specNonGoals : []), ...(prBodyNonGoals(prBody) ?? [])]).includes(closing[0]) ? closing : [];
+const BODY_CLOSING = new RegExp(String.raw`\b${KW}\s*:?\s+(?:https?://github\.com/([\w.-]+/[\w.-]+)/issues/|([\w.-]+/[\w.-]+)#|#)(\d+)\b`, "gi");
+// The distinct closing references of a PR body as { repo, number }; repo is "" for a bare #N and for a reference to `ownRepo`, so those count as one local reference.
+export const closingRefs = (body, ownRepo) => {
+  const own = String(ownRepo ?? "").toLowerCase();
+  const refs = new Map();
+  for (const m of String(body ?? "").matchAll(BODY_CLOSING)) {
+    const named = (m[1] ?? m[2] ?? "").toLowerCase();
+    const repo = named === own ? "" : named;
+    refs.set(`${repo}#${Number(m[3])}`, { repo, number: Number(m[3]) });
+  }
+  return [...refs.values()];
+};
+// The reopened issue the slice PR closes: armed only when the PR body holds exactly one distinct closing reference, it is local, and it names an issue a Non-goals reopen line (spec or PR body) names; [] otherwise.
+export const sliceLinkageIssues = (specNonGoals, prBody, ownRepo) => {
+  const closing = closingRefs(prBody, ownRepo);
+  const [only] = closing;
+  return closing.length === 1 && only.repo === "" && reopenIssueNumbers([...(Array.isArray(specNonGoals) ? specNonGoals : []), ...(prBodyNonGoals(prBody) ?? [])]).includes(only.number) ? [only.number] : [];
 };
 
 const CLOSING = String.raw`\b${KW}\b(?:\s+${REF})?`;

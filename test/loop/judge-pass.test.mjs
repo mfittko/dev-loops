@@ -19,7 +19,7 @@ import { resolveDraftRoundCap } from "../../scripts/github/write-gate-context.mj
 import { dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 import { pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
-import { deliverJudge, seedJudgeSources, writeVerdictAfterPull } from "./_judge-delivery-fixture.mjs";
+import { bindEvidenceToPrBody, deliverJudge, seedJudgeSources, writeVerdictAfterPull } from "./_judge-delivery-fixture.mjs";
 
 const HEAD = "0123456789abcdef".padEnd(40, "0");
 
@@ -33,6 +33,7 @@ async function judgePassCli(options, { pinned = {}, ...deps } = {}) {
     repo: options.repo, pr: Number(options.pr), gate: options.gate, headSha: options.headSha,
     findingsFile: options.findingsFile, specFile: pinned.specFile ?? options.specFile, contentDigest: pinned.contentDigest ?? options.contentDigest,
   });
+  if (pinned.prBodyFile) await bindEvidenceToPrBody(root, sources, await readFile(path.resolve(root, pinned.prBodyFile), "utf8"));
   const { plan, receiptTmpRoot } = await deliverJudge(root, { ...sources, ...(pinned.prBodyFile ? { prBodyFile: pinned.prBodyFile } : {}) });
   const delivered = { judgePlan: plan.planPath, ...options };
   for (const [key, ref] of [["judgeVerdict", plan.workOrder.outputRefs[0]], ["specAuthorityVerdict", plan.workOrder.outputRefs[1]]]) {
@@ -2262,6 +2263,10 @@ test("sliceLinkageIssues arms only for exactly one closing reference that a reop
   assert.deepEqual(sliceLinkageIssues([], body("Closes #2883\nCloses #2990", "Reopen #2883 on merge")), []);
   assert.deepEqual(sliceLinkageIssues([], body("Closes #10", "Reopen #12 later")), []);
   assert.deepEqual(sliceLinkageIssues([], body("Refs #10", "Reopen #10 on merge")), []);
+  // A closing reference keys on repository and number: a same-number reference in another repository is a second reference, a lone foreign one is not local.
+  assert.deepEqual(sliceLinkageIssues([], body("Closes #10\nCloses acme/lib#10", "Reopen #10 on merge"), "o/r"), []);
+  assert.deepEqual(sliceLinkageIssues([], body("Closes other/repo#2883", "Reopen #2883 on merge"), "o/r"), []);
+  assert.deepEqual(sliceLinkageIssues([], body("Closes #10\nCloses o/r#10", "Reopen #10 on merge"), "o/r"), [10]);
 });
 
 async function sliceRound(tmpDir, { specNonGoals, prBody, specText }) {
