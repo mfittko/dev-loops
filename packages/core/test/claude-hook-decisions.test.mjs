@@ -1007,6 +1007,8 @@ test("decideBashGate denies every accepted unresolve invocation form for the fix
     `./scripts/github/unresolve-review-thread.mjs ${args}`,
     `cd /repo && scripts/github/unresolve-review-thread.mjs ${args}`,
     `cd /repo\nscripts/github/unresolve-review-thread.mjs ${args}`,
+    `node scripts/github/unresolve-review-thread.mjs>/dev/null ${args}`,
+    `node scripts/github/unresolve-review-thread.mjs</dev/null ${args}`,
   ]) {
     assert.equal(decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "fixer" }).decision, "deny", command);
   }
@@ -1020,6 +1022,8 @@ test("decideBashGate allows non-executing mentions of unresolve-review-thread fo
     "bun test packages/core/test/claude-hook-decisions.test.mjs && git add scripts/github/unresolve-review-thread.mjs",
     "node a.mjs; cat scripts/github/unresolve-review-thread.mjs",
     "cat scripts/github/unresolve-review-thread.mjs",
+    "node --check scripts/github/unresolve-review-thread.mjs",
+    "node -c scripts/github/unresolve-review-thread.mjs",
   ]) {
     assert.equal(decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "fixer" }).decision, "allow", command);
   }

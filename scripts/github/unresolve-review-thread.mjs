@@ -7,7 +7,7 @@ import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
 import { parsePositiveInteger } from "@dev-loops/core/cli/primitives";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { isCopilotLogin, isGateMachineArtifactBody, matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightFieldsSpec, preflightJqFilter } from "../lib/jq-output.mjs";
 import { formatCliError } from "../_core-helpers.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -117,6 +117,7 @@ export function parseCliArgs(argv) {
     threadId,
     jq: values.jq,
     silent: values.silent === true,
+    fields: values.fields,
   };
 }
 
@@ -128,8 +129,10 @@ async function main(argv) {
   }
   const jqSyntaxError = preflightJqFilter(parsed.jq, { stderr: process.stderr });
   if (jqSyntaxError !== undefined) return jqSyntaxError;
+  const fieldsError = preflightFieldsSpec(parsed.fields, { jq: parsed.jq, silent: parsed.silent });
+  if (fieldsError !== undefined) return fieldsError;
   const result = await unresolveReviewThread(parsed);
-  return emitResult(result, { jq: parsed.jq, silent: parsed.silent });
+  return emitResult(result, { jq: parsed.jq, silent: parsed.silent, fields: parsed.fields });
 }
 
 if (isDirectCliRun(import.meta.url)) {
