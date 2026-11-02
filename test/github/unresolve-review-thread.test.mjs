@@ -94,3 +94,8 @@ test("parseCliArgs trims a padded --repo and --thread-id", () => {
   assert.equal(parsed.repo, "owner/repo");
   assert.equal(parsed.threadId, "T1");
 });
+
+test("parseCliArgs forwards --fields", () => {
+  const parsed = parseCliArgs(["--repo", "o/r", "--pr", "5", "--thread-id", "T1", "--fields", "threadId,isResolved"]);
+  assert.equal(parsed.fields, "threadId,isResolved");
+});
