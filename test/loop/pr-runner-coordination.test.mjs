@@ -265,6 +265,20 @@ test("runner coordination fails closed for second claim and allows explicit take
   }
 });
 
+test("readOnly assert skips the matching-owner heartbeat but still reports a foreign owner", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir, now: "2026-01-01T00:00:00.000Z" });
+    const own = await assertRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir, readOnly: true, now: "2026-01-01T01:00:00.000Z" });
+    assert.equal(own.ok, true);
+    assert.equal(own.activeRun.updatedAt, "2026-01-01T00:00:00.000Z");
+    const foreign = await assertRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-2", cwd: tempDir, readOnly: true });
+    assert.equal(foreign.ok, false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("owner-confirmed assert refreshes updatedAt so a long gate cycle stays non-stale", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
   const t0 = Date.parse("2026-01-01T00:00:00.000Z");

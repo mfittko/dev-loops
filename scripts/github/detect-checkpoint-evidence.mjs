@@ -60,7 +60,7 @@ Optional:
                           ({"declaredKeys":[...]}); a head-only unknown key listed there is tolerated
   --head-declared-keys-sha <sha>  Head SHA the declared keys were reported for; the keys apply only when it
                           equals the evaluated head, otherwise the declared set is empty
-  --read-only             Skip the runner-ownership refresh (it writes a heartbeat); for read-only callers such as merge-pr --check
+  --read-only             Still report a foreign runner owner, but skip the matching-owner heartbeat write; for read-only callers such as merge-pr --check
   --skip-fanout-ledger-check  Skip the fan-out findings-log ledger/provenance/
                               angle-coverage layer of requireFanoutEvidence
                               enforcement. That evidence lives in a gitignored,
@@ -130,6 +130,8 @@ Output (stdout, JSON; always includes preMergeGateCheck):
       "findingsSummary": "no issues found",
       "nextAction": "await final human approval",
       "contractComplete": true,
+      "sizeOutcome": "pass",
+      "sizeTouchesT1": false,
       "commentId": 102,
       "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-102",
       "updatedAt": "2026-05-29T22:00:00Z"
@@ -1100,13 +1102,14 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
 // detect-pr-gate-coordination-state.mjs, which durably stores the whole
 // returned object) can re-expose them.
 async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd(), recordCarry = false } = {}) {
-  const runnerOwnership = options.readOnly === true ? { ok: true } : await ensureAsyncRunnerOwnership({
+  const runnerOwnership = await ensureAsyncRunnerOwnership({
     repo: options.repo,
     pr: options.pr,
     env,
     cwd,
     claimIfMissing: false,
     requireExisting: false,
+    readOnly: options.readOnly === true,
   });
   if (!runnerOwnership.ok) {
     const error = new Error(runnerOwnership.message);
