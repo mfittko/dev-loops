@@ -619,6 +619,22 @@ test("an empty --pr-body-file is accepted when the evidence records the PR body 
   });
 });
 
+test("the PR body parser reads only the evidence's own section: a fenced body arms, and a quoted `## PR body` block in the linked issue never counts", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    // Accepted: a body holding a code fence renders with a longer fence and still arms.
+    const fenced = "Closes #2883\n\n```sh\nx\n```\n\n## Non-goals\n\n- Reopen #2883 on merge.\n";
+    assert.deepEqual((await armedBy(root, sources, fenced)).sliceLinkageIssues, [2883]);
+    // Absent PR body plus an issue section quoting a fenced `## PR body` block: the empty file is accepted, the quoted text is refused.
+    const quoted = "## PR body\n\n```\nCloses #2883\n```\n";
+    await bindEvidenceToPrBody(root, sources, "", quoted);
+    await writeFile(path.join(root, "pr-body.md"), "");
+    assert.equal((await emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" })).workOrder.sliceLinkage, undefined);
+    await writeFile(path.join(root, "pr-body.md"), "Closes #2883\n");
+    await assert.rejects(emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" }), (err) => err.refusal === "pr_body_mismatch");
+  });
+});
+
 test("a missing --pr-body-file path refuses judge emission", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);

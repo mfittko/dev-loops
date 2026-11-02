@@ -908,9 +908,9 @@ dev-loops-run scripts/loop/emit-judge-work-order.mjs --repo <owner/name> --pr <N
 dev-loops-run scripts/github/view-pr.mjs --repo <owner/name> --pr <N> --jq '.pr.body' > <pr-body-path>
 ```
 
-The producer also refuses (`pr_body_mismatch`) when the trimmed body file is empty or differs from the `## PR body` section of the pinned gate-context evidence. If the PR body changed after the round context was built, rebuild the round context with `write-gate-context.mjs`; rewriting the body file cannot clear this refusal.
+The producer also refuses (`pr_body_mismatch`) when the trimmed body file is empty or differs from the `## PR body` section of the pinned gate-context evidence. An empty file is accepted when that section records the PR body as absent. If the PR body changed after the round context was built, rebuild the round context with `write-gate-context.mjs`; rewriting the body file cannot clear this refusal.
 
-A slice PR's reopen line lives in the PR body Non-goals when the spec comes from the linked issue. The producer pins the body and, when it holds exactly one closing reference whose number a reopen line names, carries `sliceLinkage` and `sliceLinkageIssues` in the work order. `judge-pass` arms its coercion from those pinned fields only (`SPEC-SLICE-PR-KEEPS-CLOSING-REF`).
+A slice PR's reopen line lives in the PR body Non-goals when the spec comes from the linked issue. The producer pins the body and, when it holds exactly one closing reference, to an issue in this repository, whose number a reopen line names, carries `sliceLinkage` and `sliceLinkageIssues` in the work order. `judge-pass` arms its coercion from those pinned fields only (`SPEC-SLICE-PR-KEEPS-CLOSING-REF`).
 Write the `--operator-focus-file` JSON only when the operator supplied round context for the judge (`GATE-EXEC-OPERATOR-FOCUS`).
 
 A prior head's verdict path is not derivable from the head alone, because each emission's
@@ -999,10 +999,10 @@ use the same formal-spec parser, digests, complete criteria and identity stamp.
 ```sh
 content_digest=$(node scripts/loop/spec-context.mjs --repo <owner/name> --issue <linked_issue_number> \
   --content-file <reviewed-content-path> --head-sha <current_head_sha> \
-  --spec-out <spec-path> --identity-out <identity-path> [--pr-body-file <pr-body-path>] --jq '.contentDigest')
+  --spec-out <spec-path> --identity-out <identity-path> --pr-body-file <pr-body-path> --jq '.contentDigest')
 ```
 
-Write `<pr-body-path>` with the `view-pr.mjs ... --jq '.pr.body'` producer named in Phase 3.5; it is optional on this seam and required on `emit-judge-work-order.mjs`.
+Write `<pr-body-path>` with the `view-pr.mjs ... --jq '.pr.body'` producer named in Phase 3.5; pass the same body file here and to `emit-judge-work-order.mjs`, so a slice PR whose reopen line lives only in its PR body gets `sliceLinkage` in its spec context. The code keeps the flag optional.
 
 For the existing PR-body authority, use the same command with `--pr` instead:
 

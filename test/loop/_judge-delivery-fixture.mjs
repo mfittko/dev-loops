@@ -8,20 +8,20 @@ import path from "node:path";
 import { computeContentDigest, computeSpecDigest, specCriterionIds } from "@dev-loops/core/loop/spec-authority";
 import { pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
 import { buildGateContextPath } from "../../scripts/github/_gate-artifact-paths.mjs";
-import { PR_BODY_ABSENT_SENTINEL } from "../../scripts/github/write-gate-context.mjs";
+import { renderBriefingEvidence } from "../../scripts/github/write-gate-context.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 
 export const JUDGE_SPEC = { acceptanceCriteria: ["Fix the finding"], definitionOfDone: ["Verdicts are valid"], nonGoals: ["No new schema"] };
 
 // The judge emitter binds --pr-body-file to the PR body of the gate-context evidence read; write both from one body.
-export async function bindEvidenceToPrBody(root, { repo, pr, gate, headSha }, body) {
-  // An empty body renders as the unfenced absent sentinel, as write-gate-context does.
-  const evidence = `## PR body\n\n${body.trim() === "" ? PR_BODY_ABSENT_SENTINEL : `\`\`\`\n${body.trim()}\n\`\`\``}\n`;
+export async function bindEvidenceToPrBody(root, { repo, pr, gate, headSha }, body, issueBody = null) {
+  // The real renderer picks the fence and renders an empty body as the unfenced absent sentinel.
+  const evidence = renderBriefingEvidence({ repo, pr, gate, headSha, prBody: body, issueRef: issueBody ? "#2883" : null, issueBody }).text;
   await mkdir(path.join(root, "judge-fixture"), { recursive: true });
   await writeFile(path.join(root, "judge-fixture", "evidence.md"), evidence);
   const contextPath = path.join(root, buildGateContextPath({ repo, pr, gate, headSha }));
   await mkdir(path.dirname(contextPath), { recursive: true });
-  await writeFile(contextPath, JSON.stringify({ requiredReads: [{ kind: "evidence", path: "judge-fixture/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex"), bytes: evidence.length, required: true }] }));
+  await writeFile(contextPath, JSON.stringify({ requiredReads: [{ kind: "evidence", path: "judge-fixture/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex"), bytes: Buffer.byteLength(evidence), required: true }] }));
 }
 
 /**
