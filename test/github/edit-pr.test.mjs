@@ -474,22 +474,20 @@ test("editPr (#2898): refuses a body that unticks checked rows, naming them; --a
   assert.equal(parseEditPrCliArgs(["--repo", "o/n", "--pr", "5", "--body", "x", "--allow-untick"]).allowUntick, true);
 });
 
-test("editPr (#2898): the untick guard counts duplicate labels and reports a removed or reworded checked row", async () => {
-  const live = ["## AC", "- [x] Tests pass", "## DoD", "- [x] Tests pass", "- [x] Docs updated"].join("\n");
-  const fetchPrContext = async () => ({ headRefName: "x", closingIssuesReferences: [], body: live });
-  const attempt = (body) => editPr({ repo: "o/n", pr: 5, body, addAssignees: [], removeAssignees: [] }, { run: stubGh().run, fetchPrContext });
-  // both duplicates kept checked: accepted
-  await attempt(live);
-  // one of two identical checked labels unticked: refused
-  await assert.rejects(() => attempt(live.replace("## DoD\n- [x] Tests pass", "## DoD\n- [ ] Tests pass")), /untick or remove 1 checked row.*"Tests pass"/s);
-  // a checked label removed: refused
-  await assert.rejects(() => attempt(live.replace("\n- [x] Docs updated", "")), /untick or remove 1 checked row.*"Docs updated"/s);
-});
-
 const attemptEdit = (live, body) => editPr(
   { repo: "o/n", pr: 5, body, addAssignees: [], removeAssignees: [] },
   { run: stubGh().run, fetchPrContext: async () => ({ headRefName: "x", closingIssuesReferences: [], body: live }) },
 );
+
+test("editPr (#2898): the untick guard counts duplicate labels and reports a removed or reworded checked row", async () => {
+  const live = ["## AC", "- [x] Tests pass", "## DoD", "- [x] Tests pass", "- [x] Docs updated"].join("\n");
+  // both duplicates kept checked: accepted
+  await attemptEdit(live, live);
+  // one of two identical checked labels unticked: refused
+  await assert.rejects(() => attemptEdit(live, live.replace("## DoD\n- [x] Tests pass", "## DoD\n- [ ] Tests pass")), /untick or remove 1 checked row.*"Tests pass"/s);
+  // a checked label removed: refused
+  await assert.rejects(() => attemptEdit(live, live.replace("\n- [x] Docs updated", "")), /untick or remove 1 checked row.*"Docs updated"/s);
+});
 
 test("editPr (#2898): the untick guard ignores fenced rows and scopes labels to their section", async () => {
   const fenced = "```\n- [x] Tests pass\n```";
