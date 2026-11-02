@@ -22,3 +22,5 @@ Rejected: refusing to run on a version skew. The checkout code is the intended c
 ## Consequences
 
 An installed CLI behind a checkout gives the checkout's gate and loop behavior. A run outside any checkout is unchanged. The rule is `CLI-CHECKOUT-DELEGATION` in the artifact authority contract.
+
+Running a `gate`, `loop` or `pr` command inside a tree whose `package.json` declares the name `dev-loops` executes that tree's `cli/index.mjs` with the caller's environment, credentials included. The operator treats such a tree as trusted code, the same trust `dev-loops-run` already applies. `DEVLOOPS_CHECKOUT_DELEGATED=1` disables delegation. An opt-in gate would break AC2, which requires delegation without one.

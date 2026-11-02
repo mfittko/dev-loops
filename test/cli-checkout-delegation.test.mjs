@@ -55,7 +55,7 @@ test("a flag the installed CLI would not know reaches the checkout unchanged", a
 
 test("gate and pr categories delegate", async () => {
   const root = makeCheckout(ECHO_ENTRY);
-  for (const argv of [["gate", "consolidate-fanin"], ["pr", "ready-for-review"]]) {
+  for (const argv of [["gate", "consolidate-fanin"], ["loop", "gate-coordination"], ["pr", "ready-for-review"]]) {
     const result = await run(argv, root);
     assert.deepEqual(JSON.parse(result.stdout), { argv, delegated: true });
   }
@@ -132,6 +132,29 @@ test("findSkewedCheckout walks past an incomplete or malformed inner package.jso
   writeFileSync(path.join(noCli, "package.json"), JSON.stringify({ name: "dev-loops", version: "1.0.0" }));
   writeFileSync(path.join(malformed, "package.json"), "{ not json");
   assert.equal(findSkewedCheckout(malformed)?.root, realpathSync(outer));
+});
+
+test("findSkewedCheckout ignores a package that is not named dev-loops", () => {
+  const foreign = mkdtempSync(path.join(tmpdir(), "devloops-foreign-"));
+  tmpRoots.push(foreign);
+  mkdirSync(path.join(foreign, "cli"));
+  writeFileSync(path.join(foreign, "package.json"), JSON.stringify({ name: "my-app", version: "1.0.0" }));
+  writeFileSync(path.join(foreign, "cli/index.mjs"), ECHO_ENTRY);
+  assert.equal(findSkewedCheckout(foreign), null);
+  const noName = path.join(foreign, "x");
+  mkdirSync(path.join(noName, "cli"), { recursive: true });
+  writeFileSync(path.join(noName, "package.json"), JSON.stringify({ version: "1.0.0" }));
+  writeFileSync(path.join(noName, "cli/index.mjs"), ECHO_ENTRY);
+  assert.equal(findSkewedCheckout(noName), null);
+});
+
+test("findSkewedCheckout finds a dev-loops checkout above an inner foreign package", () => {
+  const outer = makeCheckout(ECHO_ENTRY);
+  const inner = path.join(outer, "inner");
+  mkdirSync(path.join(inner, "cli"), { recursive: true });
+  writeFileSync(path.join(inner, "package.json"), JSON.stringify({ name: "my-app", version: "1.0.0" }));
+  writeFileSync(path.join(inner, "cli/index.mjs"), ECHO_ENTRY);
+  assert.equal(findSkewedCheckout(inner)?.root, realpathSync(outer));
 });
 
 test("inherited delegation registers a SIGINT listener only during the spawn", () => {
