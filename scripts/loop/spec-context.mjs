@@ -37,6 +37,7 @@ import { captureChangedFilesBetween } from "../lib/git-delta.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveTrackerLocalSpec } from "../github/resolve-tracker-local-spec.mjs";
 import { viewPr } from "../github/view-pr.mjs";
+import { SLICE_LINKAGE_SENTENCE, hasReopenLine } from "./_slice-linkage.mjs";
 
 const USAGE = `Usage:
   spec-context.mjs --repo <owner/name> (--issue <number> | --pr <number> | --body-file <path>) --content-file <path> [--head-sha <sha>] [--spec-out <path>] [--identity-out <path>]
@@ -49,6 +50,10 @@ also carries specKind "pr_scope" and a scope list), echo specSource ("issue" or
 compute specDigest (from the spec) + contentDigest (from --content-file) +
 the complete criterionIds set — feeds judge-pass.mjs's --spec-file/
 --content-digest directly, so the skill never hand-derives them.
+When the spec Non-goals hold a reopen line (a slice PR), the result also carries sliceLinkage,
+the SPEC-SLICE-PR-KEEPS-CLOSING-REF sentence. It is stdout-only: the --spec-out spec is the
+specDigest input and stays unchanged. The judge sees the sentence through
+emit-judge-work-order.mjs, which renders the rule only when the PR body has exactly one closing reference that a reopen line names, and carries that number as sliceLinkageIssues.
 Required (extract mode):
   --repo <owner/name>        Repository slug
   --issue <number>           Canonical tracker issue number; exactly one of --issue/--pr/--body-file
@@ -297,6 +302,7 @@ export async function specContextExtract(
     contentDigest,
     criterionIds,
     ...(options.headSha !== undefined ? { headSha: options.headSha } : {}),
+    ...(hasReopenLine(spec.nonGoals) ? { sliceLinkage: SLICE_LINKAGE_SENTENCE } : {}),
   };
   if (options.specOut !== undefined) {
     const specPath = path.resolve(repoRoot, options.specOut);

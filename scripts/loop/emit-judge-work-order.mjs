@@ -19,11 +19,12 @@ import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "..
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildLogPath } from "../github/_gate-artifact-paths.mjs";
-import { listPriorActItems, renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { PR_BODY_ABSENT_SENTINEL, listPriorActItems, renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { copilotBodyJudgePath } from "../github/_copilot-body-disposition.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { OUT_OF_BAND_WRITE, readSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { SLICE_LINKAGE_SENTENCE, sliceLinkageIssues } from "./_slice-linkage.mjs";
 import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "./_operator-focus.mjs";
 import { isFindingsLogName, resolveGateRound } from "../github/_gate-finding-surface.mjs";
 
@@ -39,7 +40,7 @@ The work order's two verdict outputRefs sit under that directory's <roundId>/ se
 Dispatch the judge with the compact dispatchPrompt only; each run supersedes the
 previous emission for this PR and gate at any head. The only operator input is --operator-focus-file, a JSON file { round?: string } that
 renders as a bounded, sanitized "Operator focus" section and is pinned by the digest (GATE-EXEC-OPERATOR-FOCUS).
-It accepts no other brief or summary input.
+It accepts no other brief or summary input. When the body holds exactly one closing reference and its number is named by a reopen line in the body or spec Non-goals, the work order carries "sliceLinkage" and "sliceLinkageIssues" (SPEC-SLICE-PR-KEEPS-CLOSING-REF) and renders it.
 Exit codes: 0 emitted, 1 refused (missing or inconsistent source), 2 usage/IO error.`;
 
 // ref = judge:<owner/repo>#<pr>:<gate>:<headSha>:<roundId>; executionIdentity = roundId.
@@ -93,7 +94,7 @@ ${workOrder.requiredReads.some((read) => read.kind === "copilot-body-feedback") 
 Write exactly two artifacts: the relevance verdict to \`${verdictPath}\` and the spec-authority verdict to \`${specVerdictPath}\`.
 Widening: ${JUDGE_WIDENING_RULE}.
 
-${renderOperatorFocusSection(workOrder.operatorFocus)}## Required reads
+${typeof workOrder.sliceLinkage === "string" ? `## Slice linkage\n\n${workOrder.sliceLinkage}\nA remedy that changes Closes to Refs for this PR is never act.\n\n` : ""}${renderOperatorFocusSection(workOrder.operatorFocus)}## Required reads
 
 ${workOrder.requiredReads.map((read) => renderRequiredReadLine(read, "/")).join("\n")}
 
@@ -159,6 +160,14 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     if (typeof parsedBody?.angle !== "string" || !Array.isArray(parsedBody?.findings)) throw new Refusal(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${bodyFile} is not JSON with an angle and a findings array`);
   }
   const operatorFocus = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined);
+  // Slice linkage arms from the PR body section of the sha-verified evidence read (write-gate-context.mjs). Only the section at the first `## PR body` heading counts.
+  const evidenceText = evidence.bytes.toString("utf8");
+  const sectionStart = evidenceText.search(/^## PR body\n\n/m);
+  const prBodySection = sectionStart < 0 ? "" : evidenceText.slice(sectionStart);
+  const evidencePrBody = prBodySection.match(/^## PR body\n\n(`{3,})\n([\s\S]*?)\n\1(?:\n|$)/)?.[2] ?? null;
+  // An empty PR body renders as PR_BODY_ABSENT_SENTINEL (no fence); it has no closing reference and arms nothing.
+  if (evidencePrBody === null && prBodySection.split("\n")[2] !== PR_BODY_ABSENT_SENTINEL) throw new Refusal(`gate-context evidence ${evidenceRead.path} has no \`## PR body\` section; rebuild the round context with write-gate-context.mjs`);
+  const linkageIssues = sliceLinkageIssues(parseSource(spec).nonGoals, evidencePrBody ?? "", repo);
   const contracts = await Promise.all(JUDGE_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
   const workOrder = {
     role: "judge",
@@ -177,6 +186,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     // GATE-EXEC-ROUND-CAP: the one past-cap closure round (the gate context records scope.closureRound).
     ...(context?.scope?.closureRound ? { closureRound: true } : {}),
     ...(operatorFocus ? { operatorFocus, ...operatorFocusDigestEntry(operatorFocus) } : {}),
+    ...(linkageIssues.length > 0 ? { sliceLinkage: SLICE_LINKAGE_SENTENCE, sliceLinkageIssues: linkageIssues } : {}),
     configSha256: sha256(JSON.stringify(config ?? {})),
     authority: {
       specDigest,
