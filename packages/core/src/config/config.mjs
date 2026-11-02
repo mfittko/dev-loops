@@ -1673,7 +1673,8 @@ function parseConfigContent(raw, filePath) {
  * @returns {string}
  */
 export function stripConfigKeyPaths(raw, filePath, keyPaths) {
-  const data = parseConfigContent(raw, filePath);
+  // Deep clone to break YAML alias sharing: deleting through one alias must not delete the aliased setting.
+  const data = JSON.parse(JSON.stringify(parseConfigContent(raw, filePath)));
   for (const keyPath of keyPaths) {
     const parts = keyPath.split(".");
     const last = parts.pop();

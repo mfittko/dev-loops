@@ -115,3 +115,11 @@ test("stripConfigKeyPaths never touches Object.prototype through a __proto__ pat
   assert.equal(Object.prototype.x, undefined);
   assert.equal(typeof Object.prototype.toString, "function");
 });
+
+test("stripConfigKeyPaths does not delete an aliased setting through a shared YAML object", () => {
+  const raw = "gates:\n  draft: &d\n    angles: [a]\n    x: 1\nrefinement: *d\n";
+  const out = JSON.parse(stripConfigKeyPaths(raw, ".devloops", ["refinement.angles"]));
+  assert.deepEqual(out.gates.draft.angles, ["a"]);
+  assert.equal(out.refinement.angles, undefined);
+  assert.equal(out.refinement.x, 1);
+});
