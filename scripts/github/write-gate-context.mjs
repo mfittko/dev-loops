@@ -2121,9 +2121,10 @@ export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, 
   return starts.map((start) => clearingChainEnd(tmpRoot, start)).filter(Boolean);
 }
 
-/** Every head the sealed clearing chains of the cap round `capHead` visit after it: each seeded merge, each record candidate head and each chain end. */
-export async function clearingChainHeads({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince }) {
+/** The chain ends and every head the sealed clearing chains of the cap round `capHead` visit after it (each seeded merge, each record candidate head and each chain end), from one walk. */
+export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince }) {
   const { starts } = await capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
+  const ends = starts.map((start) => clearingChainEnd(tmpRoot, start)).filter(Boolean);
   const heads = new Set();
   for (const start of starts) {
     const seededFrom = normalizeSha(start.reviewBaselineHead);
@@ -2135,7 +2136,7 @@ export async function clearingChainHeads({ tmpRoot, capHead, repo, pr, baseRefNa
       record = clearingDeltaRecord(tmpRoot, next);
     }
   }
-  return [...heads];
+  return { ends, heads: [...heads] };
 }
 
 /**

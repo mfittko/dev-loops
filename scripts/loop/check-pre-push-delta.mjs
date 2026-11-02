@@ -51,7 +51,7 @@ import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { fixerPlanPath, locateFixerUnit } from "./emit-fixer-work-order.mjs";
-import { clearingChainHeads, clearingChainLastCandidates } from "../github/write-gate-context.mjs";
+import { clearingChainWalk } from "../github/write-gate-context.mjs";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
@@ -288,10 +288,11 @@ async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerg
       // The probes read repo and pr from the log: they must be the authenticated plan target's.
       if (!target || log.repo !== target.repo || log.pr !== target.pr) return false;
       const chainArgs = { tmpRoot, capHead: logHead, repo: log.repo, pr: log.pr, baseRefName, repoRoot: worktree, baseOnlyMerge };
-      const ends = await clearingChainLastCandidates(chainArgs);
+      // One walk feeds both decisions, so a concurrent record rewrite cannot split them across two chains.
+      const { ends, heads } = await clearingChainWalk(chainArgs);
       // A draft_gate findings log at the baseline or at any head the chain visits means a later full round superseded this one.
       const roundAt = (headSha) => existsSync(buildLogPath({ repo: log.repo, pr: log.pr, gate: "draft_gate", headSha, tmpRoot }));
-      if ([baseline, ...await clearingChainHeads(chainArgs)].some(roundAt)) return false;
+      if ([baseline, ...heads].some(roundAt)) return false;
       if (ends.includes(baseline)) return true;
       for (const end of ends) if (await merged(end)) return true;
       return false;
@@ -346,7 +347,7 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
   refuse(raw.headSha === (result ? result.candidateHead : currentHead)
     && isAncestor(options.worktree, sequence.reviewBaselineHead, raw.headSha)
     && isAncestor(options.worktree, raw.headSha, currentHead), "handback candidate is not the reviewed contained commit");
-  return options.threadsFile ? null : { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex(raw.siteCoverage).slice(7), handbackBytesDigest: sha256Hex(reportBytes).slice(7), origin };
+  return { target, coverageBinding: options.threadsFile ? null : { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex(raw.siteCoverage).slice(7), handbackBytesDigest: sha256Hex(reportBytes).slice(7), origin } };
 }
 
 export async function runCli(
@@ -379,7 +380,7 @@ export async function runCli(
   // The fixer's commit_only handback. Without it every act item with a site query reports a coverage gap.
   const result = options.result ? JSON.parse(readFileSync(options.result, "utf8")) : null;
   if (options.threadsFile && deltaCoverageBinding(result)) throw new Error("THREAD cannot opt into ACT coverage binding");
-  let siteCoverage = [], validationCoverage = [], coverageBinding;
+  let siteCoverage = [], validationCoverage = [], coverageBinding, authenticatedTarget;
   if (options.siteCoverage) {
     const reportBytes = readFileSync(options.siteCoverage);
     const raw = JSON.parse(reportBytes);
@@ -408,7 +409,7 @@ export async function runCli(
       if (gaps.length > 0) throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: the disposition handoff leaves site coverage incomplete: ${gaps.join("; ")}`);
     }
     // Only the validation view discards stale coverage; the reviewed raw identity stays bound.
-    if (options.fixerPlan && !options.threadsFile) coverageBinding = await authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor);
+    if (options.fixerPlan && !options.threadsFile) ({ coverageBinding, target: authenticatedTarget } = await authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor));
     siteCoverage = options.fixerPlan && !options.threadsFile ? raw.siteCoverage : record.headSha === currentHead ? record.siteCoverage ?? [] : [];
     validationCoverage = record.headSha === currentHead ? record.siteCoverage ?? [] : [];
   }
@@ -454,9 +455,8 @@ export async function runCli(
       mkdirSync(path.dirname(patchPath), { recursive: true });
       writeFileSync(patchPath, diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead));
     }
-    // The authenticated fixer plan target binds the log's repo and pr; without a plan, --repo and --pr do.
-    const planTarget = options.fixerPlan && existsSync(options.fixerPlan) ? JSON.parse(readFileSync(options.fixerPlan, "utf8")).workOrder?.target : undefined;
-    const target = planTarget ?? (options.repo && options.pr ? { repo: options.repo, pr: options.pr } : undefined);
+    // The target authenticateCoverage verified binds the log's repo and pr; without an authenticated plan the chain path refuses.
+    const target = authenticatedTarget;
     payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE }), ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target }), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
   }
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });

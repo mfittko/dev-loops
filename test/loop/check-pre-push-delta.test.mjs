@@ -710,8 +710,9 @@ test("input mode still rejects an earlier-head findings log after a PR-own chang
 
 // The cap-round chain (PRE-PUSH-DELTA-INPUT-CAP-CHAIN): the log at cap round A, a sealed clearing record A -> B, then a base-only merge M of B.
 const chainLog = (head, extra = { repo: "o/r", pr: 7 }) => {
-  const p = path.join(LOG_DIR, `chain-${head}-${JSON.stringify(extra).length}.json`);
-  fs.writeFileSync(p, JSON.stringify({ headSha: head, ...extra, provenance: { perAngle: [{ angle: "correctness" }] } }));
+  const text = JSON.stringify({ headSha: head, ...extra, provenance: { perAngle: [{ angle: "correctness" }] } });
+  const p = path.join(LOG_DIR, `chain-${head}-${createHash("sha256").update(text).digest("hex").slice(0, 16)}.json`);
+  fs.writeFileSync(p, text);
   return p;
 };
 const sealRecord = (tmpRoot, from, to, { seal = true } = {}) => {
@@ -779,6 +780,21 @@ test("input mode refuses a chain log whose repo or pr differs from the authentic
 test("input mode refuses the chain log when a later round wrote its own findings log at the baseline", async () => {
   await assert.rejects(chainRun(B, chainLog(A), { merge: false, ledgerAt: B }), /sealed clearing chain/);
   await assert.rejects(chainRun(M, chainLog(A), { ledgerAt: M }), /sealed clearing chain/);
+});
+
+test("input mode accepts a base-only merge of the log head even when the ledger already holds the baseline (ADR 0224 item 4)", async () => {
+  const out = await chainRun(M, chainLog(A), { mergeFrom: A, ledgerAt: M });
+  assert.deepEqual(out.input.surfaceHints, ["correctness"]);
+});
+
+test("a --handback run with --repo and --pr but no authenticated plan refuses the chain path", async () => {
+  const { dir, actList } = fixture();
+  const coverage = path.join(dir, "coverage.json");
+  const head = "c".repeat(40);
+  fs.writeFileSync(coverage, JSON.stringify({ headSha: head, siteCoverage: [] }));
+  const seam = { ...headAt(head), baseOnlyMerge: async ({ fromHead, head: to }) => fromHead === B && to === M };
+  sealRecord(seam.tmpRoot, A, B);
+  await assert.rejects(runCli(["--act-list", actList, "--baseline", M, "--spec-identity", "s", "--handback", "--site-coverage", coverage, "--findings-log", chainLog(A), "--repo", "o/r", "--pr", "7"], seam), /sealed clearing chain/);
 });
 
 test("input mode refuses the chain log for each failing chain condition", async () => {
