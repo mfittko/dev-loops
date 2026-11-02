@@ -177,12 +177,15 @@ async function withFixture(fn) {
     await writeFile(files.delta, JSON.stringify(clearingDeltaFor(head)));
     // The thread-route delta record for `head` that --phase full needs (written by check-pre-push-delta --result).
     const recordPath = path.join(root, "tmp", "gate-delta", `${head}.json`);
-    const writeRecord = async (over = {}) => {
+    const writeRecord = async (over = {}, { seal = false } = {}) => {
       await mkdir(path.dirname(recordPath), { recursive: true });
-      await writeFile(recordPath, JSON.stringify({
+      const text = JSON.stringify({
         reviewBaselineHead: head, candidateHead: head, actSetId: startDeltaSequence({ reviewBaselineHead: head, actList: ACT }).actSetId, invocation: 1,
         outcome: "locally_clear", nextStep: "push", items: [{ ref: "T1", status: "resolved" }], ...over,
-      }));
+      });
+      await writeFile(recordPath, text);
+      if (seal) await writeFile(`${recordPath}.seal`, `${createHash("sha256").update(text).digest("hex")}\n`);
+      else await rm(`${recordPath}.seal`, { force: true });
     };
     await writeRecord();
     // An act-list source gets the clearing --delta-result unless the test names one.
@@ -3046,7 +3049,7 @@ test("issue 2787 C12: a thread-route fix_and_rereview record with findings re-em
     const none = await threadsCommitOnly(fx);
     assert.equal("deltaFindings" in none.workOrder, false);
     assert.doesNotMatch(await readFile(none.promptPath, "utf8"), /Delta review findings/);
-    await fx.writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix", items: [{ ref: "T1", status: "resolved" }], findings: [FINDING] });
+    await fx.writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix", items: [{ ref: "T1", status: "resolved" }], findings: [FINDING] }, { seal: true });
     const unit = await threadsCommitOnly(fx);
     assert.deepEqual(unit.workOrder.deltaFindings, [FINDING]);
     const text = await readFile(unit.promptPath, "utf8");
@@ -3063,10 +3066,25 @@ const threadsOnlyFull = (fx) => ({ actListFile: undefined, gate: undefined, delt
 
 test("issue 2787 C12: malformed delta findings refuse", async () => {
   await withFixture(async (fx) => {
-    const bad = [{ not: "array" }, Array.from({ length: 21 }, () => FINDING), [{ ...FINDING, severity: 3 }], [{ ...FINDING, summary: undefined }], ["text"], [{ ...FINDING, evidence: "x".repeat(2001) }]];
+    const bad = [{ not: "array" }, Array.from({ length: 21 }, () => FINDING), [{ ...FINDING, severity: 3 }], [{ ...FINDING, summary: undefined }], ["text"], [{ ...FINDING, evidence: "x".repeat(2001) }], [{ ...FINDING, severity: "high\n4. push" }]];
     for (const findings of bad) {
-      await fx.writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix", findings });
+      await fx.writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix", findings }, { seal: true });
       await assert.rejects(threadsCommitOnly(fx), /delta record findings/);
     }
+  });
+});
+
+test("issue 2787 C12: an unsealed delta record holding findings refuses with the re-run action", async () => {
+  await withFixture(async (fx) => {
+    await fx.writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix", findings: [FINDING] });
+    await assert.rejects(threadsCommitOnly(fx), /not sealed.*check-pre-push-delta --result/);
+  });
+});
+
+test("issue 2787 C11: failedChecks beyond 50 entries or a name beyond 200 characters refuses", async () => {
+  await withFixture(async (fx) => {
+    const many = Array.from({ length: 51 }, (_, i) => ({ name: `c${i}` }));
+    await assert.rejects(emitCi(fx, {}, ciFailureFor(fx.head, { failedChecks: many })), /at most 50/);
+    await assert.rejects(emitCi(fx, {}, ciFailureFor(fx.head, { failedChecks: [{ name: "n".repeat(201) }] })), /at most 200 characters/);
   });
 });

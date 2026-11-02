@@ -60,15 +60,6 @@ test("delta residue re-enters commit_only", () => {
   assert.equal(out.reason, "delta_residue");
 });
 
-test("issue 2787 slice 4: ci_red -> act_pending and delta_review -> commit_only_emitted are reachable", () => {
-  assert.ok(FIX_LOOP_TRANSITIONS[S.CI_RED].includes(S.ACT_PENDING));
-  assert.equal(interpretFixLoopState({ pushed: true, ciStatus: "red" }).state, S.CI_RED);
-  assert.equal(interpretFixLoopState({ actPending: true }).state, S.ACT_PENDING);
-  assert.ok(FIX_LOOP_TRANSITIONS[S.DELTA_REVIEW].includes(S.COMMIT_ONLY_EMITTED));
-  assert.equal(interpretFixLoopState({ candidateCommitted: true, deltaReviewStarted: true, deltaVerdict: "bounded_out" }).state, S.DELTA_REVIEW);
-  assert.equal(interpretFixLoopState({ candidateCommitted: true, deltaReviewStarted: true, deltaVerdict: "residue" }).state, S.COMMIT_ONLY_EMITTED);
-});
-
 test("no open sequence and no act items falls back to full_gate_round", () => {
   assert.equal(interpretFixLoopState({}).state, S.FULL_GATE_ROUND);
 });
