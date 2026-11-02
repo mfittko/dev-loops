@@ -1031,7 +1031,10 @@ export function tokenizeShellCommand(command) {
   // ANSI-C `$'...'` decoding: simple escapes, \xHH, \nnn, \uHHHH, \UHHHHHHHH; an unknown escape keeps its backslash.
   const decodeAnsiC = (text) => text.replace(/\\(x[0-9a-fA-F]{1,2}|[0-7]{1,3}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8}|.)/gs, (m, e) => {
     if (e in ANSI_SIMPLE) return ANSI_SIMPLE[e];
-    if (/^[xuU]/.test(e) && e.length > 1) return String.fromCodePoint(parseInt(e.slice(1), 16));
+    if (/^[xuU]/.test(e) && e.length > 1) {
+      const cp = parseInt(e.slice(1), 16);
+      return cp > 0x10ffff ? m : String.fromCodePoint(cp); // out of range: keep the escape text instead of throwing
+    }
     if (/^[0-7]/.test(e)) return String.fromCharCode(parseInt(e, 8) & 0xff);
     return /^[\\'"?]$/.test(e) ? e : m;
   });
