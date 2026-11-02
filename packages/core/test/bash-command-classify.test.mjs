@@ -1647,6 +1647,27 @@ test("slice 2: the wait predicate ignores operators and names in data, and still
   ]) assert.equal(commandContainsDetachedWaitTool(c), true, c);
 });
 
+test("slice 2: a written script run through any wrapper, an eval-ed substitution heredoc and process substitution stay visible (#2442)", () => {
+  const LOOP = "while true; do gh pr view 5; sleep 5; done";
+  for (const c of [
+    `cat > tmp/l.sh <<'EOF'\n${LOOP}\nEOF\ntimeout 600 bash tmp/l.sh`,
+    `cat > tmp/l.sh <<'EOF'\n${LOOP}\nEOF\nchmod +x tmp/l.sh && tmp/l.sh`,
+    `cat > tmp/l.sh <<'EOF'\n${LOOP}\nEOF\ncd tmp && env bash ./l.sh`,
+    `cat > tmp/l.sh <<'EOF'\n${LOOP}\nEOF\nnohup /abs/tmp/l.sh`,
+    `x=$(cat <<'EOF'\n${LOOP}\nEOF\n); eval "$x"`,
+    `tee >(sh) <<'EOF'\n${LOOP}\nEOF`,
+    `cat <<'EOF' > >(bash)\n${LOOP}\nEOF`,
+    `echo "$(cat <<'EOF'\n${LOOP}\nEOF)rest"`,
+  ]) assert.equal(commandIsSleepPollLoop(c), true, c);
+  for (const c of [
+    "cat > tmp/l.sh <<EOF\nnode -e 1\nEOF\ntimeout 600 bash tmp/l.sh",
+    "cat > tmp/l.sh <<EOF\nnode -e 1\nEOF\nchmod +x tmp/l.sh && tmp/l.sh",
+    "x=$(cat <<EOF\nnode -e 1\nEOF\n); eval \"$x\"",
+    "tee >(sh) <<EOF\nnode -e 1\nEOF",
+    "cat <<EOF > >(bash)\nnode -e 1\nEOF",
+  ]) assert.equal(commandContainsInlineInterpreter(c), true, c);
+});
+
 test("slice 2: quoted literals and cat/tee heredoc bodies that name an interpreter are data; payloads stay visible (#2442)", () => {
   for (const c of [
     "cat > tmp/f <<'EOF'\nnode -e 'x'\nEOF",

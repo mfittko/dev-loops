@@ -1042,16 +1042,27 @@ function writeTargets(seg) {
  * whose written target is not run by a later `sh`/`bash`/interpreter segment. Every other body executes and stays visible.
  * @returns {object[]}
  */
-function dataHeredocs(segments, inPayload = false, out = []) {
-  segments.forEach((seg, index) => {
-    seg.words.forEach((w, k) => w.subs.forEach((sub) => dataHeredocs(sub.segments, inPayload || isPayloadWord(seg.words, k), out)));
+function dataHeredocs(segments, inPayload = false, out = [], root = segments, inertParent = true) {
+  segments.forEach((seg) => {
     const head = segmentHead(seg);
-    if (inPayload || seg.pipedOut || (head !== "cat" && head !== "tee")) return;
+    const inert = inertParent && !seg.pipedOut && INERT_SUBSTITUTION_HOSTS.has(head);
+    seg.words.forEach((w, k) => w.subs.forEach((sub) => dataHeredocs(sub.segments, inPayload || isPayloadWord(seg.words, k), out, root, inert)));
+    if (!inertParent || inPayload || seg.pipedOut || (head !== "cat" && head !== "tee")) return;
+    if (seg.words.some((w) => /^\d*[<>]*\(/.test(w.value))) return; // process substitution `>(sh)` or a `(`-target: the body is piped to a command
     const targets = writeTargets(seg);
-    const runsTarget = segments.some((other, j) => j !== index && SCRIPT_RUNNER_HEADS.has(segmentHead(other)) && other.words.some((w) => targets.includes(w.value.replace(/^\.\//, ""))));
+    const own = new Set(seg.words);
+    const runsTarget = targets.length > 0 && allWords(root).some((w) => !own.has(w) && targets.some((t) => matchesTarget(w.value, t)));
     for (const h of seg.heredocs) if (h.closed && !runsTarget && (h.quoted || !/\$\(|`/.test(h.body))) out.push(h);
   });
   return out;
+}
+
+/** Heads whose `$(...)` argument is inert text (a commit message, a PR body, echoed text); a heredoc in any other substitution (`x=$(cat <<EOF ...)`) may flow into `eval`. */
+const INERT_SUBSTITUTION_HOSTS = new Set(["git", "gh", "echo", "printf"]);
+/** True when WORD names TARGET, ignoring a leading `./` and any directory prefix on either side, whatever command the word follows. */
+function matchesTarget(word, target) {
+  const a = word.replace(/^\.\//, "");
+  return a === target || a.endsWith(`/${target}`) || target.endsWith(`/${a}`);
 }
 
 /** COMMAND with the data heredoc bodies blanked to same-length whitespace (newlines kept), so offsets still index the input. Incomplete input is returned unchanged. */
@@ -1239,7 +1250,7 @@ export function tokenizeShellCommand(command) {
           const line = command.slice(lineStart, eol);
           // A delimiter line at end of input needs no trailing newline (bash accepts it). Inside `$(...)`, `EOF)` closes the heredoc and the substitution together; outside one it is not a delimiter, so the heredoc stays incomplete.
           const text = h.stripTabs ? line.replace(/^\t+/, "") : line;
-          const closesSub = inSub && text.startsWith(`${h.delimiter})`);
+          const closesSub = inSub && text.startsWith(`${h.delimiter})`) && /^\s*"?\s*$/.test(text.slice(h.delimiter.length + 1)); // only whitespace or the substitution's closing quote may follow
           if (text === h.delimiter || closesSub) {
             h.bodyStart = bodyStart;
             h.bodyEnd = Math.max(bodyStart, lineStart - 1);
