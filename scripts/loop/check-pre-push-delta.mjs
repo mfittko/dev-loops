@@ -288,7 +288,7 @@ async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerg
       // The probes read repo and pr from the log: they must be the authenticated plan target's.
       if (!target || log.repo !== target.repo || log.pr !== target.pr) return false;
       const chainArgs = { tmpRoot, capHead: logHead, repo: log.repo, pr: log.pr, baseRefName, repoRoot: worktree, baseOnlyMerge };
-      // One walk feeds both decisions, so a concurrent record rewrite cannot split them across two chains.
+      // clearingChainWalk collects each chain end in the same loop that fills the visited heads, so a concurrent record rewrite cannot split the two decisions across two chains.
       const { ends, heads } = await clearingChainWalk(chainArgs);
       // A draft_gate findings log at the baseline or at any head the chain visits means a later full round superseded this one.
       const roundAt = (headSha) => existsSync(buildLogPath({ repo: log.repo, pr: log.pr, gate: "draft_gate", headSha, tmpRoot }));

@@ -2120,20 +2120,26 @@ export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, 
   return (await clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge })).ends;
 }
 
-/** The chain ends and every head the sealed clearing chains of the cap round `capHead` visit after it (each seeded merge, each record candidate head and each chain end), from one walk. */
+/** The chain ends and every head the sealed clearing chains of the cap round `capHead` visit after it (each seeded merge, each record candidate head and each chain end), from one walk: each start's end is collected in the same loop that fills the heads, so a record rewrite cannot split them. */
 export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince }) {
   const { starts } = await capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
-  const ends = starts.map((start) => clearingChainEnd(tmpRoot, start)).filter(Boolean);
+  const ends = [];
   const heads = new Set();
   for (const start of starts) {
     const seededFrom = normalizeSha(start.reviewBaselineHead);
     if (seededFrom && seededFrom !== normalizeSha(capHead)) heads.add(seededFrom);
+    // Each record is read once per step: the end and the visited heads come from the same read. A per-start cycle or invalid candidate has no end, as in clearingChainEnd.
+    const seen = new Set();
+    let last;
     for (let record = start; record;) {
       const next = normalizeSha(record.candidateHead);
-      if (!next || heads.has(next)) break;
+      if (!next || seen.has(next)) { last = undefined; break; }
+      seen.add(next);
+      last = next;
       heads.add(next);
       record = clearingDeltaRecord(tmpRoot, next);
     }
+    if (last) ends.push(last);
   }
   return { ends, heads: [...heads] };
 }
