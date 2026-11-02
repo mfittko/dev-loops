@@ -2121,12 +2121,12 @@ async function capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, re
  * The last candidate head of every sealed clearing chain of the cap round `capHead` (ADR 0218), seeded as resolveCapRoundFixed seeds them; empty when no chain starts.
  * The emitter seam skips the `covers` filter on purpose: it must admit a base-only merge M of a chain end before the fixer's record for M exists.
  */
-export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, covering = () => true }) {
-  return (await clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge, covering })).ends;
+export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, covering = () => true, allowUnsealedEnd = false }) {
+  return (await clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge, covering, allowUnsealedEnd })).ends;
 }
 
 /** The chain ends and every head the sealed clearing chains of the cap round `capHead` visit after it (each seeded merge, each record candidate head and each chain end), from one walk: each start's end is collected in the same loop that fills the heads, so a record rewrite cannot split them. */
-export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, covering = () => true }) {
+export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, covering = () => true, allowUnsealedEnd = false }) {
   const { starts, seedHeads } = await capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
   const ends = [];
   // The heads the seed proof visited stay in the set even if a concurrent rewrite changes a record before the traversal below.
@@ -2145,7 +2145,7 @@ export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefNam
       last = next;
       heads.add(next);
       record = clearingDeltaRecord(tmpRoot, next);
-      if (!record && isUnsealedDeltaRecord(tmpRoot, next)) { last = undefined; break; }
+      if (!record && isUnsealedDeltaRecord(tmpRoot, next)) { if (!allowUnsealedEnd) last = undefined; break; } // allowUnsealedEnd: extend-cap-round-chain needs the end of the sealed prefix to refuse record_not_clearing
     }
     if (last) ends.push(last);
   }

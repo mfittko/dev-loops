@@ -100,7 +100,7 @@ export async function extendCapRoundChain(options, {
   if (reached) return { ok: true, action: "already_proven", chainEnd: null, candidateHead: head, files: [] };
   const cap = await resolveCapRound(proofArgs, { repoRoot });
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
-  const ends = cap ? await clearingChainLastCandidates({ tmpRoot, capHead: cap.log.headSha, repo, pr, baseRefName, repoRoot, covering: capRoundCovers(cap) }) : [];
+  const ends = cap ? await clearingChainLastCandidates({ tmpRoot, capHead: cap.log.headSha, repo, pr, baseRefName, repoRoot, covering: capRoundCovers(cap), allowUnsealedEnd: true }) : [];
   const reaches = (from, to) => { try { git(repoRoot, ["merge-base", "--is-ancestor", from, to]); return true; } catch { return false; } };
   const isAncestor = (sha) => sha !== head && reaches(sha, head);
   // The latest end: the ancestor end that every other ancestor end precedes, so the logic check never spans commits a later chain cleared.
