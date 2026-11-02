@@ -1345,6 +1345,9 @@ test("AC15: a Copilot review emits only when it is the latest one on the PR head
     await assert.rejects(emitReview(emit, [copilotReviewFor("d".repeat(40))]), /on d{40}, not the PR head/);
     const newer = copilotReviewFor(head, { node_id: "PRR_C2", submitted_at: "2026-11-01T12:00:00Z" });
     await assert.rejects(emitReview(emit, [copilot, newer]), /not the latest Copilot review.*PRR_C2/);
+    // A newer human lookalike login is not a Copilot candidate: the real Copilot review stays the latest.
+    const lookalike = reviewFor(head, { node_id: "PRR_L1", submitted_at: "2026-11-01T12:00:00Z", user: { login: "copilot-lookalike", type: "User" } });
+    assert.equal((await emitReview(emit, [copilot, lookalike], { reviewId: "PRR_C1" })).workOrder.source, "review-body");
     await assert.rejects(emitReview(emit, [copilotReviewFor(head, { body: "" })]), /empty body/);
     await assert.rejects(emitReview(emit, [reviewFor(head, { node_id: "PRR_B1", user: { login: "some-app[bot]", type: "Bot" } })]), /by the bot some-app\[bot\]/);
   });
