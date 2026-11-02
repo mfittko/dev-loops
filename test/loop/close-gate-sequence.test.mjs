@@ -1,6 +1,6 @@
 // close-gate-sequence: a sanctioned close of an abandoned fix sequence; a live sequence is never closable.
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { afterAll, test } from "bun:test";
@@ -337,6 +337,26 @@ test("withSequenceLock refuses SEQUENCE_LOCK_BUSY, without spinning, when a stal
   });
 });
 
+test("withSequenceLock refuses SEQUENCE_LOCK_BUSY within waitMs when the lock path is a dangling symlink", async () => {
+  await withTempDir(async (tmpRoot) => {
+    mkdirSync(path.join(tmpRoot, "gate-delta"), { recursive: true });
+    symlinkSync(path.join(tmpRoot, "nowhere"), path.join(tmpRoot, "gate-delta", `${HEAD}.sequence-lock`));
+    await assert.rejects(withSequenceLock(tmpRoot, [HEAD], () => { throw new Error("must not run"); }, { waitMs: 150 }), (error) => error.code === "SEQUENCE_LOCK_BUSY");
+  });
+});
+
+test("withSequenceLock refuses SEQUENCE_LOCK_BUSY within waitMs when the steal directory cannot be created next to a stale lock", async () => {
+  if (process.getuid?.() === 0) return; // root ignores directory permissions
+  await withTempDir(async (tmpRoot) => {
+    plantLock(tmpRoot, "dead", 120_000);
+    const dir = path.join(tmpRoot, "gate-delta");
+    chmodSync(dir, 0o500);
+    try {
+      await assert.rejects(withSequenceLock(tmpRoot, [HEAD], () => { throw new Error("must not run"); }, { waitMs: 150 }), (error) => error.code === "SEQUENCE_LOCK_BUSY");
+    } finally { chmodSync(dir, 0o700); }
+  });
+});
+
 test("branchReflogMs reads the reflog mtime of a branch committed in a temp repository, and null for an absent branch", async () => {
   await withTempDir(async (dir) => {
     const git = (...args) => assert.equal(spawnSync("git", ["-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: dir }).status, 0, args.join(" "));
@@ -352,19 +372,23 @@ test("branchReflogMs reads the reflog mtime of a branch committed in a temp repo
   });
 });
 
-test("the grace is the runner TTL and follows DEVLOOPS_STALE_RUNNER_MAX_AGE_MS", async () => {
+test("the grace is the runner TTL and DEVLOOPS_STALE_RUNNER_MAX_AGE_MS can only lengthen it", async () => {
   const saved = process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
-  process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = "120000";
   try {
-    assert.equal(fixerGraceMs(), 120_000);
+    process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = "1";
+    assert.equal(fixerGraceMs(), 30 * 60_000);
+    process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = "120000";
+    assert.equal(fixerGraceMs(), 30 * 60_000);
+    process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = "7200000";
+    assert.equal(fixerGraceMs(), 7_200_000);
     await withTempDir(async (tmpRoot) => {
       const ex = execution(tmpRoot);
       writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
-      pull(tmpRoot, ex, new Date(T0 - 100_000).toISOString());
+      pull(tmpRoot, ex, new Date(T0 - 3_600_000).toISOString());
       const running = await closeGateSequence(base(tmpRoot));
       assert.equal(running.refusal, "fixer_running");
-      assert.match(running.remedy, /2 minutes/);
-      pull(tmpRoot, ex, new Date(T0 - 130_000).toISOString());
+      assert.match(running.remedy, /120 minutes/);
+      pull(tmpRoot, ex, new Date(T0 - 7_300_000).toISOString());
       assert.equal((await closeGateSequence(base(tmpRoot))).condition, "HEAD_MOVED");
     });
   } finally {
@@ -376,7 +400,10 @@ test("a 41 hex char head is rejected as a non-full sha by the CLI and for the Gi
   await withTempDir(async (tmpRoot) => {
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat" });
     assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr("b".repeat(41)) }))).refusal, "abandonment_unproven");
-    assert.equal(spawnSync("node", [cli, "--head", "a".repeat(41), "--repo", "o/r", "--pr", "7"], { encoding: "utf8" }).status, 1);
+    const result = spawnSync("node", [cli, "--head", "a".repeat(41), "--repo", "o/r", "--pr", "7"], { encoding: "utf8", cwd: tmpRoot });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /usage/i);
+    assert.doesNotMatch(result.stdout, /sequence_absent/);
   });
 });
 

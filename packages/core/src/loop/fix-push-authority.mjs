@@ -29,18 +29,22 @@ export async function withSequenceLock(tmpRoot, baselineHeads, fn, { staleMs = 6
       const lock = path.join(tmpRoot, "gate-delta", `${head}.sequence-lock`);
       mkdirSync(path.dirname(lock), { recursive: true });
       for (const deadline = Date.now() + waitMs; ;) {
+        // Every immediate retry passes the deadline check, so a persistent stat, mkdir or rename failure refuses SEQUENCE_LOCK_BUSY instead of spinning.
+        const busy = () => { if (Date.now() >= deadline) throw Object.assign(new Error(`the sequence lock ${lock} is held by a concurrent close or pull; rerun once it finishes (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC)`), { code: "SEQUENCE_LOCK_BUSY" }); };
         try { mkdirSync(lock); const token = randomUUID(); writeFileSync(path.join(lock, "owner"), token); held.push({ lock, token }); break; } catch (error) {
           if (error?.code !== "EEXIST") throw error;
           let age = 0;
-          try { age = Date.now() - statSync(lock).mtimeMs; } catch { continue; } // released meanwhile: retry
+          try { age = Date.now() - statSync(lock).mtimeMs; } catch { busy(); continue; } // released meanwhile: retry
           if (age > staleMs) {
             // Stealers serialize on a steal lock; the stolen directory is removed only when its owner token is the stale token read before the rename. A fresh lock is never removed.
             const stealLock = `${lock}.steal`;
             let stealing = false;
-            try { mkdirSync(stealLock); stealing = true; } catch {
+            try { mkdirSync(stealLock); stealing = true; } catch (mkdirError) {
               // A steal lock older than staleMs was left by a stealer that died inside the steal (a window of milliseconds): remove it and retry.
-              // Only a vanished steal lock (ENOENT) retries at once; any other error (an unremovable directory) falls through to the deadline check so the loop stays bounded.
-              try { if (Date.now() - statSync(stealLock).mtimeMs > staleMs) { rmSync(stealLock, { recursive: true, force: true }); continue; } } catch (stealError) { if (stealError?.code === "ENOENT") continue; }
+              // Only an existing steal lock (EEXIST) is inspected; any other mkdir error (EACCES, EROFS, ENOSPC) and any stat error other than a vanished lock (ENOENT) fall through to the deadline check so the loop stays bounded.
+              if (mkdirError?.code === "EEXIST") {
+                try { if (Date.now() - statSync(stealLock).mtimeMs > staleMs) { rmSync(stealLock, { recursive: true, force: true }); busy(); continue; } } catch (stealError) { if (stealError?.code === "ENOENT") { busy(); continue; } if (stealError?.code === "SEQUENCE_LOCK_BUSY") throw stealError; }
+              }
             }
             if (stealing) {
               try {
@@ -61,10 +65,11 @@ export async function withSequenceLock(tmpRoot, baselineHeads, fn, { staleMs = 6
                 }
                 }
               } finally { rmSync(stealLock, { recursive: true, force: true }); }
+              busy();
               continue;
             }
           }
-          if (Date.now() >= deadline) throw Object.assign(new Error(`the sequence lock ${lock} is held by a concurrent close or pull; rerun once it finishes (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC)`), { code: "SEQUENCE_LOCK_BUSY" });
+          busy();
           await sleep(25);
         }
       }

@@ -20,11 +20,11 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightFieldsSp
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { viewPr } from "../github/view-pr.mjs";
 import { pullReceiptPath } from "../github/_work-order-protocol.mjs";
-import { resolveStaleRunnerMaxAgeMs } from "./_stale-runner-detection.mjs";
+import { STALE_RUNNER_DEFAULT_MAX_AGE_MS, resolveStaleRunnerMaxAgeMs } from "./_stale-runner-detection.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 
-/** The grace is the runner-lock TTL itself (env override included): a dispatch or a fixer with no activity inside it may be abandoned. */
-export const fixerGraceMs = () => resolveStaleRunnerMaxAgeMs();
+/** The grace is the runner-lock TTL, floored at the 30 minute default: DEVLOOPS_STALE_RUNNER_MAX_AGE_MS can only lengthen it, so a caller cannot close a live sequence early. */
+export const fixerGraceMs = () => Math.max(STALE_RUNNER_DEFAULT_MAX_AGE_MS, resolveStaleRunnerMaxAgeMs());
 const isFullSha = (sha) => normalizeFullHeadSha(sha) === sha;
 
 const USAGE = `usage: close-gate-sequence.mjs --head <marker baseline sha> --repo <owner/name> --pr <number> [--help]\n\n${JQ_OUTPUT_USAGE}`;
