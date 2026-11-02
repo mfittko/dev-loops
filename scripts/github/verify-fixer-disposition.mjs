@@ -1023,11 +1023,11 @@ async function verifyFixerDispositionCore(
     const existing = await readReviewBodyMarkers([reviewId], options, runtime);
     for (const { reviewId: id, expectedCommit } of unreplied) {
       // A marker for this review and commit that is live but not trusted never counts: post no second one.
-      const prior = existing.find((marker) => marker.reviewId === id && marker.fixSha === expectedCommit.toLowerCase());
-      // Only this verifier's own untrusted marker blocks the post; a foreign untrusted marker must not lock out a trusted verifier. An unreadable login fails closed: no post.
-      const ownLogin = prior && !prior.trusted ? await resolveAuthenticatedLogin(runtime).catch(() => null) : null;
-      const priorIsOwn = prior && (prior.trusted || ownLogin === null || (prior.author ?? "").toLowerCase() === ownLogin.toLowerCase());
-      if (priorIsOwn) {
+      const matches = existing.filter((marker) => marker.reviewId === id && marker.fixSha === expectedCommit.toLowerCase());
+      // Only this verifier's own untrusted marker blocks the post, wherever it sits in the comment order; a foreign untrusted marker must not lock out a trusted verifier. An unreadable login fails closed: no post.
+      const ownLogin = matches.some((marker) => !marker.trusted) ? await resolveAuthenticatedLogin(runtime).catch(() => null) : null;
+      const prior = matches.find((marker) => marker.trusted || ownLogin === null || (marker.author ?? "").toLowerCase() === ownLogin.toLowerCase());
+      if (prior) {
         if (!prior.trusted) residualFailures.push(untrustedMarker(id, expectedCommit, prior.author ?? "an unknown identity"));
         continue;
       }

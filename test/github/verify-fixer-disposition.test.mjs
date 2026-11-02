@@ -259,6 +259,18 @@ test("review-body: a foreign untrusted marker does not block the trusted verifie
   });
 });
 
+test("review-body: the verifier's own untrusted marker after a foreign untrusted marker still posts nothing", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, REVIEW_HANDOFF, { review: REVIEW });
+    const foreign = JSON.stringify({ id: 4, user: { login: "mallory", type: "User" }, author_association: "CONTRIBUTOR", body: `<!-- dev-loops:review-body-disposition review=PRR_R1 fix=${FIX_SHA} -->` });
+    const both = foreign + "\n" + markerLine("CONTRIBUTOR");
+    const { deps, calls } = runtime(reviewBodyEntries(commentsEntry(both), claim({ assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "op" })}\n` }), commentsEntry(both), commentsEntry(both)), repoRoot, { live: false });
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps);
+    assert.equal(posts(calls).length, 0);
+    assert.equal(result.incomplete.some((entry) => entry.failedStep === "marker_author_untrusted"), true);
+  });
+});
+
 test("review-body: a changed body, a vanished review and a missing handoff entry refuse with a named remedy", async () => {
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, REVIEW_HANDOFF, { review: REVIEW });
