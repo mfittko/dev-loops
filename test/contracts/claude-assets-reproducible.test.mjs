@@ -94,6 +94,13 @@ test("judge fixture writes both valid verdicts with read, search, write and a pu
   const pull = "dev-loops-run scripts/github/pull-work-order.mjs --ref judge:o/r#1:draft_gate:abc:j1-aa --digest ab12 --execution j1-aa";
   assert.equal(decideBashGate({ command: pull, agentType: "judge" }).decision, "allow");
   assert.equal(decideBashGate({ command: "bun test", agentType: "judge" }).decision, "deny");
+  // #2678: the denial names Read as always available; the boundary is unchanged; the pull owns the digest check.
+  const denial = decideBashGate({ command: "bun test", agentType: "judge" }).reason;
+  assert.match(denial, /`Read`/);
+  assert.doesNotMatch(denial, /Read\/Grep\/Glob/);
+  assert.equal(decideBashGate({ command: "shasum -a 256 x", agentType: "judge" }).decision, "deny");
+  assert.match(generated, /^tools: .*\bGrep\b.*\bGlob\b/m);
+  assert.doesNotMatch(generated, /sha256 differs/);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "judge-tool-fixture-"));
   try {
     const headSha = "a".repeat(40);
