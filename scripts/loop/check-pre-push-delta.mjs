@@ -63,7 +63,7 @@ import { createGitClient, main as validateChangelog } from "../docs/validate-cha
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
-const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
+const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --result-path <path> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --handback --site-coverage <path> [--worktree <dir>]   (fixer handbackCheck run)
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --result <path> --invocation <1-3> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
        check-pre-push-delta.mjs --threads-file <path> --repo <owner/name> --pr <n> --baseline <sha> ...   (thread route: replaces --act-list)
@@ -100,8 +100,8 @@ Output (stdout, JSON):
                     Invalid authentication or a missing/mismatched marker remains an error; genuine fixer commits retain normal delta review.
 
 Result JSON (--result, DeltaPrePushReviewResult):
-  Base shape (complete THREAD shape; genuine legacy results remain readable):
-  { "reviewBaselineHead": "<sha>", "candidateHead": "<sha>", "actSetId": "<input.actSetId>",
+  Base shape (complete THREAD shape; an unsealed or runId-less result is refused under GATE-EXEC-EVIDENCE-SEALED):
+  { "reviewBaselineHead": "<sha>", "candidateHead": "<sha>", "actSetId": "<input.actSetId>", "runId": "<input.runId>",
     "actionableItems": [{ "ref", "status": "resolved|not_resolved|cannot_verify", "evidence": ["..."] }],
     "newFindings": [{ "severity", "summary", "evidence": ["..."], "residueOf"?, "site"?, "skipReason"? }],
     "widenedReads": [{ "path": "...", "reason": "..." }],   (objects, not strings; [] when none)
@@ -177,6 +177,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
   }
   if (values.result && invocation === null) throw parseError("--result requires --invocation <1-3>");
   if (values["result-path"] && (values.result || values.handback)) throw parseError("--result-path belongs to the reviewer-input run only; the --result run names its file with --result and the --handback run writes nothing");
+  if (values["result-path"] !== undefined && !path.isAbsolute(values["result-path"])) throw parseError("--result-path must be an absolute path: the run record, seal-evidence and --result resolve a relative path against different bases (GATE-EXEC-EVIDENCE-SEALED)");
   const specIdentity = values["spec-identity"]?.trim() || null;
   if (!values.result && !specIdentity) throw parseError("--spec-identity <id> is required without --result");
   if (values.handback && !(values["act-list"] && values["site-coverage"] && !values.result)) throw parseError("--handback is the fixer handbackCheck flag: it requires --act-list and --site-coverage and refuses --result; the coordinator input run never passes it");
@@ -396,6 +397,13 @@ export async function runCli(
   // One read: the same bytes are parsed and digested for the seal check (GATE-EXEC-EVIDENCE-SEALED).
   const resultBytes = options.result ? readFileSync(options.result) : null;
   const result = resultBytes ? JSON.parse(resultBytes.toString("utf8")) : null;
+  if (result) {
+    // The seal check comes first: nothing reads an unverified result (GATE-EXEC-EVIDENCE-SEALED).
+    for (const field of ["reviewBaselineHead", "candidateHead"]) {
+      if (typeof result?.[field] !== "string" || !result[field]) throw new Error(`delta result ${options.result} is malformed: ${field} must be a non-empty string`);
+    }
+    verifyEvidence(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaEvidenceKey(result.reviewBaselineHead, result.candidateHead, result.runId), options.result, result, createHash("sha256").update(resultBytes).digest("hex"));
+  }
   if (options.threadsFile && deltaCoverageBinding(result)) throw new Error("THREAD cannot opt into ACT coverage binding");
   let siteCoverage = [], validationCoverage = [], coverageBinding, authenticatedTarget;
   if (options.siteCoverage) {
@@ -443,10 +451,6 @@ export async function runCli(
   const truncatedNeedles = Array.isArray(stale) ? [] : stale.truncatedNeedles ?? [];
   let payload;
   if (options.result) {
-    for (const field of ["reviewBaselineHead", "candidateHead"]) {
-      if (typeof result?.[field] !== "string" || !result[field]) throw new Error(`delta result ${options.result} is malformed: ${field} must be a non-empty string`);
-    }
-    verifyEvidence(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaEvidenceKey(result.reviewBaselineHead, result.candidateHead, result.runId), options.result, result, createHash("sha256").update(resultBytes).digest("hex"));
     // A truncated hit list blocks locally_clear until a finding or a skipped site names the gap.
     const decision = decideDeltaNextStep({
       sequence, result, invocation: options.invocation, currentHead, siteCoverage, validationCoverage, coverageBinding,

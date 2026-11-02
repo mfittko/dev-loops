@@ -290,3 +290,25 @@ test("the reviewer-input run refuses to start without --result-path", async () =
   const args = bound.args.filter((arg, i, all) => arg !== "--result-path" && all[i - 1] !== "--result-path");
   await assert.rejects(runDeltaCli(args, { ...bound.seam, ...quiet }), /--result-path <path> is required/);
 });
+
+test("emit-fixer-work-order refuses a --delta-result whose run was never sealed with evidence_unsealed", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seal-evidence-emit-unsealed-"));
+  const actList = path.join(dir, "act-list.json");
+  const deltaResult = path.join(dir, "result.json");
+  fs.writeFileSync(actList, JSON.stringify(ACT_LIST));
+  fs.writeFileSync(deltaResult, JSON.stringify(result({ candidateHead: A })));
+  createEvidenceRun(dir, deltaEvidenceKey(A, A, RUN_ID), { ...EXPECTED, candidateHead: A });
+  await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), /GATE-EXEC-EVIDENCE-SEALED.*evidence_unsealed/);
+});
+
+test("a sealed result with an edited coverage field gives evidence_digest_mismatch before any coverage check", async () => {
+  await assert.rejects(withCli((file) => edit(file, { siteCoverageDigest: "0".repeat(64) })), /evidence_digest_mismatch/);
+});
+
+test("a sealed result of a superseded input run is evidence_foreign_run at verify", () => {
+  const { dir, file } = setup();
+  sealEvidence(dir, KEY, file, result());
+  verify(dir, KEY, file, result());
+  createEvidenceRun(dir, deltaEvidenceKey(A, B, "fedcba9876543210"), { ...EXPECTED, runId: "fedcba9876543210" });
+  assert.equal(reason(() => verify(dir, KEY, file, result())), "evidence_foreign_run");
+});

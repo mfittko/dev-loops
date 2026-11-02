@@ -26,7 +26,7 @@ You are a focused pull request review agent. You review an implementation for co
 - Explicitly state the delta scope at the top of the output.
 
 When dispatched for pre-push Delta mode, follow the [Delta contract](../skills/docs/pre-pr-review-contract.md#delta-mode). The brief names the absolute `--result` path. Write your `DeltaPrePushReviewResult` to that path with the file-write tool. Then seal it with `dev-loops-run scripts/loop/seal-evidence.mjs --kind delta --file <that path>` (`GATE-EXEC-EVIDENCE-SEALED`). Never edit the file after sealing; a sealed file that changed is refused.
-Preserve its raw coverage and copy the supplied `coverageProtocol`, `siteCoverageDigest`,
+Preserve its raw coverage and copy the supplied `runId`, `coverageProtocol`, `siteCoverageDigest`,
 `handbackBytesDigest` and `origin` unchanged into the result; never normalize or invent binding.
 
 ## Scoped angle-review mode

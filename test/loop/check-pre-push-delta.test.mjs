@@ -343,7 +343,7 @@ test("baseline equality refuses invocations that cannot authenticate input-only 
   for (const extra of [[], ["--fixer-plan", "missing.json"], ["--fixer-plan", "missing.json", "--site-coverage", "missing.json", "--result", result, "--invocation", "1"]]) {
     const seam = headAt(A);
     const marker = writeSequenceMarker({ tmpRoot: seam.tmpRoot, baselineHead: A, branch: "issue-1" });
-    await assert.rejects(runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", A, "--spec-identity", "s", ...(extra.includes("--result") ? [] : ["--result-path", "r.json"]), ...extra], seam), /no delta review applies \(worktree HEAD \w+, baseline \w+, \d+ item\(s\)\)/);
+    await assert.rejects(runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", A, "--spec-identity", "s", ...(extra.includes("--result") ? [] : ["--result-path", path.join(os.tmpdir(), "r.json")]), ...extra], seam), /no delta review applies \(worktree HEAD \w+, baseline \w+, \d+ item\(s\)\)/);
     assert.equal(fs.existsSync(marker), true);
     assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`)), false);
     assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta", `${A}-${A}.patch`)), false);
@@ -428,6 +428,14 @@ test("real git calls ignore an inherited GIT_DIR/GIT_WORK_TREE pointing at anoth
       else process.env[key] = value;
     }
   }
+});
+
+test("--result-path belongs to the reviewer-input run and must be absolute", () => {
+  const base = ["--act-list", "x", "--baseline", A, "--spec-identity", "s", "--findings-log", "f", "--fixer-plan", "p", "--site-coverage", "c"];
+  assert.equal(parseCheckPrePushDeltaArgs([...base, "--result-path", "/abs/tmp/delta-result.json"]).resultPath, "/abs/tmp/delta-result.json");
+  for (const bad of ["r.json", "./tmp/r.json", "", " "]) assert.throws(() => parseCheckPrePushDeltaArgs([...base, "--result-path", bad]), /absolute path/, JSON.stringify(bad));
+  assert.throws(() => parseCheckPrePushDeltaArgs(["--act-list", "x", "--baseline", A, "--result", "r", "--invocation", "1", "--result-path", "/abs/r.json"]), /reviewer-input run only/);
+  assert.throws(() => parseCheckPrePushDeltaArgs(["--act-list", "x", "--baseline", A, "--spec-identity", "s", "--handback", "--site-coverage", "c", "--result-path", "/abs/r.json"]), /reviewer-input run only/);
 });
 
 test("argument errors fail closed", () => {
@@ -674,8 +682,8 @@ test("--findings-log is refused on the thread route and validated on the act-lis
   await assert.rejects(runCli([...sha256Args, "--findings-log", logWith({ headSha: "e".repeat(64), ...perAngle })], headAt(B)), /stale|no longer contains/);
   await assert.rejects(runCli([...base, "--findings-log", logWith({ headSha: "not-a-sha", ...perAngle })], headAt(B)), /not the baseline/);
   const { threadsFile } = threadsFixture();
-  assert.throws(() => parseCheckPrePushDeltaArgs([...threadArgs(threadsFile), "--spec-identity", "s", "--result-path", "r.json", "--findings-log", good]), /refused with --threads-file/);
-  assert.equal(parseCheckPrePushDeltaArgs([...threadArgs(threadsFile), "--spec-identity", "s", "--result-path", "r.json"]).findingsLog, null);
+  assert.throws(() => parseCheckPrePushDeltaArgs([...threadArgs(threadsFile), "--spec-identity", "s", "--result-path", "/abs/r.json", "--findings-log", good]), /refused with --threads-file/);
+  assert.equal(parseCheckPrePushDeltaArgs([...threadArgs(threadsFile), "--spec-identity", "s", "--result-path", "/abs/r.json"]).findingsLog, null);
 });
 
 test("input mode accepts the cap-round findings log at an earlier head after a base-only merge", async () => {
