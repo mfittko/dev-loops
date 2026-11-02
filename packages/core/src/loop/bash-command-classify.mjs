@@ -1060,15 +1060,13 @@ export function tokenizeShellCommand(command) {
   const readArith = () => {
     if (command[i + 2] !== "(") return null;
     let level = 2;
-    let inner = -1;
     for (let j = i + 3; j < n; j++) {
-      if (level === 1 && /[;|&\n]/.test(command[j])) return null; // `$((a);(b))` is a substitution of subshells; fail closed on any separator (newline included) between the parens
       if (command[j] === "(") level++;
       else if (command[j] === ")") {
         level--;
-        if (level === 1) inner = j;
+        if (level === 1 && command[j + 1] !== ")") return null; // bash (chk_arithsub): parens must stay balanced up to the final `))`; `$((a) > >(b))` is a substitution of subshells
         if (level === 0) {
-          if (inner !== j - 1 || /\$\(|[`'"\\]/.test(command.slice(i + 3, j - 1))) return null;
+          if (/\$\(|[`'"\\]/.test(command.slice(i + 3, j - 1))) return null;
           const text = command.slice(i, j + 1);
           i = j + 1;
           return text;

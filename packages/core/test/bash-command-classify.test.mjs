@@ -1626,8 +1626,14 @@ test("tokenizeShellCommand: $((expr)) is arithmetic and DELIM) closes a heredoc 
   for (const c of ["echo $((1<<2))", "x=$((a<<b)); echo $x"]) assert.equal(commandContainsInlineInterpreter(c), false, c);
   assert.equal(tokenizeShellCommand(": $((1<<2))").incomplete, false);
   assert.equal(tokenizeShellCommand(": $(( $(date) << 2 ))").incomplete, true); // arithmetic holding a substitution falls back to the `$(` reader: fail closed
-  for (const c of [": $((true);(gh pr merge 5))", ": $((true) | (cmd))", ": $((p);(q))", ": $((true)\n(gh pr merge 5))", ": $((a)&(b))"]) assert.equal(tokenizeShellCommand(c).segments[0].words[1].subs.length, 1, c); // read as a substitution (visible), not opaque arithmetic
+  for (const c of [": $((true);(gh pr merge 5))", ": $((true) | (cmd))", ": $((p);(q))", ": $((true)\n(gh pr merge 5))", ": $((p)&(q))", ": $((p) > >(q))", ": $((r) | (s))"]) {
+    const parsed = tokenizeShellCommand(c);
+    // read as a substitution (visible), not opaque arithmetic
+    assert.equal(parsed.segments[0].words[1].subs.length, 1, c);
+  }
   assert.equal(commandContainsInlineInterpreter(": $((1<<2))\nnode - <<EOF\nconsole.log(1)\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter(": $((`node -e 1`<<2))"), true); // the backtick alternative of the readArith guard
+  assert.equal(tokenizeShellCommand(': $(("1"<<2))').incomplete, true); // the quote alternative
   assert.equal(tokenizeShellCommand(": $((1<<2").incomplete, true);
   assert.equal(tokenizeShellCommand(": $(( (1<<2) ))").incomplete, false);
   for (const c of ["EOF)rest", "EOF) && node -e 1"]) assert.equal(tokenizeShellCommand(`X=$(cat <<'EOF'\nbody\n${c}`).incomplete, true, c);
