@@ -1591,7 +1591,7 @@ function scanShellText(text) {
  * heredoc fed to node/python (`node - <<EOF`, `python3 - <<EOF`). Sanctioned output parsing uses
  * `--jq`/`--silent`, never an inline interpreter. Actor-independent (bars both coordinator and
  * agent flows). Script-path invocations (running a `.mjs` file, `python3 script.py`) never match.
- * Malformed input (`tokenizeShellCommand(...).incomplete`) fails closed; `inlineInterpreterDenyDetail` names that cause. Data heredoc
+ * Malformed input (`tokenizeShellCommand(...).incomplete`) fails closed. Data heredoc
  * bodies (`dataHeredocs`) are blanked before the scan, and quoted text is inert unless it is a payload word.
  * @param {string} command @returns {boolean}
  */
@@ -1599,13 +1599,6 @@ export function commandContainsInlineInterpreter(command) {
   // Checked on the whole command only: the recursive substitution slices below are cut mid-construct on purpose.
   const tok = tokenizeShellCommand(command);
   return tok.incomplete || scanInlineInterpreter(blankDataHeredocs(command, tok));
-}
-
-/** Sentence (with a leading space) for the deny reason when the cause is malformed input, else "": it names the class so the agent can fix the quoting. */
-export function inlineInterpreterDenyDetail(command) {
-  return tokenizeShellCommand(command).incomplete
-    ? " The command has an unterminated quote, $( substitution or heredoc (incomplete tokenization), so the gate cannot tell data from code. Close the construct or write the file with the editor tool."
-    : "";
 }
 
 /**

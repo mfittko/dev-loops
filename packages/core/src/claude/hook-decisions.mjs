@@ -36,7 +36,6 @@ import {
   commandContainsDetachedWaitTool,
   commandContainsTimeoutWrappedSanctionedTool,
   commandContainsInlineInterpreter,
-  inlineInterpreterDenyDetail,
   commandContainsCodeVerificationEntrypoint,
 } from "../loop/bash-command-classify.mjs";
 
@@ -261,8 +260,7 @@ export function decideBashGate({
       reason:
         "OPS-NO-INLINE-INTERPRETER: inline interpreters (node -e/--eval/-p, python3 -c, bun -e/--eval/-p/--print, bun -, " +
         "heredoc to node/python/bun) are barred in the dev-loop flow. Parse tool output via --jq/--silent and mutate " +
-        "files via the editor/patch tools or a --jq-composed --body-file, never an inline interpreter." +
-        inlineInterpreterDenyDetail(command),
+        "files via the editor/patch tools or a --jq-composed --body-file, never an inline interpreter.",
     };
   }
 
