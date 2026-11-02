@@ -72,6 +72,17 @@ test("gh api paths are built from the validated slug; query, fragment, encoded a
   }
 });
 
+test("an exec error on the zip download or on unzip yields the empty set", async () => {
+  const base = fakeExec();
+  const throwing = (match) => async (file, args) => {
+    if (match(file, args)) throw new Error("exec failed");
+    return base(file, args);
+  };
+  const call = (exec) => fetchHeadDeclaredKeys({ repo: "o/r", pr: 1, headSha: SHA, exec });
+  assert.deepEqual(await call(throwing((f, a) => f === "gh" && a[1].endsWith("/zip"))), []);
+  assert.deepEqual(await call(throwing((f) => f === "unzip")), []);
+});
+
 test("a malformed artifact yields the empty set", async () => {
   for (const zipText of [
     "not json",

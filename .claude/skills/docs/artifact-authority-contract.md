@@ -121,7 +121,7 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/github/write-gate-findings-log.mjs` | Fail closed: `config_load_failed` |
 | `scripts/github/resolve-angle-carry-forward.mjs` | Fail closed: `config_load_failed` |
 | `scripts/loop/resolve-gate-dispatch.mjs` | Fail closed: `config_load_failed` |
-| `scripts/github/detect-checkpoint-evidence.mjs` | Fail closed: `config_load_failed`. Sole exception (ADR 0234): a head-only unknown key listed in `--head-declared-keys` is stripped and the head config reloaded; every other error still fails with `config_load_failed` |
+| `scripts/github/detect-checkpoint-evidence.mjs` | Fail closed: `config_load_failed`. Sole exception (ADR 0234): a head-only unknown key listed in `--head-declared-keys` is stripped and the head config reloaded, and only when `--head-declared-keys-sha` equals the evaluated head SHA (any other value yields the empty set); every other error still fails with `config_load_failed` |
 | `scripts/github/emit-fanout-dispatch.mjs` | Fail closed: `config_load_failed` |
 | `scripts/github/reconcile-draft-gate.mjs` | Fail closed: `config_load_failed` |
 | `scripts/loop/emit-judge-work-order.mjs` | Fail closed: `config_load_failed` |
