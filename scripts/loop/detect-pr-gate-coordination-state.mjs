@@ -1537,12 +1537,14 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   if (TERMINAL_RUNNER_RELEASE_ACTIONS.has(result.nextAction)) {
     const releaseImpl = runtime.releaseAsyncRunnerOwnershipImpl ?? releaseAsyncRunnerOwnership;
     try {
-      await releaseImpl({
+      const released = await releaseImpl({
         repo: options.repo,
         pr: options.pr,
         env: runtime.env ?? process.env,
         cwd: repoRoot,
       });
+      // RUNNER-HANDOFF-TEARDOWN: with no env run id the claim stays; surface the explicit-handoff remedy.
+      if (released?.status === "skipped_no_async_run_id") result.runnerRelease = released;
     } catch {
       // Best-effort: a release failure must never block gate-coordination detection.
     }

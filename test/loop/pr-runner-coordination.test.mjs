@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { realpathSync } from "node:fs";
+import { mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { constants as fsConstants, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -16,6 +16,7 @@ import {
   ensureAsyncRunnerOwnership,
   handoffRunnerOwnership,
   loadRunnerCoordinationState,
+  pinObservedClaim,
   recordExitSignalForRunner,
   recordWatchClaim,
   releaseAsyncRunnerOwnership,
@@ -25,6 +26,7 @@ import {
 } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner, STALE_RUNNER_DEFAULT_MAX_AGE_MS, STALE_RUNNER_ERROR } from "../../scripts/loop/_stale-runner-detection.mjs";
 import { runPrRunnerCoordination } from "../../scripts/loop/pr-runner-coordination.mjs";
+import { resolveBunTestTimeoutMs } from "../../scripts/run-bun-test.mjs";
 import {
   NATIVE_PI_CHILD_MARKER,
   NATIVE_PI_PARENT_SESSION_MARKER,
@@ -2069,19 +2071,83 @@ test("native Codex handoff with no id at all names the verified thread identity,
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
 
+// Turns `filePath` into a sequence of FIFOs, one per read, and feeds read N with `contents[N]`.
+// Each read has its own FIFO: the next one is renamed over the path while the current writer still holds
+// its end open, so the reader sees EOF only after the path already points at the next FIFO. A writer
+// open blocks until its reader opens. The order is a data-flow guarantee, with no timing.
+// A read-count drift fails `done` with a named message after `timeoutMs` and releases any blocked FIFO open.
+// The watchdog stays armed until the writer finished and the promise passed to `watch` settled, so an over-read fails too.
+// The default timeout is half the managed per-test timeout, so load scaling applies.
+async function feedStateFileReads(filePath, contents, { timeoutMs = Math.floor(resolveBunTestTimeoutMs() / 2) } = {}) {
+  await rm(filePath);
+  await execFileAsync("mkfifo", [filePath]);
+  // Resolves to `{ done, watch }`: the FIFO exists before the caller starts the reader; `done` settles after the last write and the watched promise.
+  const writer = (async () => {
+    for (const [index, content] of contents.entries()) {
+      const handle = await open(filePath, "w");
+      try {
+        await handle.writeFile(content);
+        if (index + 1 < contents.length) {
+          const next = `${filePath}.next`;
+          await execFileAsync("mkfifo", [next]);
+          await rename(next, filePath);
+        }
+      } finally {
+        await handle.close();
+      }
+    }
+  })();
+  writer.catch(() => {}); // a writer failing after the timeout is already reported by `done`
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(async () => {
+      // A non-blocking read-write open releases a writer or reader open that waits on the current FIFO.
+      try { (await open(filePath, fsConstants.O_RDWR | fsConstants.O_NONBLOCK)).close(); } catch { /* nothing pending */ }
+      reject(new Error(`feedStateFileReads: the code under test did not read the state file exactly ${contents.length} time(s)`));
+    }, timeoutMs);
+  });
+  let watched = Promise.resolve();
+  const settled = (async () => { await writer; await watched; })();
+  const done = Promise.race([settled, timeout]).finally(() => clearTimeout(timer));
+  // The caller passes the promise of the code under test, so a hung extra read keeps `done` pending until the watchdog fires.
+  const watch = (promise) => { watched = promise.catch(() => {}); };
+  return { done, watch };
+}
+
+test("feedStateFileReads fails with a named message when the code reads more times than fed", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-feed-overread-"));
+  try {
+    const filePath = path.join(cwd, "state.json");
+    await writeFile(filePath, "x");
+    const { done, watch } = await feedStateFileReads(filePath, ["a"], { timeoutMs: 200 });
+    const pending = (async () => { await readFile(filePath, "utf8"); await readFile(filePath, "utf8"); })();
+    watch(pending);
+    await assert.rejects(done, /did not read the state file exactly 1 time\(s\)/);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("feedStateFileReads fails with a named message when the code reads fewer times than fed", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-feed-drift-"));
+  try {
+    const filePath = path.join(cwd, "state.json");
+    await writeFile(filePath, "x");
+    const { done } = await feedStateFileReads(filePath, ["a", "b"], { timeoutMs: 200 });
+    assert.equal(await readFile(filePath, "utf8"), "a");
+    await assert.rejects(done, /did not read the state file exactly 2 time\(s\)/);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
 test("locked re-check ownership_lost refusal names the owner liveness", async () => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-locked-verdict-"));
   try {
     const claim = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-R", cwd });
-    let pending;
-    await withStateFileLock(claim.filePath, async () => {
-      pending = assertRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-R", cwd, requireExisting: true });
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      const state = JSON.parse(await readFile(claim.filePath, "utf8"));
-      state.activeRun.runId = "run-S";
-      await writeFile(claim.filePath, JSON.stringify(state));
-    });
-    const result = await pending;
+    const stateR = await readFile(claim.filePath, "utf8");
+    const stateS = JSON.stringify({ ...JSON.parse(stateR), activeRun: { ...JSON.parse(stateR).activeRun, runId: "run-S" } });
+    // The lock-free read sees stateR and the locked re-read sees stateS (see feedStateFileReads).
+    const { done, watch } = await feedStateFileReads(claim.filePath, [stateR, stateS]);
+    const pending = assertRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-R", cwd, requireExisting: true });
+    watch(pending);
+    const [result] = await Promise.all([pending, done]);
     assert.equal(result.error, "ownership_lost");
     assert.match(result.message, /now owned by run run-S/);
     assert.match(result.message, /live|stale/i);
@@ -2129,6 +2195,47 @@ test("takeover of a stale corrupt-timestamp owner pins the owner run id", async 
     assert.equal(taken.status, "taken_over");
     assert.equal(taken.previousRun.runId, "owner");
   } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("CLI takeover pins the observed claim: a heartbeat between the read and the locked write refuses", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-takeover-cli-pin-"));
+  try {
+    const claim = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "owner", cwd });
+    const stale = JSON.parse(await readFile(claim.filePath, "utf8"));
+    stale.activeRun.updatedAt = "not-a-date";
+    const fresh = structuredClone(stale);
+    fresh.activeRun.updatedAt = new Date().toISOString();
+    // Read 1 (CLI pre-check) sees the stale owner, read 2 (locked write) sees the same owner after a
+    // heartbeat (see feedStateFileReads). Without the pin the takeover would succeed.
+    const { done, watch } = await feedStateFileReads(claim.filePath, [JSON.stringify(stale), JSON.stringify(fresh)]);
+    const pending = runPrRunnerCoordination({ command: "takeover", repo: "owner/repo", pr: 17, runId: "C" }, { env: {}, cwd });
+    watch(pending);
+    const [result] = await Promise.all([pending, done]);
+    assert.equal(result.error, "active_run_exists");
+    assert.equal(result.activeRun.runId, "owner");
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("pinObservedClaim coerces a non-string member to null", () => {
+  assert.deepEqual(pinObservedClaim({ runId: "r", claimedAt: "a", updatedAt: 5 }), {
+    expectPreviousRunId: "r",
+    expectPreviousClaim: { claimedAt: "a", updatedAt: null },
+  });
+  assert.deepEqual(pinObservedClaim(null), { expectPreviousRunId: null, expectPreviousClaim: { claimedAt: null, updatedAt: null } });
+});
+
+test("the coordinator prompt prefixes terminal-reaching calls with the claim run id and runs the explicit handoff when the release was skipped", async () => {
+  const prompt = await readFile(new URL("../../agents/dev-loop.agent.md", import.meta.url), "utf8");
+  assert.match(prompt, /Prefix every `loop handoff`, `loop gate-coordination`[^\n]*`DEVLOOPS_RUN_ID=<the id used at claim>`/);
+  assert.match(prompt, /skipped_no_async_run_id[^\n]*run the explicit handoff[^\n]*--run-id/);
+  assert.match(prompt, /`handoff_noop` with no owner, `ownership_lost` with exit 1 when another run holds the claim/);
+});
+
+test("a skipped automatic release names the explicit handoff command", async () => {
+  const skipped = await releaseAsyncRunnerOwnership({ repo: "owner/repo", pr: 17, env: {} });
+  assert.equal(skipped.status, "skipped_no_async_run_id");
+  assert.match(skipped.remedy, /pr-runner-coordination\.mjs handoff --repo owner\/repo --pr 17 --run-id/);
+  assert.match(skipped.remedy, /`handoff_noop` with no owner, `ownership_lost` with a foreign owner/);
 });
 
 test("claim refusal wording follows the injected clock and max age, not the host", async () => {

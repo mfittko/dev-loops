@@ -23,7 +23,7 @@ import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "./detect-check
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
-import { assertRunnerOwnership, claimRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
+import { assertRunnerOwnership, claimRunnerOwnership, pinObservedClaim } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
@@ -2677,8 +2677,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
           runId: envRunId,
           cwd: repoRoot,
           mode: "takeover",
-          expectPreviousRunId: observed?.runId ?? null,
-          expectPreviousClaim: { claimedAt: observed?.claimedAt ?? null, updatedAt: observed?.updatedAt ?? null },
+          ...pinObservedClaim(observed),
         });
       }
     } catch {

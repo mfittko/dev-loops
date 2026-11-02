@@ -503,7 +503,8 @@ Contract:
 - when `DEVLOOPS_RUN_ID` is set to a non-empty value, the helper enforces one-runner-per-PR ownership and returns `runnerOwnership` details when a conflicting or displaced run must stop
 
 Success output shape:
-- `{ "ok": true, "action": "watch"|"fix"|"stop", "state": "...", "allowedTransitions": [...], "nextAction": "...", "snapshot": {...}, "reviewRequestStatus"?: "...", "fixerDispositionWarning"?: { "warning": "...", "incomplete": [...] }, "watchStatus"?: "...", "autoRerequestEligible": true|false, "sameHeadCleanConverged": true|false, "loopDisposition": "...", "terminal": true|false, "requestWatchContract": { "action": "...", "nextAction": "...", "requestStatus": "requested"|"already-requested"|"unavailable"|"failed"|"none", "routingState": "copilot_request_confirmed_waiting"|"ready_state_needs_copilot_request"|"draft_reset_requires_ready_state_reentry"|"non_ready_state", "watchEntryConfirmed": true|false, "watchArgs": { ... }|null, "stopState"?: "unavailable"|"blocked"|"draft_requires_ready_state_reentry"|"no_automatic_next_step" }, "watchTimeoutPolicy"?: { "classification": "external_healthy_wait", "minimumTimeoutMs": 1800000, "defaultTimeoutMs": 1800000 }, "watchArgs"?: { ... } }`
+- `{ "ok": true, "action": "watch"|"fix"|"stop", "state": "...", "allowedTransitions": [...], "nextAction": "...", "snapshot": {...}, "reviewRequestStatus"?: "...", "fixerDispositionWarning"?: { "warning": "...", "incomplete": [...] }, "watchStatus"?: "...", "autoRerequestEligible": true|false, "sameHeadCleanConverged": true|false, "loopDisposition": "...", "terminal": true|false, "requestWatchContract": { "action": "...", "nextAction": "...", "requestStatus": "requested"|"already-requested"|"unavailable"|"failed"|"none", "routingState": "copilot_request_confirmed_waiting"|"ready_state_needs_copilot_request"|"draft_reset_requires_ready_state_reentry"|"non_ready_state", "watchEntryConfirmed": true|false, "watchArgs": { ... }|null, "stopState"?: "unavailable"|"blocked"|"draft_requires_ready_state_reentry"|"no_automatic_next_step" }, "watchTimeoutPolicy"?: { "classification": "external_healthy_wait", "minimumTimeoutMs": 1800000, "defaultTimeoutMs": 1800000 }, "watchArgs"?: { ... }, "runnerRelease"?: { "status": "...", "remedy"?: "..." } }`
+- `runnerRelease` (`{ "status": "...", "remedy"?: "..." }`) is emitted on every terminal result except the runner-ownership conflict stop, where the run holds no claim; a `skipped_no_async_run_id` status carries a `remedy`
 
 Failure behavior:
 - malformed arguments and unexpected `gh` failures emit `{ "ok": false, "error": "..." }` on stderr and exit non-zero
@@ -583,6 +584,10 @@ Release-on-death & dead-claim supersession (#1706):
   nothing: the handoff stays fail-closed on the ownership conflict and writes no state. A claim
   whose `claimedAt`/`updatedAt` do not parse is corruption rather than an expired claim, so it
   refuses the same way instead of reporting a `stale_max_age` recovery.
+- Every takeover caller builds that pin with the shared `pinObservedClaim(activeRun)` helper, which
+  maps a non-string member to `null`. At a terminal stop with no env run id, the automatic release
+  reports `runnerRelease.status: skipped_no_async_run_id` with a `remedy` naming the explicit
+  `handoff --run-id` command (`RUNNER-HANDOFF-TEARDOWN`).
 - The takeover guard pins the claim the detection read observed, not only its owner: the claim
   helper accepts `expectPreviousRunId` (the observed run id) plus `expectPreviousClaim`
   (`{ claimedAt, updatedAt }`) and refuses with `active_run_exists`, writing no state, when the
@@ -798,8 +803,9 @@ Required:
 - `--pr <number>`
 
 Success output shape:
-- `{ "ok": true, "repo": "owner/repo", "pr": 266, "currentHeadSha": "...", "mergeStateStatus": string|null, "conflictFiles": ["path"]|[], "lifecycleState": string, "loopDisposition": string, "gateBoundary": string, "draftGate": { ... }, "preApprovalGate": { ... }, "draftGateAlreadySatisfied": true, "allowedNextActions": [ ... ], "forbiddenActions": [ ... ], "nextAction": string, "reason": "..." }`
+- `{ "ok": true, "repo": "owner/repo", "pr": 266, "currentHeadSha": "...", "mergeStateStatus": string|null, "conflictFiles": ["path"]|[], "lifecycleState": string, "loopDisposition": string, "gateBoundary": string, "draftGate": { ... }, "preApprovalGate": { ... }, "draftGateAlreadySatisfied": true, "allowedNextActions": [ ... ], "forbiddenActions": [ ... ], "nextAction": string, "reason": "...", "runnerRelease"?: { "status": "skipped_no_async_run_id", "remedy": "..." } }`
 - `fixerDispositionWarning` (`{ "warning": "...", "incomplete": [...] }`) is present only when the fixer disposition is incomplete; it is advisory (ADR 0155) and blocks nothing
+- `runnerRelease` (`{ "status": "skipped_no_async_run_id", "remedy": "..." }`) is present only on a terminal action when the automatic release status is `skipped_no_async_run_id`; `remedy` names the explicit `handoff --run-id` command
 - `draftGate` / `preApprovalGate` report both latest visible evidence (`visible`, `headSha`, `verdict`, `findingsSummary`, `nextAction`) and whether the evidence is current-head + contract-complete (`currentHead`, `contractComplete`, `currentHeadClean`)
 - `draftGate.currentHeadClean` (ADR 0088) also folds in the login-narrowed `unresolvedGateThreadCount`: it is `true` only when the marker verdict is clean AND no gate-authored review thread (e.g. an unanswered or not-yet-reject-closed `question`) is still unresolved; `preApprovalGate.currentHeadClean` never receives this signal and keeps the marker-only definition. `draftGate.markerCleanThreadsUnresolved` is `true` when the marker is clean but a real thread still dangles; `draftGate.markerCleanThreadStateUnreadable` is `true` when the thread count itself could not be read (fail-closed -1)
 - `mergeStateStatus` preserves the current GitHub `gh pr view` signal in helper output even when the PR is not in the conflict boundary; `DIRTY` and explicit `CONFLICTING` inputs are treated as conflict-required states
