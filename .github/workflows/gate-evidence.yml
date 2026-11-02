@@ -21,6 +21,9 @@ permissions:
   pull-requests: read
   issues: read
   statuses: write
+  # Read-only: issue_comment runs download the head-declared-keys artifact
+  # (fetch-head-declared-keys.mjs, default-branch code only).
+  actions: read
 
 jobs:
   # Trust boundary (docs/decisions/0034, 0076, 0234): PR head code runs ONLY in
@@ -32,19 +35,20 @@ jobs:
   # does not know yet (issue 2662 AC7). The PR number comes from the event
   # payload and the head is fetched as refs/pull/<n>/head, so no token is
   # needed (a private repository would need `contents: read` here and would
-  # fail closed to an empty key set). The job never fails: every step is
-  # continue-on-error and the output defaults to an empty key set.
+  # fail closed to an empty key set). Every step is continue-on-error and the
+  # output defaults to an empty key set, but a job-level failure or timeout is
+  # still possible: the runner and reporter below tolerate it (empty set).
+  #
+  # Head code runs on pull_request* events ONLY. On issue_comment the workflow
+  # runs in the default-branch context even for fork PRs, so running head
+  # `bun install` / head config.mjs there would hold the default-branch Actions
+  # runtime/cache token and could poison the default-branch cache. On
+  # pull_request* GitHub isolates fork runs (read-only, merge-ref cache scope).
+  # issue_comment runs instead download the declared keys this job uploads as an
+  # artifact and treat them as data (scripts/github/fetch-head-declared-keys.mjs).
   head-declared-keys:
-    # Same condition as gate-evidence-runner (kept in sync by the workflow test).
-    if: >-
-      (github.event_name != 'issue_comment' && github.event.pull_request.draft == false) ||
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request &&
-       (startsWith(github.event.comment.body, '### Gate review:') ||
-        startsWith(github.event.comment.body, 'approve merge ') ||
-        startsWith(github.event.comment.body, '<!-- dev-loops:carried-heads:v1') ||
-        startsWith(github.event.changes.body.from, 'approve merge ')) &&
-       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+    if: github.event_name != 'issue_comment' && github.event.pull_request.draft == false
+    timeout-minutes: 10
     permissions: {}
     runs-on: ubuntu-latest
     outputs:
@@ -55,7 +59,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           path: head
-          ref: refs/pull/${{ github.event.pull_request.number || github.event.issue.number }}/head
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
           persist-credentials: false
 
       # Trusted script source only; it is never given PR head scripts.
@@ -96,6 +100,18 @@ jobs:
             echo "$keys"
             echo "${delim}"
           } >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/keys"
+          printf '%s\n' "$keys" > "$RUNNER_TEMP/keys/head-declared-keys.json"
+
+      - name: Upload declared keys for issue_comment runs (data only)
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: head-declared-keys-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/keys/head-declared-keys.json
+          overwrite: true
+          retention-days: 7
+          if-no-files-found: ignore
 
   # The compute-heavy DETECTOR: checks out the trusted default branch and runs
   # detect-checkpoint-evidence.mjs. Keeps job-level cancel-in-progress — its
@@ -115,7 +131,13 @@ jobs:
     # where `comment.body` still carries the deleted body) both re-fire so a
     # retracted approval re-evaluates the head instead of leaving a stale
     # status — fail-closed.
+    #
+    # !cancelled(): a skipped (issue_comment) or failed/timed-out
+    # head-declared-keys job must NOT skip this runner, or a stale success
+    # would stand after an approve-merge retraction. An empty keys output
+    # parses to the empty set (fail closed).
     if: >-
+      ${{ !cancelled() && (
       (github.event_name != 'issue_comment' && github.event.pull_request.draft == false) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
@@ -123,7 +145,7 @@ jobs:
         startsWith(github.event.comment.body, 'approve merge ') ||
         startsWith(github.event.comment.body, '<!-- dev-loops:carried-heads:v1') ||
         startsWith(github.event.changes.body.from, 'approve merge ')) &&
-       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))) }}
     # One evaluation per PR at a time; a superseded in-flight run is cancelled —
     # the newer run reflects newer comment/thread state. JOB-level
     # deliberately: a workflow-level group is joined by every run BEFORE the
@@ -199,6 +221,24 @@ jobs:
         if: steps.pr.outputs.draft == 'false'
         run: bun install --frozen-lockfile
 
+      # issue_comment runs never execute PR head code: they read the keys the
+      # pull_request run uploaded, via default-branch code only. A failure
+      # leaves the output unset, which parses to the empty set (fail closed).
+      - name: Fetch head-declared keys artifact (data only)
+        id: fetch_keys
+        if: github.event_name == 'issue_comment' && steps.pr.outputs.draft == 'false'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          keys="$(node scripts/github/fetch-head-declared-keys.mjs --repo "${{ github.repository }}" --pr "${{ steps.pr.outputs.number }}" --head-sha "${{ steps.pr.outputs.head_sha }}" | head -n1 | head -c 262144)"
+          delim="EOF_$(openssl rand -hex 16)"
+          {
+            echo "declared_keys<<${delim}"
+            echo "$keys"
+            echo "${delim}"
+          } >> "$GITHUB_OUTPUT"
+
       # --skip-fanout-ledger-check: the fan-out findings-log ledger is a
       # gitignored, worktree-local tmp/ file that only the machine that ran the
       # review has on disk, so this stateless runner can never see it. This check
@@ -226,13 +266,13 @@ jobs:
         if: steps.pr.outputs.draft == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HEAD_DECLARED_KEYS: ${{ needs.head-declared-keys.outputs.declared_keys }}
+          HEAD_DECLARED_KEYS: ${{ github.event_name == 'issue_comment' && steps.fetch_keys.outputs.declared_keys || needs.head-declared-keys.outputs.declared_keys }}
         run: |
           set +e
           node scripts/github/detect-checkpoint-evidence.mjs \
             --repo "${{ github.repository }}" \
             --pr "${{ steps.pr.outputs.number }}" \
-            --head-declared-keys "$HEAD_DECLARED_KEYS" \
+            --head-declared-keys="$HEAD_DECLARED_KEYS" \
             --skip-fanout-ledger-check \
             > gate_check_stdout.json 2> gate_check_stderr.json
           cat gate_check_stdout.json
@@ -348,18 +388,33 @@ jobs:
         if: steps.decide.outputs.recompute == 'true' && steps.pr.outputs.draft == 'false'
         run: bun install --frozen-lockfile
 
+      - name: Fetch head-declared keys artifact (data only)
+        id: fetch_keys
+        if: github.event_name == 'issue_comment' && steps.decide.outputs.recompute == 'true' && steps.pr.outputs.draft == 'false'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          keys="$(node scripts/github/fetch-head-declared-keys.mjs --repo "${{ github.repository }}" --pr "${{ steps.pr.outputs.number }}" --head-sha "${{ steps.pr.outputs.head_sha }}" | head -n1 | head -c 262144)"
+          delim="EOF_$(openssl rand -hex 16)"
+          {
+            echo "declared_keys<<${delim}"
+            echo "$keys"
+            echo "${delim}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Recompute draft_gate / pre_approval_gate evidence
         id: recompute_check
         if: steps.decide.outputs.recompute == 'true' && steps.pr.outputs.draft == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HEAD_DECLARED_KEYS: ${{ needs.head-declared-keys.outputs.declared_keys }}
+          HEAD_DECLARED_KEYS: ${{ github.event_name == 'issue_comment' && steps.fetch_keys.outputs.declared_keys || needs.head-declared-keys.outputs.declared_keys }}
         run: |
           set +e
           node scripts/github/detect-checkpoint-evidence.mjs \
             --repo "${{ github.repository }}" \
             --pr "${{ steps.pr.outputs.number }}" \
-            --head-declared-keys "$HEAD_DECLARED_KEYS" \
+            --head-declared-keys="$HEAD_DECLARED_KEYS" \
             --skip-fanout-ledger-check \
             > gate_check_stdout.json 2> gate_check_stderr.json
           cat gate_check_stdout.json

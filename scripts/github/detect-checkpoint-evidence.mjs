@@ -43,6 +43,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { verifyFreshHumanApproval } from "@dev-loops/core/loop/merge-approval";
 import { countUnresolvedHumanChangesRequested, resolveSizeBudgetHumanApprovalRequired } from "@dev-loops/core/loop/size-budget-merge-gate";
 import { SUBMITTED_REVIEW_STATES } from "@dev-loops/core/github/copilot-helpers";
+import { parseHeadDeclaredKeys } from "./head-declared-keys-schema.mjs";
 const USAGE = `Usage: detect-checkpoint-evidence.mjs --repo <owner/name> --pr <number>
 Fetch the live PR head SHA and visible PR issue comments, then summarize the
 latest valid draft-gate and pre-approval checkpoint verdict comments. Always fail
@@ -783,19 +784,8 @@ async function readActListInAny(checkouts, ledgerPath, markerExecutionMode) {
   }
   return exists ? { ledgerPath, unreadable, open, unjudged } : null;
 }
-const HEAD_DECLARED_KEYS_MAX_BYTES = 256 * 1024;
-
-/** Parse the --head-declared-keys value; invalid or oversized input is an empty set, never an error. */
-export function parseHeadDeclaredKeys(text) {
-  if (typeof text !== "string" || Buffer.byteLength(text) > HEAD_DECLARED_KEYS_MAX_BYTES) return [];
-  try {
-    const parsed = JSON.parse(text);
-    const list = Array.isArray(parsed) ? parsed : parsed?.declaredKeys;
-    return Array.isArray(list) ? list.filter((k) => typeof k === "string") : [];
-  } catch {
-    return [];
-  }
-}
+// The --head-declared-keys value uses the shared strict schema (invalid input is an empty set).
+export { parseHeadDeclaredKeys };
 
 // A committed `.devloops` is a small hand-authored config file; 8 MiB is
 // already many times larger than any legitimate one, so bounding `git show`

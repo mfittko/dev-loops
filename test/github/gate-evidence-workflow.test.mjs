@@ -92,7 +92,11 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
   // since issue_comment payloads have no pull_request object).
   // Exact-composition pin: substring checks alone would let a boolean rewrite
   // (e.g. an || that opens the guard) slip through.
-  const collapsedIf = job.if.replace(/\s+/gu, " ").trim();
+  const wrappedIf = job.if.replace(/\s+/gu, " ").trim();
+  // The runner survives a skipped/failed head-declared-keys job (!cancelled(), ADR 0234).
+  assert.ok(wrappedIf.startsWith("${{ !cancelled() && ( "), "runner if must start with !cancelled()");
+  assert.ok(wrappedIf.endsWith(") }}"));
+  const collapsedIf = wrappedIf.slice("${{ !cancelled() && ( ".length, -") }}".length);
   assert.equal(
     collapsedIf,
     "(github.event_name != 'issue_comment' && github.event.pull_request.draft == false) || " +
@@ -401,9 +405,22 @@ test("head-declared-keys is the only job that checks out a PR head, with no perm
   const keysJob = workflow.jobs["head-declared-keys"];
   const runnerJob = workflow.jobs["gate-evidence-runner"];
   const reporterJob = workflow.jobs["gate-evidence-reporter"];
-  assert.equal(keysJob.if, runnerJob.if, "head-declared-keys must start under the same condition as the runner");
+  // Head code runs on pull_request* events only; issue_comment runs in the default-branch context
+  // (cache-poisoning risk) and receives the keys as an artifact instead.
+  assert.equal(keysJob.if, "github.event_name != 'issue_comment' && github.event.pull_request.draft == false");
+  assert.equal(keysJob["timeout-minutes"], 10);
   assert.deepEqual(keysJob.permissions, {}, "the job that runs PR head code holds no permissions");
-  assert.ok(keysJob.steps.every((s) => s["continue-on-error"] === true), "head-declared-keys must never fail");
+  const upload = keysJob.steps.find((s) => String(s.uses ?? "").startsWith("actions/upload-artifact@"));
+  assert.ok(upload, "the keys job uploads the declared keys artifact");
+  assert.equal(upload.with.name, "head-declared-keys-${{ github.event.pull_request.head.sha }}");
+  assert.equal(upload.with.overwrite, true);
+  assert.equal(upload.with["retention-days"], 7);
+  assert.equal(upload.with["if-no-files-found"], "ignore");
+  assert.ok(keysJob.steps.every((s) => s["continue-on-error"] === true), "every keys step tolerates failure");
+  assert.ok(!JSON.stringify(workflow.jobs).includes("github.event.issue.number }}/head"), "no PR-head checkout by issue number");
+  assert.equal(workflow.permissions.actions, "read", "artifact download needs actions: read");
+  assert.ok(String(runnerJob.if).replace(/\s+/gu, " ").startsWith("${{ !cancelled() && ("), "a skipped or failed keys job must not skip the runner");
+  assert.ok(String(reporterJob.if).includes("always()"));
   const checkouts = (job) => job.steps.filter((s) => String(s.uses ?? "").startsWith("actions/checkout"));
   assert.ok(checkouts(keysJob).some((s) => String(s.with.ref).startsWith("refs/pull/")), "the keys job checks out the PR head");
   for (const s of checkouts(keysJob)) assert.equal(s.with["persist-credentials"], false);
@@ -416,8 +433,18 @@ test("head-declared-keys is the only job that checks out a PR head, with no perm
   assert.ok(reporterJob.needs.includes("head-declared-keys") && reporterJob.needs.includes("gate-evidence-runner"));
   for (const job of [runnerJob, reporterJob]) {
     const detect = job.steps.find((s) => typeof s.run === "string" && s.run.includes("detect-checkpoint-evidence.mjs"));
-    assert.equal(detect.env.HEAD_DECLARED_KEYS, "${{ needs.head-declared-keys.outputs.declared_keys }}");
-    assert.ok(detect.run.includes('--head-declared-keys "$HEAD_DECLARED_KEYS"'));
-    assert.ok(!detect.run.includes("needs.head-declared-keys"), "declared keys never reach the shell by splice");
+    assert.equal(
+      detect.env.HEAD_DECLARED_KEYS,
+      "${{ github.event_name == 'issue_comment' && steps.fetch_keys.outputs.declared_keys || needs.head-declared-keys.outputs.declared_keys }}",
+    );
+    assert.ok(detect.run.includes('--head-declared-keys="$HEAD_DECLARED_KEYS"'), "flag form with = so a dash-leading value is data");
+    assert.ok(!detect.run.includes("needs.head-declared-keys") && !detect.run.includes("fetch_keys"), "declared keys never reach the shell by splice");
+    const fetchIdx = job.steps.findIndex((s) => s.id === "fetch_keys");
+    assert.ok(fetchIdx >= 0 && fetchIdx < job.steps.indexOf(detect), "fetch step precedes the detect step");
+    const fetch = job.steps[fetchIdx];
+    assert.equal(fetch["continue-on-error"], true);
+    assert.ok(fetch.if.startsWith("github.event_name == 'issue_comment' && "));
+    assert.ok(fetch.if.includes("steps.pr.outputs.draft == 'false'"));
+    assert.ok(fetch.run.includes("node scripts/github/fetch-head-declared-keys.mjs"), "default-branch code only");
   }
 });

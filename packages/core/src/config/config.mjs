@@ -1678,8 +1678,12 @@ export function stripConfigKeyPaths(raw, filePath, keyPaths) {
     const parts = keyPath.split(".");
     const last = parts.pop();
     let node = data;
-    for (const part of parts) node = node?.[part];
-    if (node !== null && typeof node === "object") delete node[last];
+    // Own-property guard: a `__proto__` path step must never reach Object.prototype.
+    for (const part of parts) {
+      if (node === null || typeof node !== "object" || !Object.hasOwn(node, part)) { node = null; break; }
+      node = node[part];
+    }
+    if (node !== null && typeof node === "object" && Object.hasOwn(node, last)) delete node[last];
   }
   return JSON.stringify(data);
 }
