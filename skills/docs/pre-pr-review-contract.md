@@ -198,7 +198,7 @@ fixer and owns the push. The sequence is:
    delta record as the `delta-result` read. The record carries item ref/status
    pairs and the `findings[]` the fixer must act on (medium-or-higher
    `newFindings` without `residueOf`, and open residue); the emitter renders
-   them as act items (`deltaFindings`, [ADR 0235](../../docs/decisions/0235-ci-failure-source-and-delta-findings-intake.md)).
+   them as act items (`deltaFindings`, ADR 0235, `docs/decisions/0235-ci-failure-source-and-delta-findings-intake.md`).
    A CI failure is a fourth fixer-order source (`--ci-file`, full phase only, no delta route).
    On `nextStep: rereview_current_head`, the result is stale for the current
    head; the coordinator returns to step 2 without a fixer.

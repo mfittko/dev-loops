@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-11-02. Amends [ADR 0166](0166-fix-loop-one-state-machine.md) requirement 3 (findings outside the act list can enter a fixer order) and [ADR 0233](0233-fixer-work-order-from-review-body.md) (the review-body decision names three fixer sources; this record adds a fourth).
+Accepted — 2026-11-02. Amends [ADR 0166](0166-liveness-first-fixer-lifecycle-requirements.md) requirement 3 (findings outside the act list can enter a fixer order) and [ADR 0233](0233-fixer-work-order-from-review-body.md) (the review-body decision names three fixer sources; this record adds a fourth).
 
 ## Context
 
