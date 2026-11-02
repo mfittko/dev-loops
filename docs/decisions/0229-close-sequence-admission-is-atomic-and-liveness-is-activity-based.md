@@ -1,4 +1,4 @@
-# 0228. Close-sequence admission is atomic and the fixer liveness rule is activity-based
+# 0229. Close-sequence admission is atomic and the fixer liveness rule is activity-based
 
 ## Status
 

@@ -6,7 +6,7 @@ Accepted, 2026-11-01 ([issue 2999](https://github.com/mfittko/dev-loops/issues/2
 
 Amends ADR 0143 and ADR 0213. Accepted records remain unchanged.
 
-Amended by [ADR 0228](0228-close-sequence-admission-is-atomic-and-liveness-is-activity-based.md) for the command spelling (`dev-loops-run cli/index.mjs gate close-sequence ...`), the grace period (the runner TTL, `resolveStaleRunnerMaxAgeMs`) and the activity-based liveness rule.
+Amended by [ADR 0229](0229-close-sequence-admission-is-atomic-and-liveness-is-activity-based.md) for the command spelling (`dev-loops-run cli/index.mjs gate close-sequence ...`), the grace period (the runner TTL, `resolveStaleRunnerMaxAgeMs`) and the activity-based liveness rule.
 
 ## Context
 
