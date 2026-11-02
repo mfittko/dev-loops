@@ -211,6 +211,20 @@ const SALVAGED_DENY_ROWS = [
   "cat >> .git/config <<'EOF'\n[alias]\n\tr = !f\nnode -e 1\nEOF\ngit r",
   "cat >> .git/hooks/pre-commit <<'EOF'\nnode -e 1\nEOF\ngit commit -m x",
   "git -c alias.x='!f(){ eval \"$2\"; }; f' x -m \"$(cat <<'EOF'\nnode -e 1\nEOF\n)\"",
+  // grouping fail-open (draft_gate round 3029 r2): a group closer pipes or redirects a cat heredoc written on its own line
+  ...["node -e 'x'", "while true; do gh pr view 5; sleep 5; done", "node scripts/loop/probe-copilot-review.mjs --pr 5 &"].flatMap((body) => [
+    `{\ncat <<'EOF'\n${body}\nEOF\n} | sh`,
+    `(\ncat <<'EOF'\n${body}\nEOF\n) | bash`,
+    `for i in 1; do\ncat <<'EOF'\n${body}\nEOF\ndone | bash`,
+    `if true; then\ncat <<'EOF'\n${body}\nEOF\nfi | sh`,
+    `{\ncat <<'EOF'\n${body}\nEOF\n} |& sh`,
+    `{\ncat <<'EOF'\n${body}\nEOF\n} 2>&1 | sh`,
+    `{\ncat <<'EOF'\n${body}\nEOF\n} > l.sh; bash l.sh`,
+    `{\ncat <<'EOF'\n${body}\nEOF\n}>l.sh\nbash l.sh`,
+    `f() {\ncat <<'EOF'\n${body}\nEOF\n}\nf | sh`,
+    `{\necho "$(cat <<'EOF'\n${body}\nEOF\n)"\n} | sh`,
+    `{\necho "$(cat <<'EOF'\n${body}\nEOF\n)"\n} > l.sh; bash l.sh`,
+  ]),
 ];
 
 /** Hook-verdict row from test/loop/check-retro-tooling.test.mjs: `EOF)` is not a delimiter line, so origin/main allowed it and the head denies it. */
