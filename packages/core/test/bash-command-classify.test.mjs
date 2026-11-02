@@ -38,6 +38,7 @@ import {
   commandContainsCopilotSummonComment,
   commandContainsRawPrBodyEdit,
   commandContainsRawPrBodyApiWrite,
+  inlineInterpreterDenyDetail,
   commandContainsDetachedWaitTool,
   commandIsSleepPollLoop,
   commandIsFileMarkerPollLoop,
@@ -1574,7 +1575,7 @@ test("stripQuotedLiterals is built on tokenizeShellCommand and the regex pairing
   const source = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/loop/bash-command-classify.mjs"), "utf8");
   assert.equal(source.includes("/(['\"])((?:(?!\\1).)*)\\1/gs"), false);
   assert.equal(source.includes("neutralizeQuoteNoise"), false);
-  assert.match(source, /function stripQuotedLiterals\(command\) \{\s*const \{[^}]*\} = tokenizeShellCommand\(command\)/);
+  assert.match(source, /function stripQuotedLiterals\(command, precise = false\) \{\s*const tok = tokenizeShellCommand\(command\)/);
 });
 
 test("stripQuotedLiterals callers keep their decisions on tokenizer-backed quoting (#2442)", () => {
@@ -1587,15 +1588,18 @@ test("stripQuotedLiterals callers keep their decisions on tokenizer-backed quoti
   assert.equal(commandIsFileMarkerPollLoop("echo 'while [ ! -f tmp/done ]; do sleep 2; done'"), false);
 });
 
-test("stripQuotedLiterals blanks nothing near quote-pairing hazards, slice 1 stays fail-closed (#2442)", () => {
+test("the wait and poll predicates trust the tokenizer near former quote-pairing hazards (#2442 slice 2)", () => {
   const LOOP = "while true; do gh pr view 5; sleep 5; done";
+  // the loop sits in quotes: data, allowed (these rows are listed as intended removals in the differential test)
   for (const c of [
     `# it's\necho 'LOOP'`.replace("LOOP", LOOP),
     `echo "a \\" ; ${LOOP}"`,
     `echo $'a\\' ; ${LOOP} '`,
     `cat <<'EOF'\nit's\nEOF\necho '${LOOP}'`,
     `echo it\\'s; echo '${LOOP}'`,
-  ]) assert.equal(commandIsSleepPollLoop(c), true, c);
+  ]) assert.equal(commandIsSleepPollLoop(c), false, c);
+  // the same hazard text around a real loop stays denied
+  for (const c of [`# it's\n${LOOP}`, `echo it\\'s; ${LOOP}`, `echo "a \\" b"; ${LOOP}`, `cat <<'EOF'\nit's\nEOF\n${LOOP}`]) assert.equal(commandIsSleepPollLoop(c), true, c);
 });
 
 test("an unmatched quote inside an unquoted backtick span is a quote-pairing hazard; balanced spans still blank (#2442)", () => {
@@ -1620,4 +1624,71 @@ test("review fixes: hazard text keeps the body flag visible, nested quotes are a
   // ANSI-C delimiter decoding
   assert.equal(commandContainsInlineInterpreter(": <<$'\\x45OF'\nbody\nEOF"), false);
   assert.equal(commandContainsInlineInterpreter(": <<$'EO\\x46'\nbody\nEOF"), false);
+});
+
+const PROBE = "scripts/loop/probe-copilot-review.mjs";
+
+test("slice 2: the wait predicate ignores operators and names in data, and still denies real waits (#2442)", () => {
+  for (const c of [
+    "cat > tmp/f <<'EOF'\nnode scripts/loop/detect-copilot-loop-state.mjs & more\nEOF",
+    'echo "detect-copilot-loop-state.mjs & more"',
+    "sed -n 's/`gh pr view 5`/while sleep 5/p' f",
+  ]) assert.equal(commandContainsDetachedWaitTool(c), false, c);
+  for (const c of [
+    `node ${PROBE} --pr 5 --timeout-ms 1000 &`,
+    `node "${PROBE}" &`,
+    `bash <<'EOF'\nnode ${PROBE} &\nEOF`,
+    `bash <<< 'node ${PROBE} &'`,
+    `bash -c -e 'node ${PROBE} &'`,
+    "cat > tmp/x <<EOF\n$(while true; do gh pr view 5; sleep 5; done)\nEOF",
+    "# don't\nwhile [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done # it's",
+    `cat > tmp/r.sh <<'EOF'\nnode ${PROBE} &\nEOF\nbash tmp/r.sh`,
+    "while :; do `true '`; 'sleep' 5; gh pr view 5; done", // a quoted whole-word keyword still runs
+  ]) assert.equal(commandContainsDetachedWaitTool(c), true, c);
+});
+
+test("slice 2: quoted literals and cat/tee heredoc bodies that name an interpreter are data; payloads stay visible (#2442)", () => {
+  for (const c of [
+    "cat > tmp/f <<'EOF'\nnode -e 'x'\nEOF",
+    "cat > tmp/f <<'EOF'\npython3 -c x\nEOF",
+    "tee tmp/f <<EOF\nnode -e x\nEOF",
+    "git commit -m \"$(cat <<'EOF'\nuse node -e and sed -i here\nEOF\n)\"",
+    "gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\"",
+    'node scripts/loop/x.mjs --notes "11 were python3 or node -e; python3 -c denied"',
+    'node scripts/loop/x.mjs --notes "a | node -e b"',
+    "node scripts/loop/x.mjs --notes 'perl -0pi -e & ruby -e'",
+    "node scripts/loop/x.mjs --notes 'tee src/a.mjs <<EOF'",
+    'grep -n "sed -i" README.md',
+    "echo $((1<<2))",
+    "x=$((a<<b)); echo $x",
+  ]) assert.equal(commandContainsInlineInterpreter(c), false, c);
+  for (const c of [
+    `bash <<< "a b"'; node -e y'`,
+    `bash -c "a b"'; node -e y'`,
+    `bash -c -e 'x; node -e y'`,
+    `bash -c $'x; node -e y'`,
+    `eval $'x; node -e y'`,
+    `bash<<<'x; node -e y'`,
+    `bash <<<$'x; node -e y'`,
+    "# don't\nnode -e 'console.log(1)'",
+    "git commit -F - <<'MSG'\ndon't\nMSG\nnode -e 'x'",
+    "cat <<'EOF' | sh\nnode -e 'x'\nEOF",
+    "bash <<'EOF'\nnode -e 'x'\nEOF",
+    "node - <<'EOF'\nx\nEOF",
+    "python3 - <<'EOF'\nx\nEOF",
+    "cat > tmp/r.sh <<'EOF'\nnode -e 'x'\nEOF\nbash tmp/r.sh",
+    "cat > tmp/x <<EOF\n$(node -e 'x')\nEOF",
+    "bash <<< \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
+  ]) assert.equal(commandContainsInlineInterpreter(c), true, c);
+});
+
+test("slice 2: a heredoc closed by EOF) inside a substitution is complete; malformed input names its cause (#2442)", () => {
+  const closed = "echo \"$(cat <<'EOF'\nbody\nEOF)\"";
+  assert.equal(tokenizeShellCommand(closed).incomplete, false);
+  assert.equal(tokenizeShellCommand("cat <<'EOF'\nbody\nEOF)").incomplete, true);
+  assert.equal(tokenizeShellCommand(": $((1<<2))").incomplete, false);
+  assert.equal(tokenizeShellCommand(": $(( $(date) << 2 ))").incomplete, true); // arithmetic holding a substitution is not read as plain arithmetic: fail closed
+  assert.equal(inlineInterpreterDenyDetail("node -e 'x"), inlineInterpreterDenyDetail("echo \"$(gh pr view 5"));
+  assert.match(inlineInterpreterDenyDetail("node -e 'x"), /incomplete tokenization/);
+  assert.equal(inlineInterpreterDenyDetail("node -e 'x'"), "");
 });

@@ -950,6 +950,14 @@ test("decideBashGate denies inline interpreters actor-independently on the targe
   assert.match(dMain.reason, /OPS-NO-INLINE-INTERPRETER/);
 });
 
+test("decideBashGate allows a heredoc write whose body only names a wait script and denies a backgrounded probe (#2442)", () => {
+  const ctx = { repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET };
+  const write = "cat > tmp/f <<'EOF'\nnode scripts/loop/detect-copilot-loop-state.mjs & then node -e 'x'\nEOF";
+  assert.equal(decideBashGate({ command: write, ...ctx }).decision, "allow");
+  assert.equal(decideBashGate({ command: 'node scripts/loop/x.mjs --notes "11 were python3 or node -e; python3 -c denied"', ...ctx }).decision, "allow");
+  assert.equal(decideBashGate({ command: "node scripts/loop/probe-copilot-review.mjs --pr 5 --timeout-ms 1000 &", ...ctx }).decision, "deny");
+});
+
 test("decideBashGate allows sanctioned node/python script invocations and off-target inline interpreters", () => {
   assert.equal(decideBashGate({ command: "node scripts/github/comment-issue.mjs 5", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
   assert.equal(decideBashGate({ command: 'node -e "console.log(1)"', repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
