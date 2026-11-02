@@ -233,6 +233,7 @@ export async function editIssue(options, { env = process.env, ghCommand = "gh", 
   // `adr-tripwire:allow` line; fail closed when the current body is unreadable.
   // The body is resolved once so stdin is read a single time.
   let snapshotDir;
+  try {
   if (options.body !== undefined || options.bodyFile !== undefined) {
     let body = options.body;
     if (body === undefined) {
@@ -260,17 +261,15 @@ export async function editIssue(options, { env = process.env, ghCommand = "gh", 
       throw new Error(`CHECKLIST-SCOPE-ONE-MODEL: refusing to untick or remove ${unticked.length} checked row(s) on #${options.issue} (unticked, deleted, reworded, or moved into or out of its AC/DoD scope): ${unticked.map((l) => JSON.stringify(l)).join("; ")}. Edit from the current body, or pass --allow-untick for a deliberate change.`);
     }
     // Forward the body that was just checked, never a re-read of the caller's
-    // file (it may change after the guard ran). Stdin goes inline; a file body
-    // goes through a private temp snapshot so a large body cannot exceed argv limits.
-    if (options.bodyFile === "-") options = { ...options, body, bodyFile: undefined };
-    else if (options.bodyFile !== undefined) {
+    // file (it may change after the guard ran). Stdin and file bodies go through
+    // a private temp snapshot so a large body cannot exceed argv limits.
+    if (options.bodyFile !== undefined) {
       snapshotDir = await mkdtemp(join(tmpdir(), "edit-issue-"));
       const snapshot = join(snapshotDir, "body.md");
       await writeFile(snapshot, body, { mode: 0o600 });
       options = { ...options, bodyFile: snapshot };
     }
   }
-  try {
     return await editWithGrillCheck(options, { env, ghCommand, run });
   } finally {
     if (snapshotDir !== undefined) await rm(snapshotDir, { recursive: true, force: true });

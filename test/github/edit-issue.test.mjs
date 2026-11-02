@@ -208,8 +208,10 @@ test("editIssue: --body-file - reads stdin and passes it inline as --body (never
   const res = spawnSync((Bun.which("node") ?? "node"), [driver], { input: "Body from stdin\n", encoding: "utf8" });
   assert.equal(res.status, 0, res.stderr);
   const args = JSON.parse(res.stdout);
-  assert.deepEqual(args, ["issue", "edit", "17", "--repo", "o/n", "--body", "Body from stdin\n"]);
-  assert.ok(!args.includes("--body-file"), "must not re-emit --body-file - for an exhausted stdin");
+  assert.deepEqual(args.slice(0, 5), ["issue", "edit", "17", "--repo", "o/n"]);
+  assert.equal(args[5], "--body-file");
+  assert.notEqual(args[6], "-", "must not re-emit --body-file - for an exhausted stdin");
+  assert.ok(!args.includes("--body"), "stdin body must go through the snapshot file, not argv");
 });
 
 test("editIssue: --remove-assignee builds gh args and reports the edited field", async () => {
@@ -400,8 +402,10 @@ test("editIssue: --enforce-grill with --body-file - forwards stdin inline (no fd
   const res = spawnSync((Bun.which("node") ?? "node"), [driver], { input: "## Acceptance criteria\n\n- [ ] ac\n", encoding: "utf8" });
   assert.equal(res.status, 0, res.stderr);
   const args = JSON.parse(res.stdout);
-  assert.deepEqual(args, ["issue", "edit", "17", "--repo", "o/n", "--body", "## Acceptance criteria\n\n- [ ] ac\n"]);
-  assert.ok(!args.includes("--body-file"), "must not re-emit --body-file - under --enforce-grill");
+  assert.deepEqual(args.slice(0, 5), ["issue", "edit", "17", "--repo", "o/n"]);
+  assert.equal(args[5], "--body-file");
+  assert.notEqual(args[6], "-", "must not re-emit --body-file - under --enforce-grill");
+  assert.ok(!args.includes("--body"), "stdin body must go through the snapshot file, not argv");
 });
 
 test("editIssue: --enforce-grill with empty stdin fails closed (blank --body-file - cannot clear the body)", () => {
