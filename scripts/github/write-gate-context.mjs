@@ -2117,8 +2117,7 @@ async function capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, re
  * The emitter seam skips the `covers` filter on purpose: it must admit a base-only merge M of a chain end before the fixer's record for M exists.
  */
 export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince }) {
-  const { starts } = await capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
-  return starts.map((start) => clearingChainEnd(tmpRoot, start)).filter(Boolean);
+  return (await clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge })).ends;
 }
 
 /** The chain ends and every head the sealed clearing chains of the cap round `capHead` visit after it (each seeded merge, each record candidate head and each chain end), from one walk. */
