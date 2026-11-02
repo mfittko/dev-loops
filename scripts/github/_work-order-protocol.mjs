@@ -62,7 +62,7 @@ export async function codeTreeSkewNote({ execution, tmpRoots, rerun, toolchainRo
       try { emitterRoot = JSON.parse(await readFile(executionIndexPath(tmpRoot, execution), "utf8")).emitterRoot; } catch { continue; }
       if (typeof emitterRoot !== "string" || await real(emitterRoot) === await real(toolchainRoot)) continue;
       const version = (root) => versionOf(root).catch(() => "unknown");
-      return `; code-tree skew: emitted by ${emitterRoot} (dev-loops ${await version(emitterRoot)}), pulled by ${toolchainRoot} (dev-loops ${await version(toolchainRoot)}), and the work-order identity code may differ; rerun with \`dev-loops-run --repo-root ${shellQuote(emitterRoot)} ${rerun}\``;
+      return `; code-tree skew: emitted by ${emitterRoot} (dev-loops ${await version(emitterRoot)}), pulled by ${toolchainRoot} (dev-loops ${await version(toolchainRoot)}), and the work-order identity code may differ; rerun with \`dev-loops-run --repo-root ${shellQuote(emitterRoot)} ${rerun}\` (refusal rule WORK-ORDER-CODE-TREE-SKEW)`;
     }
   } catch { /* best effort: the plain refusal stands */ }
   return "";
