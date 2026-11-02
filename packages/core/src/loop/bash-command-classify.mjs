@@ -1607,7 +1607,7 @@ function interpreterScanParts(command) {
 
 /**
  * The token-level interpreter scan (no incomplete-input check; `commandContainsInlineInterpreter` adds that and the data-heredoc blanking).
- * Shared with `scripts/loop/check-retro-tooling.mjs`, which calls it per transcript segment.
+ * Shared with the retro-tooling transcript check, which calls it per transcript segment.
  * @param {string} command @returns {boolean}
  */
 export function scanInlineInterpreter(command) {
