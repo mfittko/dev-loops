@@ -221,7 +221,7 @@ const markerLine = (association = "OWNER") => JSON.stringify({ id: 5, user: { lo
   body: `<!-- dev-loops:review-body-disposition review=PRR_R1 fix=${FIX_SHA} -->\nAddressed review PRR_R1 in commit ${FIX_SHA}.` });
 const commentsEntry = (stdout = "") => claim({ assertArgs: [`repos/${REPO}/issues/${PR}/comments`, "--paginate"], stdout });
 const markerPostEntry = claim({ assertArgs: [`repos/${REPO}/issues/${PR}/comments`, "-f"], assertArgContains: [`body=<!-- dev-loops:review-body-disposition review=PRR_R1 fix=${FIX_SHA} -->`], stdout: "{}" });
-const reviewBodyEntries = (...comments) => [reviewsEntry(), claim(liveHeadEntry()), claim(threadsCallEntry([])), ...ciEntries(HEAD_SHA).map(claim), claim(compareEntry(FIX_SHA, "ahead")), ...comments];
+const reviewBodyEntries = (...comments) => [reviewsEntry(), claim(liveHeadEntry()), claim(threadsCallEntry([])), ...ciEntries(HEAD_SHA).map(claim), claim(compareEntry(FIX_SHA, "ahead")), claim(compareEntry(HEAD_SHA, "ahead", FIX_SHA)), ...comments];
 const posts = (calls) => calls.filter((call) => call.args.includes("-f"));
 
 test("review-body: the verifier posts one marker comment citing the fixing commit, and re-entry posts nothing", async () => {
@@ -268,6 +268,31 @@ test("review-body: the verifier's own untrusted marker after a foreign untrusted
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps);
     assert.equal(posts(calls).length, 0);
     assert.equal(result.incomplete.some((entry) => entry.failedStep === "marker_author_untrusted"), true);
+  });
+});
+
+test("review-body: an unreadable own login fails closed, so a foreign untrusted marker blocks the post", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, REVIEW_HANDOFF, { review: REVIEW });
+    const foreign = JSON.stringify({ id: 4, user: { login: "mallory", type: "User" }, author_association: "CONTRIBUTOR", body: `<!-- dev-loops:review-body-disposition review=PRR_R1 fix=${FIX_SHA} -->` });
+    const userFails = claim({ assertArgs: ["api", "user"], code: 1, stderr: "boom", stdout: "" });
+    const { deps, calls } = runtime(reviewBodyEntries(commentsEntry(foreign), userFails, commentsEntry(foreign), commentsEntry(foreign)), repoRoot, { live: false });
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps);
+    assert.equal(posts(calls).length, 0);
+    assert.equal(result.complete, false);
+    assert.equal(result.incomplete.some((entry) => entry.failedStep === "marker_author_untrusted"), true);
+  });
+});
+
+test("review-body: a fixing commit that the reviewed commit already contains posts nothing and fails fix_not_after_review", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, REVIEW_HANDOFF, { review: REVIEW });
+    const entries = reviewBodyEntries(commentsEntry()).map((entry) => (entry.assertArgs?.[1] === `repos/${REPO}/compare/${HEAD_SHA}...${FIX_SHA}` ? claim(compareEntry(HEAD_SHA, "behind", FIX_SHA)) : entry));
+    const { deps, calls } = runtime(entries, repoRoot, { live: false });
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps);
+    assert.equal(posts(calls).length, 0);
+    assert.equal(result.complete, false);
+    assert.deepEqual(result.incomplete, [{ reviewId: "PRR_R1", expectedCommit: FIX_SHA, failedStep: "fix_not_after_review" }]);
   });
 });
 

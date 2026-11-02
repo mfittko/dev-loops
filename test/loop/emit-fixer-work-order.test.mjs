@@ -1309,6 +1309,16 @@ test("AC1/AC2/AC5: --review-id emits a review-body work order whose snapshot, di
   });
 });
 
+test("AC5: the review-body task shares the full-phase steps, so it refuses a branch git rejects and names the ci_unknown hand-back", async () => {
+  await withFixture(async ({ head, emit }) => {
+    const review = reviewFor(head);
+    const text = await readFile((await emitReview(emit, [review])).promptPath, "utf8");
+    assert.match(text, /hand back `ci_pending` \(`ci_unknown` when the checks cannot be read\)/);
+    assert.match(text, /reports `stuck` or `changed`/);
+    await assert.rejects(emitReview(emit, [review], { fetchPr: async () => ({ headRefName: "bad..branch", headRefOid: head }) }), /refusing to render a branch name git rejects/);
+  });
+});
+
 test("AC3: exactly one source; --gate and --delta-result refuse with --review-id", async () => {
   await withFixture(async ({ head, files, emit }) => {
     const review = reviewFor(head);

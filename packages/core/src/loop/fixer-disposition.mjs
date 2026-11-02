@@ -27,6 +27,8 @@ export const FIXER_DISPOSITION_FAILED_STEP = Object.freeze({
   DELTA_BLOCKED: "delta_blocked",
   // A review-body marker comment exists for the fixing commit, but its author is not a trusted one (OWNER, MEMBER or COLLABORATOR human).
   MARKER_AUTHOR_UNTRUSTED: "marker_author_untrusted",
+  // A review-body entry cites a fixing commit that the reviewed commit already contains, so it cannot be a fix for the review.
+  FIX_NOT_AFTER_REVIEW: "fix_not_after_review",
 });
 
 /** The review node id a review-body handoff entry and `emit-fixer-work-order.mjs --review-id` both accept. */
@@ -300,10 +302,11 @@ const citesShortSha = (body, commit) => (String(body).toLowerCase().match(/\b[0-
  * @param {{ headSha: string, dispositions: Array<object> }} params.handoff - raw or already-normalized; ALWAYS re-validated via normalizeFixerDispositionHandoff (idempotent on already-normalized input), so a malformed array-bearing handoff can never bypass schema+enum validation just by already carrying an array
  * @param {Array<{ threadId: string, isResolved: boolean, replyBodies?: string[], claimedTackled?: boolean }>} [params.liveThreads]
  * @param {Record<string, boolean>} [params.containment] - fixingCommitSha -> true when the observed PR head contains it
+ * @param {Record<string, boolean>} [params.fixAfterReview] - per fixing commit, whether it is strictly after the reviewed commit (false refuses a review-body entry)
  * @param {Array<{ reviewId: string, markerCommits: string[] }>} [params.liveReviews] - per review-body entry, the fixing commits that trusted marker comments cite
  * @returns {{ ok: boolean, incomplete: Array<{ threadId: string, expectedCommit: string|null, failedStep: string } | { reviewId: string, expectedCommit: string|null, failedStep: string }>, forbiddenActions: string[], nextAction: string|null, reason: string|null }}
  */
-export function evaluateFixerDisposition({ handoff, liveThreads = [], containment = {}, liveReviews = [] } = {}) {
+export function evaluateFixerDisposition({ handoff, liveThreads = [], containment = {}, liveReviews = [], fixAfterReview = {} } = {}) {
   const normalizedHandoff = normalizeFixerDispositionHandoff(handoff ?? {});
   const threadEntries = normalizedHandoff.dispositions.filter((entry) => entry.threadId);
   const handoffByThreadId = new Map(threadEntries.map((entry) => [entry.threadId, entry]));
@@ -365,6 +368,7 @@ export function evaluateFixerDisposition({ handoff, liveThreads = [], containmen
   for (const entry of normalizedHandoff.dispositions.filter((e) => e.reviewId && e.disposition === FIXER_DISPOSITION_KIND.TACKLED)) {
     const { reviewId, fixingCommitSha: expectedCommit } = entry;
     const failedStep = containment?.[expectedCommit] !== true ? FIXER_DISPOSITION_FAILED_STEP.COMMIT_NOT_CONTAINED
+      : fixAfterReview?.[expectedCommit] === false ? FIXER_DISPOSITION_FAILED_STEP.FIX_NOT_AFTER_REVIEW
       : !(markersByReview.get(reviewId) ?? []).some((commit) => String(commit).toLowerCase() === expectedCommit.toLowerCase()) ? FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING : null;
     if (failedStep) incomplete.push({ reviewId, expectedCommit, failedStep });
   }

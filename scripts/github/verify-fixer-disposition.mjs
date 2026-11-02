@@ -468,6 +468,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   // A review-body order pins one review: the handoff needs its entry, and the live body must still be the pinned one.
   let reviewId = null;
   let reviewBodySha256 = null;
+  let reviewCommitId = null;
   const reviewRead = (order.requiredReads ?? []).find((read) => read?.kind === "review-body");
   if (reviewRead) {
     const bytes = await readFile(reviewRead.path);
@@ -477,6 +478,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     }
     reviewId = snapshot.reviewId;
     reviewBodySha256 = snapshot.bodySha256;
+    reviewCommitId = snapshot.commitId ?? null;
     const foreign = handoff.dispositions.filter((entry) => entry.reviewId && entry.reviewId !== reviewId).map((entry) => entry.reviewId);
     if (foreign.length) throw new Error(`the handoff carries disposition entries for review(s) ${foreign.join(", ")}, not the pinned review ${reviewId}; remove them from the work order's outputRef`);
     // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: a review-body order has no thread to reply to or resolve.
@@ -617,6 +619,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     constructedReport: raw,
     reviewId,
     reviewBodySha256,
+    reviewCommitId,
     source: order.source,
     handoffPath,
     bindActiveFixer,
@@ -801,7 +804,7 @@ async function verifyFixerDispositionCore(
   const logPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: "fixer-disposition", headSha: options.headSha, tmpRoot });
   const fullPath = path.resolve(repoRoot, logPath);
   const runtime = { env, ghCommand, runChild };
-  const { handoff, actList, deltaStatuses, completion, constructedReport, reviewId, reviewBodySha256, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
+  const { handoff, actList, deltaStatuses, completion, constructedReport, reviewId, reviewBodySha256, reviewCommitId, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
   // The observed head must be the live PR head, never a caller claim.
   const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,statusCheckRollup"], env);
   const livePayload = live.code === 0 ? (() => { try { return JSON.parse(live.stdout); } catch { return null; } })() : null;
@@ -896,11 +899,18 @@ async function verifyFixerDispositionCore(
   )];
   const containment = await buildContainmentMap(tackledShas, { repo: options.repo, headSha: options.headSha }, runtime);
 
+  // A review-body fix must be strictly after the reviewed commit; an unknown or non-ancestor review commit fails closed.
+  const fixAfterReview = {};
+  for (const sha of new Set(handoff.dispositions.filter((entry) => entry.reviewId && entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).map((entry) => entry.fixingCommitSha))) {
+    fixAfterReview[sha] = typeof reviewCommitId === "string" && (await isCommitContainedByHead({ repo: options.repo, commitSha: reviewCommitId.toLowerCase(), headSha: sha, requireAhead: true }, runtime)).contained;
+  }
+
   let liveSnapshot = initialSnapshot;
   const evaluate = async () => evaluateFixerDisposition({
     handoff,
     liveThreads: buildLiveThreads(liveSnapshot),
     containment,
+    fixAfterReview,
     liveReviews: await readReviewMarkerCommits(reviewId ? [reviewId] : [], options, runtime),
   });
   let evaluation = await evaluate();

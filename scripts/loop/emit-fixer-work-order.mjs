@@ -184,8 +184,10 @@ export function buildSiteCoverageSkeleton(actList) {
 const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
 const EDIT_RULE = "Edit rule: write file content only with the Edit and Write tools. Never write file content through Bash (heredoc, redirect, `sed -i`, or cp/mv onto a tracked file). Scripts the order names, such as the asset generator and `--construct`, may write files. Never write `fixer-disposition*.json` (the verifier's --construct writes it; a hand-written report is refused). Only after the verifier refuses this execution's report as hand-written, rm that report and its corresponding stale `.constructed` marker; no other delete is allowed. Preserve accepted construction evidence and unrelated files.";
 
+const REVIEW_BODY_EDIT_RULE = "Edit rule: write file content only with the Edit and Write tools. Never write file content through Bash (heredoc, redirect, `sed -i`, or cp/mv onto a tracked file). Write the handoff only at step 4; the verifier posts the reply comment.";
+
 // The numbered full-phase steps (issue 2787 C1): push, confirm the remote head, wait for CI, --construct, verify, --check.
-function fullPhaseSteps(workOrder, verifier, { push }) {
+function fullPhaseSteps(workOrder, verifier, { push, handoffStep = null }) {
   const root = path.dirname(path.dirname(workOrder.executionRules.contract));
   const { repo, pr } = workOrder.target;
   const { branch } = workOrder.mutationAuthority;
@@ -195,27 +197,19 @@ function fullPhaseSteps(workOrder, verifier, { push }) {
 1. ${push}
 2. Confirm the remote head equals the candidate: run \`git ls-remote origin\` with the ref ${JSON.stringify(`refs/heads/${branch}`)}; it must print the pushed candidate SHA. If it does not, stop and report.${verifier.includes("<pushed-head-sha>") ? " Replace `<pushed-head-sha>` in steps 4 to 6 with the confirmed SHA." : ""}
 3. Run \`${wait}\` once. If it exits 2 (not settled), run it exactly once more. If CI is red (\`failure\`), resolve no thread, run no verifier step, and hand back \`ci_failed\` with the failing check names. If it is still not settled, reports \`stuck\` or \`changed\`, or exits 1 with an error, resolve no thread, run no verifier step, and hand back \`ci_pending\` (\`ci_unknown\` when the checks cannot be read).
-4. Run \`${verifier} --construct\`. If it fails because the output exists, go to step 5. If step 5 refuses the report as hand-written, rm only this execution's refused outputRef and its corresponding stale \`<outputRef>.constructed\` marker, then re-run step 4. Preserve accepted construction evidence and unrelated files.
+4. ${handoffStep ?? `Run \`${verifier} --construct\`. If it fails because the output exists, go to step 5. If step 5 refuses the report as hand-written, rm only this execution's refused outputRef and its corresponding stale \`<outputRef>.constructed\` marker, then re-run step 4. Preserve accepted construction evidence and unrelated files.`}
 5. Run \`${verifier}\`.
 6. Run \`${verifier} --check --report-path ${shellQuote(fixerReportPath(workOrder.outputRefs[0]))}\`. It publishes the final join report there, last; no earlier step writes it.
-${EDIT_RULE}`;
+${handoffStep ? REVIEW_BODY_EDIT_RULE : EDIT_RULE}`;
 }
 
 // A review body has no thread: the fixer writes the handoff entry itself and verify-fixer-disposition.mjs posts the reply comment.
 function reviewBodyFullTask(workOrder, verifier, dispositionPath) {
-  const { repo, pr } = workOrder.target;
   const { branch } = workOrder.mutationAuthority;
-  const wait = `node ${shellQuote(path.join(path.dirname(path.dirname(workOrder.executionRules.contract)), "scripts/github/wait-pr-checks.mjs"))} --repo ${shellQuote(repo)} --pr ${pr} --timeout 900`;
   const review = workOrder.requiredReads.find((read) => read.kind === "review-body");
+  const handoffStep = `Write the disposition handoff \`{ headSha: "<pushed-head-sha>", dispositions: [{ reviewId: ${JSON.stringify(workOrder.authority.reviewId)}, fixingCommitSha: "<full 40-character SHA of the fixing commit>", disposition: "tackled"|"deferred"|"rejected" }] }\` to \`${dispositionPath}\`. Replace \`<pushed-head-sha>\` with the confirmed SHA.`;
   return `Address every point the review body in the \`review-body\` read (${JSON.stringify(review.path)}) raises, per agents/fixer.agent.md. No thread exists to reply to or resolve: do not reply or resolve anything. \`verify-fixer-disposition.mjs\` posts the reply comment that cites your fixing commit.
-Do these steps in this order; none may be skipped or reordered:
-1. Commit the fixes and push them to branch ${JSON.stringify(branch)}.
-2. Confirm the remote head equals your pushed commit: run \`git ls-remote origin\` with the ref ${JSON.stringify(`refs/heads/${branch}`)}. Replace \`<pushed-head-sha>\` below with that full SHA.
-3. Run \`${wait}\` once (one retry when it exits 2). If CI is red hand back \`ci_failed\` with the failing check names; if it is still not settled hand back \`ci_pending\`. Run no verifier step in either case.
-4. Write the disposition handoff \`{ headSha: "<pushed-head-sha>", dispositions: [{ reviewId: ${JSON.stringify(workOrder.authority.reviewId)}, fixingCommitSha: "<full 40-character SHA of the fixing commit>", disposition: "tackled"|"deferred"|"rejected" }] }\` to \`${dispositionPath}\`.
-5. Run \`${verifier}\`.
-6. Run \`${verifier} --check --report-path ${shellQuote(fixerReportPath(workOrder.outputRefs[0]))}\`.
-Edit rule: write file content only with the Edit and Write tools. Never write file content through Bash (heredoc, redirect, \`sed -i\`, or cp/mv onto a tracked file).`;
+${fullPhaseSteps(workOrder, verifier, { push: `Commit the fixes and push them to branch ${JSON.stringify(branch)}.`, handoffStep })}`;
 }
 
 export function renderWorkOrder(workOrder) {
