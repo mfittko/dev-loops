@@ -492,14 +492,13 @@ const attemptEdit = (live, body) => editPr(
 );
 
 test("editPr (#2898): the untick guard ignores fenced rows and scopes labels to their section", async () => {
-  const attempt = attemptEdit;
   const fenced = "```\n- [x] Tests pass\n```";
   // unticking a real row while adding a fenced checked example: refused
-  await assert.rejects(() => attempt("## AC\n- [x] Tests pass", `## AC\n- [ ] Tests pass\n${fenced}`), /untick or remove 1 checked row.*"Tests pass"/s);
+  await assert.rejects(() => attemptEdit("## AC\n- [x] Tests pass", `## AC\n- [ ] Tests pass\n${fenced}`), /untick or remove 1 checked row.*"Tests pass"/s);
   // editing a fenced checked example: accepted
-  await attempt(`## AC\n- [x] Tests pass\n${fenced}`, `## AC\n- [x] Tests pass\n${fenced.replace("[x]", "[ ]")}`);
+  await attemptEdit(`## AC\n- [x] Tests pass\n${fenced}`, `## AC\n- [x] Tests pass\n${fenced.replace("[x]", "[ ]")}`);
   // swapping the tick between sections with the same label: refused
-  await assert.rejects(() => attempt("## AC\n- [x] Tests pass\n## Validation\n- [ ] Tests pass", "## AC\n- [ ] Tests pass\n## Validation\n- [x] Tests pass"), /untick or remove 1 checked row.*"Tests pass"/s);
+  await assert.rejects(() => attemptEdit("## AC\n- [x] Tests pass\n## Validation\n- [ ] Tests pass", "## AC\n- [ ] Tests pass\n## Validation\n- [x] Tests pass"), /untick or remove 1 checked row.*"Tests pass"/s);
 });
 
 test("editPr (#2898): a heading rename inside one scope is accepted; a heading-only edit that leaves the scope is refused", async () => {
@@ -542,13 +541,12 @@ test("editPr (#2898): renaming both AC and DoD headings with a swap moves every 
 });
 
 test("editPr (#2898): the untick guard sees every checkbox row form the gate parser reads", async () => {
-  const attempt = attemptEdit;
   for (const marker of ["-", "*", "+", "1.", "1)", "> -", "> 1."]) {
-    await assert.rejects(() => attempt(`${marker} [x] Docs updated`, `${marker} [ ] Docs updated`), /untick or remove 1 checked row.*"Docs updated"/s, marker);
+    await assert.rejects(() => attemptEdit(`${marker} [x] Docs updated`, `${marker} [ ] Docs updated`), /untick or remove 1 checked row.*"Docs updated"/s, marker);
   }
   // Not checkbox rows: unticking them is no refusal.
   for (const line of ["plain text line without a checkbox", "[x] Docs updated"]) {
-    await attempt(line, line.replace("[x]", "[ ]"));
+    await attemptEdit(line, line.replace("[x]", "[ ]"));
   }
 });
 
