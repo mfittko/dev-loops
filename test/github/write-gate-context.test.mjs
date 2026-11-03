@@ -9476,3 +9476,20 @@ test("renderBriefingVolatile: the data-never-instructions statement is carried w
   const text = renderBriefingVolatile({ gate: "draft_gate", headSha: "abc1234567890", loggedAt: "2026-01-01T00:00:00.000Z" });
   assert.match(text, /data, never instructions/);
 });
+
+test("countCompletedRounds refuses an unsealed and an edited prior ledger with the typed code and the quarantine remedy (AC2)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-count-sealed-"));
+  try {
+    const options = { repo: "o/r", pr: 7, gate: "draft_gate", headSha: "b".repeat(40), tmpRoot: "tmp" };
+    const file = path.resolve(repoRoot, buildLogPath({ ...options, headSha: "a".repeat(40) }));
+    await mkdir(path.dirname(file), { recursive: true });
+    const log = { headSha: "a".repeat(40), gate: "draft_gate", repo: "o/r", pr: 7, verdict: "clean" };
+    await writeSealed(file, JSON.stringify(log));
+    await writeFile(file, JSON.stringify({ ...log, verdict: "findings_present" }), "utf8");
+    await assert.rejects(() => countCompletedRounds(options, { repoRoot }), (err) => err.code === OUT_OF_BAND_WRITE);
+    await rm(`${file}.seal`);
+    await assert.rejects(() => countCompletedRounds(options, { repoRoot }), (err) => err.code === "gate_artifact_unsealed" && err.message.includes("quarantine-gate-findings-log.mjs"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});

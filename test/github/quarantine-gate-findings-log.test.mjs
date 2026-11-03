@@ -340,3 +340,44 @@ test("resolve-angle-carry-forward surfaces the typed code for a seal-mismatched 
     assert.equal(JSON.parse(errs.join("").trim().split("\n").pop()).code, "gate_artifact_out_of_band_write");
   });
 });
+
+test("quarantine moves an unsealed prior-head log and records gate_artifact_unsealed", async () => {
+  await withRepo(async (dir) => {
+    const { logPath, ledgerPath } = await seed(dir, { valid: true });
+    await rm(`${logPath}.seal`);
+    const result = await run(dir);
+    assert.match(result.integrityFailure, /gate_artifact_unsealed/);
+    await assert.rejects(readFile(logPath, "utf8"));
+    const files = await readdir(result.auditDir);
+    assert.ok(files.includes(path.basename(logPath)), files.join(","));
+    assert.ok(files.includes(path.basename(ledgerPath)), files.join(","));
+    assert.equal(JSON.parse(await readFile(path.join(result.auditDir, "quarantine.json"), "utf8")).reason, "findings_log_integrity_failure");
+  });
+});
+
+test("resolve-angle-carry-forward and the prior-head listing refuse an unsealed prior log and name the quarantine remedy", async () => {
+  await withRepo(async (dir) => {
+    const { logPath } = await seed(dir, { valid: true });
+    await rm(`${logPath}.seal`);
+    const errs = [];
+    const origErr = process.stderr.write;
+    const prior = process.exitCode;
+    process.stderr.write = (chunk) => { errs.push(String(chunk)); return true; };
+    try {
+      await resolveMain(["--repo", REPO, "--pr", String(PR), "--gate", GATE, "--prev-head", PRIOR, "--head-sha", HEAD, "--tmp-root", "tmp"], { repoRoot: dir, runGit: () => { throw new Error("git must not run"); } });
+    } finally {
+      process.stderr.write = origErr;
+      process.exitCode = prior;
+    }
+    const failure = JSON.parse(errs.join("").trim().split("\n").pop());
+    assert.equal(failure.code, "gate_artifact_unsealed");
+    assert.match(failure.error ?? "", /quarantine-gate-findings-log\.mjs/);
+    const cwd = process.cwd();
+    process.chdir(dir);
+    try {
+      await assert.rejects(() => listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD, tmpRoot: "tmp" }), (err) => err.code === "gate_artifact_unsealed");
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+});

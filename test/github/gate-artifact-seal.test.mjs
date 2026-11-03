@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { OUT_OF_BAND_WRITE, UNSEALED, readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
+import { OUT_OF_BAND_WRITE, QUARANTINE_REMEDY, UNSEALED, readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 
 describe("gate artifact seal", () => {
   it("round-trips a sanctioned write", async () => {
@@ -25,8 +26,24 @@ describe("gate artifact seal", () => {
     expect(error.code).toBe(UNSEALED);
     expect(error.message).toContain(f);
     expect(error.message).toContain("re-run the sanctioned writer");
-    expect(error.message).toContain("quarantine-gate-findings-log.mjs");
+    expect(error.message).not.toContain("quarantine-gate-findings-log.mjs");
+    expect(error.message).not.toContain("--findings <json>");
     expect(await readFile(f, "utf8")).toBe("{}\n");
+  });
+  it("appends the caller's own remedy to an unsealed refusal", async () => {
+    const f = path.join(await mkdtemp(path.join(os.tmpdir(), "seal-")), "legacy.json");
+    await writeFile(f, "{}\n", "utf8");
+    const error = await readSealed(f, { remedy: QUARANTINE_REMEDY }).catch((e) => e);
+    expect(error.code).toBe(UNSEALED);
+    expect(error.message).toContain("quarantine-gate-findings-log.mjs");
+  });
+  it("waits for a held write lock before refusing a missing seal", async () => {
+    const f = path.join(await mkdtemp(path.join(os.tmpdir(), "seal-")), "a.json");
+    await writeFile(f, "{\"w\":1}\n", "utf8");
+    await mkdir(`${f}.lock`);
+    const read = readSealed(f);
+    setTimeout(async () => { await writeFile(`${f}.seal`, `${createHash("sha256").update("{\"w\":1}\n").digest("hex")}\n`, "utf8"); await rm(`${f}.lock`, { recursive: true }); }, 100);
+    expect(await read).toBe("{\"w\":1}\n");
   });
 });
 
@@ -43,11 +60,13 @@ describe("gate artifact seal edge cases", () => {
     await writeFile(`${f}.seal`, "", "utf8");
     expect((await readSealed(f).catch((e) => e)).code).toBe(OUT_OF_BAND_WRITE);
   });
-  it("rethrows a non-ENOENT seal read error", async () => {
+  it("types a non-ENOENT seal read error as unsealed", async () => {
     const f = await tmp();
     await writeFile(f, "{}\n", "utf8");
     await mkdir(`${f}.seal`);
-    expect((await readSealed(f).catch((e) => e)).code).toBe("EISDIR");
+    const error = await readSealed(f).catch((e) => e);
+    expect(error.code).toBe(UNSEALED);
+    expect(error.message).toContain(f);
   });
   it("accepts an uppercase seal", async () => {
     const f = await tmp();

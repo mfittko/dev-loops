@@ -9,7 +9,7 @@ import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
-import { resolveFindingsInput } from "./_findings-input.mjs";
+import { HAND_AUTHORED_REMEDY, resolveFindingsInput } from "./_findings-input.mjs";
 import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, assertNoProjectedForbiddenDefer, neverDeferredSeverity, UNJUDGED_DISPOSITION, checkFanoutAngleCoverage, fanoutReviewerPairingError, ledgerAngleNames, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveFindingFile, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 // JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
 // the validator's membership check so validateFindingsArray stays self-contained.
@@ -37,8 +37,9 @@ Required:
                                  (ov=1). It does not control filing: close-gate-findings.mjs files a deferral only
                                  when the judge disposed the finding "defer".
                                  operatorVisible on any OTHER severity fails closed (exit 2) — it has no meaning there.
-  --findings-file <path>         Read the --findings JSON array from a file instead of an inline argument
-                                 (mutually exclusive with --findings; identical validation)
+  --findings-file <path>         Read the findings from a SEALED consolidate-fanin or judge-pass --ledger-out file
+                                 (mutually exclusive with --findings). An unsealed or hand-written file is refused
+                                 with gate_artifact_unsealed; pass hand-authored findings through --findings.
 Optional:
   --verdict <clean|findings_present|blocked>
   --provenance <json>            Fan-out provenance object: { distinctReviewers: <int>, perAngle: [{ angle, reviewer?, dispatchId?, model?, carriedFromHead?, carriedVerdict?, group? }] }
@@ -322,7 +323,7 @@ function validateFindingsArray(parsed, flagLabel) {
 // --findings-file (a path), with identical validation either way. Shared
 // plumbing lives in _findings-input.mjs.
 function resolveFindings(options) {
-  return resolveFindingsInput(options, { parseError, validate: validateFindingsArray });
+  return resolveFindingsInput(options, { parseError, validate: validateFindingsArray, remedy: HAND_AUTHORED_REMEDY });
 }
 /**
  * Validate + normalize the fan-out provenance object (distinctReviewers +

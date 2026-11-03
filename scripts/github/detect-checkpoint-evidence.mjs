@@ -737,22 +737,22 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
     return true;
   };
   let firstNonNull = null;
+  let satisfying = null;
   for (const root of checkouts) {
     const full = path.resolve(root, ledgerPath);
     try {
       const parsed = JSON.parse(await readSealed(full));
       const prov = parsed && typeof parsed === "object" ? parsed.provenance : null;
       if (prov == null) continue; // ledger present but no provenance — keep scanning.
-      if (satisfies(prov)) {
-        return prov; // satisfying ledger — prefer it over any earlier failing one.
-      }
-      if (firstNonNull === null) firstNonNull = prov; // remember for diagnostics.
+      // Keep scanning after a satisfying copy: a seal refusal in a later checkout must fail the same way whatever the cwd (like readActListInAny).
+      if (satisfying === null && satisfies(prov)) satisfying = prov; // satisfying ledger — prefer it over any earlier failing one.
+      else if (firstNonNull === null) firstNonNull = prov; // remember for diagnostics.
     } catch (error) {
       if (isSealRefusal(error)) throw error; // edited or unsealed: fail closed, never "no ledger"
       // Missing/unreadable/malformed ledger in this checkout — try the next.
     }
   }
-  return firstNonNull;
+  return satisfying ?? firstNonNull;
 }
 /**
  * The judge act list of the pre_approval_gate ledger across the enumerated

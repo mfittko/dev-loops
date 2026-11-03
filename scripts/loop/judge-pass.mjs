@@ -37,7 +37,7 @@ import { readClosedPriorRoundLogs, resolveDraftRoundCap } from "../github/write-
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { isSealRefusal, readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
-import { resolveFindingsInput } from "../github/_findings-input.mjs";
+import { CONSOLIDATE_REMEDY, resolveFindingsInput } from "../github/_findings-input.mjs";
 import { codeTreeSkewNote, materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -63,8 +63,9 @@ pass executes (#1658).
 Inputs:
   --findings-file <path>       The consolidated flat ledger from consolidate-fanin
                                --ledger-out ({ overallVerdict, findings } wrapper,
-                               or a bare findings array). Same unwrap semantics as
-                               write-gate-findings-log --findings-file.
+                               or a bare findings array). Only a SEALED consolidate-fanin
+                               or judge-pass --ledger-out file is accepted; an unsealed
+                               file is refused with gate_artifact_unsealed.
   --judge-verdict <path>       The judge agent's verdict artifact (JSON) at the
                                work order's per-round outputRef
                                tmp/gate-judge/.../<gate>-<headSha>/<roundId>/judge-verdict.json.
@@ -616,7 +617,7 @@ async function stampDurableDeferTargets(enriched, options, resolvedRoot) {
 async function readJsonArtifact(artifactPath, label, parseErr, { sealed = false } = {}) {
   let raw;
   try {
-    raw = sealed ? await readSealed(artifactPath) : await readFile(artifactPath, "utf8");
+    raw = sealed ? await readSealed(artifactPath, { remedy: CONSOLIDATE_REMEDY }) : await readFile(artifactPath, "utf8");
   } catch (error) {
     if (isSealRefusal(error)) throw error;
     throw parseErr(`Cannot read ${label} "${artifactPath}": ${error instanceof Error ? error.message : String(error)}`);

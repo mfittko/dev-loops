@@ -3208,7 +3208,14 @@ test("writeGateFindingsLog refuses an unsealed --findings-file with gate_artifac
     await writeFile(findingsFile, "[]", "utf8");
     await assert.rejects(
       () => writeGateFindingsLog({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234567890abcdef000000000000000000000", verdict: "clean", findingsFile, tmpRoot: tmpDir }),
-      (err) => err.code === "gate_artifact_unsealed" && err.message.includes(findingsFile),
+      (err) => err.code === "gate_artifact_unsealed" && err.message.includes(findingsFile) && err.message.includes("--findings <json>"),
+    );
+    // An edited sealed file fails with the out-of-band code.
+    await writeSealed(findingsFile, "[]");
+    await writeFile(findingsFile, "[ ]", "utf8");
+    await assert.rejects(
+      () => writeGateFindingsLog({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234567890abcdef000000000000000000000", verdict: "clean", findingsFile, tmpRoot: tmpDir }),
+      (err) => err.code === "gate_artifact_out_of_band_write",
     );
   } finally {
     await rm(tmpDir, { recursive: true, force: true });

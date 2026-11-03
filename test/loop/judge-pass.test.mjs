@@ -323,7 +323,7 @@ test("judgePassCli resolves a relative findings-file against repo-root (#1658)",
   assert.equal(payload.ok, true);
   assert.equal(payload.actCount, 1);
   assert.deepEqual(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8")).length, 1);
-  assert.equal(JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings[0].judgeDisposition, "act");
+  assert.equal(JSON.parse(await readSealed(path.join(tmpDir, "enriched.json"))).findings[0].judgeDisposition, "act"); // the sanctioned writer seals the handoff file (AC2)
 });
 
 test("judgePassCli --out is deduped to one remediation per acted cluster; --ledger-out keeps every acted finding (#2156)", async () => {
@@ -2359,5 +2359,26 @@ test("judgePassCli reports a null --spec-file as the typed parse error, not a ba
   await assert.rejects(
     sliceRound(await mkdtemp(path.join(os.tmpdir(), "judge-pass-slice-null-")), { specText: "null" }),
     (e) => !(e instanceof TypeError) && /--spec-file/.test(e.message),
+  );
+});
+
+test("judge-pass refuses an unsealed --findings-file with the typed code and the consolidate-fanin remedy (ADR 0242)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-unsealed-"));
+  const ledgerPath = path.join(tmpDir, "ledger.json");
+  await writeSealed(ledgerPath, JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
+  const sources = await seedJudgeSources(tmpDir, { repo: "mfittko/dev-loops", pr: 1658, gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json" });
+  const { plan, receiptTmpRoot } = await deliverJudge(tmpDir, sources);
+  await writeVerdictAfterPull(plan.workOrder.outputRefs[0], Buffer.from(JSON.stringify(verdict())));
+  await rm(`${ledgerPath}.seal`);
+  await assert.rejects(
+    judgePassCliRaw({ repo: "mfittko/dev-loops", pr: "1658", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgePlan: plan.planPath, judgeVerdict: plan.workOrder.outputRefs[0], out: "./act.json" }, { repoRoot: tmpDir, receiptTmpRoot }),
+    (error) => error.code === "gate_artifact_unsealed" && /consolidate-fanin --ledger-out/.test(error.message) && !/--findings <json>/.test(error.message),
+  );
+  // An edited ledger fails with the out-of-band code.
+  await writeSealed(ledgerPath, JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
+  await writeFile(ledgerPath, JSON.stringify({ overallVerdict: "clean", findings: [] }), "utf8");
+  await assert.rejects(
+    judgePassCliRaw({ repo: "mfittko/dev-loops", pr: "1658", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgePlan: plan.planPath, judgeVerdict: plan.workOrder.outputRefs[0], out: "./act.json" }, { repoRoot: tmpDir, receiptTmpRoot }),
+    (error) => error.code === "gate_artifact_out_of_band_write",
   );
 });

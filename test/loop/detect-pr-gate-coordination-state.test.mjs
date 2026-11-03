@@ -4469,6 +4469,24 @@ test("detect-pr-gate-coordination-state (ADR 0218): an unreadable cap-round ledg
   }
 });
 
+// ADR 0242: an unsealed cap-round ledger is a hard failure; the swallowed-catch path would route run_draft_gate past the cap.
+test("detect-pr-gate-coordination-state (ADR 0242): an unsealed cap-round ledger reports blocked with the typed refusal", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-unsealed-"));
+  try {
+    const headSha = "abc1234567".repeat(4);
+    await seedCapFixedRepo(tempDir, { headSha, seal: true });
+    await rm(path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10", `draft_gate-${"c".repeat(40)}.json.seal`));
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "blocked", findingsSummary: "round_cap_reached", nextAction: "stop" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
+    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+    assert.ok(result.reason.includes("gate_artifact_unsealed"), result.reason);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 // Issue 2787 C11: a ci-failure fixer plan has no thread to verify, so the ADR 0155 advisory check skips it.
 for (const [source, advisory] of [["ci-failure", false], ["threads", true]]) test(`an active full ${source} plan ${advisory ? "raises" : "raises no"} unverified_active_fixer advisory`, async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-ci-failure-"));

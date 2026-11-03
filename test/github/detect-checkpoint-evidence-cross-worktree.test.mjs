@@ -479,3 +479,29 @@ test("angle-contract shadow: a stale checkout's provenance FAILING the angle con
     await rm(base, { recursive: true, force: true });
   }
 });
+
+test("seal refusal in a non-primary checkout fails the provenance read the same way from either cwd (ADR 0242)", async () => {
+  const { base, repoA, repoB } = await makeRepoWithWorktrees();
+  try {
+    const ledgerPath = buildLogPath({ repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, tmpRoot: "tmp" });
+    const body = JSON.stringify({
+      repo: "owner/repo", pr: 42, gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: [],
+      provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist", reviewer: "review-b" }] },
+    }) + "\n";
+    const sealedPath = path.join(repoA, ledgerPath);
+    await mkdir(path.dirname(sealedPath), { recursive: true });
+    await writeSealed(sealedPath, body, "utf8");
+    const unsealedPath = path.join(repoB, ledgerPath);
+    await mkdir(path.dirname(unsealedPath), { recursive: true });
+    await writeFile(unsealedPath, body, "utf8");
+    for (const cwd of [repoA, repoB]) {
+      await assert.rejects(
+        () => buildFanoutEnforcement({ repo: "owner/repo", pr: "42", currentHeadSha: HEAD, draftGateMarker: NO_DRAFT_MARKER, preApprovalGateMarker: PA_MARKER, config: ANGLE_CONFIG, cwd }),
+        (err) => err.code === "gate_artifact_unsealed",
+        `cwd ${cwd}`,
+      );
+    }
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});

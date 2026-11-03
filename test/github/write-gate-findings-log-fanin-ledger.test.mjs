@@ -214,3 +214,15 @@ test("the findings-log writer emits a seal equal to the sha256 of the written by
     assert.equal((await readFile(`${logPath}.seal`, "utf8")).trim(), sealed);
   });
 });
+
+test("an unsealed keyed fan-in ledger is refused with gate_artifact_unsealed, naming the ledger path (AC2)", async () => {
+  await withRound({ plan: true }, async (write, repoRoot) => {
+    const ledgerPath = path.resolve(repoRoot, buildGateFaninLedgerPath(KEY));
+    await mkdir(path.dirname(ledgerPath), { recursive: true });
+    await writeFile(ledgerPath, JSON.stringify(LEDGER), "utf8");
+    await assert.rejects(
+      () => write(),
+      (err) => err.code === "gate_artifact_unsealed" && err.message.includes(ledgerPath) && err.usage === undefined,
+    );
+  });
+});

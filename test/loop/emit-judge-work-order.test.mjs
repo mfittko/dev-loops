@@ -645,3 +645,11 @@ test("2678: the Judgment section leaves the digest check to the pull", async () 
     assert.match(judgment, /the Codex after-pull setup above still governs Codex/);
   });
 });
+
+test("J1c: an unsealed findings ledger refuses judge emission and names the consolidate-fanin remedy, not --findings", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    await rm(path.join(root, sources.findingsFile) + ".seal", { force: true });
+    await assert.rejects(emitJudgeWorkOrder(sources), (error) => /gate_artifact_unsealed/.test(error.message) && /consolidate-fanin --ledger-out/.test(error.message) && !/--findings <json>/.test(error.message));
+  });
+});

@@ -7,6 +7,10 @@
 // disposition enforcement).
 import { isSealRefusal, readSealed } from "./_gate-artifact-seal.mjs";
 
+/** Refusal remedies for an unsealed --findings-file: the route differs by caller (a tool without --findings must regenerate the ledger). */
+export const CONSOLIDATE_REMEDY = "regenerate the input with consolidate-fanin --ledger-out";
+export const HAND_AUTHORED_REMEDY = "for hand-authored findings pass --findings <json> instead of --findings-file";
+
 // The consolidate-fanin CLI's `--ledger-out` writes a wrapper object
 // `{ overallVerdict, findings }` (the consolidator's computed verdict carried
 // alongside the flat findings it already wrote) rather than a bare array, so
@@ -47,7 +51,7 @@ function unwrapFindingsPayload(parsed) {
  * @param {{ parseError: (message: string) => Error, validate: (parsed: unknown, flagLabel: string) => unknown[] }} deps
  * @returns {Promise<{ findings: unknown[], overallVerdict?: unknown, provenance?: unknown }>}
  */
-export async function resolveFindingsInput(options, { parseError, validate }) {
+export async function resolveFindingsInput(options, { parseError, validate, remedy = CONSOLIDATE_REMEDY }) {
   if (options.findings !== undefined && options.findingsFile !== undefined) {
     throw parseError("--findings and --findings-file are mutually exclusive; pass only one");
   }
@@ -56,7 +60,7 @@ export async function resolveFindingsInput(options, { parseError, validate }) {
   if (options.findingsFile !== undefined) {
     let raw;
     try {
-      raw = await readSealed(options.findingsFile);
+      raw = await readSealed(options.findingsFile, { remedy });
     } catch (err) {
       if (isSealRefusal(err)) throw err;
       throw parseError(`Cannot read --findings-file "${options.findingsFile}": ${err instanceof Error ? err.message : String(err)}`);

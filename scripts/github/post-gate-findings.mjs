@@ -8,7 +8,7 @@ import { loadDevLoopConfig, resolveGatePostFindingsComments } from "@dev-loops/c
 import { SEVERITY_ORDER, VALID_SEVERITIES, UNJUDGED_DISPOSITION, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { resolveFindingsInput } from "./_findings-input.mjs";
+import { HAND_AUTHORED_REMEDY, resolveFindingsInput } from "./_findings-input.mjs";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 
@@ -32,8 +32,9 @@ Required:
   --head-sha <sha>                 Current head SHA or hexadecimal prefix
   --findings <json>                JSON array of findings in the findings-log shape
                                    ([{severity, angle, summary, disposition?, files?}])
-  --findings-file <path>           Read the --findings JSON array from a file instead of an
-                                   inline argument (mutually exclusive with --findings; identical validation)
+  --findings-file <path>           Read the findings from a SEALED consolidate-fanin or judge-pass --ledger-out file
+                                   (mutually exclusive with --findings). An unsealed or hand-written file is refused
+                                   with gate_artifact_unsealed; pass hand-authored findings through --findings.
 Output (stdout, JSON):
   { "ok": true, "action": "created"|"updated"|"noop"|"skipped",
     "omittedFindingsCount": <number> (present only when the render degraded to fit
@@ -134,7 +135,7 @@ export function parseFindings(raw) {
 // Shared plumbing lives in _findings-input.mjs; validateFindingsArray above is
 // the injected element validator.
 function resolveFindings(options) {
-  return resolveFindingsInput(options, { parseError, validate: validateFindingsArray });
+  return resolveFindingsInput(options, { parseError, validate: validateFindingsArray, remedy: HAND_AUTHORED_REMEDY });
 }
 
 export function parsePostGateFindingsCliArgs(argv) {

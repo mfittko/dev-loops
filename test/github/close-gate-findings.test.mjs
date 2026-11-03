@@ -502,7 +502,7 @@ test("round source (C): real <gate>-*.json findings-log files under --tmp-root c
       await writeSealed(path.join(findingsDir, `draft_gate-${HEAD_SHA}.json`), "{}", "utf8");
       await writeFile(path.join(findingsDir, "draft_gate-0000000000000000000000000000000000000000.json"), "{}", "utf8");
       await writeFile(path.join(findingsDir, `pre_approval_gate-${HEAD_SHA}.json`), "{}", "utf8"); // other gate — excluded
-      await writeSealed(path.join(findingsDir, `draft_gate-${HEAD_SHA}.txt`), "not json", "utf8"); // wrong extension — excluded
+      await writeFile(path.join(findingsDir, `draft_gate-${HEAD_SHA}.txt`), "not json", "utf8"); // wrong extension — excluded
 
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       // Verdict-surface count is 1; the local fallback (2 real draft_gate-*.json

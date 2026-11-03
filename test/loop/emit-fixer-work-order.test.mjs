@@ -597,7 +597,7 @@ for (const defect of ["resultBinding", "decisionBinding", "resultLegacy", "decis
     const retire = async () => {
       const file = path.join(defect === "mainRetirement" ? root : wt, "tmp/retired-gate-rounds", head, "r1/retirement.json");
       await mkdir(path.dirname(file), { recursive: true });
-      await writeSealed(file, JSON.stringify({ gate: "draft_gate", retiredAt: new Date(Number(f.prior.executionIdentity.slice(1).split("-")[0]) + 1).toISOString() }));
+      await writeFile(file, JSON.stringify({ gate: "draft_gate", retiredAt: new Date(Number(f.prior.executionIdentity.slice(1).split("-")[0]) + 1).toISOString() }));
     };
     if (defect === "earlyRetirement" || defect === "mainRetirement") await retire();
     const mock = f.runtime();
