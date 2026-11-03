@@ -985,7 +985,7 @@ function stripQuotedLiterals(command, precise = false, waitView = false) {
   const all = precise ? allWords(tok.segments) : [];
   const payloads = all.filter(({ words, k }) => feedsShell(tok) || isPayloadWord(words, k)).map(({ w }) => w);
   const limit = tok.incompleteAt < 0 ? text.length : tok.incompleteAt;
-  const textPipe = (seg) => seg.pipedOut && tok.segments.includes(seg) && TEXT_CONSUMER_RE.test(receiverOf(tok.segments[tok.segments.indexOf(seg) + 1]?.words ?? [])); // a pipe into a text reader (`| grep x`) keeps the quoted text inert
+  const textPipe = (seg) => { const r = seg.pipedOut && tok.segments.includes(seg) ? receiverOf(tok.segments[tok.segments.indexOf(seg) + 1]?.words ?? []) : ""; return r !== "tee" && TEXT_CONSUMER_RE.test(r); }; // a pipe into a text reader (`| grep x`) keeps the quoted text inert; `tee` writes a file
   const inertHere = (seg) => inertQuoteSegment(tok, textPipe(seg) ? { ...seg, pipedOut: false } : seg);
   let out = "";
   let pos = 0;

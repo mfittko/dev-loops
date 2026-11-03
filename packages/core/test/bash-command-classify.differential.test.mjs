@@ -206,7 +206,7 @@ const SALVAGED_DENY_ROWS = [
   // hidden exec redirect: a payload word, here-string, variable head or quoted keyword; the multi-segment command keeps every heredoc body visible
   "eval 'exec >l.sh'\ncat <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF\nbash l.sh",
   // quoted backgrounded probe run through a file, source, process substitution, a pipe or a non-shell interpreter (round 3029 r5)
-  ...["echo 'P' > l.sh; bash l.sh", "echo 'P' > l.sh; . l.sh", "echo 'P' > l.sh; source l.sh", "source <(echo 'P')", ". <(echo 'P')", "echo 'P' | source /dev/stdin", "make -f <(printf '%s' 'a:; P')",
+  ...["echo 'P' > l.sh; bash l.sh", "echo 'P' > l.sh; . l.sh", "echo 'P' > l.sh; source l.sh", "source <(echo 'P')", ". <(echo 'P')", "echo 'P' | source /dev/stdin", "echo 'P' | tee l.sh; bash l.sh", "make -f <(printf '%s' 'a:; P')",
     "perl -e 'system q(P)'", 'awk \'BEGIN{system("P")}\'', 'ruby -e \'system "P"\'', 'osascript -e \'do shell script "P"\'', "env -S 'P'",
   ].map((row) => row.replace(/P/g, "node scripts/loop/probe-copilot-review.mjs --pr 5 &")),
   // bash 5.3 funsub in an unquoted heredoc body
