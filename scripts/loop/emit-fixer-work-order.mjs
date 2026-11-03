@@ -53,7 +53,7 @@ takes only --phase full, needs no delta decision, ignores any delta record for t
 refuses --phase commit_only. --ci-file <path> takes the wait-pr-checks.mjs JSON of a red head (status and ciStatus
 "failure", headSha equal to --head-sha, non-blank failedChecks[].name; the order carries the first 50 names cut at 200 characters and the omitted count) as a ci-failure source with the same shape:
 --phase full only, no delta record, no --gate or --delta-result; its handoff is { headSha } and joinRef is the outputRef.
---completion-only (--phase full, one --act-list-file or --threads-file source; no --delta-result, --allowed-path or --operator-focus-file, the plan pins them) re-enters the incomplete full plan on disk for delivery only: it applies when the plan was pulled and its report is missing or predates the pull, and the plan candidate is the live head or (act-list source only) an ancestor of it, and it emits an operation: complete order with empty allowedPaths and no push marker. Drift of the plan, its receipt, the source bytes, the branch or the tree refuses and writes nothing. A --phase commit_only emission refuses while such a pulled plan is active at its candidate with no new commit.
+--completion-only (--phase full, one --act-list-file or --threads-file source; no --delta-result, --allowed-path or --operator-focus-file, the plan pins them) re-enters the incomplete full plan on disk for delivery only: it applies when the plan was pulled and its report is missing or predates the pull, and the plan candidate is the live head or (act-list source only) an ancestor of it, and it emits an operation: complete order with empty allowedPaths and no push marker. Drift of the plan, its receipt, the source bytes, the branch or the tree refuses and writes nothing. A --phase commit_only emission refuses while such a pulled plan, or an unpulled completion order for it, is active at its candidate with no new commit. A plan that is unpulled, whose pinned required read drifted, whose gate sequence is closed or whose review round is retired is superseded without a refusal. --completion-only over an unpulled completion order refuses and names pulling its workOrderRef.
 On the threads source a commit_only emission carries the delta record's findings[] as deltaFindings act items.
 For the other sources --phase full needs a clearing
 delta decision for the head: an act-list source passes the clearing --delta-result, a
@@ -383,7 +383,8 @@ async function driftedRequiredRead(order, readBytes) {
 /**
  * Issue 2787 C13: a commit_only emission never supersedes an incomplete full plan whose candidate is still the worktree HEAD and whose
  * report is missing. The exit is --completion-only when the PR head is the candidate, else the existing full order (pull it and push).
- * Runs before the first write.
+ * An unpulled completion order (completesExecution set, no pull receipt) refuses too and names pulling it. Superseded without a refusal:
+ * an unpulled plan, a plan whose pinned required read drifted, a closed gate sequence and a retired review round. Runs before the first write.
  */
 async function rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr, headSha, tmpRoot }) {
   const active = JSON.parse(originalBytes), order = active.workOrder;
@@ -401,6 +402,7 @@ async function rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr
   const verified =await readFile(path.resolve(resolveRepoRoot(cwd), buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: candidate, tmpRoot: markerRoot }))).then((text) => JSON.parse(text).complete === true, () => false);
   if (verified) return;
   const pulled = await verifyPulledResult({ resultPath: order.outputRefs?.[0], receiptTmpRoot: markerRoot, role: "fixer", workOrderRef: active.workOrderRef, workOrderDigest: active.workOrderDigest, executionIdentity: active.executionIdentity });
+  if (active.completesExecution && pulled.reason === "receipt_missing") throw new Refusal(`--phase commit_only refused: the completion order ${active.workOrderRef} is active at candidate ${candidate} and unpulled, so a commit_only plan would supersede it. Pull ${active.workOrderRef} and run its steps, or commit the new fix first`);
   if (pulled.ok || !["result_missing", "result_predates_pull"].includes(pulled.reason)) return;
   // A drifted pinned read makes --completion-only refuse too, so nothing is superseded and the refusal would name a failing exit.
   if (await driftedRequiredRead(order, (file) => capture.read(file))) return;
@@ -423,6 +425,10 @@ async function emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRo
   if (String(prState.headRefOid ?? "").toLowerCase() !== headSha) refuse(`PR head is ${prState.headRefOid}, not --head-sha ${headSha}`);
   const receiptTmpRoot = resolveGateArtifactTmpRoot(cwd);
   const read = async (file) => { const bytes = await capture.read(file); if (!bytes) throw Object.assign(new Error(`missing ${file}`), { code: "ENOENT" }); return bytes; };
+  if (original.completesExecution) {
+    const unpulled = await verifyPulledResult({ resultPath: prior.outputRefs?.[0], receiptTmpRoot, role: "fixer", workOrderRef: original.workOrderRef, workOrderDigest: original.workOrderDigest, executionIdentity: original.executionIdentity });
+    if (unpulled.reason === "receipt_missing") refuse(`the completion order ${original.workOrderRef} was emitted and never pulled; pull ${original.workOrderRef} and run its steps instead`);
+  }
   try { await authenticateOriginalPlan({ plan: original, canonical: planPath, emissionTmpRoot: path.resolve(tmpRoot), receiptTmpRoot, requireReceipt: true, read }); }
   catch (error) { refuse(`the plan or its pull receipt does not authenticate (${error.message})`); }
   if (prior.outputRefs?.length !== 1 || prior.outputRefs[0] !== path.join(dir, original.executionIdentity, "fixer-disposition.json")) refuse("the plan's output is not execution-derived");

@@ -3276,6 +3276,19 @@ test("issue 2787 C13: a THREAD plan whose pinned threads read drifted does not b
   });
 });
 
+test("issue 2787 C13/C14: an unpulled completion order refuses commit_only and a --completion-only re-run, names pulling it and writes nothing", async () => {
+  await withFixture(async (fx) => {
+    await pulledFull(fx, "ACT");
+    const completion = await reenter(fx, "ACT");
+    const plan = await readFile(completion.planPath);
+    const live = git(fx.wt, "rev-parse", "HEAD");
+    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, keepRecord: true, headSha: live, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: live }) }),
+      (error) => error.message.includes(completion.workOrderRef) && /unpulled/.test(error.message) && /Pull/.test(error.message));
+    await assert.rejects(reenter(fx, "ACT"), (error) => error.message.includes(completion.workOrderRef) && /never pulled; pull/.test(error.message));
+    assert.deepEqual(await readFile(completion.planPath), plan, "the completion plan stays current");
+  });
+});
+
 test("issue 2787 C13: a genuine report for the active full plan allows commit_only", async () => {
   await withFixture(async (fx) => {
     const unit = await pulledFull(fx, "ACT");
