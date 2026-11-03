@@ -34,7 +34,7 @@ import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
 import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
-import { createEvidenceRun, EvidenceSealError, deltaEvidenceKey, deltaResultKey, mintEvidenceRunId, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
+import { createEvidenceRun, EvidenceSealError, deltaEvidenceKey, mintEvidenceRunId, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { clearSequenceMarker, readSequenceMarker, withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
 import {
   DELTA_MAX_INVOCATIONS,
@@ -90,7 +90,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
 
 Output (stdout, JSON):
   without --result, reviewer input (except --handback, which writes nothing and omits "patchPath", "evidenceRule", "sealCommand" and "runId"): { "ok": true, "input": { ..., "patchPath", "evidenceRule", "sealCommand", "runId", "resultShape": { ... } } }
-                    input.sealCommand is the bare seal-evidence command with the bound --result-path (and a non-default --tmp-root) already in it; the reviewer runs it verbatim after writing its result.
+                    input.sealCommand is the bare seal-evidence command with the bound --result-path and an absolute --tmp-root already in it; the reviewer runs it verbatim after writing its result.
                     input.runId is copied unchanged into the result.
                     Also writes the cumulative baseline..candidate patch to input.patchPath (<tmp-root>/gate-delta/<baseline>-<candidate>.patch); the reviewer reads it with the read tool and needs no shell.
                     Fill input.resultShape; on ACT copy its binding below unchanged.
@@ -221,11 +221,12 @@ export const DELTA_EVIDENCE_RULE = "Read patchPath with the read tool. Evidence 
 
 // The bare command, run verbatim by the reviewer after it writes resultPath. Paths outside the shell-inert set would make the reviewer gate block it.
 const SHELL_INERT_PATH = /^[\w./-]+$/;
-export const deltaSealCommand = (resultPath, tmpRoot, defaultTmpRoot) => {
-  for (const [name, value] of [["--result-path", resultPath], ...(tmpRoot === defaultTmpRoot ? [] : [["tmp root", tmpRoot]])]) {
+export const deltaSealCommand = (resultPath, tmpRoot) => {
+  tmpRoot = path.resolve(tmpRoot);
+  for (const [name, value] of [["--result-path", resultPath], ["tmp root", tmpRoot]]) {
     if (!SHELL_INERT_PATH.test(value)) throw parseError(`${name} ${JSON.stringify(value)} may use only letters, digits, "_", ".", "/" and "-": the reviewer runs input.sealCommand verbatim and the read-only gate blocks any other character (GATE-EXEC-EVIDENCE-SEALED)`);
   }
-  return `dev-loops-run scripts/loop/seal-evidence.mjs --kind delta --file ${resultPath}${tmpRoot === defaultTmpRoot ? "" : ` --tmp-root ${tmpRoot}`}`;
+  return `dev-loops-run scripts/loop/seal-evidence.mjs --kind delta --file ${resultPath} --tmp-root ${tmpRoot}`;
 };
 
 export const deltaPatchPath = (tmpRoot, baseline, candidate) => path.join(tmpRoot, "gate-delta", `${baseline}-${candidate}.patch`);
@@ -414,7 +415,7 @@ export async function runCli(
   }
   if (options.result) {
     // The seal check comes first: nothing reads an unverified result, a falsy JSON one included (GATE-EXEC-EVIDENCE-SEALED).
-    verifyEvidence(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaResultKey(result), options.result, result, createHash("sha256").update(resultBytes).digest("hex"));
+    verifyEvidence(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), options.result, result, createHash("sha256").update(resultBytes).digest("hex"));
   }
   if (options.threadsFile && deltaCoverageBinding(result)) throw new Error("THREAD cannot opt into ACT coverage binding");
   let siteCoverage = [], validationCoverage = [], coverageBinding, authenticatedTarget;
@@ -501,7 +502,7 @@ export async function runCli(
       writeFileSync(patchPath, diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead));
     }
     // The target authenticateCoverage verified binds the log's repo and pr; without an authenticated plan the chain path refuses.
-    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE, sealCommand: deltaSealCommand(options.resultPath, tmpRoot ??resolveGateArtifactTmpRoot(options.worktree), resolveGateArtifactTmpRoot(options.worktree)) }), ...buildDeltaInput({ sequence, candidateHead: currentHead, runId, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles, staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
+    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE, sealCommand: deltaSealCommand(options.resultPath, tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree)) }), ...buildDeltaInput({ sequence, candidateHead: currentHead, runId, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles, staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
     // Every input run opens its own unsealed record, so a re-run of the producer at the same heads can seal again. Last step: only a successful input run moves the pointer.
     if (!options.handback) createEvidenceRun(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaEvidenceKey(sequence.reviewBaselineHead, currentHead, runId), { reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead, actSetId: sequence.actSetId, runId }, path.resolve(options.worktree, options.resultPath));
   }

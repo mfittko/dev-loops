@@ -201,7 +201,8 @@ test("input.patchPath is the gate-delta patch holding the diffPatch bytes", asyn
   assert.equal(out.input.evidenceRule, DELTA_EVIDENCE_RULE);
   const resultPath = path.join(seam.tmpRoot, "bound-result.json");
   const bare = (await runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A), "--result-path", resultPath], seam)).input.sealCommand;
-  assert.equal(bare, `dev-loops-run scripts/loop/seal-evidence.mjs --kind delta --file ${resultPath} --tmp-root ${seam.tmpRoot}`, "the bare command with the bound path and the non-default tmp root");
+  assert.equal(bare, `dev-loops-run scripts/loop/seal-evidence.mjs --kind delta --file ${resultPath} --tmp-root ${path.resolve(seam.tmpRoot)}`, "the cwd-independent command with the bound path and the absolute tmp root");
+  assert.match(bare, /--tmp-root \//);
   assert.equal(decidePiToolCall({ toolName: "bash", input: { command: bare }, agentType: "review" }).block, false, "the review role may run it verbatim");
 });
 

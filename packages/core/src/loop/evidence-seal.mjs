@@ -3,6 +3,7 @@
  * A producer run mints a run id and writes `<tmp-root>/evidence-runs/<key>.json` with the expected identity fields;
  * the reviewer seals its file there (sha256 of the exact bytes); a consumer verifies before use.
  * Each producer run owns its own record, so a re-run at the same heads opens a new unsealed record and the old seal stays final.
+ * Re-creating a run with an existing key leaves its record, and any seal, unchanged.
  */
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
@@ -60,7 +61,8 @@ export function createEvidenceRun(tmpRoot, key, expected, resultPath) {
   mkdirSync(path.dirname(file), { recursive: true });
   // The briefed directory exists before it is resolved, so a symlinked prefix is always realpathed.
   mkdirSync(path.dirname(path.resolve(resultPath)), { recursive: true });
-  writeAtomic(file, `${JSON.stringify({ key, expected, resultPath: canonicalPath(resultPath), sealed: null })}\n`);
+  // An existing record is never overwritten, so a sealed record stays intact.
+  if (!existsSync(file)) writeAtomic(file, `${JSON.stringify({ key, expected, resultPath: canonicalPath(resultPath), sealed: null })}\n`);
   // The newest run of a head pair is the current one; a superseded run's sealed result stops verifying.
   writeAtomic(pointer, `${expected.runId}\n`);
 }
@@ -92,7 +94,8 @@ function assertSameRun(record, parsed, key) {
 const sha256Of = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 /** `bytes` is required and holds the exact bytes `parsed` came from, so the seal covers what was parsed. */
-export function sealEvidence(tmpRoot, key, filePath, parsed, bytes) {
+export function sealEvidence(tmpRoot, filePath, parsed, bytes) {
+  const key = deltaResultKey(parsed);
   const record = readRun(tmpRoot, key);
   assertSameRun(record, parsed, key);
   if (record.sealed) throw new EvidenceSealError("evidence_foreign_run", `run ${key} is already sealed and a seal is final; re-run the producer for a new run`);
@@ -109,8 +112,9 @@ export function sealEvidence(tmpRoot, key, filePath, parsed, bytes) {
 }
 
 /** Verifies `filePath` against its sealed record. `sha256` is the digest of the exact bytes the consumer parsed, so the check covers the bytes that drive the decision. */
-export function verifyEvidence(tmpRoot, key, filePath, parsed, sha256) {
+export function verifyEvidence(tmpRoot, filePath, parsed, sha256) {
   if (typeof sha256 !== "string") throw new TypeError("verifyEvidence requires the sha256 of the bytes the caller parsed");
+  const key = deltaResultKey(parsed);
   // The pointer of the parsed heads comes first, so a foreign result with rewritten heads names the current run, not a missing record.
   const pointer = currentRunPointerPath(tmpRoot, parsed);
   if (!existsSync(pointer)) throw new EvidenceSealError("evidence_run_missing", `no current run recorded for these heads (${key}); re-run the producer`);

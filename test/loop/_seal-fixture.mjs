@@ -12,13 +12,13 @@ export function sealDeltaFixture(tmpRoot, file) {
   if (current.runId) {
     const key = deltaEvidenceKey(current.reviewBaselineHead, current.candidateHead, current.runId);
     try {
-      verifyEvidence(tmpRoot, key, file, current, createHash("sha256").update(bytes).digest("hex"));
+      verifyEvidence(tmpRoot, file, current, createHash("sha256").update(bytes).digest("hex"));
       return;
     } catch (error) {
       if (!(error instanceof EvidenceSealError)) throw error;
       if (error.reason === "evidence_run_missing") { // another tmp root over the same bytes: record this run there, leave the bytes alone
         createEvidenceRun(tmpRoot, key, { reviewBaselineHead: current.reviewBaselineHead, candidateHead: current.candidateHead, actSetId: current.actSetId, runId: current.runId }, file);
-        sealEvidence(tmpRoot, key, file, current, bytes);
+        sealEvidence(tmpRoot, file, current, bytes);
         return;
       }
     }
@@ -29,5 +29,5 @@ export function sealDeltaFixture(tmpRoot, file) {
   const written = JSON.stringify(parsed);
   fs.writeFileSync(file, written);
   createEvidenceRun(tmpRoot, key, { reviewBaselineHead, candidateHead, actSetId, runId }, file);
-  sealEvidence(tmpRoot, key, file, parsed, Buffer.from(written));
+  sealEvidence(tmpRoot, file, parsed, Buffer.from(written));
 }

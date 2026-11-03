@@ -22,8 +22,8 @@ const result = (over = {}) => ({ reviewBaselineHead: A, candidateHead: B, actSet
 const KEY = deltaEvidenceKey(A, B, RUN_ID);
 const EXPECTED = { reviewBaselineHead: A, candidateHead: B, actSetId: ACT_SET_ID, runId: RUN_ID };
 const shaOf = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-const sealEvidence = (dir, key, file, parsed, bytes = fs.readFileSync(file)) => sealWithBytes(dir, key, file, parsed, bytes);
-const verify = (dir, key, file, parsed) => verifyEvidence(dir, key, file, parsed, shaOf(file));
+const sealEvidence = (dir, file, parsed, bytes = fs.readFileSync(file)) => sealWithBytes(dir, file, parsed, bytes);
+const verify = (dir, file, parsed) => verifyEvidence(dir, file, parsed, shaOf(file));
 const quiet = { stdout: { write() {} } };
 
 function setup(parsed = result()) {
@@ -38,37 +38,38 @@ const edit = (file, over) => fs.writeFileSync(file, JSON.stringify({ ...JSON.par
 
 test("a sealed file verifies and the record sits under evidence-runs", () => {
   const { dir, file } = setup();
-  sealEvidence(dir, KEY, file, result());
-  verify(dir, KEY, file, result());
+  sealEvidence(dir, file, result());
+  verify(dir, file, result());
   assert.ok(fs.existsSync(evidenceRunRecordPath(dir, KEY)));
 });
 
 test("the seal CLI derives the key from the heads and run id and seals; a relative --file resolves against the injected cwd", () => {
   const { dir, file } = setup();
   sealCli(["--kind", "delta", "--file", "result.json", "--tmp-root", dir], { ...quiet, cwd: dir });
-  verify(dir, KEY, file, result());
+  verify(dir, file, result());
 });
 
 test("typed refusals: missing run, unsealed, digest mismatch, foreign run", () => {
   const { dir, file } = setup();
-  assert.equal(reason(() => verify(dir, "delta-none", file, result())), "evidence_run_missing");
-  assert.equal(reason(() => verify(dir, KEY, file, result())), "evidence_unsealed");
-  sealEvidence(dir, KEY, file, result());
+  assert.equal(reason(() => verify(dir, file, result({ candidateHead: "d".repeat(40) }))), "evidence_run_missing");
+  assert.equal(reason(() => verify(dir, file, result())), "evidence_unsealed");
+  sealEvidence(dir, file, result());
   fs.writeFileSync(file, `${JSON.stringify(result())} `);
-  assert.equal(reason(() => verify(dir, KEY, file, result())), "evidence_digest_mismatch");
-  assert.equal(reason(() => sealEvidence(dir, KEY, file, result({ candidateHead: "f".repeat(40) }))), "evidence_foreign_run");
-  assert.equal(reason(() => verify(dir, KEY, file, result({ actSetId: "0".repeat(16) }))), "evidence_foreign_run");
-  assert.equal(reason(() => verify(dir, KEY, file, result({ runId: "fedcba9876543210" }))), "evidence_foreign_run");
+  assert.equal(reason(() => verify(dir, file, result())), "evidence_digest_mismatch");
+  assert.equal(reason(() => sealEvidence(dir, file, result({ candidateHead: "f".repeat(40) }))), "evidence_run_missing");
+  assert.equal(reason(() => sealEvidence(dir, file, result({ actSetId: "0".repeat(16) }))), "evidence_foreign_run");
+  assert.equal(reason(() => verify(dir, file, result({ actSetId: "0".repeat(16) }))), "evidence_foreign_run");
+  assert.equal(reason(() => verify(dir, file, result({ runId: "fedcba9876543210" }))), "evidence_foreign_run");
 });
 
 test("a consumer decides on the digest of the bytes it parsed, not on a second read of the path", () => {
   const { dir, file } = setup();
-  sealEvidence(dir, KEY, file, result());
+  sealEvidence(dir, file, result());
   const parsedBytesDigest = shaOf(file);
   edit(file, { newFindings: [{ severity: "low", summary: "x", evidence: ["e"] }] });
-  verifyEvidence(dir, KEY, file, result(), parsedBytesDigest); // the bytes that were parsed are the sealed ones: the later edit does not change this verdict
-  assert.equal(reason(() => verifyEvidence(dir, KEY, file, result(), shaOf(file))), "evidence_digest_mismatch");
-  assert.throws(() => verifyEvidence(dir, KEY, file, result()), /requires the sha256/);
+  verifyEvidence(dir, file, result(), parsedBytesDigest); // the bytes that were parsed are the sealed ones: the later edit does not change this verdict
+  assert.equal(reason(() => verifyEvidence(dir, file, result(), shaOf(file))), "evidence_digest_mismatch");
+  assert.throws(() => verifyEvidence(dir, file, result()), /requires the sha256/);
 });
 
 // PR 2876 replays against the real checker.
@@ -102,36 +103,36 @@ test("PR 2876 case 2 with heads that name no run (one head, then both heads) giv
 
 test("verifyEvidence checks the current-run pointer of the parsed heads before it reads the record", () => {
   const { dir, file } = setup();
-  sealEvidence(dir, KEY, file, result());
+  sealEvidence(dir, file, result());
   const foreign = result({ runId: "fedcba9876543210" });
-  assert.equal(reason(() => verify(dir, deltaEvidenceKey(A, B, "fedcba9876543210"), file, foreign)), "evidence_foreign_run");
+  assert.equal(reason(() => verify(dir, file, foreign)), "evidence_foreign_run");
 });
 
 test("a truncated run record gives a typed evidence_malformed refusal, and record and pointer writes leave no temp file", () => {
   const { dir, file } = setup();
-  sealEvidence(dir, KEY, file, result());
+  sealEvidence(dir, file, result());
   assert.deepEqual(fs.readdirSync(path.join(dir, "evidence-runs")).filter((name) => name.endsWith(".tmp")), []);
   fs.writeFileSync(evidenceRunRecordPath(dir, KEY), '{"key":');
-  assert.equal(reason(() => verify(dir, KEY, file, result())), "evidence_malformed");
-  assert.equal(reason(() => sealEvidence(dir, KEY, file, result())), "evidence_malformed");
+  assert.equal(reason(() => verify(dir, file, result())), "evidence_malformed");
+  assert.equal(reason(() => sealEvidence(dir, file, result())), "evidence_malformed");
 });
 
 test("PR 2876 case 2b: heads and actSetId copied from the input shape cannot reseal a sealed run", () => {
   const { dir, file } = setup();
-  sealEvidence(dir, KEY, file, result());
+  sealEvidence(dir, file, result());
   const copied = result();
   fs.writeFileSync(file, JSON.stringify({ ...copied, newFindings: [{ severity: "low", summary: "x", evidence: ["e"] }] }));
-  assert.equal(reason(() => sealEvidence(dir, KEY, file, copied)), "evidence_foreign_run");
-  assert.equal(reason(() => verify(dir, KEY, file, copied)), "evidence_digest_mismatch");
+  assert.equal(reason(() => sealEvidence(dir, file, copied)), "evidence_foreign_run");
+  assert.equal(reason(() => verify(dir, file, copied)), "evidence_digest_mismatch");
 });
 
 test("PR 2876 case 2c: a foreign file with matching heads, act set and run id at another path cannot be sealed", () => {
   const { dir, file } = setup();
   const foreign = path.join(dir, "scratch-x.json");
   fs.writeFileSync(foreign, JSON.stringify(result()));
-  assert.equal(reason(() => sealEvidence(dir, KEY, foreign, result())), "evidence_foreign_run");
-  sealEvidence(dir, KEY, file, result());
-  verify(dir, KEY, file, result());
+  assert.equal(reason(() => sealEvidence(dir, foreign, result())), "evidence_foreign_run");
+  sealEvidence(dir, file, result());
+  verify(dir, file, result());
 });
 
 test("emit-fixer-work-order refuses a --delta-result with no run record with evidence_run_missing", async () => {
@@ -143,13 +144,14 @@ test("emit-fixer-work-order refuses a --delta-result with no run record with evi
   await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), /GATE-EXEC-EVIDENCE-SEALED.*evidence_run_missing/);
 });
 
-test("a sealed record is final: re-seal of identical bytes and re-seal after an edit are refused", () => {
+test("a sealed record is final: re-seal of identical bytes and re-seal after an edit are refused, and re-creating the run keeps the seal", () => {
   const { dir, file } = setup();
-  sealEvidence(dir, KEY, file, result());
-  assert.equal(reason(() => sealEvidence(dir, KEY, file, result())), "evidence_foreign_run");
+  sealEvidence(dir, file, result());
+  assert.equal(reason(() => sealEvidence(dir, file, result())), "evidence_foreign_run");
   fs.writeFileSync(file, `${JSON.stringify(result())} `);
-  assert.equal(reason(() => sealEvidence(dir, KEY, file, result())), "evidence_foreign_run");
-  assert.equal(reason(() => verify(dir, KEY, file, result())), "evidence_digest_mismatch");
+  assert.equal(reason(() => sealEvidence(dir, file, result())), "evidence_foreign_run");
+  createEvidenceRun(dir, KEY, EXPECTED, file);
+  assert.equal(reason(() => verify(dir, file, result())), "evidence_digest_mismatch");
 });
 
 test("recovery at the same heads: a refused result, a re-run of the input run and a second seal verify through the real CLIs, with no record deleted", async () => {
@@ -202,21 +204,21 @@ test("the input run records the briefed result path and seal-evidence refuses an
 
 test("a consumer path that differs from the sealed path is evidence_foreign_run, and a symlinked spelling of the sealed path verifies", () => {
   const { dir, file } = setup();
-  sealEvidence(dir, KEY, file, result());
+  sealEvidence(dir, file, result());
   const copy = path.join(dir, "copy.json");
   fs.copyFileSync(file, copy);
-  assert.equal(reason(() => verify(dir, KEY, copy, result())), "evidence_foreign_run");
+  assert.equal(reason(() => verify(dir, copy, result())), "evidence_foreign_run");
   const link = path.join(os.tmpdir(), `seal-evidence-link-${process.pid}-${Date.now()}`);
   fs.symlinkSync(dir, link);
-  try { verify(dir, KEY, path.join(link, "result.json"), result()); } finally { fs.rmSync(link, { force: true }); }
+  try { verify(dir, path.join(link, "result.json"), result()); } finally { fs.rmSync(link, { force: true }); }
 });
 
 test("sealing through a symlinked directory verifies through the real path", () => {
   const { dir, file } = setup();
   const link = path.join(os.tmpdir(), `seal-evidence-link-${process.pid}-${Date.now()}`);
   fs.symlinkSync(dir, link);
-  try { sealEvidence(dir, KEY, path.join(link, "result.json"), result()); } finally { fs.rmSync(link, { force: true }); }
-  verify(dir, KEY, file, result());
+  try { sealEvidence(dir, path.join(link, "result.json"), result()); } finally { fs.rmSync(link, { force: true }); }
+  verify(dir, file, result());
 });
 
 test("check-pre-push-delta --result on an unsealed run gives evidence_unsealed", async () => {
@@ -251,14 +253,14 @@ test("--result refuses an empty or truncated result file with evidence_malformed
 test("the seal is one-time: a claimed seal marker refuses a second sealer even when the record still reads unsealed", () => {
   const { dir, file } = setup();
   fs.writeFileSync(`${evidenceRunRecordPath(dir, KEY)}.sealed`, "");
-  assert.equal(reason(() => sealEvidence(dir, KEY, file, result())), "evidence_foreign_run");
+  assert.equal(reason(() => sealEvidence(dir, file, result())), "evidence_foreign_run");
 });
 
 test("a missing current-run pointer with a sealed record gives evidence_run_missing", () => {
   const { dir, file } = setup();
-  sealEvidence(dir, KEY, file, result());
+  sealEvidence(dir, file, result());
   fs.rmSync(path.join(dir, "evidence-runs", `current-delta-${A}-${B}.txt`));
-  assert.equal(reason(() => verify(dir, KEY, file, result())), "evidence_run_missing");
+  assert.equal(reason(() => verify(dir, file, result())), "evidence_run_missing");
 });
 
 test("a failed input run leaves the current-run pointer on the earlier run", async () => {
@@ -321,8 +323,8 @@ test("the seal CLI refuses a result without heads, a null result, a traversal he
 test("a run record without expected identity is a typed refusal, not a TypeError", () => {
   const { dir, file } = setup();
   fs.writeFileSync(evidenceRunRecordPath(dir, KEY), `${JSON.stringify({ key: KEY, sealed: null })}\n`);
-  assert.equal(reason(() => sealEvidence(dir, KEY, file, result())), "evidence_run_missing");
-  assert.equal(reason(() => verify(dir, KEY, file, result())), "evidence_run_missing");
+  assert.equal(reason(() => sealEvidence(dir, file, result())), "evidence_run_missing");
+  assert.equal(reason(() => verify(dir, file, result())), "evidence_run_missing");
 });
 
 test("emit-fixer-work-order refuses an edited (evidence_digest_mismatch) and a foreign (evidence_foreign_run) --delta-result", async () => {
@@ -337,7 +339,7 @@ test("emit-fixer-work-order refuses an edited (evidence_digest_mismatch) and a f
     fs.writeFileSync(sealedPath, JSON.stringify(sealed));
     const key = deltaEvidenceKey(A, A, RUN_ID);
     createEvidenceRun(dir, key, { ...EXPECTED, candidateHead: A }, sealedPath);
-    sealEvidence(dir, key, sealedPath, sealed);
+    sealEvidence(dir, sealedPath, sealed);
     fs.writeFileSync(deltaResult, JSON.stringify(foreign ? sealed : { ...sealed, newFindings: [{ severity: "low", summary: "x", evidence: ["e"] }] }));
     await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), expected);
   }
@@ -359,8 +361,8 @@ test("a briefed result directory that does not exist yet is realpathed through a
     createEvidenceRun(dir, KEY, EXPECTED, path.join(link, "later", "result.json"));
     const file = path.join(dir, "later", "result.json");
     fs.writeFileSync(file, JSON.stringify(result()));
-    sealEvidence(dir, KEY, file, result());
-    verify(dir, KEY, file, result());
+    sealEvidence(dir, file, result());
+    verify(dir, file, result());
   } finally { fs.rmSync(link, { force: true }); }
 });
 
@@ -394,7 +396,7 @@ test("emit-fixer-work-order gives the typed evidence refusal for an edited seale
     fs.writeFileSync(deltaResult, JSON.stringify(result({ candidateHead: A })));
     const key = deltaEvidenceKey(A, A, RUN_ID);
     createEvidenceRun(dir, key, { ...EXPECTED, candidateHead: A }, deltaResult);
-    sealEvidence(dir, key, deltaResult, result({ candidateHead: A }));
+    sealEvidence(dir, deltaResult, result({ candidateHead: A }));
     edit(deltaResult, over);
     return emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir });
   };
@@ -408,17 +410,17 @@ test("a sealed result with an edited coverage field gives evidence_digest_mismat
 
 test("a sealed result of a superseded input run is evidence_foreign_run at verify", () => {
   const { dir, file } = setup();
-  sealEvidence(dir, KEY, file, result());
-  verify(dir, KEY, file, result());
+  sealEvidence(dir, file, result());
+  verify(dir, file, result());
   createEvidenceRun(dir, deltaEvidenceKey(A, B, "fedcba9876543210"), { ...EXPECTED, runId: "fedcba9876543210" }, path.join(dir, "other.json"));
-  assert.equal(reason(() => verify(dir, KEY, file, result())), "evidence_foreign_run");
+  assert.equal(reason(() => verify(dir, file, result())), "evidence_foreign_run");
 });
 
 test("sealEvidence seals the bytes the caller parsed, not a second read of the path", () => {
   const { dir, file } = setup();
   const parsedBytes = fs.readFileSync(file);
   edit(file, { newFindings: [{ severity: "low", summary: "x", evidence: ["e"] }] }); // the file changes after the caller parsed it
-  const sealed = sealEvidence(dir, KEY, file, result(), parsedBytes);
+  const sealed = sealEvidence(dir, file, result(), parsedBytes);
   assert.equal(sealed.sha256, createHash("sha256").update(parsedBytes).digest("hex"));
-  assert.equal(reason(() => verify(dir, KEY, file, result())), "evidence_digest_mismatch");
+  assert.equal(reason(() => verify(dir, file, result())), "evidence_digest_mismatch");
 });

@@ -14,7 +14,7 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { VALID_SEVERITIES, normalizeSeverity, isPastRoundCap, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
-import { EvidenceSealError, deltaResultKey, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
+import { EvidenceSealError, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
 import { deltaCoverageBinding, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
@@ -466,7 +466,7 @@ export async function emitFixerWorkOrder({
   const delta = deltaResult ? await readSource("delta-result", abs(deltaResult), capture) : threadRecordPath && existsSync(threadRecordPath) ? await readSource("delta-result", threadRecordPath, capture) : null;
   if (delta && deltaResult) {
     // Verify the seal before any other use of the result, so an edited result gets the typed evidence refusal.
-    try { verifyEvidence(tmpRoot, deltaResultKey(delta.parsed), abs(deltaResult), delta.parsed, delta.read.sha256); } catch (error) { throw new Refusal(`delta result ${deltaResult} refused (GATE-EXEC-EVIDENCE-SEALED): ${error.message}`); }
+    try { verifyEvidence(tmpRoot, abs(deltaResult), delta.parsed, delta.read.sha256); } catch (error) { throw new Refusal(`delta result ${deltaResult} refused (GATE-EXEC-EVIDENCE-SEALED): ${error.message}`); }
     // The delta result must belong to this act list and this head (its pinned review baseline).
     const errors = validateDeltaResult(delta.parsed, { sequence: startDeltaSequence({ reviewBaselineHead: headSha, actList: source.parsed }), membershipOnly: true });
     if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}`);

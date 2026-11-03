@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { deltaResultKey, sealEvidence } from "@dev-loops/core/loop/evidence-seal";
+import { sealEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
@@ -28,7 +28,7 @@ export function runCli(argv = process.argv.slice(2), { stdout = process.stdout, 
   const bytes = readFileSync(file);
   const parsed = JSON.parse(bytes.toString("utf8"));
   const tmpRoot = values["tmp-root"] ? path.resolve(cwd, values["tmp-root"]) : resolveGateArtifactTmpRoot(cwd);
-  const sealed = sealEvidence(tmpRoot, deltaResultKey(parsed), file, parsed, bytes);
+  const sealed = sealEvidence(tmpRoot, file, parsed, bytes);
   process.exitCode = emitResult({ ok: true, sealed }, { jq: values.jq, silent: values.silent, fields: values.fields, stdout });
 }
 
