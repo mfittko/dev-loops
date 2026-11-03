@@ -5,6 +5,7 @@ import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from ".
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "./_copilot-convergence-carry.mjs";
 import { resolvePrConflicts } from "./resolve-pr-conflicts.mjs";
+import { isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
@@ -324,11 +325,17 @@ export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env
 
     // Find human comments after the last bot action
     const humanComments = [];
+    const skippedUntrusted = new Set();
     for (const comment of comments) {
       const authorLogin = comment?.user?.login ?? "";
       const authorType = comment?.user?.type ?? "";
       // Skip bot authors (GitHub type "Bot") and Copilot
       if (authorType === "Bot" || isCopilotLogin(authorLogin)) {
+        continue;
+      }
+      // ADR 0247: a non-maintainer comment is never handed to the coordinator (no bodyPreview, no pause).
+      if (!isTrustedRestComment(comment)) {
+        skippedUntrusted.add(authorLogin || "unknown");
         continue;
       }
       // Skip if comment body is a gate verdict comment (system action, not operator input)
@@ -350,6 +357,7 @@ export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env
     return {
       paused: humanComments.length > 0,
       humanComments: humanComments.length > 0 ? humanComments : undefined,
+      ...(skippedUntrusted.size > 0 ? { skippedUntrusted: [...skippedUntrusted] } : {}),
       lastBotCommentAt: lastBotActionMs !== null ? new Date(lastBotActionMs).toISOString() : undefined,
     };
   } catch {

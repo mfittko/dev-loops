@@ -53,7 +53,8 @@ import {
   submitPendingReview,
   updateGateReview,
 } from "./_gate-finding-surface.mjs";
-import { fetchAllReviewThreads } from "./list-review-threads.mjs";
+import { fetchAllReviewThreadsWithSkips } from "./list-review-threads.mjs";
+import { postUntrustedSkipNote } from "./_untrusted-skip-note.mjs";
 import { mergeSameDefectFindings, normalizeFindingSummary } from "./_gate-finding-text.mjs";
 import { computeSpecDigest, extractSpecFromBody, normalizeCriterionText, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
@@ -2223,7 +2224,12 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
   const issueComments = await listIssueComments({ repo: options.repo, pr: options.pr }, gh);
   // A merged comment carries one marker per merged finding, and later markers
   // fall past the default 200-char listing excerpt, so widen the excerpt.
-  const threads = await fetchAllReviewThreads({ repo: options.repo, pr: options.pr }, { ...gh, bodyMax: MERGED_THREAD_BODY_MAX });
+  const { threads, skipped } = await fetchAllReviewThreadsWithSkips({ repo: options.repo, pr: options.pr }, { ...gh, bodyMax: MERGED_THREAD_BODY_MAX });
+  try {
+    await postUntrustedSkipNote({ repo: options.repo, pr: options.pr, headSha, skipped: skipped.filter((entry) => !entry.isResolved), issueComments, login }, gh);
+  } catch (error) {
+    process.stderr.write(`warning: could not post the untrusted-comments note: ${error.message}\n`);
+  }
   const suppressed = collectSuppressedFingerprints({ reviews, threads, login });
   const round = await resolveGateRound({
     repo: options.repo,
