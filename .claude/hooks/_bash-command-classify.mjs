@@ -1260,7 +1260,7 @@ const SLEEP_LOOP_SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
  * Whether COMMAND holds a `while`/`until`/`for` loop whose body runs `sleep`, whatever the loop condition.
  * Reads tokenizer segments, so quoted literals and heredoc bodies never count; `eval` and `sh|bash|zsh -c`
  * payloads are checked again as shell. An incomplete parse fails closed on raw text.
- * A `sh|bash|zsh|dash|ksh [flags] -c` payload is found at any word position, so `env -i`, `nice -n` and `xargs -I{}` wrappers do not hide it.
+ * A `sh|bash|zsh|dash|ksh [flags] -c` payload is found after wrappers only, so `env -i`, `nice -n` and `xargs -I{}` do not hide it and `echo bash -c ...` is text.
  * A loop opened after `{` (function body) or inside `<(`/`>(` counts, and a `for((` head counts. A sleep behind `nohup`, `nice -n`, `stdbuf`, `exec` counts.
  * Heads are normalized first: `!`/`if`/`else`/`elif`, a glued `(`, wrappers (`timeout`, `env`, `sudo`, ...) and
  * path prefixes (`/bin/sleep`) are stripped; a `sleep` right after a loop keyword counts as a sleep head.
@@ -1272,10 +1272,21 @@ export function commandIsSleepLoop(command) {
   const { segments, incomplete } = tokenizeShellCommand(command);
   if (incomplete) return /\b(?:while|until|for)\b/.test(command) && /\bsleep\b/.test(command);
   const heads = [];
-  const SKIP = /^(?:do|then|\{|command|!|else|elif|if|\()$/;
+  const SKIP = /^(?:do|then|\{|command|builtin|!|else|elif|if|\()$/;
+  // Index past SKIP words, assignments and leading redirections (`2>/dev/null`, `> f`) at or after k.
+  const skipPrefix = (words, k) => {
+    for (;;) {
+      const w = words[k];
+      if (w === undefined) return k;
+      const r = /^(?:\d*|&)(?:>>?|<)(.*)$/.exec(w);
+      if (r) k += r[1] ? 1 : 2;
+      else if (SKIP.test(w) || /^[A-Za-z_]\w*=/.test(w)) k++;
+      else return k;
+    }
+  };
   // Index of the normalized head word at or after k, and the head itself.
   const headAt = (words, k) => {
-    while (k < words.length && (SKIP.test(words[k]) || /^[A-Za-z_]\w*=/.test(words[k]))) k++;
+    k = skipPrefix(words, k);
     if (k >= words.length) return { j: k, head: undefined };
     const w = [words[k].replace(/^\(+/, ""), ...words.slice(k + 1)];
     const rest = stripLeadingWrappers(w.join(" "));
@@ -1284,7 +1295,7 @@ export function commandIsSleepLoop(command) {
     return { j: k + j, head: rest.split(/\s+/, 1)[0] };
   };
   const base = (w) => w.replace(/^[<>]?\(+/, "").replace(/^.*\//, "");
-  const LOOP = /^(?:while|until|for)\b/;
+  const LOOP = /^(?:while|until|for)(?:$|\(\()/;
   const flat = (segs) => {
     for (const seg of segs) {
       const words = seg.words.map((w) => w.value);
@@ -1295,9 +1306,12 @@ export function commandIsSleepLoop(command) {
       words.forEach((w, i) => {
         if (((i > 0 && words[i - 1] === "{") || /^[<>]\(/.test(w)) && LOOP.test(w.replace(/^[<>]?\(+/, ""))) heads.push("while");
       });
+      // A command after a `case` arm label (`a)`, `a|b)`, `*)`) is a head too.
+      words.forEach((w, i) => {
+        if (/^\(?[^\s()$`]*\)$/.test(w)) heads.push(headAt(words, i + 1).head);
+      });
       // A sleep behind a wrapper that takes flags (`nice -n 10 sleep`, `stdbuf -o0 sleep`) or detaches (`nohup`, `exec`).
-      let k = 0;
-      while (k < words.length && (SKIP.test(words[k]) || /^[A-Za-z_]\w*=/.test(words[k]))) k++;
+      const k = skipPrefix(words, 0);
       // Sleep counts only as the command word: after the wrapper, flags (a one-letter flag takes one argument), numbers and nested wrappers are skipped.
       if (k < words.length && SLEEP_WRAPPERS.has(base(words[k]))) {
         let m = k + 1;
@@ -1311,14 +1325,26 @@ export function commandIsSleepLoop(command) {
       }
       const payloads = [];
       if (head === "eval") payloads.push(words.slice(j + 1).join(" "));
-      // A `<shell> [flags] -c <payload>` anywhere in the segment, whatever wrapper (`env -i`, `nice -n`, `xargs -I{}`) precedes it.
-      words.forEach((w, i) => {
-        if (!SLEEP_LOOP_SHELLS.has(base(w))) return;
+      // A `<shell> [flags] -c <payload>` in command position: only SLEEP_WRAPPERS and their flags/arguments
+      // (`env -i`, `nice -n 10`, `xargs -I{}`) may precede the shell, so `echo bash -c '...'` stays plain text.
+      let m = k;
+      while (m < words.length && !SLEEP_LOOP_SHELLS.has(base(words[m]))) {
+        const x = words[m];
+        if (SLEEP_WRAPPERS.has(base(x)) || (/^-/.test(x) && !/^-[a-zA-Z]$/.test(x)) || /^\d+[smhd]?$/.test(x) || /^[A-Za-z_]\w*=/.test(x)) m++;
+        else if (/^-[a-zA-Z]$/.test(x)) m += m + 1 < words.length && !SLEEP_LOOP_SHELLS.has(base(words[m + 1])) ? 2 : 1;
+        else break;
+      }
+      if (m < words.length && SLEEP_LOOP_SHELLS.has(base(words[m]))) {
         // First later `-c` word, so a shell option with an argument (`bash -o pipefail -c`) does not hide the payload.
-        const c = words.findIndex((x, n) => n > i && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(x));
+        const c = words.findIndex((x, n) => n > m && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(x));
         if (c > 0 && words[c + 1] !== undefined) payloads.push(words[c + 1]);
-      });
-      if (payloads.some((p) => commandIsSleepLoop(p))) heads.push("while", "sleep");
+      }
+      // The payload's own heads join the outer list, so `while true; do sh -c 'sleep 5'; done` counts.
+      for (const p of payloads) {
+        const t = tokenizeShellCommand(p);
+        if (!t.incomplete) flat(t.segments);
+        else if (commandIsSleepLoop(p)) heads.push("while", "sleep");
+      }
       for (const w of seg.words) for (const s of w.subs) flat(s.segments);
     }
   };

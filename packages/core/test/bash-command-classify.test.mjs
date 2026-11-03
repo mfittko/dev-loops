@@ -728,6 +728,13 @@ test("commandContainsDetachedWaitTool denies any loop containing sleep, whatever
     "bash -o pipefail -c 'while true; do sleep 1; done'",
     "bash -O extglob -c 'while true; do sleep 1; done'",
     "while true; do sudo -u x sleep 5; done",
+    "while true; do sh -c 'sleep 5'; done",
+    "while true; do eval sleep 5; done",
+    "while true; do 2>/dev/null sleep 1; done",
+    "while true; do >/dev/null sleep 1; done",
+    "while true; do case $x in a) sleep 1;; esac; done",
+    "while true; do builtin sleep 1; done",
+    "until grep -q x f; do sleep 5; done",
   ]) assert.equal(commandContainsDetachedWaitTool(cmd), true, cmd);
   for (const cmd of [
     'echo "while true; do nohup sleep 5; done"',
@@ -747,6 +754,12 @@ test("commandContainsDetachedWaitTool denies any loop containing sleep, whatever
     "bash -c 'echo hi' sleep",
     "for f in a b; do timeout 5 grep sleep $f; done",
     "for f in *.log; do sudo grep sleep $f; done",
+    "echo 'while true; do 2>/dev/null sleep 1; done'",
+    "case $x in a) sleep 1;; esac",
+    "echo bash -c 'while true; do sleep 1; done'",
+    "printf '%s' bash -c 'while true; do sleep 1; done'",
+    "ls; until-ready 3; sleep 1",
+    "while-x; sleep 1",
   ]) assert.equal(commandContainsDetachedWaitTool(cmd), false, cmd);
 });
 
