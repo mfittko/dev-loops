@@ -14,7 +14,7 @@ export const OUT_OF_BAND_WRITE = "gate_artifact_out_of_band_write";
 export const UNSEALED = "gate_artifact_unsealed";
 /** True for a seal failure a reader must surface instead of swallowing: an edited or an unsealed artifact. */
 export const isSealRefusal = (error) => error?.code === OUT_OF_BAND_WRITE || error?.code === UNSEALED;
-const sealPath =(file) => `${file}.seal`;
+const sealPath = (file) => `${file}.seal`;
 const digest = (text) => createHash("sha256").update(text).digest("hex");
 
 const LOCK_STALE_MS = 30_000;
@@ -51,7 +51,7 @@ export async function readSealed(file) {
   let seal;
   try { seal = (await readFile(sealPath(file), "utf8")).trim().toLowerCase(); } catch (error) {
     if (error?.code === "ENOENT") {
-      throw Object.assign(new Error(`${UNSEALED}: ${file} has no seal; re-run the sanctioned writer at that head, or quarantine it with scripts/github/quarantine-gate-findings-log.mjs`), { code: UNSEALED, file });
+      throw Object.assign(new Error(`${UNSEALED}: ${file} has no seal; re-run the sanctioned writer at that head`), { code: UNSEALED, file });
     }
     throw error;
   }

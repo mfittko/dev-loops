@@ -38,8 +38,8 @@ function unwrapFindingsPayload(parsed) {
  * the caller-supplied `validate` callback. Returns
  * `{ findings, overallVerdict, provenance }` so a consolidator-produced
  * wrapper object (`{ overallVerdict, findings, provenance? }`, written by
- * consolidate-fanin.mjs's `--ledger-out`, or hand-authored by any other
- * caller) threads its computed verdict and its own `provenance` field
+ * consolidate-fanin.mjs or judge-pass.mjs via their sealed `--ledger-out`)
+ * threads its computed verdict and its own `provenance` field
  * through to the consumer alongside the findings array; a bare array input
  * leaves both undefined.
  *

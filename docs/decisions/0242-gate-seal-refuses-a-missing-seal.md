@@ -12,7 +12,7 @@ ADR 0204 added a sha256 seal beside the keyed fan-in ledger and the findings log
 
 ## Decision
 
-- `readSealed` refuses an artifact with no `.seal` file. The error carries the typed code `gate_artifact_unsealed` and names the file and the next step: re-run the sanctioned writer at that head, or quarantine the log with `scripts/github/quarantine-gate-findings-log.mjs`.
+- `readSealed` refuses an artifact with no `.seal` file. The error carries the typed code `gate_artifact_unsealed` and names the file and the next step: re-run the sanctioned writer at that head. For a prior-head findings log, `GATE-EXEC-FINDINGS-LOG-QUARANTINE` names the quarantine command.
 - A seal mismatch keeps the typed code `gate_artifact_out_of_band_write`. A reader that fails closed on one code fails closed on both, through `isSealRefusal`. `formatCliError` carries both codes.
 - Legacy migration: gate ledgers and findings logs are per head and ephemeral. A pre-seal artifact is not migrated in place. The sanctioned writer produces a sealed artifact at the next run of that head, and the quarantine command moves an unsealed log aside.
 - The artifacts a sanctioned writer seals are the keyed fan-in ledger (`consolidate-fanin.mjs`), the judged ledger that `judge-pass.mjs --ledger-out` writes, and the findings log (`write-gate-findings-log.mjs` and the `judge-pass.mjs` defer stamp). A reader of one of these artifacts reads it with `readSealed`. These readers are converted:
@@ -28,6 +28,7 @@ ADR 0204 added a sha256 seal beside the keyed fan-in ledger and the findings log
   - `detect-checkpoint-evidence.mjs` (provenance and act list reads).
   - `waive-adr-tripwire.mjs` `defaultReadRecordedSpecDigest`.
 - `judge-pass.mjs` reads its spec, verdict and other inputs without a seal check, because no writer seals them.
+- Known unconverted reader: `check-pre-push-delta.mjs` `roundAnglesOf` reads `--findings-log` with a plain `readFileSync`. Its fixtures across several test files write unsealed logs. A follow-up converts it with `readSealed`.
 - A reader whose catch skips an unreadable file treats a seal refusal as a hard failure, not as "no ledger".
 - `judge-pass.mjs --ledger-out` writes with `writeSealed`, so the enriched ledger it hands to `write-gate-findings-log.mjs` carries a seal.
 

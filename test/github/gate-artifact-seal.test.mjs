@@ -24,7 +24,7 @@ describe("gate artifact seal", () => {
     const error = await readSealed(f).catch((e) => e);
     expect(error.code).toBe(UNSEALED);
     expect(error.message).toContain(f);
-    expect(error.message).toContain("quarantine-gate-findings-log.mjs");
+    expect(error.message).toContain("re-run the sanctioned writer");
     expect(await readFile(f, "utf8")).toBe("{}\n");
   });
 });

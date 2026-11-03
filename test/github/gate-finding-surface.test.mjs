@@ -1003,6 +1003,18 @@ test("#2381: findJudgeDispositionForFingerprint ignores a ledger whose own recor
   );
 });
 
+test("ADR 0242: findJudgeDispositionForFingerprint skips an unsealed <gate>-<sha>.act-list.json sidecar", async () => {
+  await withLocalLedgerFiles(
+    { [`${JDF_GATE}-headA.json`]: jdfLedger({ loggedAt: "2026-09-01T00:00:00.000Z", disposition: "act", rationale: "sealed ledger" }) },
+    async (tmpRoot) => {
+      const dir = path.join(tmpRoot, "gate-findings", JDF_REPO.replace("/", "-"), `pr-${JDF_PR}`);
+      await writeFile(path.join(dir, `${JDF_GATE}-headA.act-list.json`), "[]", "utf8");
+      const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+      assert.deepEqual(result, { disposition: "act", rationale: "sealed ledger", reason: null });
+    },
+  );
+});
+
 // Copilot review (PR 2402): the SAME carry-forward eligibility gate
 // write-gate-context.mjs applies to a prior ledger (buildCarryForwardPlan,
 // resolve-angle-carry-forward.mjs — only `clean`/`findings_present` is a

@@ -1468,7 +1468,7 @@ async function countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, re
 // findJudgeDispositionForFingerprint below picks a winner among them.
 async function collectLocalJudgeDispositionMatches({ dir, filenames, repo, pr, gate, fp }) {
   const matches = [];
-  for (const filename of filenames) {
+  for (const filename of filenames.filter((name) => /^[^.]+\.json$/.test(name.slice(gate.length + 1)))) { // skip unsealed sidecars such as <gate>-<sha>.act-list.json
     let parsed;
     try {
       parsed = JSON.parse(await readSealed(path.join(dir, filename)));

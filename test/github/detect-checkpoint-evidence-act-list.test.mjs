@@ -267,9 +267,9 @@ test("an edited or unsealed ledger fails the provenance read closed and the act 
     const ledger = path.join(roots[0], LEDGER_REL);
     await writeFile(ledger, JSON.stringify({ findings: [ACT_ITEM] }), "utf8");
     await assert.rejects(() => probe(repo), (err) => err.code === "gate_artifact_out_of_band_write");
-    assert.ok((await probe(repo, CONFIG_NO_FANOUT, inlineMarker)).check.failures.some((f) => f.includes(`unreadable or malformed (${ledger})`)));
+    await assert.rejects(() => probe(repo, CONFIG_NO_FANOUT, inlineMarker), (err) => err.code === "gate_artifact_out_of_band_write");
     await rm(`${ledger}.seal`);
     await assert.rejects(() => probe(repo), (err) => err.code === "gate_artifact_unsealed");
-    assert.ok((await probe(repo, CONFIG_NO_FANOUT, inlineMarker)).check.failures.some((f) => f.includes(`unreadable or malformed (${ledger})`)));
+    await assert.rejects(() => probe(repo, CONFIG_NO_FANOUT, inlineMarker), (err) => err.code === "gate_artifact_unsealed");
   });
 });

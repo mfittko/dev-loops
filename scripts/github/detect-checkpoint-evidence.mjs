@@ -775,6 +775,7 @@ async function readActListInAny(checkouts, ledgerPath, markerExecutionMode) {
     try {
       parsed = JSON.parse(await readSealed(full));
     } catch (error) {
+      if (isSealRefusal(error)) throw error; // edited or unsealed: fail closed, never "unreadable"
       if (error?.code !== "ENOENT") {
         exists = true;
         unreadable ??= { path: full };
