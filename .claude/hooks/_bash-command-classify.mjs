@@ -1598,7 +1598,7 @@ export function commandContainsInlineInterpreter(command) {
  */
 function inertQuoteSegment(tok, s) {
   const [h = "", arg = ""] = s.words.filter((w) => !w.op).map((w) => w.value);
-  return tok.segments.length === 1 && !s.pipedOut && writeTargets(s).length === 0 && !h.includes("/") && !s.words.some((w) => /\$\(|`|[<>]\(|\$\{[\s|]/.test(w.raw)) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
+  return tok.segments.length === 1 && !s.pipedOut && writeTargets(s).length === 0 && !h.includes("/") && !s.words.some((w) => /\$\(|`|[<>]\(|\$\{[\s|]/.test(w.raw.replaceAll("\\\n", ""))) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
 }
 
 /**

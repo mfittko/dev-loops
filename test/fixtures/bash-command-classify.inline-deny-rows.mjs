@@ -80,4 +80,6 @@ export const INLINE_DENY_ROWS = [
   "builtin printf -vPATH tmp; grep -ec 'true; node -e y'",
   "echo \"${ true; node -e y; }\"",
   "echo \"${| true; node -e y; }\"",
+  "echo \"$\\\n(true; node -e y)\"",
+  "echo \"${\\\n true; node -e y; }\"",
 ];
