@@ -339,3 +339,24 @@ test("list-review-threads --unresolved-only reports skippedUntrusted with logins
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("list-review-threads CLI stdout carries trusted: true on every thread in default and --unresolved-only modes (ADR 0238)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-list-threads-marker-"));
+  try {
+    const nodes = [
+      threadNode({ id: "T_COPILOT", comment: commentNode({ databaseId: 1, body: "copilot says", login: "copilot-pull-request-reviewer[bot]", authorAssociation: "NONE" }) }),
+      threadNode({ id: "T_HUMAN", comment: commentNode({ databaseId: 2, body: "human says", login: "maint" }) }),
+      threadNode({ id: "T_DONE", isResolved: true, comment: commentNode({ databaseId: 3, body: "done", login: "maint" }) }),
+    ];
+    for (const [args, expected] of [[[], 3], [["--unresolved-only"], 2]]) {
+      const gh = await writeGhStub(tempDir, [{ stdout: threadsPayload({ nodes }) }, { stdout: threadsPayload({ nodes }) }]);
+      const result = await runNode(["--repo", "owner/repo", "--pr", "9", ...args], { env: gh.env });
+      assert.equal(result.code, 0);
+      const { threads } = JSON.parse(result.stdout);
+      assert.equal(threads.length, expected);
+      assert.ok(threads.every((thread) => thread.trusted === true), `marker missing in ${args.join(" ") || "default"} mode`);
+    }
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
