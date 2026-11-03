@@ -132,7 +132,10 @@ function hasHighEntropyToken(text) {
   // and ends in a file extension) so each segment is scored alone, and skip
   // timestamped migration file names (`20240101123456_add_x.rb`). Other runs,
   // including random secrets containing `/` with no file extension, are scored whole.
-  const candidates = (text.match(ENTROPY_CANDIDATE_RE) ?? []).flatMap((run) =>
+  // Trailing `.` (sentence-final punctuation) is stripped so the anchored checks see the bare name.
+  const candidates = (text.match(ENTROPY_CANDIDATE_RE) ?? [])
+    .map((run) => run.replace(/\.+$/u, ""))
+    .flatMap((run) =>
     run.includes("/") && /\.[A-Za-z][A-Za-z0-9]{0,9}$/u.test(run) ? run.split("/") : [run],
   );
   for (const candidate of candidates) {

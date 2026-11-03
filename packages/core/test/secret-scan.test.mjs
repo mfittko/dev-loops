@@ -461,8 +461,9 @@ test("detector 2 (high-entropy, #3054): path-like docs references and migration 
     "db/migrate/20240101123456_add_example_column.rb",
     "20240101123456_add_example_column.rb",
     "docs/assets/Video-Recording-Of-Setup-2024.mp4",
-    "assets/fonts/Some-Long-Font-Name-Regular.woff2",
-    "docs/file.9x",
+    "See docs/01-Guides-For-Newcomers/Setup-Notes-And-Tips-2.markdown.",
+    "See docs/01-Guides/Setup-Notes.markdown.",
+    "Run 20240101123456_add_example_column.rb.",
   ]) {
     assert.deepEqual(scanLineText(line), [], line);
   }
@@ -480,4 +481,8 @@ test("detector 2 (high-entropy, #3054): a random token, a slash-containing secre
   // A path-shaped run is split, not dropped: a random segment inside it still blocks.
   const segment = join("aB3dE5gH7j", "K9mN1pQ3sT", "5vX7zA9cE1", "gI3");
   assert.equal(scanLineText(`x ${segment}/a.js`)[0].detectorClass, DETECTOR_CLASSES.HIGH_ENTROPY);
+  // A trailing sentence period does not hide a secret.
+  assert.equal(scanLineText(`x ${segment}/a.js.`)[0].detectorClass, DETECTOR_CLASSES.HIGH_ENTROPY);
+  assert.equal(scanLineText(`aws_secret ${slashed}.`)[0].detectorClass, DETECTOR_CLASSES.HIGH_ENTROPY);
+  assert.equal(scanLineText(`value ${random}.`)[0].detectorClass, DETECTOR_CLASSES.HIGH_ENTROPY);
 });
