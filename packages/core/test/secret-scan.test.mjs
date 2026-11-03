@@ -459,12 +459,16 @@ test("detector 2 (high-entropy, #3054): path-like docs references and migration 
     "See docs/01-Guides-For-Newcomers/Setup-Notes-And-Tips-2.markdown for details",
     "See docs/02-Reference-Material/Configuration-Options-Overview/Setup-Notes-1.markdown",
     "db/migrate/20240101123456_add_example_column.rb",
+    "20240101123456_add_example_column.rb",
+    "docs/assets/Video-Recording-Of-Setup-2024.mp4",
+    "assets/fonts/Some-Long-Font-Name-Regular.woff2",
+    "docs/file.9x",
   ]) {
     assert.deepEqual(scanLineText(line), [], line);
   }
 });
 
-test("detector 2 (high-entropy, #3054): a bare random token and a base64 blob still block", () => {
+test("detector 2 (high-entropy, #3054): a random token, a slash-containing secret, and a base64 blob still block", () => {
   const random = join("kZ9mQ2", "vL7pR4", "wT8nJ1", "zY6cF3", "xB5dH0", "qS2gM8");
   assert.equal(random.length, 36);
   assert.equal(scanLineText(`value ${random}`)[0].detectorClass, DETECTOR_CLASSES.HIGH_ENTROPY);
@@ -473,4 +477,7 @@ test("detector 2 (high-entropy, #3054): a bare random token and a base64 blob st
   assert.equal(scanLineText(`aws_secret ${slashed}`)[0].detectorClass, DETECTOR_CLASSES.HIGH_ENTROPY);
   const blob = join("aGVsbG8gd29y", "bGQgZm9vIGJhciBi", "YXogcXV4MTIz", "NDU2Nzg5MA==");
   assert.equal(scanLineText(`blob ${blob}`)[0].detectorClass, DETECTOR_CLASSES.HIGH_ENTROPY);
+  // A path-shaped run is split, not dropped: a random segment inside it still blocks.
+  const segment = join("aB3dE5gH7j", "K9mN1pQ3sT", "5vX7zA9cE1", "gI3");
+  assert.equal(scanLineText(`x ${segment}/a.js`)[0].detectorClass, DETECTOR_CLASSES.HIGH_ENTROPY);
 });
