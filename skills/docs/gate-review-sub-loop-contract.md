@@ -940,6 +940,7 @@ by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
 }
 ```
 
+- `scopeDrift.driftedAreas` is optional for `within_scope` and defaults to `[]`.
 - `index` is the cluster's `clusterId` from the consolidated ledger (the finding's 0-based
   position in `findings` only when the ledger carries no `clusterId`). One disposition per cluster.
   `title`, `detail` and `fix` are required on every disposition and `reason` on `defer` and `reject`.

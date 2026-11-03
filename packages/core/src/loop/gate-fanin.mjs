@@ -1118,7 +1118,7 @@ export function normalizeScopeDriftVerdict(verdict) {
  * ```
  * {
  *   headSha: "<sha>",
- *   scopeDrift: { verdict: "within_scope"|"drift_detected", rationale: "...", driftedAreas: ["..."] },
+ *   scopeDrift: { verdict: "within_scope"|"drift_detected", rationale: "...", driftedAreas?: ["..."] (optional for within_scope, defaults to []) },
  *   dispositions: [{ index, disposition: "act"|"defer"|"reject", title, detail, fix, reason (required unless act), rationale, criterion?, followUpDraft? }]
  * }
  * ```
