@@ -14,6 +14,7 @@ import {
   fingerprintFinding,
   isBelowInlineFloor,
   isDeferredAtRound,
+  filterTrustedRoundInputs,
   isFileableDeferral,
   listPrReviews,
   parseFindingMarker,
@@ -854,7 +855,11 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // 2. Round (gate-scoped; both verdict surfaces plus the local ledger count).
   const reviews = await listPrReviews({ repo, pr }, gh);
   const issueComments = await listIssueComments({ repo, pr }, gh);
-  const round = await resolveGateRound({ repo, pr, gate, headSha, reviews, issueComments, tmpRoot, repoRoot });
+  const round = await resolveGateRound({
+    repo, pr, gate, headSha, tmpRoot, repoRoot,
+    reviews: filterTrustedRoundInputs(reviews, login),
+    issueComments: filterTrustedRoundInputs(issueComments, login),
+  });
 
   // 3. Resolve this gate's per-gate medium fix window and inline severity
   // floor (GATE-COMMENT-INLINE-SEVERITY-FLOOR) together. loadDevLoopConfig never throws; on

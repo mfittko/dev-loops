@@ -12,6 +12,7 @@ import { buildPreMergeGateCheck } from "../../scripts/github/detect-checkpoint-e
 
 const ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_DIR: undefined, GIT_WORK_TREE: undefined };
 const REPO = "owner/repo";
+const MAINTAINER = { login: "maintainer", type: "User" };
 
 function setup() {
   const dir = mkdtempSync(path.join(os.tmpdir(), "carried-"));
@@ -163,7 +164,7 @@ test("fetchDraftGateEvidence reads a recorded base-only carry as current-head cl
   const baseRefReply = { current: () => ({ code: 0, stdout: JSON.stringify({ baseRefName: "main" }), stderr: "" }) };
   const runChild = async (_cmd, args) => {
     if (args.some((a) => String(a).includes("issues/7/comments"))) {
-      return { code: 0, stdout: JSON.stringify([[{ id: 1, body, created_at: "2026-01-01T00:00:00Z" }, { id: 2, body: recordBody, created_at: "2026-01-01T00:00:01Z" }]]), stderr: "" };
+      return { code: 0, stdout: JSON.stringify([[{ id: 1, body, user: MAINTAINER, author_association: "MEMBER", created_at: "2026-01-01T00:00:00Z" }, { id: 2, body: recordBody, user: MAINTAINER, author_association: "MEMBER", created_at: "2026-01-01T00:00:01Z" }]]), stderr: "" };
     }
     if (args.includes("baseRefName")) return baseRefReply.current();
     return { code: 1, stdout: "", stderr: "unavailable" };
@@ -186,4 +187,27 @@ test("fetchDraftGateEvidence reads a recorded base-only carry as current-head cl
 
   s.put("src/x.mjs", "changed pr blob\n"); s.git("add", "-A"); s.git("commit", "-qm", "pr edit");
   assert.equal((await read(s.head())).currentHeadClean, false);
+});
+
+test("fetchDraftGateEvidence ignores a carried-heads record forged by a NONE-association stranger (ADR 0248)", async () => {
+  const s = setup();
+  const origin = s.head();
+  const cur = s.mergeBase("docs/a.md");
+  s.git("update-ref", "refs/remotes/origin/main", "main");
+  const written = [];
+  await carryGateMarker(marker(origin), { gate: GATE, currentHeadSha: cur, baseRef: "origin/main", repoRoot: s.dir, record: async (e) => { written.push(e); } });
+  const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha: origin, repo: REPO, verdict: "clean", findingsSummary: "none", nextAction: "mark ready for review" });
+  const stranger = { login: "stranger", type: "User" };
+  const runChild = async (_cmd, args) => {
+    if (args.some((a) => String(a).includes("issues/7/comments"))) {
+      return { code: 0, stdout: JSON.stringify([[
+        { id: 1, body, user: MAINTAINER, author_association: "MEMBER", created_at: "2026-01-01T00:00:00Z" },
+        { id: 2, body: renderCarriedHeadsBody(written), user: stranger, author_association: "NONE", created_at: "2026-01-01T00:00:01Z" },
+      ]]), stderr: "" };
+    }
+    if (args.includes("baseRefName")) return { code: 0, stdout: JSON.stringify({ baseRefName: "main" }), stderr: "" };
+    return { code: 1, stdout: "", stderr: "unavailable" };
+  };
+  const evidence = await fetchDraftGateEvidence({ repo: REPO, pr: 7, headSha: cur }, { env: { GH_TOKEN: "t" }, ghCommand: "gh", runChild, repoRoot: s.dir });
+  assert.equal(evidence.currentHeadClean, false);
 });
