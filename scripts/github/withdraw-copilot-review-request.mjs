@@ -55,7 +55,8 @@ import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from ".
 // SUBMITTED_REVIEW_STATES is shared with the loop-state reader on purpose:
 // whitelisting (not `!== "PENDING"`) fails a missing, null, lowercase or
 // newly-invented state closed, and one copy cannot drift from the gate's.
-import { isCopilotErrorReview, isCopilotLogin, SUBMITTED_REVIEW_STATES } from "@dev-loops/core/github/copilot-helpers";
+import { isCopilotErrorReview, SUBMITTED_REVIEW_STATES } from "@dev-loops/core/github/copilot-helpers";
+import { isSanctionedCopilotReviewerLogin } from "@dev-loops/core/github/comment-trust";
 import { parseReviewThreads } from "@dev-loops/core/github/review-threads";
 import { REVIEW_THREADS_QUERY } from "./capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -190,7 +191,7 @@ function parseCliArgs(argv) {
 async function fetchCopilotRequested(args, { env, runChild }) {
   const requested = await ghJson(["api", `repos/${args.repo}/pulls/${args.pr}/requested_reviewers`], { env, runChild });
   const users = Array.isArray(requested?.users) ? requested.users : [];
-  return users.some((user) => isCopilotLogin(user?.login));
+  return users.some((user) => isSanctionedCopilotReviewerLogin(user?.login));
 }
 
 async function collectState(args, { env, runChild }) {
@@ -201,7 +202,7 @@ async function collectState(args, { env, runChild }) {
   ], { env, runChild });
   const reviews = Array.isArray(pr?.reviews) ? pr.reviews : [];
   const submittedCopilotReviews = reviews.filter(
-    (review) => isCopilotLogin(review?.author?.login)
+    (review) => isSanctionedCopilotReviewerLogin(review?.author?.login)
       && SUBMITTED_REVIEW_STATES.has(String(review?.state ?? "").toUpperCase())
       && !isCopilotErrorReview(review),
   );

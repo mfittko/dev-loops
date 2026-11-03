@@ -172,7 +172,7 @@ export function resolveCopilotReviewPresence({ requested = false, reviews = [] }
   if (requested === true) {
     sources.push("requested_reviewer");
   }
-  if (list.some((review) => isCopilotLogin(review?.author?.login))) {
+  if (list.some((review) => isSanctionedCopilotReviewerLogin(review?.author?.login))) {
     sources.push("submitted_review");
   }
   return { present: sources.length > 0, sources };
