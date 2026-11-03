@@ -96,6 +96,10 @@ test("residue is accepted only with allowResidue, sanitized and bounded (GATE-EX
   bad([{ summary: "x".repeat(501) }]);
   bad([{ summary: "s", other: 1 }]);
   bad([{ summary: "s", line: 0 }]);
+  bad([{ summary: "s", line: 1.5 }]);
+  bad([{ summary: "s", line: "3" }]);
+  bad({ summary: "s" });
+  bad([null]);
   bad(Array.from({ length: 21 }, () => ({ summary: "s" })));
   assert.notEqual(
     operatorFocusDigestEntry(normalizeOperatorFocus({ residue: [{ summary: "a" }] }, { allowResidue: true })).operatorFocusDigest,

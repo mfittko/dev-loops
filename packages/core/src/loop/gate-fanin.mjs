@@ -499,6 +499,7 @@ export function isOperatorFocusEntry(entry) {
   return Boolean(entry) && typeof entry === "object" && entry.source === "operator-focus"
     && typeof entry.angle === "string" && entry.angle.trim().toLowerCase() === ROUTED_RESIDUE_ANGLE
     && !("carriedFromHead" in entry)
+    && !["reviewer", "dispatchId", "model", "group"].some((k) => k in entry) // the entry is not a reviewer
     && typeof entry.operatorFocusDigest === "string" && /^[0-9a-f]{64}$/.test(entry.operatorFocusDigest);
 }
 

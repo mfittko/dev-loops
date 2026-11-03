@@ -1249,6 +1249,8 @@ test("parseProvenanceJson accepts the operator-focus entry only on the reserved 
     assert.throws(() => parse({ angle, source: "operator-focus", operatorFocusDigest: digest }), refusal);
   }
   assert.throws(() => parse({ angle: "operator-routed-residue", source: "operator-focus", operatorFocusDigest: digest, carriedFromHead: "a".repeat(40) }), refusal);
+  assert.throws(() => parse({ angle: "operator-routed-residue", reviewer: "ghost", source: "operator-focus", operatorFocusDigest: digest }), refusal);
+  assert.throws(() => parse({ angle: "operator-routed-residue", dispatchId: "d", source: "operator-focus", operatorFocusDigest: digest }), refusal);
   assert.throws(() => parse({ angle: "operator-routed-residue", source: "other", operatorFocusDigest: digest }), refusal);
   assert.throws(() => parse({ angle: "operator-routed-residue", source: "operator-focus", operatorFocusDigest: "a".repeat(63) }), refusal);
   assert.throws(() => parse({ angle: "operator-routed-residue", source: "operator-focus", operatorFocusDigest: "A".repeat(64) }), refusal);
