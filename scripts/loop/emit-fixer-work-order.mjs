@@ -384,6 +384,8 @@ async function rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr
   // A closed or retired plan cannot be completed, so --completion-only would refuse too: nothing is superseded (same checks as emitCompletionOnly).
   const baselines = [order.headSha, order.authority?.reviewBaselineHead].filter(Boolean);
   if (await closureRecorded(markerRoot, baselines, active.executionIdentity)) return;
+  // A completion plan belongs to the sequence of the root execution it completes, which close-gate-sequence closes.
+  if (active.completesExecution && await closureRecorded(markerRoot, active.completesExecution.heads, active.completesExecution.executionIdentity)) return;
   if (order.source === "act-list") {
     for (const root of new Set([path.resolve(tmpRoot), markerRoot, path.join(resolveRepoRoot(cwd), "tmp")])) if (findRetirementAfter(root, order.gate, baselines.at(-1), emittedAt(active.executionIdentity))) return;
   }
@@ -414,7 +416,10 @@ async function emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRo
   catch (error) { refuse(`the plan or its pull receipt does not authenticate (${error.message})`); }
   if (prior.outputRefs?.length !== 1 || prior.outputRefs[0] !== path.join(dir, original.executionIdentity, "fixer-disposition.json")) refuse("the plan's output is not execution-derived");
   const baselines = [prior.headSha, prior.authority?.reviewBaselineHead].filter(Boolean);
+  // A second re-entry completes the same root execution as the first, so the root identity propagates.
+  const root = original.completesExecution ?? { executionIdentity: original.executionIdentity, heads: baselines };
   if (await closureRecorded(receiptTmpRoot, baselines, original.executionIdentity)) refuse(closedText(original.executionIdentity));
+  if (await closureRecorded(receiptTmpRoot, root.heads, root.executionIdentity)) refuse(closedText(root.executionIdentity));
   if (prior.source === "act-list") {
     for (const root of new Set([path.resolve(tmpRoot), receiptTmpRoot, path.join(resolveRepoRoot(cwd), "tmp")])) {
       if (findRetirementAfter(root, gate, baselines.at(-1), emittedAt(original.executionIdentity))) refuse("the plan's reviewed source round was retired");
@@ -446,7 +451,7 @@ async function emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRo
   await capture.write(promptPath, text);
   await writeExecutionIndex(tmpRoot, identityTriple);
   const plan = { ...identityTriple, materializationHash: materializationHash(text), promptPath, dispatchPrompt: buildDispatchPointer(identityTriple), workOrder,
-    completesExecution: { executionIdentity: original.executionIdentity, heads: baselines } };
+    completesExecution: root };
   const tempPath = `${planPath}.tmp-${executionIdentity}`;
   await capture.write(tempPath, `${JSON.stringify(plan, null, 2)}\n`);
   await capture.recheck();
@@ -454,8 +459,9 @@ async function emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRo
   // No push marker: delivery-only authority grants nothing.
   try {
     // close-gate-sequence locks the plan baselines, so the closure of the original execution is rechecked under those locks.
-    await withSequenceLock(receiptTmpRoot, [headSha, ...baselines], async () => {
+    await withSequenceLock(receiptTmpRoot, [headSha, ...baselines, ...root.heads], async () => {
       if (await closureRecorded(receiptTmpRoot, baselines, original.executionIdentity)) { await rm(tempPath, { force: true }); refuse(closedText(original.executionIdentity)); }
+      if (await closureRecorded(receiptTmpRoot, root.heads, root.executionIdentity)) { await rm(tempPath, { force: true }); refuse(closedText(root.executionIdentity)); }
       await rename(tempPath, planPath);
     });
   } catch (error) {

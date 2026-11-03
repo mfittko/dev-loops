@@ -3439,6 +3439,20 @@ test("issue 2787 C14: a close of the original execution after the emit refuses t
   });
 });
 
+test("issue 2787 C14: a close of the root execution refuses a second re-entry and no longer blocks commit_only", async () => {
+  await withFixture(async (fx) => {
+    const old = await pulledFull(fx, "ACT");
+    const first = await reenter(fx, "ACT");
+    assert.equal(pull(first, fx.wt).status, 0);
+    const { sequenceClosurePath } = await import("@dev-loops/core/loop/fix-push-authority");
+    const file = sequenceClosurePath(path.join(fx.root, "tmp"), fx.head, old.executionIdentity);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, "{}\n");
+    await assert.rejects(reenter(fx, "ACT"), (error) => error.message.includes(`fixer execution ${old.executionIdentity} belongs to a gate fix sequence that was closed`));
+    assert.equal((await fx.emit({ phase: "commit_only", deltaResult: undefined })).workOrder.phase, "commit_only");
+  });
+});
+
 for (const [drift, expected] of [["source", /threads differs from the plan/], ["tree", /clean committed authority changed/], ["branch", /differs from the plan's branch/], ["receipt", /does not authenticate/], ["plan", /does not authenticate|differs/], ["head", /PR head is/]]) {
   test(`issue 2787 C14: drift of the ${drift} refuses with no write`, async () => {
     await withFixture(async (fx) => {
