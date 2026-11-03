@@ -1053,10 +1053,8 @@ const isTextHost = (seg) => seg.words[0]?.value === "git" && seg.words[1]?.value
 /** Whether the substitution in word K of SEG (a `isTextHost` segment) is inert text: the value of a text flag, never an env-assignment word. */
 function substitutionIsInert(seg, k) {
   const { raw: w } = seg.words[k];
-  if (overridesConfig(seg) || !isTextHost(seg)) return false;
   const attached = TEXT_FLAG_ATTACHED_RE.exec(w);
-  const raw = attached ? w.slice(attached[0].length) : w;
-  return /^(?:\$\(.*\)|"\$\(.*\)")$/s.test(raw) && (attached !== null || TEXT_FLAG_RE.test(seg.words[k - 1]?.value ?? ""));
+  return !overridesConfig(seg) && isTextHost(seg) && /^(?:\$\(.*\)|"\$\(.*\)")$/s.test(attached ? w.slice(attached[0].length) : w) && (attached !== null || TEXT_FLAG_RE.test(seg.words[k - 1]?.value ?? ""));
 }
 
 /** A `-c`/`--config` override or `alias.` word (any case): git/gh run a shell alias from it. */
@@ -1083,9 +1081,8 @@ function dataHeredocs(segments) {
   // exactly one inert git commit text-flag substitution holding exactly one substitution-free, file-writing-free cat segment
   if (subs.length !== 1 || seg.pipedOut || writeTargets(seg).length !== 0 || seg.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw))) return [];
   const { sub, k } = subs[0];
-  if (isPayloadWord(seg.words, k) || !substitutionIsInert(seg, k) || sub.segments.length !== 1) return [];
-  const inner = sub.segments[0];
-  return segmentHead(inner) === "cat" && writeTargets(inner).length === 0 && inner.words.every((w) => w.subs.length === 0) ? dataBody(inner) : [];
+  const [inner] = sub.segments;
+  return !isPayloadWord(seg.words, k) && substitutionIsInert(seg, k) && sub.segments.length === 1 && segmentHead(inner) === "cat" && writeTargets(inner).length === 0 && inner.words.every((w) => w.subs.length === 0) ? dataBody(inner) : [];
 }
 
 /** COMMAND with the data heredoc bodies blanked to same-length whitespace (newlines kept), so offsets still index the input. Incomplete input is returned unchanged. */
@@ -1610,9 +1607,9 @@ function inertQuoteSegment(tok, s) {
 }
 
 /** A bare `sed` segment that only reads: no in-place flag (`-i`, `-i<suffix>`, a cluster holding `i`, `--in-place`), no `-f` script file, and no `e`/`w` command or `e`/`w` substitute flag in any word. */
-function isPlainSed(seg) {
-  const ws = seg.words.filter((w) => !w.op).map((w) => w.value);
-  return ws[0] === "sed" && !ws.some((v) => /^-[A-Za-z]*[if]|^--(?:in-place|file)/.test(v) || /(?:^|[;{}\s])s(.)(?:(?!\1).)*\1(?:(?!\1).)*\1\w*[ew]/s.test(v) || /(?:^|[;{}\s\d$,!])[ew](?:\s|$)/.test(v));
+function isPlainSed({ words }) {
+  const ws = words.filter((w) => !w.op).map((w) => w.value);
+  return ws[0] === "sed" && !ws.some((v) => /^-[A-Za-z]*[if]|^--(?:in-place|file)|(?:^|[;{}\s])s(.)(?:(?!\1).)*\1(?:(?!\1).)*\1\w*[ew]|(?:^|[;{}\s\d$,!])[ew](?:\s|$)/s.test(v));
 }
 
 /**

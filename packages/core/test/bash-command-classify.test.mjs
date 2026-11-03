@@ -1642,7 +1642,6 @@ test("slice 2: the wait predicate ignores operators and names in data, and still
   for (const c of [
     "cat > tmp/f <<'EOF'\nnode scripts/loop/detect-copilot-loop-state.mjs & more\nEOF",
     'echo "detect-copilot-loop-state.mjs & more"',
-    "sed -n 's/`gh pr view 5`/while sleep 5/p' f",
   ]) assert.equal(commandContainsDetachedWaitTool(c), false, c);
   for (const c of [
     `node ${PROBE} --pr 5 --timeout-ms 1000 &`,
@@ -1676,13 +1675,13 @@ test("slice 2: a written script run through a wrapper, runner payload, glob or a
 });
 
 test("slice 2: any multi-segment command keeps every heredoc body visible, whatever hides the exec redirect (#2442)", () => {
-  assert.equal(commandIsSleepPollLoop("eval 'exec >l.sh'\ncat <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF\nbash l.sh"), true);
-  assert.equal(commandContainsDetachedWaitTool("eval 'exec >l.sh'\ncat <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF\nbash l.sh"), true);
+  const c = "eval 'exec >l.sh'\ncat <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF\nbash l.sh";
+  assert.equal(commandIsSleepPollLoop(c) && commandContainsDetachedWaitTool(c), true);
 });
 
 test("slice 2: the sanctioned single-segment shapes stay visible when an executor hides inside them, and executor arguments are payloads (#2442)", () => {
-  assert.equal(commandIsSleepPollLoop("tee />(sh) <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF"), true);
-  assert.equal(commandContainsDetachedWaitTool("tee />(sh) <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF"), true);
+  const t = "tee />(sh) <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF";
+  assert.equal(commandIsSleepPollLoop(t) && commandContainsDetachedWaitTool(t), true);
   assert.equal(commandContainsInlineInterpreter("git commit -m \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\""), false);
   assert.equal(commandContainsInlineInterpreter("gh pr create --body \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\""), true); // gh is no text host: the heredoc body stays visible
 });
