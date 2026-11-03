@@ -950,6 +950,18 @@ test("F1: a judge-act finding below the inline floor still reaches the work orde
   });
 });
 
+test("C15: the pinned act-list read is the emitter's own copy and survives an overwrite of the caller's file", async () => {
+  await withFixture(async ({ files, emit }) => {
+    const { workOrder } = await emit({ deltaResult: undefined, phase: "commit_only" });
+    const read = workOrder.requiredReads.find((r) => r.kind === "act-list");
+    assert.notEqual(path.resolve(read.path), path.resolve(files.actList));
+    const pinned = await readFile(read.path);
+    await writeFile(files.actList, "[]");
+    assert.deepEqual(await readFile(read.path), pinned);
+    assert.match(workOrder.handbackCheck, /act-list\.json/);
+  });
+});
+
 test("delta gate: an act-list --phase full without --delta-result refuses and names commit_only; commit_only emits", async () => {
   await withFixture(async ({ emit }) => {
     await assert.rejects(emit({ phase: "full", deltaResult: undefined }), /needs --delta-result[^]*--phase commit_only/);
@@ -1706,7 +1718,11 @@ test("F3: a superseded ref, a changed act list, a retired gate round and a rewri
     assert.equal(pull(second, wt).status, 0);
 
     await writeFile(files.actList, JSON.stringify([]));
+    assert.equal(pull(second, wt).status, 0); // C15: the caller's file is not the pinned read
+    const copy = second.workOrder.requiredReads.find((r) => r.kind === "act-list").path;
+    await writeFile(copy, JSON.stringify([]));
     assert.equal(refusal(pull(second, wt)), "stale_dispatch");
+    await writeFile(copy, JSON.stringify(ACT));
     await writeFile(files.actList, JSON.stringify(ACT));
 
     const retired = path.join(root, "tmp", "retired-gate-rounds", head, "r1");
@@ -2097,12 +2113,13 @@ test("F5: a pulled grant goes stale with the pull's own predicate; an edited out
     assert.equal(hook(wt, target), "allow");
 
     // The hook's own required-read check (not locateFixerUnit): an act list rewritten after the pull revokes the grant.
-    const actList = await readFile(files.actList);
-    await writeFile(files.actList, JSON.stringify([{ ...ACT[0], line: 9 }]));
+    const pinnedAct = unit.workOrder.requiredReads.find((r) => r.kind === "act-list").path;
+    const actList = await readFile(pinnedAct);
+    await writeFile(pinnedAct, JSON.stringify([{ ...ACT[0], line: 9 }]));
     assert.equal(hook(wt, target), "deny", "a changed required read grants nothing");
-    await rm(files.actList);
+    await rm(pinnedAct);
     assert.equal(hook(wt, target), "deny", "a vanished required read grants nothing");
-    await writeFile(files.actList, actList);
+    await writeFile(pinnedAct, actList);
     assert.equal(hook(wt, target), "allow");
 
     const plan = JSON.parse(await readFile(unit.planPath, "utf8"));
@@ -2668,7 +2685,7 @@ test("commit_only work order carries a siteCoverage skeleton built from the act 
     assert.match(query.noSitesReason, /^FILL:/);
     assert.match(await readFile(promptPath, "utf8"), /Start from the `siteCoverage` skeleton/);
     assert.match(await readFile(promptPath, "utf8"), /run the work order's `handbackCheck` command/);
-    assert.equal(workOrder.handbackCheck, `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(files.actList)} --baseline ${workOrder.headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(workOrder.outputRefs[0])}`);
+    assert.equal(workOrder.handbackCheck, `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(workOrder.requiredReads.find((r) => r.kind === "act-list").path)} --baseline ${workOrder.headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(workOrder.outputRefs[0])}`);
     const threads = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     assert.equal(threads.workOrder.siteCoverage, undefined);
     const threadsPrompt = await readFile(threads.promptPath, "utf8");

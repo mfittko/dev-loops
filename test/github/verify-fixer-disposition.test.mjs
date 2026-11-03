@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { link, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { copyFile, link, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -2810,7 +2810,10 @@ for (const [defect, expectedError] of Object.entries({
         const other = path.join(repoRoot, "unrelated");
         await mkdir(other);
         await writeFile(path.join(other, "fixer-disposition.json"), "must remain unchanged");
-        if (defect === "directorySymlink") { await rm(path.dirname(canonical), { recursive: true }); await symlink(other, path.dirname(canonical), "dir"); }
+        if (defect === "directorySymlink") {
+          // C15: the pinned act-list copy lives in the execution directory, so it moves with the redirect.
+          await copyFile(path.join(path.dirname(canonical), "act-list.json"), path.join(other, "act-list.json")).catch(() => {});
+          await rm(path.dirname(canonical), { recursive: true }); await symlink(other, path.dirname(canonical), "dir"); }
         else await symlink(path.join(other, "fixer-disposition.json"), canonical);
       }
       const evidenceBefore = await Promise.all([f.originPath, f.sourcePath].map((file) => readFile(file, "utf8").catch(() => null)));

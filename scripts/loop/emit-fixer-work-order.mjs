@@ -396,7 +396,7 @@ async function emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRo
     if (entry.required !== true || !bytes || sha256(bytes) !== entry.sha256 || bytes.length !== entry.bytes) refuse(`required read ${entry.kind} differs from the plan`);
   }
   const pinned = prior.requiredReads.filter((entry) => entry.kind === sourceKind);
-  if (pinned.length !== 1 || pinned[0].sha256 !== source.read.sha256 || path.resolve(pinned[0].path) !== source.read.path) refuse(`the ${sourceKind} source differs from the plan's pinned read`);
+  if (pinned.length !== 1 || pinned[0].sha256 !== source.read.sha256) refuse(`the ${sourceKind} source differs from the plan's pinned read`);
   const candidate = await planCandidate(prior, read);
   if (!candidate) refuse("the plan names no candidate commit");
   assertBranchHeadClean(cwd, prState.headRefName, headSha);
@@ -463,6 +463,13 @@ export async function emitFixerWorkOrder({
 
   // The review-body source is built below, once the live PR head is known.
   let source = actListFile ? await readSource("act-list", abs(actListFile), capture) : threadsFile ? await readSource("threads", abs(threadsFile), capture) : ciFile ? await readSource("ci-failure", abs(ciFile), capture) : null;
+  let actListCopy;
+  if (actListFile) {
+    // Pin the emitter's own copy so a later judge-pass --out overwrite of the caller's file cannot break the byte check (issue 2787 C15).
+    actListCopy = path.join(dir, executionIdentity, "act-list.json");
+    await capture.write(actListCopy, await capture.read(source.read.path));
+    source = { ...source, read: { ...source.read, path: actListCopy } };
+  }
   if (ciFile) {
     const ci = source.parsed, next = "run scripts/github/wait-pr-checks.mjs on the PR head and pass its JSON";
     if (ci?.ok !== true || ci.status !== "failure" || ci.ciStatus !== "failure") throw new Refusal(`ci file ${ciFile} is not a red wait-pr-checks result (status ${JSON.stringify(ci?.status)}, ciStatus ${JSON.stringify(ci?.ciStatus)}); a green, pending or failed read has nothing to fix; ${next}`);
@@ -620,7 +627,7 @@ export async function emitFixerWorkOrder({
       if (read.required !== true || !bytes || sha256(bytes) !== read.sha256 || bytes.length !== read.bytes) throw new Refusal(`original required read differs: ${read.kind}`);
     }
     const actReads = prior.requiredReads.filter((read) => read.kind === "act-list");
-    if (actReads.length !== 1 || actReads[0].sha256 !== source.read.sha256 || path.resolve(actReads[0].path) !== source.read.path) throw new Refusal("original ACT source is not the current exact read");
+    if (actReads.length !== 1 || actReads[0].sha256 !== source.read.sha256) throw new Refusal("original ACT source is not the current exact read");
     const reportPath = prior.outputRefs[0], reportBytes = await capture.read(reportPath);
     const pulled = await verifyPulledResult({ resultPath: reportPath, receiptTmpRoot, role: "fixer", ...origin });
     if (!pulled.ok) throw new Refusal(`original pull/result failed: ${pulled.reason}`);
@@ -679,7 +686,7 @@ export async function emitFixerWorkOrder({
     outputRefs: [outputRef],
     siteCoverage: actListFile && !completion ? buildSiteCoverageSkeleton(source.parsed) : undefined,
     handbackCheck: phase === "commit_only" && actListFile
-      ? `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(abs(actListFile))} --baseline ${headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(outputRef)}`
+      ? `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(actListCopy)} --baseline ${headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(outputRef)}`
       : undefined,
     executionRules: {
       contract: fileURLToPath(new URL("agents/fixer.agent.md", PACKAGE_ROOT)),
