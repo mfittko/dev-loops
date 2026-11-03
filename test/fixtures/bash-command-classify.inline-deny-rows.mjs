@@ -72,4 +72,6 @@ export const INLINE_DENY_ROWS = [
   "declare -x PATH=tmp:$PATH; grep -ec 'true; node -e y'",
   ". tmp/f.sh; grep 'true; node -e y'",
   "source tmp/f.sh; grep 'true; node -e y'",
+  "printf -v PATH tmp:/usr/bin; grep -ec 'true; node -e y'",
+  "read PATH tmp:/usr/bin; grep -ec 'true; node -e y'",
 ];
