@@ -253,7 +253,6 @@ const SLICE1_FAIL_CLOSED_FLIPS = new Map();
   const R_UNCLOSED = "unterminated $( substitution: incomplete, so commandContainsInlineInterpreter fails closed";
   const R_COMMENT = "apostrophe in a # comment: the regex paired it across lines and blanked the loop; the tokenizer skips the comment";
   const R_ESCAPE = 'escaped \\" inside a double-quoted word: the regex paired the quotes wrongly and blanked the loop; the tokenizer keeps the loop visible';
-  const R_NESTED ='quoted "$(...)" inside a $(...) heredoc body: the regex blanked the inner quotes; the tokenizer keeps the whole substitution';
   flip("commandContainsRawPrBodyEdit", "trailing # comment with an apostrophe is a quote-pairing hazard: the stripper blanks nothing, so the flag-looking text in the quoted title stays visible", "gh pr edit 5 --title 'a --body b' # it's");
   flip("commandContainsInlineInterpreter", R_UNCLOSED, 'echo "$(gh pr view 5');
   for (const sep of SEPARATORS) {

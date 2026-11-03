@@ -99,4 +99,5 @@ export const INLINE_DENY_ROWS = [
   "PATH=tmp grep 'x; node -e y'",
   "exec 3> x.sh; echo 'true; node -e y' >&3; sh x.sh",
   "printf -v x 'true; node -e y'; eval \"$x\"",
+  "exec >x.sh; echo 'true; node -e y'; sh x.sh",
 ];
