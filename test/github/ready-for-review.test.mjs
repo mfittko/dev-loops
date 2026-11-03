@@ -559,7 +559,7 @@ function niceToHaveThreadNode() {
     isOutdated: false,
     path: "src/naming.mjs",
     line: 4,
-    comments: { nodes: [{ id: "gid-9001", databaseId: 9001, body: `${marker}\n**nice-to-have** (\`naming\`): casing nit`, author: { login: "pi-local-run", __typename: "User" } }] },
+    comments: { nodes: [{ id: "gid-9001", databaseId: 9001, body: `${marker}\n**nice-to-have** (\`naming\`): casing nit`, authorAssociation: "OWNER", author: { login: "pi-local-run", __typename: "User" } }] },
   };
 }
 
@@ -618,7 +618,7 @@ function nitThreadNode({ commentId = 9003, fp = "7".repeat(16) } = {}) {
     isOutdated: false,
     path: "src/naming.mjs",
     line: 4,
-    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${marker}\n**nit** (\`style\`): trailing whitespace`, author: { login: "pi-local-run", __typename: "User" } }] },
+    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${marker}\n**nit** (\`style\`): trailing whitespace`, authorAssociation: "OWNER", author: { login: "pi-local-run", __typename: "User" } }] },
   };
 }
 
@@ -656,7 +656,7 @@ function questionThreadNode({ commentId = 9002, fp = "9".repeat(16) } = {}) {
     isOutdated: false,
     path: null,
     line: null,
-    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${marker}\n**question** (\`scope\`): why this approach?`, author: { login: "pi-local-run", __typename: "User" } }] },
+    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${marker}\n**question** (\`scope\`): why this approach?`, authorAssociation: "OWNER", author: { login: "pi-local-run", __typename: "User" } }] },
   };
 }
 

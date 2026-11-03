@@ -455,7 +455,7 @@ test("detect-pr-gate-coordination-state routes a ready PR with only unresolved g
                             id: "PRRC_1",
                             databaseId: 111,
                             body: "<!-- dev-loops:finding 0123456789abcdef severity=high angle=correctness round=1 -->\nFix this bug.",
-                            author: { login: "dev-loops-gate[bot]", __typename: "Bot" },
+                            viewerDidAuthor: true, author: { login: "dev-loops-gate[bot]", __typename: "Bot" },
                           },
                         ],
                       },
@@ -742,7 +742,7 @@ test("#2381: a foreign marker-quoting thread (not the gate's own login) is narro
           body: `${questionMarker}\n**question** (\`scope\`): why this approach?`,
           // Quotes a real gate finding marker, but is NOT authored by the
           // gate's own login — a foreign comment forging the marker shape.
-          author: { login: "someone-else", __typename: "User" },
+          authorAssociation: "OWNER", author: { login: "someone-else", __typename: "User" },
         }],
       },
     };
@@ -3700,7 +3700,7 @@ for (const [location, step] of [["main", "reply_missing"], ["linked", "reply_mis
               pullRequest: {
                 // T1 is claimed tackled in the checkpoint above but carries no
                 // commit-evidenced reply live — an incomplete disposition.
-                reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: step === "not_resolved" ? `Fixed in commit ${FIX_SHA}` : "please fix", author: { login: "reviewer", __typename: "User" } }] } }] },
+                reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: step === "not_resolved" ? `Fixed in commit ${FIX_SHA}` : "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }] } }] },
               },
             },
           },
@@ -3794,7 +3794,7 @@ for (const withMarker of [true, false]) test(`detect-pr-gate-coordination-state 
       { assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`], stdout: jsonLine({ users: [], teams: [] }) },
       {
         assertArgs: ["api", "graphql", `pr=${PR}`],
-        stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } }] } } } } }),
+        stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }] } }] } } } } }),
       },
       { assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid"], stdout: jsonLine({ headRefOid: HEAD_SHA }) },
       {
@@ -4077,7 +4077,7 @@ async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw, 
       await writeFile(checkpoint, JSON.stringify({ headSha: HEAD_SHA, dispositions: [] }));
       if (act) checkerCalls.push(
         { assertArgs: ["pr", "view", String(PR), "--json", "headRefOid,statusCheckRollup"], stdout: jsonLine({ headRefOid: HEAD_SHA, statusCheckRollup: [] }) },
-        { assertArgs: ["api", "graphql"], stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_ACT", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "<!-- dev-loops:finding 0123456789abcdef -->", author: { login: "gate", __typename: "User" } }] } }] } } } } }) },
+        { assertArgs: ["api", "graphql"], stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_ACT", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "<!-- dev-loops:finding 0123456789abcdef -->", authorAssociation: "OWNER", author: { login: "gate", __typename: "User" } }] } }] } } } } }) },
         { assertArgs: ["api", "user"], stdout: jsonLine({ login: "gate" }) },
       );
     }
@@ -4089,7 +4089,7 @@ async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw, 
       { assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`], stdout: jsonLine({ users: [], teams: [] }) },
       {
         assertArgs: ["api", "graphql", `pr=${PR}`],
-        stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } }] } } } } }),
+        stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }] } }] } } } } }),
       },
       { assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid"], stdout: jsonLine({ headRefOid: HEAD_SHA }) },
       {

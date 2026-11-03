@@ -177,7 +177,7 @@ test("pulled coverage binding preserves raw identity through the input, result a
 
 test("THREAD cannot opt into the ACT coverage protocol", async () => {
   const file = path.join(coverageRepo, "threads.json"), result = path.join(coverageRepo, "thread-result.json");
-  fs.writeFileSync(file, JSON.stringify({ ok: true, repo: "o/r", pr: 7, threads: [{ threadId: "T1", isResolved: false }] }));
+  fs.writeFileSync(file, JSON.stringify({ ok: true, repo: "o/r", pr: 7, threads: [{ trusted: true, threadId: "T1", isResolved: false }] }));
   fs.writeFileSync(result, JSON.stringify({ reviewBaselineHead: A, candidateHead: B, actSetId: "0".repeat(16), coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex([]).slice(7), handbackBytesDigest: "a".repeat(64),
     origin: { workOrderRef: `fixer:o/r#7:${A}:f1-00000000`, workOrderDigest: `sha256:${"b".repeat(64)}`, executionIdentity: "f1-00000000" } }));
   sealDeltaFixture(resolveGateArtifactTmpRoot(coverageRepo), result); // the seal check precedes the THREAD refusal

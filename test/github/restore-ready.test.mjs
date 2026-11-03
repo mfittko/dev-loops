@@ -249,7 +249,7 @@ test("refuses when a gate-authored review thread is unresolved", async () => {
                       isResolved: false,
                       comments: {
                         nodes: [{
-                          author: { login: "pi-local-run" },
+                          viewerDidAuthor: true, author: { login: "pi-local-run" },
                           body: `${buildFindingMarker({ fp: "f".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): casing nit`,
                         }],
                       },

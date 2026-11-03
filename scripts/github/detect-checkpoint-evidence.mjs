@@ -1341,10 +1341,12 @@ async function main() {
     let unresolvedThreadCount = -1;
     let unresolvedGateThreadCount = -1;
     let githubCapFixed = false;
+    let skippedUntrusted = [];
     try {
       const threadsPayload = await fetchGithubReviewThreadsPayload(options, { env: process.env });
       const parsedThreads = parseReviewThreads(threadsPayload);
       unresolvedThreadCount = coerceUnresolvedThreadCount(parsedThreads);
+      skippedUntrusted = parsedThreads.skippedUntrusted ?? [];
       githubCapFixed = capRoundThreadsResolved(result.capRoundNumber, threadsPayload);
       // The draftGateSatisfied field must assert 0 unresolved gate-authored
       // threads (high, medium, low, question, AND nit), not just a clean
@@ -1403,7 +1405,7 @@ async function main() {
     // are excluded here to keep emitted output bounded regardless of how many
     // comments the PR has accumulated.
     const { reviews: _reviews, comments: _comments, capRoundNumber: _capRoundNumber, ...serializableResult } = result;
-    const output = { ...serializableResult, preMergeGateCheck, staleRunnerCheck, evidenceState };
+    const output = { ...serializableResult, preMergeGateCheck, staleRunnerCheck, evidenceState, ...(skippedUntrusted.length > 0 ? { skippedUntrusted } : {}) };
     if (!preMergeGateCheck.ok) {
       process.stderr.write(`${JSON.stringify({
         ok: false,

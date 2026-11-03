@@ -317,6 +317,10 @@
       "enforcement": "runtime"
     },
     {
+      "id": "GATE-REVIEW-COMMENT-TRUST",
+      "enforcement": "runtime"
+    },
+    {
       "id": "GATE-REVIEW-SUBMIT-MODES",
       "enforcement": "runtime"
     },

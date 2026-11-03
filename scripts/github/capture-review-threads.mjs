@@ -30,10 +30,15 @@ export const REVIEW_THREADS_QUERY = [
   "          path",
   "          line",
   "          comments(first: 100) {",
+  "            pageInfo {",
+  "              hasNextPage",
+  "            }",
   "            nodes {",
   "              id",
   "              databaseId",
   "              body",
+  "              authorAssociation",
+  "              viewerDidAuthor",
   "              pullRequestReview {",
   "                id",
   "              }",
@@ -60,11 +65,23 @@ Options:
                     Emit the fix-loop working set instead of the full capture:
                     only unresolved threads, each as
                     { threadId, path, line, isOutdated, bodies: [...] } with the
-                    thread's comment bodies joined in order (plus the summary
-                    block). Resolved threads are absent. The two flags are only
+                    thread's trusted comment bodies in thread order (an untrusted
+                    comment is dropped from bodies; plus the summary block).
+                    Resolved threads are absent, and an unresolved thread with no
+                    trusted comment appears in skippedUntrusted, not threads.
+                    The two flags are only
                     valid together; the default output shape is unchanged when
                     they are omitted. Canonical loop re-entry read — no
                     post-processing needed beyond --jq '.threads[]'.
+                    The output also carries skippedUntrusted (always emitted,
+                    an empty array included; list-review-threads omits it when
+                    empty): [ { threadId, authors, remedy } ] for unresolved
+                    threads with no trusted comment (ADR 0238), with logins and
+                    no text. summary adds skippedUntrustedThreads and counts
+                    only trusted threads as unresolvedThreads. The default
+                    capture adds per-thread untrusted/untrustedAuthors and a
+                    per-comment trusted flag; an untrusted comment's body is
+                    empty.
   --output <path>   Write JSON output to file in addition to stdout
   --help, -h        Show this help
 ${JQ_OUTPUT_USAGE}

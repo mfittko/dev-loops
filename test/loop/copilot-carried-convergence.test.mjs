@@ -24,7 +24,7 @@ import {
   resolveCopilotBodyDisposition,
   resolveLatestCopilotReview,
 } from "../../scripts/github/_copilot-body-disposition.mjs";
-import { fetchDeltaChangedFiles, isBelowCopilotRoundCap, resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copilot-convergence-carry.mjs";
+import { fetchDeltaChangedFiles, hasCurrentHeadCopilotReview, isBelowCopilotRoundCap, resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copilot-convergence-carry.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { summarizeCopilotReviews } from "@dev-loops/core/github/copilot-helpers";
 import { interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
@@ -1139,6 +1139,12 @@ describe("COPILOT-STATE-CONVERGED-BELOW-CAP: below the round cap an unclean revi
     const { runtime } = runtimeFor(shared);
     return resolveCarriedConvergence({ repo: REPO, pr: PR, currentHeadSha: HEAD, prData: { reviews }, copilotReviewRequestStatus: "none", ...extra }, runtime);
   };
+
+  it("hasCurrentHeadCopilotReview counts the sanctioned reviewer only, not a lookalike", () => {
+    const review = (login) => ({ state: "COMMENTED", author: { login }, commit: { oid: HEAD }, body: "### 🟡 Changes recommended" });
+    assert.equal(hasCurrentHeadCopilotReview({ reviews: [review("copilot-fan")] }, HEAD), false);
+    assert.equal(hasCurrentHeadCopilotReview({ reviews: [review("copilot-pull-request-reviewer")] }, HEAD), true);
+  });
 
   it("the shared cap predicate: below, at the cap, a light cap of 1, and missing inputs", () => {
     assert.equal(isBelowCopilotRoundCap({ copilotReviewRoundCount: 1, effectiveCap: 2 }), true);
