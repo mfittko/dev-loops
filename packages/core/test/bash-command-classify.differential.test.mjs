@@ -237,6 +237,8 @@ const SALVAGED_DENY_ROWS = [
 const EOF_PAREN_ROW = "gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\"";
 /** Arithmetic shifts inside `$((...))`: the tokenizer reads them as arithmetic text, not a heredoc operator. */
 const ARITH_SHIFT_ROWS = ["echo $((1<<2))", "echo $(( 1 << 2 ))", "x=$((a<<b)); echo $x"];
+/** A chained command or a non-cat/tee heredoc host keeps a quoted-delimiter body visible: a backticked mention in it is now denied. */
+const CHAINED_HEREDOC_ROWS = ["git add -A && git commit -m \"$(cat <<'EOF'\nfix: refuse `node -e`\nEOF\n)\"", "node scripts/github/comment-issue.mjs 5 --body-file - <<'EOF'\nfix: refuse `node -e`\nEOF"];
 const rowKey = (name, cmd) => `${name}: ${JSON.stringify(cmd)}`;
 /**
  * Rows the frozen copy allows and the head denies on purpose (fail-closed, slice 1). Key: `<predicate>: <JSON command>`.
@@ -253,6 +255,8 @@ const SLICE1_FAIL_CLOSED_FLIPS = new Map();
   flip("commandContainsRawPrBodyEdit", "trailing # comment with an apostrophe is a quote-pairing hazard: the stripper blanks nothing, so the flag-looking text in the quoted title stays visible", "gh pr edit 5 --title 'a --body b' # it's");
   flip("commandContainsInlineInterpreter", R_UNCLOSED, 'echo "$(gh pr view 5');
   flip("commandContainsInlineInterpreter", "gh is no heredoc text host: its quoted cat heredoc body stays visible (host exemption is git commit only)", EOF_PAREN_ROW);
+  flip("commandContainsInlineInterpreter", "chained command: only a single segment makes a heredoc body data, so the backticked mention stays visible", CHAINED_HEREDOC_ROWS[0]);
+  flip("commandContainsInlineInterpreter", "comment-issue.mjs is no cat/tee host: its --body-file - heredoc body stays visible", CHAINED_HEREDOC_ROWS[1]);
   for (const sep of SEPARATORS) {
     for (const f of ["cat > src/a.mjs <<'EOF'", "cat > tmp/r.mjs <<'EOF' && node tmp/r.mjs"]) flip("commandContainsInlineInterpreter", R_HEREDOC, `${sep}${f}\necho done`);
   }
@@ -279,7 +283,7 @@ const R_SED_BACKTICK = "backtick inside a single-quoted sed expression is litera
 const PINNED_REMOVAL_COUNTS = { [R_QUOTE_WRAP]: 23, [R_HEREDOC_WRAP]: 116, [R_HAZARD_DATA]: 160, [R_SED_BACKTICK]: 2 }; // rows removed per reason
 
 function buildCorpus() {
-  const corpus = new Set([SED_BACKTICK_ROW, ...RESIDUE_SHAPES,...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW, ...ARITH_SHIFT_ROWS]);
+  const corpus = new Set([SED_BACKTICK_ROW, ...RESIDUE_SHAPES,...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW, ...ARITH_SHIFT_ROWS, ...CHAINED_HEREDOC_ROWS]);
   const forms = [...INLINE_FORMS, ...WAIT_FORMS, ...PR_BODY_FORMS];
   for (const f of forms) {
     for (const sep of SEPARATORS) for (const suf of SUFFIXES) corpus.add(`${sep}${f}${suf}`);
