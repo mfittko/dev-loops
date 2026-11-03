@@ -1016,6 +1016,7 @@ test("upsert-checkpoint-verdict --fields returns the named top-level scalars as 
       // executionMode), so it fetches the PR reviews list and changed-files list
       // to auto-detect fanout vs inline before posting.
       {
+        matchByClaims: true, // the best-effort untrusted-skip-note reads (ADR 0247) are unmatched and rejected
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
         stdout: '[]\n',
       },
@@ -1023,6 +1024,10 @@ test("upsert-checkpoint-verdict --fields returns the named top-level scalars as 
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"],
         stdout: "src/index.ts\n",
       },
+      // The untrusted-skip-note reads (ADR 0247): login, issue comments, review threads; nothing skipped, no note.
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "graphql"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
         assertStdinIncludes: ["### Gate review: `draft_gate`", "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`", "**Next action:** mark ready for review"],
@@ -2346,9 +2351,10 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
       inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["high"],
     });
-    // Seven gh calls: the explicit fixture repoRoot owns config resolution, so
+    // Eight gh calls: the explicit fixture repoRoot owns config resolution, so
     // this bare synthetic root does not inherit the ambient light-mode fetch.
-    assert.equal(result.ghCallCount(), 7);
+    // One is the best-effort untrusted-skip-note login read (ADR 0247), which the stub rejects.
+    assert.equal(result.ghCallCount(), 8);
   }, { prefix: "dev-loops-upsert-gate-review-noop-" });
 });
 
@@ -9560,9 +9566,9 @@ test("#1912: a fanout_fanin round posted with --findings-json and NO --findings-
     // Routed through --gate review (no coordination-context reads): the footgun
     // is gate-agnostic, and review keeps the mock to the pending-scan + create.
     const entries = [
-      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
-      // findOwnSubmittedReview scan: no own submitted review (no ledger means
-      // resolveFindingSurface issues no reads, so this is the next call).
+      // matchByClaims: the best-effort untrusted-skip-note reads (ADR 0247) are unmatched and rejected.
+      { matchByClaims: true, assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      // findOwnSubmittedReview scan: no own submitted review.
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],

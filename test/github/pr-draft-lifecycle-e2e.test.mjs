@@ -126,6 +126,10 @@ test("convert-to-draft -> fan-out draft_gate post -> restore-ready composes with
       // match for this call takes THIS (empty) entry first because it sorts
       // before phase 3's populated one below.
       { assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/pulls/${PR}/reviews?per_page=100`], stdout: "[]" },
+      // Best-effort untrusted-skip-note reads (ADR 0247); nothing skipped, no note.
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/issues/${PR}/comments?per_page=100`], stdout: "[]" },
+      { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) },
       {
         assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/reviews`, "--input", "-"],
         assertStdinIncludes: ["**Verdict:** clean"],

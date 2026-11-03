@@ -374,6 +374,10 @@ test("reconcile-draft-gate skips CI checks when config disables draft requireCi"
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"],
         stdout: "src/index.ts\n",
       },
+      // Best-effort untrusted-skip-note reads (ADR 0247); nothing skipped, no note.
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "graphql"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
         assertStdinIncludes: ["### Gate review: `draft_gate`", "CI optional by config"],
@@ -399,7 +403,7 @@ test("reconcile-draft-gate skips CI checks when config disables draft requireCi"
       commentId: 301,
       commentUrl: "https://github.com/owner/repo/pull/17#pullrequestreview-301",
     });
-    assert.equal(await readGhCallCount(tempDir), 14);
+    assert.equal(await readGhCallCount(tempDir), 17);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -461,6 +465,10 @@ test("reconcile-draft-gate skips the draft conversion mutation when the PR is al
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"],
         stdout: "src/index.ts\n",
       },
+      // Best-effort untrusted-skip-note reads (ADR 0247); nothing skipped, no note.
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "graphql"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
         assertStdinIncludes: ["### Gate review: `draft_gate`"],
@@ -487,7 +495,7 @@ test("reconcile-draft-gate skips the draft conversion mutation when the PR is al
       commentId: 201,
       commentUrl: "https://github.com/owner/repo/pull/17#pullrequestreview-201",
     });
-    assert.equal(await readGhCallCount(tempDir), 14);
+    assert.equal(await readGhCallCount(tempDir), 17);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -549,6 +557,10 @@ test("reconcile-draft-gate does not mark ready when upsert throws and the PR was
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"],
         stdout: "src/index.ts\n",
       },
+      // Best-effort untrusted-skip-note reads (ADR 0247); nothing skipped, no note.
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "graphql"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
         stderr: 'boom\n',
@@ -561,7 +573,7 @@ test("reconcile-draft-gate does not mark ready when upsert throws and the PR was
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
     assert.match(JSON.parse(result.stderr).error, /gh command failed: boom/i);
-    assert.equal(await readGhCallCount(tempDir), 13);
+    assert.equal(await readGhCallCount(tempDir), 16);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -628,6 +640,10 @@ test("reconcile-draft-gate marks the PR ready again if gate-comment upsert throw
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"],
         stdout: "src/index.ts\n",
       },
+      // Best-effort untrusted-skip-note reads (ADR 0247); nothing skipped, no note.
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "graphql"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
         stderr: 'boom\n',
@@ -644,7 +660,7 @@ test("reconcile-draft-gate marks the PR ready again if gate-comment upsert throw
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
     assert.match(JSON.parse(result.stderr).error, /gh command failed: boom/i);
-    assert.equal(await readGhCallCount(tempDir), 15);
+    assert.equal(await readGhCallCount(tempDir), 18);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -711,6 +727,10 @@ test("reconcile-draft-gate converts to draft, posts clean evidence, and marks re
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"],
         stdout: "src/index.ts\n",
       },
+      // Best-effort untrusted-skip-note reads (ADR 0247); nothing skipped, no note.
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "graphql"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
         assertStdinIncludes: [
@@ -741,7 +761,7 @@ test("reconcile-draft-gate converts to draft, posts clean evidence, and marks re
       commentId: 101,
       commentUrl: "https://github.com/owner/repo/pull/17#pullrequestreview-101",
     });
-    assert.equal(await readGhCallCount(tempDir), 15);
+    assert.equal(await readGhCallCount(tempDir), 18);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -962,6 +982,10 @@ test("reconcile-draft-gate succeeds for a light-mode under-threshold PR under ac
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"],
         stdout: JSON.stringify({ baseRefOid: baseRef, labels: [] }) + "\n",
       },
+      // Best-effort untrusted-skip-note reads (ADR 0247); nothing skipped, no note.
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "graphql"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
         assertStdinIncludes: [

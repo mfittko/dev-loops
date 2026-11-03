@@ -2170,6 +2170,7 @@ test("detectRecentHumanComments detects human comment after last bot comment", a
       id: 101,
       body: "Let's reconsider the approach here.",
       user: { login: "human-dev", type: "User" },
+      author_association: "MEMBER",
       created_at: "2026-06-07T10:00:00Z",
     });
 
@@ -2421,12 +2422,14 @@ test("detectRecentHumanComments detects multiple human comments after last bot",
       id: 101,
       body: "First human note.",
       user: { login: "dev-1", type: "User" },
+      author_association: "MEMBER",
       created_at: "2026-06-07T10:00:00Z",
     });
     const HUMAN2 = JSON.stringify({
       id: 102,
       body: "Second human note.",
       user: { login: "dev-2", type: "User" },
+      author_association: "MEMBER",
       created_at: "2026-06-07T11:00:00Z",
     });
 
@@ -2496,6 +2499,7 @@ test("copilot-pr-handoff runs human comment check when DEVLOOPS_RUN_ID is set", 
       id: 200,
       body: "Please stop and reconsider the approach.",
       user: { login: "human-dev", type: "User" },
+      author_association: "MEMBER",
       created_at: "2026-06-07T10:00:00Z",
     });
     const BOT_COMMENT = JSON.stringify({
@@ -2558,6 +2562,7 @@ test("copilot-pr-handoff releases runner ownership at the terminal human-checkpo
       id: 200,
       body: "Please stop and reconsider the approach.",
       user: { login: "human-dev", type: "User" },
+      author_association: "MEMBER",
       created_at: "2026-06-07T10:00:00Z",
     });
     const BOT_COMMENT = JSON.stringify({
