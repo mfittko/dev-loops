@@ -392,7 +392,7 @@ export function parseProvenanceJson(raw, resolvedGroups = null, dispatchUnits = 
     // GATE-EXEC-ROUTED-RESIDUE-INPUT: the synthetic operator-focus entry persists its source and digest.
     if ("source" in a || "operatorFocusDigest" in a) {
       if (!isOperatorFocusEntry(a)) {
-        throw parseError(`--provenance.perAngle[${i}] source must be "operator-focus" with a 64-hex operatorFocusDigest`);
+        throw parseError(`--provenance.perAngle[${i}] source must be "operator-focus" with a 64-hex operatorFocusDigest, on the reserved angle "operator-routed-residue" and without carriedFromHead`);
       }
       entry.source = a.source;
       entry.operatorFocusDigest = a.operatorFocusDigest;

@@ -58,16 +58,14 @@ import { verifyPullReceipt, verifyPulledResult } from "../github/_work-order-pro
 import { resolveGateArtifactTmpRoot, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, countDistinctReviewers, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { FANIN_SYNTHETIC_ANGLES, ROUTED_RESIDUE_ANGLE, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, countDistinctReviewers, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { clusterFindings } from "@dev-loops/core/loop/finding-cluster";
 import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { operatorFocusDigestEntry, readOperatorFocusFile } from "./_operator-focus.mjs";
 
-const ROUTED_RESIDUE_ANGLE = "operator-routed-residue";
-
-const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>] [--emit-plan <path>]
+const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>] [--emit-plan <path>] [--operator-focus-file <path>] [--spec-authority <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
 --findings-dir into the JSON shapes write-gate-findings-log.mjs, post-gate-findings.mjs
 (--findings / --findings-file), and upsert-checkpoint-verdict.mjs (--findings-json) accept.
@@ -277,7 +275,8 @@ Optional:
   --operator-focus-file <path>   GATE-EXEC-ROUTED-RESIDUE-INPUT: operator focus JSON whose "residue" entries
                                  ({ summary, severity?, file?, line? }) become findings under the declared
                                  angle "operator-routed-residue"; --emit-plan adds a provenance.perAngle entry
-                                 (source "operator-focus", the focus digest).
+                                 (source "operator-focus", the focus digest). A residue entry without severity
+                                 becomes "medium". A relative path resolves against --repo-root, else the cwd.
   --spec-authority <path>        JSON { specDigest, headSha, contentDigest, checkedCriteria }
                                  (issue 2008 / ADR 0061 AC1). When supplied, stamps the
                                  --ledger-out { overallVerdict, findings } object with the pinned
@@ -1465,7 +1464,7 @@ export async function consolidateGateFanin(options) {
   }
 
   // GATE-EXEC-ROUTED-RESIDUE-INPUT: operator-routed residue enters as a fresh, head-stamped artifact under a declared angle.
-  const operatorFocus = await readOperatorFocusFile(options.operatorFocusFile ? path.resolve(process.cwd(), options.operatorFocusFile) : undefined, { allowResidue: true });
+  const operatorFocus = await readOperatorFocusFile(options.operatorFocusFile ? path.resolve(options.repoRoot ?? process.cwd(), options.operatorFocusFile) : undefined, { allowResidue: true });
   if (operatorFocus?.residue) {
     if (emitPlan === undefined) throw new Error("GATE-EXEC-ROUTED-RESIDUE-INPUT: --operator-focus-file residue requires --emit-plan so the provenance entry exists");
     rawArtifacts.push({

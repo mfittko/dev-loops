@@ -497,8 +497,13 @@ export function provenanceConsistencyError(prov) {
  */
 export function isOperatorFocusEntry(entry) {
   return Boolean(entry) && typeof entry === "object" && entry.source === "operator-focus"
+    && typeof entry.angle === "string" && entry.angle.trim().toLowerCase() === ROUTED_RESIDUE_ANGLE
+    && !("carriedFromHead" in entry)
     && typeof entry.operatorFocusDigest === "string" && /^[0-9a-f]{64}$/.test(entry.operatorFocusDigest);
 }
+
+/** The reserved angle name that carries operator-routed residue (GATE-EXEC-ROUTED-RESIDUE-INPUT). */
+export const ROUTED_RESIDUE_ANGLE = "operator-routed-residue";
 
 /**
  * Yield `{ entry, angle, group }` for each "fresh" entry in a `perAngle` array:
@@ -563,6 +568,7 @@ export function ledgerAngleNames(perAngle, catalogOrder) {
   const angles = new Set();
   for (const entry of perAngle) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    if (isOperatorFocusEntry(entry)) continue;
     const angle = typeof entry.angle === "string" ? entry.angle.trim() : "";
     if (angle) angles.add(baseAngleName(angle));
   }

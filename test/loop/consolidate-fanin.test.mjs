@@ -22,7 +22,7 @@ import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-
 import { retireGateRound } from "../../scripts/github/retire-gate-round.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { normalizeStructuredFindings, renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
-import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
+import { checkFanoutAngleCoverage, ledgerAngleNames } from "@dev-loops/core/loop/gate-fanin";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { buildCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, renderBriefingPointerLine, sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -5045,6 +5045,41 @@ test("residue round trips: fan-in ledger, findings-log write, carry-forward inte
     const keyed = buildGateFaninLedgerPath({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: PROV_HEAD, tmpRoot: root });
     assert.ok(JSON.parse(await readSealed(keyed)).findings.some((f) => f.angle === "operator-routed-residue"));
   });
+});
+
+test("residue round trips under grouped fan-out: the residue angle never joins a dispatch unit, in the write or the merge-evidence read (#2971)", async () => {
+  const fanout = "    groups:\n      - name: sc\n        angles: [scope, coverage]\n      - name: pd\n        angles: [pr-description]";
+  const units = [unitOf(["scope", "coverage"], "sc", "r1-u0"), unitOf(["pr-description"], null, "r1-u1")];
+  await withProvenanceRound({ units, fanout }, async ({ root, base, ledgerOut }) => {
+    const focusFile = path.join(root, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ residue: [{ summary: "leftover nit" }] }), "utf8");
+    await consolidateGateFanin({ ...base, ledgerOut, operatorFocusFile: focusFile });
+    const ledger = JSON.parse(await readFile(ledgerOut, "utf8"));
+    assert.equal(ledger.findings.find((f) => f.angle === "operator-routed-residue").severity, "medium");
+    const written = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: PROV_HEAD, verdict: ledger.overallVerdict, executionMode: "fanout_fanin",
+      findingsFile: ledgerOut, emitPlan: base.emitPlan, tmpRoot: path.join(root, "ledgers"),
+    }, { repoRoot: root });
+    assert.equal(written.ok, true);
+    assert.ok(written.log.provenance.perAngle.some((e) => e.angle === "operator-routed-residue"));
+    // detect-checkpoint-evidence and the findings-log write both derive their groups from ledgerAngleNames.
+    assert.deepEqual(ledgerAngleNames(written.log.provenance.perAngle, ["scope", "coverage", "pr-description"]), ["scope", "coverage", "pr-description"]);
+  });
+});
+
+test("consolidateGateFanin resolves a relative --operator-focus-file against --repo-root, not the cwd (#2971)", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    (dir) => withTempDir(async (planDir) => {
+      const planPath = await writeEmitPlan(planDir, matchingEmitPlan());
+      await writeEmitPlanReceipt(planDir);
+      await writeEmitPlanLayoutRecord(planDir);
+      await writeFile(path.join(planDir, "focus.json"), JSON.stringify({ residue: [{ summary: "from repo root" }] }), "utf8");
+      const result = await consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, tmpRoot: planDir, receiptTmpRoot: planDir, repoRoot: planDir, operatorFocusFile: "focus.json" });
+      assert.equal(result.findings.length, 1);
+      assert.equal(result.findings[0].summary, "from repo root");
+    }),
+  );
 });
 
 test("fan-in refuses the reserved residue angle in a findings artifact or --carried-angles, residue without --emit-plan, and an unknown residue severity (#2971)", async () => {
