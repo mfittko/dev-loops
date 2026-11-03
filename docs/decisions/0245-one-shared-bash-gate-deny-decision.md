@@ -1,4 +1,4 @@
-# 0238. The Bash-gate deny rules live in one harness-neutral module
+# 0245. The Bash-gate deny rules live in one harness-neutral module
 
 ## Status
 
