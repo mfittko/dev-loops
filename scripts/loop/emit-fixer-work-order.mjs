@@ -450,6 +450,8 @@ export async function emitFixerWorkOrder({
   const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined, { allowItems: true });
   if (operatorFocusRaw?.items && !actListFile) throw new OperatorFocusRefusal("GATE-EXEC-OPERATOR-FOCUS: operator focus items need an --act-list-file source; a threads source accepts a round only");
   const operatorFocus = actListFile ? bindOperatorFocusItems(operatorFocusRaw, source.parsed) : operatorFocusRaw;
+  // A trust-incomplete thread (first comment page all untrusted, more pages exist) stays a blocker but is never a fixer source.
+  if (threadsFile && Array.isArray(source.parsed?.threads)) source.parsed = { ...source.parsed, threads: source.parsed.threads.filter((thread) => thread?.trustIncomplete !== true) };
   if (threadsFile && (source.parsed?.ok !== true || !Array.isArray(source.parsed.threads) || source.parsed.repo !== repo || Number(source.parsed.pr) !== Number(pr)
     || !source.parsed.threads.every((thread) => thread?.isResolved === false))) {
     const resolved = Array.isArray(source.parsed?.threads) ? source.parsed.threads.filter((thread) => thread?.isResolved === true) : [];

@@ -151,13 +151,18 @@ export function parseReviewThreads(payload) {
     // A thread with comments and no trusted one is skipped (ADR 0238): it is no unresolved blocker and no act item.
     // A truncated comments connection (more than one page) is not provably all-untrusted: it stays a blocker.
     const truncated = thread?.comments?.pageInfo?.hasNextPage === true;
-    const untrusted = normalizedComments.length > 0 && !truncated && !normalizedComments.some((comment) => comment.trusted);
+    const anyTrusted = normalizedComments.some((comment) => comment.trusted);
+    const untrusted = normalizedComments.length > 0 && !truncated && !anyTrusted;
+    // Incomplete trust: the first page is all untrusted and more comments exist. The thread stays an
+    // unresolved blocker but is never a fixer or reply target, since a later page may hold the maintainer.
+    const trustIncomplete = normalizedComments.length > 0 && truncated && !anyTrusted;
 
     return {
       id: threadId,
       isResolved,
       reviewId,
       untrusted,
+      ...(trustIncomplete ? { trustIncomplete } : {}),
       untrustedAuthors: untrusted ? [...new Set(normalizedComments.map((comment) => comment.author.login || "unknown"))] : [],
       isActionable: actionableCommentIds.length > 0,
       commentIds,
@@ -205,7 +210,8 @@ export function parseReviewThreads(payload) {
  */
 export function parseUnresolvedThreadBodies(payload) {
   const rawThreads = extractRawThreads(payload);
-  const { summary, skippedUntrusted } = parseReviewThreads(payload);
+  const { summary, skippedUntrusted, threads: parsedThreads } = parseReviewThreads(payload);
+  const incompleteIds = new Set(parsedThreads.filter((thread) => thread.trustIncomplete).map((thread) => thread.id));
   const skippedIds = new Set(skippedUntrusted.map((entry) => entry.threadId));
   const threads = rawThreads
     .map((thread, threadIndex) => ({ thread, threadIndex }))
@@ -220,7 +226,7 @@ export function parseUnresolvedThreadBodies(payload) {
         .filter((comment) => isTrustedGraphqlComment(comment, { allowCopilot: true }))
         .map((comment) => normalizeBody(comment?.body ?? comment?.bodyText ?? comment?.bodyHTML ?? "")),
     }))
-    .filter(({ threadId }) => !skippedIds.has(threadId))
+    .filter(({ threadId }) => !skippedIds.has(threadId) && !incompleteIds.has(threadId))
     .sort((left, right) => compareIds(left.threadId, right.threadId));
 
   return { summary, skippedUntrusted, threads };

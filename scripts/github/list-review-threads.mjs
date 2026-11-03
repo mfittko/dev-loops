@@ -15,7 +15,7 @@ export const LIST_REVIEW_THREADS_QUERY = [
   "query($owner: String!, $name: String!, $pr: Int!, $after: String) {",
   "  repository(owner: $owner, name: $name) {",
   "    pullRequest(number: $pr) {",
-  "      reviewThreads(first: 100, after: $after) {",
+  "      reviewThreads(first: 25, after: $after) {",
   "        pageInfo {",
   "          hasNextPage",
   "          endCursor",
@@ -214,6 +214,7 @@ function normalizeThreadNode(node, bodyMax) {
     const authors = [...new Set(comments.map((comment) => (typeof comment?.author?.login === "string" && comment.author.login.length > 0 ? comment.author.login : "unknown")))];
     return { skipped: { threadId: typeof node?.id === "string" ? node.id : "", authors, isResolved: Boolean(node?.isResolved), remedy: UNTRUSTED_COMMENT_REMEDY } };
   }
+  const trustIncomplete = trustedComment === null && comments.length > 0 && truncated;
   const rootComment = comments[0];
   const commentId = Number.isFinite(rootComment?.databaseId) ? rootComment.databaseId : null;
   // bodyCommentId is the comment whose text `body` carries: the full-body join keys on it, since
@@ -223,7 +224,8 @@ function normalizeThreadNode(node, bodyMax) {
   const author = typeof authorLogin === "string" && authorLogin.length > 0 ? authorLogin : null;
   return {
     threadId: typeof node?.id === "string" ? node.id : "",
-    trusted: true, // ADR 0238 marker: consumers refuse a thread file without it
+    trusted: !trustIncomplete, // ADR 0238 marker: consumers refuse a thread file without it
+    ...(trustIncomplete ? { trustIncomplete: true } : {}), // first page all untrusted, more pages exist: a blocker, never a fixer target
     commentId,
     bodyCommentId,
     author,
@@ -249,9 +251,9 @@ export async function fetchAllReviewThreadsWithSkips(
   const skipped = [];
   let after = null;
   let pages = 0;
-  // 10k threads at 100/page; same ceiling as capture-review-threads.mjs, so a
+  // 10k threads at 25/page (25 threads x 100 comments bounds each response; same thread ceiling as capture-review-threads.mjs), so a
   // payload cycling cursors or inventing fresh ones forever fails closed.
-  const MAX_PAGES = 100;
+  const MAX_PAGES = 400;
   while (true) {
     if (pages >= MAX_PAGES) {
       throw new Error(`Invalid review-threads GraphQL payload: pagination exceeded ${MAX_PAGES} pages without completing`);

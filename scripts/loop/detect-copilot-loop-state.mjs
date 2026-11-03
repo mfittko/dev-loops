@@ -297,12 +297,14 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
   let actionableThreadCount = 0;
   let lastCopilotRoundMaxSignal = null;
   let reviewThreads = [];
+  let skippedUntrusted = [];
   try {
     const threadsPayload = await fetchGithubReviewThreadsPayload({ repo, pr }, { env, ghCommand, runChild });
     const parsed = parseReviewThreads(threadsPayload);
     unresolvedThreadCount = parsed.summary.unresolvedThreads;
     actionableThreadCount = parsed.summary.actionableThreads;
     reviewThreads = parsed.threads;
+    skippedUntrusted = parsed.skippedUntrusted;
     lastCopilotRoundMaxSignal = classifyReviewThreadsSignal(parsed, isCopilotLogin);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -370,6 +372,7 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
   // conflicted state on a casing/whitespace variance and re-open the deadlock.
   return {
     ...snapshot,
+    ...(skippedUntrusted.length > 0 ? { skippedUntrusted } : {}),
     mergeable: normalizeMergeEnum(prData.mergeable),
     mergeStateStatus: normalizeMergeEnum(prData.mergeStateStatus),
     baseRefName: typeof prData.baseRefName === "string" && prData.baseRefName.trim().length > 0

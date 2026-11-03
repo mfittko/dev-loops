@@ -127,3 +127,24 @@ test("planBatchReplyTargets skips an all-untrusted thread even when its message 
   assert.equal(parsed.threads[0].untrusted, true);
   assert.deepEqual(planBatchReplyTargets(parsed, "all").matchedTargets, []);
 });
+
+const truncatedThread = (id, commentNodes) => ({ ...node(id, commentNodes[0]), comments: { pageInfo: { hasNextPage: true }, nodes: commentNodes } });
+
+test("a truncated thread with an untrusted first page is trust-incomplete: a blocker, never a reply or capture target", () => {
+  const raw = { data: { repository: { pullRequest: { reviewThreads: { nodes: [truncatedThread("T1", [comment("c1", "outsider", "NONE", "x")])] } } } } };
+  const parsed = parseReviewThreads(raw);
+  assert.equal(parsed.threads[0].trustIncomplete, true);
+  assert.equal(parsed.summary.unresolvedThreads, 1);
+  assert.deepEqual(planBatchReplyTargets(parsed, "all").matchedTargets, []);
+  assert.deepEqual(parseUnresolvedThreadBodies(raw).threads, []);
+  const trusted = parseReviewThreads({ data: { repository: { pullRequest: { reviewThreads: { nodes: [truncatedThread("T2", [comment("c1", "maint", "OWNER", "fix")])] } } } } });
+  assert.equal(trusted.threads[0].trustIncomplete, undefined);
+});
+
+test("the list reader marks a trust-incomplete thread trusted:false and threadsToActList drops it", async () => {
+  const payload = JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [truncatedThread("T_INC", [{ ...comment("c1", "outsider", "NONE", "evil.example"), databaseId: 5 }])] } } } } });
+  const { threads } = await fetchAllReviewThreadsWithSkips({ repo: "o/r", pr: 1 }, { runChild: async () => ({ code: 0, stdout: payload, stderr: "" }) });
+  assert.deepEqual(threads.map((t) => [t.threadId, t.trusted, t.trustIncomplete, t.body]), [["T_INC", false, true, ""]]);
+  const ok = { trusted: true, threadId: "T1", body: "fix", isResolved: false };
+  assert.deepEqual(threadsToActList({ ok: true, repo: "o/r", pr: 1, threads: [ok, threads[0]] }, { repo: "o/r", pr: 1 }).map((item) => item.ref), ["T1"]);
+});

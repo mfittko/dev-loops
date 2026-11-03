@@ -182,6 +182,25 @@ test("probe-copilot-review returns changed for fresh Copilot review-thread comme
   }
 });
 
+test("probe-copilot-review ignores a maintainer whose login merely starts with copilot in all three activity filters", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-probe-copilot-lookalike-"));
+  const owner = (item) => ({ ...item, authorAssociation: "OWNER" });
+  const thread = createThread("c-9", "copilot-fan", "mine");
+  thread.comments.nodes = thread.comments.nodes.map(owner);
+  const changed = createActivityPayload({
+    threads: [thread],
+    reviews: [owner(createReview("r-9", "copilot-fan", "mine"))],
+    issueComments: [owner(createIssueComment("i-9", "copilot-fan", "mine"))],
+  });
+  try {
+    const env = await writeGhStub(tempDir, [{ stdout: JSON.stringify(createActivityPayload()) + "\n" }, { stdout: JSON.stringify(changed) + "\n" }]);
+    const result = await watchCopilotReview({ repo: "owner/repo", pr: 17, pollIntervalMs: 1, timeoutMs: 5 }, { env, ghCommand: "gh" });
+    assert.notEqual(result.status, "changed");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("probe-copilot-review returns changed for fresh Copilot review summaries", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-probe-copilot-review-"));
   const baseline = createActivityPayload();

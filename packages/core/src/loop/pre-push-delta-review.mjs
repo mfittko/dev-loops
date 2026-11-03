@@ -119,7 +119,9 @@ export function resolveDeltaTrigger({ actItemCount = 0, threadItemCount = 0, fix
  * @param {{ repo: string, pr: number|string }} target
  */
 export function threadsToActList(payload, { repo, pr } = {}) {
-  const threads = /** @type {any} */ (payload)?.threads;
+  const allThreads = /** @type {any} */ (payload)?.threads;
+  // A trust-incomplete thread stays a blocker but is never an act item.
+  const threads = Array.isArray(allThreads) ? allThreads.filter((thread) => thread?.trustIncomplete !== true) : allThreads;
   if (/** @type {any} */ (payload)?.ok !== true || !Array.isArray(threads) || /** @type {any} */ (payload).repo !== repo || Number(/** @type {any} */ (payload).pr) !== Number(pr)
     || !threads.every((thread) => thread?.isResolved === false && nonEmpty(thread?.threadId))) {
     throw new Error(`threads file is not successful list-review-threads --unresolved-only output for ${repo}#${pr}`);
