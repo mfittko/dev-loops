@@ -1088,7 +1088,6 @@ const FIX_LOOP_TO_FIXTURE = new Map([
 export const FIX_LOOP_KNOWN_GAPS = new Map([
   ["head_moved->full_gate_round", "slice 3 (C19): unresolved gate-thread recovery admission deferred until PR #2990 merges"],
   ["no_commit->full_gate_round", "slice 3 (C19): unresolved gate-thread recovery admission deferred until PR #2990 merges"],
-  ["delivery_incomplete->disposition_complete", "slice 5 (C14): --completion-only delivery re-entry"],
 ]);
 
 {

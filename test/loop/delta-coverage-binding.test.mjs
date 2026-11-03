@@ -170,9 +170,10 @@ test("pulled coverage binding preserves raw identity through the input, result a
   fs.writeFileSync(copiedOutput, originals[2]);
   const locatorArgs = [...resultArgs]; locatorArgs[locatorArgs.indexOf("--site-coverage") + 1] = copiedOutput;
   await assert.rejects(runCli(locatorArgs, options), /noncanonical/);
-  const copiedAct = path.join(coverageRepo, "copied-act.json"); fs.writeFileSync(copiedAct, originals[4]);
+  // C15: the emitter pins its own copy and sha256 binds content, so a byte-identical copy is not the refusal; altered content is.
+  const copiedAct = path.join(coverageRepo, "copied-act.json"); fs.writeFileSync(copiedAct, JSON.stringify([...JSON.parse(originals[4]), { ...JSON.parse(originals[4])[0], summary: "altered" }]));
   const sourceArgs = [...resultArgs]; sourceArgs[sourceArgs.indexOf("--act-list") + 1] = copiedAct;
-  await assert.rejects(runCli(sourceArgs, options), /ACT source/);
+  await assert.rejects(runCli(sourceArgs, options), /changed ACT source/);
 });
 
 test("THREAD cannot opt into the ACT coverage protocol", async () => {
