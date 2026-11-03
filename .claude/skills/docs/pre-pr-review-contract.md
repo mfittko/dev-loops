@@ -336,7 +336,7 @@ report is retried through normal/check, never removed and reconstructed. Legacy 
 pre-push Delta policy and compact dispatch payloads retain their existing behavior. Isolated
 mixed-root tests establish command routing, not actual worker qualification or recovery.
 
-Explicit full `operation: complete` consumes already-reviewed delivery with empty source
+Explicit full `operation: complete` requires the authenticated `completesExecution` root `{ executionIdentity, heads[] }` (pull refuses without it, and refuses `stale_dispatch` once the root execution's sequence is closed) and consumes already-reviewed delivery with empty source
 selectors, exactly one authenticated ACT/THREAD source and only its own output authority.
 Follow `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY`: ACT completion input is mandatory, even when
 all optional markers are absent; THREAD reports exactly its pinned IDs, built by `--construct`,

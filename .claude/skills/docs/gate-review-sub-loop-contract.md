@@ -1448,7 +1448,7 @@ Untackled, deferred, rejected, foreign-authored and newly arrived threads keep t
 
 Adding `--check` runs the same current-protocol plan/digest, role/target/execution, receipt/path, after-pull output, source integrity, current-head/contained-order-head, coverage, authenticated ACT-thread and containment checks, including live reply/resolution and `delta_blocked` evaluation. It writes no report or checkpoint and posts no reply or resolution. A THREAD unit validates its digest-bound source hash and requires dispositions for its own pinned thread IDs only; it adds no ACT query or all-history requirement. An authentic threadless ACT unit with complete required coverage may have an empty dispositions array. The default mutating verification remains the completion path after populated construction; legacy deliveries retain their existing coverage requirements.
 
-Explicit `operation: complete` is a delivery-only consumer mode: require `phase: full`, an
+Explicit `operation: complete` is a delivery-only consumer mode: require `phase: full`, an authenticated `completesExecution` root `{ executionIdentity, heads[] }` (a complete order without it is refused at pull; once the root execution's sequence is closed, pull refuses with `stale_dispatch`), an
 actual empty `mutationAuthority.allowedPaths`, a single output and exactly one required
 ACT or THREAD source with raw-byte and semantic authentication. ACT additionally requires
 unique required Delta/completion-input reads and both completion authorities; missing all
