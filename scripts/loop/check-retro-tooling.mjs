@@ -104,9 +104,9 @@ const ALLOWED_WRITE_OPS = Object.freeze([
  */
 function splitSegments(line) {
   const tok = tokenizeShellCommand(line);
-  const parts = tok.incomplete
-    ? line.split(/&&|\|\||\||;/g)
-    : tok.segments.filter((s) => s.words.length > 0).flatMap((s) => [line.slice(s.words[0].start, s.words.at(-1).end), ...s.words.filter((w, k) => isPayloadWord(s.words, k)).flatMap((w) => splitSegments(w.value))]);
+  // Segments inside `$(...)`/backticks run too, so each substitution's segments are traversed like top-level ones (offsets index LINE).
+  const walk = (segments) => segments.filter((s) => s.words.length > 0).flatMap((s) => [line.slice(s.words[0].start, s.words.at(-1).end), ...s.words.filter((w, k) => isPayloadWord(s.words, k)).flatMap((w) => splitSegments(w.value)), ...s.words.flatMap((w) => w.subs.flatMap((sub) => walk(sub.segments)))]);
+  const parts = tok.incomplete ? line.split(/&&|\|\||\||;/g) : walk(tok.segments);
   return parts.map((s) => s.trim()).filter((s) => s.length > 0);
 }
 

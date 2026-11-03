@@ -1741,3 +1741,18 @@ test("tokenizeShellCommand: $((expr)) is arithmetic and DELIM) closes a heredoc 
   assert.equal(tokenizeShellCommand("cat <<'EOF'\nbody\nEOF)").incomplete, true); // outside a substitution `EOF)` is no delimiter
   assert.equal(commandContainsInlineInterpreter("gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\""), true); // gh is no text host
 });
+
+test("round 3: a shell reached through env/command/exec or `<(`, a joined heredoc line and text consumers (#2442)", () => {
+  // thread 1: process substitution into a shell keeps quoted words visible
+  assert.equal(commandContainsDetachedWaitTool(`bash <(printf '%s\\n' 'node ${PROBE} --pr 5 &')`), true);
+  // thread 2: the receiving shell is found behind env/command/exec
+  assert.equal(commandContainsInlineInterpreter("{\necho 'true; node -e y'\n} | env sh"), true);
+  assert.equal(commandContainsDetachedWaitTool(`echo 'node ${PROBE} --pr 5 &' | env bash`), true);
+  assert.equal(commandContainsDetachedWaitTool(`echo 'node ${PROBE} --pr 5 &' | grep x`), false);
+  // thread 3: backslash-newline joins before the unquoted-heredoc check
+  assert.equal(commandContainsInlineInterpreter("cat <<EOF\n$\\\n(true; node -e x)\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("cat <<'EOF'\n$\\\n(true; node -e x)\nEOF"), false);
+  // thread 5: a here-string or `-c` counts as payload only for a consumer that executes text
+  for (const c of ["cat <<< 'node -e x'", "head -c 100 'node -e x'", "env head -c 100 'node -e x'"]) assert.equal(commandContainsInlineInterpreter(c), false, c);
+  for (const c of ["bash <<< 'node -e x'", "env bash <<< 'node -e x'", "exec sh -c 'node -e x'"]) assert.equal(commandContainsInlineInterpreter(c), true, c);
+});

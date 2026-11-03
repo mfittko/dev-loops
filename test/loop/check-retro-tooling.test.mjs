@@ -307,3 +307,8 @@ test("retro classification keeps origin/main verdicts for a line with an untermi
   assert.equal(analyzeTranscript("git commit -m \"$(cat <<'EOF' fix: don't retry EOF )\"").violations.length, 0);
   assert.match(analyzeTranscript("echo \\` ; python3 x.py").violations[0], /^python3\b/);
 });
+
+test("retro splitter traverses command substitution (#2442)", () => {
+  assert.match(analyzeTranscript('echo "$(true; gh pr list)"').violations[0], /^gh:/);
+  assert.match(analyzeTranscript('echo "$(true; python3 script.py)"').violations[0], /^python3:/);
+});
