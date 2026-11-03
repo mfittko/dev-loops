@@ -1,6 +1,6 @@
 import { isCopilotLogin } from "./copilot-helpers.mjs";
 
-// ADR 0238: the one trust predicate for comment, review and thread text that can
+// ADR 0239: the one trust predicate for comment, review and thread text that can
 // reach an agent. Owner rule: GATE-REVIEW-COMMENT-TRUST in
 // skills/docs/gate-review-sub-loop-contract.md.
 const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);

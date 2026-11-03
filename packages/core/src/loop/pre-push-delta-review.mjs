@@ -124,9 +124,9 @@ export function threadsToActList(payload, { repo, pr } = {}) {
     || !threads.every((thread) => thread?.isResolved === false && nonEmpty(thread?.threadId))) {
     throw new Error(`threads file is not successful list-review-threads --unresolved-only output for ${repo}#${pr}`);
   }
-  // ADR 0238: a thread without the ingestion trust marker is untrusted text; never an act item.
+  // ADR 0239: a thread without the ingestion trust marker is untrusted text; never an act item.
   if (!threads.every((thread) => thread.trusted === true)) {
-    throw new Error(`threads file for ${repo}#${pr} holds a thread without the trusted marker (ADR 0238); re-run list-review-threads --unresolved-only`);
+    throw new Error(`threads file for ${repo}#${pr} holds a thread without the trusted marker (ADR 0239); re-run list-review-threads --unresolved-only`);
   }
   // Sorted by threadId so actSetId is stable for the same thread set, whatever the capture order.
   return [...threads].sort((a, b) => (a.threadId < b.threadId ? -1 : a.threadId > b.threadId ? 1 : 0)).map((thread) => ({

@@ -1,4 +1,4 @@
-# 0238. Comment text from non-maintainers never reaches an agent
+# 0239. Comment text from non-maintainers never reaches an agent
 
 ## Status
 
