@@ -2210,7 +2210,33 @@ async function loadMatchingFindingsLedger(options, headSha) {
   return ledger;
 }
 export const MERGED_THREAD_BODY_MAX = 4000;
-async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, preloadedLedger, inlineSeverityFloor, blockingSeverities = [] }, gh) {
+// ADR 0247: once per verdict write, ledger or not. Returns the reads so the ledger path reuses them; a read or post failure only warns.
+async function postSkipNoteForRound({ options, headSha, hasLedger }, gh) {
+  let read = null;
+  let skipped = [];
+  try {
+    const login = await resolveAuthenticatedLogin(gh);
+    // Same read order as before the move (login, reviews, comments, threads) for the ledger path.
+    const reviews = hasLedger ? await listPrReviews({ repo: options.repo, pr: options.pr }, gh) : null;
+    const issueComments = await listIssueComments({ repo: options.repo, pr: options.pr }, gh);
+    // A merged comment carries one marker per merged finding, and later markers
+    // fall past the default 200-char listing excerpt, so widen the excerpt.
+    const fetched = await fetchAllReviewThreadsWithSkips({ repo: options.repo, pr: options.pr }, { ...gh, bodyMax: MERGED_THREAD_BODY_MAX });
+    skipped = fetched.skipped.filter((entry) => !entry.isResolved);
+    read = { login, reviews, issueComments, threads: fetched.threads };
+  } catch (error) {
+    // Ledger rounds need these reads, so their failure stays fatal as before; otherwise the note is best-effort.
+    if (hasLedger) throw error;
+    return null;
+  }
+  try {
+    await postUntrustedSkipNote({ repo: options.repo, pr: options.pr, headSha, skipped, issueComments: read.issueComments, login: read.login }, gh);
+  } catch (error) {
+    process.stderr.write(`warning: could not post the untrusted-comments note: ${error.message}\n`);
+  }
+  return read;
+}
+async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, preloadedLedger, inlineSeverityFloor, blockingSeverities = [], roundRead = null }, gh) {
   // The withheld-tier coverage check above already loaded and validated this
   // same --findings-ledger file for this same round; reuse it instead of
   // reading it a second time (undefined means it was never preloaded, e.g. a
@@ -2219,17 +2245,10 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
   if (!ledger) {
     return null;
   }
-  const login = await resolveAuthenticatedLogin(gh);
-  const reviews = await listPrReviews({ repo: options.repo, pr: options.pr }, gh);
-  const issueComments = await listIssueComments({ repo: options.repo, pr: options.pr }, gh);
-  // A merged comment carries one marker per merged finding, and later markers
-  // fall past the default 200-char listing excerpt, so widen the excerpt.
-  const { threads, skipped } = await fetchAllReviewThreadsWithSkips({ repo: options.repo, pr: options.pr }, { ...gh, bodyMax: MERGED_THREAD_BODY_MAX });
-  try {
-    await postUntrustedSkipNote({ repo: options.repo, pr: options.pr, headSha, skipped: skipped.filter((entry) => !entry.isResolved), issueComments, login }, gh);
-  } catch (error) {
-    process.stderr.write(`warning: could not post the untrusted-comments note: ${error.message}\n`);
-  }
+  const login = roundRead?.login ?? await resolveAuthenticatedLogin(gh);
+  const reviews = roundRead?.reviews ?? await listPrReviews({ repo: options.repo, pr: options.pr }, gh);
+  const issueComments = roundRead?.issueComments ?? await listIssueComments({ repo: options.repo, pr: options.pr }, gh);
+  const threads = roundRead?.threads ?? (await fetchAllReviewThreadsWithSkips({ repo: options.repo, pr: options.pr }, { ...gh, bodyMax: MERGED_THREAD_BODY_MAX })).threads;
   const suppressed = collectSuppressedFingerprints({ reviews, threads, login });
   const round = await resolveGateRound({
     repo: options.repo,
@@ -3625,13 +3644,16 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // The round's finding surface (this same review): resolved BEFORE the body is
   // rendered, since the body carries the round number, the body-filed findings,
   // and the reduced per-angle digest that depends on them.
+  const roundLedger = preloadedFindingsLedger !== undefined ? preloadedFindingsLedger : await loadMatchingFindingsLedger(options, canonicalHeadSha);
+  const roundRead = await postSkipNoteForRound({ options, headSha: canonicalHeadSha, hasLedger: Boolean(roundLedger) }, gh);
   const findingSurface = await resolveFindingSurface(
     {
       options,
+      roundRead,
       headSha: canonicalHeadSha,
       repoRoot,
       isUpdate: existing !== null,
-      preloadedLedger: preloadedFindingsLedger,
+      preloadedLedger: roundLedger,
       inlineSeverityFloor: activeGateConfig.inlineSeverityFloor,
       blockingSeverities: activeGateConfig.blockCleanOnFindingSeverities ?? [],
     },

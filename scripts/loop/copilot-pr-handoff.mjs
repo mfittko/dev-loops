@@ -5,7 +5,7 @@ import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from ".
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "./_copilot-convergence-carry.mjs";
 import { resolvePrConflicts } from "./resolve-pr-conflicts.mjs";
-import { isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
+import { isTrustedRestComment, UNTRUSTED_COMMENT_REMEDY } from "@dev-loops/core/github/comment-trust";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
@@ -277,6 +277,12 @@ export function parseHandoffCliArgs(argv, { cwd = process.cwd() } = {}) {
  * loop should pause for operator review.
  * Returns { paused: true, humanComments: [...] } when human comments need attention.
  */
+/** ADR 0247: logins only, never comment text; omitted when nothing was skipped. */
+function skippedUntrustedField(check) {
+  const logins = check?.skippedUntrusted ?? [];
+  return logins.length > 0 ? { skippedUntrustedComments: { logins, remedy: UNTRUSTED_COMMENT_REMEDY } } : {};
+}
+
 export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   try {
     const result = await runChild(
@@ -333,6 +339,11 @@ export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env
       if (authorType === "Bot" || isCopilotLogin(authorLogin)) {
         continue;
       }
+      const createdAt = normalizeTimestamp(comment?.created_at);
+      // Only in-window comments count: older ones were already visible before the last bot action.
+      if (createdAt === null || createdAt <= lastBotActionMs) {
+        continue;
+      }
       // ADR 0247: a non-maintainer comment is never handed to the coordinator (no bodyPreview, no pause).
       if (!isTrustedRestComment(comment)) {
         skippedUntrusted.add(authorLogin || "unknown");
@@ -343,15 +354,12 @@ export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env
       if (body.includes("Gate review:") || body.includes("**draft_gate**") || body.includes("**pre_approval_gate**") || isGateMachineArtifactBody(body)) {
         continue;
       }
-      const createdAt = normalizeTimestamp(comment?.created_at);
-      if (createdAt !== null && createdAt > lastBotActionMs) {
-        humanComments.push({
-          id: comment.id,
-          author: authorLogin,
-          createdAt: comment.created_at,
-          bodyPreview: body.slice(0, 200),
-        });
-      }
+      humanComments.push({
+        id: comment.id,
+        author: authorLogin,
+        createdAt: comment.created_at,
+        bodyPreview: body.slice(0, 200),
+      });
     }
 
     return {
@@ -633,6 +641,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
       snapshot,
       runnerOwnership,
       runnerRelease,
+      ...skippedUntrustedField(humanCommentCheck),
       humanCommentPause: {
         reason: humanCommentCheck.paused ? "human_comment_detected" : "human_comment_check_unavailable",
         error: humanCommentCheck.error || undefined,
@@ -1006,6 +1015,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
     requestStatus: normalizedRequestStatus,
     watchArgs: result.watchArgs,
   });
+  Object.assign(result, skippedUntrustedField(humanCommentCheck));
   if (result.terminal === true) {
     const runnerRelease = await releaseAsyncRunnerOwnership({
       repo: options.repo,
