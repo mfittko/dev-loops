@@ -43,6 +43,11 @@ test("agent-level raw gh api is a violation", () => {
   assert.match(violations[0], /^gh:/);
 });
 
+test("a bash -c payload is audited per segment", () => {
+  assert.ok(analyzeTranscript("bash -c 'true; gh pr list'").violations.length > 0);
+  assert.ok(analyzeTranscript("bash -c 'true; python3 script.py'").violations.length > 0);
+});
+
 test("python and python3 are violations", () => {
   const { violations } = analyzeTranscript("python3 -c 'import json'\npython script.py");
   assert.equal(violations.length, 2);

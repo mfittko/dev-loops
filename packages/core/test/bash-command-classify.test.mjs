@@ -562,6 +562,8 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   // this to "detach AND family reference"; restored to the pre-#2065 unconditional ban (regression
   // guard, main/coordinator context — subagent context is covered separately below).
   assert.equal(commandContainsDetachedWaitTool("nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &"), true);
+  for (const c of ["echo 'node scripts/loop/probe-copilot-review.mjs --pr 5 &' | bash", "git rebase -x 'node scripts/loop/probe-copilot-review.mjs --pr 5 &' HEAD~1", "git rebase --exec='node scripts/loop/probe-copilot-review.mjs --pr 5 &' HEAD~1"]) assert.equal(commandContainsDetachedWaitTool(c), true, c);
+  for (const c of ['echo "while" "sleep" gh', "grep -c 'node -e x' README.md", "echo eval 'node -e x'"]) assert.equal(commandContainsDetachedWaitTool(c) || commandIsSleepPollLoop(c) || commandContainsInlineInterpreter(c), false, c);
   assert.equal(commandContainsDetachedWaitTool("disown"), true);
   assert.equal(commandContainsDetachedWaitTool("tmux new-session -d -s loop"), true);
   assert.equal(commandContainsDetachedWaitTool("screen -dmS loop"), true);

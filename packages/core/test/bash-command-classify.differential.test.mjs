@@ -278,7 +278,7 @@ const R_QUOTE_WRAP = "the form sits in a quoted --notes/-m/echo argument: quoted
 const R_HEREDOC_WRAP = "the form is the body of a cat/tee heredoc (quoted delimiter) written to a temp path: the body is data (item 8)";
 const R_HAZARD_DATA = "the loop sits in quotes next to a quote-pairing hazard (comment apostrophe, escaped quote, heredoc quote): the tokenizer pairs the quotes correctly, so the loop is data";
 const R_SED_BACKTICK = "backtick inside a single-quoted sed expression is literal text, not a substitution";
-const PINNED_REMOVAL_COUNTS = { [R_QUOTE_WRAP]: 24, [R_HEREDOC_WRAP]: 116, [R_HAZARD_DATA]: 166, [R_SED_BACKTICK]: 2 }; // rows removed per reason
+const PINNED_REMOVAL_COUNTS = { [R_QUOTE_WRAP]: 24, [R_HEREDOC_WRAP]: 116, [R_HAZARD_DATA]: 160, [R_SED_BACKTICK]: 2 }; // rows removed per reason
 
 function buildCorpus() {
   const corpus = new Set([SED_BACKTICK_ROW, ...RESIDUE_SHAPES,...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW, ...ARITH_SHIFT_ROWS]);

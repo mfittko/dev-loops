@@ -59,7 +59,7 @@ import { readFileSync } from "node:fs";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
-import { scanInlineInterpreter, stripLeadingWrappers, tokenizeShellCommand } from "@dev-loops/core/loop/bash-command-classify";
+import { isPayloadWord, scanInlineInterpreter, stripLeadingWrappers, tokenizeShellCommand } from "@dev-loops/core/loop/bash-command-classify";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]
@@ -106,7 +106,7 @@ function splitSegments(line) {
   const tok = tokenizeShellCommand(line);
   const parts = tok.incomplete
     ? line.split(/&&|\|\||\||;/g)
-    : tok.segments.filter((s) => s.words.length > 0).map((s) => line.slice(s.words[0].start, s.words.at(-1).end));
+    : tok.segments.filter((s) => s.words.length > 0).flatMap((s) => [line.slice(s.words[0].start, s.words.at(-1).end), ...s.words.filter((w, k) => isPayloadWord(s.words, k)).flatMap((w) => splitSegments(w.value))]);
   return parts.map((s) => s.trim()).filter((s) => s.length > 0);
 }
 

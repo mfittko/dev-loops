@@ -981,7 +981,7 @@ function stripQuotedLiterals(command, precise = false) {
   if (!precise && hasQuotePairingHazard(command)) return command;
   const text = precise ? blankDataHeredocs(command, tok) : command;
   const all = precise ? allWords(tok.segments) : [];
-  const payloads = all.filter(({ words, k }) => isPayloadWord(words, k)).map(({ w }) => w);
+  const payloads = all.filter(({ words, k }) => pipesToShell(tok) || isPayloadWord(words, k)).map(({ w }) => w);
   const limit = tok.incompleteAt < 0 ? text.length : tok.incompleteAt;
   let out = "";
   let pos = 0;
@@ -989,7 +989,7 @@ function stripQuotedLiterals(command, precise = false) {
     if (start < pos || start >= limit) continue; // nested in a span already handled, or in the unterminated tail (kept as a guard: a backtick span can start past the opener without a quote)
     const kept = precise
       ? (kind === "double" && /\$\(|`/.test(text.slice(start + 1, end - 1))) || payloads.some((w) => w.start <= start && end <= w.end) ||
-        (STRUCTURAL_WORD_RE.test(text.slice(start + 1, end - 1)) && all.some(({ w }) => w.end === end && w.raw.length <= end - start + 1)) // a quoted structural keyword that is a whole word (`'sleep' 5`) still runs: keep it visible
+        (STRUCTURAL_WORD_RE.test(text.slice(start + 1, end - 1)) && all.some(({ w, words }) => w.end === end && w.raw.length <= end - start + 1 && !/^(?:echo|printf)$/.test(words.find((x) => !x.op)?.value))) // a quoted structural keyword that is a whole word (`'sleep' 5`) still runs: keep it visible
       : /\$\(|`/.test(text.slice(start + 1, end - 1)) || // executable code in quotes: preserve (fail-closed)
         /(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(text.slice(0, start)); // -c/eval payload: real shell syntax
     out += text.slice(pos, start) + (kept ? text.slice(start, end) : " ");
@@ -1012,11 +1012,14 @@ const payloadFrom = (words) => {
   const base = words[hi]?.value.split("/").pop();
   const run = words.findIndex((w, i) => i >= hi && (i === hi || /^(?:sudo|timeout|nice|nohup|env|exec|command)$/.test(base)) && /^(?:watch|trap)$/.test(w.value.split("/").pop()));
   if (run >= 0) return run + 1; // every argument of `watch`/`trap` (also behind a wrapper) is command text the shell runs
-  const at = words.findIndex((w) => !w.op && (w.value === "eval" || EXEC_FLAG_RE.test(w.value)));
-  return at < 0 ? words.length : at + 1;
+  if (/^(?:echo|printf|grep|rg|wc)$/.test(base)) return words.length; // literal-text printers: `-c` counts, `eval` is an argument
+  const at = words.findIndex((w) => !w.op && (w.value === "eval" || EXEC_FLAG_RE.test(w.value) || (base === "git" && /^(?:-x|--exec(?:=.*)?)$/.test(w.value))));
+  return at < 0 ? words.length : at + (words[at].value.startsWith("--exec=") ? 0 : 1);
 };
+/** Whether some segment's output is piped into a shell (`echo '…' | bash`, `{ echo '…'; } | sh`): the text it writes runs, so no quoted word is inert. */
+const pipesToShell = (tok) => tok.segments.some((s, i) => s.pipedOut && /^(?:ba|z|da|k)?sh$/.test(tok.segments[i + 1] ? segmentHead(tok.segments[i + 1]) : ""));
 /** Words that the shell executes as command text: after `-c`/`--command`/`eval`, or the target of a `<<<` here-string. */
-const isPayloadWord = (words, k) => k >= payloadFrom(words) || words[k - 1]?.op === "<<<";
+export const isPayloadWord = (words, k) => k >= payloadFrom(words) || words[k - 1]?.op === "<<<";
 
 const rawHead = (seg) => seg.words.find((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op)?.value ?? "";
 const segmentHead = (seg) => rawHead(seg).split("/").pop();
@@ -1597,7 +1600,7 @@ function interpreterScanParts(command) {
   // A quoted word is inert only behind a text head or a repo script runner; any other head keeps its quoted words visible (origin/main's raw split), so `git bisect run 'x; node -e y'` is still seen.
   // The head must be the bare name (no path, no env prefix) and the command must define no function, since either can rebind the name to a program that runs its quoted words.
   // A word holding `()` (also the no-space `grep(){`) defines a function; a segment headed by alias, hash, shopt, unalias or enable rebinds names, so each disables inert quotes for the whole command.
-  const definesFunction = tok.segments.some((s) => /^(?:alias|hash|shopt|unalias|enable)$/.test(rawHead(s)) || s.words.some((w) => w.value === "function" || w.raw.includes("()") || /\($/.test(w.value)));
+  const definesFunction = pipesToShell(tok) || tok.segments.some((s) => s.words.some((w) => /^(?:alias|hash|shopt|unalias|enable)$/.test(w.value)) || s.words.some((w) => w.value === "function" || w.raw.includes("()") || /\($/.test(w.value)));
   const anyRedirect = tok.segments.some((s) => s.words.some((w) => REDIRECT_RE.test(w.value))); // an output redirect in any segment (exec >f, braced group) can feed a later one, so no segment is inert
   const inertQuotes = (s) => { const h = rawHead(s); const arg = s.words.filter((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op)[1]?.value ?? ""; return !definesFunction && !anyRedirect && !s.pipedOut && writeTargets(s).length === 0 && !s.words.some((w) => REDIRECT_RE.test(w.value) || w.raw.includes("(")) && !(h === "printf" && s.words.some((w) => /^-v/.test(w.value))) && !h.includes("/") &&!s.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw)) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/"))); };
   const segments = tok.segments.filter((s) => s.words.length).flatMap((s) => { const text = command.slice(s.words[0].start, s.words.at(-1).end); return inertQuotes(s) ? [text] : shellSegments(text); });

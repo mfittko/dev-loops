@@ -100,4 +100,6 @@ export const INLINE_DENY_ROWS = [
   "exec 3> x.sh; echo 'true; node -e y' >&3; sh x.sh",
   "printf -v x 'true; node -e y'; eval \"$x\"",
   "exec >x.sh; echo 'true; node -e y'; sh x.sh",
+  "builtin shopt -s expand_aliases\nbuiltin alias echo='bash -c'\necho 'true; node -e y'",
+  "{\necho 'true; node -e 1'\n} | sh",
 ];
