@@ -46,6 +46,8 @@ import {
   commandContainsTimeoutWrappedSanctionedTool,
   commandContainsInlineInterpreter,
   commandContainsCodeVerificationEntrypoint,
+  isPayloadWord,
+  tokenizeShellCommand,
 } from "./_bash-command-classify.mjs";
 
 /**
@@ -114,8 +116,9 @@ function commandContainsEvidenceWrite(command) {
  * fixture — and `packages/core/test/bash-gate-decisions.test.mjs` asserts this exact list and each
  * rule's exact reason literal, so a reordered or reworded rule fails.
  *
- * Three denies below are inline denials with no registered rule ID — the unresolve owner allowlist,
- * the `timeout`-wrapped sanctioned command deny and the subagent ad-hoc external-write deny — so they
+ * Four denies below are inline denials with no registered rule ID — the unresolve owner allowlist,
+ * the `timeout`-wrapped sanctioned command deny, the subagent ad-hoc external-write deny and the
+ * subagent merge-pr deny — so they
  * return `ruleId: null` and stay out of this list: listing them would mint rule IDs the rule registry
  * does not own.
  */
@@ -195,6 +198,58 @@ export function decideUnresolveOwnerDeny({ command, role }) {
   return null;
 }
 
+const ASSIGNMENT_WORD = /^[A-Za-z_]\w*=/;
+// `timeout` is not a launcher here: a `timeout`-wrapped sanctioned command is denied by its own actor-independent rule (issue 2755).
+const LAUNCHER_PREFIX = /^(?:env|command|exec|nohup|time|nice|sudo)$/;
+const baseName = (value) => value.split("/").pop();
+
+/** Whether one tokenized segment runs `merge-pr.mjs` as its program (directly, or as the first operand of node/bun/dev-loops-run) with no `--check` word. */
+function segmentRunsMergePrWithoutCheck(words) {
+  const values = words.filter((w) => !w.op && !ASSIGNMENT_WORD.test(w.raw)).map((w) => w.value);
+  let i = 0;
+  while (LAUNCHER_PREFIX.test(baseName(values[i] ?? ""))) for (i++; /^(?:-|\d)/.test(values[i] ?? ""); i++);
+  const head = baseName(values[i] ?? "");
+  if (/^(?:node|bun|dev-loops-run)$/.test(head)) for (i++; /^-|^run$/.test(values[i] ?? ""); i++);
+  else if (head !== "merge-pr.mjs") return false;
+  return baseName(values[i] ?? "") === "merge-pr.mjs" && !values.slice(i + 1).includes("--check");
+}
+
+/** Walks the token tree: a program word, a `$(...)` substitution, a `-c`/`eval` payload or a shell heredoc body that runs merge-pr.mjs without `--check`. */
+function treeRunsMergePr(segments) {
+  return segments.some((seg) =>
+    segmentRunsMergePrWithoutCheck(seg.words)
+    || seg.words.some((w, k) => w.subs.some((sub) => treeRunsMergePr(sub.segments)) || (isPayloadWord(seg.words, k) && commandRunsMergePrWithoutCheck(w.value)))
+    || (/^(?:ba|z|da)?sh$/.test(baseName(seg.words[0]?.value ?? "")) && seg.heredocs.some((h) => commandRunsMergePrWithoutCheck(h.body))));
+}
+
+/**
+ * Structural check on the tokenized command (no word list): some segment's program is `scripts/github/merge-pr.mjs`
+ * and no `--check` word follows it. A mention in an argument, quoted text or comment is not a program word. Incomplete tokenization fails closed.
+ * ponytail: a script written to a file and run later, or a command split across variables, is not followed.
+ * @param {string} command @returns {boolean}
+ */
+export function commandRunsMergePrWithoutCheck(command) {
+  const tok = tokenizeShellCommand(command);
+  if (tok.incomplete) return /merge-pr\.mjs/.test(command) && !/(?:^|\s)--check(?:\s|$)/.test(command);
+  return treeRunsMergePr(tok.segments);
+}
+
+/**
+ * Merge ownership (issue 2500): the merge is orchestrator-owned, so any subagent that runs `merge-pr.mjs` without `--check` is denied.
+ * The read-only `--check` mode stays open to every actor. The top-level session (role null) keeps the script. Keys on the role name alone, like the unresolve allowlist.
+ * @param {{command: string, role: string|null|undefined}} params
+ * @returns {{ruleId: null, reason: string}|null}
+ */
+export function decideMergePrOwnerDeny({ command, role }) {
+  if (typeof role !== "string" || !commandRunsMergePrWithoutCheck(command)) return null;
+  return {
+    ruleId: null,
+    reason:
+      `The ${normalizeAgentType(role)} agent may not merge: scripts/github/merge-pr.mjs is owned by the orchestrator (main agent). ` +
+      "Run `merge-pr.mjs --check` (read-only) at the merge-ready point and hand back its result, with the exact merge command line it reports, instead of merging.",
+  };
+}
+
 /**
  * Decide whether a Bash command must be denied by a dev-loop gate boundary.
  *
@@ -230,7 +285,7 @@ export function decideUnresolveOwnerDeny({ command, role }) {
  * @param {{passed: boolean, error: string|null}|null} [params.readyGate] - Draft-gate evidence
  *   probe result for the command's PR; null when the adapter did not probe.
  * @returns {{ruleId: string|null, reason: string}|null} The deny decision, or null to allow.
- *   `ruleId` is null for the three inline denies that carry no registered rule ID and for the
+ *   `ruleId` is null for the four inline denies that carry no registered rule ID and for the
  *   missing-facts deny.
  */
 export function decideBashGateDeny(facts = {}) {
@@ -261,6 +316,10 @@ export function decideBashGateDeny(facts = {}) {
   const unresolve = decideUnresolveOwnerDeny({ command, role });
   if (unresolve) {
     return unresolve;
+  }
+  const mergeOwner = decideMergePrOwnerDeny({ command, role });
+  if (mergeOwner) {
+    return mergeOwner;
   }
 
   // COORDINATOR-VERIFY-BOUNDARY: a known code-verification/build entrypoint (bun run

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   BASH_GATE_RULES,
   decideBashGateDeny,
+  decideMergePrOwnerDeny,
   decideUnresolveOwnerDeny,
 } from "../src/loop/bash-gate-decisions.mjs";
 
@@ -555,4 +556,41 @@ test("a readyGate probe whose `error` is an empty string is refused naming ready
   assert.ok(decision, "an empty `error` must deny instead of degrading to 'not probed'");
   assert.equal(decision.ruleId, null);
   assert.match(decision.reason, /supplied no valid readyGate fact/);
+});
+
+const MERGE_CMD = "dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 2630 --human-approved-by mfittko";
+const MERGE_DENY_FORMS = [
+  MERGE_CMD,
+  "node scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 2902 --standing-authorization",
+  "DEVLOOPS_RUN_ID=x dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5",
+  "cd x && dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5",
+  'bash -c "dev-loops-run scripts/github/merge-pr.mjs --pr 5"',
+];
+
+test("any subagent role is denied merge-pr.mjs without --check (issue 2500)", () => {
+  for (const role of ["dev-loop", "dev-loops:dev-loop", "gate-coordinator", "fixer"]) {
+    for (const command of MERGE_DENY_FORMS) {
+      const d = decideBashGateDeny({ ...BASE, role, command });
+      assert.ok(d, `${role}: ${command}`);
+      assert.equal(d.ruleId, null);
+      assert.equal(d.reason, decideMergePrOwnerDeny({ command, role }).reason);
+      assert.match(d.reason, /orchestrator/);
+      assert.match(d.reason, /--check/);
+    }
+  }
+});
+
+test("merge-pr.mjs stays open to the top-level session, to --check and to mere mentions (issue 2500)", () => {
+  for (const command of MERGE_DENY_FORMS) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, command);
+    assert.equal(decideBashGateDeny({ ...BASE, role: "fixer", command: command.replace("merge-pr.mjs", "merge-pr.mjs --check") }), null, command);
+  }
+  for (const command of [
+    'git commit -m "run merge-pr.mjs later"',
+    "grep merge-pr.mjs README.md",
+    "cat scripts/github/merge-pr.mjs",
+    "echo node scripts/github/merge-pr.mjs",
+  ]) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: "fixer", command }), null, command);
+  }
 });
