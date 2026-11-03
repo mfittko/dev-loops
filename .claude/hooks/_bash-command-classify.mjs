@@ -950,49 +950,144 @@ function blankQuotedForFlags(command) {
  * quoted issue body, `--body` payload, or quoted example that merely mentions them carries them
  * INSIDE quotes as inert data. Blanking those quoted contents is what lets the poll-loop matchers key
  * on an actual loop CONSTRUCT rather than the token sequence appearing anywhere in a command
- * (`gh issue create --body "while … sleep … done"` must not be flagged). The `s` (dotAll) flag lets
- * `.` match a newline too, so a MULTI-LINE quoted `--body` (a real issue body commonly spans lines) is
- * stripped in full, not just its first line.
+ * (`gh issue create --body "while … sleep … done"` must not be flagged). Default mode matches spans with a
+ * dotAll pattern, so a MULTI-LINE quoted `--body` (a real issue body commonly spans lines) is stripped in full.
  * A quoted string that itself contains a command substitution (`$(...)`) or a backtick (`` `...` ``)
  * is executable code, not inert data — its inner command runs regardless of the surrounding quotes.
  * Blanking it would hide a real poll loop such as `while [ "$(gh pr view 5)" != MERGED ]; do sleep 5;
  * done` that the gh/loop-state ban already denies, so such a quoted literal is PRESERVED (fail-closed
  * direction) ahead of the `-c`/`--command`/`eval` exemption check below.
  *
- * The `-c`-cluster/`--command`/`eval` exemption is intentionally coarse in the fail-closed direction:
+ * Default mode only: the `-c`-cluster/`--command`/`eval` exemption is intentionally coarse in the fail-closed direction:
  * it looks only for a `c` anywhere in a preceding short-flag cluster (or `--command`/`eval`), not for
  * a shell-interpreter anchor. A non-shell command carrying `-c` (e.g. `grep -ci '<loop text>'`,
  * `wc -c`) may therefore have its quoted argument preserved too and get over-denied — an accepted
  * benign false positive, because tightening the exemption to a shell-interpreter anchor would risk a
  * fail-open (missing a real `sh -c` poll loop), the worse direction.
  *
- * When `hasQuotePairingHazard(command)` is true the function returns the command unchanged (fail
- * closed); otherwise it blanks the quote spans from `tokenizeShellCommand`. Text from an unterminated quote,
- * `$(` or heredoc onward is left as raw executable text (deny direction). Accepted ceiling: a
- * deliberately quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is
- * blanked like any other quoted literal and can therefore evade the ban.
- * @param {string} command @returns {string}
+ * Two modes. The default (PR-body predicates) is strictly fail-closed against the frozen differential oracle: when
+ * `hasQuotePairingHazard(command)` is true it returns the command unchanged, because a caller that would read the unblanked
+ * text as more permissive (a foreign `--repo`, an explicit `-X GET`) must not. `precise` (wait and poll predicates) trusts the
+ * tokenizer instead of that coarse guard, which removes the hazard false positives. It also blanks the bodies that
+ * `blankDataHeredocs` finds to be data, treats a single-quoted or ANSI-C `$(`/backtick as inert, and keeps every
+ * quoted span inside a payload word (`isPayloadWord`, see `payloadFrom`). Text from an
+ * unterminated quote, `$(` or heredoc onward is left as raw executable text in both modes (deny direction). Accepted ceiling, default mode
+ * only: a deliberately quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is blanked like any other quoted
+ * literal and can evade the ban.
+ * `waitView` (the detached-wait operator view) also keeps a quoted span visible unless every segment around it passes `inertQuoteSegment`. The poll predicates use the default mode, as on origin/main.
+ * @param {string} command @param {boolean} [precise] @param {boolean} [waitView] @returns {string}
  */
-function stripQuotedLiterals(command) {
-  const { spans, incompleteAt } = tokenizeShellCommand(command);
-  if (hasQuotePairingHazard(command)) return command;
-  const limit = incompleteAt < 0 ? command.length : incompleteAt;
+function stripQuotedLiterals(command, precise = false, waitView = false) {
+  const tok = tokenizeShellCommand(command);
+  if (!precise && hasQuotePairingHazard(command)) return command;
+  const text = precise ? blankDataHeredocs(command, tok) : command;
+  const all = precise ? allWords(tok.segments) : [];
+  const payloads = all.filter(({ words, k }) => isPayloadWord(words, k)).map(({ w }) => w);
+  const limit = tok.incompleteAt < 0 ? text.length : tok.incompleteAt;
   let out = "";
   let pos = 0;
-  for (const { start, end } of [...spans].sort((a, b) => a.start - b.start)) {
+  for (const { start, end, kind } of [...tok.spans].sort((a, b) => a.start - b.start)) {
     if (start < pos || start >= limit) continue; // nested in a span already handled, or in the unterminated tail (kept as a guard: a backtick span can start past the opener without a quote)
-    const kept =
-      /\$\(|`/.test(command.slice(start + 1, end - 1)) || // executable code in quotes: preserve (fail-closed)
-      /(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(command.slice(0, start)); // -c/eval payload: real shell syntax
-    out += command.slice(pos, start) + (kept ? command.slice(start, end) : " ");
+    const body = text.slice(start + 1, end - 1);
+    const subst = /\$\(|`/.test(body);
+    const kept = precise
+      ? (subst && kind === "double") || (waitView && all.some(({ w, seg }) => w.start <= start && end <= w.end && !inertQuoteSegment(tok, seg))) || payloads.some((w) => w.start <= start && end <= w.end)
+      : subst || // executable code in quotes: preserve (fail-closed)
+        /(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(text.slice(0, start)); // -c/eval payload: real shell syntax
+    out += text.slice(pos, start) + (kept ? text.slice(start, end) : " ");
     pos = end;
   }
-  return out + command.slice(pos);
+  return out + text.slice(pos);
+}
+
+/** @returns {{w: object, words: object[], k: number, seg: object}[]} every word in SEGMENTS with its segment's words and index, nested substitutions included. */
+function allWords(segments, out = []) {
+  for (const seg of segments) seg.words.forEach((w, k) => { out.push({ w, words: seg.words, k, seg }); for (const sub of w.subs) allWords(sub.segments, out); });
+  return out;
+}
+const EXEC_FLAG_RE = /^(?:-[a-z]*c[a-z]*|--command)$/i;
+const ENV_ASSIGNMENT_WORD_RE = /^[A-Za-z_]\w*=/;
+/** Programs that only read their text (`-c` counts or selects bytes, a here-string is stdin data, an operand is a file name). */
+const TEXT_CONSUMER_RE = /^(?:echo|printf|grep|rg|wc|cat|tee|head|tail|cut|sort|uniq|tr|od|jq|read)$/;
+/** Basename of the program that receives a segment's input and arguments: the first word after env assignments and `env`/`command`/`exec` launchers with their flags. ponytail: `env -u NAME sh` reads NAME as the head. */
+function receiverOf(words) {
+  const w = words.filter((x) => !x.op && !ENV_ASSIGNMENT_WORD_RE.test(x.raw));
+  let i = 0;
+  while (/^(?:env|command|exec)$/.test(w[i]?.value.split("/").pop() ?? "")) for (i++; w[i]?.value.startsWith("-"); i++);
+  return w[i]?.value.split("/").pop() ?? "";
+}
+/** Index of the first payload word of a segment: every word after `eval` or a `-c`-containing short-flag cluster (origin/main's coarse rule) is executable text. Also every argument of `watch`/`trap`, and the value of `git -x`/`--exec`. A TEXT_CONSUMER_RE head has no payload (`-c` counts bytes, `eval` is an argument). */
+const payloadFrom = (words) => {
+  const hi = words.findIndex((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op);
+  const base = receiverOf(words);
+  const run = words.findIndex((w, i) => i >= hi && (i === hi || /^(?:sudo|timeout|nice|nohup|env|exec|command)$/.test(base)) && /^(?:watch|trap)$/.test(w.value.split("/").pop()));
+  if (run >= 0) return run + 1; // every argument of `watch`/`trap` (also behind a wrapper) is command text the shell runs
+  if (TEXT_CONSUMER_RE.test(base)) return words.length; // literal-text consumers: `-c` counts bytes, `eval` is an argument
+  const at = words.findIndex((w) => !w.op && (w.value === "eval" || EXEC_FLAG_RE.test(w.value) || (base === "git" && /^(?:-x|--exec(?:=.*)?)$/.test(w.value))));
+  return at < 0 ? words.length : at + (words[at].value.startsWith("--exec=") ? 0 : 1);
+};
+/** Words that the shell executes as command text: the words `payloadFrom` selects (`-c`/`--command`/`eval`, `watch`/`trap`, `git -x`/`--exec`), or the target of a `<<<` here-string whose consumer is not a text reader. */
+export const isPayloadWord = (words, k) => k >= payloadFrom(words) || (words[k - 1]?.op === "<<<" && !TEXT_CONSUMER_RE.test(receiverOf(words)));
+
+const rawHead = (seg) => seg.words.find((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op)?.value ?? "";
+const segmentHead = (seg) => rawHead(seg).split("/").pop();
+const REDIRECT_RE = /^\d*(?:&>>?|<>|>>?&?)\|?(.*)$/s;
+/** Words a `cat`/`tee` segment writes to: the word after any `>`, `>>`, `>|`, `>&`, `&>`, `&>>` or `<>` operator, an attached `>file`, and every `tee` operand. `>&2`/`>&-` duplicate a descriptor and write no file. */
+function writeTargets(seg) {
+  const targets = seg.words.map((w, k) => { const attached = REDIRECT_RE.exec(w.value); return attached ? attached[1] || seg.words[k + 1]?.value : segmentHead(seg) === "tee" && k > 0 && !w.op && !w.value.startsWith("-") ? w.value : null; });
+  return targets.filter((t) => t && !/^\d+$|^-$/.test(t)).map((t) => t.replace(/^\.\//, ""));
+}
+
+const TEXT_FLAG_RE = /^(?:-m|--message|--body|--title|--notes)$/;
+const TEXT_FLAG_ATTACHED_RE = /^--(?:message|body|title|notes)=/;
+/** A `git commit` segment whose head is the bare name: the only host whose text flag value is inert. `gh` hosts are excluded. */
+const isTextHost = (seg) => seg.words[0]?.value === "git" && seg.words[1]?.value === "commit";
+/** Whether the substitution in word K of SEG (a `isTextHost` segment) is inert text: the value of a text flag, never an env-assignment word. */
+function substitutionIsInert(seg, k) {
+  const { raw: w } = seg.words[k];
+  const attached = TEXT_FLAG_ATTACHED_RE.exec(w);
+  return !overridesConfig(seg) && isTextHost(seg) && /^(?:\$\(.*\)|"\$\(.*\)")$/s.test(attached ? w.slice(attached[0].length) : w) && (attached !== null || TEXT_FLAG_RE.test(seg.words[k - 1]?.value ?? ""));
+}
+
+/** A `-c`/`--config` override or `alias.` word (any case): git/gh run a shell alias from it. */
+const overridesConfig = (seg) => seg.words.some((w) => /^(?:-c|--config)|alias\./i.test(w.value));
+
+/**
+ * Heredocs whose body is data (issue 2442 item 8): a `cat` or `tee` heredoc that is closed, whose delimiter is quoted or whose body has no
+ * `$(`/backtick, whose segment is not piped onward, and that sits in no `-c`/`eval`/here-string payload.
+ * Structural rule, counted over the whole tree: the command is exactly one `cat`/`tee` heredoc segment, or one root `git commit` segment (bare head) holding exactly one substitution that holds exactly one `cat` segment that writes no file. A top-level `git commit -F -` is not a host. Anything else keeps every heredoc body visible, so a later segment or substitution that runs a written file never sees a blanked body.
+ * The host must write no file, carry no env-assignment word and no `-c`/alias override (`substitutionIsInert`); `echo`/`printf` are not hosts. The `cat`/`tee` head is the bare name or a `/bin/` or `/usr/bin/` path, with no env-assignment word and no `<(`/`>(` anywhere in a word.
+ * Every other body executes and stays visible.
+ * @returns {object[]}
+ */
+function dataHeredocs(segments) {
+  if (segments.length !== 1) return []; // multi-segment: a later segment may run what the heredoc writes
+  const seg = segments[0];
+  const dataBody = (s) => { // closed, not piped onward, no process-substitution word (`>(sh)`, a `(`-target)
+    if (s.pipedOut || s.words.some((w) => /[<>]\(/.test(w.raw) || /[<>]\(/.test(w.value))) return [];
+    if (!/^(?:\/bin\/|\/usr\/bin\/)?(?:cat|tee)$/.test(rawHead(s)) || s.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw))) return []; // not cat/tee, or a path-prefixed or PATH-overridden `cat`, is an unknown program
+    return s.heredocs.filter((x) => x.closed && (x.quoted || !/\$\(|`|\$\{[\s|]/.test(x.body.replace(/\\\n/g, ""))));
+  };
+  const subs = seg.words.flatMap((w, k) => w.subs.map((sub) => ({ sub, k })));
+  if (subs.length === 0) return dataBody(seg);
+  // exactly one inert git commit text-flag substitution holding exactly one substitution-free, file-writing-free cat segment
+  if (subs.length !== 1 || seg.pipedOut || writeTargets(seg).length !== 0 || seg.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw))) return [];
+  const { sub, k } = subs[0];
+  const [inner] = sub.segments;
+  return !isPayloadWord(seg.words, k) && substitutionIsInert(seg, k) && sub.segments.length === 1 && segmentHead(inner) === "cat" && writeTargets(inner).length === 0 && inner.words.every((w) => w.subs.length === 0) ? dataBody(inner) : [];
+}
+
+/** COMMAND with the data heredoc bodies blanked to same-length whitespace (newlines kept), so offsets still index the input. Incomplete input is returned unchanged. */
+function blankDataHeredocs(command, tok) {
+  if (tok.incomplete) return command;
+  let out = command;
+  for (const h of dataHeredocs(tok.segments)) out = out.slice(0, h.bodyStart) + out.slice(h.bodyStart, h.bodyEnd).replace(/[^\n]/g, " ") + out.slice(h.bodyEnd);
+  return out;
 }
 
 /**
- * The stripper stays strictly fail-closed against the frozen differential oracle: where the old regex mispaired
- * quotes, `stripQuotedLiterals` blanks nothing, and a caller that would read the unblanked text as more permissive
+ * Coarse text hazards used by the default (PR-body) mode of `stripQuotedLiterals` and by `blankQuotedForFlags`; the wait and
+ * poll predicates no longer use them (they trust the tokenizer). A caller that would read unblanked text as more permissive
  * (a foreign `--repo`, an explicit `-X GET`) must not.
  * ponytail: coarse text hazards (an escaped quote anywhere, a `#` comment with a quote, a quoted heredoc body, an unmatched quote inside a backtick span).
  * @param {string} command @returns {boolean}
@@ -1022,6 +1117,9 @@ function segmentsHaveQuotedHeredoc(segments) {
  * `spans` lists every terminated quote span (`start`/`end` offsets in COMMAND). `ticks` lists the texts of terminated backtick substitutions and `comments` the texts of real unquoted `#` comments. Substitution nesting deeper than 64 levels sets `incomplete`. An unterminated
  * quote, `$(`, backtick or heredoc sets `incomplete`; `incompleteAt` is the offset of the earliest
  * unclosed opener, and callers treat the text from there on as unquoted executable text.
+ * A heredoc record also carries `closed`, `bodyStart` and `bodyEnd` (offsets of the body in COMMAND) once its delimiter line is found; a segment
+ * carries `pipedOut` when an unquoted `|`/`|&` follows it. A heredoc operator at the end of input with no
+ * newline has no body to hide and is complete; a `<<` with no delimiter word, or a body that never reaches its delimiter line, is incomplete.
  * `$((expr))` with a plain expression is read as arithmetic text (so `1<<2` is no heredoc);
  * inside `$(...)` a line `DELIM)` followed only by whitespace or the substitution's closing double quote closes the heredoc and the substitution together.
  * ponytail: `${...}` quoting, subshell grouping and arithmetic holding a substitution or quote are not modelled; the last fails closed.
@@ -1166,7 +1264,10 @@ export function tokenizeShellCommand(command) {
           const text = h.stripTabs ? line.replace(/^\t+/, "") : line;
           const closesSub = inSub && text.startsWith(`${h.delimiter})`) && /^\s*"?\s*$/.test(text.slice(h.delimiter.length + 1)); // only whitespace or the substitution's closing quote may follow
           if (text === h.delimiter || closesSub) {
-            h.body = command.slice(bodyStart, Math.max(bodyStart, lineStart - 1));
+            h.bodyStart = bodyStart;
+            h.bodyEnd = Math.max(bodyStart, lineStart - 1);
+            h.body = command.slice(h.bodyStart, h.bodyEnd);
+            h.closed = true;
             i = closesSub ? lineStart + line.length - text.length + h.delimiter.length : Math.min(eol + 1, n);
             found = true;
           }
@@ -1186,8 +1287,8 @@ export function tokenizeShellCommand(command) {
       else if (c === "#" && !word) { const at = i; while (i < n && command[i] !== "\n") i++; comments.push(command.slice(at, i)); }
       else if (c === "&" && next === "&") { endSeg(); i += 2; }
       else if (c === "|" && next === "|") { endSeg(); i += 2; }
-      else if (c === "|" && next === "&") { endSeg(); i += 2; }
-      else if (c === ";" || (c === "|" && !(word && command[i - 1] === ">")) || (c === "&" && !redirectChar && next !== ">")) { endSeg(); i++; }
+      else if (c === "|" && next === "&") { seg.pipedOut = true; endSeg(); i += 2; }
+      else if (c === ";" || (c === "|" && !(word && command[i - 1] === ">")) || (c === "&" && !redirectChar && next !== ">")) { if (c === "|") seg.pipedOut = true; endSeg(); i++; }
       else if (c === "<" && command.startsWith("<<<", i)) operator("<<<", 3);
       else if (c === "<" && next === "<") {
         const start = i;
@@ -1327,9 +1428,11 @@ const WAIT_PROBE_FAMILY_RE = new RegExp(
  */
 export function commandContainsDetachedWaitTool(command) {
   const whole = command.trim();
+  // Operators are read on the view with data heredoc bodies and inert quoted text blanked (`stripQuotedLiterals`, precise); the family name is matched on the raw text, so a quoted script path still counts.
+  const view = stripQuotedLiterals(whole, true, true);
 
   // (1) Unconditional detach-wrapper ban — no wait/probe-family requirement.
-  const hasDetachWrapper = shellSegments(command).some((segment) => {
+  const hasDetachWrapper = shellSegments(view).some((segment) => {
     // `nohup`/`disown` only detach when they head a command (segment start, or right after a
     // shell operator) — a bare mention (`cat nohup.out`, `echo "nohup banned"`) is not a detach.
     if (/(?:^|[;&|])\s*(?:nohup|disown)\b/.test(segment)) return true;
@@ -1347,7 +1450,7 @@ export function commandContainsDetachedWaitTool(command) {
   }
 
   // (3) OPTION-C: bare-`&` background AND a wait/probe family reference.
-  if (!commandHasBareBackgroundOperator(whole)) {
+  if (!commandHasBareBackgroundOperator(view)) {
     return false;
   }
   return WAIT_PROBE_FAMILY_RE.test(whole);
@@ -1472,17 +1575,51 @@ function scanShellText(text) {
  * OPS-NO-INLINE-INTERPRETER: an inline interpreter — `node -e`/`--eval`/`-p`, `python3 -c`, or a
  * heredoc fed to node/python (`node - <<EOF`, `python3 - <<EOF`). Sanctioned output parsing uses
  * `--jq`/`--silent`, never an inline interpreter. Actor-independent (bars both coordinator and
- * agent flows). Script-path invocations (running a `.mjs` file, `python3 script.py`) never match.
+ * agent flows). A script-path head (running a `.mjs` file, `python3 script.py`) does not match by itself, but a non-data heredoc body it reads is scanned.
+ * Malformed input (`tokenizeShellCommand(...).incomplete`) fails closed. Data heredoc
+ * bodies (`dataHeredocs`) are blanked before the scan, and quoted text is inert only in a segment that passes `inertQuoteSegment`.
  * @param {string} command @returns {boolean}
  */
 export function commandContainsInlineInterpreter(command) {
-  // Malformed input (unterminated quote, `$(` or heredoc) fails closed. Checked on the whole command only: the recursive substitution slices below are cut mid-construct on purpose.
-  return tokenizeShellCommand(command).incomplete || scanInlineInterpreter(command);
+  // Checked on the whole command only: the recursive substitution slices below are cut mid-construct on purpose.
+  const tok = tokenizeShellCommand(command);
+  return tok.incomplete || scanInlineInterpreter(blankDataHeredocs(command, tok));
 }
 
+/**
+ * Whether the quoted words of segment S are inert text. A quoted word is inert only behind a text head or a repo script runner; any other head keeps its quoted words visible (origin/main's raw split), so `git bisect run 'x; node -e y'` is still seen.
+ * The head must be the bare name (no path, no env prefix) and the command must define no function, since either can rebind the name to a program that runs its quoted words.
+ * One structural rule: the command must be a single top-level segment (no `;`, `&&`, `||`, `|`, newline), so no earlier segment can rebind PATH, define a function, or source a file, and no later segment can run what this one writes. The first word is the head, so an assignment word (`PATH=x grep …`) is never a text head.
+ */
+function inertQuoteSegment(tok, s) {
+  const [h = "", arg = ""] = s.words.filter((w) => !w.op).map((w) => w.value);
+  return tok.segments.length === 1 && !s.pipedOut && writeTargets(s).length === 0 && !h.includes("/") && !s.words.some((w) => /\$\(|`|[<>]\(|\$\{[\s|]/.test(w.raw.replaceAll("\\\n", ""))) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
+}
+
+/**
+ * Command segments and nested texts for the interpreter scan. A complete tokenization yields one text per unquoted-separator segment plus
+ * the executable nested texts (payload words after `-c`/`--command`/`eval` or a `<<<` here-string, and every heredoc body, which is blank
+ * when `blankDataHeredocs` removed it). Incomplete input (mid-construct slices) falls back to the line/operator split.
+ */
+function interpreterScanParts(command) {
+  const tok = tokenizeShellCommand(command);
+  if (tok.incomplete) return { segments: shellSegments(command), nested: [] };
+  const segments = tok.segments.filter((s) => s.words.length).flatMap((s) => { const text = command.slice(s.words[0].start, s.words.at(-1).end); return inertQuoteSegment(tok, s) ? [text] : shellSegments(text); });
+  const nested = [];
+  const bodies = (segs) => segs.forEach((seg) => { seg.heredocs.forEach((h) => nested.push(h.body)); seg.words.forEach((w) => w.subs.forEach((sub) => bodies(sub.segments))); }); // the substitution slices cut quoted-delimiter bodies out, so read every heredoc body from the token tree
+  bodies(tok.segments);
+  for (const { words } of tok.segments) words.forEach((w, k) => { if (isPayloadWord(words, k)) nested.push(w.value); });
+  return { segments, nested };
+}
+
+/**
+ * The token-level interpreter scan (no incomplete-input check; `commandContainsInlineInterpreter` adds that and the data-heredoc blanking).
+ * Shared with the retro-tooling transcript check, which calls it per transcript segment.
+ * @param {string} command @returns {boolean}
+ */
 export function scanInlineInterpreter(command) {
   // Token-level, not a shell parser: text after each `$(` and inside backtick pairs is checked as a command too.
-  // Literal text is blanked for this scan only (the per-segment check below keeps the raw text): quoted-delimiter heredoc bodies, single-quoted spans outside double quotes, and backslash-escaped characters.
+  // Literal text is blanked for this scan only (the per-segment check below keeps the raw text): quoted-delimiter heredoc bodies in this regex pass (the nested pass in `interpreterScanParts` rescans every body `dataHeredocs` does not classify as data), single-quoted spans outside double quotes, and backslash-escaped characters.
   // ponytail: ceiling: nested quote context inside `$(...)`, process substitution `<(...)` and subshell `(...)` are not covered; wrapper options (`sudo -u x`, `nice -n 5`, `xargs -I{}`) are not skipped by stripLeadingWrappers (pre-existing).
   // An unquoted-delimiter heredoc body keeps `$(` live but its quotes and `#` are literal: blank them so apostrophes never pair.
   // The delimiter is any unquoted shell word. A heredoc operator these regexes do not consume (a second heredoc on one line, an unusual delimiter) fails closed below.
@@ -1502,7 +1639,7 @@ export function scanInlineInterpreter(command) {
   // One left-to-right pass handles both forms, so a quote character in an earlier unquoted-delimiter body never desynchronizes the quote state of a later operator.
   // Bash closes `<<` on an unindented delimiter line; `<<-` strips leading tabs only. Each form has its own alternatives (groups 1-6 for `<<-`, 7-12 for `<<`; quoted head/quote/delimiter, then unquoted head/delimiter/body).
   const heredocForm = (g, op, ind) => `((?<!<)<<${op}\\s*(['"])([^\\s'"<>|;&()\\\\]+)\\${g + 2}[^\\n]*\\n)(?:[\\s\\S]*?\\n)??${ind}\\${g + 3}(?=\\)|\\n|$)|((?<!<)<<${op}\\s*([^\\s'"<>|;&()\\\\]+)[^\\n]*\\n)([\\s\\S]*?)(?=(?:(?<=\\n)|\\n)${ind}\\${g + 5}(?:\\)|\\n|$))`;
-  const blank = (s) => s.replace(/['"#]/g, " ");
+  const blank = (s) => s.replace(/\\\n/g, "").replace(/['"#]/g, " "); // an unquoted heredoc joins backslash-newline lines, so `$\` + newline + `(` is a live `$(`
   const noHeredoc = replaceUnquoted(command, new RegExp(`${heredocForm(0, "-", "\\t*")}|${heredocForm(6, "(?!-)", "")}`, "g"), (m) => m[1] ?? (m[4] === undefined ? m[7] ?? m[10] + blank(m[12]) : m[4] + blank(m[6]))); // quoted: body optional, an empty body closes on the first terminator line
   // An operator with no later newline has no body to hide, so a single-line mention (quoted text, arithmetic) keeps the blanked scan. ponytail: a multi-line command that quotes `<<` still fails closed.
   const heredocOperators = (noHeredoc.match(/(?<!<)<<(?!<)(?=[^\n]*\n)/g) ?? []).length;
@@ -1521,8 +1658,10 @@ export function scanInlineInterpreter(command) {
     ...ticks.filter((_, k) => k % 2 === 0).map((t, k) => base.slice(t + 1, ticks[2 * k + 1]).replace(/\\([`$\\])/g, "$1")), // bash unescapes \` \$ \\ in a backtick body
   ];
   if (subs.some((sub) => scanInlineInterpreter(sub))) return true;
+  const { segments, nested } = interpreterScanParts(command);
+  if (nested.some((text) => scanInlineInterpreter(text))) return true;
   // The raw head keeps the env-option forms; the stripped head adds sudo/xargs/timeout.
-  return shellSegments(command).flatMap((segment) => [segment, stripLeadingWrappers(segment)]).some((s) => {
+  return segments.flatMap((segment) => [segment, stripLeadingWrappers(segment)]).some((s) => {
     if (interpreterRegex("node").test(s)) {
       const code = s.replace(interpreterRegex("node"), "").trim();
       const tokens = unshellTokens(code); // quote-aware: a quoted option value with spaces stays one token
