@@ -975,21 +975,24 @@ function blankQuotedForFlags(command) {
  * unterminated quote, `$(` or heredoc onward is left as raw executable text in both modes (deny direction). Accepted ceiling, default mode
  * only: a deliberately quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is blanked like any other quoted
  * literal and can evade the ban. Precise mode keeps a quoted whole-word keyword (`'sleep' 5`) visible (`STRUCTURAL_WORD_RE`), so the ceiling does not apply there.
- * @param {string} command @param {boolean} [precise] @returns {string}
+ * `waitView` (the detached-wait operator view) also keeps a quoted span visible unless every segment around it passes `inertQuoteSegment`.
+ * @param {string} command @param {boolean} [precise] @param {boolean} [waitView] @returns {string}
  */
-function stripQuotedLiterals(command, precise = false) {
+function stripQuotedLiterals(command, precise = false, waitView = false) {
   const tok = tokenizeShellCommand(command);
   if (!precise && hasQuotePairingHazard(command)) return command;
   const text = precise ? blankDataHeredocs(command, tok) : command;
   const all = precise ? allWords(tok.segments) : [];
   const payloads = all.filter(({ words, k }) => feedsShell(tok) || isPayloadWord(words, k)).map(({ w }) => w);
   const limit = tok.incompleteAt < 0 ? text.length : tok.incompleteAt;
+  const textPipe = (seg) => seg.pipedOut && tok.segments.includes(seg) && TEXT_CONSUMER_RE.test(receiverOf(tok.segments[tok.segments.indexOf(seg) + 1]?.words ?? [])); // a pipe into a text reader (`| grep x`) keeps the quoted text inert
+  const inertHere = (seg) => inertQuoteSegment(tok, textPipe(seg) ? { ...seg, pipedOut: false } : seg);
   let out = "";
   let pos = 0;
   for (const { start, end, kind } of [...tok.spans].sort((a, b) => a.start - b.start)) {
     if (start < pos || start >= limit) continue; // nested in a span already handled, or in the unterminated tail (kept as a guard: a backtick span can start past the opener without a quote)
     const kept = precise
-      ? (kind === "double" && /\$\(|`/.test(text.slice(start + 1, end - 1))) || payloads.some((w) => w.start <= start && end <= w.end) ||
+      ? (kind === "double" && /\$\(|`/.test(text.slice(start + 1, end - 1))) || (waitView && all.some(({ w, seg }) => w.start <= start && end <= w.end && !inertHere(seg))) || payloads.some((w) => w.start <= start && end <= w.end) ||
         (STRUCTURAL_WORD_RE.test(text.slice(start + 1, end - 1)) && all.some(({ w, words }) => w.end === end && w.raw.length <= end - start + 1 && !/^(?:echo|printf)$/.test(words.find((x) => !x.op)?.value))) // a quoted structural keyword that is a whole word (`'sleep' 5`) still runs: keep it visible
       : /\$\(|`/.test(text.slice(start + 1, end - 1)) || // executable code in quotes: preserve (fail-closed)
         /(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(text.slice(0, start)); // -c/eval payload: real shell syntax
@@ -1002,7 +1005,7 @@ function stripQuotedLiterals(command, precise = false) {
 const STRUCTURAL_WORD_RE = /^(?:while|until|for|do|done|sleep|gh|loop-state|test|\[\[?)$/;
 /** @returns {{w: object, words: object[], k: number}[]} every word in SEGMENTS with its segment's words and index, nested substitutions included. */
 function allWords(segments, out = []) {
-  for (const { words } of segments) words.forEach((w, k) => { out.push({ w, words, k }); for (const sub of w.subs) allWords(sub.segments, out); });
+  for (const seg of segments) seg.words.forEach((w, k) => { out.push({ w, words: seg.words, k, seg }); for (const sub of w.subs) allWords(sub.segments, out); });
   return out;
 }
 const EXEC_FLAG_RE = /^(?:-[a-z]*c[a-z]*|--command)$/i;
@@ -1037,12 +1040,7 @@ const segmentHead = (seg) => rawHead(seg).split("/").pop();
 const REDIRECT_RE = /^\d*(?:&>>?|<>|>>?&?)\|?(.*)$/s;
 /** Words a `cat`/`tee` segment writes to: the word after any `>`, `>>`, `>|`, `>&`, `&>`, `&>>` or `<>` operator, an attached `>file`, and every `tee` operand. `>&2`/`>&-` duplicate a descriptor and write no file. */
 function writeTargets(seg) {
-  const targets = [];
-  seg.words.forEach((w, k) => {
-    const attached = REDIRECT_RE.exec(w.value);
-    if (attached) targets.push(attached[1] || seg.words[k + 1]?.value);
-    else if (segmentHead(seg) === "tee" && k > 0 && !w.op && !w.value.startsWith("-")) targets.push(w.value);
-  });
+  const targets = seg.words.map((w, k) => { const attached = REDIRECT_RE.exec(w.value); return attached ? attached[1] || seg.words[k + 1]?.value : segmentHead(seg) === "tee" && k > 0 && !w.op && !w.value.startsWith("-") ? w.value : null; });
   return targets.filter((t) => t && !/^\d+$|^-$/.test(t)).map((t) => t.replace(/^\.\//, ""));
 }
 
@@ -1052,10 +1050,10 @@ const TEXT_FLAG_ATTACHED_RE = /^--(?:message|body|title|notes)=/;
 const isTextHost = (seg) => seg.words[0]?.value === "git" && seg.words[1]?.value === "commit";
 /** Whether the substitution in word K of SEG (a `isTextHost` segment) is inert text: the value of a text flag, never an env-assignment word. */
 function substitutionIsInert(seg, k) {
-  const w = seg.words[k];
-  if (ENV_ASSIGNMENT_WORD_RE.test(w.raw) || overridesConfig(seg) || !isTextHost(seg)) return false;
-  const attached = TEXT_FLAG_ATTACHED_RE.exec(w.raw);
-  const raw = attached ? w.raw.slice(attached[0].length) : w.raw;
+  const { raw: w } = seg.words[k];
+  if (ENV_ASSIGNMENT_WORD_RE.test(w) || overridesConfig(seg) || !isTextHost(seg)) return false;
+  const attached = TEXT_FLAG_ATTACHED_RE.exec(w);
+  const raw = attached ? w.slice(attached[0].length) : w;
   return /^(?:\$\(.*\)|"\$\(.*\)")$/s.test(raw) && (attached !== null || TEXT_FLAG_RE.test(seg.words[k - 1]?.value ?? ""));
 }
 
@@ -1076,12 +1074,12 @@ function dataHeredocs(segments) {
   const dataBody = (s) => { // closed, not piped onward, no process-substitution word (`>(sh)`, a `(`-target)
     if (s.pipedOut || s.words.some((w) => /[<>]\(/.test(w.raw) || /[<>]\(/.test(w.value))) return [];
     if (!/^(?:\/bin\/|\/usr\/bin\/)?(?:cat|tee)$/.test(rawHead(s)) || s.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw))) return []; // not cat/tee, or a path-prefixed or PATH-overridden `cat`, is an unknown program
-    return s.heredocs.filter((x) => x.closed && (x.quoted || !/\$\(|`/.test(x.body.replace(/\\\n/g, ""))));
+    return s.heredocs.filter((x) => x.closed && (x.quoted || !/\$\(|`|\$\{[\s|]/.test(x.body.replace(/\\\n/g, ""))));
   };
   const subs = seg.words.flatMap((w, k) => w.subs.map((sub) => ({ sub, k })));
   if (subs.length === 0) return dataBody(seg);
   // exactly one inert git commit text-flag substitution holding exactly one substitution-free, file-writing-free cat segment
-  if (subs.length !== 1 || !isTextHost(seg) || seg.pipedOut || writeTargets(seg).length !== 0 || seg.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw))) return [];
+  if (subs.length !== 1 || seg.pipedOut || writeTargets(seg).length !== 0 || seg.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw))) return [];
   const { sub, k } = subs[0];
   if (isPayloadWord(seg.words, k) || !substitutionIsInert(seg, k) || sub.segments.length !== 1) return [];
   const inner = sub.segments[0];
@@ -1089,7 +1087,7 @@ function dataHeredocs(segments) {
 }
 
 /** COMMAND with the data heredoc bodies blanked to same-length whitespace (newlines kept), so offsets still index the input. Incomplete input is returned unchanged. */
-function blankDataHeredocs(command, tok = tokenizeShellCommand(command)) {
+function blankDataHeredocs(command, tok) {
   if (tok.incomplete) return command;
   let out = command;
   for (const h of dataHeredocs(tok.segments)) out = out.slice(0, h.bodyStart) + out.slice(h.bodyStart, h.bodyEnd).replace(/[^\n]/g, " ") + out.slice(h.bodyEnd);
@@ -1440,7 +1438,7 @@ const WAIT_PROBE_FAMILY_RE = new RegExp(
 export function commandContainsDetachedWaitTool(command) {
   const whole = command.trim();
   // Operators are read on the view with data heredoc bodies and inert quoted text blanked (`stripQuotedLiterals`, precise); the family name is matched on the raw text, so a quoted script path still counts.
-  const view = stripQuotedLiterals(whole, true);
+  const view = stripQuotedLiterals(whole, true, true);
 
   // (1) Unconditional detach-wrapper ban — no wait/probe-family requirement.
   const hasDetachWrapper = shellSegments(view).some((segment) => {
@@ -1598,6 +1596,18 @@ export function commandContainsInlineInterpreter(command) {
 }
 
 /**
+ * Whether the quoted words of segment S are inert text. A quoted word is inert only behind a text head or a repo script runner; any other head keeps its quoted words visible (origin/main's raw split), so `git bisect run 'x; node -e y'` is still seen.
+ * The head must be the bare name (no path, no env prefix) and the command must define no function, since either can rebind the name to a program that runs its quoted words.
+ * A word holding `()` (also the no-space `grep(){`) defines a function; a segment headed by alias, hash, shopt, unalias or enable rebinds names, so each disables inert quotes for the whole command.
+ */
+function inertQuoteSegment(tok, s) {
+  const definesFunction = feedsShell(tok) || tok.segments.some((x) => x.words.some((w) => /^(?:alias|hash|shopt|unalias|enable)$/.test(w.value)) || x.words.some((w) => w.value === "function" || w.raw.includes("()") || /\($/.test(w.value)));
+  const anyRedirect = tok.segments.some((x) => x.words.some((w) => REDIRECT_RE.test(w.value))); // an output redirect in any segment (exec >f, braced group) can feed a later one, so no segment is inert
+  const [h = "", arg = ""] = s.words.filter((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op).map((w) => w.value);
+  return !definesFunction && !anyRedirect && !s.pipedOut && writeTargets(s).length === 0 && !s.words.some((w) => REDIRECT_RE.test(w.value) || w.raw.includes("(")) && !(h === "printf" && s.words.some((w) => /^-v/.test(w.value))) && !h.includes("/") && !s.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw)) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
+}
+
+/**
  * Command segments and nested texts for the interpreter scan. A complete tokenization yields one text per unquoted-separator segment plus
  * the executable nested texts (payload words after `-c`/`--command`/`eval` or a `<<<` here-string, and every heredoc body, which is blank
  * when `blankDataHeredocs` removed it). Incomplete input (mid-construct slices) falls back to the line/operator split.
@@ -1605,20 +1615,9 @@ export function commandContainsInlineInterpreter(command) {
 function interpreterScanParts(command) {
   const tok = tokenizeShellCommand(command);
   if (tok.incomplete) return { segments: shellSegments(command), nested: [] };
-  // A quoted word is inert only behind a text head or a repo script runner; any other head keeps its quoted words visible (origin/main's raw split), so `git bisect run 'x; node -e y'` is still seen.
-  // The head must be the bare name (no path, no env prefix) and the command must define no function, since either can rebind the name to a program that runs its quoted words.
-  // A word holding `()` (also the no-space `grep(){`) defines a function; a segment headed by alias, hash, shopt, unalias or enable rebinds names, so each disables inert quotes for the whole command.
-  const definesFunction = feedsShell(tok) || tok.segments.some((s) => s.words.some((w) => /^(?:alias|hash|shopt|unalias|enable)$/.test(w.value)) || s.words.some((w) => w.value === "function" || w.raw.includes("()") || /\($/.test(w.value)));
-  const anyRedirect = tok.segments.some((s) => s.words.some((w) => REDIRECT_RE.test(w.value))); // an output redirect in any segment (exec >f, braced group) can feed a later one, so no segment is inert
-  const inertQuotes = (s) => { const h = rawHead(s); const arg = s.words.filter((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op)[1]?.value ?? ""; return !definesFunction && !anyRedirect && !s.pipedOut && writeTargets(s).length === 0 && !s.words.some((w) => REDIRECT_RE.test(w.value) || w.raw.includes("(")) && !(h === "printf" && s.words.some((w) => /^-v/.test(w.value))) && !h.includes("/") &&!s.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw)) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/"))); };
-  const segments = tok.segments.filter((s) => s.words.length).flatMap((s) => { const text = command.slice(s.words[0].start, s.words.at(-1).end); return inertQuotes(s) ? [text] : shellSegments(text); });
+  const segments = tok.segments.filter((s) => s.words.length).flatMap((s) => { const text = command.slice(s.words[0].start, s.words.at(-1).end); return inertQuoteSegment(tok, s) ? [text] : shellSegments(text); });
   const nested = [];
-  const bodies = (segs) => { // the substitution slices cut quoted-delimiter bodies out, so read every heredoc body from the token tree
-    for (const seg of segs) {
-      for (const h of seg.heredocs) nested.push(h.body);
-      for (const w of seg.words) for (const sub of w.subs) bodies(sub.segments);
-    }
-  };
+  const bodies = (segs) => segs.forEach((seg) => { seg.heredocs.forEach((h) => nested.push(h.body)); seg.words.forEach((w) => w.subs.forEach((sub) => bodies(sub.segments))); }); // the substitution slices cut quoted-delimiter bodies out, so read every heredoc body from the token tree
   bodies(tok.segments);
   for (const { words } of tok.segments) words.forEach((w, k) => { if (isPayloadWord(words, k)) nested.push(w.value); });
   return { segments, nested };

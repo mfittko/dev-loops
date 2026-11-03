@@ -1582,7 +1582,7 @@ test("stripQuotedLiterals is built on tokenizeShellCommand and the regex pairing
   const source = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/loop/bash-command-classify.mjs"), "utf8");
   assert.equal(source.includes("/(['\"])((?:(?!\\1).)*)\\1/gs"), false);
   assert.equal(source.includes("neutralizeQuoteNoise"), false);
-  assert.match(source, /function stripQuotedLiterals\(command, precise = false\) \{\s*const tok = tokenizeShellCommand\(command\)/);
+  assert.match(source, /function stripQuotedLiterals\(command, precise = false, waitView = false\) \{\s*const tok = tokenizeShellCommand\(command\)/);
 });
 
 test("stripQuotedLiterals callers keep their decisions on tokenizer-backed quoting (#2442)", () => {
