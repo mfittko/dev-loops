@@ -1228,6 +1228,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     conflictFiles,
     prData,
     snapshot,
+    skippedUntrusted: parsedThreads.skippedUntrusted,
     gateEvidence,
     unresolvedGateThreadCount,
     interpretation,
@@ -1531,6 +1532,8 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   }
   // Expose effective round count in output for testability
   result.copilotReviewRoundCount = context.snapshot?.copilotReviewRoundCount ?? 0;
+  // ADR 0238: all-untrusted open threads are non-blocking but visible, with authors and the remedy.
+  if (context.skippedUntrusted?.length > 0) result.skippedUntrusted = context.skippedUntrusted;
   // ADR 0155: an incomplete fixer disposition is a visible warning, never a block.
   if (context.fixerDisposition?.warning) {
     result.fixerDispositionWarning = { warning: context.fixerDisposition.warning, incomplete: context.fixerDisposition.incomplete };

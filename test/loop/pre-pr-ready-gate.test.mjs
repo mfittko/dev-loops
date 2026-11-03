@@ -324,7 +324,7 @@ function niceToHaveThreadNode({ fp = "f".repeat(16), commentId = 9001, id = "THR
     isOutdated: false,
     path: "src/naming.mjs",
     line: 4,
-    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${buildFindingMarker({ fp, severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): casing nit`, author: { login: "pi-local-run", __typename: "User" } }] },
+    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${buildFindingMarker({ fp, severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): casing nit`, authorAssociation: "OWNER", author: { login: "pi-local-run", __typename: "User" } }] },
   };
 }
 
@@ -382,7 +382,7 @@ function questionThreadNode({ fp = "9".repeat(16), commentId = 9002, id = "THREA
     isOutdated: false,
     path: null,
     line: null,
-    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${buildFindingMarker({ fp, severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why this approach?`, author: { login: "pi-local-run", __typename: "User" } }] },
+    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${buildFindingMarker({ fp, severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why this approach?`, authorAssociation: "OWNER", author: { login: "pi-local-run", __typename: "User" } }] },
   };
 }
 
@@ -420,7 +420,7 @@ function nitThreadNode({ fp = "7".repeat(16), commentId = 9003, id = "THREAD_NIT
     isOutdated: false,
     path: "src/naming.mjs",
     line: 4,
-    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${buildFindingMarker({ fp, severity: "nit", angle: "style", round: 1 })}\n**nit** (\`style\`): trailing whitespace`, author: { login: "pi-local-run", __typename: "User" } }] },
+    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${buildFindingMarker({ fp, severity: "nit", angle: "style", round: 1 })}\n**nit** (\`style\`): trailing whitespace`, authorAssociation: "OWNER", author: { login: "pi-local-run", __typename: "User" } }] },
   };
 }
 

@@ -1796,7 +1796,7 @@ test("copilot-pr-handoff emits fix action when unresolved threads exist", async 
                     {
                       id: "c-1",
                       body: "Please add a test.",
-                      author: { login: "reviewer", __typename: "User" },
+                      authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" },
                     },
                   ],
                 },

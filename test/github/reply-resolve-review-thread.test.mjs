@@ -821,7 +821,7 @@ async function runDeltaGuardedReply({ items, candidateOffset = false, rootBody =
       reviewBaselineHead: baseline, candidateHead: candidateOffset ? baseline : head, actSetId: "0".repeat(16), invocation: 1,
       outcome: "needs_fix", nextStep: "fix_and_rereview", items,
     }));
-    const fingerprintThread = createReviewThreadsPayload([{ id: "THREAD_123", comments: { nodes: [{ id: "PRRC_node_123", databaseId: 123, body: rootBody }] } }]);
+    const fingerprintThread = createReviewThreadsPayload([{ id: "THREAD_123", comments: { nodes: [{ id: "PRRC_node_123", databaseId: 123, authorAssociation: "OWNER", author: { login: "owner", __typename: "User" }, body: rootBody }] } }]);
     return await runFixedReply(`Fixed in ${fix} with the missing guard.\n`, [
       { ...headViewEntry, stdout: `${JSON.stringify({ headRefOid: head })}\n` },
       { ...threadEntry, stdout: fingerprintThread },

@@ -154,9 +154,10 @@ export function parseAllowedRefsCsv(value, flag, parseError = null) {
 // so a caller that needs stdin no longer has to reach for a second, separately
 // injected runner — every gh call in a script can route through the ONE
 // runChild its tests already stub.
-export function runChild(command, args, env = process.env, stdinText = undefined) {
+// `timeoutMs` is optional and additive: when set, spawn kills the child at the bound, so the close handler settles with a signal exit.
+export function runChild(command, args, env = process.env, stdinText = undefined, { timeoutMs } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { env, stdio: [stdinText === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
+    const child = spawn(command, args, { env, timeout: timeoutMs, killSignal: "SIGKILL", stdio: [stdinText === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += String(chunk); });

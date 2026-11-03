@@ -1162,14 +1162,19 @@ test("explicitRepoProvenForeign truth table", () => {
   assert.equal(explicitRepoProvenForeign("other/repo", "acme/widgets;id"), false);
 });
 
-test("decideBashGate (hook-decisions.mjs) resolves inManagedRepo via the shared deriveInManagedRepo predicate", () => {
+test("decideBashGate resolves inManagedRepo via the shared deriveInManagedRepo predicate", () => {
   // Parity guard: the Claude Bash-hook guard and this Pi-harness helper must agree on the same
   // managed-repo-identity resolution rather than drifting into two divergent implementations.
-  const hookDecisionsSource = fs.readFileSync(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/claude/hook-decisions.mjs"),
-    "utf8",
+  // The gate's rule bodies (and so this composition) live in the harness-neutral
+  // loop/bash-gate-decisions.mjs; the Claude seam delegates to them.
+  const coreSrc = path.join(path.dirname(fileURLToPath(import.meta.url)), "../src");
+  const decisionSource = fs.readFileSync(path.join(coreSrc, "loop/bash-gate-decisions.mjs"), "utf8");
+  assert.match(decisionSource, /deriveInManagedRepo/, "bash-gate-decisions.mjs must import/use deriveInManagedRepo from the shared module");
+  assert.match(
+    fs.readFileSync(path.join(coreSrc, "claude/hook-decisions.mjs"), "utf8"),
+    /decideBashGateDeny/,
+    "decideBashGate must delegate to the shared Bash-gate deny decision",
   );
-  assert.match(hookDecisionsSource, /deriveInManagedRepo/, "hook-decisions.mjs must import/use deriveInManagedRepo from the shared module");
 
   // Same input table, both call sites: `decideBashGate` composes `deriveInManagedRepo` the same
   // way the Pi harness does (verified indirectly — decideBashGate's own gate behavior when
@@ -1620,4 +1625,30 @@ test("review fixes: hazard text keeps the body flag visible, nested quotes are a
   // ANSI-C delimiter decoding
   assert.equal(commandContainsInlineInterpreter(": <<$'\\x45OF'\nbody\nEOF"), false);
   assert.equal(commandContainsInlineInterpreter(": <<$'EO\\x46'\nbody\nEOF"), false);
+});
+
+test("tokenizeShellCommand: $((expr)) is arithmetic and DELIM) closes a heredoc inside $(...) (#2442)", () => {
+  for (const c of ["echo $((1<<2))", "x=$((a<<b)); echo $x"]) assert.equal(commandContainsInlineInterpreter(c), false, c);
+  assert.equal(tokenizeShellCommand(": $((1<<2))").incomplete, false);
+  assert.equal(tokenizeShellCommand(": $(( $(date) << 2 ))").incomplete, true); // arithmetic holding a substitution falls back to the `$(` reader: fail closed
+  for (const c of [": $((true);(gh pr merge 5))", ": $((true) | (cmd))", ": $((p);(q))", ": $((true)\n(gh pr merge 5))", ": $((p)&(q))", ": $((p) > >(q))", ": $((r) | (s))"]) {
+    const parsed = tokenizeShellCommand(c);
+    // read as a substitution (visible), not opaque arithmetic
+    assert.equal(parsed.segments[0].words[1].subs.length, 1, c);
+  }
+  assert.equal(commandContainsInlineInterpreter(": $((1<<2))\nnode - <<EOF\nconsole.log(1)\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter(": $((`node -e 1`<<2))"), true); // the backtick alternative of the readArith guard
+  assert.equal(tokenizeShellCommand(': $(("1"<<2))').incomplete, true); // the quote alternative
+  assert.equal(tokenizeShellCommand(": $((1<<2").incomplete, true);
+  assert.equal(tokenizeShellCommand(": $(( (1<<2) ))").incomplete, false);
+  for (const c of ["EOF)rest", "EOF) && node -e 1"]) assert.equal(tokenizeShellCommand(`X=$(cat <<'EOF'\nbody\n${c}`).incomplete, true, c);
+  const tabbed = "X=$(cat <<-'EOF'\n\tbody\n\tEOF)";
+  assert.equal(tokenizeShellCommand(tabbed).incomplete, false);
+  const subs = tokenizeShellCommand(tabbed).segments[0].words[0].subs;
+  assert.equal(subs[0].segments[0].heredocs[0].body, "\tbody", "<<- body kept");
+  assert.ok(!subs[0].segments.some((s) => s.words.some((w) => w.value === "F")), "no stray word F");
+  const closed = "echo \"$(cat <<'EOF'\nbody\nEOF)\"";
+  assert.equal(tokenizeShellCommand(closed).incomplete, false);
+  assert.equal(tokenizeShellCommand("cat <<'EOF'\nbody\nEOF)").incomplete, true); // outside a substitution `EOF)` is no delimiter
+  assert.equal(commandContainsInlineInterpreter("gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\""), false);
 });

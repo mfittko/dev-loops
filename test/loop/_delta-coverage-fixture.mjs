@@ -7,6 +7,7 @@ import { emitFixerWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs
 import { pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { initGitFixture } from "../_helpers.mjs";
+import { sealDeltaFixture } from "./_seal-fixture.mjs";
 
 export const coverageRepo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "delta-pulled-")));
 export const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnvNoDirOverrides(), stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -22,9 +23,18 @@ export const B = git(coverageRepo, "rev-parse", "HEAD");
 let next = 0;
 
 // Actual emission, registered canonical pull and an output written AFTER the pull.
-export async function boundArgs(argv, seam = {}) {
+export async function boundArgs(argv, seam = {}, { seal = true } = {}) {
+  const bound = await bindArgs(argv, seam);
+  const at = (flag) => bound.args[bound.args.indexOf(flag) + 1];
+  if (seal && bound.args.includes("--result")) sealDeltaFixture(seam.tmpRoot ?? resolveGateArtifactTmpRoot(at("--worktree")), at("--result"));
+  return bound;
+}
+
+async function bindArgs(argv, seam) {
   const args = [...argv];
   if (!args.includes("--worktree")) args.push("--worktree", coverageRepo);
+  // The reviewer-input run requires the briefed result path.
+  if (!["--result", "--result-path", "--handback", "--help"].some((flag) => args.includes(flag))) args.push("--result-path", path.join(os.tmpdir(), `delta-result-${++next}.json`));
   if (!args.includes("--act-list") || args.includes("--handback")) return { args, seam };
   const get = (flag) => args[args.indexOf(flag) + 1];
   const cwd = get("--worktree"), actList = get("--act-list");

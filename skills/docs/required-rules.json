@@ -317,6 +317,10 @@
       "enforcement": "runtime"
     },
     {
+      "id": "GATE-REVIEW-COMMENT-TRUST",
+      "enforcement": "runtime"
+    },
+    {
       "id": "GATE-REVIEW-SUBMIT-MODES",
       "enforcement": "runtime"
     },
@@ -329,6 +333,10 @@
     },
     {
       "id": "GATE-EXEC-ANGLE-COVERAGE"
+    },
+    {
+      "id": "GATE-EXEC-EVIDENCE-SEALED",
+      "enforcement": "runtime"
     },
     {
       "id": "GATE-EXEC-ARTIFACT-HEAD-STAMP",

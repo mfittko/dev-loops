@@ -5,6 +5,7 @@
 
 import { GATE_REVIEW_VERDICT_SET } from "../loop/policy-constants.mjs";
 import { trimmedOrNull } from "../loop/normalize.mjs";
+import { isSanctionedCopilotReviewerLogin } from "./comment-trust.mjs";
 
 // Same whitelist as the loop-state reader: two copies could drift, and a guard
 // acting on the gate's behalf must agree with the gate about what a submitted
@@ -744,7 +745,8 @@ export function resolveDraftGateRoundResetMs({ draftGate, currentHeadSha } = {})
 
 export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs } = {}) {
   const allReviews = Array.isArray(reviews) ? reviews : [];
-  const copilotReviews = allReviews.filter((review) => isCopilotLogin(review?.author?.login ?? review?.user?.login));
+  // Exact sanctioned reviewer only (ADR 0238): a `copilot-*` lookalike's review body never reaches the judge.
+  const copilotReviews = allReviews.filter((review) => isSanctionedCopilotReviewerLogin(review?.author?.login ?? review?.user?.login));
 
   // When draft gate has re-passed on a different head, only count reviews
   // after the most recent draft gate approval to prevent round accumulation.
