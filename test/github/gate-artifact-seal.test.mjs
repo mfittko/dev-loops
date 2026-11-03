@@ -45,6 +45,15 @@ describe("gate artifact seal", () => {
     setTimeout(async () => { await writeFile(`${f}.seal`, `${createHash("sha256").update("{\"w\":1}\n").digest("hex")}\n`, "utf8"); await rm(`${f}.lock`, { recursive: true }); }, 100);
     expect(await read).toBe("{\"w\":1}\n");
   });
+  it("waits for a held write lock before reporting a seal mismatch, then re-reads once", async () => {
+    const f = path.join(await mkdtemp(path.join(os.tmpdir(), "seal-")), "a.json");
+    await writeFile(f, "{\"w\":2}\n", "utf8");
+    await writeFile(`${f}.seal`, "stale\n", "utf8");
+    await mkdir(`${f}.lock`);
+    const read = readSealed(f);
+    setTimeout(async () => { await writeFile(`${f}.seal`, `${createHash("sha256").update("{\"w\":2}\n").digest("hex")}\n`, "utf8"); await rm(`${f}.lock`, { recursive: true }); }, 100);
+    expect(await read).toBe("{\"w\":2}\n");
+  });
 });
 
 describe("gate artifact seal edge cases", () => {

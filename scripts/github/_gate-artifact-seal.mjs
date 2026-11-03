@@ -58,16 +58,21 @@ const lockHeld = (file) => stat(`${file}.lock`).then((s) => Date.now() - s.mtime
 export async function readSealed(file, { remedy } = {}, waited = false) {
   const text = await readFile(file, "utf8");
   let seal;
+  // A writer holding the lock can interleave with the two reads: wait for it, then re-read once.
+  const rereadAfterWriter = async () => {
+    if (waited || !await lockHeld(file)) return null;
+    const deadline = Date.now() + LOCK_WAIT_MS;
+    while (Date.now() < deadline && await lockHeld(file)) await new Promise((resolve) => setTimeout(resolve, 10));
+    return readSealed(file, { remedy }, true);
+  };
   try { seal = (await readFile(sealPath(file), "utf8")).trim().toLowerCase(); } catch (error) {
-    if (error?.code === "ENOENT" && !waited && await lockHeld(file)) {
-      const deadline = Date.now() + LOCK_WAIT_MS;
-      while (Date.now() < deadline && await lockHeld(file)) await new Promise((resolve) => setTimeout(resolve, 10));
-      return readSealed(file, { remedy }, true);
-    }
+    if (error?.code === "ENOENT") { const reread = await rereadAfterWriter(); if (reread !== null) return reread; }
     const cause = error?.code === "ENOENT" ? "has no seal" : `has an unreadable seal (${error?.code ?? "read error"})`;
     throw Object.assign(new Error(`${UNSEALED}: ${file} ${cause}; re-run the sanctioned writer at the artifact head${remedy ? `; ${remedy}` : ""}`), { code: UNSEALED, file });
   }
   if (seal !== digest(text)) {
+    const reread = await rereadAfterWriter();
+    if (reread !== null) return reread;
     throw Object.assign(new Error(`${OUT_OF_BAND_WRITE}: ${file} was modified outside its sanctioned writer (seal mismatch)`), { code: OUT_OF_BAND_WRITE, file });
   }
   return text;

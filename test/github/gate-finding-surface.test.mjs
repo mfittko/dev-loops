@@ -1442,3 +1442,17 @@ test("findJudgeDispositionForFingerprint refuses an unsealed and an edited prior
     await assert.rejects(lookup, (err) => err.code === "gate_artifact_unsealed");
   });
 });
+
+test("readGateFindingsLedger surfaces an unsealed and an edited ledger as typed seal refusals, not a plain read error", async () => {
+  await withLedgerFile(validLedgerForSeal(), async (ledgerPath) => {
+    await rm(`${ledgerPath}.seal`);
+    await assert.rejects(() => readGateFindingsLedger(ledgerPath), { code: "gate_artifact_unsealed" });
+  });
+  await withLedgerFile(validLedgerForSeal(), async (ledgerPath) => {
+    await writeFile(ledgerPath, "{}", "utf8");
+    await assert.rejects(() => readGateFindingsLedger(ledgerPath), { code: "gate_artifact_out_of_band_write" });
+  });
+});
+function validLedgerForSeal() {
+  return { repo: "o/r", pr: 1, gate: "draft_gate", headSha: HEAD_SHA, verdict: "findings_present", loggedAt: "2026-10-25T00:00:00.000Z", findings: [] };
+}

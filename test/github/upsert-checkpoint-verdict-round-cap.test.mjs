@@ -420,3 +420,18 @@ test("the closure round line renders a normalized full SHA and refuses a short, 
   }
   for (const input of ["abc1234", "", "  ", null, undefined]) assert.doesNotMatch(line(input), /closure round: diff from/, String(input));
 });
+
+test("a --findings-ledger without a seal is refused as gate_artifact_unsealed and an edited one as gate_artifact_out_of_band_write", async () => {
+  await seedPrior(repoRoot, priorHeads);
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-seal-ledger-"));
+  try {
+    const sealed = await writeLedger(dir, { findings: [finding("high", "act")] });
+    await rm(`${sealed}.seal`);
+    assert.match((await post(["--findings-ledger", sealed])).error, /gate_artifact_unsealed/);
+    const edited = await writeLedger(dir, { findings: [finding("high", "act")], name: "edited.json" });
+    await writeFile(edited, "{\"edited\":true}", "utf8");
+    assert.match((await post(["--findings-ledger", edited])).error, /gate_artifact_out_of_band_write/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
