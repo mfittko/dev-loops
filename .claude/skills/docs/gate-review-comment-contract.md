@@ -30,8 +30,10 @@ findings: locatable ones as its inline comments, the rest body-filed in full in 
 Each finding carries an invisible fingerprint+disposition marker that `GATE-EXEC-FINDING-THREADS`
 reads back for cross-round suppression and deferral tracking
 ([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition)).
-No separate verdict issue comment and no separate findings review is posted. Two exceptions exist:
-the opt-in findings comment (`gates.postFindingsComments`, `GATE-COMMENT-IDENTITY-DISJOINT`) and
+No separate verdict issue comment and no separate findings review is posted. Three exceptions exist:
+the opt-in findings comment (`gates.postFindingsComments`, `GATE-COMMENT-IDENTITY-DISJOINT`),
+the once-per-head untrusted-comments-skipped note (`<!-- dev-loops:untrusted-comments-skipped head=<sha> -->`,
+ADR 0247, `GATE-REVIEW-COMMENT-TRUST`; it names counts and author logins, never comment text) and
 the batched deferral comment (`<!-- dev-loops:deferred-summary -->`) that `judge-pass.mjs` and
 `close-gate-findings.mjs` post for a round's deferred findings, at most one per tool run, on the
 linked spec issue (ADR 0092, `GATE-EXEC-DEFERRAL-RECORD`) on lifecycle gates; the standalone `review` gate posts no deferral comment on any target (`REVIEW-GATE-JUDGE-PHASE`). When the target is the PR itself no
