@@ -551,6 +551,7 @@ export async function assertRunnerOwnership({
   cwd = process.cwd(),
   filePath = null,
   requireExisting = false,
+  readOnly = false,
   now = new Date().toISOString(),
   maxAgeMs,
 } = {}) {
@@ -617,6 +618,10 @@ export async function assertRunnerOwnership({
       filePath: resolvedPath,
       message: `PR ${normalizedRepo}#${normalizedPr} has no active runner ownership record for async run ${normalizedRunId}.`,
     });
+  }
+  if (state.activeRun.runId === normalizedRunId && readOnly) {
+    // Read-only callers (merge-pr --check) confirm the owner without a heartbeat write.
+    return { ok: true, status: "owner_confirmed", repo: normalizedRepo, pr: normalizedPr, runId: normalizedRunId, activeRun: state.activeRun, previousRun: state.previousRun, exitSignals: state.exitSignals, filePath: resolvedPath };
   }
   if (state.activeRun.runId === normalizedRunId) {
     return withRunnerStateFileLock(resolvedPath, async () => {
@@ -1018,6 +1023,7 @@ export async function ensureAsyncRunnerOwnership({
   cwd = process.cwd(),
   claimIfMissing = true,
   requireExisting = false,
+  readOnly = false,
   supersedeStale = false,
   // The detection read this handoff authorizes a takeover with; tests inject a
   // verdict to exercise the production wiring without a live stale claim.
@@ -1047,7 +1053,7 @@ export async function ensureAsyncRunnerOwnership({
       filePath: null,
     };
   }
-  const asserted = await assertRunnerOwnership({ repo, pr, runId, cwd, requireExisting });
+  const asserted = await assertRunnerOwnership({ repo, pr, runId, cwd, requireExisting, readOnly });
   if (asserted.ok && asserted.status !== "no_owner_record") {
     return asserted;
   }
