@@ -68,9 +68,9 @@ const CASES = [
   ["perl -e 'x'", false],
   ["ruby -e 'x'", false],
   ["deno eval 'x'", false],
-  ["gh pr comment 1 --body-file - <<'EOF'\nthe hook refuses cat <<EOF then `node -e 1`\nEOF", false],
-  ["gh issue comment 1 --body-file - <<'EOF'\nsee `python3 -c x`\n```\ncat <<X\nhi\nX\n```\nEOF", false],
-  ["git commit -F - <<'EOF'\nfix: refuse `node -e`\n\nmention: python3 - <<EOF\nEOF", false],
+  ["gh pr comment 1 --body-file - <<'EOF'\nthe hook refuses cat <<EOF then `node -e 1`\nEOF", true],
+  ["gh issue comment 1 --body-file - <<'EOF'\nsee `python3 -c x`\n```\ncat <<X\nhi\nX\n```\nEOF", true],
+  ["git commit -F - <<'EOF'\nfix: refuse `node -e`\n\nmention: python3 - <<EOF\nEOF", true],
 ];
 
 test("inline interpreter verdict table", () => {

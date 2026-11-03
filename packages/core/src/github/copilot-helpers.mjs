@@ -129,14 +129,14 @@ export function matchGateReviewCommentHeader(body) {
 //
 // Line-anchored (`^` with `m`) so only a marker at column 0 is excluded; a
 // genuine verdict whose findings merely QUOTE the marker mid-line still counts.
-// The set covers exactly three tokens: the per-round review marker
+// The set covers exactly four tokens: the per-round review marker
 // (gate-findings-review), post-gate-findings.mjs's findings-COMMENT marker
-// (gate-findings), and the deferred-summary comment. Without the
+// (gate-findings), the deferred-summary comment and the untrusted-comments-skipped note. Without the
 // findings-comment marker, that comment parses as a verdict candidate and the
 // verdict upsert overwrites it in place, silently destroying the round's
 // findings record. Every branch is delimiter-anchored (token followed by
 // whitespace or `-->`) so no suffixed `<token>-<x>` variant matches.
-const GATE_MACHINE_ARTIFACT_MARKER_RE = /^<!--\s*dev-loops:(?:gate-findings-review|gate-findings|deferred-summary)(?=\s|-->)/mu;
+const GATE_MACHINE_ARTIFACT_MARKER_RE = /^<!--\s*dev-loops:(?:gate-findings-review|gate-findings|deferred-summary|untrusted-comments-skipped)(?=\s|-->)/mu;
 
 export function isGateMachineArtifactBody(body) {
   if (typeof body !== "string" || !GATE_MACHINE_ARTIFACT_MARKER_RE.test(body)) {
@@ -172,7 +172,7 @@ export function resolveCopilotReviewPresence({ requested = false, reviews = [] }
   if (requested === true) {
     sources.push("requested_reviewer");
   }
-  if (list.some((review) => isCopilotLogin(review?.author?.login))) {
+  if (list.some((review) => isSanctionedCopilotReviewerLogin(review?.author?.login))) {
     sources.push("submitted_review");
   }
   return { present: sources.length > 0, sources };
