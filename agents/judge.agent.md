@@ -55,7 +55,7 @@ Write a single JSON object to the deterministic path your work order names (unde
   "scopeDrift": {
     "verdict": "within_scope" | "drift_detected",
     "rationale": "<names the scope boundary confirmed or exceeded>",
-    "driftedAreas": ["<area that grew past the stated criteria>"]
+    "driftedAreas": []
   },
   "dispositions": [
     {
@@ -74,6 +74,7 @@ Write a single JSON object to the deterministic path your work order names (unde
 }
 ```
 
+- `scopeDrift.driftedAreas` is a list of the areas that grew past the stated criteria. `drift_detected` lists each area as a non-empty string. `within_scope` may omit it or use `[]`.
 - `index` is the cluster's `clusterId` from the consolidated ledger (a finding's own 0-based position when the ledger carries no `clusterId`). You dispose each cluster once, with one rationale, and the disposition applies to every member. A cluster with no disposition fails closed. `title`, `detail` and `fix` are required on every disposition and `reason` on `defer` and `reject`. Write them as plain sentences that state the defect as observable behavior, with no em dashes and no arrows.
 - You are the only authority for a disposition, the review verdict and the next action. Severity, the round number and the medium fix window (`mediumFixWindow`) in your work order are inputs. No code path defers or rejects a finding from severity or round alone, except `GATE-EXEC-LOW-FIX-UNTIL-CAP`, so you decide `act`, `defer` or `reject` for every cluster in every round. One rule bounds `defer`: a cluster that contains a `high` or a `question`, and an all-`nit` cluster, is never deferred. Only `act` or `reject` is valid for it, and a `defer` fails the judge pass closed.
 - `disposition`:

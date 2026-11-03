@@ -456,10 +456,10 @@ test("reviewer-loop-state adversarial probe: submission failure fails closed eve
   assert.ok(REVIEWER_TRANSITIONS[REVIEWER_STATE.REVIEW_INVALIDATED].includes(REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION));
 });
 
-test("fix-loop-state pins three known_gap edges including deferred C19 recovery admission; slice 4 edges are verified", async () => {
+test("fix-loop-state pins two known_gap edges including deferred C19 recovery admission; slice 4 and slice 5 edges are verified", async () => {
   const { FIX_LOOP_KNOWN_GAPS } = await import("../../scripts/docs/validate-state-machine-conformance.mjs");
+  assert.ok(!FIX_LOOP_KNOWN_GAPS.has("delivery_incomplete->disposition_complete"));
   assert.deepEqual([...FIX_LOOP_KNOWN_GAPS.keys()].sort(), [
-    "delivery_incomplete->disposition_complete",
     "head_moved->full_gate_round",
     "no_commit->full_gate_round",
   ]);

@@ -1706,6 +1706,17 @@ describe("applyJudgeDispositions (#1525)", () => {
     assert.equal(scopeDrift.driftedAreas[0], "cli surface");
   });
 
+  test("missing driftedAreas defaults to [] for within_scope and none, errors otherwise (#3051)", () => {
+    const disp = [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "x", criterion: "AC-1" }];
+    for (const verdict of ["within_scope", "none"]) {
+      const out = validateJudgeVerdict(judgeVerdict(disp, { verdict, rationale: "x" }));
+      assert.equal(out.scopeDrift.verdict, "within_scope");
+      assert.deepEqual(out.scopeDrift.driftedAreas, []);
+    }
+    assert.throws(() => validateJudgeVerdict(judgeVerdict(disp, { verdict: "drift_detected", rationale: "x" })), /driftedAreas must be an array/);
+    assert.throws(() => validateJudgeVerdict(judgeVerdict(disp, { verdict: "within_scope", rationale: "x", driftedAreas: "a" })), /driftedAreas must be an array/);
+  });
+
   test("scopeDrift.verdict 'none' normalizes to within_scope, rationale and driftedAreas byte-intact (#2260)", () => {
     const verdict = judgeVerdict(
       [
