@@ -25,7 +25,7 @@
  * fresh blocking Copilot round.
  */
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { QUARANTINE_REMEDY, readSealed } from "./_gate-artifact-seal.mjs";
+import { quarantineRemedy,readSealed } from "./_gate-artifact-seal.mjs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -473,7 +473,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     });
     let log = null;
     try {
-      log = JSON.parse(await readSealed(path.resolve(repoRoot, logPath), { remedy: QUARANTINE_REMEDY }));
+      log = JSON.parse(await readSealed(path.resolve(repoRoot, logPath), { remedy: quarantineRemedy({ repo: options.repo, pr: options.pr, gate: options.gate, prevHead: options.prevHead }) }));
     } catch (err) {
       if (err && err.code === "ENOENT") {
         // A matching quarantine audit means the log was moved on purpose: record the fresh fallback

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { QUARANTINE_REMEDY, readSealed } from "./_gate-artifact-seal.mjs";
+import { quarantineRemedy,readSealed } from "./_gate-artifact-seal.mjs";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { validateZeroUnitCarryProof } from "./_carried-angles.mjs";
@@ -312,7 +312,7 @@ export async function listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRo
     // identity-mismatched file is simply not a valid prior round and is skipped.
     let log;
     try {
-      log = JSON.parse(await readSealed(path.join(dir, entry), { remedy: QUARANTINE_REMEDY }));
+      log = JSON.parse(await readSealed(path.join(dir, entry), { remedy: quarantineRemedy({ repo, pr, gate, prevHead: sha }) }));
       // A log written at or before the latest quarantine of this PR+gate no longer counts
       // (GATE-EXEC-FINDINGS-LOG-QUARANTINE): fail-safe, more review, never less.
       if (cutoff !== null && logWrittenMs(log, (await stat(path.join(dir, entry))).mtimeMs) <= cutoff) continue;

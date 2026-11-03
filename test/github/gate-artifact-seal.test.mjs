@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { OUT_OF_BAND_WRITE, QUARANTINE_REMEDY, UNSEALED, readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
+import { OUT_OF_BAND_WRITE, quarantineRemedy,UNSEALED, readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 
 describe("gate artifact seal", () => {
   it("round-trips a sanctioned write", async () => {
@@ -33,9 +33,15 @@ describe("gate artifact seal", () => {
   it("appends the caller's own remedy to an unsealed refusal", async () => {
     const f = path.join(await mkdtemp(path.join(os.tmpdir(), "seal-")), "legacy.json");
     await writeFile(f, "{}\n", "utf8");
-    const error = await readSealed(f, { remedy: QUARANTINE_REMEDY }).catch((e) => e);
+    const remedy = quarantineRemedy({ repo: "o/r", pr: 7, gate: "draft_gate", prevHead: "abc123" });
+    const error = await readSealed(f, { remedy }).catch((e) => e);
     expect(error.code).toBe(UNSEALED);
-    expect(error.message).toContain("quarantine-gate-findings-log.mjs");
+    expect(error.message).toContain("quarantine-gate-findings-log.mjs --repo o/r --pr 7 --gate draft_gate --prev-head abc123");
+    expect(error.message).not.toContain("<");
+    await writeFile(`${f}.seal`, "0".repeat(64), "utf8");
+    const edited = await readSealed(f, { remedy }).catch((e) => e);
+    expect(edited.code).toBe(OUT_OF_BAND_WRITE);
+    expect(edited.message).toContain("--prev-head abc123");
   });
   it("waits for a held write lock before refusing a missing seal", async () => {
     const f = path.join(await mkdtemp(path.join(os.tmpdir(), "seal-")), "a.json");

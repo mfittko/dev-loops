@@ -47,7 +47,7 @@ export async function writeSealed(file, text) {
 }
 
 /** Remedy a prior-head findings-log reader appends to the refusal: quarantine handles only those logs. */
-export const QUARANTINE_REMEDY = "to discard a prior-head log: dev-loops-run scripts/github/quarantine-gate-findings-log.mjs --repo <owner/name> --pr <N> --gate <gate> --prev-head <sha>";
+export const quarantineRemedy = ({ repo, pr, gate, prevHead }) => `to discard a prior-head log: dev-loops-run scripts/github/quarantine-gate-findings-log.mjs --repo ${repo} --pr ${pr} --gate ${gate} --prev-head ${prevHead}`;
 
 const lockHeld = (file) => stat(`${file}.lock`).then((s) => Date.now() - s.mtimeMs <= LOCK_STALE_MS, () => false);
 
@@ -73,7 +73,7 @@ export async function readSealed(file, { remedy } = {}, waited = false) {
   if (seal !== digest(text)) {
     const reread = await rereadAfterWriter();
     if (reread !== null) return reread;
-    throw Object.assign(new Error(`${OUT_OF_BAND_WRITE}: ${file} was modified outside its sanctioned writer (seal mismatch)`), { code: OUT_OF_BAND_WRITE, file });
+    throw Object.assign(new Error(`${OUT_OF_BAND_WRITE}: ${file} was modified outside its sanctioned writer (seal mismatch)${remedy ? `; ${remedy}` : ""}`), { code: OUT_OF_BAND_WRITE, file });
   }
   return text;
 }

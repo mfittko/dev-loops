@@ -27,7 +27,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { QUARANTINE_REMEDY, isSealRefusal, readSealed } from "./_gate-artifact-seal.mjs";
+import { quarantineRemedy,isSealRefusal, readSealed } from "./_gate-artifact-seal.mjs";
 
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
@@ -1900,7 +1900,7 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
     if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha) || sha.startsWith(head) || head.startsWith(sha)) continue;
     let log;
     try {
-      log = JSON.parse(await readSealed(path.join(ledgerDir, name), { remedy: QUARANTINE_REMEDY }));
+      log = JSON.parse(await readSealed(path.join(ledgerDir, name), { remedy: quarantineRemedy({ repo: options.repo, pr: options.pr, gate: options.gate, prevHead: sha }) }));
     } catch (err) {
       if (isSealRefusal(err)) throw err;
       onUnreadable?.(name);
