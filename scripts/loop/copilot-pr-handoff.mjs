@@ -5,7 +5,7 @@ import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from ".
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "./_copilot-convergence-carry.mjs";
 import { resolvePrConflicts } from "./resolve-pr-conflicts.mjs";
-import { isTrustedRestComment, UNTRUSTED_COMMENT_REMEDY } from "@dev-loops/core/github/comment-trust";
+import { isTrustedRestComment, UNTRUSTED_CONVERSATION_COMMENT_REMEDY } from "@dev-loops/core/github/comment-trust";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
@@ -280,7 +280,7 @@ export function parseHandoffCliArgs(argv, { cwd = process.cwd() } = {}) {
 /** ADR 0247: logins only, never comment text; omitted when nothing was skipped. */
 function skippedUntrustedField(check) {
   const logins = check?.skippedUntrusted ?? [];
-  return logins.length > 0 ? { skippedUntrustedComments: { logins, remedy: UNTRUSTED_COMMENT_REMEDY } } : {};
+  return logins.length > 0 ? { skippedUntrustedComments: { logins, remedy: UNTRUSTED_CONVERSATION_COMMENT_REMEDY } } : {};
 }
 
 export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
