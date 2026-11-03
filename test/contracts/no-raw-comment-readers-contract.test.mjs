@@ -8,27 +8,21 @@ const RAW_READERS = [
   /gh api\b[^\n]*(?:issues|pulls)\/[^\s`]*\/(?:comments|reviews)/,
   /gh api graphql\b[^\n]*reviewThreads/,
 ];
-// A match is allowed when its own command span writes (POST/PATCH/DELETE) or when a negation precedes it.
-// A write verb elsewhere on the line does not exempt a raw reader.
-const WRITE_VERB = /\b(?:DELETE|POST|PATCH)\b/;
-const NEGATION = /\b(?:never|do not|must not|forbidden)\b/i;
+// A raw reader command is exempt only when (a) the command text itself carries an explicit write method
+// flag, or (b) a negation word precedes it in the same sentence. Nothing outside the command exempts it.
+const WRITE_FLAG = /(?:-X|--method)[ =]+(?:POST|PATCH|DELETE|PUT)\b/;
+const NEGATION = /\b(?:never|do not|must not|forbidden|banned)\b/i;
 
-// A command span ends at a backtick, a sentence boundary, a semicolon or a comma that joins clauses
-// ("..., then gh ..."), so a write verb in one command never exempts a raw reader in another.
-// A comma inside one command's arguments (GraphQL "owner: o, name: r") never breaks the span.
-const SPAN_BREAK = /`|[.;!?](?=\s|$)|,\s+(?=(?:then|and|or|gh)\b)/;
+// One gh command runs to a backtick, sentence end, shell joiner or a clause joiner ("..., then gh ...").
+// A comma inside the arguments (GraphQL "owner: o, name: r") does not end it.
+const COMMAND = /gh (?:issue|pr|api)\b(?:(?!&&|\|\||[|;]|[.!?](?=\s|$)|,\s+(?:then|and|or|gh)\b|\s(?:and|then|or)\s+gh\b)[^`\n])*/g;
 
 function isRawReaderLine(line) {
-  let start = 0;
-  const spans = [];
-  line.split(new RegExp(`(${SPAN_BREAK.source})`)).forEach((part, index) => {
-    if (index % 2 === 0) spans.push({ text: part, start }); // odd indexes are the captured breaks
-    start += part.length;
+  return [...line.matchAll(COMMAND)].some(({ 0: command, index }) => {
+    if (!RAW_READERS.some((pattern) => pattern.test(command)) || WRITE_FLAG.test(command)) return false;
+    const sentence = line.slice(0, index).split(/[.!?](?=\s)/).pop();
+    return !NEGATION.test(sentence);
   });
-  return spans.some(({ text, start: spanStart }) => RAW_READERS.some((pattern) => {
-    const raw = pattern.exec(text);
-    return Boolean(raw) && !WRITE_VERB.test(text) && !NEGATION.test(line.slice(0, spanStart + raw.index));
-  }));
 }
 
 test("the matcher flags raw reader forms and exempts negated and write lines", () => {
@@ -42,6 +36,9 @@ test("the matcher flags raw reader forms and exempts negated and write lines", (
     "Read `gh api repos/o/r/pulls/1/reviews`, then POST a reply.",
     "Run gh pr view 1 --comments, then gh api -X POST repos/o/r/issues/1/comments.",
     "Run `gh api -X POST repos/o/r/issues/1/comments` and then `gh pr view 1 --comments`.",
+    "gh pr view 1 --comments && gh api -X POST repos/o/r/issues/1/comments",
+    "gh api -X POST repos/o/r/issues/1/comments and gh pr view 1 --comments",
+    "gh api -X POST repos/o/r/issues/1/comments | gh pr view 1 --comments",
   ]) assert.equal(isRawReaderLine(line), true, line);
   for (const line of [
     "never read it with raw `gh api .../reviews`",
