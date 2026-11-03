@@ -18,6 +18,7 @@ import {
 import { execFileSync } from "node:child_process";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { retireGateRound } from "../../scripts/github/retire-gate-round.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { normalizeStructuredFindings, renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
@@ -5019,5 +5020,41 @@ test("consolidateGateFanin refuses residue items outside the focus schema", asyn
     const focusFile = path.join(tmp, "focus.json");
     await writeFile(focusFile, JSON.stringify({ residue: [{ summary: "s", extra: 1 }] }), "utf8");
     await assert.rejects(() => consolidateGateFanin({ findingsDir: dir, operatorFocusFile: focusFile }), /GATE-EXEC-OPERATOR-FOCUS/);
+  }));
+});
+
+// GATE-EXEC-ROUTED-RESIDUE-INPUT (#2971): durable write, carry-forward integrity and reserved-angle refusals.
+test("residue round trips: fan-in ledger, findings-log write, carry-forward integrity and the judge's ledger read (#2971)", async () => {
+  const units = [unitOf(["scope"], null, "r1-u0"), unitOf(["coverage"], null, "r1-u1"), unitOf(["pr-description"], null, "r1-u2")];
+  await withProvenanceRound({ units, fanout: "    mode: per-angle" }, async ({ root, base, ledgerOut }) => {
+    const focusFile = path.join(root, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ residue: [{ summary: "leftover nit", severity: "low" }] }), "utf8");
+    await consolidateGateFanin({ ...base, ledgerOut, operatorFocusFile: focusFile });
+    const ledger = JSON.parse(await readFile(ledgerOut, "utf8"));
+    const written = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: PROV_HEAD, verdict: ledger.overallVerdict, executionMode: "fanout_fanin",
+      findingsFile: ledgerOut, emitPlan: base.emitPlan, tmpRoot: path.join(root, "ledgers"),
+    }, { repoRoot: root });
+    const entry = written.log.provenance.perAngle.find((e) => e.angle === "operator-routed-residue");
+    assert.equal(entry.source, "operator-focus");
+    assert.match(entry.operatorFocusDigest, /^[0-9a-f]{64}$/);
+    assert.ok(written.log.findings.some((f) => f.angle === "operator-routed-residue"));
+    const plan = buildCarryForwardPlan({ log: written.log, changedFiles: [] });
+    assert.ok(plan.mustRerun.some((m) => m.angle === "operator-routed-residue"));
+    // The judge work order pins the sealed ledger it reads; the residue finding is in those bytes.
+    const keyed = buildGateFaninLedgerPath({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: PROV_HEAD, tmpRoot: root });
+    assert.ok(JSON.parse(await readSealed(keyed)).findings.some((f) => f.angle === "operator-routed-residue"));
+  });
+});
+
+test("fan-in refuses the reserved residue angle in a findings artifact or --carried-angles, residue without --emit-plan, and an unknown residue severity (#2971)", async () => {
+  await withFindingsDir({ "r.json": { angle: "operator-routed-residue", verdict: "clean", findings: [] } }, (dir) => assert.rejects(() => consolidateGateFanin({ findingsDir: dir }), /reserved for operator-focus residue/));
+  assert.throws(() => parseConsolidateFaninCliArgs(["--findings-dir", "d", "--gate", "review", "--carry-forward-plan", "[]", "--carried-angles", "[\"Operator-Routed-Residue\"]"]), /reserved angle/);
+  await withFindingsDir({ "a.json": { angle: "a", verdict: "clean", findings: [] } }, (dir) => withTempDir(async (tmp) => {
+    const focusFile = path.join(tmp, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ residue: [{ summary: "s" }] }), "utf8");
+    await assert.rejects(() => consolidateGateFanin({ findingsDir: dir, operatorFocusFile: focusFile }), /requires --emit-plan/);
+    await writeFile(focusFile, JSON.stringify({ residue: [{ summary: "s", severity: "bogus" }] }), "utf8");
+    await assert.rejects(() => consolidateGateFanin({ findingsDir: dir, operatorFocusFile: focusFile }), /GATE-EXEC-OPERATOR-FOCUS.*severity/);
   }));
 });

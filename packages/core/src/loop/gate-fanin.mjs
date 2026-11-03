@@ -489,6 +489,18 @@ export function provenanceConsistencyError(prov) {
 }
 
 /**
+ * GATE-EXEC-ROUTED-RESIDUE-INPUT: the one synthetic provenance entry (source "operator-focus" plus a
+ * 64-hex digest) that is exempt from reviewer pairing, emit-plan unit matching and the foreign-angle check.
+ * The digest is an audit stamp, not a verifiable binding.
+ * @param {unknown} entry
+ * @returns {boolean}
+ */
+export function isOperatorFocusEntry(entry) {
+  return Boolean(entry) && typeof entry === "object" && entry.source === "operator-focus"
+    && typeof entry.operatorFocusDigest === "string" && /^[0-9a-f]{64}$/.test(entry.operatorFocusDigest);
+}
+
+/**
  * Yield `{ entry, angle, group }` for each "fresh" entry in a `perAngle` array:
  * a valid object naming a non-blank `angle` and carrying no `carriedFromHead`
  * (a carried angle's clean verdict was reused from a prior head, not reviewed
@@ -503,6 +515,7 @@ function* freshEntries(perAngle) {
   if (!Array.isArray(perAngle)) return;
   for (const entry of perAngle) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    if (isOperatorFocusEntry(entry)) continue;
     if (typeof entry.carriedFromHead === "string" && entry.carriedFromHead.trim().length > 0) continue;
     const angle = typeof entry.angle === "string" ? entry.angle.trim() : "";
     if (!angle) continue;
@@ -815,7 +828,7 @@ export function baseAngleName(angle) {
 export function checkFanoutAngleCoverage(recordedAngles, { mandatoryAngles = [], pool = null } = {}) {
   const recorded = Array.isArray(recordedAngles)
     ? recordedAngles
-      .map((e) => (e && typeof e === "object" && typeof e.angle === "string" ? e.angle.trim() : ""))
+      .map((e) => (e && typeof e === "object" && !isOperatorFocusEntry(e) && typeof e.angle === "string" ? e.angle.trim() : ""))
       .filter((a) => a.length > 0)
     : [];
   const recordedBases = new Set(recorded.map(baseAngleName));

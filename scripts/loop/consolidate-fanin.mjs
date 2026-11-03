@@ -698,6 +698,9 @@ export function parseConsolidateFaninCliArgs(argv) {
       // Parse shared with write-gate-context.mjs's own --carried-angles flag
       // so the two CLIs' accepted shape and wording can never drift.
       options.carriedAngles = parseCarriedAnglesJsonArray(requireTokenValue(token, parseError), parseError);
+      if (options.carriedAngles.some((a) => String(a).trim().toLowerCase() === ROUTED_RESIDUE_ANGLE)) {
+        throw parseError(`--carried-angles may not name the reserved angle "${ROUTED_RESIDUE_ANGLE}" (GATE-EXEC-ROUTED-RESIDUE-INPUT)`);
+      }
       continue;
     }
     if (token.name === "carry-forward-plan") {
@@ -1145,6 +1148,9 @@ export async function consolidateGateFanin(options) {
     }
     validateArtifactShape(parsed, `"${filePath}"`);
     const angle = parsed.angle.trim();
+    if (angle.toLowerCase() === ROUTED_RESIDUE_ANGLE) {
+      throw new Error(`"${filePath}": angle "${angle}" is reserved for operator-focus residue (GATE-EXEC-ROUTED-RESIDUE-INPUT); only --operator-focus-file may produce it`);
+    }
     // Head-stamp guard: with --head-sha, an artifact must prove it was written
     // against THIS round's head. A stale copy staged from an earlier round is
     // otherwise indistinguishable from a fresh verdict — it would re-raise
@@ -1461,6 +1467,7 @@ export async function consolidateGateFanin(options) {
   // GATE-EXEC-ROUTED-RESIDUE-INPUT: operator-routed residue enters as a fresh, head-stamped artifact under a declared angle.
   const operatorFocus = await readOperatorFocusFile(options.operatorFocusFile ? path.resolve(process.cwd(), options.operatorFocusFile) : undefined, { allowResidue: true });
   if (operatorFocus?.residue) {
+    if (emitPlan === undefined) throw new Error("GATE-EXEC-ROUTED-RESIDUE-INPUT: --operator-focus-file residue requires --emit-plan so the provenance entry exists");
     rawArtifacts.push({
       angle: ROUTED_RESIDUE_ANGLE,
       verdict: "findings_present",

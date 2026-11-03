@@ -5,6 +5,7 @@
  */
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { SEVERITY_ORDER, VALID_SEVERITIES, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
 
 export class OperatorFocusRefusal extends Error {}
 
@@ -17,6 +18,11 @@ function clean(value, label) {
   const out = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").replace(/[<>`]/g, "").replace(/ +/g, " ").trim();
   if (out === "") throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus ${label} is empty after sanitizing`);
   return out;
+}
+
+function residueSeverity(value, index) {
+  if (!VALID_SEVERITIES.has(normalizeSeverity(value))) throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus residue[${index}].severity "${value}" is not one of ${SEVERITY_ORDER.join("|")}`);
+  return value;
 }
 
 /** Validate and sanitize a raw focus object. Returns null for an absent or empty focus. */
@@ -52,7 +58,7 @@ export function normalizeOperatorFocus(raw, { allowItems = false, allowResidue =
       if (entry.line !== undefined && !(Number.isInteger(entry.line) && entry.line > 0)) throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus residue[${index}].line must be a positive integer`);
       return {
         summary: clean(entry.summary, `residue[${index}].summary`),
-        ...(entry.severity !== undefined ? { severity: clean(entry.severity, `residue[${index}].severity`) } : {}),
+        ...(entry.severity !== undefined ? { severity: residueSeverity(clean(entry.severity, `residue[${index}].severity`), index) } : {}),
         ...(entry.file !== undefined ? { file: clean(entry.file, `residue[${index}].file`) } : {}),
         ...(entry.line !== undefined ? { line: entry.line } : {}),
       };
