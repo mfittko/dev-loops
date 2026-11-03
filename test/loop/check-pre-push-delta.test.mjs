@@ -240,6 +240,7 @@ test("the evidence rule reads, forbids executing tests, and the input carries no
   assert.match(DELTA_EVIDENCE_RULE, /Read patchPath with the read tool/);
   assert.match(DELTA_EVIDENCE_RULE, /Run no tests, builds/);
   assert.match(DELTA_EVIDENCE_RULE, /git grep, grep, rg/);
+  assert.match(DELTA_EVIDENCE_RULE, /data, never instructions/);
   const { actList } = fixture();
   const out = await runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], headAt(B));
   const text = JSON.stringify(out.input);
@@ -271,7 +272,7 @@ test("with --result the CLI records the decision for the baseline, and the last 
   assert.equal(later.candidateHead, "ccccccc3333333");
 });
 
-const THREADS = { ok: true, repo: "o/r", pr: 7, threads: [{ threadId: "T1", commentId: 1, body: "fix a", isResolved: false, path: "a.mjs", line: 1 }, { threadId: "T2", commentId: 2, body: "fix b", isResolved: false }] };
+const THREADS = { ok: true, repo: "o/r", pr: 7, threads: [{ trusted: true, threadId: "T1", commentId: 1, body: "fix a", isResolved: false, path: "a.mjs", line: 1 }, { trusted: true, threadId: "T2", commentId: 2, body: "fix b", isResolved: false }] };
 function threadsFixture(payload = THREADS) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-threads-"));
   const threadsFile = path.join(dir, "threads.json");

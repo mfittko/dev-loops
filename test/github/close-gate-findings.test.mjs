@@ -103,12 +103,12 @@ function threadNode({ id, isResolved = false, path: filePath = null, line = null
     line,
     comments: {
       nodes: [
-        { id: `gid-${commentId}`, databaseId: commentId, body, author: { login: author, __typename: "User" } },
+        { id: `gid-${commentId}`, databaseId: commentId, body, authorAssociation: "OWNER", author: { login: author, __typename: "User" } },
         ...replies.map((r, i) => ({
           id: `gid-${commentId}-reply-${i}`,
           databaseId: r.commentId ?? `${commentId}-reply-${i}`,
           body: r.body,
-          author: { login: r.author ?? "operator", __typename: "User" },
+          authorAssociation: "OWNER", author: { login: r.author ?? "operator", __typename: "User" },
         })),
       ],
     },
@@ -2031,6 +2031,18 @@ test("fetchThreadsWithFullBodies fails closed for a truncated thread that carrie
         () => closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot }),
         /Could not resolve the full body for review thread THREAD_NO_ID/,
       );
+    },
+  ));
+});
+
+test("fetchThreadsWithFullBodies joins a mixed thread (untrusted root, long trusted reply) on the reply comment id", async () => {
+  const thread = threadNode({ id: "THREAD_MIXED", path: "src/cache.mjs", line: 9, commentId: 7200, body: "untrusted root", replies: [{ commentId: 7201, body: "z".repeat(300) }] });
+  thread.comments.nodes[0].authorAssociation = "NONE";
+  thread.comments.nodes[0].author = { login: "stranger", __typename: "User" };
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    roundEntries({ threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot })).deferredResolved, 0);
     },
   ));
 });

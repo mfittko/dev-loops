@@ -20,6 +20,7 @@
     "./debt/remediation-to-issue": "./src/debt/remediation-to-issue.mjs",
     "./debt/shape": "./src/debt/shape.mjs",
     "./debt/signal": "./src/debt/debt-signal.mjs",
+    "./github/comment-trust": "./src/github/comment-trust.mjs",
     "./github/copilot-helpers": "./src/github/copilot-helpers.mjs",
     "./github/comment-id-guard": "./src/github/comment-id-guard.mjs",
     "./github/closing-ref-guard": "./src/github/closing-ref-guard.mjs",

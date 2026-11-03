@@ -119,10 +119,16 @@ export function resolveDeltaTrigger({ actItemCount = 0, threadItemCount = 0, fix
  * @param {{ repo: string, pr: number|string }} target
  */
 export function threadsToActList(payload, { repo, pr } = {}) {
-  const threads = /** @type {any} */ (payload)?.threads;
+  const allThreads = /** @type {any} */ (payload)?.threads;
+  // A trust-incomplete thread stays a blocker but is never an act item.
+  const threads = Array.isArray(allThreads) ? allThreads.filter((thread) => thread?.trustIncomplete !== true) : allThreads;
   if (/** @type {any} */ (payload)?.ok !== true || !Array.isArray(threads) || /** @type {any} */ (payload).repo !== repo || Number(/** @type {any} */ (payload).pr) !== Number(pr)
     || !threads.every((thread) => thread?.isResolved === false && nonEmpty(thread?.threadId))) {
     throw new Error(`threads file is not successful list-review-threads --unresolved-only output for ${repo}#${pr}`);
+  }
+  // ADR 0238: a thread without the ingestion trust marker is untrusted text; never an act item.
+  if (!threads.every((thread) => thread.trusted === true)) {
+    throw new Error(`threads file for ${repo}#${pr} holds a thread without the trusted marker (ADR 0238); re-run list-review-threads --unresolved-only`);
   }
   // Sorted by threadId so actSetId is stable for the same thread set, whatever the capture order.
   return [...threads].sort((a, b) => (a.threadId < b.threadId ? -1 : a.threadId > b.threadId ? 1 : 0)).map((thread) => ({

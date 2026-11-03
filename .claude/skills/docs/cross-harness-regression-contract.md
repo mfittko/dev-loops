@@ -47,6 +47,10 @@ Symmetrically, for a change targeting the Claude-Code-specific seam that MUST NO
 3. Add or extend a test asserting the other harness's behavior directly — do not rely on an untested assumption that the change is inert there.
 4. Run the relevant suite locally (`bun run test:assets`, `bun run test:core`, `bun run test:extension`, or `bun run smoke:headless` as applicable) before opening the pull request.
 
+## Comment trust predicate
+
+`GATE-REVIEW-COMMENT-TRUST` (ADR 0238, owner: [Gate review sub-loop contract](./gate-review-sub-loop-contract.md)) is enforced in shared scripts and the core module, so Pi and Claude Code take the same path. The cross-harness row is `test/contracts/comment-trust-rule-contract.test.mjs` plus the trust cases in `test/loop/emit-fixer-work-order.test.mjs`; neither depends on a harness identity.
+
 ## Read-only role enforcement on Pi
 
 The judge boundary is enforced on both harnesses. The reviewer boundary is enforced on Pi only. Claude Code enforces the judge boundary in the PreToolUse Bash gate (`decideBashGate`), which gates the judge and denies `unresolve-review-thread.mjs` to every agent type except the main agent and dev-loop. Pi enforces the judge and reviewer boundaries in the `tool_call` handler in `extension/readonly-role-gate.ts`. The handler resolves the role on every call from the calling session's own `ctx.getSystemPrompt()`. The role marker is the `active_agent` tag with a `name` attribute that pi-subagents writes into each named child's system prompt. The marker value is the `name` frontmatter of `agents/*.agent.md`. dev-loops sets no env marker. The untagged row is additionally scoped to the calling session: the handler consults `ctx.getSessionId()` against the native-async marker pair, so a lone `PI_SUBAGENT_CHILD=1`, a blank `PI_SUBAGENT_PARENT_SESSION`, an absent or blank calling session id, or a calling session whose own id equals the recorded parent marker stays the unrestricted main agent. Resolution is fail closed:
