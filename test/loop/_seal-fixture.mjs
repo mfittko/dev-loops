@@ -17,8 +17,8 @@ export function sealDeltaFixture(tmpRoot, file) {
     } catch (error) {
       if (!(error instanceof EvidenceSealError)) throw error;
       if (error.reason === "evidence_run_missing") { // another tmp root over the same bytes: record this run there, leave the bytes alone
-        createEvidenceRun(tmpRoot, key, { reviewBaselineHead: current.reviewBaselineHead, candidateHead: current.candidateHead, actSetId: current.actSetId, runId: current.runId });
-        sealEvidence(tmpRoot, key, file, current);
+        createEvidenceRun(tmpRoot, key, { reviewBaselineHead: current.reviewBaselineHead, candidateHead: current.candidateHead, actSetId: current.actSetId, runId: current.runId }, file);
+        sealEvidence(tmpRoot, key, file, current, bytes);
         return;
       }
     }
@@ -26,7 +26,8 @@ export function sealDeltaFixture(tmpRoot, file) {
   const parsed = { ...current, runId: mintEvidenceRunId() };
   const { reviewBaselineHead, candidateHead, actSetId, runId } = parsed;
   const key = deltaEvidenceKey(reviewBaselineHead, candidateHead, runId);
-  fs.writeFileSync(file, JSON.stringify(parsed));
-  createEvidenceRun(tmpRoot, key, { reviewBaselineHead, candidateHead, actSetId, runId });
-  sealEvidence(tmpRoot, key, file, parsed);
+  const written = JSON.stringify(parsed);
+  fs.writeFileSync(file, written);
+  createEvidenceRun(tmpRoot, key, { reviewBaselineHead, candidateHead, actSetId, runId }, file);
+  sealEvidence(tmpRoot, key, file, parsed, Buffer.from(written));
 }

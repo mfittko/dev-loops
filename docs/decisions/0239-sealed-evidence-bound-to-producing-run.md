@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted — 2026-11-03 ([PR 3037](https://github.com/mfittko/dev-loops/pull/3037))
 
 ## Context
 

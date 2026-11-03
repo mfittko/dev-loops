@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { createEvidenceRun, deltaEvidenceKey, evidenceRunRecordPath, mintEvidenceRunId, sealEvidence, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
+import { createEvidenceRun, deltaEvidenceKey, evidenceRunRecordPath, mintEvidenceRunId, sealEvidence as sealWithBytes, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { runCli as sealCli } from "../../scripts/loop/seal-evidence.mjs";
 import { runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
@@ -22,14 +22,15 @@ const result = (over = {}) => ({ reviewBaselineHead: A, candidateHead: B, actSet
 const KEY = deltaEvidenceKey(A, B, RUN_ID);
 const EXPECTED = { reviewBaselineHead: A, candidateHead: B, actSetId: ACT_SET_ID, runId: RUN_ID };
 const shaOf = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+const sealEvidence = (dir, key, file, parsed, bytes = fs.readFileSync(file)) => sealWithBytes(dir, key, file, parsed, bytes);
 const verify = (dir, key, file, parsed) => verifyEvidence(dir, key, file, parsed, shaOf(file));
 const quiet = { stdout: { write() {} } };
 
-function setup(parsed = result(), resultPath) {
+function setup(parsed = result()) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seal-evidence-"));
   const file = path.join(dir, "result.json");
   fs.writeFileSync(file, JSON.stringify(parsed));
-  createEvidenceRun(dir, KEY, EXPECTED, resultPath === true ? file : resultPath);
+  createEvidenceRun(dir, KEY, EXPECTED, file);
   return { dir, file };
 }
 const reason = (fn) => { try { fn(); } catch (error) { return error.reason; } return null; };
@@ -125,7 +126,7 @@ test("PR 2876 case 2b: heads and actSetId copied from the input shape cannot res
 });
 
 test("PR 2876 case 2c: a foreign file with matching heads, act set and run id at another path cannot be sealed", () => {
-  const { dir, file } = setup(result(), true);
+  const { dir, file } = setup();
   const foreign = path.join(dir, "scratch-x.json");
   fs.writeFileSync(foreign, JSON.stringify(result()));
   assert.equal(reason(() => sealEvidence(dir, KEY, foreign, result())), "evidence_foreign_run");
@@ -142,13 +143,12 @@ test("emit-fixer-work-order refuses a --delta-result with no run record with evi
   await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), /GATE-EXEC-EVIDENCE-SEALED.*evidence_run_missing/);
 });
 
-test("a sealed record is final: re-seal of identical bytes and re-seal after an edit are refused, and re-creating the run keeps the seal", () => {
+test("a sealed record is final: re-seal of identical bytes and re-seal after an edit are refused", () => {
   const { dir, file } = setup();
   sealEvidence(dir, KEY, file, result());
   assert.equal(reason(() => sealEvidence(dir, KEY, file, result())), "evidence_foreign_run");
   fs.writeFileSync(file, `${JSON.stringify(result())} `);
   assert.equal(reason(() => sealEvidence(dir, KEY, file, result())), "evidence_foreign_run");
-  createEvidenceRun(dir, KEY, EXPECTED);
   assert.equal(reason(() => verify(dir, KEY, file, result())), "evidence_digest_mismatch");
 });
 
@@ -228,7 +228,7 @@ test("check-pre-push-delta --result on an unsealed run gives evidence_unsealed",
   fs.writeFileSync(resultPath, JSON.stringify(result({ runId })));
   const bound = await boundArgs(["--act-list", actList, "--baseline", A, "--result", resultPath, "--invocation", "1"], {}, { seal: false });
   const tmpRoot = bound.seam.tmpRoot ?? resolveGateArtifactTmpRoot(bound.args[bound.args.indexOf("--worktree") + 1]);
-  createEvidenceRun(tmpRoot, deltaEvidenceKey(A, B, runId), { ...EXPECTED, runId });
+  createEvidenceRun(tmpRoot, deltaEvidenceKey(A, B, runId), { ...EXPECTED, runId }, resultPath);
   await assert.rejects(runDeltaCli(bound.args, { ...bound.seam, ...quiet }), /evidence_unsealed/);
 });
 
@@ -336,7 +336,7 @@ test("emit-fixer-work-order refuses an edited (evidence_digest_mismatch) and a f
     const sealed = result({ candidateHead: A });
     fs.writeFileSync(sealedPath, JSON.stringify(sealed));
     const key = deltaEvidenceKey(A, A, RUN_ID);
-    createEvidenceRun(dir, key, { ...EXPECTED, candidateHead: A });
+    createEvidenceRun(dir, key, { ...EXPECTED, candidateHead: A }, sealedPath);
     sealEvidence(dir, key, sealedPath, sealed);
     fs.writeFileSync(deltaResult, JSON.stringify(foreign ? sealed : { ...sealed, newFindings: [{ severity: "low", summary: "x", evidence: ["e"] }] }));
     await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), expected);
@@ -381,7 +381,7 @@ test("emit-fixer-work-order refuses a --delta-result whose run was never sealed 
   const deltaResult = path.join(dir, "result.json");
   fs.writeFileSync(actList, JSON.stringify(ACT_LIST));
   fs.writeFileSync(deltaResult, JSON.stringify(result({ candidateHead: A })));
-  createEvidenceRun(dir, deltaEvidenceKey(A, A, RUN_ID), { ...EXPECTED, candidateHead: A });
+  createEvidenceRun(dir, deltaEvidenceKey(A, A, RUN_ID), { ...EXPECTED, candidateHead: A }, deltaResult);
   await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), /GATE-EXEC-EVIDENCE-SEALED.*evidence_unsealed/);
 });
 
@@ -410,7 +410,7 @@ test("a sealed result of a superseded input run is evidence_foreign_run at verif
   const { dir, file } = setup();
   sealEvidence(dir, KEY, file, result());
   verify(dir, KEY, file, result());
-  createEvidenceRun(dir, deltaEvidenceKey(A, B, "fedcba9876543210"), { ...EXPECTED, runId: "fedcba9876543210" });
+  createEvidenceRun(dir, deltaEvidenceKey(A, B, "fedcba9876543210"), { ...EXPECTED, runId: "fedcba9876543210" }, path.join(dir, "other.json"));
   assert.equal(reason(() => verify(dir, KEY, file, result())), "evidence_foreign_run");
 });
 
