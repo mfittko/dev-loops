@@ -3221,8 +3221,17 @@ for (const route of ["ACT", "THREAD"]) {
       const unit = await pulledFull(fx, route);
       const plan = await readFile(unit.planPath);
       const marker = await readFile(markerOf(fx));
-      const commitOnly = () => (route === "ACT" ? fx.emit({ phase: "commit_only", deltaResult: undefined }) : fx.emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: fx.files.threads, deltaResult: undefined }));
-      await assert.rejects(commitOnly(), (error) => error.message.includes(unit.workOrderRef) && /--completion-only/.test(error.message));
+      const texts = (await readdir(path.join(path.dirname(unit.planPath), "work-orders"))).length;
+      const commitOnly =() => (route === "ACT" ? fx.emit({ phase: "commit_only", deltaResult: undefined }) : fx.emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: fx.files.threads, deltaResult: undefined }));
+      const atHead = (headSha) => fx.emit({ phase: "commit_only", deltaResult: undefined, keepRecord: true, headSha, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: headSha }),
+        ...(route === "THREAD" ? { actListFile: undefined, gate: undefined, threadsFile: fx.files.threads } : {}) });
+      // The PR head is the candidate: the exit is --completion-only, and the refusal writes nothing.
+      await assert.rejects(atHead(git(fx.wt, "rev-parse", "HEAD")), (error) => error.message.includes(unit.workOrderRef) && /--completion-only/.test(error.message));
+      // The PR head is not the candidate (unpushed): the exit names the existing full order.
+      await assert.rejects(atHead("b".repeat(40)), (error) => error.message.includes(unit.workOrderRef) && /pull .* and push the candidate/.test(error.message) && !/--completion-only/.test(error.message));
+      if (route === "THREAD") await assert.rejects(commitOnly(), /--completion-only/);
+      await noWrite(unit);
+      assert.equal((await readdir(path.join(path.dirname(unit.planPath), "work-orders"))).length, texts, "no new work order text");
       assert.deepEqual(await readFile(unit.planPath), plan, "the active plan stays current");
       assert.deepEqual(await readFile(markerOf(fx)), marker);
       const candidate = unit.workOrder.headSha;
@@ -3233,6 +3242,38 @@ for (const route of ["ACT", "THREAD"]) {
     });
   });
 }
+
+test("issue 2787 C13: a genuine report for the active full plan allows commit_only", async () => {
+  await withFixture(async (fx) => {
+    const unit = await pulledFull(fx, "ACT");
+    await mkdir(path.dirname(unit.workOrder.outputRefs[0]), { recursive: true });
+    await writeFile(unit.workOrder.outputRefs[0], "{}\n");
+    assert.equal((await fx.emit({ phase: "commit_only", deltaResult: undefined })).workOrder.phase, "commit_only");
+  });
+});
+
+test("issue 2787 C14: a closed sequence refuses --completion-only with no write", async () => {
+  await withFixture(async (fx) => {
+    const old = await pulledFull(fx, "ACT");
+    const { sequenceClosurePath } = await import("@dev-loops/core/loop/fix-push-authority");
+    const file = sequenceClosurePath(path.join(fx.root, "tmp"), fx.head, old.executionIdentity);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, "{}\n");
+    await assert.rejects(reenter(fx, "ACT"), /closed as abandoned/);
+    await noWrite(old);
+  });
+});
+
+test("issue 2787 C14: a retired gate round refuses --completion-only with no write", async () => {
+  await withFixture(async (fx) => {
+    const old = await pulledFull(fx, "ACT");
+    const file = path.join(fx.root, "tmp/retired-gate-rounds", fx.head, "r1/retirement.json");
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ gate: "draft_gate", retiredAt: new Date(Number(old.executionIdentity.slice(1).split("-")[0]) + 1).toISOString() }));
+    await assert.rejects(reenter(fx, "ACT"), /retired/);
+    await noWrite(old);
+  });
+});
 
 test("issue 2787 C13: a complete verified checkpoint at the candidate allows commit_only", async () => {
   await withFixture(async (fx) => {

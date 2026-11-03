@@ -372,6 +372,25 @@ async function planCandidate(order, readBytes) {
 }
 
 /**
+ * Issue 2787 C13: a commit_only emission never supersedes an incomplete full plan whose candidate is still the worktree HEAD and whose
+ * report is missing. The exit is --completion-only when the PR head is the candidate, else the existing full order (pull it and push).
+ * Runs before the first write.
+ */
+async function rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr, headSha }) {
+  const active = JSON.parse(originalBytes), order = active.workOrder;
+  const candidate = order?.phase === "full" ? await planCandidate(order, (file) => capture.read(file)) : null;
+  if (!candidate || candidate !== gitIn(cwd, "rev-parse", "HEAD")) return;
+  const markerRoot = resolveGateArtifactTmpRoot(cwd);
+  const verified = await readFile(path.resolve(resolveRepoRoot(cwd), buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: candidate, tmpRoot: markerRoot }))).then((text) => JSON.parse(text).complete === true, () => false);
+  if (verified) return;
+  const pulled = await verifyPulledResult({ resultPath: order.outputRefs?.[0], receiptTmpRoot: markerRoot, role: "fixer", workOrderRef: active.workOrderRef, workOrderDigest: active.workOrderDigest, executionIdentity: active.executionIdentity });
+  if (pulled.ok || !["result_missing", "result_predates_pull"].includes(pulled.reason)) return;
+  const exit = headSha === candidate ? "Deliver it with --completion-only (--phase full, the same one source), or commit the new fix first"
+    : `Its candidate is not pushed: pull ${active.workOrderRef} and push the candidate, or commit the new fix first`;
+  throw new Refusal(`--phase commit_only refused: the full plan ${active.workOrderRef} is active at candidate ${candidate} with no new commit and no verified disposition, so a commit_only plan would supersede it. ${exit}`);
+}
+
+/**
  * Issue 2787 C14: re-enter an incomplete full plan for delivery only. The plan, its pull receipt, its pinned reads, the source
  * bytes, the branch and the tree are authenticated first; any drift refuses before the first write. Nothing is pushed or granted.
  */
@@ -388,6 +407,13 @@ async function emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRo
   try { await authenticateOriginalPlan({ plan: original, canonical: planPath, emissionTmpRoot: path.resolve(tmpRoot), receiptTmpRoot, requireReceipt: true, read }); }
   catch (error) { refuse(`the plan or its pull receipt does not authenticate (${error.message})`); }
   if (prior.outputRefs?.length !== 1 || prior.outputRefs[0] !== path.join(dir, original.executionIdentity, "fixer-disposition.json")) refuse("the plan's output is not execution-derived");
+  const baselines = [prior.headSha, prior.authority?.reviewBaselineHead].filter(Boolean);
+  if (await closureRecorded(receiptTmpRoot, baselines, original.executionIdentity)) refuse(closedText(original.executionIdentity));
+  if (prior.source === "act-list") {
+    for (const root of new Set([path.resolve(tmpRoot), receiptTmpRoot, path.join(resolveRepoRoot(cwd), "tmp")])) {
+      if (findRetirementAfter(root, gate, baselines.at(-1), emittedAt(original.executionIdentity))) refuse("the plan's reviewed source round was retired");
+    }
+  }
   const pulled = await verifyPulledResult({ resultPath: prior.outputRefs[0], receiptTmpRoot, role: "fixer", workOrderRef: original.workOrderRef, workOrderDigest: original.workOrderDigest, executionIdentity: original.executionIdentity });
   if (pulled.ok) refuse(`the report ${prior.outputRefs[0]} exists and postdates the pull; run the verifier steps of that order instead`);
   if (!["result_missing", "result_predates_pull"].includes(pulled.reason)) refuse(`the plan's pull receipt is not valid (${pulled.reason})`);
@@ -401,7 +427,7 @@ async function emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRo
   if (!candidate) refuse("the plan names no candidate commit");
   assertBranchHeadClean(cwd, prState.headRefName, headSha);
   try { gitIn(cwd, "merge-base", "--is-ancestor", candidate, headSha); } catch { refuse(`plan candidate ${candidate} is not an ancestor of the live head ${headSha}; run a full gate round`); }
-  const workOrder = { ...prior, operation: "complete", headSha, mutationAuthority: { ...prior.mutationAuthority, allowedPaths: [] }, outputRefs: [path.join(dir, executionIdentity, "fixer-disposition.json")],
+  const workOrder = { ...prior, operation: "complete", headSha, executionRules: { ...prior.executionRules, contract: fileURLToPath(new URL("agents/fixer.agent.md", PACKAGE_ROOT)) },mutationAuthority: { ...prior.mutationAuthority, allowedPaths: [] }, outputRefs: [path.join(dir, executionIdentity, "fixer-disposition.json")],
     contracts: await Promise.all(FIXER_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) }))) };
   const invalid = completeAdmissionError(workOrder);
   if (invalid) refuse(invalid);
@@ -453,6 +479,7 @@ export async function emitFixerWorkOrder({
   try {
   const planPath = path.join(dir, PLAN_FILE);
   const originalBytes = await capture.read(planPath);
+  if (phase === "commit_only" && originalBytes) await rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr, headSha });
   if (completionOnly) {
     // Every drift check runs before the first write, including the preserve step (issue 2787 C14).
     const sourceKind = actListFile ? "act-list" : "threads";
@@ -722,13 +749,6 @@ export async function emitFixerWorkOrder({
     await withSequenceLock(markerRoot, [headSha], async () => {
       // PRE-PUSH-DELTA-PUSH-AUTHORITY: a full emission that skips the delta check never overwrites an ungranted commit_only sequence at this head.
       if (phase === "full" && (reviewId || ciFile) && readSequenceMarker(markerRoot, headSha)?.fullGranted === false) throw new Refusal(`a commit_only sequence is active at ${headSha} and its candidate has no delta review; a ${ciFile ? "--ci-file" : "--review-id"} full emission would grant the push of that unreviewed candidate. Run the delta review and emit the full phase of that sequence, or close it with scripts/loop/close-gate-sequence.mjs, then re-emit`);
-      // Issue 2787 C13: a commit_only re-emission never supersedes an incomplete full plan whose candidate is still the worktree HEAD; that plan is delivered with --completion-only.
-      if (phase === "commit_only" && originalBytes) {
-        const active = JSON.parse(originalBytes);
-        const candidate = active.workOrder?.phase === "full" ? await planCandidate(active.workOrder, (file) => capture.read(file)) : null;
-        const verified = candidate && await readFile(path.resolve(resolveRepoRoot(cwd), buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: candidate, tmpRoot: markerRoot }))).then((text) => JSON.parse(text).complete === true, () => false);
-        if (candidate && !verified && candidate === gitIn(cwd, "rev-parse", "HEAD")) throw new Refusal(`--phase commit_only refused: the full plan ${active.workOrderRef} is active at candidate ${candidate} with no new commit and no verified disposition, so a commit_only plan would supersede it. Deliver it with --completion-only (--phase full, the same one source), or commit the new fix first`);
-      }
       await rename(tempPath, planPath);
       writeSequenceMarker({ tmpRoot: markerRoot, baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName, execution: { executionIdentity, workOrderRef: identityTriple.workOrderRef, outputRef } });
     });
