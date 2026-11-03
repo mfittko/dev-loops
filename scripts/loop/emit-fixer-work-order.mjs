@@ -526,8 +526,6 @@ export async function emitFixerWorkOrder({
       source: await readSource(sourceKind, abs(actListFile ?? threadsFile), capture), prState: await fetchPr({ repo, pr }), executionIdentity });
   }
   await capture.preserve(planPath, path.resolve(tmpRoot), resolveGateArtifactTmpRoot(cwd));
-  // A pull can finish between the first guard and preserve capturing the receipt; the capture now pins the receipt state, so re-run the guard against it.
-  if (phase === "commit_only" && originalBytes) await rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr, headSha, tmpRoot });
 
   // The review-body source is built below, once the live PR head is known.
   let source = actListFile ? await readSource("act-list", abs(actListFile), capture) : threadsFile ? await readSource("threads", abs(threadsFile), capture) : ciFile ? await readSource("ci-failure", abs(ciFile), capture) : null;
@@ -787,7 +785,11 @@ export async function emitFixerWorkOrder({
   // The plan rename and the marker write share the head's sequence lock: a busy lock refuses before the plan becomes current, so no pullable plan exists without its marker, and a marker replacement never interleaves with a close-sequence.
   const markerRoot = resolveGateArtifactTmpRoot(cwd);
   try {
-    await withSequenceLock(markerRoot, [headSha], async () => {
+    // C13: a pull holds its plan's heads' locks while it writes the receipt, so the supersede guard is re-run under those same locks right before the rename.
+    const oldPlan = phase === "commit_only" && originalBytes ? JSON.parse(originalBytes).workOrder : null;
+    const oldHeads = oldPlan ? [oldPlan.headSha, oldPlan.authority?.reviewBaselineHead, ...(oldPlan.completesExecution?.heads ?? [])].filter(Boolean) : [];
+    await withSequenceLock(markerRoot, [...new Set([headSha, ...oldHeads])], async () => {
+      if (oldPlan) await rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr, headSha, tmpRoot });
       // PRE-PUSH-DELTA-PUSH-AUTHORITY: a full emission that skips the delta check never overwrites an ungranted commit_only sequence at this head.
       if (phase === "full" && (reviewId || ciFile) && readSequenceMarker(markerRoot, headSha)?.fullGranted === false) throw new Refusal(`a commit_only sequence is active at ${headSha} and its candidate has no delta review; a ${ciFile ? "--ci-file" : "--review-id"} full emission would grant the push of that unreviewed candidate. Run the delta review and emit the full phase of that sequence, or close it with scripts/loop/close-gate-sequence.mjs, then re-emit`);
       await rename(tempPath, planPath);

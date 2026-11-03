@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, realpathSync, utimesSync } from "node:fs";
+import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { cp, link, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -3555,5 +3556,48 @@ test("issue 2787 C14: --completion-only takes phase full, one source and no othe
     await assert.rejects(reenter(fx, "ACT", { threadsFile: fx.files.threads }), /exactly one of/);
     await assert.rejects(reenter(fx, "ACT"), /no fixer plan exists/);
     assert.match((await import("node:fs")).readFileSync(EMITTER, "utf8"), /\[--completion-only\]/);
+  });
+});
+
+test("issue 2787 C13: a pull that lands after the first guard and before the plan rename refuses commit_only under the plan's head locks and leaves the plan current", async () => {
+  await withFixture(async (fx) => {
+    const unit = await (await fx.prepareFull()).full();
+    const plan = await readFile(unit.planPath);
+    // Pull for real, then take the receipt away: the emit sees an unpulled plan, and the pull "lands" while the emit waits on the plan's head locks.
+    assert.equal(pull(unit, fx.wt).status, 0);
+    const markerRoot = resolveGateArtifactTmpRoot(fx.wt), receipt = pullReceiptPath(markerRoot, unit.workOrderRef), receiptBytes = await readFile(receipt);
+    await rm(receipt);
+    const { withSequenceLock } = await import("@dev-loops/core/loop/fix-push-authority");
+    let emitting;
+    await withSequenceLock(markerRoot, [unit.workOrder.headSha], async () => {
+      emitting = fx.emit({ phase: "commit_only", deltaResult: undefined }).then(() => null, (error) => error);
+      await new Promise((resolve) => setTimeout(resolve, 1500)); // the emit passed both early guards and now waits on the lock
+      await writeFile(receipt, receiptBytes);
+    });
+    const error = await emitting;
+    assert.ok(error && error.message.includes(unit.workOrderRef) && /would supersede it/.test(error.message), `expected the supersede refusal, got ${error?.message}`);
+    assert.deepEqual(await readFile(unit.planPath), plan, "the pulled plan stays current");
+  });
+});
+
+test("issue 2787 C13: a truncated fixer-disposition checkpoint is not a verified disposition and commit_only still refuses with the typed message", async () => {
+  await withFixture(async (fx) => {
+    const unit = await pulledFull(fx, "ACT");
+    const checkpoint = path.resolve(fx.wt, buildLogPath({ repo: REPO, pr: PR, gate: "fixer-disposition", headSha: git(fx.wt, "rev-parse", "HEAD"), tmpRoot: resolveGateArtifactTmpRoot(fx.wt) }));
+    await mkdir(path.dirname(checkpoint), { recursive: true });
+    await writeFile(checkpoint, '{"complete": tr');
+    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined }), (error) => error.message.includes(unit.workOrderRef) && /--phase commit_only refused/.test(error.message));
+  });
+});
+
+test("issue 2787 C13/C14: resetting the worktree to the original candidate does not reactivate a completion order emitted at a descendant head", async () => {
+  await withFixture(async (fx) => {
+    await pulledFull(fx, "ACT");
+    const candidate = git(fx.wt, "rev-parse", "HEAD");
+    git(fx.wt, "commit", "-q", "--allow-empty", "-m", "ci fix");
+    await reenter(fx, "ACT");
+    git(fx.wt, "reset", "-q", "--hard", candidate);
+    const unit = await fx.emit({ phase: "commit_only", deltaResult: undefined, keepRecord: true, headSha: candidate, fetchVerdictMarkers: verdictPostedAt(candidate), fetchPr: async () => ({ headRefName: "issue-1", headRefOid: candidate }) });
+    assert.equal(unit.workOrder.phase, "commit_only");
   });
 });
