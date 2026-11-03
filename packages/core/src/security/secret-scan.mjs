@@ -128,7 +128,7 @@ const ENTROPY_MIN_LENGTH = 20;
 const ENTROPY_THRESHOLD = 4.3;
 
 function hasHighEntropyToken(text) {
-  // #3054: split a run at `/` only when it looks like a path (contains `/`
+  // Path-shaped runs: split a run at `/` only when it looks like a path (contains `/`
   // and ends in a file extension) so each segment is scored alone, and skip
   // timestamped migration file names (`20240101123456_add_x.rb`). Other runs,
   // including random secrets containing `/`, are scored whole.
