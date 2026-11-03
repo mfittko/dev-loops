@@ -51,7 +51,7 @@ export async function readSealed(file) {
   let seal;
   try { seal = (await readFile(sealPath(file), "utf8")).trim().toLowerCase(); } catch (error) {
     if (error?.code === "ENOENT") {
-      throw Object.assign(new Error(`${UNSEALED}: ${file} has no seal; re-run the sanctioned writer at that head`), { code: UNSEALED, file });
+      throw Object.assign(new Error(`${UNSEALED}: ${file} has no seal; re-run the sanctioned writer at the artifact head when that is the current head, otherwise quarantine a prior-head log: dev-loops-run scripts/github/quarantine-gate-findings-log.mjs --repo <owner/name> --pr <N> --gate <gate> --prev-head <sha>; for hand-authored findings pass --findings <json> instead of --findings-file`), { code: UNSEALED, file });
     }
     throw error;
   }
