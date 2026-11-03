@@ -2236,7 +2236,7 @@ async function postSkipNoteForRound({ options, headSha, hasLedger }, gh) {
   }
   return read;
 }
-async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, preloadedLedger, inlineSeverityFloor, blockingSeverities = [], roundRead = null }, gh) {
+async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, preloadedLedger, inlineSeverityFloor, blockingSeverities = [], roundRead }, gh) {
   // The withheld-tier coverage check above already loaded and validated this
   // same --findings-ledger file for this same round; reuse it instead of
   // reading it a second time (undefined means it was never preloaded, e.g. a
@@ -2245,10 +2245,7 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
   if (!ledger) {
     return null;
   }
-  const login = roundRead?.login ?? await resolveAuthenticatedLogin(gh);
-  const reviews = roundRead?.reviews ?? await listPrReviews({ repo: options.repo, pr: options.pr }, gh);
-  const issueComments = roundRead?.issueComments ?? await listIssueComments({ repo: options.repo, pr: options.pr }, gh);
-  const threads = roundRead?.threads ?? (await fetchAllReviewThreadsWithSkips({ repo: options.repo, pr: options.pr }, { ...gh, bodyMax: MERGED_THREAD_BODY_MAX })).threads;
+  const { login, reviews, issueComments, threads } = roundRead;
   const suppressed = collectSuppressedFingerprints({ reviews, threads, login });
   const round = await resolveGateRound({
     repo: options.repo,
