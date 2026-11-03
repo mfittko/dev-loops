@@ -198,19 +198,28 @@ export function decideUnresolveOwnerDeny({ command, role }) {
 }
 
 const ASSIGNMENT_WORD = /^[A-Za-z_]\w*=/;
-// `timeout` is not a launcher here: a `timeout`-wrapped sanctioned command is denied by its own actor-independent rule (issue 2755).
+// `timeout` is not a launcher here: the timeout rule (issue 2755) covers a `timeout`-wrapped sanctioned command in the managed context only.
 const LAUNCHER_PREFIX = /^(?:env|command|exec|nohup|time|nice|sudo)$/;
+const RESERVED_WORD = /^(?:\{|!|then|do|else|elif|if|while|until)$/;
 const baseName = (value) => value.split("/").pop();
 
 /** Whether one tokenized segment runs `merge-pr.mjs` as its program (directly, or as the first operand of node/bun/dev-loops-run) with no `--check` word. */
 function segmentRunsMergePrWithoutCheck(words) {
   const values = words.filter((w) => !w.op && !ASSIGNMENT_WORD.test(w.raw)).map((w) => w.value);
   let i = 0;
-  while (LAUNCHER_PREFIX.test(baseName(values[i] ?? ""))) for (i++; /^(?:-|\d)/.test(values[i] ?? ""); i++);
+  for (;;) {
+    if (RESERVED_WORD.test(values[i] ?? "")) i++;
+    else if (LAUNCHER_PREFIX.test(baseName(values[i] ?? ""))) for (i++; /^(?:-|\d)/.test(values[i] ?? ""); i++);
+    else break;
+  }
   const head = baseName(values[i] ?? "");
-  if (/^(?:node|bun|dev-loops-run)$/.test(head)) for (i++; /^-|^run$/.test(values[i] ?? ""); i++);
-  else if (head !== "merge-pr.mjs") return false;
-  return baseName(values[i] ?? "") === "merge-pr.mjs" && !values.slice(i + 1).includes("--check");
+  if (/^(?:node|bun|dev-loops-run)$/.test(head)) {
+    // A launcher flag may take a separate value word, so any later word named merge-pr.mjs is the script.
+    i = values.findIndex((v, k) => k > i && baseName(v) === "merge-pr.mjs");
+    if (i < 0) return false;
+  } else if (head !== "merge-pr.mjs") return false;
+  // merge-pr takes the last `--check=<value>`, so such a word voids any `--check`.
+  return values.some((v) => v.startsWith("--check=")) || !values.slice(i + 1).includes("--check");
 }
 
 /** Walks the token tree: a program word, a `$(...)` substitution, a `-c`/`eval` payload or a shell heredoc body that runs merge-pr.mjs without `--check`. */

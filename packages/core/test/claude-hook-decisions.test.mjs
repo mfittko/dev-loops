@@ -1865,6 +1865,7 @@ test("decideBashGate denies merge-pr.mjs without --check for any subagent, not f
   const forms = [
     "dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 2630 --human-approved-by mfittko",
     "dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 2902 --standing-authorization",
+    "dev-loops-run --repo-root /wt scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5",
   ];
   const gate = (command, agentType) => decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType });
   for (const command of forms) {

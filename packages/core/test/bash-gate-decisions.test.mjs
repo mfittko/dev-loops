@@ -565,6 +565,14 @@ const MERGE_DENY_FORMS = [
   "DEVLOOPS_RUN_ID=x dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5",
   "cd x && dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5",
   'bash -c "dev-loops-run scripts/github/merge-pr.mjs --pr 5"',
+  "dev-loops-run --repo-root /wt scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5",
+  "node --import ./x.mjs scripts/github/merge-pr.mjs --pr 5",
+  "{ node scripts/github/merge-pr.mjs --pr 5; }",
+  "if true; then node scripts/github/merge-pr.mjs --pr 5; fi",
+  "for i in 1; do node scripts/github/merge-pr.mjs --pr 5; done",
+  "! node scripts/github/merge-pr.mjs --pr 5",
+  "node scripts/github/merge-pr.mjs --check=false --pr 5",
+  "node scripts/github/merge-pr.mjs --check --check=false --pr 5",
 ];
 
 test("any subagent role is denied merge-pr.mjs without --check (issue 2500)", () => {
@@ -583,6 +591,7 @@ test("any subagent role is denied merge-pr.mjs without --check (issue 2500)", ()
 test("merge-pr.mjs stays open to the top-level session, to --check and to mere mentions (issue 2500)", () => {
   for (const command of MERGE_DENY_FORMS) {
     assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, command);
+    if (command.includes("--check")) continue;
     assert.equal(decideBashGateDeny({ ...BASE, role: "fixer", command: command.replace("merge-pr.mjs", "merge-pr.mjs --check") }), null, command);
   }
   for (const command of [

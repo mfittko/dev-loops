@@ -18,4 +18,4 @@ The Bash gate already holds inline denials with no registered rule ID, such as t
 
 ## Consequences
 
-A subagent hands back the `--check` result and the merge command line, and the orchestrator runs the merge. The check is a guardrail for cooperative agents: a script written to a file and run later, or a command split across variables, is not followed. The Claude PreToolUse seam is the only consumer today; Pi wiring is tracked in issue 3033.
+A subagent hands back the `--check` result and the merge command line, and the orchestrator runs the merge. The check is a guardrail for cooperative agents: a script written to a file and run later, or a command split across variables, is not followed. Option values of wrappers such as `xargs`, `bunx` and `env -u`, and a script written to a file, are ceilings of the structural check. The Claude PreToolUse seam is the only consumer today; Pi wiring is tracked in issue 3033.
