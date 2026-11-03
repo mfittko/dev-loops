@@ -6,8 +6,9 @@
 // This suite drives the REAL hook script (the harness `test/loop/fixer-pull-line-hook.test.mjs`
 // mirrors) for the two actor-independent denies the pre-check used to leave unnamed:
 //   - `ADR-TRIPWIRE-STANDING-WAIVER`: raw `gh pr edit` body writes and `gh api` body writes to
-//     `pulls/<n>`/`issues/<n>` — including either shape behind a `timeout`/`sudo`/path-prefix
-//     wrapper, which must not hide the command head from the pre-check — and
+//     `pulls/<n>`/`issues/<n>` — including either shape behind a `timeout`/`sudo`/`nice`/`time`/
+//     path-prefix wrapper, whose own options must not hide the command head from the pre-check
+//     (the hook reads the wrapper-unwrapped head beside the raw one, `unwrappedCommandHeads`) — and
 //   - the `timeout N <sanctioned command>` wrapper.
 // Both apply to EVERY Claude actor, so each is asserted for the operator/main-agent payload
 // (Claude exposes `agent_type` only inside a subagent, so its absence IS the main agent) and for
@@ -80,13 +81,24 @@ test("raw gh pr edit and gh api PR/issue body writes are denied for every Claude
       "gh api -X PATCH repos/o/r/issues/5 --field body=x",
       "gh api -X PATCH repos/o/r/pulls/5 --input body.json",
       "gh api graphql -f query=mutation{updatePullRequest}",
-      // A wrapper prefix must not hide the shape from the pre-check (the classifier's
-      // `SHELL_EXEC_PREFIX` tolerates env/`command`/path prefixes but not `timeout`), or the
-      // nominate-then-decide path fails open on the wrapped form of a shape it already names.
+      // A wrapper prefix must not hide the shape from the pre-check: the shared `SHELL_EXEC_PREFIX`
+      // tolerates env-assignment / `command` / `env` / path prefixes but no wrapper, so the hook
+      // reads the wrapper-unwrapped head beside the raw one. Without that, the nominate-then-decide
+      // path fails open on the wrapped form of a shape the pre-check already names. The wrapper
+      // options are spelled out per wrapper, because a `timeout` duration and a `nice -n N` level
+      // are the only wrapper arguments that are not flags.
       "timeout 300 gh pr edit 5 --body-file waiver.md",
       "timeout 300 gh api -X PATCH repos/o/r/pulls/5 -f body=x",
       "timeout -k 5 60 gh api -X PATCH repos/o/r/issues/5 --input body.json",
+      "FOO=1 timeout 60 gh pr edit 5 --body x",
+      "/usr/bin/timeout 60 gh api repos/o/r/pulls/5 --field body=x",
       "sudo gh pr edit 5 --body 'text with an adr-tripwire:allow line'",
+      "sudo -n gh api -X PATCH repos/o/r/pulls/5 -f body=x",
+      // A wrapper flag's own value sits exactly where a boolean flag leaves the command, so
+      // `sudo -u root gh …` must be read through the one head past the unwrapped one.
+      "sudo -u root gh api -X PATCH repos/o/r/pulls/5 -f body=x",
+      "nice -n 5 gh pr edit 5 --body x",
+      "time -p gh api -X PATCH repos/o/r/issues/5 --field body=x",
     ]) {
       denyForEveryActor(root, command, /ADR-TRIPWIRE-STANDING-WAIVER/);
     }
@@ -99,6 +111,8 @@ test("raw gh pr edit and gh api PR/issue body writes are denied for every Claude
       "dev-loops-run cli/index.mjs pr edit --body-file waiver.md",
       "timeout 30 gh pr edit 5 --add-label needs-review",
       "timeout 30 gh api repos/o/r/pulls/5",
+      "nice -n 5 gh pr edit 5 --add-label needs-review",
+      "time -p gh pr view 5 --json body",
     ]) {
       assert.equal(bash(root, command, undefined).decision, "allow", command);
     }

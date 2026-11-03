@@ -1275,13 +1275,6 @@ test("commandContainsRawPrBodyEdit detects gh pr edit body writes (--body, --bod
     "gh pr edit 5 --repo o/n -b 'text'",
     "gh pr edit 5 -F pr.md",
     "echo ok && gh pr edit 5 --body-file -",
-    // #3031: a `timeout`/`sudo` wrapper prefix must not hide the deny's command head
-    "timeout 300 gh pr edit 5 --body-file waiver.md",
-    "timeout -k 5 60 gh pr edit 5 --body x",
-    "timeout 300 gh -R o/n pr edit 5 --body x",
-    "/usr/bin/timeout 60 gh pr edit 5 -F pr.md",
-    "FOO=1 timeout 60 gh pr edit 5 --body x",
-    "sudo gh pr edit 5 --body 'x'",
   ]) {
     assert.equal(commandContainsRawPrBodyEdit(cmd), true, cmd);
   }
@@ -1312,13 +1305,6 @@ test("commandContainsRawPrBodyApiWrite detects a gh api write of a body field to
     'bash -c "gh api -X PATCH repos/mfittko/dev-loops/pulls/5 -f body=x"',
     'eval "gh api repos/mfittko/dev-loops/pulls/5 -f body=x"',
     "echo 5 | xargs -I{} gh api -X PATCH repos/mfittko/dev-loops/pulls/{} -f body=x",
-    // #3031: the same wrapper prefix in front of the API half
-    "timeout 300 gh api -X PATCH repos/mfittko/dev-loops/pulls/5 -f body=x",
-    "timeout -s KILL 60 gh api -X PATCH repos/mfittko/dev-loops/issues/5 --input p.json",
-    "/usr/bin/timeout 60 gh api repos/mfittko/dev-loops/pulls/5 --field body=x",
-    "FOO=1 timeout 60 gh api repos/mfittko/dev-loops/issues/5 -F body=@i.md",
-    "sudo gh api -X PATCH repos/mfittko/dev-loops/pulls/5 --raw-field body=x",
-    "timeout 300 gh api graphql -f query='mutation { updatePullRequest(input: {}) { clientMutationId } }'",
   ]) {
     assert.equal(commandContainsRawPrBodyApiWrite(cmd, MANAGED_SLUG), true, cmd);
   }
@@ -1360,11 +1346,6 @@ test("commandContainsRawPrBodyEdit keeps passing title, assignee and read forms"
     "gh -R o/n pr view 5",
     `bash -c "echo hi"`,
     "git commit -m 'gh pr edit notes'",
-    // #3031: tolerating a wrapper prefix must not widen these predicates into a blanket deny
-    "timeout 30 gh pr edit 5 --add-label needs-review",
-    "timeout 30 gh pr view 5 --json body",
-    // the sanctioned writer stays out too, so the wrapped-command deny stays a separate rule
-    "timeout 30 node scripts/github/edit-pr.mjs --pr 5 --body-file x.md",
   ]) {
     assert.equal(commandContainsRawPrBodyEdit(cmd), false, cmd);
   }
@@ -1400,12 +1381,6 @@ test("commandContainsRawPrBodyApiWrite keeps passing comments, title-only and gr
     "gh api repos/{owner}/{repo}/pulls/5?x=1",
     "gh api graphql -f query='query { viewer { login } }'",
     "gh api -X PATCH repos/other/repo/issues/5 -f body=text",
-    // #3031: tolerating a wrapper prefix must not turn the deny into a blanket one
-    "timeout 30 gh api repos/mfittko/dev-loops/pulls/5",
-    "timeout 30 gh api -X PATCH repos/mfittko/dev-loops/pulls/5 -f title=new",
-    "timeout 30 gh api -X POST repos/mfittko/dev-loops/pulls/5/comments -f body=text",
-    "timeout 30 gh api -X PATCH repos/other/repo/pulls/5 -f body=x",
-    "timeout 30 gh api graphql -f query='query { viewer { login } }'",
   ]) {
     assert.equal(commandContainsRawPrBodyApiWrite(cmd, MANAGED_SLUG), false, cmd);
   }

@@ -17,6 +17,9 @@
  *     `--input` payload, or a `gh api graphql` `updatePullRequest`) — blocked actor-independently
  *     (`ADR-TRIPWIRE-STANDING-WAIVER`): the sanctioned launcher writers are the only route for these
  *     `gh pr` and `gh api` body writes, because they refuse a hand-written `adr-tripwire:allow` line.
+ *     A process wrapper in front of the write cannot hide it from either side: the pre-check and the
+ *     decision it nominates both read the wrapper-unwrapped command head (`unwrappedCommandHeads`),
+ *     so a `timeout`/`sudo`/`nice`/`time`/path-prefixed wrapper's own flags are skipped too.
  *     The raw `gh issue edit <n> --body`/`--body-file` command line form is NOT covered by this deny;
  *     it stays with the subagent-scoped external-write guard, which runs only when `agent_type` is present.
  *   - `timeout N <sanctioned command>` — blocked outright: the wrapper hides the `dev-loops-run`
@@ -81,6 +84,43 @@ const mainRoot = isFixer && parseSanctionedPullLine(command) ? listCheckouts(cwd
 const fixerPull = mainRoot ? parseFixerPullCommand(command, mainRoot) : null;
 if (fixerPull) recordFixerAgentBinding(mainRoot, { agentId: input?.agent_id, ...fixerPull });
 
+// A process wrapper whose own options sit between it and the command it runs, so a segment's real
+// command head is not its first token: `SHELL_EXEC_PREFIX` (the prefix every head-anchored
+// predicate shares) tolerates `NAME=value` assignments, the `env`/`command`/`exec` words and a
+// binary path, but no wrapper. Names the same wrapper set the classifier's `stripLeadingWrappers`
+// recognises (`sudo`, `env`, `xargs`, `time`, `nice`, `command`) plus `timeout`, and spells out the
+// two wrappers whose own argument is not a flag: `timeout [-s SIG] [-k DUR] <duration>` and
+// `nice -n <N>`. Ceiling: an outer wrapper's flag that takes a SEPARATE value in front of a SECOND
+// wrapper (`sudo -u root nice -n 5 gh …`) stops the unwrap at that value token.
+const WRAPPER_HEAD_RE = new RegExp(
+  "^" +
+    "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*" +
+    "(?:" +
+      "(?:\\S*/)?g?timeout\\s+(?:-{1,2}[\\w-]+(?:=\\S+|\\s+(?:\\d[\\w.]*|[A-Z]+))?\\s+)*\\d[\\w.]*\\s+" +
+      "|(?:\\S*/)?nice\\s+(?:-n\\s*\\S+\\s+|--adjustment(?:=\\S+|\\s+\\S+)\\s+)?" +
+      "|(?:\\S*/)?(?:sudo|env|xargs|time|nice|command)\\s+(?:-{1,2}[\\w-]+(?:=\\S+)?\\s+|--\\s+)*" +
+    ")*" +
+    "(?:\\S*/)?",
+  "i",
+);
+
+/**
+ * The heads a head-anchored predicate must read for a command: its wrapper-unwrapped head, plus
+ * the head one token later. The second head exists because a wrapper flag's own value sits exactly
+ * where a boolean flag leaves the command (`sudo -n gh api …` leaves `gh api …`, `sudo -u root gh
+ * api …` leaves `root gh api …`), and the predicate is its own arbiter: only a head that really
+ * starts with the caller's command can match, so one extra head costs one predicate call to close
+ * the arity question. Over-report is the safe direction.
+ * @param {string} command @returns {string[]}
+ */
+function unwrappedCommandHeads(command) {
+  const trimmed = command.trim();
+  const remainder = trimmed.replace(WRAPPER_HEAD_RE, "").trim();
+  if (!remainder || remainder === trimmed) return [];
+  const tokens = remainder.split(/\s+/);
+  return tokens.length > 1 ? [remainder, tokens.slice(1).join(" ")] : [remainder];
+}
+
 let repoRoot = null;
 let repoSlug = null;
 try {
@@ -132,9 +172,16 @@ const isTimeoutWrapped = typeof command === "string" && commandContainsTimeoutWr
 // The `ADR-TRIPWIRE-STANDING-WAIVER` raw PR/issue body write shapes are decided in the shared
 // decider and denied for EVERY actor, operator and main agent included. The pre-check must
 // nominate them too, or the non-match path allows what the decider would deny.
-const isBodyWrite =
-  typeof command === "string" &&
-  (commandContainsRawPrBodyEdit(command, managedRepoSlug) || commandContainsRawPrBodyApiWrite(command, managedRepoSlug));
+//
+// Both sides anchor those predicates on a segment's command HEAD, and `SHELL_EXEC_PREFIX`
+// tolerates `NAME=value` assignments, the `env`/`command`/`exec` words and a binary path but NOT a
+// process wrapper, so the wrapped form of a shape this file already names (`timeout 300 gh pr edit
+// 5 --body-file f`, `sudo -n gh api … -f body=x`) reached neither and the hook emitted allow. Read
+// the unwrapped heads as well, here and in the deny below.
+const bodyWriteHeads = typeof command === "string" ? [command, ...unwrappedCommandHeads(command)] : [];
+const hasRawPrBodyWrite = (view) =>
+  commandContainsRawPrBodyEdit(view, managedRepoSlug) || commandContainsRawPrBodyApiWrite(view, managedRepoSlug);
+const isBodyWrite = bodyWriteHeads.some(hasRawPrBodyWrite);
 // COORDINATOR-VERIFY-BOUNDARY (#2082) — actor-scoped inside decideBashGate (agentType is
 // "dev-loop" or "gate-coordinator"), so the quick pre-check here only detects the command shape; the hook must not
 // short-circuit to allow before the decider applies the actor + enforceCoordinator scoping.
@@ -202,7 +249,7 @@ if (inManagedContext) {
 // as boundary 3 of pre-tool-use-write-guard.mjs (decideCoordinatorWriteGuard).
 const enforceCoordinator = process.env.DEVLOOPS_COORDINATOR_READONLY === "1";
 
-const decision = decideBashGate({
+const bashGateFacts = {
   command,
   repoSlug,
   managedRepoSlug,
@@ -212,8 +259,18 @@ const decision = decideBashGate({
   agentType,
   humanMergeOnly,
   enforceCoordinator,
-});
+};
+const decision = decideBashGate(bashGateFacts);
 if (decision.decision === "deny") {
   emitDeny(decision.reason);
+}
+// A raw body write behind a wrapper prefix: the decision above reads the command it is handed, so
+// the wrapped form cannot produce its own deny. Judge the unwrapped heads too and honor the deny.
+for (const head of bodyWriteHeads.slice(1)) {
+  if (!hasRawPrBodyWrite(head)) continue;
+  const unwrappedDecision = decideBashGate({ ...bashGateFacts, command: head });
+  if (unwrappedDecision.decision === "deny") {
+    emitDeny(unwrappedDecision.reason);
+  }
 }
 emitAllow();
