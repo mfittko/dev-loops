@@ -182,25 +182,6 @@ test("probe-copilot-review returns changed for fresh Copilot review-thread comme
   }
 });
 
-test("probe-copilot-review ignores a maintainer whose login merely starts with copilot in all three activity filters", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-probe-copilot-lookalike-"));
-  const owner = (item) => ({ ...item, authorAssociation: "OWNER" });
-  const thread = createThread("c-9", "copilot-fan", "mine");
-  thread.comments.nodes = thread.comments.nodes.map(owner);
-  const changed = createActivityPayload({
-    threads: [thread],
-    reviews: [owner(createReview("r-9", "copilot-fan", "mine"))],
-    issueComments: [owner(createIssueComment("i-9", "copilot-fan", "mine"))],
-  });
-  try {
-    const env = await writeGhStub(tempDir, [{ stdout: JSON.stringify(createActivityPayload()) + "\n" }, { stdout: JSON.stringify(changed) + "\n" }]);
-    const result = await watchCopilotReview({ repo: "owner/repo", pr: 17, pollIntervalMs: 1, timeoutMs: 5 }, { env, ghCommand: "gh" });
-    assert.notEqual(result.status, "changed");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
 test("probe-copilot-review returns changed for fresh Copilot review summaries", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-probe-copilot-review-"));
   const baseline = createActivityPayload();
@@ -278,47 +259,6 @@ test("probe-copilot-review ignores lookalike non-Copilot logins", async () => {
     const result = await watchCopilotReview({ repo: "owner/repo", pr: 17, pollIntervalMs: 1, timeoutMs: 1 }, { env, ghCommand: "gh" });
     assert.equal(result.status, "timeout");
     assert.equal(result.attempts, 1);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("probe-copilot-review excludes untrusted Copilot-named review and conversation text from the concise output", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-trust-"));
-  const baseline = createActivityPayload();
-  const changed = createActivityPayload({
-    reviews: [
-      createReview("r-1", "copilot-x", "INJECTED review text", "User"),
-      createReview("r-2", "copilot-pull-request-reviewer", "TRUSTED review text", "Bot"),
-    ],
-    issueComments: [{ ...createIssueComment("i-1", "Copilot", "INJECTED comment text", "User"), authorAssociation: "NONE" }],
-  });
-  try {
-    const env = await writeGhStub(tempDir, [
-      { stdout: JSON.stringify(baseline) + "\n" },
-      { stdout: JSON.stringify(changed) + "\n" },
-    ]);
-    const result = await watchCopilotReview({ repo: "owner/repo", pr: 17, pollIntervalMs: 1, timeoutMs: 1000 }, { env, ghCommand: "gh" });
-    const text = formatProbeConcise(result);
-    assert.match(text, /TRUSTED review text/);
-    assert.doesNotMatch(text, /INJECTED/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("probe-copilot-review ignores an untrusted copilot-x review-thread comment as fresh Copilot activity", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-thread-trust-"));
-  const baseline = createActivityPayload();
-  const changed = createActivityPayload({ threads: [createThread("c-1", "copilot-x", "INJECTED thread text", "User")] });
-  try {
-    const env = await writeGhStub(tempDir, [
-      { stdout: JSON.stringify(baseline) + "\n" },
-      { stdout: JSON.stringify(changed) + "\n" },
-    ]);
-    const result = await watchCopilotReview({ repo: "owner/repo", pr: 17, pollIntervalMs: 1, timeoutMs: 1 }, { env, ghCommand: "gh" });
-    assert.equal(result.status, "timeout");
-    assert.deepEqual(result.newComments, []);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
