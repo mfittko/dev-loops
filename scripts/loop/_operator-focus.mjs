@@ -1,7 +1,8 @@
 /**
  * Operator focus (GATE-EXEC-OPERATOR-FOCUS, ADR 0205): a typed, bounded, sanitized
  * carrier for operator context on a reviewer, judge or fixer work order (fan-out, judge and fixer emitters). The focus guides the
- * work and never changes a disposition. Absent focus adds no key and renders nothing.
+ * work and never changes a disposition. The `residue` field is accepted by consolidate-fanin.mjs only
+ * (GATE-EXEC-ROUTED-RESIDUE-INPUT, ADR 0243). Absent focus adds no key and renders nothing.
  */
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";

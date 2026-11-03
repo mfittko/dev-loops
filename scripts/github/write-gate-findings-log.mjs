@@ -10,7 +10,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, assertNoProjectedForbiddenDefer, neverDeferredSeverity, UNJUDGED_DISPOSITION, checkFanoutAngleCoverage, fanoutReviewerPairingError, isOperatorFocusEntry, ledgerAngleNames, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveFindingFile, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
+import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, assertNoProjectedForbiddenDefer, neverDeferredSeverity, UNJUDGED_DISPOSITION, checkFanoutAngleCoverage, fanoutReviewerPairingError, isOperatorFocusEntry, ROUTED_RESIDUE_ANGLE, ledgerAngleNames, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveFindingFile, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 // JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
 // the validator's membership check so validateFindingsArray stays self-contained.
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
@@ -392,7 +392,7 @@ export function parseProvenanceJson(raw, resolvedGroups = null, dispatchUnits = 
     // GATE-EXEC-ROUTED-RESIDUE-INPUT: the synthetic operator-focus entry persists its source and digest.
     if ("source" in a || "operatorFocusDigest" in a) {
       if (!isOperatorFocusEntry(a)) {
-        throw parseError(`--provenance.perAngle[${i}] source must be "operator-focus" with a 64-hex operatorFocusDigest, on the reserved angle "operator-routed-residue" and without carriedFromHead`);
+        throw parseError(`--provenance.perAngle[${i}] source must be "operator-focus" with a 64-hex operatorFocusDigest, on the reserved angle "operator-routed-residue", without carriedFromHead and without reviewer, dispatchId, model or group`);
       }
       entry.source = a.source;
       entry.operatorFocusDigest = a.operatorFocusDigest;
@@ -480,7 +480,10 @@ export async function verifyEmitPlanProvenance(planPath, fullProvenance, round, 
   }
   if (plan.units.length === 0) {
     verifyZeroUnitCarryProvenance(plan.carried, provenance.perAngle);
-    const remaining = Array.isArray(findings) ? [...findings] : [];
+    // Routed residue has no carried proof; a valid operator-focus entry vouches for it (GATE-EXEC-ROUTED-RESIDUE-INPUT).
+    const residueRouted = fullProvenance.perAngle.some((entry) => isOperatorFocusEntry(entry));
+    const remaining = (Array.isArray(findings) ? [...findings] : [])
+      .filter((finding) => !(residueRouted && finding.angle === ROUTED_RESIDUE_ANGLE));
     for (const entry of plan.carried) {
       for (const prior of entry.findings ?? []) {
         const index = remaining.findIndex((finding) => finding.angle === entry.angle

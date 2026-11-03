@@ -274,8 +274,8 @@ Optional:
                                  the root the plan was emitted under.
   --operator-focus-file <path>   GATE-EXEC-ROUTED-RESIDUE-INPUT: operator focus JSON whose "residue" entries
                                  ({ summary, severity?, file?, line? }) become findings under the declared
-                                 angle "operator-routed-residue"; --emit-plan adds a provenance.perAngle entry
-                                 (source "operator-focus", the focus digest). A residue entry without severity
+                                 angle "operator-routed-residue"; residue requires --emit-plan, which adds a
+                                 provenance.perAngle entry (source "operator-focus", the focus digest). A residue entry without severity
                                  becomes "medium". A relative path resolves against --repo-root, else the cwd.
   --spec-authority <path>        JSON { specDigest, headSha, contentDigest, checkedCriteria }
                                  (issue 2008 / ADR 0061 AC1). When supplied, stamps the
@@ -697,7 +697,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       // Parse shared with write-gate-context.mjs's own --carried-angles flag
       // so the two CLIs' accepted shape and wording can never drift.
       options.carriedAngles = parseCarriedAnglesJsonArray(requireTokenValue(token, parseError), parseError);
-      if (options.carriedAngles.some((a) => String(a).trim().toLowerCase() === ROUTED_RESIDUE_ANGLE)) {
+      if (options.carriedAngles.some((a) => baseAngleName(String(a).trim()).toLowerCase() === ROUTED_RESIDUE_ANGLE)) {
         throw parseError(`--carried-angles may not name the reserved angle "${ROUTED_RESIDUE_ANGLE}" (GATE-EXEC-ROUTED-RESIDUE-INPUT)`);
       }
       continue;
@@ -1147,7 +1147,7 @@ export async function consolidateGateFanin(options) {
     }
     validateArtifactShape(parsed, `"${filePath}"`);
     const angle = parsed.angle.trim();
-    if (angle.toLowerCase() === ROUTED_RESIDUE_ANGLE) {
+    if (baseAngleName(angle).toLowerCase() === ROUTED_RESIDUE_ANGLE) {
       throw new Error(`"${filePath}": angle "${angle}" is reserved for operator-focus residue (GATE-EXEC-ROUTED-RESIDUE-INPUT); only --operator-focus-file may produce it`);
     }
     // Head-stamp guard: with --head-sha, an artifact must prove it was written

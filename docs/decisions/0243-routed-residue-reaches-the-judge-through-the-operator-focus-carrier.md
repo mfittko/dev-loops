@@ -15,7 +15,7 @@ Issue [2971](https://github.com/mfittko/dev-loops/issues/2971) reports that an o
 - Fan-in records each residue entry as a finding under the reserved declared angle `operator-routed-residue`. The ledger `provenance.perAngle` gains an entry for that angle with `source: "operator-focus"` and a 64-hex `operatorFocusDigest`. The digest is an audit stamp. It does not bind the entry to a run; issue [2892](https://github.com/mfittko/dev-loops/issues/2892) slice 2 owns run binding.
 - A residue entry without `severity` becomes `medium`.
 - Residue requires `--emit-plan`. Fan-in refuses residue without it.
-- `write-gate-findings-log.mjs` persists that one perAngle entry. It exempts only an entry on the reserved angle with that source and digest from reviewer pairing, emit-plan unit matching, and the foreign-angle check.
+- `write-gate-findings-log.mjs` persists that one perAngle entry. It exempts only an entry on the reserved angle (no `carriedFromHead` and no `reviewer`, `dispatchId`, `model` or `group`) with that source and digest from reviewer pairing, emit-plan unit matching, and the foreign-angle check.
 - The carry-forward resolver never carries the angle, so the angle lands in `mustRerun`. Re-routing is explicit at each head.
 - The rule is `GATE-EXEC-ROUTED-RESIDUE-INPUT` in `skills/docs/gate-review-sub-loop-contract.md`.
 
