@@ -13,17 +13,19 @@ import {
 const TARGET = "mfittko/dev-loops";
 
 // The gate's rule bodies and their reason texts moved out of the Claude seam into this shared
-// module, so the move has to be PINNED rather than trusted: the tables below are the ordered rule
-// list, each rule's reason strings exactly as the module emits them (including the draft-gate
-// gate-error variants the `readyGate` probe adds to the ready and raw-merge denies), the two inline
-// denies' place in the same ordered body, the fact-validation refusals and the attribution of an
-// unparsable lifecycle verb. Every variant is pinned here as a full reason literal, including the
-// raw-merge deny's optional "also writes gate evidence" hint, so a reworded or removed suffix fails
-// this table rather than relying on the Claude seam's fragment assertion
-// (claude-hook-decisions.test.mjs); the ready verb's unparsable-PR attribution has its own
-// exact-string test below. Reordering two checks, rewording a pinned reason or dropping a rule fails
-// here — which is what makes a later edit to the shared set (or a second adapter that consumes it)
-// safe to review.
+// module, so the move has to be PINNED rather than trusted: everything below freezes the ordered rule
+// list, each rule's reason strings exactly as the module emits them, the two inline denies' place in
+// the same ordered body, and the attribution each lifecycle verb gives a command that names no PR
+// number. That covers every draft-gate gate-error suffix the `readyGate` probe adds to the ready and
+// raw-merge denies (the raw-merge reason also carries an optional "also writes gate evidence" hint, so
+// all four of its composed forms are pinned) and BOTH verbs' unparsable-PR attributions — the ready
+// verb's in `RULE_FIXTURES`, the merge verb's in its own exact-string test. Every one of those reasons
+// is pinned as a full literal, so a reworded or removed suffix or attribution fails an exact-string
+// assertion here rather than relying on the Claude seam's fragment assertions
+// (claude-hook-decisions.test.mjs). The fact-validation refusals are the deliberate exception: they
+// stay fragment-pinned, because each must name the fact it rejected, which an exact literal would not
+// add. Reordering two checks, rewording a pinned reason or dropping a rule fails here — which is what
+// makes a later edit to the shared set (or a second adapter that consumes it) safe to review.
 const BASE = Object.freeze({
   role: null,
   repoSlug: TARGET,
@@ -115,6 +117,16 @@ const RULE_FIXTURES = [
     reason: "gh pr ready blocked: draft-gate evidence check failed (draft-gate guard unavailable).",
   },
   {
+    // The same rule's UNPARSABLE-PR variant: `gh pr ready` with no PR number reaches neither the
+    // not-probed nor the probed-failure branch above, so the attribution has to come from the verb
+    // alone. The Claude seam matched that attribution only as a fragment
+    // (claude-hook-decisions.test.mjs), so pinning its complete text here gives the ready verb the
+    // same freeze the merge verb's attribution has.
+    id: "GATE-COMMENT-DRAFT-REQUIREMENTS",
+    facts: { ...BASE, command: "gh pr ready" },
+    reason: "gh pr ready blocked: could not determine the PR number from the command. Include the PR number explicitly.",
+  },
+  {
     // The raw-merge deny's probed-failure variant: the same `readyGate` error is appended as a suffix to
     // the merge reason, which no fixture pinned either. The merge verb keeps RAW-GH-PR-MERGE-BYPASS as
     // its rule id.
@@ -133,6 +145,21 @@ const RULE_FIXTURES = [
     facts: { ...BASE, command: "node scripts/loop/write-gate-findings-log.mjs --pr 5 && gh pr merge 5" },
     reason:
       "gh pr merge is forbidden: route the merge through the sanctioned wrapper `node scripts/github/merge-pr.mjs --repo <owner/name> --pr 5 --human-approved-by <login>`, which runs the full precondition set fail-closed (mandatory approver, merge class, fresh approval) — a raw `gh pr merge` bypasses those (RAW-GH-PR-MERGE-BYPASS)." +
+      " This command also writes gate evidence, but hooks evaluate before the command runs — never chain an evidence write with the merge.",
+  },
+  {
+    // The raw-merge deny's LAST composed form: the `readyGate` failure suffix and the evidence-write
+    // hint STACK, and their order is part of the emitted text. Pinning the composition freezes that
+    // order, and completes the rule's four forms (plain, probe-failed, evidence-write, both).
+    id: "RAW-GH-PR-MERGE-BYPASS",
+    facts: {
+      ...BASE,
+      command: "node scripts/loop/write-gate-findings-log.mjs --pr 5 && gh pr merge 5",
+      readyGate: { passed: false, error: "draft-gate guard unavailable" },
+    },
+    reason:
+      "gh pr merge is forbidden: route the merge through the sanctioned wrapper `node scripts/github/merge-pr.mjs --repo <owner/name> --pr 5 --human-approved-by <login>`, which runs the full precondition set fail-closed (mandatory approver, merge class, fresh approval) — a raw `gh pr merge` bypasses those (RAW-GH-PR-MERGE-BYPASS)." +
+      " (pre-merge gate evidence check also failed: draft-gate guard unavailable)" +
       " This command also writes gate evidence, but hooks evaluate before the command runs — never chain an evidence write with the merge.",
   },
 ];
