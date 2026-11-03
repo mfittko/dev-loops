@@ -4482,6 +4482,7 @@ test("detect-pr-gate-coordination-state (ADR 0242): an unsealed cap-round ledger
     assert.equal(result.ok, true);
     assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
     assert.ok(result.reason.includes("gate_artifact_unsealed"), result.reason);
+    assert.ok(!result.reason.includes("round_cap_reached") && !result.reason.includes("past the round cap"), result.reason);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

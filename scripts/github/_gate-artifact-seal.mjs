@@ -58,9 +58,9 @@ const lockHeld = (file) => stat(`${file}.lock`).then((s) => Date.now() - s.mtime
 export async function readSealed(file, { remedy } = {}, waited = false) {
   const text = await readFile(file, "utf8");
   let seal;
-  // A writer holding the lock can interleave with the two reads: wait for it, then re-read once.
+  // A sanctioned write can land between the two reads, even when it has already released the lock: on the first inconsistent pair, wait for any held lock, then re-read once.
   const rereadAfterWriter = async () => {
-    if (waited || !await lockHeld(file)) return null;
+    if (waited) return null;
     const deadline = Date.now() + LOCK_WAIT_MS;
     while (Date.now() < deadline && await lockHeld(file)) await new Promise((resolve) => setTimeout(resolve, 10));
     return readSealed(file, { remedy }, true);

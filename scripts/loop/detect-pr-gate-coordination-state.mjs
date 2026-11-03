@@ -1440,7 +1440,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const draftRoundRefused = context.prData?.isDraft === true && !draftCapRoundFixed
     && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), (error) => {
       if (!isSealRefusal(error)) return false;
-      draftCapRoundFailure ??= "cap_round_unresolved";
+      draftCapRoundFailure = "ledger_seal_refused";
       draftCapRoundDetail = error.message;
       return true;
     });
