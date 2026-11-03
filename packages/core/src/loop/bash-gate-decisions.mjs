@@ -387,10 +387,12 @@ export function decideBashGateDeny(facts = {}) {
     };
   }
 
-  // ADR-TRIPWIRE-STANDING-WAIVER: raw PR/issue body writes (`gh pr edit --body`/`--body-file`, a `gh api`
-  // write of a body field or --input to pulls/<n> or issues/<n>, a graphql updatePullRequest) are the path that carries an `adr-tripwire:allow` waiver
-  // line. Actor-independent defense in depth: the agent and the operator share one GitHub credential,
-  // so the sanctioned writers (which refuse a hand-written waiver line) are the only body route.
+  // ADR-TRIPWIRE-STANDING-WAIVER: raw `gh pr edit` body writes (`--body`/`--body-file`/`-b`/`-F`)
+  // and `gh api` writes of a body field (`-f`/`-F`/`--field`/`--raw-field`), an `--input` payload, or a
+  // `gh api graphql` `updatePullRequest`, to pulls/<n> or issues/<n> are the path that carries an
+  // `adr-tripwire:allow` waiver line. Actor-independent defense in depth: the agent and the operator
+  // share one GitHub credential, so the sanctioned writers (which refuse a hand-written waiver line)
+  // are the only body route.
   if (inManagedRepo && (commandContainsRawPrBodyEdit(command, managedSlug) || commandContainsRawPrBodyApiWrite(command, managedSlug))) {
     return {
       ruleId: "ADR-TRIPWIRE-STANDING-WAIVER",
