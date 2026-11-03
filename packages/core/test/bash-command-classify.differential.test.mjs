@@ -87,7 +87,7 @@ const HEREDOC_BODY_WRAPPERS = [
 
 /** Quote-pairing hazards the old regex mispaired; the head must not allow any of them where the frozen copy denies. */
 const HAZARD_LOOP = "while true; do gh pr view 5; sleep 5; done";
-const LOOP_PREDICATES = ["commandContainsDetachedWaitTool"];
+const LOOP_PREDICATES = ["commandContainsDetachedWaitTool", "commandIsSleepPollLoop"];
 /** Marks a hazard shape whose loop sits inside quotes (data): its allowed rows are intended removals. The other shapes hold a real loop and must stay denied. */
 const DATA = "data";
 /** Each shape lists the only predicates whose frozen-allow/head-deny flip it may exempt, and optionally `DATA`. */
@@ -97,11 +97,11 @@ const HAZARD_SHAPES = [
   [(f) => `echo $'a\\' ; ${f} '`, LOOP_PREDICATES, "escaped quote in an ANSI-C string: the regex mispaired the quotes; the stripper now blanks nothing", DATA],
   [(f) => `cat <<'EOF'\nit's\nEOF\necho '${f}'`, LOOP_PREDICATES, "quote in a heredoc body: the regex paired it with later quotes; the stripper now blanks nothing", DATA],
   [(f) => `echo it\\'s; echo '${f}'`, LOOP_PREDICATES, "escaped apostrophe: the regex mispaired the quotes; the stripper now blanks nothing", DATA],
-  [() => "while :; do `true '`; 'sleep' 5; gh pr view 5; done", [], "apostrophe inside a backtick span: the regex mispaired the quotes; the stripper now blanks nothing"],
-  [() => "echo \\` ; while :; do `true '`; 'sleep' 5; gh pr view 5; done", [], "escaped backtick before a backtick span holding an apostrophe: the regex mispaired the quotes; the stripper now blanks nothing"],
+  [() => "while :; do `true '`; 'sleep' 5; gh pr view 5; done", LOOP_PREDICATES, "apostrophe inside a backtick span: the regex mispaired the quotes; the stripper now blanks nothing"],
+  [() => "echo \\` ; while :; do `true '`; 'sleep' 5; gh pr view 5; done", LOOP_PREDICATES, "escaped backtick before a backtick span holding an apostrophe: the regex mispaired the quotes; the stripper now blanks nothing"],
   // wrapped in a double-quoted --notes/-m, the lone backtick opens an unterminated substitution, so the inline-interpreter scan also fails closed
-  [() => "# `\nwhile :; do `true '`; 'sleep' 5; gh pr view 5; done", ["commandContainsInlineInterpreter"], "backtick in a # comment followed by a backtick span holding an apostrophe: the stripper now blanks nothing"],
-  [() => "echo '`' \"'\" ; while :; do `true '`; 'sleep' 5; gh pr view 5; done", ["commandContainsInlineInterpreter"], "quoted backtick and apostrophe before a backtick span holding an apostrophe: the stripper now blanks nothing"],
+  [() => "# `\nwhile :; do `true '`; 'sleep' 5; gh pr view 5; done", [...LOOP_PREDICATES, "commandContainsInlineInterpreter"], "backtick in a # comment followed by a backtick span holding an apostrophe: the stripper now blanks nothing"],
+  [() => "echo '`' \"'\" ; while :; do `true '`; 'sleep' 5; gh pr view 5; done", [...LOOP_PREDICATES, "commandContainsInlineInterpreter"], "quoted backtick and apostrophe before a backtick span holding an apostrophe: the stripper now blanks nothing"],
   [() => 'while [ ! -f tmp/d ]; do echo "a \\"; sleep 2"; done', ["commandContainsDetachedWaitTool", "commandIsFileMarkerPollLoop"], "escaped quote inside a double-quoted word: the regex mispaired the quotes; the stripper now blanks nothing", DATA],
   [() => "gh api repos/mfittko/dev-loops/pulls/5 -f body=x it\\'s -X GET 'y'", [], "escaped apostrophe: the stripper blanks nothing (no predicate flips)"],
   [() => "gh pr edit 5 --title it\\'s --repo other/x 'y' --body z", ["commandContainsRawPrBodyEdit"], "escaped apostrophe: the stripper blanks nothing, so the flag-looking text stays visible"],
@@ -254,8 +254,11 @@ const rowKey = (name, cmd) => `${name}: ${JSON.stringify(cmd)}`;
 const SLICE1_FAIL_CLOSED_FLIPS = new Map();
 {
   const flip = (name, reason, cmd) => SLICE1_FAIL_CLOSED_FLIPS.set(rowKey(name, cmd), reason);
+  const POLL = 'while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done';
   const R_HEREDOC = "heredoc body never reaches a delimiter line (the trailing line is not EOF): incomplete, so the rest stays executable text";
   const R_UNCLOSED = "unterminated $( substitution: incomplete, so commandContainsInlineInterpreter fails closed";
+  const R_COMMENT = "apostrophe in a # comment: the regex paired it across lines and blanked the loop; the tokenizer skips the comment";
+  const R_ESCAPE = 'escaped \\" inside a double-quoted word: the regex paired the quotes wrongly and blanked the loop; the tokenizer keeps the loop visible';
   flip("commandContainsRawPrBodyEdit", "trailing # comment with an apostrophe is a quote-pairing hazard: the stripper blanks nothing, so the flag-looking text in the quoted title stays visible", "gh pr edit 5 --title 'a --body b' # it's");
   flip("commandContainsInlineInterpreter", R_UNCLOSED, 'echo "$(gh pr view 5');
   flip("commandContainsInlineInterpreter", "gh is no heredoc text host: its quoted cat heredoc body stays visible (host exemption is git commit only)", EOF_PAREN_ROW);
@@ -265,16 +268,24 @@ const SLICE1_FAIL_CLOSED_FLIPS = new Map();
     for (const f of ["cat > src/a.mjs <<'EOF'", "cat > tmp/r.mjs <<'EOF' && node tmp/r.mjs"]) flip("commandContainsInlineInterpreter", R_HEREDOC, `${sep}${f}\necho done`);
   }
   for (const f of ["cat > src/a.mjs <<'EOF'", "cat > tmp/r.mjs <<'EOF' && node tmp/r.mjs"]) flip("commandContainsInlineInterpreter", R_HEREDOC, `# can't\n${f}\n# don't`);
+  const wrapComment = (f) => `# can't\n${f}\n# don't`;
+  for (const f of ["while ! gh pr view 5; do sleep 5; done", "until gh pr checks 5; do sleep 5; done", "while [ ! -f tmp/done ]; do sleep 2; done"]) flip("commandContainsDetachedWaitTool", R_COMMENT, wrapComment(f));
+  for (const f of ["while ! gh pr view 5; do sleep 5; done", "until gh pr checks 5; do sleep 5; done"]) flip("commandIsSleepPollLoop", R_COMMENT, wrapComment(f));
+  flip("commandIsFileMarkerPollLoop", R_COMMENT, wrapComment("while [ ! -f tmp/done ]; do sleep 2; done"));
+  for (const name of ["commandContainsDetachedWaitTool", "commandIsSleepPollLoop"]) {
+    flip(name, R_ESCAPE, `echo "a \\" b"; ${POLL}`);
+  }
 }
 /**
  * Slice 2 intended removals (issue 2442): rows the frozen copy denies and the head allows, each with a reason. Key: `<predicate>: <JSON command>`.
  * Only the interpreter and wait predicates may appear: the PR-body predicates keep every decision.
  */
 const INTENDED_REMOVALS = new Map();
-const REMOVAL_PREDICATES = ["commandContainsInlineInterpreter", "commandContainsDetachedWaitTool"];
+const REMOVAL_PREDICATES = ["commandContainsInlineInterpreter", "commandContainsDetachedWaitTool", "commandIsSleepPollLoop", "commandIsFileMarkerPollLoop"];
 const R_QUOTE_WRAP = "the form sits in a quoted --notes/-m/echo argument: quoted text is inert data (item 9)";
 const R_HEREDOC_WRAP = "the form is the body of a cat/tee heredoc (quoted delimiter) written to a temp path: the body is data (item 8)";
-const PINNED_REMOVAL_COUNTS = { [R_QUOTE_WRAP]: 3, [R_HEREDOC_WRAP]: 30 }; // rows removed per reason
+const R_HAZARD_DATA = "the loop sits in quotes next to a quote-pairing hazard (comment apostrophe, escaped quote, heredoc quote): the tokenizer pairs the quotes correctly, so the loop is data";
+const PINNED_REMOVAL_COUNTS = { [R_QUOTE_WRAP]: 19, [R_HEREDOC_WRAP]: 116, [R_HAZARD_DATA]: 156 }; // rows removed per reason
 
 function buildCorpus() {
   const corpus = new Set([...RESIDUE_SHAPES,...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW, ...ARITH_SHIFT_ROWS, ...CHAINED_HEREDOC_ROWS]);
@@ -315,6 +326,7 @@ const PREDICATES = [
     for (const wrap of QUOTED_WRAPPERS) removeIf(wrap(row), R_QUOTE_WRAP);
     for (const wrap of HEREDOC_BODY_WRAPPERS) removeIf(wrap(row), R_HEREDOC_WRAP);
   }
+  for (const [shape, , , flag] of HAZARD_SHAPES) if (flag === DATA) for (const row of hazardRowsOf(shape)) removeIf(row, R_HAZARD_DATA);
 }
 
 // One SLICE1_FAIL_CLOSED_FLIPS entry per (predicate, row) a hazard shape actually flips, carrying the shape's reason.
