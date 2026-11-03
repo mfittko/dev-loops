@@ -53,7 +53,8 @@
  *     inside a quoted argument does not start a segment. A line the tokenizer cannot
  *     close falls back to a plain top-level split on `&&`, `||`, `|`, `;`. It catches the
  *     common raw-call forms (incl. the env/wrapper/path-prefixed ones above), but
- *     deeply obfuscated calls — aliases, `eval` — may evade it. Prefer single-line, single-purpose commands in transcripts.
+ *     deeply obfuscated calls — aliases, `eval` with a variable payload — may evade it. Payload
+ *     words (the text after `eval` or a `-c` flag) and substitution segments are split too. Prefer single-line, single-purpose commands in transcripts.
  */
 import { readFileSync } from "node:fs";
 import process from "node:process";

@@ -67,4 +67,9 @@ export const INLINE_DENY_ROWS = [
   "exec >x.sh; echo 'true; node -e y'; sh x.sh",
   "builtin shopt -s expand_aliases\nbuiltin alias echo='bash -c'\necho 'true; node -e y'",
   "{\necho 'true; node -e 1'\n} | sh",
+  "ln -s /bin/bash tmp/grep; PATH=tmp:$PATH; grep -ec 'true; node -e y'",
+  "export PATH=tmp:$PATH; grep -ec 'true; node -e y'",
+  "declare -x PATH=tmp:$PATH; grep -ec 'true; node -e y'",
+  ". tmp/f.sh; grep 'true; node -e y'",
+  "source tmp/f.sh; grep 'true; node -e y'",
 ];
