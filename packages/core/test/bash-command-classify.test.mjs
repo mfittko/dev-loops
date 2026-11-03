@@ -742,6 +742,16 @@ test("commandContainsDetachedWaitTool denies any loop containing sleep, whatever
     "while true; do case $x in a) sleep 1;; esac; done",
     "while true; do builtin sleep 1; done",
     "until grep -q x f; do sleep 5; done",
+    "bash <<'EOF'\nwhile true; do sleep 1; done\nEOF",
+    "bash -s <<'EOF'\nwhile true; do sleep 1; done\nEOF",
+    "echo 'while true; do sleep 1; done' | bash",
+    "while true; do command -p sleep 1; done",
+    "while true; do command sleep 1; done",
+    "s() { sleep 1; }; while true; do s; done",
+    "while true; do s() { sleep 1; }; s; done",
+    "bash -c -- 'while true; do sleep 1; done'",
+    "sh -c -- 'until false; do sleep 2; done'",
+    "for f in a; do echo $f; done; sleep 1",
   ]) assert.equal(commandContainsDetachedWaitTool(cmd), true, cmd);
   for (const cmd of [
     'echo "while true; do nohup sleep 5; done"',
@@ -773,6 +783,13 @@ test("commandContainsDetachedWaitTool denies any loop containing sleep, whatever
     "echo sudo -u root timeout 0.5 bash -c 'while true; do sleep 1; done'",
     "echo nice -n 10 timeout 0.5 bash -c 'while true; do sleep 1; done'",
     "for f in a b; do grep 'x)' sleep; done",
+    "cat <<'EOF' > s.sh\nwhile true; do sleep 1; done\nEOF",
+    "bash script.sh",
+    "command -v sleep",
+    "while true; do command -p ls; done",
+    "s() { ls; }; while true; do s; done",
+    "s() { sleep 1; }; s",
+    "bash -c -- 'echo hi'",
   ]) assert.equal(commandContainsDetachedWaitTool(cmd), false, cmd);
 });
 

@@ -1279,7 +1279,7 @@ export function commandIsSleepLoop(command) {
       if (w === undefined) return k;
       const r = redirectionSkip(w);
       if (r) k += r;
-      else if (SKIP.test(w) || /^[A-Za-z_]\w*=/.test(w)) k++;
+      else if (SKIP.test(w) || /^[A-Za-z_]\w*=/.test(w) || (w === "-p" && words[k - 1] === "command")) k++;
       else return k;
     }
   };
@@ -1295,7 +1295,7 @@ export function commandIsSleepLoop(command) {
   };
   const base = (w) => w.replace(/^[<>]?\(+/, "").replace(/^.*\//, "");
   const LOOP = /^(?:while|until|for)(?:$|\()/;
-  const flat = (segs) => {
+  const flat = (segs, text) => {
     for (const seg of segs) {
       const words = seg.words.map((w) => w.value);
       const { j, head } = headAt(words, 0);
@@ -1304,6 +1304,7 @@ export function commandIsSleepLoop(command) {
       // A loop opened mid-segment: after a `{` (function body) or inside `<(` / `>(` (process substitution).
       words.forEach((w, i) => {
         if (((i > 0 && words[i - 1] === "{") || /^[<>]\(/.test(w)) && LOOP.test(w.replace(/^[<>]?\(+/, ""))) heads.push("while");
+        if (i > 0 && words[i - 1] === "{") heads.push(headAt(words, i).head); // a sleep inside a function body
       });
       // A command after a `case` arm label (`a)`, `a|b)`, `*)`) is a head too.
       words.forEach((w, i) => {
@@ -1340,18 +1341,28 @@ export function commandIsSleepLoop(command) {
       if (m < words.length && SLEEP_LOOP_SHELLS.has(base(words[m]))) {
         // First later `-c` word, so a shell option with an argument (`bash -o pipefail -c`) does not hide the payload.
         const c = words.findIndex((x, n) => n > m && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(x));
-        if (c > 0 && words[c + 1] !== undefined) payloads.push(words[c + 1]);
+        let p = c + 1;
+        while (c > 0 && /^--?$/.test(words[p] ?? "")) p++; // `bash -c -- 'script'`: the payload follows the end-of-options marker
+        if (c > 0 && words[p] !== undefined) payloads.push(words[p]);
+        // No -c and no script operand: the shell reads its script from stdin (heredoc body, or a pipe from a quoted literal).
+        const rest = words.slice(m + 1);
+        const operand = rest.some((x, n) => !/^-/.test(x) && !redirectionSkip(x) && !x.includes("<") && !rest[n - 1]?.includes("<"));
+        if (c < 0 && !operand) {
+          for (const h of seg.heredocs) payloads.push(h.body);
+          const sep = text?.slice(seg.start, seg.words[0].start) ?? "";
+          if (/(?:^|[^|])\|(?!\|)|\|&/.test(sep)) for (const prev of segs) if (prev !== seg) for (const w of prev.words) payloads.push(w.value);
+        }
       }
       // The payload's own heads join the outer list, so `while true; do sh -c 'sleep 5'; done` counts.
       for (const p of payloads) {
         const t = tokenizeShellCommand(p);
-        if (!t.incomplete) flat(t.segments);
+        if (!t.incomplete) flat(t.segments, p);
         else if (commandIsSleepLoop(p)) heads.push("while", "sleep");
       }
       for (const w of seg.words) for (const s of w.subs) flat(s.segments);
     }
   };
-  flat(segments);
+  flat(segments, command);
   return heads.some((h) => LOOP.test(h ?? "")) && heads.includes("sleep");
 }
 
