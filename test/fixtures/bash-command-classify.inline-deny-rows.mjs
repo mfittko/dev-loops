@@ -58,6 +58,7 @@ export const INLINE_DENY_ROWS = [
   "git commit -m \"$(cat > .git/hooks/pre-commit <<'EOF'\nnode -e 'x'\nEOF\n)\"",
   "git commit -m \"$(cat >> .git/config <<'EOF'\nnode -e 'x'\nEOF\n)\"",
   "gh r --body \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
+  "git commit -F - <<'MSG'\nnode -e 'x'\nMSG",
   "git rebase -x 'true; node -e y' HEAD~1",
   "git rebase --exec 'true; node -e y' HEAD~1",
   "watch 'true; node -e y'",

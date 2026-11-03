@@ -971,9 +971,9 @@ function blankQuotedForFlags(command) {
  * tokenizer instead of that coarse guard, which removes the hazard false positives. It also blanks the bodies that
  * `blankDataHeredocs` finds to be data, treats a single-quoted or ANSI-C `$(`/backtick as inert, and keeps every
  * quoted span inside a payload word (`isPayloadWord`: after `-c`/`--command`/`eval`, or a `<<<` here-string). Text from an
- * unterminated quote, `$(` or heredoc onward is left as raw executable text in both modes (deny direction). Accepted ceiling: a
- * deliberately quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is
- * blanked like any other quoted literal and can therefore evade the ban.
+ * unterminated quote, `$(` or heredoc onward is left as raw executable text in both modes (deny direction). Accepted ceiling, default mode
+ * only: a deliberately quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is blanked like any other quoted
+ * literal and can evade the ban. Precise mode keeps a quoted whole-word keyword (`'sleep' 5`) visible (`STRUCTURAL_WORD_RE`), so the ceiling does not apply there.
  * @param {string} command @param {boolean} [precise] @returns {string}
  */
 function stripQuotedLiterals(command, precise = false) {
@@ -1050,19 +1050,11 @@ function substitutionIsInert(seg, k) {
 
 /** A `-c`/`--config` override or `alias.` word (any case): git/gh run a shell alias from it. */
 const overridesConfig = (seg) => seg.words.some((w) => /^(?:-c|--config)|alias\./i.test(w.value));
-const STDIN_TEXT_SUBCOMMANDS = { git: new Set(["commit", "tag", "notes"]), gh: new Set(["pr", "issue", "release", "gist"]) };
-/** A top-level `git commit -F -` / `gh pr comment --body-file -` segment: a text subcommand of git/gh with a `-F -`/`--body-file -` operand, no `-c`, no env assignment. Its heredoc is message text. */
-function readsTextFromStdin(seg, head) {
-  const sub = STDIN_TEXT_SUBCOMMANDS[head];
-  const vals = seg.words.map((w) => w.value);
-  if (!sub || vals[0] !== head || !sub.has(vals[1]) || seg.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw)) || overridesConfig(seg)) return false;
-  return vals.some((v, i) => /^(?:-F|--file|--body-file|--notes-file)$/.test(v) && vals[i + 1] === "-");
-}
 
 /**
- * Heredocs whose body is data (issue 2442 item 8): a `cat` or `tee` heredoc (or a `git commit -F -`/`gh pr comment --body-file -` message, `readsTextFromStdin`) that is closed, whose delimiter is quoted or whose body has no
+ * Heredocs whose body is data (issue 2442 item 8): a `cat` or `tee` heredoc that is closed, whose delimiter is quoted or whose body has no
  * `$(`/backtick, whose segment is not piped onward, and that sits in no `-c`/`eval`/here-string payload.
- * Structural rule, counted over the whole tree: the command is exactly one `cat`/`tee` heredoc segment, or one root `git commit` / `gh pr|issue comment|create|edit` segment (bare head) holding exactly one substitution that holds exactly one `cat` segment that writes no file. Anything else keeps every heredoc body visible, so a later segment or substitution that runs a written file never sees a blanked body.
+ * Structural rule, counted over the whole tree: the command is exactly one `cat`/`tee` heredoc segment, or one root `git commit` / `gh pr|issue comment|create|edit` segment (bare head) holding exactly one substitution that holds exactly one `cat` segment that writes no file. A top-level `git commit -F -` or `gh ... --body-file -` heredoc is not a host. Anything else keeps every heredoc body visible, so a later segment or substitution that runs a written file never sees a blanked body.
  * The host must write no file, carry no env-assignment word and no `-c`/alias override (`substitutionIsInert`); `echo`/`printf` are not hosts. The `cat`/`tee` head is the bare name or a `/bin/` or `/usr/bin/` path, with no env-assignment word and no `<(`/`>(` anywhere in a word.
  * Every other body executes and stays visible.
  * @returns {object[]}
@@ -1071,10 +1063,8 @@ function dataHeredocs(segments) {
   if (segments.length !== 1) return []; // multi-segment: a later segment may run what the heredoc writes
   const seg = segments[0];
   const dataBody = (s) => { // closed, not piped onward, no process-substitution word (`>(sh)`, a `(`-target)
-    const h = segmentHead(s);
-    const isCatTee = h === "cat" || h === "tee";
-    if (s.pipedOut || (!isCatTee && !readsTextFromStdin(s, h)) || s.words.some((w) => /[<>]\(/.test(w.raw) || /[<>]\(/.test(w.value))) return [];
-    if (isCatTee && (!/^(?:\/bin\/|\/usr\/bin\/)?(?:cat|tee)$/.test(rawHead(s)) || s.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw)))) return []; // a path-prefixed or PATH-overridden `cat` is an unknown program
+    if (s.pipedOut || s.words.some((w) => /[<>]\(/.test(w.raw) || /[<>]\(/.test(w.value))) return [];
+    if (!/^(?:\/bin\/|\/usr\/bin\/)?(?:cat|tee)$/.test(rawHead(s)) || s.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw))) return []; // not cat/tee, or a path-prefixed or PATH-overridden `cat`, is an unknown program
     return s.heredocs.filter((x) => x.closed && (x.quoted || !/\$\(|`/.test(x.body)));
   };
   const subs = seg.words.flatMap((w, k) => w.subs.map((sub) => ({ sub, k })));
