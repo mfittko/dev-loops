@@ -20,10 +20,10 @@ function clean(value, label) {
 }
 
 /** Validate and sanitize a raw focus object. Returns null for an absent or empty focus. */
-export function normalizeOperatorFocus(raw, { allowItems = false } = {}) {
+export function normalizeOperatorFocus(raw, { allowItems = false, allowResidue = false } = {}) {
   if (raw === undefined || raw === null) return null;
   if (typeof raw !== "object" || Array.isArray(raw)) throw new OperatorFocusRefusal("GATE-EXEC-OPERATOR-FOCUS: operator focus must be a JSON object");
-  const unknown = Object.keys(raw).filter((key) => key !== "round" && key !== "items");
+  const unknown = Object.keys(raw).filter((key) => key !== "round" && key !== "items" && key !== "residue");
   if (unknown.length > 0) throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus has unknown field(s) ${unknown.join(", ")}`);
   const focus = {};
   if (raw.round !== undefined) focus.round = clean(raw.round, "round");
@@ -41,6 +41,23 @@ export function normalizeOperatorFocus(raw, { allowItems = false } = {}) {
       return { fingerprint, decision: clean(item.decision, `items[${index}].decision`) };
     });
     if (items.length > 0) focus.items = items;
+  }
+  if (raw.residue !== undefined) {
+    if (!allowResidue) throw new OperatorFocusRefusal("GATE-EXEC-OPERATOR-FOCUS: operator focus residue is accepted for fan-in only");
+    if (!Array.isArray(raw.residue) || raw.residue.length > MAX_ITEMS) throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus residue must be an array of at most ${MAX_ITEMS} entries`);
+    const residue = raw.residue.map((entry, index) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus residue[${index}] must be an object`);
+      const extra = Object.keys(entry).filter((key) => !["summary", "severity", "file", "line"].includes(key));
+      if (extra.length > 0) throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus residue[${index}] has unknown field(s) ${extra.join(", ")}`);
+      if (entry.line !== undefined && !(Number.isInteger(entry.line) && entry.line > 0)) throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus residue[${index}].line must be a positive integer`);
+      return {
+        summary: clean(entry.summary, `residue[${index}].summary`),
+        ...(entry.severity !== undefined ? { severity: clean(entry.severity, `residue[${index}].severity`) } : {}),
+        ...(entry.file !== undefined ? { file: clean(entry.file, `residue[${index}].file`) } : {}),
+        ...(entry.line !== undefined ? { line: entry.line } : {}),
+      };
+    });
+    if (residue.length > 0) focus.residue = residue;
   }
   return Object.keys(focus).length > 0 ? focus : null;
 }

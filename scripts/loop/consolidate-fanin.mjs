@@ -63,6 +63,9 @@ import { clusterFindings } from "@dev-loops/core/loop/finding-cluster";
 import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
+import { operatorFocusDigestEntry, readOperatorFocusFile } from "./_operator-focus.mjs";
+
+const ROUTED_RESIDUE_ANGLE = "operator-routed-residue";
 
 const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>] [--emit-plan <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
@@ -271,6 +274,10 @@ Optional:
                                  (not a tmp/ subdirectory of it); per-gate records from <tmpRoot>/gate-context/**.
                                  With --emit-plan, the keyed fan-in ledger is written here, so this MUST be
                                  the root the plan was emitted under.
+  --operator-focus-file <path>   GATE-EXEC-ROUTED-RESIDUE-INPUT: operator focus JSON whose "residue" entries
+                                 ({ summary, severity?, file?, line? }) become findings under the declared
+                                 angle "operator-routed-residue"; --emit-plan adds a provenance.perAngle entry
+                                 (source "operator-focus", the focus digest).
   --spec-authority <path>        JSON { specDigest, headSha, contentDigest, checkedCriteria }
                                  (issue 2008 / ADR 0061 AC1). When supplied, stamps the
                                  --ledger-out { overallVerdict, findings } object with the pinned
@@ -602,6 +609,7 @@ export function parseConsolidateFaninCliArgs(argv) {
     emitPlan: undefined,
     tmpRoot: undefined,
     specAuthority: undefined,
+    operatorFocusFile: undefined,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -624,6 +632,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       "emit-plan": { type: "string" },
       "tmp-root": { type: "string" },
       "spec-authority": { type: "string" },
+      "operator-focus-file": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -746,6 +755,12 @@ export function parseConsolidateFaninCliArgs(argv) {
         throw parseError("--tmp-root requires a non-empty path");
       }
       options.tmpRoot = tmpRoot;
+      continue;
+    }
+    if (token.name === "operator-focus-file") {
+      const p = requireTokenValue(token, parseError).trim();
+      if (p.length === 0) throw parseError("--operator-focus-file requires a non-empty path");
+      options.operatorFocusFile = p;
       continue;
     }
     if (token.name === "spec-authority") {
@@ -1443,6 +1458,17 @@ export async function consolidateGateFanin(options) {
     }
   }
 
+  // GATE-EXEC-ROUTED-RESIDUE-INPUT: operator-routed residue enters as a fresh, head-stamped artifact under a declared angle.
+  const operatorFocus = await readOperatorFocusFile(options.operatorFocusFile ? path.resolve(process.cwd(), options.operatorFocusFile) : undefined, { allowResidue: true });
+  if (operatorFocus?.residue) {
+    rawArtifacts.push({
+      angle: ROUTED_RESIDUE_ANGLE,
+      verdict: "findings_present",
+      ...(options.headSha !== undefined ? { headSha: options.headSha } : {}),
+      findings: operatorFocus.residue.map((r) => ({ ...r, severity: r.severity ?? "medium" })),
+    });
+  }
+
   const angles = rawArtifacts.map((a) => ({
     angle: a.angle.trim(),
     verdict: a.verdict.trim(),
@@ -1599,6 +1625,9 @@ export async function consolidateGateFanin(options) {
     const ledgerWrapper = { overallVerdict: consolidated.verdict, findings };
     if (verifiedItems.length > 0) ledgerWrapper.verifiedItems = verifiedItems;
     if (emitPlan !== undefined) ledgerWrapper.provenance = deriveFaninProvenance(rawArtifacts, emitPlan, options.headSha, options.carryForwardPlan);
+    if (emitPlan !== undefined && operatorFocus?.residue) {
+      ledgerWrapper.provenance.perAngle.push({ angle: ROUTED_RESIDUE_ANGLE, source: "operator-focus", ...operatorFocusDigestEntry(operatorFocus) });
+    }
     const ledgerRecord = stampOptionalSpecAuthority(ledgerWrapper, specAuthorityIdentity);
     const ledgerText = `${JSON.stringify(ledgerRecord, null, 2)}\n`;
     if (options.ledgerOut !== undefined) ledgerTargets.push(options.ledgerOut);

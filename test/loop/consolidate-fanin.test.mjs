@@ -4987,3 +4987,37 @@ test("#2526: a withheld over-budget round with --out at the keyed ledger is refu
     assert.equal(JSON.parse(await readFile(keyed(root), "utf8")).findings.length, 25 * 30);
   });
 });
+
+// GATE-EXEC-ROUTED-RESIDUE-INPUT (#2971): operator-routed residue enters fan-in as a declared angle.
+test("consolidateGateFanin records operator-focus residue under operator-routed-residue and its provenance entry", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    (dir) => withTempDir(async (planDir) => {
+      const planPath = await writeEmitPlan(planDir, matchingEmitPlan());
+      await writeEmitPlanReceipt(planDir);
+      await writeEmitPlanLayoutRecord(planDir);
+      const focusFile = path.join(planDir, "focus.json");
+      await writeFile(focusFile, JSON.stringify({ residue: [{ summary: "leftover <b>nit</b>", severity: "low", file: "src/a.mjs", line: 4 }] }), "utf8");
+      const base = { findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, tmpRoot: planDir, receiptTmpRoot: planDir };
+      const plain = await consolidateGateFanin(base);
+      assert.equal(plain.findings.length, 0);
+      const result = await consolidateGateFanin({ ...base, operatorFocusFile: focusFile });
+      assert.equal(result.findings.length, 1);
+      assert.equal(result.findings[0].angle, "operator-routed-residue");
+      assert.equal(result.findings[0].summary, "leftover bnit/b");
+      const ledger = JSON.parse(await readSealed(buildGateFaninLedgerPath({ repo: "o/r", pr: "7", gate: "review", headSha: EMIT_HEAD, tmpRoot: planDir })));
+      const entry = ledger.provenance.perAngle.find((e) => e.angle === "operator-routed-residue");
+      assert.equal(entry.source, "operator-focus");
+      assert.match(entry.operatorFocusDigest, /^[0-9a-f]{64}$/);
+      assert.equal(ledger.provenance.perAngle.length, 2);
+    }),
+  );
+});
+
+test("consolidateGateFanin refuses residue items outside the focus schema", async () => {
+  await withFindingsDir({ "a.json": { angle: "a", verdict: "clean", findings: [] } }, (dir) => withTempDir(async (tmp) => {
+    const focusFile = path.join(tmp, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ residue: [{ summary: "s", extra: 1 }] }), "utf8");
+    await assert.rejects(() => consolidateGateFanin({ findingsDir: dir, operatorFocusFile: focusFile }), /GATE-EXEC-OPERATOR-FOCUS/);
+  }));
+});

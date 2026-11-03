@@ -468,6 +468,10 @@
       "enforcement": "runtime"
     },
     {
+      "id": "GATE-EXEC-ROUTED-RESIDUE-INPUT",
+      "enforcement": "runtime"
+    },
+    {
       "id": "GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE",
       "enforcement": "doc"
     },

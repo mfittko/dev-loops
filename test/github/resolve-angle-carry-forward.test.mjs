@@ -1400,3 +1400,10 @@ test("buildCarryForwardPlan: duplicate rerun names are idempotent; case mismatch
   assert.deepEqual(twice, once);
   assert.throws(() => buildCarryForwardPlan({ log: cleanLog, changedFiles: [], rerunAngles: ["Docs"] }), { code: "unknown_rerun_angle" });
 });
+
+test("buildCarryForwardPlan passes integrity on a log whose provenance has an operator-focus residue entry and never carries it, only marks it for re-run (#2971)", () => {
+  const log = { ...cleanLog, provenance: { ...cleanLog.provenance, perAngle: [...cleanLog.provenance.perAngle, { angle: "operator-routed-residue", source: "operator-focus", operatorFocusDigest: "d".repeat(64) }] } };
+  const plan = buildCarryForwardPlan({ log, changedFiles: ["docs/guide.md"] });
+  assert.deepEqual(plan.carried.map((c) => c.angle).sort(), ["correctness", "coverage"]);
+  assert.ok(plan.mustRerun.some((m) => m.angle === "operator-routed-residue"));
+});
