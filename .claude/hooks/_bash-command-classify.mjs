@@ -1349,7 +1349,7 @@ export function commandIsSleepLoop(command) {
           if (seg.words[n].op) { n++; continue; } // a heredoc / here-string operator and its operand
           const r = redirectionSkip(x);
           if (r) { n += r - 1; continue; }
-          if (/^[-+][oO]$|^--(?:rcfile|init-file)$/.test(x)) n++;
+          if (/^[-+][a-zA-Z]*[oO]$|^--(?:rcfile|init-file)$/.test(x)) n++;
           else if (x === "--") break;
           else if (/^-[a-zA-Z]*c[a-zA-Z]*$/.test(x)) { c = n; break; }
           else if (/^-[a-zA-Z]*s[a-zA-Z]*$/.test(x)) stdin = true; // `-s`: the operands are positional parameters, the script is stdin
