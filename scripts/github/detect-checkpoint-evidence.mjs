@@ -40,9 +40,8 @@ import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { carryFromPostedVerdict } from "./_carried-verdict.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { verifyFreshHumanApproval } from "@dev-loops/core/loop/merge-approval";
+import { verifyFreshHumanApproval, projectSubmittedReviewFacts } from "@dev-loops/core/loop/merge-approval";
 import { countUnresolvedHumanChangesRequested, resolveSizeBudgetHumanApprovalRequired } from "@dev-loops/core/loop/size-budget-merge-gate";
-import { SUBMITTED_REVIEW_STATES } from "@dev-loops/core/github/copilot-helpers";
 import { parseHeadDeclaredKeys } from "./head-declared-keys-schema.mjs";
 const USAGE = `Usage: detect-checkpoint-evidence.mjs --repo <owner/name> --pr <number>
 Fetch the live PR head SHA and visible PR issue comments, then summarize the
@@ -61,6 +60,7 @@ Optional:
                           ({"declaredKeys":[...]}); a head-only unknown key listed there is tolerated
   --head-declared-keys-sha <sha>  Head SHA the declared keys were reported for; the keys apply only when it
                           equals the evaluated head, otherwise the declared set is empty
+  --read-only             Still report a foreign runner owner, but skip the matching-owner heartbeat write; for read-only callers such as merge-pr --check
   --skip-fanout-ledger-check  Skip the fan-out findings-log ledger/provenance/
                               angle-coverage layer of requireFanoutEvidence
                               enforcement. That evidence lives in a gitignored,
@@ -130,6 +130,8 @@ Output (stdout, JSON; always includes preMergeGateCheck):
       "findingsSummary": "no issues found",
       "nextAction": "await final human approval",
       "contractComplete": true,
+      "sizeOutcome": "pass",
+      "sizeTouchesT1": false,
       "commentId": 102,
       "commentUrl": "https://github.com/owner/repo/pull/17#pullrequestreview-102",
       "updatedAt": "2026-05-29T22:00:00Z"
@@ -174,6 +176,7 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       pr: { type: "string" },
       "require-before-merge": { type: "boolean" },
       "skip-fanout-ledger-check": { type: "boolean" },
+      "read-only": { type: "boolean" },
       "base-ref-name": { type: "string" },
       "head-declared-keys": { type: "string" },
       "head-declared-keys-sha": { type: "string" },
@@ -214,6 +217,10 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       // below, never silently enabling the skip. So presence => enable, and the
       // only way to keep full enforcement is to omit the flag (the default).
       options.skipFanoutLedgerCheck = true;
+      continue;
+    }
+    if (token.name === "read-only") {
+      options.readOnly = true;
       continue;
     }
     if (token.name === "head-declared-keys") {
@@ -1102,6 +1109,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
     cwd,
     claimIfMissing: false,
     requireExisting: false,
+    readOnly: options.readOnly === true,
   });
   if (!runnerOwnership.ok) {
     const error = new Error(runnerOwnership.message);
@@ -1159,11 +1167,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
       { env, ghCommand, runChild, restFallback: () => restGetPaginatedJson(prReviewsApiPath(options.repo, options.pr), env) },
     );
     prReviews = normalizePrReviewsPayload(reviewsRaw);
-    reviewFacts = flattenPaginatedSlurp(reviewsRaw)
-      .filter((r) => SUBMITTED_REVIEW_STATES.has(r?.state))
-      .map((r) => ({
-        login: r?.user?.login ?? null, state: r?.state ?? null, commit_id: r?.commit_id ?? null, type: r?.user?.type ?? null,
-      }));
+    reviewFacts = projectSubmittedReviewFacts(flattenPaginatedSlurp(reviewsRaw));
   } catch {
     // Graceful fallback for the comment/verdict summarizers below: PR reviews
     // fetch failure is non-fatal there, and they continue with issue comments
@@ -1337,10 +1341,12 @@ async function main() {
     let unresolvedThreadCount = -1;
     let unresolvedGateThreadCount = -1;
     let githubCapFixed = false;
+    let skippedUntrusted = [];
     try {
       const threadsPayload = await fetchGithubReviewThreadsPayload(options, { env: process.env });
       const parsedThreads = parseReviewThreads(threadsPayload);
       unresolvedThreadCount = coerceUnresolvedThreadCount(parsedThreads);
+      skippedUntrusted = parsedThreads.skippedUntrusted ?? [];
       githubCapFixed = capRoundThreadsResolved(result.capRoundNumber, threadsPayload);
       // The draftGateSatisfied field must assert 0 unresolved gate-authored
       // threads (high, medium, low, question, AND nit), not just a clean
@@ -1399,7 +1405,7 @@ async function main() {
     // are excluded here to keep emitted output bounded regardless of how many
     // comments the PR has accumulated.
     const { reviews: _reviews, comments: _comments, capRoundNumber: _capRoundNumber, ...serializableResult } = result;
-    const output = { ...serializableResult, preMergeGateCheck, staleRunnerCheck, evidenceState };
+    const output = { ...serializableResult, preMergeGateCheck, staleRunnerCheck, evidenceState, ...(skippedUntrusted.length > 0 ? { skippedUntrusted } : {}) };
     if (!preMergeGateCheck.ok) {
       process.stderr.write(`${JSON.stringify({
         ok: false,
@@ -1407,6 +1413,8 @@ async function main() {
         repo: result.repo,
         pr: result.pr,
         currentHeadSha: result.currentHeadSha,
+        // Size facts survive a size-approval failure so merge-pr --check can still name the escalated class.
+        preApprovalGateMarker: result.preApprovalGateMarker,
         preMergeGateCheck,
         staleRunnerCheck,
         staleRunner: result.staleRunner,

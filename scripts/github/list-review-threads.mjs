@@ -3,6 +3,7 @@ import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { isTrustedGraphqlComment, UNTRUSTED_COMMENT_REMEDY } from "@dev-loops/core/github/comment-trust";
 import { authorMatchesFilter } from "./_review-thread-mutations.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -14,7 +15,7 @@ export const LIST_REVIEW_THREADS_QUERY = [
   "query($owner: String!, $name: String!, $pr: Int!, $after: String) {",
   "  repository(owner: $owner, name: $name) {",
   "    pullRequest(number: $pr) {",
-  "      reviewThreads(first: 100, after: $after) {",
+  "      reviewThreads(first: 25, after: $after) {",
   "        pageInfo {",
   "          hasNextPage",
   "          endCursor",
@@ -25,12 +26,18 @@ export const LIST_REVIEW_THREADS_QUERY = [
   "          isOutdated",
   "          path",
   "          line",
-  "          comments(first: 1) {",
+  "          comments(first: 100) {",
+  "            pageInfo {",
+  "              hasNextPage",
+  "            }",
   "            nodes {",
   "              databaseId",
   "              body",
+  "              authorAssociation",
+  "              viewerDidAuthor",
   "              author {",
   "                login",
+  "                __typename",
   "              }",
   "            }",
   "          }",
@@ -58,15 +65,24 @@ Required:
   --pr <number>         Pull request number
 Optional:
   --unresolved-only     Only include threads where isResolved is false
-  --author <login>      Only include threads whose first comment author matches
+  --author <login>      Only include threads whose root (first) comment author matches
                         (case-insensitive; "copilot" matches any Copilot review
                         login variant; "all" matches every author)
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/name", "pr": N, "threads": [
-    { "threadId": "...", "commentId": N|null, "author": "..."|null,
-      "body": "...", "isResolved": bool, "isOutdated": bool,
+    { "threadId": "...", "trusted": true, "commentId": N|null, "author": "..."|null,
+      "bodyCommentId": N|null, "body": "...", "isResolved": bool, "isOutdated": bool,
       "path": "..."|null, "line": N|null }, ...
-  ] }
+  ], "skippedUntrusted": [ { "threadId": "...", "authors": [...], "isResolved": bool, "remedy": "..." } ] }
+  commentId and author belong to the root (first) comment, the reply target; body is the
+  first trusted comment's text; bodyCommentId is the id of that trusted comment. "trusted": true is the ingestion marker consumers require.
+  Comments from authors who are not an OWNER, MEMBER or COLLABORATOR (the Copilot
+  reviewer and comments the reading identity authored itself excepted) are never listed
+  (ADR 0238); a thread with only such comments appears in skippedUntrusted (omitted
+  when empty), with author logins and no text. A thread with more than 100 comments
+  and no trusted comment on the first page stays listed with an empty body. A reply past
+  the first 100 comments is never read, so the remedy for such a thread is to resolve it
+  or to restate the finding in a new thread.
 Error output (stderr, JSON):
   Argument/usage errors:
     { "ok": false, "error": "...", "usage": "..." }
@@ -184,16 +200,36 @@ function excerptBody(rawBody, max = BODY_EXCERPT_MAX_CHARS) {
   return `${text.slice(0, max)}…`;
 }
 
+// ADR 0238: trust is decided here, at ingestion. The listing shows the text of the first
+// TRUSTED comment of a thread; a thread with comments and none trusted is returned as
+// `skipped` (author logins only, no text). commentId and author come from the root
+// comment (ids and logins are not prompt text), so a reply targets a top-level comment.
+// A thread whose comments connection has a next page is not provably all-untrusted:
+// it stays listed (a blocker) with no text.
 function normalizeThreadNode(node, bodyMax) {
-  const firstComment = node?.comments?.nodes?.[0] ?? null;
-  const commentId = Number.isFinite(firstComment?.databaseId) ? firstComment.databaseId : null;
-  const authorLogin = firstComment?.author?.login;
+  const comments = Array.isArray(node?.comments?.nodes) ? node.comments.nodes : [];
+  const trustedComment = comments.find((comment) => isTrustedGraphqlComment(comment, { allowCopilot: true })) ?? null;
+  const truncated = node?.comments?.pageInfo?.hasNextPage === true;
+  if (trustedComment === null && comments.length > 0 && !truncated) {
+    const authors = [...new Set(comments.map((comment) => (typeof comment?.author?.login === "string" && comment.author.login.length > 0 ? comment.author.login : "unknown")))];
+    return { skipped: { threadId: typeof node?.id === "string" ? node.id : "", authors, isResolved: Boolean(node?.isResolved), remedy: UNTRUSTED_COMMENT_REMEDY } };
+  }
+  const trustIncomplete = trustedComment === null && comments.length > 0 && truncated;
+  const rootComment = comments[0];
+  const commentId = Number.isFinite(rootComment?.databaseId) ? rootComment.databaseId : null;
+  // bodyCommentId is the comment whose text `body` carries: the full-body join keys on it, since
+  // the root may be untrusted (empty body in the snapshot) while a trusted reply supplies the text.
+  const bodyCommentId = Number.isFinite(trustedComment?.databaseId) ? trustedComment.databaseId : null;
+  const authorLogin = rootComment?.author?.login;
   const author = typeof authorLogin === "string" && authorLogin.length > 0 ? authorLogin : null;
   return {
     threadId: typeof node?.id === "string" ? node.id : "",
+    trusted: !trustIncomplete, // ADR 0238 marker: consumers refuse a thread file without it
+    ...(trustIncomplete ? { trustIncomplete: true } : {}), // first page all untrusted, more pages exist: a blocker, never a fixer target
     commentId,
+    bodyCommentId,
     author,
-    body: excerptBody(firstComment?.body, bodyMax),
+    body: excerptBody(trustedComment?.body, bodyMax),
     isResolved: Boolean(node?.isResolved),
     isOutdated: Boolean(node?.isOutdated),
     path: typeof node?.path === "string" ? node.path : null,
@@ -201,17 +237,23 @@ function normalizeThreadNode(node, bodyMax) {
   };
 }
 
-export async function fetchAllReviewThreads(
+/** Trusted threads only (ADR 0238). Use fetchAllReviewThreadsWithSkips to also read the skipped untrusted threads. */
+export async function fetchAllReviewThreads(target, options) {
+  return (await fetchAllReviewThreadsWithSkips(target, options)).threads;
+}
+
+export async function fetchAllReviewThreadsWithSkips(
   { repo, pr },
   { env = process.env, ghCommand = "gh", runChild = defaultRunChild, bodyMax = BODY_EXCERPT_MAX_CHARS } = {},
 ) {
   const { owner, name } = parseRepoSlug(repo);
   const threads = [];
+  const skipped = [];
   let after = null;
   let pages = 0;
-  // 10k threads at 100/page; same ceiling as capture-review-threads.mjs, so a
+  // 10k threads at 25/page (25 threads x 100 comments bounds each response; same thread ceiling as capture-review-threads.mjs), so a
   // payload cycling cursors or inventing fresh ones forever fails closed.
-  const MAX_PAGES = 100;
+  const MAX_PAGES = 400;
   while (true) {
     if (pages >= MAX_PAGES) {
       throw new Error(`Invalid review-threads GraphQL payload: pagination exceeded ${MAX_PAGES} pages without completing`);
@@ -225,7 +267,9 @@ export async function fetchAllReviewThreads(
     const payload = parseJsonText(result.stdout);
     const { nodes, hasNextPage, endCursor } = readThreadsConnection(payload);
     for (const node of nodes) {
-      threads.push(normalizeThreadNode(node, bodyMax));
+      const normalized = normalizeThreadNode(node, bodyMax);
+      if (normalized.skipped) skipped.push(normalized.skipped);
+      else threads.push(normalized);
     }
     if (!hasNextPage) {
       break;
@@ -238,7 +282,7 @@ export async function fetchAllReviewThreads(
     }
     after = endCursor;
   }
-  return threads;
+  return { threads, skipped };
 }
 
 export function filterThreads(threads, { unresolvedOnly = false, author = undefined } = {}) {
@@ -274,9 +318,10 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return 0;
   }
-  const allThreads = await fetchAllReviewThreads({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+  const { threads: allThreads, skipped } = await fetchAllReviewThreadsWithSkips({ repo: options.repo, pr: options.pr }, { env, ghCommand });
   const threads = filterThreads(allThreads, { unresolvedOnly: options.unresolvedOnly, author: options.author });
-  const result = { ok: true, repo: options.repo, pr: options.pr, threads };
+  const skippedUntrusted = options.unresolvedOnly ? skipped.filter((thread) => !thread.isResolved) : skipped;
+  const result = { ok: true, repo: options.repo, pr: options.pr, threads, ...(skippedUntrusted.length > 0 ? { skippedUntrusted } : {}) };
   return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 

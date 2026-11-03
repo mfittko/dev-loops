@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,6 +24,22 @@ test("editIssue: refuses a body write that adds an adr-tripwire:allow line (PR b
     /ADR-TRIPWIRE-STANDING-WAIVER/,
   );
   assert.equal(calls.length, 0);
+});
+
+test("editIssue (#2898): refuses to untick a checked row unless --allow-untick", async () => {
+  const live = "## AC\n- [x] Tests pass\n- [x] Docs";
+  const attempt = (body, extra = {}) => {
+    const stub = makeGhStub([{ code: 0, stdout: "u\n", stderr: "" }], { repeatLastOnOverflow: true });
+    const run = (cmd, args, env) =>
+      args[1] === "view" ? Promise.resolve({ code: 0, stdout: JSON.stringify({ body: live }), stderr: "" }) : stub.run(cmd, args, env);
+    return editIssue({ repo: "o/n", issue: 7, body, addAssignees: [], removeAssignees: [], ...extra }, { run }).then(() => stub.calls);
+  };
+  await assert.rejects(() => attempt("## AC\n- [ ] Tests pass\n- [x] Docs"), /CHECKLIST-SCOPE-ONE-MODEL.*1 checked row.*#7.*"Tests pass"/s);
+  assert.equal((await attempt("## AC\n- [x] Tests pass\n- [x] Docs\n- [ ] New")).length, 1);
+  assert.equal((await attempt("## AC\n- [ ] Tests pass\n- [x] Docs", { allowUntick: true })).length, 1);
+  assert.equal(parseEditIssueCliArgs(["--repo", "o/n", "--issue", "1", "--body", "x", "--allow-untick"]).allowUntick, true);
+  assert.equal(parseEditIssueCliArgs(["--repo", "o/n", "--issue", "1", "--body", "x", "--allow-untick=true"]).allowUntick, true);
+  assert.equal(parseEditIssueCliArgs(["--repo", "o/n", "--issue", "1", "--body", "x", "--allow-untick=false"]).allowUntick, false);
 });
 
 test("parseEditIssueCliArgs: requires --repo, --issue and at least one edit", () => {
@@ -118,13 +134,57 @@ test("editIssue: --body-file reads the body from a real file", async () => {
   const dir = mkdtempSync(join(tmpdir(), "edit-issue-"));
   const bodyPath = join(dir, "body.md");
   writeFileSync(bodyPath, "Body from file\nsecond line");
-  const { run, calls } = stubGh();
+  const { run: base, calls } = stubGh();
+  const snapshots = [];
+  const run = (cmd, args, env) => {
+    if (args.includes("--body-file")) snapshots.push(readFileSync(args[args.indexOf("--body-file") + 1], "utf8"));
+    return base(cmd, args, env);
+  };
   const result = await editIssue(
     { repo: "o/n", issue: 5, bodyFile: bodyPath, addAssignees: [], removeAssignees: [] },
     { run },
   );
   assert.deepEqual(result.edited, ["body"]);
-  assert.deepEqual(calls[0], ["issue", "edit", "5", "--repo", "o/n", "--body-file", bodyPath]);
+  assert.equal(calls[0][calls[0].indexOf("--body-file") + 1] === bodyPath, false, "forwards a private snapshot, not the caller's file");
+  assert.ok(!calls[0].includes("--body"));
+  assert.equal(snapshots[0], "Body from file\nsecond line");
+});
+
+test("editIssue: a large multibyte --body-file goes to gh as a private 0600 temp file removed afterwards (no argv blowup)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "edit-issue-"));
+  const bodyPath = join(dir, "body.md");
+  const big = "漢".repeat(200_000);
+  writeFileSync(bodyPath, big);
+  let seen;
+  const run = (cmd, args) => {
+    if (args[1] === "view") return Promise.resolve({ code: 0, stdout: JSON.stringify({ body: "" }), stderr: "" });
+    const file = args[args.indexOf("--body-file") + 1];
+    seen = { args, file, mode: statSync(file).mode & 0o777, body: readFileSync(file, "utf8") };
+    return Promise.resolve({ code: 0, stdout: "https://github.com/o/n/issues/5\n", stderr: "" });
+  };
+  await editIssue({ repo: "o/n", issue: 5, bodyFile: bodyPath, addAssignees: [], removeAssignees: [] }, { run });
+  assert.ok(!seen.args.includes("--body"));
+  assert.ok(seen.args.join(" ").length < 1000);
+  assert.equal(seen.mode, 0o600);
+  assert.equal(seen.body, big);
+  assert.equal(existsSync(seen.file), false);
+});
+
+test("editIssue (#2898): a --body-file changed during the baseline read cannot bypass the guard (checked body is forwarded inline)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "edit-issue-"));
+  const bodyPath = join(dir, "body.md");
+  writeFileSync(bodyPath, "## AC\n- [x] Docs");
+  let sent;
+  const run = (cmd, args) => {
+    if (args[1] === "view") {
+      writeFileSync(bodyPath, "## AC\n- [ ] Docs"); // file mutates after the guard read it
+      return Promise.resolve({ code: 0, stdout: JSON.stringify({ body: "## AC\n- [x] Docs" }), stderr: "" });
+    }
+    sent = readFileSync(args[args.indexOf("--body-file") + 1], "utf8");
+    return Promise.resolve({ code: 0, stdout: "https://github.com/o/n/issues/5\n", stderr: "" });
+  };
+  await editIssue({ repo: "o/n", issue: 5, bodyFile: bodyPath, addAssignees: [], removeAssignees: [] }, { run });
+  assert.equal(sent, "## AC\n- [x] Docs");
 });
 
 test("editIssue: --body-file - reads stdin and passes it inline as --body (never re-emits exhausted fd 0)", () => {
@@ -148,8 +208,10 @@ test("editIssue: --body-file - reads stdin and passes it inline as --body (never
   const res = spawnSync((Bun.which("node") ?? "node"), [driver], { input: "Body from stdin\n", encoding: "utf8" });
   assert.equal(res.status, 0, res.stderr);
   const args = JSON.parse(res.stdout);
-  assert.deepEqual(args, ["issue", "edit", "17", "--repo", "o/n", "--body", "Body from stdin\n"]);
-  assert.ok(!args.includes("--body-file"), "must not re-emit --body-file - for an exhausted stdin");
+  assert.deepEqual(args.slice(0, 5), ["issue", "edit", "17", "--repo", "o/n"]);
+  assert.equal(args[5], "--body-file");
+  assert.notEqual(args[6], "-", "must not re-emit --body-file - for an exhausted stdin");
+  assert.ok(!args.includes("--body"), "stdin body must go through the snapshot file, not argv");
 });
 
 test("editIssue: --remove-assignee builds gh args and reports the edited field", async () => {
@@ -340,8 +402,10 @@ test("editIssue: --enforce-grill with --body-file - forwards stdin inline (no fd
   const res = spawnSync((Bun.which("node") ?? "node"), [driver], { input: "## Acceptance criteria\n\n- [ ] ac\n", encoding: "utf8" });
   assert.equal(res.status, 0, res.stderr);
   const args = JSON.parse(res.stdout);
-  assert.deepEqual(args, ["issue", "edit", "17", "--repo", "o/n", "--body", "## Acceptance criteria\n\n- [ ] ac\n"]);
-  assert.ok(!args.includes("--body-file"), "must not re-emit --body-file - under --enforce-grill");
+  assert.deepEqual(args.slice(0, 5), ["issue", "edit", "17", "--repo", "o/n"]);
+  assert.equal(args[5], "--body-file");
+  assert.notEqual(args[6], "-", "must not re-emit --body-file - under --enforce-grill");
+  assert.ok(!args.includes("--body"), "stdin body must go through the snapshot file, not argv");
 });
 
 test("editIssue: --enforce-grill with empty stdin fails closed (blank --body-file - cannot clear the body)", () => {

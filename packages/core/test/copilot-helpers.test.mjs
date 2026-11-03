@@ -423,7 +423,7 @@ test("summarizeGateReviewCommentMarkers filters by headSha when provided", () =>
 test("summarizeCopilotReviews identifies submitted reviews on the current head", () => {
   const reviews = [
     {
-      author: { login: "copilot-swe-agent" },
+      author: { login: "copilot-pull-request-reviewer" },
       state: "CHANGES_REQUESTED",
       commit: { oid: "abc1234" },
       submittedAt: "2024-01-10T00:00:00Z",
@@ -918,19 +918,19 @@ test("parseGateReviewCommentMarkerBody parses labeled fields without the header 
 test("summarizeCopilotReviews filters reviews before draftGateResetAtMs", () => {
   const reviews = [
     {
-      author: { login: "copilot-swe-agent" },
+      author: { login: "copilot-pull-request-reviewer" },
       state: "COMMENTED",
       commit: { oid: "aaa1111" },
       submittedAt: "2024-01-08T00:00:00Z",
     },
     {
-      author: { login: "copilot-swe-agent" },
+      author: { login: "copilot-pull-request-reviewer" },
       state: "COMMENTED",
       commit: { oid: "bbb2222" },
       submittedAt: "2024-01-10T00:00:00Z",
     },
     {
-      author: { login: "copilot-swe-agent" },
+      author: { login: "copilot-pull-request-reviewer" },
       state: "COMMENTED",
       commit: { oid: "ccc3333" },
       submittedAt: "2024-01-12T00:00:00Z",
@@ -954,13 +954,13 @@ test("summarizeCopilotReviews filters reviews before draftGateResetAtMs", () => 
 test("summarizeCopilotReviews returns zero rounds when all reviews are before draftGateResetAtMs", () => {
   const reviews = [
     {
-      author: { login: "copilot-swe-agent" },
+      author: { login: "copilot-pull-request-reviewer" },
       state: "COMMENTED",
       commit: { oid: "aaa1111" },
       submittedAt: "2024-01-05T00:00:00Z",
     },
     {
-      author: { login: "copilot-swe-agent" },
+      author: { login: "copilot-pull-request-reviewer" },
       state: "COMMENTED",
       commit: { oid: "bbb2222" },
       submittedAt: "2024-01-06T00:00:00Z",
@@ -983,13 +983,13 @@ test("summarizeCopilotReviews returns zero rounds when all reviews are before dr
 test("summarizeCopilotReviews with null/undefined draftGateResetAtMs behaves same as before (backward compat)", () => {
   const reviews = [
     {
-      author: { login: "copilot-swe-agent" },
+      author: { login: "copilot-pull-request-reviewer" },
       state: "COMMENTED",
       commit: { oid: "aaa1111" },
       submittedAt: "2024-01-08T00:00:00Z",
     },
     {
-      author: { login: "copilot-swe-agent" },
+      author: { login: "copilot-pull-request-reviewer" },
       state: "COMMENTED",
       commit: { oid: "bbb2222" },
       submittedAt: "2024-01-10T00:00:00Z",
@@ -1010,13 +1010,13 @@ test("summarizeCopilotReviews with null/undefined draftGateResetAtMs behaves sam
 test("summarizeCopilotReviews excludes reviews with exactly draftGateResetAtMs timestamp", () => {
   const reviews = [
     {
-      author: { login: "copilot-swe-agent" },
+      author: { login: "copilot-pull-request-reviewer" },
       state: "COMMENTED",
       commit: { oid: "aaa1111" },
       submittedAt: "2024-01-10T00:00:00Z",
     },
     {
-      author: { login: "copilot-swe-agent" },
+      author: { login: "copilot-pull-request-reviewer" },
       state: "COMMENTED",
       commit: { oid: "bbb2222" },
       submittedAt: "2024-01-10T00:00:01Z",
@@ -1042,7 +1042,7 @@ test("summarizeCopilotReviews draftGateResetAtMs does not affect non-Copilot rev
       submittedAt: "2024-01-10T00:00:00Z",
     },
     {
-      author: { login: "copilot-swe-agent" },
+      author: { login: "copilot-pull-request-reviewer" },
       state: "COMMENTED",
       commit: { oid: "bbb2222" },
       submittedAt: "2024-01-12T00:00:00Z",
@@ -1095,11 +1095,11 @@ test("resolveDraftGateRoundResetMs + summarizeCopilotReviews agree on the reset-
   // Five Copilot rounds; a clean draft_gate re-passed on an earlier head at 20:00Z.
   // Both scripts apply the same reset, so only the two post-reset rounds count.
   const reviews = [
-    { author: { login: "copilot[bot]" }, state: "COMMENTED", commit: { oid: "h1" }, submittedAt: "2026-05-31T18:00:00Z" },
-    { author: { login: "copilot[bot]" }, state: "COMMENTED", commit: { oid: "h2" }, submittedAt: "2026-05-31T19:00:00Z" },
-    { author: { login: "copilot[bot]" }, state: "COMMENTED", commit: { oid: "h3" }, submittedAt: "2026-05-31T19:30:00Z" },
-    { author: { login: "copilot[bot]" }, state: "COMMENTED", commit: { oid: "h4" }, submittedAt: "2026-05-31T21:00:00Z" },
-    { author: { login: "copilot[bot]" }, state: "COMMENTED", commit: { oid: "def56789abcdef" }, submittedAt: "2026-05-31T22:00:00Z" },
+    { author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", commit: { oid: "h1" }, submittedAt: "2026-05-31T18:00:00Z" },
+    { author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", commit: { oid: "h2" }, submittedAt: "2026-05-31T19:00:00Z" },
+    { author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", commit: { oid: "h3" }, submittedAt: "2026-05-31T19:30:00Z" },
+    { author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", commit: { oid: "h4" }, submittedAt: "2026-05-31T21:00:00Z" },
+    { author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", commit: { oid: "def56789abcdef" }, submittedAt: "2026-05-31T22:00:00Z" },
   ];
   const draftGate = { verdict: "clean", headSha: "aaa1111", updatedAt: "2026-05-31T20:00:00Z" };
   const currentHeadSha = "def56789abcdef";

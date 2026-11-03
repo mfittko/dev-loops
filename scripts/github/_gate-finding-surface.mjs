@@ -1695,7 +1695,8 @@ export async function fetchThreadsWithFullBodies({ repo, pr }, gh) {
   const snapshot = await captureParsedReviewThreads({ repo, pr }, gh);
   const fullBodyByCommentId = buildFullBodyByCommentId(snapshot.comments);
   const threadsWithFullBodies = threads.map((thread) => {
-    if (thread.commentId === null) {
+    const joinId = thread.bodyCommentId ?? thread.commentId;
+    if (joinId === null) {
       // No databaseId means the join key itself is unavailable for this
       // thread — it can never be found in fullBodyByCommentId no matter how
       // the two walks interleave, so treat this exactly like a join miss
@@ -1705,10 +1706,10 @@ export async function fetchThreadsWithFullBodies({ repo, pr }, gh) {
       }
       return thread;
     }
-    const fullBody = fullBodyByCommentId.get(String(thread.commentId));
+    const fullBody = fullBodyByCommentId.get(String(joinId));
     if (fullBody !== undefined) return { ...thread, body: fullBody };
     if (isTruncatedListingExcerpt(thread.body)) {
-      throw new Error(`Could not resolve the full body for review comment ${thread.commentId}: the listing excerpt was truncated and the full-body join missed it.`);
+      throw new Error(`Could not resolve the full body for review comment ${joinId}: the listing excerpt was truncated and the full-body join missed it.`);
     }
     return thread;
   });

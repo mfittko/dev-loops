@@ -448,7 +448,7 @@ test("a merged comment's non-primary fingerprints stay suppressed through fetchA
   const members = ["holistic", "no-op", "robustness"].map((angle) => ({ ...noOpKeyed, angle, summary: `${noOp.summary} Variant ${angle}.` }));
   assert.equal(new Set(members.map(fingerprintFinding)).size, 3);
   const body = renderInlineCommentBody(mergeSameDefectFindings(members)[0], { round: 1 });
-  const node = { id: "T1", isResolved: false, isOutdated: false, path: "src/Widget.js", line: 69, comments: { nodes: [{ databaseId: 1, body, author: { login: "bot" } }] } };
+  const node = { id: "T1", isResolved: false, isOutdated: false, path: "src/Widget.js", line: 69, comments: { nodes: [{ databaseId: 1, body, authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } };
   const payload = JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [node] } } } } });
   const runChild = async () => ({ code: 0, stdout: payload, stderr: "" });
   const threads = await fetchAllReviewThreads({ repo: "owner/repo", pr: 5 }, { env: {}, ghCommand: "gh", runChild, bodyMax: MERGED_THREAD_BODY_MAX });

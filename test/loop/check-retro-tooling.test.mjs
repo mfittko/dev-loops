@@ -256,7 +256,7 @@ test("wrapper and substitution forms get one verdict from hook and retro paths; 
     ["echo \"don't\" ; X=$(python3 -c x) ; echo \"it's\"", true], ["gh pr comment 1 --body \"Here's the result: $(python3 -c 'print(1)')\"", true], ["echo \"don't\" `node -e 'x'`", true],
     ["echo \"don't\" # it's fine", false], ["cat <<EOF\ndon't\nit's\nEOF", false], ["echo 'it is $(python3 -c x)'", false],
     ["# Don't touch main\nSPEC=$(python3 -c x)\n# Won't retry", true], ["# don't refetch\nSPEC=$(python3 -c \"import json\")\n# it's cached", true], ["cat <<EOF\ndon't\n$(python3 -c x)\nit's\nEOF", true],
-    ["gh pr ready 5", false], ["gh pr ready 5 $(node -e 1)", true], ["gh pr ready 1 `node -e 1`", true], ["X=$(cat <<EOF\ndon't\n$(python3 -c x)\nit's\nEOF)", true], ["X=$(cat <<EOF\ndon't\n$(python3 -c x)\nit's\nEOF\n)", true], ["gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\"", true],
+    ["gh pr ready 5", false], ["gh pr ready 5 $(node -e 1)", true], ["gh pr ready 1 `node -e 1`", true], ["X=$(cat <<EOF\ndon't\n$(python3 -c x)\nit's\nEOF)", true], ["X=$(cat <<EOF\ndon't\n$(python3 -c x)\nit's\nEOF\n)", true], ["gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\"", false],
     ["gh pr comment 1 --body \"$(cat <<'EOF'\nthe hook missed `node -e 1`\nEOF\n)\"", false],
     ["gh pr comment 1 --body \"the hook missed \\`node -e 1\\`\"", false], ["echo \"\\$(python3 -c x)\"", false], ["X=$(node -e 1)", true], ["echo \"$(echo \"it's\")\" ; X=$(python3 -c x)", true],
     ["X=$(echo x | node scripts/x.mjs)", false], ["X=$(echo x | node -)", true], ["X=\"$(echo x | node -)\"", true], ["X=`echo x | node -`", true],

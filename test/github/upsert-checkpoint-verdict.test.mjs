@@ -8346,7 +8346,7 @@ test("upsert-checkpoint-verdict --findings-ledger suppresses a finding an OWN-au
       isOutdated: false,
       path: finding.files[0],
       line: finding.line ?? null,
-      comments: { nodes: [{ id: "gid-1", databaseId: 601, body: buildFindingMarker({ fp: fingerprintFinding(finding), severity: finding.severity, angle: finding.angle, round: 1 }), author: { login: author, __typename: "User" } }] },
+      comments: { nodes: [{ id: "gid-1", databaseId: 601, body: buildFindingMarker({ fp: fingerprintFinding(finding), severity: finding.severity, angle: finding.angle, round: 1 }), authorAssociation: "OWNER", author: { login: author, __typename: "User" } }] },
     });
 
     const entries = [
