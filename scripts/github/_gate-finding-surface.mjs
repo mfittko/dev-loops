@@ -319,7 +319,10 @@ export async function fetchListedFingerprints(
 ) {
   const fingerprints = new Set();
   const comments = await listIssueComments({ repo, pr: target }, { env, ghCommand, runChild: run });
-  for (const comment of comments) {
+  // ADR 0248: a marker comment from an untrusted author must not suppress a deferral
+  // recording; dropping it can at worst list a duplicate entry.
+  const isTrusted = await resolveTrustedEvidencePredicate(comments, { env, ghCommand, runChild: run });
+  for (const comment of comments.filter(isTrusted)) {
     // Only a deferral comment (marker on its first line) counts; a bullet in any
     // other comment on a shared issue or PR must never suppress an entry.
     if (typeof comment?.body !== "string" || !comment.body.startsWith(DEFERRED_SUMMARY_MARKER)) continue;

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { makeGhMock, runIdFreeEnv, runNode, writeGhStub } from "../_helpers.mjs";
+import { makeGhMock, runIdFreeEnv, runNode, trustCommentFixtures, writeGhStub } from "../_helpers.mjs";
 
 import {
   buildMeritRationale,
@@ -221,7 +221,7 @@ function prViewEntry(closing = []) {
 function targetCommentsEntry(target, comments = []) {
   return {
     assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/issues/${target}/comments?per_page=100`],
-    stdout: `${JSON.stringify(comments)}\n`,
+    stdout: `${JSON.stringify(trustCommentFixtures(comments))}\n`,
   };
 }
 

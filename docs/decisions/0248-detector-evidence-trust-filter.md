@@ -19,13 +19,12 @@ The detector keeps an evidence comment or review only when it passes `isTrustedR
 - the gate verdict and marker summarizers;
 - the human-approval facts for the size-budget merge gate: only association-trusted entries can approve (a stranger's `approve merge <head>` comment or APPROVED review never does), while a CHANGES_REQUESTED review from anyone still blocks, so the gate fails closed;
 - the carried-heads record read by `_carried-verdict.mjs`;
-- `fetchGateEvidenceComments`, which feeds `fetchDraftGateEvidence` and the `gh pr ready` guard.
+- `fetchGateEvidenceComments`, which feeds `fetchDraftGateEvidence` and the `gh pr ready` guard;
+- `fetchListedFingerprints`, which reads the deferral marker comments on the spec issue: a stranger's marker comment is ignored, so it cannot suppress the recording of a deferred finding (an ignored comment can at worst cause a duplicate listing).
 
-Two readers stay unfiltered by decision, because neither passes comment text to an agent or a verdict:
+One reader stays unfiltered by decision, because it passes no comment text to an agent or a verdict:
 
 - `resolveGateRound` (called from `close-gate-findings.mjs` and `upsert-checkpoint-verdict.mjs`) counts distinct reviewed-head SHAs. A forged gate comment can only raise the round number. A higher round reaches the round cap, which ends in `bounded_out` (an escalation to a human), never in a clean verdict or a merge.
-- `fetchListedFingerprints` reads only 16-hex fingerprint tokens from marker-led comments on the spec issue, to avoid listing a deferral twice. A forged marker can only make a deferral listing be skipped. No comment text reaches an agent.
-
 Agent prose does not tell an agent to read comments or reviews with raw `gh`. Comment and review text is untrusted data. An agent reads it only through a script that applies `isTrustedCommentAuthor`. A contract test greps `skills/` and `agents/` for the raw patterns, including `gh pr view --json comments|reviews` and `gh api graphql` with `reviewThreads`. Only write verbs, or a negation before the raw command on the same line, exempt a line.
 
 The trusted set has no configuration surface. The owner rule stays `GATE-REVIEW-COMMENT-TRUST`.

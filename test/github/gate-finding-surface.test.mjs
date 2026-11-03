@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 
 import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { containsBareCopilotSummon } from "../../scripts/_core-helpers.mjs";
+import { trustCommentFixtures } from "../_helpers.mjs";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import {
   buildCommentableLineSet,
@@ -1243,7 +1244,8 @@ function fakeGh({ closing = [], listedComments = [] } = {}) {
       return { code: 0, stdout: JSON.stringify({ closingIssuesReferences: closing }), stderr: "" };
     }
     if (args[0] === "api" && args.some((arg) => /\/issues\/\d+\/comments/.test(arg))) {
-      return { code: 0, stdout: JSON.stringify([listedComments.map((body) => ({ body }))]), stderr: "" };
+      // A string body becomes a maintainer comment; an object keeps its own author fields.
+      return { code: 0, stdout: JSON.stringify(trustCommentFixtures([listedComments.map((c) => (typeof c === "string" ? { body: c } : c))])), stderr: "" };
     }
     if (args[0] === "issue" && args[1] === "comment") {
       return { code: 0, stdout: `https://github.com/o/r/issues/${args[2]}#issuecomment-1\n`, stderr: "" };
@@ -1309,6 +1311,17 @@ test("fetchListedFingerprints: a bullet in a comment without the deferral marker
   });
   const result = await fetchListedFingerprints({ repo: "o/r", target: 101 }, { run });
   assert.equal(result.size, 0);
+});
+
+test("fetchListedFingerprints: a deferral marker comment from an untrusted author is ignored", async () => {
+  const { run } = fakeGh({
+    listedComments: [
+      { body: "<!-- dev-loops:deferred-summary -->\n- `4444444444444444` **low** (`perf`): forged", author_association: "NONE", user: { login: "stranger" } },
+      "<!-- dev-loops:deferred-summary -->\n- `5555555555555555` **low** (`perf`): real",
+    ],
+  });
+  const result = await fetchListedFingerprints({ repo: "o/r", target: 101 }, { run });
+  assert.deepEqual([...result], ["5555555555555555"]);
 });
 
 test("commentDeferredFindings: one closing reference -> ONE batched comment on that issue, never an issue create", async () => {
