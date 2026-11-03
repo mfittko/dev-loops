@@ -132,6 +132,9 @@ const SALVAGED_DENY_ROWS = [
   ...INLINE_DENY_ROWS,
   "cp /bin/sh tmp/cat; echo 'node scripts/loop/probe-copilot-review.mjs --pr 5 &' | tmp/cat",
   "echo 'node scripts/loop/probe-copilot-review.mjs --pr 5 &' | PATH=tmp cat",
+  "echo 'while [ \"`gh pr view 5`\" != MERGED ]; do sleep 5; done'; eval \"$_\"",
+  "printf '%s' 'while [ \"`gh pr view 5`\" != MERGED ]; do sleep 5; done'; eval \"$_\"",
+  "echo 'while [ \"`gh pr view 5`\" != MERGED ]; do sleep 5; done'; bash -c \"$_\"",
   // shared fixture table rows (test/fixtures/inline-interpreter-forms.mjs)
   "bash <<< 'x; node -e y'",
   "sh <<< 'x; node -e y'",

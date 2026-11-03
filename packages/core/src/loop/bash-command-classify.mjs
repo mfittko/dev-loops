@@ -1601,8 +1601,9 @@ export function commandContainsInlineInterpreter(command) {
 function inertQuoteSegment(tok, s) {
   const definesFunction = feedsShell(tok) || tok.segments.some((x) => x.words.some((w) => /^(?:alias|hash|shopt|unalias|enable)$/.test(w.value)) || x.words.some((w) => w.value === "function" || w.raw.includes("()") || /\($/.test(w.value)));
   const anyRedirect = tok.segments.some((x) => x.words.some((w) => REDIRECT_RE.test(w.value) || w.raw.includes("("))); // an output redirect or a ( word in any segment (exec >f, braced group, subshell) can feed a later one, so no segment is inert
+  const reruns = tok.segments.some((x) => x.words.some((w) => w.value === "eval" || w.value === "-c" || w.raw.includes("$_"))); // a later eval, sh -c payload or $_ (the last argument) can run an earlier quoted span, so no segment is inert
   const [h = "", arg = ""] = s.words.filter((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op).map((w) => w.value);
-  return !definesFunction && !anyRedirect && !s.pipedOut && writeTargets(s).length === 0 && !s.words.some((w) => REDIRECT_RE.test(w.value)) &&!(h === "printf" && s.words.some((w) => /^-v/.test(w.value))) && !h.includes("/") && !s.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw)) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
+  return !definesFunction && !anyRedirect && !reruns && !s.pipedOut && writeTargets(s).length === 0 && !s.words.some((w) => REDIRECT_RE.test(w.value)) &&!(h === "printf" && s.words.some((w) => /^-v/.test(w.value))) && !h.includes("/") && !s.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw)) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
 }
 
 /**
