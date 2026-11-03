@@ -13,6 +13,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
+import { isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
 import { commentIssue as coreCommentIssue } from "@dev-loops/core/github/issue-ops";
 import { JUDGE_DISPOSITIONS, SEVERITY_ORDER, VALID_SEVERITIES, hasLocatableShape, normalizeSeverity, resolveFindingFile } from "@dev-loops/core/loop/gate-fanin";
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -898,6 +899,26 @@ export async function listPrReviews({ repo, pr }, { env, ghCommand, runChild }) 
 }
 
 /**
+ * The one trust predicate for raw REST comments/reviews that feed gate evidence
+ * (ADR 0248): trusted by association (maintainer or Copilot) or authored by the
+ * authenticated viewer (the gate poster's own identity, which may be a bot).
+ * The viewer lookup runs only when an untrusted candidate exists; a failed
+ * lookup trusts by association only (fail closed).
+ */
+export async function resolveTrustedEvidencePredicate(candidates, runtime) {
+  const trustedByAssociation = (c) => isTrustedRestComment(c, { allowCopilot: true });
+  let viewerLogin = null;
+  if (candidates.some((c) => !trustedByAssociation(c))) {
+    try {
+      viewerLogin = await resolveAuthenticatedLogin(runtime);
+    } catch {
+      viewerLogin = null;
+    }
+  }
+  return (c) => trustedByAssociation(c) || (viewerLogin !== null && c?.user?.login === viewerLogin);
+}
+
+/**
  * Read every comment-shaped body a gate verdict can live on: the issue-comment
  * stream (verdicts posted by earlier versions) plus the PR review stream (the
  * round's single visible surface today). The reviews read is FAIL-OPEN (a
@@ -910,16 +931,19 @@ export async function listPrReviews({ repo, pr }, { env, ghCommand, runChild }) 
  * failed review read, while every other caller keeps the fail-open default.
  */
 export async function fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, runChild = defaultRunChild, reportSurfaces = false } = {}) {
-  const comments = await listIssueComments({ repo, pr }, { env, ghCommand, runChild });
+  const rawComments = await listIssueComments({ repo, pr }, { env, ghCommand, runChild });
   const surfaces = [];
   let reviewSurfaceRead = false;
+  let rawReviews = [];
   try {
-    const reviews = await runGhJson(prReviewsApiArgs(repo, pr), { env, ghCommand, runChild });
-    comments.push(...normalizePrReviewsPayload(reviews));
+    rawReviews = flattenPaginatedSlurp(await runGhJson(prReviewsApiArgs(repo, pr), { env, ghCommand, runChild }));
     reviewSurfaceRead = true;
   } catch {
     // Non-fatal: continue on the issue-comment stream alone.
   }
+  const isTrusted = await resolveTrustedEvidencePredicate([...rawComments, ...rawReviews], { env, ghCommand, runChild });
+  const comments = rawComments.filter(isTrusted);
+  comments.push(...normalizePrReviewsPayload(rawReviews.filter(isTrusted)));
   if (reviewSurfaceRead) surfaces.push("review");
   surfaces.push("issue_comment");
   return reportSurfaces ? { comments, surfaces } : comments;

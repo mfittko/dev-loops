@@ -4006,6 +4006,7 @@ test("detect-checkpoint-evidence: a head-pinned APPROVED review followed by a la
           {
             id: 900,
             user: { login: "alice", type: "User" },
+            author_association: "MEMBER",
             state: "APPROVED",
             commit_id: "abc1234",
             submitted_at: "2026-05-29T22:30:00Z",
@@ -4016,6 +4017,7 @@ test("detect-checkpoint-evidence: a head-pinned APPROVED review followed by a la
           {
             id: 901,
             user: { login: "alice", type: "User" },
+            author_association: "MEMBER",
             state: "PENDING",
             commit_id: null,
             submitted_at: null,

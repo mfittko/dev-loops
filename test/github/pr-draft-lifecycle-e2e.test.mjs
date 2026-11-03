@@ -155,6 +155,8 @@ test("convert-to-draft -> fan-out draft_gate post -> restore-ready composes with
         assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/pulls/${PR}/reviews?per_page=100`],
         stdout: JSON.stringify([{ id: 101, state: "COMMENTED", submitted_at: "2026-06-05T00:00:00Z", user: { login: "gate-bot" }, body: cleanDraftGateReviewBody(headSha) }]),
       },
+      // Claimed twice: the evidence trust filter (ADR 0248) and the gate-thread login check.
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "gate-bot" }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "gate-bot" }) },
       {
         assertArgs: ["api", "graphql"],

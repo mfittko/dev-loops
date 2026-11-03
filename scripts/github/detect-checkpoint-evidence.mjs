@@ -33,7 +33,7 @@ import { detectMergeBaseChangedFiles } from "../loop/detect-change-scope.mjs";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { resolveCapRoundFixed } from "./write-gate-context.mjs";
-import { crossCheckRoundFromReviewBodies, normalizePrReviewsPayload, parseFindingMarker, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
+import { crossCheckRoundFromReviewBodies, normalizePrReviewsPayload, resolveTrustedEvidencePredicate, parseFindingMarker, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
 import { isCapRound } from "@dev-loops/core/loop/review-round-cap";
 import { flattenPaginatedSlurp, resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
@@ -372,7 +372,11 @@ function normalizeGateMarkerSummary(summary) {
  * human login the two streams surface against the one existing resolver
  * rather than reimplementing its bot-exclusion/head-pinning/marker rules.
  */
-function anyFreshHumanApproval({ currentHeadSha, reviews, comments }) {
+function anyFreshHumanApproval({ currentHeadSha, reviews: allReviews, comments: allComments }) {
+  // Only association-trusted entries can approve (ADR 0248); a stranger's
+  // "approve merge <head>" comment or APPROVED review never satisfies the gate.
+  const reviews = allReviews.filter((e) => e?.trusted !== false);
+  const comments = allComments.filter((e) => e?.trusted !== false);
   const candidateLogins = new Set();
   for (const entry of reviews) {
     if (typeof entry?.login === "string" && entry.login.length > 0) candidateLogins.add(entry.login);
@@ -1155,7 +1159,6 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
   // SUBMITTED_REVIEW_STATES survive — a PENDING (unsubmitted draft) review
   // must never shadow an already-submitted APPROVED review from the same
   // login in the "last entry per login wins" resolvers below.
-  let reviewFacts = [];
   // Distinct from "reviews fetched, zero reviews": a genuine read failure
   // must never be consumed by the size-budget merge gate as "zero blocking
   // reviews" (see buildPreMergeGateCheck below). Every other evidence
@@ -1168,7 +1171,6 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
       { env, ghCommand, runChild, restFallback: () => restGetPaginatedJson(prReviewsApiPath(options.repo, options.pr), env) },
     );
     rawReviews = flattenPaginatedSlurp(reviewsRaw);
-    reviewFacts = projectSubmittedReviewFacts(flattenPaginatedSlurp(reviewsRaw));
   } catch {
     // Graceful fallback for the comment/verdict summarizers below: PR reviews
     // fetch failure is non-fatal there, and they continue with issue comments
@@ -1176,9 +1178,6 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
     // see reviewsReadFailed above.
     reviewsReadFailed = true;
   }
-  const commentFacts = commentsPayload.map((c) => ({
-    login: c?.user?.login ?? null, body: c?.body ?? "", type: c?.user?.type ?? null,
-  }));
   // Machine-artifact bodies are filtered inside the two summarizers below, not
   // here — see the import comment above.
   // Trust boundary (ADR 0238/0248): a gate-formatted comment or review from a
@@ -1187,17 +1186,15 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
   // gate poster's own identity, which may be a bot). The viewer lookup runs
   // only when an untrusted candidate exists; a failed lookup trusts by
   // association only.
+  const isTrustedEvidence = await resolveTrustedEvidencePredicate([...commentsPayload, ...rawReviews], { env, ghCommand, runChild });
+  // Size-budget facts: every review/comment still counts toward blocking
+  // (CHANGES_REQUESTED fails closed), but only association-trusted entries can
+  // supply the human approval (`trusted`, read by anyFreshHumanApproval).
   const trustedByAssociation = (c) => isTrustedRestComment(c, { allowCopilot: true });
-  let viewerLogin = null;
-  if ([...commentsPayload, ...rawReviews].some((c) => !trustedByAssociation(c))) {
-    try {
-      viewerLogin = await resolveAuthenticatedLogin({ env, ghCommand, runChild });
-    } catch {
-      viewerLogin = null;
-    }
-  }
-  const isTrustedEvidence = (c) => trustedByAssociation(c)
-    || (viewerLogin !== null && c?.user?.login === viewerLogin);
+  const reviewFacts = rawReviews.flatMap((r) => projectSubmittedReviewFacts([r]).map((f) => ({ ...f, trusted: trustedByAssociation(r) })));
+  const commentFacts = commentsPayload.map((c) => ({
+    login: c?.user?.login ?? null, body: c?.body ?? "", type: c?.user?.type ?? null, trusted: trustedByAssociation(c),
+  }));
   const prReviews = normalizePrReviewsPayload(rawReviews.filter(isTrustedEvidence));
   const allComments = [...commentsPayload.filter(isTrustedEvidence), ...prReviews];
   const commentSummary = summarizeGateReviewComments(allComments);
@@ -1208,7 +1205,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
   // The carry seam (baseRefName fetch with REST fallback, posted carried-heads record) runs only for a
   // clean contract-complete cross-head candidate, so non-carry flows make no extra gh call. Only the
   // coordination path passes recordCarry; a fetch or record failure means no carry (fail closed).
-  const carryComments = [...commentsPayload];
+  const carryComments = commentsPayload.filter(isTrustedEvidence);
   const resolveGateMarker = async (gate) => {
     const filtered = normalizeGateMarkerSummary(markerSummary[gate]);
     if (filtered.visible) return { marker: filtered, fanoutMarker: filtered };

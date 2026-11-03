@@ -4,12 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { runNode as runNodeHelper, trustCommentFixtures, trustGhEntries, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { auditGateEvidence, parseAuditGateEvidenceCliArgs } from "../../scripts/github/audit-gate-evidence.mjs";
 
 const scriptPath = path.resolve("scripts/github/audit-gate-evidence.mjs");
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
-const writeGhStub = (tempDir, entries) => writeGhStubHelper(tempDir, entries);
+const writeGhStub = (tempDir, entries) => writeGhStubHelper(tempDir, trustGhEntries(entries));
 
 // Build a runChild that routes each gh invocation by its first positional arg
 // after the verb: `pr view` -> head oid; `api ... issues/.../comments` ->
@@ -19,10 +19,10 @@ function stubRunChild({ headRefOid = "3d4f0389", issueComments = [], reviews = [
     assert.equal(command, "gh");
     const joined = args.join(" ");
     if (joined.includes(`repos/owner/repo/issues/17/comments`)) {
-      return { code: 0, stdout: `${JSON.stringify(issueComments)}\n`, stderr: "" };
+      return { code: 0, stdout: `${JSON.stringify(trustCommentFixtures(issueComments))}\n`, stderr: "" };
     }
     if (joined.includes(`repos/owner/repo/pulls/17/reviews`)) {
-      return { code: 0, stdout: `${JSON.stringify(reviews)}\n`, stderr: "" };
+      return { code: 0, stdout: `${JSON.stringify(trustCommentFixtures(reviews))}\n`, stderr: "" };
     }
     if (joined.includes("--json") && joined.includes("headRefOid")) {
       return { code: 0, stdout: `${JSON.stringify({ headRefOid })}\n`, stderr: "" };

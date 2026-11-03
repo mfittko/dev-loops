@@ -1390,12 +1390,26 @@ test("fetchDraftGateEvidence: preApprovalCurrentHeadClean needs a clean, contrac
     const evidence = await fetchDraftGateEvidence({ repo: "o/r", pr: 7, headSha: HEAD_SHA }, { env: {}, ghCommand: "gh", runChild });
     return evidence.preApprovalCurrentHeadClean;
   };
-  const comment = (b) => ({ id: 1, body: b, created_at: "2026-01-01T00:00:00Z" });
+  const comment = (b, trusted = true) => ({ id: 1, body: b, user: { login: "maintainer", type: "User" }, author_association: trusted ? "MEMBER" : "NONE", created_at: "2026-01-01T00:00:00Z" });
   assert.equal(await run([comment(body())]), true);
+  // ADR 0248: a stranger's gate-formatted comment is not evidence (viewer lookup fails here, so association only).
+  assert.equal(await run([comment(body(), false)]), false);
   assert.equal(await run([comment(body({ headSha: "1111110000000000000000000000000000000000" }))]), false);
   assert.equal(await run([comment(body({ verdict: "findings_present" }))]), false);
   assert.equal(await run([comment(body({ findingsSummary: "", nextAction: "" }))]), false);
   assert.equal(await run([]), false);
+});
+
+test("fetchDraftGateEvidence: a stranger's clean draft_gate comment is not evidence (ADR 0248)", async () => {
+  const draft = renderGateReviewCommentBody({ gate: "draft_gate", headSha: HEAD_SHA, repo: "o/r", verdict: "clean", findingsSummary: "none", nextAction: "mark ready for review" });
+  const run = async (association) => {
+    const runChild = async (_cmd, args) => (args.some((a) => String(a).includes("issues/7/comments"))
+      ? { code: 0, stdout: JSON.stringify([[{ id: 1, body: draft, user: { login: "someone", type: "User" }, author_association: association, created_at: "2026-01-01T00:00:00Z" }]]), stderr: "" }
+      : { code: 1, stdout: "", stderr: "unavailable" });
+    return (await fetchDraftGateEvidence({ repo: "o/r", pr: 7, headSha: HEAD_SHA }, { env: {}, ghCommand: "gh", runChild })).currentHeadClean;
+  };
+  assert.equal(await run("MEMBER"), true);
+  assert.equal(await run("NONE"), false);
 });
 
 test("renderVerdictDetailsBlock: a Deferred entry carries issue=<pr> in its marker; other groups do not", () => {
