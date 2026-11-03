@@ -1947,12 +1947,20 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   const nodes = threadBindings.map(({ threadId, fingerprints }, index) => actThread(threadId, [gateComment(`c${index}`, index + 1,
     fingerprints.map((fp) => `<!-- dev-loops:finding ${fp} severity=medium angle=correctness round=1 -->`).join("\n") + `\nFixed in commit ${fixing}.`)], dispositions[index].disposition === "tackled"));
   const plan = await emit("full", { deltaResult: deltaPath, runChild: makeGhMock([threadsCallEntry(nodes), userEntry]).runChild });
+  let live = null;
   if (settings.complete) {
     plan.executionIdentity = `f${Date.now()}-2800abcd`;
     plan.workOrderRef = `fixer:${REPO}#${PR}:${candidate}:${plan.executionIdentity}`;
     plan.workOrder.outputRefs = [path.join(path.dirname(plan.planPath), plan.executionIdentity, "fixer-disposition.json")];
     plan.promptPath = path.join(path.dirname(plan.planPath), "work-orders", `${plan.executionIdentity}.md`);
     plan.workOrder.operation = "complete";
+    if (settings.descendant) {
+      // A descendant re-entry (issue 2787 C14) emits the complete order at the live head L, ahead of the candidate.
+      git("commit", "-q", "--allow-empty", "-m", "ci fix");
+      live = git("rev-parse", "HEAD");
+      plan.workOrder.headSha = live;
+      plan.workOrderRef = `fixer:${REPO}#${PR}:${live}:${plan.executionIdentity}`;
+    }
     plan.workOrder.mutationAuthority.allowedPaths = [];
     plan.workOrderDigest = workOrderDigest(plan.workOrder);
     const text = renderWorkOrder(plan.workOrder);
@@ -1964,7 +1972,7 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   await pull(plan);
   const fixerPlan = plan.planPath, sourceRead = plan.workOrder.requiredReads.find((read) => read.kind === "completion-input"), sourcePath = sourceRead.path;
   const source = JSON.parse(await readFile(sourcePath));
-  const depsFor = (extra = []) => runtime([compareEntry(baseline, "ahead", candidate), compareEntry(fixing, "ahead", candidate), liveHeadEntry(candidate), threadsCallEntry(nodes), userEntry, ...ciEntries(candidate), ...extra], repoRoot, { live: false });
+  const depsFor = (extra = []) => runtime([...live ? [compareEntry(live, "behind", candidate), compareEntry(candidate, "ahead", live), compareEntry(baseline, "ahead", candidate)] : [compareEntry(baseline, "ahead", candidate)], compareEntry(fixing, "ahead", candidate), liveHeadEntry(candidate), threadsCallEntry(nodes), userEntry, ...ciEntries(candidate), ...extra], repoRoot, { live: false });
   assert.equal((await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: candidate, fixerPlan, construct: true }, depsFor().deps)).constructed, true);
   // Negative tests may reseal a corruption only after a genuine baseline was constructed.
   const seal = async () => {
@@ -1993,6 +2001,14 @@ for (const kind of ["resolved", "threadless", "mixed"]) test(`explicit complete 
     }
     await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan, construct: true }, f.depsFor().deps), /EEXIST/);
     assert.deepEqual(await readFile(output), before);
+  });
+});
+
+test("a complete ACT order at a descendant live head passes its emitted --construct and normal steps", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await completionFixture(root, "resolved", { complete: true, descendant: true });
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan }, f.depsFor([compareEntry(f.fixing, "ahead", f.candidate)]).deps);
+    assert.equal(result.complete, true);
   });
 });
 

@@ -389,7 +389,9 @@ async function driftedRequiredRead(order, readBytes) {
 async function rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr, headSha, tmpRoot }) {
   const active = JSON.parse(originalBytes), order = active.workOrder;
   const candidate = order?.phase === "full" ? await planCandidate(order, (file) => capture.read(file)) : null;
-  if (!candidate || candidate !== gitIn(cwd, "rev-parse", "HEAD")) return;
+  // A completion order emitted at a descendant head (C14) keeps the original candidate in its read but is active at its own headSha.
+  const worktreeHead = gitIn(cwd, "rev-parse", "HEAD");
+  if (!candidate || ![candidate, active.completesExecution && order.headSha].includes(worktreeHead)) return;
   const markerRoot = resolveGateArtifactTmpRoot(cwd);
   // A closed or retired plan cannot be completed, so --completion-only would refuse too: nothing is superseded (same checks as emitCompletionOnly).
   const baselines = [order.headSha, order.authority?.reviewBaselineHead].filter(Boolean);
@@ -406,7 +408,8 @@ async function rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr
   if (!pulled.ok && await driftedRequiredRead(order, (file) => capture.read(file))) return;
   if (active.completesExecution && pulled.reason === "receipt_missing") throw new Refusal(`--phase commit_only refused: the completion order ${active.workOrderRef} is active at candidate ${candidate} and unpulled, so a commit_only plan would supersede it. Pull ${active.workOrderRef} and run its steps, or commit the new fix first`);
   if (pulled.ok || !["result_missing", "result_predates_pull"].includes(pulled.reason)) return;
-  const exit = headSha === candidate ? "Deliver it with --completion-only (--phase full, the same one source), or commit the new fix first"
+  const exit = active.completesExecution ? `Pull ${active.workOrderRef} and run its steps, or commit the new fix first`
+    : headSha === candidate ? "Deliver it with --completion-only (--phase full, the same one source), or commit the new fix first"
     : `Its candidate is not pushed: pull ${active.workOrderRef} and push the candidate, or commit the new fix first`;
   throw new Refusal(`--phase commit_only refused: the full plan ${active.workOrderRef} is active at candidate ${candidate} with no new commit and no verified disposition, so a commit_only plan would supersede it. ${exit}`);
 }

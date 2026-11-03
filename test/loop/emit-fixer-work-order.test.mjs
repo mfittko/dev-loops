@@ -3289,6 +3289,21 @@ test("issue 2787 C13/C14: an unpulled completion order refuses commit_only and a
   });
 });
 
+test("issue 2787 C13/C14: commit_only at a descendant head refuses over the completion order emitted there, unpulled or pulled", async () => {
+  await withFixture(async (fx) => {
+    await pulledFull(fx, "ACT");
+    git(fx.wt, "commit", "-q", "--allow-empty", "-m", "ci fix");
+    const completion = await reenter(fx, "ACT");
+    const live = git(fx.wt, "rev-parse", "HEAD");
+    const commitOnly = () => fx.emit({ phase: "commit_only", deltaResult: undefined, keepRecord: true, headSha: live, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: live }) });
+    const plan = await readFile(completion.planPath);
+    await assert.rejects(commitOnly(), (error) => error.message.includes(completion.workOrderRef) && /unpulled/.test(error.message));
+    assert.equal(pull(completion, fx.wt).status, 0);
+    await assert.rejects(commitOnly(), (error) => error.message.includes(completion.workOrderRef) && /Pull .* and run its steps/.test(error.message));
+    assert.deepEqual(await readFile(completion.planPath), plan, "the completion plan stays current");
+  });
+});
+
 test("issue 2787 C13: an unpulled completion order whose pinned threads read drifted does not block commit_only", async () => {
   await withFixture(async (fx) => {
     await pulledFull(fx, "THREAD");

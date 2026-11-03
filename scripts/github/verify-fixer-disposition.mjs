@@ -413,7 +413,9 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   options = { ...options, headSha: raw.headSha };
   if (completion && completion.headSha !== options.headSha) throw new Error("completion input candidate differs from the constructed report");
   if (order.headSha !== options.headSha) {
-    const contained = await isCommitContainedByHead({ repo: options.repo, commitSha: order.headSha, headSha: options.headSha }, runtime);
+    let contained = await isCommitContainedByHead({ repo: options.repo, commitSha: order.headSha, headSha: options.headSha }, runtime);
+    // A descendant re-entry (issue 2787 C14) emits a complete order at the live head L, ahead of the candidate C: C7 ahead-only containment runs from C to L.
+    if (!contained.contained && complete) contained = await isCommitContainedByHead({ repo: options.repo, commitSha: options.headSha, headSha: order.headSha }, runtime);
     if (!contained.contained) throw new Error(`the work order head ${order.headSha} is not contained by the observed head ${options.headSha}: ${contained.reason}`);
   }
   const threadsRead = (order.requiredReads ?? []).find((read) => read?.kind === "threads");
