@@ -3289,6 +3289,17 @@ test("issue 2787 C13/C14: an unpulled completion order refuses commit_only and a
   });
 });
 
+test("issue 2787 C13: an unpulled completion order whose pinned threads read drifted does not block commit_only", async () => {
+  await withFixture(async (fx) => {
+    await pulledFull(fx, "THREAD");
+    await reenter(fx, "THREAD");
+    await writeFile(fx.files.threads, `${await readFile(fx.files.threads, "utf8")}\n`);
+    const live = git(fx.wt, "rev-parse", "HEAD");
+    const unit = await fx.emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: fx.files.threads, deltaResult: undefined, keepRecord: true, headSha: live, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: live }) });
+    assert.equal(unit.workOrder.phase, "commit_only");
+  });
+});
+
 test("issue 2787 C13: a genuine report for the active full plan allows commit_only", async () => {
   await withFixture(async (fx) => {
     const unit = await pulledFull(fx, "ACT");

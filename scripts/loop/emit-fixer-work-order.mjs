@@ -402,10 +402,10 @@ async function rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr
   const verified =await readFile(path.resolve(resolveRepoRoot(cwd), buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: candidate, tmpRoot: markerRoot }))).then((text) => JSON.parse(text).complete === true, () => false);
   if (verified) return;
   const pulled = await verifyPulledResult({ resultPath: order.outputRefs?.[0], receiptTmpRoot: markerRoot, role: "fixer", workOrderRef: active.workOrderRef, workOrderDigest: active.workOrderDigest, executionIdentity: active.executionIdentity });
+  // A drifted pinned read makes the pull and --completion-only refuse too, so nothing is superseded and a refusal would name a failing exit.
+  if (!pulled.ok && await driftedRequiredRead(order, (file) => capture.read(file))) return;
   if (active.completesExecution && pulled.reason === "receipt_missing") throw new Refusal(`--phase commit_only refused: the completion order ${active.workOrderRef} is active at candidate ${candidate} and unpulled, so a commit_only plan would supersede it. Pull ${active.workOrderRef} and run its steps, or commit the new fix first`);
   if (pulled.ok || !["result_missing", "result_predates_pull"].includes(pulled.reason)) return;
-  // A drifted pinned read makes --completion-only refuse too, so nothing is superseded and the refusal would name a failing exit.
-  if (await driftedRequiredRead(order, (file) => capture.read(file))) return;
   const exit = headSha === candidate ? "Deliver it with --completion-only (--phase full, the same one source), or commit the new fix first"
     : `Its candidate is not pushed: pull ${active.workOrderRef} and push the candidate, or commit the new fix first`;
   throw new Refusal(`--phase commit_only refused: the full plan ${active.workOrderRef} is active at candidate ${candidate} with no new commit and no verified disposition, so a commit_only plan would supersede it. ${exit}`);
@@ -425,13 +425,6 @@ async function emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRo
   if (String(prState.headRefOid ?? "").toLowerCase() !== headSha) refuse(`PR head is ${prState.headRefOid}, not --head-sha ${headSha}`);
   const receiptTmpRoot = resolveGateArtifactTmpRoot(cwd);
   const read = async (file) => { const bytes = await capture.read(file); if (!bytes) throw Object.assign(new Error(`missing ${file}`), { code: "ENOENT" }); return bytes; };
-  if (original.completesExecution) {
-    const unpulled = await verifyPulledResult({ resultPath: prior.outputRefs?.[0], receiptTmpRoot, role: "fixer", workOrderRef: original.workOrderRef, workOrderDigest: original.workOrderDigest, executionIdentity: original.executionIdentity });
-    if (unpulled.reason === "receipt_missing") refuse(`the completion order ${original.workOrderRef} was emitted and never pulled; pull ${original.workOrderRef} and run its steps instead`);
-  }
-  try { await authenticateOriginalPlan({ plan: original, canonical: planPath, emissionTmpRoot: path.resolve(tmpRoot), receiptTmpRoot, requireReceipt: true, read }); }
-  catch (error) { refuse(`the plan or its pull receipt does not authenticate (${error.message})`); }
-  if (prior.outputRefs?.length !== 1 || prior.outputRefs[0] !== path.join(dir, original.executionIdentity, "fixer-disposition.json")) refuse("the plan's output is not execution-derived");
   const baselines = [prior.headSha, prior.authority?.reviewBaselineHead].filter(Boolean);
   // A second re-entry completes the same root execution as the first, so the root identity propagates.
   const root = original.completesExecution ?? { executionIdentity: original.executionIdentity, heads: baselines };
@@ -442,11 +435,18 @@ async function emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRo
       if (findRetirementAfter(root, gate, baselines.at(-1), emittedAt(original.executionIdentity))) refuse("the plan's reviewed source round was retired");
     }
   }
+  const drifted = await driftedRequiredRead(prior, (file) => capture.read(file));
+  if (drifted) refuse(`required read ${drifted} differs from the plan`);
+  if (original.completesExecution) {
+    const unpulled = await verifyPulledResult({ resultPath: prior.outputRefs?.[0], receiptTmpRoot, role: "fixer", workOrderRef: original.workOrderRef, workOrderDigest: original.workOrderDigest, executionIdentity: original.executionIdentity });
+    if (unpulled.reason === "receipt_missing") refuse(`the completion order ${original.workOrderRef} was emitted and never pulled; pull ${original.workOrderRef} and run its steps instead`);
+  }
+  try { await authenticateOriginalPlan({ plan: original, canonical: planPath, emissionTmpRoot: path.resolve(tmpRoot), receiptTmpRoot, requireReceipt: true, read }); }
+  catch (error) { refuse(`the plan or its pull receipt does not authenticate (${error.message})`); }
+  if (prior.outputRefs?.length !== 1 || prior.outputRefs[0] !== path.join(dir, original.executionIdentity, "fixer-disposition.json")) refuse("the plan's output is not execution-derived");
   const pulled = await verifyPulledResult({ resultPath: prior.outputRefs[0], receiptTmpRoot, role: "fixer", workOrderRef: original.workOrderRef, workOrderDigest: original.workOrderDigest, executionIdentity: original.executionIdentity });
   if (pulled.ok) refuse(`the report ${prior.outputRefs[0]} exists and postdates the pull; run the verifier steps of that order instead`);
   if (!["result_missing", "result_predates_pull"].includes(pulled.reason)) refuse(`the plan's pull receipt is not valid (${pulled.reason})`);
-  const drifted = await driftedRequiredRead(prior, (file) => capture.read(file));
-  if (drifted) refuse(`required read ${drifted} differs from the plan`);
   const pinned = prior.requiredReads.filter((entry) => entry.kind === sourceKind);
   if (pinned.length !== 1 || pinned[0].sha256 !== source.read.sha256) refuse(`the ${sourceKind} source differs from the plan's pinned read${pinned.length === 1 && sourceKind === "act-list" ? `; pass the plan's pinned act-list copy ${pinned[0].path} as --act-list-file` : ""}`);
   const candidate = await planCandidate(prior, read);
