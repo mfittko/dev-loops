@@ -4772,7 +4772,15 @@ test("detectCheckpointEvidence carries clean gate markers from an earlier head a
     assert.deepEqual(recorded.map((e) => [e.gate, e.originHead, e.headSha, e.decision]).sort(), [
       ["draft_gate", headA, headB, "carry_verdict"], ["pre_approval_gate", headA, headB, "carry_verdict"],
     ]);
-    assert.equal((await run({})).draftGateMarker.carriedFrom, headA);
+    assert.equal((await run({})).draftGateMarker.carriedFrom, headA, "MEMBER-authored carried-heads record carries");
+
+    // The same record from a NONE-association stranger is dropped by the detector's carry filter (#3034 AC3).
+    const record = comments.find((c) => c.id === 99);
+    record.user = { login: "stranger", type: "User" };
+    record.author_association = "NONE";
+    const forged = await run({});
+    assert.equal(forged.draftGateMarker.carriedFrom, undefined);
+    assert.equal(forged.preApprovalGateMarker.carriedFrom, undefined);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
