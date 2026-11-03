@@ -1145,7 +1145,7 @@ export function validateJudgeVerdict(verdict) {
   if (typeof sd.rationale !== "string" || sd.rationale.trim().length === 0) {
     throw new Error("judge verdict.scopeDrift.rationale must be a non-empty string");
   }
-  // #3051: a within_scope verdict may omit driftedAreas; default it to [].
+  // A within_scope verdict may omit driftedAreas; it defaults to [] (drift_detected still requires it).
   const driftedAreas = sd.driftedAreas === undefined && normalizedVerdict === "within_scope" ? [] : sd.driftedAreas;
   if (!Array.isArray(driftedAreas)) {
     throw new Error("judge verdict.scopeDrift.driftedAreas must be an array");
