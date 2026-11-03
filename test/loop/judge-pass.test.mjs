@@ -13,6 +13,7 @@ import {
   runJudgePass,
   validateCliArgs,
 } from "../../scripts/loop/judge-pass.mjs";
+import { trustCommentFixtures } from "../_helpers.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { hasReopenLine, rejectClosingRefRemoval, sliceLinkageIssues } from "../../scripts/loop/_slice-linkage.mjs";
 import { readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
@@ -694,7 +695,7 @@ function stubDeferralDeps({ closing = [], listed = [] } = {}) {
       return { code: 0, stdout: JSON.stringify({ closingIssuesReferences: closing.map((number) => ({ number, repository: { name: "dev-loops", owner: { login: "mfittko" } } })) }), stderr: "" };
     }
     if (args[0] === "api" && args.some((arg) => /\/issues\/\d+\/comments/.test(arg))) {
-      return { code: 0, stdout: JSON.stringify([listed.map((body) => ({ body }))]), stderr: "" };
+      return { code: 0, stdout: JSON.stringify(trustCommentFixtures([listed.map((body) => ({ body }))])), stderr: "" };
     }
     throw new Error(`unexpected gh call: ${args.join(" ")}`);
   };
