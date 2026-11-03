@@ -6,6 +6,7 @@ const RAW_READERS = [
   /gh (?:issue|pr) view\b[^\n]*--comments/,
   /gh (?:issue|pr) view\b[^\n]*--json\b[^\n]*\b(?:comments|reviews)\b/,
   /gh api\b[^\n]*(?:issues|pulls)\/[^\s`]*\/(?:comments|reviews)/,
+  /gh api\b[^\n]*(?:issues|pulls)\/comments\/[^\s`]+/,
   /gh api graphql\b[^\n]*reviewThreads/,
 ];
 // A raw reader command is exempt only when (a) the command text itself carries an explicit write method
@@ -28,6 +29,8 @@ function isRawReaderLine(line) {
 test("the matcher flags raw reader forms and exempts negated and write lines", () => {
   for (const line of [
     "gh api repos/{owner}/{repo}/pulls/{number}/reviews",
+    "gh api repos/o/r/issues/comments/42",
+    "gh api repos/o/r/pulls/comments/42",
     "gh pr view --comments",
     "gh issue view --comments",
     "gh pr view 1 --json comments,reviews",
