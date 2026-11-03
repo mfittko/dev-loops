@@ -12,6 +12,24 @@ const RAW_READERS = [
 const WRITE_VERB = /\b(?:DELETE|POST|PATCH)\b/;
 const NEGATION = /\b(?:never|do not|must not|forbidden)\b/i;
 
+function isRawReaderLine(line) {
+  if (WRITE_VERB.test(line)) return false;
+  const raw = RAW_READERS.map((pattern) => pattern.exec(line)).find(Boolean);
+  return Boolean(raw) && !NEGATION.test(line.slice(0, raw.index));
+}
+
+test("the matcher flags raw reader forms and exempts negated and write lines", () => {
+  for (const line of [
+    "gh api repos/{owner}/{repo}/pulls/{number}/reviews",
+    "gh pr view --comments",
+    "gh issue view --comments",
+  ]) assert.equal(isRawReaderLine(line), true, line);
+  for (const line of [
+    "never read it with raw `gh api .../reviews`",
+    "gh api -X POST repos/{owner}/{repo}/issues/{number}/comments",
+  ]) assert.equal(isRawReaderLine(line), false, line);
+});
+
 async function markdownFiles(dir) {
   const entries = await readdir(new URL(`../../${dir}`, import.meta.url), { recursive: true });
   return entries.filter((entry) => entry.endsWith(".md")).map((entry) => `${dir}/${entry}`);
@@ -22,9 +40,7 @@ test("skills/ and agents/ prose never tells an agent to read comments or reviews
   for (const file of [...await markdownFiles("skills"), ...await markdownFiles("agents")]) {
     const lines = (await readRepo(file)).split("\n");
     lines.forEach((line, index) => {
-      if (WRITE_VERB.test(line)) return;
-      const raw = RAW_READERS.map((pattern) => pattern.exec(line)).find(Boolean);
-      if (raw && !NEGATION.test(line.slice(0, raw.index))) hits.push(`${file}:${index + 1}`);
+      if (isRawReaderLine(line)) hits.push(`${file}:${index + 1}`);
     });
   }
   assert.deepEqual(hits, []);

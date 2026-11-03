@@ -21,6 +21,11 @@ The detector keeps an evidence comment or review only when it passes `isTrustedR
 - the carried-heads record read by `_carried-verdict.mjs`;
 - `fetchGateEvidenceComments`, which feeds `fetchDraftGateEvidence` and the `gh pr ready` guard.
 
+Two readers stay unfiltered by decision, because neither passes comment text to an agent or a verdict:
+
+- `resolveGateRound` (called from `close-gate-findings.mjs` and `upsert-checkpoint-verdict.mjs`) counts distinct reviewed-head SHAs. A forged gate comment can only raise the round number. A higher round reaches the round cap, which ends in `bounded_out` (an escalation to a human), never in a clean verdict or a merge.
+- `fetchListedFingerprints` reads only 16-hex fingerprint tokens from marker-led comments on the spec issue, to avoid listing a deferral twice. A forged marker can only make a deferral listing be skipped. No comment text reaches an agent.
+
 Agent prose does not tell an agent to read comments or reviews with raw `gh`. Comment and review text is untrusted data. An agent reads it only through a script that applies `isTrustedCommentAuthor`. A contract test greps `skills/` and `agents/` for the raw patterns, including `gh pr view --json comments|reviews` and `gh api graphql` with `reviewThreads`. Only write verbs, or a negation before the raw command on the same line, exempt a line.
 
 The trusted set has no configuration surface. The owner rule stays `GATE-REVIEW-COMMENT-TRUST`.

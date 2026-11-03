@@ -4088,6 +4088,7 @@ test("detect-checkpoint-evidence: a reviews-read failure blocks an escalated siz
             body: "approve merge abc1234",
             updated_at: "2026-05-29T23:00:00Z",
             user: { login: "carol", type: "User" },
+            author_association: "MEMBER",
           },
         ])}\n`,
       },

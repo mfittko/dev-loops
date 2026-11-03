@@ -6,7 +6,7 @@ import { test } from "bun:test";
 
 import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 
-// ADR 0238/0247: a gate-formatted comment from a stranger must not become evidence text.
+// ADR 0238/0248: a gate-formatted comment from a stranger must not become evidence text.
 
 const scriptPath = path.resolve("scripts/github/detect-checkpoint-evidence.mjs");
 const HEAD = "a".repeat(40);
@@ -106,6 +106,13 @@ test("a stranger's \"approve merge <head>\" comment does not satisfy the size-bu
   const approve = (association) => ({ id: 30, user: { login: "someone", type: "User" }, author_association: association, body: `approve merge ${HEAD}`, updated_at: "2026-10-20T10:02:00Z" });
   assert.equal(hasSizeFailure(await sizeFailures([approve("NONE")])), true);
   assert.equal(hasSizeFailure(await sizeFailures([approve("MEMBER")])), false);
+});
+
+test("a stranger's CHANGES_REQUESTED review at HEAD still blocks the size-budget gate (fail closed)", async () => {
+  const review = (state, association, id) => ({ id, user: { login: id === 41 ? "someone" : "maintainer", type: "User" }, author_association: association, state, commit_id: HEAD, submitted_at: "2026-10-20T10:02:00Z", body: "" });
+  const memberApproved = review("APPROVED", "MEMBER", 42);
+  assert.equal(hasSizeFailure(await sizeFailures([], [memberApproved])), false);
+  assert.equal(hasSizeFailure(await sizeFailures([], [review("CHANGES_REQUESTED", "NONE", 41), memberApproved])), true);
 });
 
 test("a stranger's APPROVED review does not satisfy the size-budget human approval", async () => {
