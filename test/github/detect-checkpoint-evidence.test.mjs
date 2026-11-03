@@ -23,7 +23,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { test } from "bun:test";
-import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { runIdFreeEnv, runNode as runNodeHelper, trustCommentFixtures, trustGhEntries, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
   isGateMachineArtifactBody,
@@ -68,7 +68,7 @@ const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
 });
 
 async function writeGhStub(tempDir, entries) {
-  const { env } = await writeGhStubHelper(tempDir, entries, { repeatLastOnOverflow: true });
+  const { env } = await writeGhStubHelper(tempDir, trustGhEntries(entries), { repeatLastOnOverflow: true });
   return { ...env, DEVLOOPS_RUN_ID: "" };
 }
 
@@ -397,7 +397,7 @@ test("detectCheckpointEvidence falls back to the REST API when the gh binary is 
           status: 200,
           statusText: "OK",
           headers: { get: () => null },
-          json: async () => ([
+          json: async () => trustCommentFixtures([
             {
               id: 42,
               body: [
@@ -4735,7 +4735,7 @@ test("detectCheckpointEvidence carries clean gate markers from an earlier head a
         : joined.includes("/issues/") ? [comments]
           : joined.includes("/reviews") ? [[]] : null;
       if (out === null) return { code: 0, stdout: "", stderr: "" };
-      return { code: 0, stdout: JSON.stringify(out), stderr: "" };
+      return { code: 0, stdout: JSON.stringify(trustCommentFixtures(out)), stderr: "" };
     };
     const run = (extra) => detectCheckpointEvidence({ repo: "owner/repo", pr: 2819 }, { env: { GH_TOKEN: "t" }, ghCommand: "gh", runChild, cwd: dir, ...extra });
 

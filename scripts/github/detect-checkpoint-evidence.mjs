@@ -26,6 +26,7 @@ import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "./_gate-finding-
 import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
+import { isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
 import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, assertConfigLoaded, isSizeOutcomeT1Clean, loadDevLoopConfig, loadDevLoopConfigStrict, stripConfigKeyPaths, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveGateDispatchMode, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
 import { FANOUT_UNAVAILABLE_MESSAGE, JUDGE_DISPOSITIONS, VALID_SEVERITIES, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, ledgerAngleNames, listOpenActItems, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseChangedFiles } from "../loop/detect-change-scope.mjs";
@@ -1145,7 +1146,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
   // the back-compat read that still sees legacy verdicts and the zero-dep
   // fallback poster's output. Both feed the same summarizers, so a verdict is
   // counted once wherever it lives.
-  let prReviews = [];
+  let rawReviews = [];
   // Flat { login, state, commit_id, type } facts for the size-budget merge
   // gate below — the SAME shape merge-pr.mjs's own evaluateMergePreconditions
   // call feeds countUnresolvedHumanChangesRequested/verifyFreshHumanApproval,
@@ -1166,7 +1167,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
       prReviewsApiArgs(options.repo, options.pr),
       { env, ghCommand, runChild, restFallback: () => restGetPaginatedJson(prReviewsApiPath(options.repo, options.pr), env) },
     );
-    prReviews = normalizePrReviewsPayload(reviewsRaw);
+    rawReviews = flattenPaginatedSlurp(reviewsRaw);
     reviewFacts = projectSubmittedReviewFacts(flattenPaginatedSlurp(reviewsRaw));
   } catch {
     // Graceful fallback for the comment/verdict summarizers below: PR reviews
@@ -1180,7 +1181,25 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
   }));
   // Machine-artifact bodies are filtered inside the two summarizers below, not
   // here — see the import comment above.
-  const allComments = [...commentsPayload, ...prReviews];
+  // Trust boundary (ADR 0238/0248): a gate-formatted comment or review from a
+  // stranger must not reach the coordinator as evidence text. Trusted means a
+  // maintainer-association author, Copilot, or the authenticated viewer (the
+  // gate poster's own identity, which may be a bot). The viewer lookup runs
+  // only when an untrusted candidate exists; a failed lookup trusts by
+  // association only.
+  const trustedByAssociation = (c) => isTrustedRestComment(c, { allowCopilot: true });
+  let viewerLogin = null;
+  if ([...commentsPayload, ...rawReviews].some((c) => !trustedByAssociation(c))) {
+    try {
+      viewerLogin = await resolveAuthenticatedLogin({ env, ghCommand, runChild });
+    } catch {
+      viewerLogin = null;
+    }
+  }
+  const isTrustedEvidence = (c) => trustedByAssociation(c)
+    || (viewerLogin !== null && c?.user?.login === viewerLogin);
+  const prReviews = normalizePrReviewsPayload(rawReviews.filter(isTrustedEvidence));
+  const allComments = [...commentsPayload.filter(isTrustedEvidence), ...prReviews];
   const commentSummary = summarizeGateReviewComments(allComments);
   const markerSummary = summarizeGateReviewCommentMarkers(allComments, { headSha: currentHeadSha });
   // The head-filtered summary hides markers at other heads, so the carry candidate is the latest
