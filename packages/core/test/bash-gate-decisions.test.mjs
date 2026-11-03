@@ -575,9 +575,45 @@ const MERGE_DENY_FORMS = [
   "node scripts/github/merge-pr.mjs --check --check=false --pr 5",
 ];
 
+// Denied for a subagent, but not run for the top-level session here: the timeout and inline-interpreter rules would deny those forms on their own.
+const MERGE_DENY_EXTRA_FORMS = [
+  'node scripts/github/merge-pr.mjs --pr 5 "',
+  'node scripts/github/merge-pr.mjs --pr 5 --check "',
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x <<EOF\n--check",
+  "node scripts/github/merge-pr.mjs --pr 5 <<EOF\n--check",
+  "node scripts/github/merge-pr.mjs --pr 5 & echo --check",
+  "node scripts/github/merge-pr.mjs --pr 5 # --check",
+  "dev-loops-run scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by --check --human-approved-by x",
+  "dev-loops-run scripts/github/merge-pr.mjs --repo --check --repo a/b --pr 5",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x --jq --check",
+  "(node scripts/github/merge-pr.mjs --pr 5)",
+  "( dev-loops-run scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x )",
+  "timeout 300 dev-loops-run scripts/github/merge-pr.mjs --repo someone/else --pr 5 --human-approved-by x",
+  "timeout -s KILL 300 node scripts/github/merge-pr.mjs --pr 5",
+  "bash <<EOF\nnode scripts/github/merge-pr.mjs --pr 5\nEOF",
+  "env bash <<EOF\ndev-loops-run scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x\nEOF",
+  "FOO=1 bash <<EOF\nnode scripts/github/merge-pr.mjs --pr 5\nEOF",
+  "sudo sh <<EOF\nnode scripts/github/merge-pr.mjs --pr 5\nEOF",
+];
+
+const MERGE_ALLOW_FORMS = [
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --check",
+  "dev-loops-run scripts/github/merge-pr.mjs --repo a/b --pr 5 --check",
+  "dev-loops-run scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x --check",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --check --jq .mergeClass",
+  "(node scripts/github/merge-pr.mjs --pr 5 --check)",
+  "bash <<EOF\nnode scripts/github/merge-pr.mjs --pr 5 --check\nEOF",
+];
+
+test("merge-pr.mjs --check forms stay allowed for a subagent role (issue 2500)", () => {
+  for (const command of MERGE_ALLOW_FORMS) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: "fixer", command }), null, command);
+  }
+});
+
 test("any subagent role is denied merge-pr.mjs without --check (issue 2500)", () => {
   for (const role of ["dev-loop", "dev-loops:dev-loop", "gate-coordinator", "fixer"]) {
-    for (const command of MERGE_DENY_FORMS) {
+    for (const command of [...MERGE_DENY_FORMS, ...MERGE_DENY_EXTRA_FORMS]) {
       const d = decideBashGateDeny({ ...BASE, role, command });
       assert.ok(d, `${role}: ${command}`);
       assert.equal(d.ruleId, null);

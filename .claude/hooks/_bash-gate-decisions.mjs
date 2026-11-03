@@ -199,36 +199,49 @@ export function decideUnresolveOwnerDeny({ command, role }) {
 }
 
 const ASSIGNMENT_WORD = /^[A-Za-z_]\w*=/;
-// `timeout` is not a launcher here: the timeout rule (issue 2755) covers a `timeout`-wrapped sanctioned command in the managed context only.
 const LAUNCHER_PREFIX = /^(?:env|command|exec|nohup|time|nice|sudo)$/;
 const RESERVED_WORD = /^(?:\{|!|then|do|else|elif|if|while|until)$/;
+// merge-pr options that consume the next word, so a `--check` right after one is a value and not the flag.
+const VALUE_OPTIONS = new Set(["--repo", "--pr", "--human-approved-by", "--method", "--jq"]);
 const baseName = (value) => value.split("/").pop();
 
-/** Whether one tokenized segment runs `merge-pr.mjs` as its program (directly, or as the first operand of node/bun/dev-loops-run) with no `--check` word. */
-function segmentRunsMergePrWithoutCheck(words) {
-  const values = words.filter((w) => !w.op && !ASSIGNMENT_WORD.test(w.raw)).map((w) => w.value);
+/** The program of one tokenized segment: its words without env assignments, `(`/`)` subshell edges and operators, and the index of the first word after the launcher prefixes. */
+function segmentProgram(words) {
+  const values = words.filter((w) => !w.op && !ASSIGNMENT_WORD.test(w.raw)).map((w) => w.value.replace(/^\(+|\)+$/g, "")).filter(Boolean);
   let i = 0;
   for (;;) {
     if (RESERVED_WORD.test(values[i] ?? "")) i++;
     else if (LAUNCHER_PREFIX.test(baseName(values[i] ?? ""))) for (i++; /^(?:-|\d)/.test(values[i] ?? ""); i++);
+    // `timeout` takes options (`-s`/`-k` with a value word) and a duration; the merge-pr deny is not repo-scoped, so it must see through it outside the managed repo.
+    else if (baseName(values[i] ?? "") === "timeout") for (i++; i < values.length; i++) { if (/^-[sk]$/.test(values[i])) i++; else if (!/^(?:-|\d)/.test(values[i])) break; }
     else break;
   }
+  return { values, i };
+}
+
+/** Whether one tokenized segment runs `merge-pr.mjs` as its program (directly, or as any operand after the launcher node/bun/dev-loops-run) with no `--check` word. */
+function segmentRunsMergePrWithoutCheck(words) {
+  const { values, i: start } = segmentProgram(words);
+  let i = start;
   const head = baseName(values[i] ?? "");
   if (/^(?:node|bun|dev-loops-run)$/.test(head)) {
     // A launcher flag may take a separate value word, so any later word named merge-pr.mjs is the script.
     i = values.findIndex((v, k) => k > i && baseName(v) === "merge-pr.mjs");
     if (i < 0) return false;
   } else if (head !== "merge-pr.mjs") return false;
-  // merge-pr takes the last `--check=<value>`, so such a word voids any `--check`.
-  return values.some((v) => v.startsWith("--check=")) || !values.slice(i + 1).includes("--check");
+  // Any `--check=` word voids the allow: the last `--check` token of either form wins in merge-pr, so the gate stays fail-closed and accepts only a bare `--check` word.
+  const rest = values.slice(i + 1);
+  return values.some((v) => v.startsWith("--check=")) || !rest.some((v, k) => v === "--check" && !VALUE_OPTIONS.has(rest[k - 1]));
 }
 
 /** Walks the token tree: a program word, a `$(...)` substitution, a `-c`/`eval` payload or a shell heredoc body that runs merge-pr.mjs without `--check`. */
 function treeRunsMergePr(segments) {
-  return segments.some((seg) =>
-    segmentRunsMergePrWithoutCheck(seg.words)
-    || seg.words.some((w, k) => w.subs.some((sub) => treeRunsMergePr(sub.segments)) || (isPayloadWord(seg.words, k) && commandRunsMergePrWithoutCheck(w.value)))
-    || (/^(?:ba|z|da)?sh$/.test(baseName(seg.words[0]?.value ?? "")) && seg.heredocs.some((h) => commandRunsMergePrWithoutCheck(h.body))));
+  return segments.some((seg) => {
+    const { values, i } = segmentProgram(seg.words);
+    return segmentRunsMergePrWithoutCheck(seg.words)
+      || seg.words.some((w, k) => w.subs.some((sub) => treeRunsMergePr(sub.segments)) || (isPayloadWord(seg.words, k) && commandRunsMergePrWithoutCheck(w.value)))
+      || (/^(?:ba|z|da)?sh$/.test(baseName(values[i] ?? "")) && seg.heredocs.some((h) => commandRunsMergePrWithoutCheck(h.body)));
+  });
 }
 
 /**
@@ -239,7 +252,7 @@ function treeRunsMergePr(segments) {
  */
 export function commandRunsMergePrWithoutCheck(command) {
   const tok = tokenizeShellCommand(command);
-  if (tok.incomplete) return /merge-pr\.mjs/.test(command) && !/(?:^|\s)--check(?:\s|$)/.test(command);
+  if (tok.incomplete) return /merge-pr\.mjs/.test(command);
   return treeRunsMergePr(tok.segments);
 }
 
@@ -255,7 +268,7 @@ export function decideMergePrOwnerDeny({ command, role }) {
     ruleId: null,
     reason:
       `The ${normalizeAgentType(role)} agent may not merge: scripts/github/merge-pr.mjs is owned by the orchestrator (main agent). ` +
-      "Run `merge-pr.mjs --check` (read-only) at the merge-ready point and hand back its result, with the exact merge command line it reports, instead of merging.",
+      "Run `merge-pr.mjs --check` (read-only) at the merge-ready point and hand back its result, with the merge-pr command line composed from the approvalPath and approveMergeLine it reports, instead of merging.",
   };
 }
 
