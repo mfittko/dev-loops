@@ -885,6 +885,7 @@ test("ADR 0238: a trust-incomplete thread is dropped from the pinned threads rea
     const bytes = await readFile(read.path);
     assert.equal(sha256Hex(bytes).replace(/^sha256:/, ""), read.sha256);
     assert.deepEqual(JSON.parse(bytes).threads.map((t) => t.threadId), ["T1"]);
+    assert.equal(sha256Hex(JSON.parse(bytes)).replace(/^sha256:/, ""), workOrder.authority.sourceDigest, "the verifier recomputes this digest from the pinned read");
   });
 });
 
