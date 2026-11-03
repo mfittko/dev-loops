@@ -18,8 +18,12 @@ test("retro node verdict matches the shared classifier (#2943)", () => {
   }
   const src = readFileSync(fileURLToPath(new URL("../../scripts/loop/check-retro-tooling.mjs", import.meta.url)), "utf8");
   assert.match(src, /from "@dev-loops\/core\/loop\/bash-command-classify"/);
+  // The Bash-gate consumer moved to the shared module (issue 3032); the invariant is that the
+  // hook's Bash-gate decisions still come from the one shared classifier, never a second copy.
+  const gateDecisions = readFileSync(fileURLToPath(new URL("../../packages/core/src/loop/bash-gate-decisions.mjs", import.meta.url)), "utf8");
+  assert.match(gateDecisions, /commandContainsInlineInterpreter,[\s\S]*?from "\.\/bash-command-classify\.mjs"/);
   const hook = readFileSync(fileURLToPath(new URL("../../packages/core/src/claude/hook-decisions.mjs", import.meta.url)), "utf8");
-  assert.match(hook, /commandContainsInlineInterpreter,[\s\S]*?from "\.\.\/loop\/bash-command-classify\.mjs"/);
+  assert.match(hook, /from "\.\.\/loop\/bash-gate-decisions\.mjs"/);
 });
 
 test("clean transcript: dev-loops tooling + node scripts only — no violations", () => {
