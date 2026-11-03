@@ -1010,7 +1010,7 @@ function allWords(segments, out = []) {
 }
 const EXEC_FLAG_RE = /^(?:-[a-z]*c[a-z]*|--command)$/i;
 const ENV_ASSIGNMENT_WORD_RE = /^[A-Za-z_]\w*=/;
-const SHELL_RE = /^(?:ba|z|da|k|a)?sh$/;
+const SHELL_RE = /^(?:(?:ba|z|da|k|a)?sh|source|\.)$/;
 /** Programs that only read their text (`-c` counts or selects bytes, a here-string is stdin data, an operand is a file name). */
 const TEXT_CONSUMER_RE = /^(?:echo|printf|grep|rg|wc|cat|tee|head|tail|cut|sort|uniq|tr|od|jq|read)$/;
 /** Readers that never write a file: the only pipe receivers that leave quoted text inert, and only as the last segment. */
@@ -1601,9 +1601,9 @@ export function commandContainsInlineInterpreter(command) {
  */
 function inertQuoteSegment(tok, s) {
   const definesFunction = feedsShell(tok) || tok.segments.some((x) => x.words.some((w) => /^(?:alias|hash|shopt|unalias|enable)$/.test(w.value)) || x.words.some((w) => w.value === "function" || w.raw.includes("()") || /\($/.test(w.value)));
-  const anyRedirect = tok.segments.some((x) => x.words.some((w) => REDIRECT_RE.test(w.value))); // an output redirect in any segment (exec >f, braced group) can feed a later one, so no segment is inert
+  const anyRedirect = tok.segments.some((x) => x.words.some((w) => REDIRECT_RE.test(w.value) || w.raw.includes("("))); // an output redirect or a ( word in any segment (exec >f, braced group, subshell) can feed a later one, so no segment is inert
   const [h = "", arg = ""] = s.words.filter((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op).map((w) => w.value);
-  return !definesFunction && !anyRedirect && !s.pipedOut && writeTargets(s).length === 0 && !s.words.some((w) => REDIRECT_RE.test(w.value) || w.raw.includes("(")) && !(h === "printf" && s.words.some((w) => /^-v/.test(w.value))) && !h.includes("/") && !s.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw)) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
+  return !definesFunction && !anyRedirect && !s.pipedOut && writeTargets(s).length === 0 && !s.words.some((w) => REDIRECT_RE.test(w.value)) &&!(h === "printf" && s.words.some((w) => /^-v/.test(w.value))) && !h.includes("/") && !s.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw)) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
 }
 
 /**

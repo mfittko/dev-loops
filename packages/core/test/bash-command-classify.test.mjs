@@ -562,7 +562,7 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   // this to "detach AND family reference"; restored to the pre-#2065 unconditional ban (regression
   // guard, main/coordinator context — subagent context is covered separately below).
   assert.equal(commandContainsDetachedWaitTool("nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &"), true);
-  for (const c of ["echo 'node scripts/loop/probe-copilot-review.mjs --pr 5 &' | bash", "git rebase -x 'node scripts/loop/probe-copilot-review.mjs --pr 5 &' HEAD~1", "git rebase --exec='node scripts/loop/probe-copilot-review.mjs --pr 5 &' HEAD~1"]) assert.equal(commandContainsDetachedWaitTool(c), true, c);
+  for (const c of ["echo 'node scripts/loop/probe-copilot-review.mjs --pr 5 &' | bash", "git rebase -x 'node scripts/loop/probe-copilot-review.mjs --pr 5 &' HEAD~1", "git rebase --exec='node scripts/loop/probe-copilot-review.mjs --pr 5 &' HEAD~1", "source <(echo a; echo 'while true; do sleep 5; gh pr view 5; done')", ". <(echo a; echo 'while true; do sleep 5; gh pr view 5; done')"]) assert.equal(commandContainsDetachedWaitTool(c), true, c);
   for (const c of ['echo "while" "sleep" gh', "grep -c 'node -e x' README.md", "echo eval 'node -e x'"]) assert.equal(commandContainsDetachedWaitTool(c) || commandIsSleepPollLoop(c) || commandContainsInlineInterpreter(c), false, c);
   assert.equal(commandContainsDetachedWaitTool("disown"), true);
   assert.equal(commandContainsDetachedWaitTool("tmux new-session -d -s loop"), true);
@@ -1559,7 +1559,7 @@ test("tokenizeShellCommand: malformed input is incomplete and the classifier den
   assert.equal(commandIsSleepPollLoop("echo $(echo 'while true; do gh pr view 5; sleep 5; done'"), true);
   assert.equal(commandIsSleepPollLoop("cat <<EOF 'while true; do gh pr view 5; sleep 5; done'\nx"), true);
   // an executed single-quoted poll loop stays denied; an inert echo, a body flag and a plain sed reader stay allowed
-  for (const c of ["echo 'while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done' > l.sh; bash l.sh", "perl -e 'system q(while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done)'", "sed -n 's/`gh pr view 5`/while sleep 5/e' f", "sed -i 's/`gh pr view 5`/while sleep 5/' f", "sed -n 's/`gh pr view 5`/while sleep 5/p' f", "echo 'while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done'", "sed -n -e 's/`gh pr view 5`/while sleep 5/e' f", "sed -n --expression='s/`gh pr view 5`/while sleep 5/e' f"]) assert.equal(commandIsSleepPollLoop(c), true, c);
+  for (const c of ["echo 'while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done' > l.sh; bash l.sh", "perl -e 'system q(while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done)'", "sed -n 's/`gh pr view 5`/while sleep 5/e' f", "sed -i 's/`gh pr view 5`/while sleep 5/' f", "sed -n 's/`gh pr view 5`/while sleep 5/p' f", "echo 'while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done'", "sed -n --expression='s/`gh pr view 5`/while sleep 5/e' f"]) assert.equal(commandIsSleepPollLoop(c), true, c);
   assert.equal(commandIsSleepPollLoop("gh issue create --body 'while true; do sleep 5; gh pr view 5; done'"), false);
   // a quote pair after an unclosed opener keeps the permissive callers (-X GET, foreign --repo) from allowing
   assert.equal(commandContainsRawPrBodyApiWrite(`gh api repos/mfittko/dev-loops/pulls/5 -f body=x -f "title=$(echo ' -X GET ' ; true)"`, "mfittko/dev-loops"), true);
