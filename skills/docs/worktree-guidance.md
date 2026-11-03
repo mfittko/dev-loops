@@ -324,7 +324,6 @@ this rule by ID.
 
 <!-- rule: WORKTREE-SCRIPT-LAUNCHER-CWD -->
 `WORKTREE-SCRIPT-LAUNCHER-CWD`: an agent MUST run a repo script either as one compound command that enters the target checkout first, `cd <checkout> && dev-loops-run scripts/<path>`, or as `dev-loops-run --repo-root <checkout> scripts/<path>`. A dispatched pull line is exempt and runs bare. The judge decision-check line (`dev-loops-run scripts/loop/check-judge-decision.mjs --file <path>`) is exempt the same way.
-
 Each Bash call may start in another checkout, and the working directory does
 not persist between calls. A standalone `cd <checkout>` call followed by a
 separate `dev-loops-run` call therefore runs the scripts of whichever checkout

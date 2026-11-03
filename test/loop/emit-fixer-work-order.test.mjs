@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, realpathSync, utimesSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, realpathSync, utimesSync } from "node:fs";
 import { cp, link, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -24,7 +24,17 @@ import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverag
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
-import { TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
+import { TOOLCHAIN_ROOT, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
+import { sealDeltaFixture } from "./_seal-fixture.mjs";
+
+// Seals a delta result file that exists and parses as an object with heads; fixtures that pin malformed results stay unsealed.
+const sealIfPresent = (tmpRoot, file) => {
+  let parsed;
+  try { parsed = file ? JSON.parse(readFileSync(file, "utf8")) : null; } catch (error) {
+    if (error?.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error; // only an absent or unparsable fixture stays unsealed
+  }
+  if (parsed?.reviewBaselineHead) sealDeltaFixture(tmpRoot, file); // a seal failure surfaces
+};
 
 const EMITTER = path.resolve("scripts/loop/emit-fixer-work-order.mjs");
 const PULL = path.resolve("scripts/github/pull-work-order.mjs");
@@ -198,7 +208,7 @@ async function withFixture(fn) {
       await writeFile(recordPath, JSON.stringify({ ...JSON.parse(original), items: (delta.actionableItems ?? []).map(({ ref, status }) => ({ ref, status })) }));
       return () => writeFile(recordPath, original);
     };
-    const emitRaw = (over = {}) => emitFixerWorkOrder({
+    const emitRaw = (over = {}) => (sealIfPresent(over.tmpRoot ?? resolveGateArtifactTmpRoot(over.cwd ?? wt), "deltaResult" in over ? over.deltaResult : files.delta), emitFixerWorkOrder)({
       repo: REPO, pr: PR, headSha: head, phase: "commit_only", actListFile: files.actList, gate: "draft_gate", cwd: wt,
       ...(over.actListFile === undefined && "actListFile" in over ? {} : { deltaResult: files.delta }),
       fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }), fetchVerdictMarkers: verdictPostedAt(head), executionIdentity: nextExecution(), ...over,
@@ -219,10 +229,11 @@ async function withFixture(fn) {
       const log = path.join(path.dirname(files.actList), "findings.json");
       await writeFile(log, JSON.stringify({ headSha: head, provenance: { perAngle: [{ angle: "correctness" }] } }));
       const args = ["--act-list", files.actList, "--baseline", head, "--worktree", wt, "--fixer-plan", prior.planPath, "--site-coverage", prior.workOrder.outputRefs[0]];
-      const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", log], { stdout: { write() {} } });
+      const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", log, "--result-path", path.join(path.dirname(log), "delta-result.json")], { stdout: { write() {} } });
       const result = { ...input.input.resultShape, actionableItems: input.input.actItems.map(({ ref }) => ({ ref, status: "resolved", evidence: ["focused check"] })), newFindings: [], widenedReads: [], outcome: "locally_clear" };
       if (bounded) { git(wt, "commit", "-q", "--allow-empty", "-m", "candidate B"); result.outcome = "bounded_out"; }
       await writeFile(files.delta, JSON.stringify(result));
+      sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta);
       assert.equal((await runCli([...args, "--result", files.delta, "--invocation", bounded ? "3" : "1"], { stdout: { write() {} } })).nextStep, bounded ? "push_to_gate" : "push");
       const candidate = git(wt, "rev-parse", "HEAD");
       const runtime = () => makeGhMock([
@@ -399,7 +410,7 @@ test("THREAD no_commit and head_moved close an authenticated sequence and allow 
     const located = await locateFixerUnit({ ref: unit.workOrderRef, cwd: wt, tmpRoots: [path.join(root, "tmp")] });
     if (move === "amended") assert.match(located.stale, /no longer contains/);
     else assert.equal(located.stale, undefined);
-    const args = ["--threads-file", files.threads, "--repo", REPO, "--pr", String(PR), "--baseline", head, "--spec-identity", "s", "--fixer-plan", unit.planPath, "--site-coverage", output, "--worktree", wt];
+    const args = ["--threads-file", files.threads, "--repo", REPO, "--pr", String(PR), "--baseline", head, "--spec-identity", "s", "--result-path", path.join(wt, "delta-result.json"), "--fixer-plan", unit.planPath, "--site-coverage", output, "--worktree", wt];
     if (move !== "amended") assert.equal(checkFixPushAuthority(wt).ok, false);
     const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
     const original = await readFile(marker);
@@ -422,7 +433,7 @@ test("the no_commit close under a held head lock throws SEQUENCE_LOCK_BUSY and l
     const output = unit.workOrder.outputRefs[0];
     await mkdir(path.dirname(output), { recursive: true });
     await writeFile(output, JSON.stringify({ headSha: head, dispositions: [] }));
-    const args = ["--threads-file", files.threads, "--repo", REPO, "--pr", String(PR), "--baseline", head, "--spec-identity", "s", "--fixer-plan", unit.planPath, "--site-coverage", output, "--worktree", wt];
+    const args = ["--threads-file", files.threads, "--repo", REPO, "--pr", String(PR), "--baseline", head, "--spec-identity", "s", "--result-path", path.join(wt, "delta-result.json"), "--fixer-plan", unit.planPath, "--site-coverage", output, "--worktree", wt];
     const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
     const lock = path.join(root, "tmp", "gate-delta", `${head}.sequence-lock`);
     await mkdir(lock, { recursive: true });
@@ -531,8 +542,9 @@ test("ordinary full emission carries genuine pulled coverage from reviewed A thr
     const log = path.join(path.dirname(files.actList), "findings.json");
     await writeFile(log, JSON.stringify({ headSha: head, provenance: { perAngle: [{ angle: "correctness" }] } }));
     const args = ["--act-list", files.actList, "--baseline", head, "--worktree", wt, "--fixer-plan", prior.planPath, "--site-coverage", prior.workOrder.outputRefs[0]];
-    const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", log], { stdout: { write() {} } });
+    const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", log, "--result-path", path.join(path.dirname(log), "delta-result.json")], { stdout: { write() {} } });
     await writeFile(files.delta, JSON.stringify({ ...input.input.resultShape, actionableItems: [{ ref: ACT_REF, status: "resolved", evidence: ["query returned no sites"] }], newFindings: [], widenedReads: [], outcome: "locally_clear" }));
+    sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta);
     const decision = await runCli([...args, "--result", files.delta, "--invocation", "1"], { stdout: { write() {} } });
     assert.equal(decision.nextStep, "push");
     const mock = makeGhMock([
@@ -892,7 +904,8 @@ test("ADR 0238: a trust-incomplete thread is dropped from the pinned threads rea
 test("F1: a delta result that does not belong to this act list and head refuses before dispatch", async () => {
   await withFixture(async ({ head, files, emit }) => {
     await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: files.delta }), /--delta-result applies only to an --act-list-file source/);
-    for (const bad of [deltaResultFor("b".repeat(40)), deltaResultFor(head, { actSetId: "0".repeat(16) }), { nextStep: "fix_and_rereview", items: [{ ref: 0, status: "not_resolved" }] }, ACT]) {
+    // The emit helper seals each bad result (it carries heads), so the seal check passes and the membership check refuses it.
+    for (const bad of [deltaResultFor("b".repeat(40)), deltaResultFor(head, { actSetId: "0".repeat(16) }), { ...deltaResultFor(head), nextStep: "fix_and_rereview", actionableItems: [{ ref: 0, status: "not_resolved" }] }, { ...deltaResultFor(head), actionableItems: ACT }]) {
       await writeFile(files.delta, JSON.stringify(bad));
       await assert.rejects(emit({ deltaResult: files.delta }), /does not belong to this act list/, JSON.stringify(bad));
     }
@@ -1028,6 +1041,15 @@ test("delta gate: an act-list --phase full with a push-clearing delta result at 
     const unit = await (await prepareFull()).full();
     assert.equal(unit.workOrder.phase, "full");
     assert.deepEqual(unit.workOrder.requiredReads.map((read) => read.kind), ["act-list", "delta-result", "completion-input"]);
+  });
+});
+
+test("an empty or truncated --delta-result refuses with the typed evidence_malformed reason and a producer-rerun remedy", async () => {
+  await withFixture(async ({ files, emit }) => {
+    for (const bad of ["", '{"outcome": "clea']) {
+      await writeFile(files.delta, bad);
+      await assert.rejects(emit({ deltaResult: files.delta, keepRecord: true }), /GATE-EXEC-EVIDENCE-SEALED\): evidence_malformed:[^]*re-run the producer/, JSON.stringify(bad));
+    }
   });
 });
 
@@ -1554,6 +1576,7 @@ test("F2: Claude, Pi and Codex initial, rebuilt and replacement payloads carry t
     chmodSync(path.join(bin, "gh"), 0o755);
     // Hermetic: a launched session's DEVLOOPS_AGENT_OVERRIDES must not flip the consumer-checkout agent type.
     const env = { ...runIdFreeEnv({ DEVLOOPS_AGENT_OVERRIDES: undefined }), PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+    sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta);
     const cli = (harness, extra = []) => spawnSync("node", [EMITTER, "--harness", harness, "--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "commit_only", "--act-list-file", files.actList, "--gate", "draft_gate", "--delta-result", files.delta, ...extra], { cwd: wt, encoding: "utf8", env });
     const unsupportedRoot = path.join(root, "tmp", "unsupported");
     const unsupported = cli("unknown", ["--tmp-root", unsupportedRoot]);
@@ -2337,6 +2360,7 @@ for (const route of ["THREAD", "ACT", "HISTORICAL_CONSTRUCT", "LEGACY", "AUTHORI
       await writeFile(files.actList, JSON.stringify(act));
       const coverageIdentity = completion && !legacy ? { siteCoverageDigest: sha256Hex(completion.siteCoverage).slice(7) } : {};
       await writeFile(files.delta, JSON.stringify(deltaResultFor(head, { actSetId, actionableItems, ...legacy ? { candidateHead: candidate, outcome: "locally_clear" } : {}, ...coverageIdentity })));
+      sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta); // the sealed bytes are final before the historical emitter reads them
       await writeRecord({ candidateHead: candidate, actSetId, invocation: legacy ? 2 : 3, outcome: legacy ? "locally_clear" : "bounded_out", nextStep: legacy ? "push" : "push_to_gate", items: actionableItems.map(({ ref, status }) => ({ ref, status })), ...coverageIdentity });
     }
     let unit = await oldEmitter.emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, phase: "full", ...(route === "THREAD" ? { threadsFile: files.threads } : { actListFile: files.actList, gate: "draft_gate", deltaResult: files.delta }), cwd: wt, executionIdentity: nextExecution(), fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });
@@ -2599,6 +2623,7 @@ test("regenerate: the rule is identical for the claude, pi and codex harness CLI
     chmodSync(path.join(bin, "gh"), 0o755);
     const env = { ...runIdFreeEnv({ DEVLOOPS_AGENT_OVERRIDES: undefined }), PATH: `${bin}${path.delimiter}${process.env.PATH}` };
     const rules = [];
+    sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta);
     for (const harness of ["claude", "pi", "codex"]) {
       const cli = spawnSync("node", [EMITTER, "--harness", harness, "--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "commit_only", "--act-list-file", files.actList, "--gate", "draft_gate", "--delta-result", files.delta], { cwd: wt, encoding: "utf8", env });
       assert.equal(cli.status, 0, cli.stderr);
