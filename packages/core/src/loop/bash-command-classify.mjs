@@ -1287,7 +1287,7 @@ export function commandIsSleepLoop(command) {
   const headAt = (words, k) => {
     k = skipPrefix(words, k);
     if (k >= words.length) return { j: k, head: undefined };
-    const w = [words[k].replace(/^\(+/, ""), ...words.slice(k + 1)];
+    const w = [words[k].replace(/^(?:do|then|else)(?=\()/, "").replace(/^\(+/, ""), ...words.slice(k + 1)]; // `do(sleep`: the keyword glued to a subshell
     const rest = stripLeadingWrappers(w.join(" "));
     let j = 0;
     for (let i = 0; i < w.length; i++) if (stripLeadingWrappers(w.slice(i).join(" ")) === rest) j = i;
@@ -1300,17 +1300,18 @@ export function commandIsSleepLoop(command) {
       const words = seg.words.map((w) => w.value);
       const { j, head } = headAt(words, 0);
       heads.push(LOOP.test(head ?? "") ? "while" : head);
-      if (/^(?:while|until)$/.test(head ?? "")) heads.push(headAt(words, j + 1).head);
+      // The condition runs as a command: scan it like a body command (wrappers, `sh -c` and `eval` payloads).
+      if (/^(?:while|until)$/.test(head ?? "") && j + 1 < words.length) flat([{ ...seg, words: seg.words.slice(j + 1) }], text);
       // A loop opened mid-segment: after a `{` (function body) or inside `<(` / `>(` (process substitution).
       words.forEach((w, i) => {
-        const open = i > 0 && words[i - 1] === "{" && !seg.words[i - 1].single && !seg.words[i - 1].double && !seg.words[i - 1].ansi; // a quoted `{` is text
+        const open = i > 0 && (words[i - 1] === "{" || /^[\w.-]+\(\)\{$/.test(words[i - 1])) && !seg.words[i - 1].single && !seg.words[i - 1].double && !seg.words[i - 1].ansi; // a quoted `{` is text
         if ((open || /^[<>]\(/.test(w)) && LOOP.test(w.replace(/^[<>]?\(+/, ""))) heads.push("while");
         if (open) heads.push(headAt(words, i).head); // a sleep inside a function body
         if (/^[<>]\(/.test(w) && !seg.words[i].single && !seg.words[i].double) heads.push(headAt([w.replace(/^[<>]\(+/, ""), ...words.slice(i + 1)], 0).head); // `<(sleep 5)`: the executable head
       });
       // A command after a `case` arm label (`a)`, `a|b)`, `*)`) is a head too.
       words.forEach((w, i) => {
-        if (!seg.words[i].single && !seg.words[i].double && /^\(?[^\s()$`]*\)$/.test(w)) heads.push(headAt(words, i + 1).head);
+        if (/^\(?[^\s()$`]*\)$/.test(w) && /(?<!\\)\)$/.test(seg.words[i].raw)) heads.push(headAt(words, i + 1).head);
       });
       // A sleep behind a wrapper that takes flags (`nice -n 10 sleep`, `stdbuf -o0 sleep`) or detaches (`nohup`, `exec`).
       const k = skipPrefix(words, 0);
@@ -1342,24 +1343,22 @@ export function commandIsSleepLoop(command) {
       if (!(m < words.length && SLEEP_LOOP_SHELLS.has(base(words[m]))) && SLEEP_LOOP_SHELLS.has(base(head ?? ""))) m = j;
       if (m < words.length && SLEEP_LOOP_SHELLS.has(base(words[m]))) {
         // Shell option words up to the script operand or `--`; an option with an argument (`-o pipefail`) is skipped, so it does not hide `-c`.
-        let c = -1, stdin = false;
+        let c = -1, stdin = false, operand = false;
         for (let n = m + 1; n < words.length; n++) {
           const x = words[n];
           if (seg.words[n].op) { n++; continue; } // a heredoc / here-string operator and its operand
           const r = redirectionSkip(x);
           if (r) { n += r - 1; continue; }
           if (/^[-+][a-zA-Z]*[oO]$|^--(?:rcfile|init-file)$/.test(x)) n++;
-          else if (x === "--") break;
+          else if (x === "--") { operand = n + 1 < words.length && !seg.words[n + 1].op && !redirectionSkip(words[n + 1]); break; }
           else if (/^-[a-zA-Z]*c[a-zA-Z]*$/.test(x)) { c = n; break; }
           else if (/^-[a-zA-Z]*s[a-zA-Z]*$/.test(x)) stdin = true; // `-s`: the operands are positional parameters, the script is stdin
-          else if (!/^[-+]/.test(x)) break; // a script file operand: `bash /dev/null -c ...` runs the file, `-c` is its argument
+          else if (!/^[-+]/.test(x)) { operand = true; break; } // a script file operand: `bash /dev/null -c ...` runs the file, `-c` is its argument
         }
         let p = c + 1;
         while (c > 0 && /^--?$/.test(words[p] ?? "")) p++; // `bash -c -- 'script'`: the payload follows the end-of-options marker
         if (c > 0 && words[p] !== undefined) payloads.push(words[p]);
         // No -c and no script operand (or `-s`): the shell reads its script from stdin (heredoc, here-string, or a pipe).
-        const rest = words.slice(m + 1);
-        const operand = rest.some((x, n) => !/^-/.test(x) && !redirectionSkip(x) && !x.includes("<") && !rest[n - 1]?.includes("<")) && !stdin;
         if (c < 0 && (!operand || stdin)) {
           for (const h of seg.heredocs) payloads.push(h.body);
           seg.words.forEach((w, n) => { if (w.op === "<<<" && seg.words[n + 1]) payloads.push(seg.words[n + 1].value); });
@@ -1374,7 +1373,7 @@ export function commandIsSleepLoop(command) {
         if (!t.incomplete) flat(t.segments, p);
         else if (commandIsSleepLoop(p)) heads.push("while", "sleep");
       }
-      for (const w of seg.words) for (const s of w.subs) flat(s.segments);
+      for (const w of seg.words) for (const s of w.subs) flat(s.segments, text);
     }
   };
   flat(segments, command);
