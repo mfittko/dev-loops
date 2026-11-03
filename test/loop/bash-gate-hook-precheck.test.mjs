@@ -65,11 +65,16 @@ const denyForEveryActor = (root, command, reason) => {
 
 test("raw PR/issue body writes are denied for every Claude actor", async () => {
   await withManagedRepo(async (root) => {
+    // The last two pin the API forms the hook header names beyond a plain body field
+    // (an `--input` payload and a `gh api graphql` `updatePullRequest`), so the header
+    // cannot drift from what the nominated predicate denies.
     for (const command of [
       "gh pr edit 5 --body-file waiver.md",
       "gh pr edit 5 --body 'text with an adr-tripwire:allow line'",
       "gh api -X PATCH repos/o/r/pulls/5 -f body=x",
       "gh api -X PATCH repos/o/r/issues/5 --field body=x",
+      "gh api -X PATCH repos/o/r/pulls/5 --input body.json",
+      "gh api graphql -f query=mutation{updatePullRequest}",
     ]) {
       denyForEveryActor(root, command, /ADR-TRIPWIRE-STANDING-WAIVER/);
     }
