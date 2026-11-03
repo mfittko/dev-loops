@@ -1252,7 +1252,6 @@ export function commandIsFileMarkerPollLoop(command) {
   );
 }
 
-const SLEEP_WRAPPERS = new Set(["nohup", "nice", "stdbuf", "exec", "busybox", "env", "time", "sudo", "xargs", "timeout", "command", "ionice", "setsid"]);
 const SLEEP_LOOP_SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 
 /**
@@ -1313,58 +1312,19 @@ export function commandIsSleepLoop(command) {
       words.forEach((w, i) => {
         if (/^\(?[^\s()$`]*\)$/.test(w) && /(?<!\\)\)$/.test(seg.words[i].raw)) heads.push(headAt(words, i + 1).head);
       });
-      // A sleep behind a wrapper that takes flags (`nice -n 10 sleep`, `stdbuf -o0 sleep`) or detaches (`nohup`, `exec`).
-      const k = skipPrefix(words, 0);
-      // Sleep counts only as the command word: after the wrapper, flags (a one-letter flag takes one argument), numbers and nested wrappers are skipped.
-      if (k < words.length && SLEEP_WRAPPERS.has(base(words[k]))) {
-        let m = k + 1;
-        while (m < words.length && base(words[m]) !== "sleep") {
-          const x = words[m];
-          if (/^(?:-[a-zA-Z]|--[\w-]+)$/.test(x) && m + 1 < words.length && base(words[m + 1]) !== "sleep") m++;
-          else if (!/^-/.test(x) && !/^(?:\d+(?:\.\d*)?|\.\d+)[smhd]?$/.test(x) && !/^[A-Za-z_]\w*=/.test(x) && !SLEEP_WRAPPERS.has(base(x))) break;
-          m++;
-        }
-        if (m < words.length && base(words[m]) === "sleep") heads.push("sleep");
-      }
       const payloads = [];
       if (head === "eval") payloads.push(words.slice(j + 1 + +(words[j + 1] === "--")).join(" "));
-      // A `<shell> [flags] -c <payload>` in command position: only SLEEP_WRAPPERS and their flags/arguments
-      // (`env -i`, `nice -n 10`, `xargs -I{}`) may precede the shell, so `echo bash -c '...'` stays plain text.
-      let m = k;
-      while (m < words.length && !SLEEP_LOOP_SHELLS.has(base(words[m]))) {
-        const x = words[m];
-        const nx = words[m + 1];
-        if (/^--[^=]+$/.test(x) && nx !== undefined && !/^-/.test(nx) && !SLEEP_LOOP_SHELLS.has(base(nx)) && !SLEEP_WRAPPERS.has(base(nx))) m += 2;
-        else if (SLEEP_WRAPPERS.has(base(x)) || (/^-/.test(x) && !/^-[a-zA-Z]$/.test(x)) || /^(?:\d+(?:\.\d*)?|\.\d+)[smhd]?$/.test(x) || /^[A-Za-z_]\w*=/.test(x)) m++;
-        else if (/^-[a-zA-Z]$/.test(x)) m += m + 1 < words.length && !SLEEP_LOOP_SHELLS.has(base(words[m + 1])) ? 2 : 1;
-        else break;
-      }
-      // A wrapper with a long flag or fractional duration (`timeout --signal KILL 5`, `timeout 0.5`): headAt already resolves its shell.
-      if (!(m < words.length && SLEEP_LOOP_SHELLS.has(base(words[m]))) && SLEEP_LOOP_SHELLS.has(base(head ?? ""))) m = j;
-      if (m < words.length && SLEEP_LOOP_SHELLS.has(base(words[m]))) {
-        // Shell option words up to the script operand or `--`; an option with an argument (`-o pipefail`) is skipped, so it does not hide `-c`.
-        let c = -1, stdin = false, operand = false;
-        for (let n = m + 1; n < words.length; n++) {
-          const x = words[n];
-          if (seg.words[n].op) { n++; continue; } // a heredoc / here-string operator and its operand
-          const r = redirectionSkip(x);
-          if (r) { n += r - 1; continue; }
-          if (/^[-+][a-zA-Z]*[oO]$|^--(?:rcfile|init-file)$/.test(x)) n++;
-          else if (x === "--") { operand = n + 1 < words.length && !seg.words[n + 1].op && !redirectionSkip(words[n + 1]); break; }
-          else if (/^-[a-zA-Z]*c[a-zA-Z]*$/.test(x)) { c = n; break; }
-          else if (/^-[a-zA-Z]*s[a-zA-Z]*$/.test(x)) stdin = true; // `-s`: the operands are positional parameters, the script is stdin
-          else if (!/^[-+]/.test(x)) { operand = true; break; } // a script file operand: `bash /dev/null -c ...` runs the file, `-c` is its argument
-        }
-        let p = c + 1;
-        while (c > 0 && /^--?$/.test(words[p] ?? "")) p++; // `bash -c -- 'script'`: the payload follows the end-of-options marker
-        if (c > 0 && words[p] !== undefined) payloads.push(words[p]);
-        // No -c and no script operand (or `-s`): the shell reads its script from stdin (heredoc, here-string, or a pipe).
-        if (c < 0 && (!operand || stdin)) {
-          for (const h of seg.heredocs) payloads.push(h.body);
-          seg.words.forEach((w, n) => { if (w.op === "<<<" && seg.words[n + 1]) payloads.push(seg.words[n + 1].value); });
-          const sep = text?.slice(seg.start, seg.words[0].start) ?? "";
-          const prev = segs[segs.indexOf(seg) - 1]; // only the producer right before the pipe feeds this shell
-          if (prev && /(?:^|[^|])\|(?!\|)|\|&/.test(sep)) { for (const w of prev.words) payloads.push(w.value); for (const h of prev.heredocs) payloads.push(h.body); }
+      // A shell in command position (found by headAt through stripLeadingWrappers, so `echo bash -c '...'` stays text):
+      // every argument, heredoc body, here-string and pipe producer feeding it is payload.
+      if (SLEEP_LOOP_SHELLS.has(base(head ?? ""))) {
+        for (const w of words.slice(j + 1)) payloads.push(w);
+        for (const h of seg.heredocs) payloads.push(h.body);
+        for (let cur = seg; cur; ) {
+          const prev = segs[segs.indexOf(cur) - 1];
+          if (!prev || !/(?:^|[^|])\|(?!\|)|\|&/.test(text?.slice(cur.start, cur.words[0].start) ?? "")) break;
+          for (const w of prev.words) payloads.push(w.value);
+          for (const h of prev.heredocs) payloads.push(h.body);
+          cur = prev;
         }
       }
       // The payload's own heads join the outer list, so `while true; do sh -c 'sleep 5'; done` counts.
@@ -1509,7 +1469,9 @@ export function commandContainsTimeoutWrappedSanctionedTool(command) {
 }
 
 /** Wrapper binaries whose first argument is the real command to classify. */
-const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command"]);
+const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command", "nohup", "exec", "stdbuf", "setsid", "ionice", "busybox"]);
+// A bare wrapper flag (`-n`, `--user`) takes the next word as its argument, unless that word is itself the command.
+const WRAPPER_FLAG_TARGETS = new Set([...WRAPPER_BINARIES, ...SLEEP_LOOP_SHELLS, "timeout", "sleep"]);
 
 /**
  * Strip prefixes that hide the real command head, fail-closed (over-report is
@@ -1538,8 +1500,13 @@ export function stripLeadingWrappers(segment) {
   // (b) strip a leading wrapper binary, then re-normalize the remainder
   const head = s.split(/\s+/, 1)[0];
   if (WRAPPER_BINARIES.has(head)) {
-    const rest = s.slice(head.length).trim();
-    if (rest.length > 0) return stripLeadingWrappers(rest);
+    const words = s.slice(head.length).trim().split(/\s+/).filter(Boolean);
+    while (/^-/.test(words[0] ?? "")) {
+      const bare = /^(?:-[A-Za-z]|--[\w-]+)$/.test(words[0]);
+      words.shift();
+      if (bare && words.length > 1 && !WRAPPER_FLAG_TARGETS.has(words[0].replace(/^.*\//, ""))) words.shift();
+    }
+    if (words.length > 0) return stripLeadingWrappers(words.join(" "));
   }
   return s;
 }
