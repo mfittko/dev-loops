@@ -13,9 +13,10 @@ const RAW_READERS = [
 const WRITE_VERB = /\b(?:DELETE|POST|PATCH)\b/;
 const NEGATION = /\b(?:never|do not|must not|forbidden)\b/i;
 
-// A command span ends at a backtick, a sentence boundary, a semicolon or a comma followed by space,
-// so a write verb in one command never exempts a raw reader in another.
-const SPAN_BREAK = /`|[.;!?](?=\s|$)|,\s/;
+// A command span ends at a backtick, a sentence boundary, a semicolon or a comma that joins clauses
+// ("..., then gh ..."), so a write verb in one command never exempts a raw reader in another.
+// A comma inside one command's arguments (GraphQL "owner: o, name: r") never breaks the span.
+const SPAN_BREAK = /`|[.;!?](?=\s|$)|,\s+(?=(?:then|and|or|gh)\b)/;
 
 function isRawReaderLine(line) {
   let start = 0;
@@ -37,6 +38,7 @@ test("the matcher flags raw reader forms and exempts negated and write lines", (
     "gh issue view --comments",
     "gh pr view 1 --json comments,reviews",
     "gh api graphql -f query='{ repository { pullRequest { reviewThreads { nodes { id } } } } }'",
+    "gh api graphql -f query='{ repository(owner: \"o\", name: \"r\") { pullRequest(number: 1) { reviewThreads { nodes { id } } } } }'",
     "Read `gh api repos/o/r/pulls/1/reviews`, then POST a reply.",
     "Run gh pr view 1 --comments, then gh api -X POST repos/o/r/issues/1/comments.",
     "Run `gh api -X POST repos/o/r/issues/1/comments` and then `gh pr view 1 --comments`.",
