@@ -2,65 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
-## 1.0.9-pre.4
+## 1.0.9
 
 ### Added
 
+- `merge-pr.mjs --check` reports the merge class, the exact `approve merge <headSha>` line and every failing precondition without merging (#2500)
+- A merged PR gets a record comment naming the approval path, approver and head SHA, and a later PENDING draft no longer hides an APPROVED review (#2500)
+- `merge-pr.mjs --check` reads size facts from the current-head marker, keeps the escalated class on a size-gate failure, reports no class without size or T1 facts, writes no heartbeat (#2500)
+- `emit-fixer-work-order --ci-file` adds a `ci-failure` fixer source; thread-route `commit_only` orders carry delta findings as act items (#2787)
+- `emit-fixer-work-order --completion-only` re-enters an incomplete full plan for delivery only, and `--phase commit_only` refuses while that plan is active at its candidate with no new commit (#2787)
+- `emit-fixer-work-order` pins its own copy of the act list in the plan directory, so a later `judge-pass --out` overwrite no longer breaks the fixer byte checks (#2787)
+- `operation: complete` admission requires a `completesExecution` root and pull refuses `stale_dispatch` once the root execution sequence is closed (#2787)
 - `emit-fixer-work-order.mjs --review-id` accepts a human or Copilot review body as a fixer work-order source, verified by a `dev-loops:review-body-disposition` marker comment (#2548)
 - Add the sanctioned `unresolve-review-thread.mjs` wrapper; the hook allows only the main agent and the `dev-loop` coordinator and denies every other agent type (#2577)
 - Add `GATE-EXEC-ROUND-CAP-NO-DECLINE-RESOLVE`: fix high and medium cap-round findings via the thread route; the resolved-thread refusal names the unresolve script (#2577)
-
-### Changed
-
-- The checkbox-row grammar lives in one core constant shared by the tick, the live preview and the edit-pr untick guard (#2898)
-- The edit-pr untick guard and its usage text now name a heading edit that moves a checked row out of its AC/DoD scope (#2898)
-- The unified row grammar also accepts a row ending in U+2028 or U+2029 on the tick side, so the tick now flips such a row when its label is reviewer-verified (#2898)
-- The reviewer-verified tick docs describe the dry run before composing and the write before the post (#2898)
-
-### Fixed
-
-- Thread replies carry the full 40-character commit SHA; a resolved thread with a short-SHA reply is refused with the unresolve remedy (#2548)
-- gate-evidence accepts a `.devloops` key that only the PR's own schema declares; a key declared by neither schema still fails (#2662)
-- A work order pulled by another dev-loops code tree now refuses with both roots, both versions and the rerun command, not a bare `semantic_identity_mismatch` (#2662)
-
-## 1.0.9-pre.3
-
-### Changed
-
-- Logic-change draft rounds now run the `state-concurrency` review angle, extended with precondition, ownership-binding and liveness checks (#3005)
-- The gate reviewer brief now asks for a sibling sweep after a finding: the opposite direction, concurrent invocation, alternate input forms and every call site of a fix (#3005)
-- The gate context adds importers and sibling functions of a changed exported function, state writer or guard, within the `gates.contextExpansion` cap; the briefing lists dropped files (#3005)
-
-### Fixed
-
-- The pre-push delta input accepts the cap-round findings log across the sealed fixer chain plus a base-only merge, and its refusal names the remedy (#2462)
-- Fixer join is final on write; a notification fallback waits for the final notification; `wait-for-units --artifact` needs `--after` to reject a stale file (#2462)
-- An installed `dev-loops` CLI runs the source checkout's CLI for `gate`, `loop` and `pr`, and names a version difference on stderr (#2662)
-- Judge work order carries the verdict schema, the denial names Read, and the pull owns the digest check so Pi and Claude judges compute none (#2678)
-- The judge no longer acts on removing a slice PR's only closing reference (#2883)
-- A PR runner claim is released at hand-back with an explicit run id, `status` reports owner liveness, and `takeover` refuses a live owner (#2884)
-- A terminal stop on Claude Code releases the PR runner claim with an explicit run id, and the takeover pin payload has one shared helper (#2884)
-- Closing an abandoned fix sequence is atomic with fixer pull admission; liveness uses branch activity. `close-sequence --head` must be a full 40 or 64 char lowercase hex SHA (#2999)
-- Gate coordination at the Copilot round cap returns `wait_for_ci` or the thread route, not a remedy-less `report_blocked`; an orphaned cap-round baseline names the restart (#3002)
-- `pr waive-adr-tripwire` accepts the cap-round-fixed proof, `gate extend-cap-round-chain` extends the sealed chain over docs/tests-only commits, refusals name remedies (#3010)
-
-## 1.0.9-pre.2
-
-### Changed
-
-- Coordinators now continue across phase transitions: the unit-boundary field is `reportAfter`, and the 150K peak-context figure is an advisory retrospective diagnostic, not a cap (#2955)
-
-### Fixed
-
-- Cap-round blockers: a base merge after the cleared fix reaches ready, refusals name one condition and remedy, no-commit sequences close, and `wait-for-units --artifact` joins one child (#2462)
-- Deliver unchanged thread sites at descendant heads; identify changed sites for full-gate input. Unresolved gate-thread recovery admission is deferred until PR #2990 merges (#2787)
-- `upsert-checkpoint-verdict` ticks verified rows after all refusal checks, leaves act-named rows unticked; `edit-pr` refuses a silent untick without `--allow-untick` (#2898)
-- `dev-loops gate close-sequence` closes an abandoned gate fix sequence marker with a recorded condition, so a push is no longer locked out until the operator deletes a file (#2999)
-
-## 1.0.9-pre.1
-
-### Added
-
 - Fan-out, judge and fixer emitters take `--operator-focus-file`, a typed, bounded, digest-pinned operator focus rendered as an "Operator focus" section (#2635)
 - The gate fix loop is one state machine with a sanctioned exit from every state, registered in the conformance harness and State atlas; later-slice transitions are known gaps (#2787)
 - Configure Codex worker and pre-push reviewer model/effort through role and tier settings with `gate resolve-role --role` (#2914)
@@ -69,6 +24,18 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- The Bash gate now fails closed on unterminated quotes, `$(` and heredocs and on quote-pairing hazards; a shell-word tokenizer backs it (#2442)
+- Delta review results are sealed to their producing run; `loop pre-push-delta` and `emit-fixer-work-order` refuse an edited, unsealed, superseded or foreign result with a typed reason (#2892)
+- The Claude Bash gate denies any `while`, `until` or `for` loop that runs `sleep`, whatever its condition (#3028)
+- The Bash-gate deny rules move into one harness-neutral module; Claude verdicts and reason texts are unchanged (#3032)
+- The checkbox-row grammar lives in one core constant shared by the tick, the live preview and the edit-pr untick guard (#2898)
+- The edit-pr untick guard and its usage text now name a heading edit that moves a checked row out of its AC/DoD scope (#2898)
+- The unified row grammar also accepts a row ending in U+2028 or U+2029 on the tick side, so the tick now flips such a row when its label is reviewer-verified (#2898)
+- The reviewer-verified tick docs describe the dry run before composing and the write before the post (#2898)
+- Logic-change draft rounds now run the `state-concurrency` review angle, extended with precondition, ownership-binding and liveness checks (#3005)
+- The gate reviewer brief now asks for a sibling sweep after a finding: the opposite direction, concurrent invocation, alternate input forms and every call site of a fix (#3005)
+- The gate context adds importers and sibling functions of a changed exported function, state writer or guard, within the `gates.contextExpansion` cap; the briefing lists dropped files (#3005)
+- Coordinators now continue across phase transitions: the unit-boundary field is `reportAfter`, and the 150K peak-context figure is an advisory retrospective diagnostic, not a cap (#2955)
 - merge-pr and the CI gate-evidence check accept a cap-fixed PR from a cap-round marker plus resolved round threads; cap-fixed hardening lands (#2462)
 - After the draft_gate cap round's fixer pass lands the PR goes ready and round N+1 is refused (#2462)
 - Gate coordination records a base-merge verdict carry in a PR comment, and merge-pr and gate-evidence accept it after recomputation, so a base-only merge needs no new gate round (#2752)
@@ -84,6 +51,36 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A Copilot review that reports zero reviewed files is no longer treated as clean, and an unreadable gate marker read refuses the carry with a typed `copilot_reviews_unreadable` reason (#2437)
+- The Bash gate no longer denies a single heredoc write or a `git commit -m "$(cat <<'EOF' ...)"` message that only mentions a wait script or interpreter (#2442)
+- Quoted wait/interpreter text after echo, printf, cat, tee, grep, rg, head, tail, wc, sort, test, dev-loops-run or a node/bun scripts/ runner passes; other heads keep the old split (#2442)
+- A `gh` text-flag, `--body-file -` or `git commit -F -` heredoc whose body names an inline interpreter is now denied. Write the body to a file with the editor tool (#2442)
+- A multi-segment command, or a heredoc on a head other than cat/tee, whose body holds a backticked or `$(` interpreter mention is now denied; use a single `git commit -m` heredoc (#2442)
+- The Bash gate tokenizer reads `$((1<<2))` as arithmetic and a `EOF)` line inside `$(...)` as closing the heredoc and the substitution (#2442)
+- `edit-issue` now refuses a body write that unticks or removes a checked AC/DoD row unless `--allow-untick` is passed, matching `edit-pr` (#2898)
+- The Copilot probe drops non-maintainer review text, and request, withdraw and loop checks match the Copilot reviewer login exactly, so a `copilot-x` lookalike no longer stalls the loop (#3034)
+- Gate evidence readers now ignore comments and reviews from accounts that are not maintainers, the Copilot reviewer or the viewer (#3034)
+- Non-maintainer review-thread text no longer reaches a fixer or gate agent; only OWNER, MEMBER, COLLABORATOR and Copilot threads are trusted, and untrusted-only threads are not unresolved (#3034)
+- PR note once per head when non-maintainer threads are skipped; the human-comment detector drops non-maintainer comments (#3034)
+- A judge verdict with `scopeDrift.verdict` `within_scope` (or `none`) that omits `driftedAreas` now validates with `driftedAreas: []` instead of failing the gate round (#3051)
+- Secret scan no longer flags repo file paths that end in a file extension or timestamped migration names as credentials; a random secret with `/` and no file extension is still flagged (#3054)
+- Thread replies carry the full 40-character commit SHA; a resolved thread with a short-SHA reply is refused with the unresolve remedy (#2548)
+- gate-evidence accepts a `.devloops` key that only the PR's own schema declares; a key declared by neither schema still fails (#2662)
+- A work order pulled by another dev-loops code tree now refuses with both roots, both versions and the rerun command, not a bare `semantic_identity_mismatch` (#2662)
+- The pre-push delta input accepts the cap-round findings log across the sealed fixer chain plus a base-only merge, and its refusal names the remedy (#2462)
+- Fixer join is final on write; a notification fallback waits for the final notification; `wait-for-units --artifact` needs `--after` to reject a stale file (#2462)
+- An installed `dev-loops` CLI runs the source checkout's CLI for `gate`, `loop` and `pr`, and names a version difference on stderr (#2662)
+- Judge work order carries the verdict schema, the denial names Read, and the pull owns the digest check so Pi and Claude judges compute none (#2678)
+- The judge no longer acts on removing a slice PR's only closing reference (#2883)
+- A PR runner claim is released at hand-back with an explicit run id, `status` reports owner liveness, and `takeover` refuses a live owner (#2884)
+- A terminal stop on Claude Code releases the PR runner claim with an explicit run id, and the takeover pin payload has one shared helper (#2884)
+- Closing an abandoned fix sequence is atomic with fixer pull admission; liveness uses branch activity. `close-sequence --head` must be a full 40 or 64 char lowercase hex SHA (#2999)
+- Gate coordination at the Copilot round cap returns `wait_for_ci` or the thread route, not a remedy-less `report_blocked`; an orphaned cap-round baseline names the restart (#3002)
+- `pr waive-adr-tripwire` accepts the cap-round-fixed proof, `gate extend-cap-round-chain` extends the sealed chain over docs/tests-only commits, refusals name remedies (#3010)
+- Cap-round blockers: a base merge after the cleared fix reaches ready, refusals name one condition and remedy, no-commit sequences close, and `wait-for-units --artifact` joins one child (#2462)
+- Deliver unchanged thread sites at descendant heads; identify changed sites for full-gate input. Unresolved gate-thread recovery admission is deferred until PR #2990 merges (#2787)
+- `upsert-checkpoint-verdict` ticks verified rows after all refusal checks, leaves act-named rows unticked; `edit-pr` refuses a silent untick without `--allow-untick` (#2898)
+- `dev-loops gate close-sequence` closes an abandoned gate fix sequence marker with a recorded condition, so a push is no longer locked out until the operator deletes a file (#2999)
 - A Copilot review with findings no longer counts as converged below the round cap before the Copilot gate passes; the loop re-requests Copilot on the fix head (#2445)
 - Carry complete fixer checkpoints to descendants and close authenticated no-commit or foreign-head pre-push sequences; bind THREAD delta records to the committed candidate (#2787)
 - Authenticate empty-range delta exits and canonical handback heads, close sequences after baseline amendments, and align no-commit and THREAD instructions (#2787)
