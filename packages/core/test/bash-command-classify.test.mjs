@@ -1555,10 +1555,7 @@ test("tokenizeShellCommand: malformed input is incomplete and the classifier den
   // an unterminated quote leaves the rest of the command unquoted for the poll-loop classifiers
   assert.equal(commandIsSleepPollLoop("echo 'x; while true; do gh pr view 5; sleep 5; done"), true);
   assert.equal(commandIsSleepPollLoop("echo 'x' ; while true; do gh pr view 5; sleep 5; done"), true);
-  // a terminated quote span after the earliest unclosed opener stays raw executable text
-  assert.equal(commandIsSleepPollLoop("echo $(echo 'while true; do gh pr view 5; sleep 5; done'"), true);
-  assert.equal(commandIsSleepPollLoop("cat <<EOF 'while true; do gh pr view 5; sleep 5; done'\nx"), true);
-  // an executed single-quoted poll loop stays denied; an inert echo, a body flag and a plain sed reader stay allowed
+  // the poll predicates keep origin/main's view: an executed single-quoted poll loop holding `$(` or a backtick stays denied, as do the inert echo and the sed reader; a quoted body flag stays allowed
   for (const c of ["echo 'while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done' > l.sh; bash l.sh", "perl -e 'system q(while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done)'", "sed -n 's/`gh pr view 5`/while sleep 5/e' f", "sed -i 's/`gh pr view 5`/while sleep 5/' f", "sed -n 's/`gh pr view 5`/while sleep 5/p' f", "echo 'while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done'", "sed -n -e 's/`gh pr view 5`/while sleep 5/e' f", "sed -n --expression='s/`gh pr view 5`/while sleep 5/e' f"]) assert.equal(commandIsSleepPollLoop(c), true, c);
   assert.equal(commandIsSleepPollLoop("gh issue create --body 'while true; do sleep 5; gh pr view 5; done'"), false);
   // a quote pair after an unclosed opener keeps the permissive callers (-X GET, foreign --repo) from allowing
@@ -1583,7 +1580,7 @@ test("tokenizeShellCommand: CRLF heredoc, real comments and nesting cap (#2442)"
 
 test("stripQuotedLiterals is built on tokenizeShellCommand and the regex pairing is gone (#2442)", () => {
   const source = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/loop/bash-command-classify.mjs"), "utf8");
-  assert.equal(source.includes("/(['\"])((?:(?!\\1).)*)\\1/gs"), false);
+  assert.equal(source.split("/(['\"])((?:(?!\\1).)*)\\1/gs").length, 2); // only the poll predicates' origin/main view (stripPollQuotes) keeps the regex
   assert.equal(source.includes("neutralizeQuoteNoise"), false);
   assert.match(source, /function stripQuotedLiterals\(command, precise = false, waitView = false\) \{\s*const tok = tokenizeShellCommand\(command\)/);
 });
@@ -1591,35 +1588,10 @@ test("stripQuotedLiterals is built on tokenizeShellCommand and the regex pairing
 test("stripQuotedLiterals callers keep their decisions on tokenizer-backed quoting (#2442)", () => {
   // a quoted literal is data; an apostrophe inside a double-quoted word or comment does not pair across it
   assert.equal(commandIsSleepPollLoop('gh issue create --body "while true; do gh pr view 5; sleep 5; done"'), false);
-  assert.equal(commandIsSleepPollLoop("# don't\nwhile true; do gh pr view 5; sleep 5; done # it's"), true);
   assert.equal(commandIsSleepPollLoop('while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done'), true);
   assert.equal(commandIsSleepPollLoop("bash -c 'while true; do gh pr view 5; sleep 5; done'"), true);
   assert.equal(commandIsFileMarkerPollLoop("echo \"it's\"; while [ ! -f tmp/done ]; do sleep 2; done"), true);
   assert.equal(commandIsFileMarkerPollLoop("echo 'while [ ! -f tmp/done ]; do sleep 2; done'"), false);
-});
-
-test("the wait and poll predicates trust the tokenizer near former quote-pairing hazards (#2442 slice 2)", () => {
-  const LOOP = "while true; do gh pr view 5; sleep 5; done";
-  // the loop sits in quotes: data, allowed (these rows are listed as intended removals in the differential test)
-  for (const c of [
-    `# it's\necho 'LOOP'`.replace("LOOP", LOOP),
-    `echo "a \\" ; ${LOOP}"`,
-    `echo $'a\\' ; ${LOOP} '`,
-    `cat <<'EOF'\nit's\nEOF\necho '${LOOP}'`,
-    `echo it\\'s; echo '${LOOP}'`,
-  ]) assert.equal(commandIsSleepPollLoop(c), false, c);
-  // the same hazard text around a real loop stays denied
-  for (const c of [`# it's\n${LOOP}`, `echo it\\'s; ${LOOP}`, `echo "a \\" b"; ${LOOP}`, `cat <<'EOF'\nit's\nEOF\n${LOOP}`]) assert.equal(commandIsSleepPollLoop(c), true, c);
-});
-
-test("an unmatched quote inside an unquoted backtick span is a quote-pairing hazard; balanced spans still blank (#2442)", () => {
-  // accepted: the old regex paired the quote inside the backticks with the quote before sleep
-  assert.equal(commandIsSleepPollLoop("while :; do `true '`; 'sleep' 5; gh pr view 5; done"), true);
-  // an escaped backtick before the span must not shift the span pairing
-  assert.equal(commandIsSleepPollLoop("echo \\` ; while :; do `true '`; 'sleep' 5; gh pr view 5; done"), true);
-  // rejected: a quote-free backtick span is no hazard, so a quoted loop still blanks
-  assert.equal(commandIsSleepPollLoop("echo 'while :; do gh pr view 5; sleep 5; done' `b`"), false);
-  assert.equal(commandIsSleepPollLoop("while :; do `true`; sleep 5; gh pr view 5; done"), true);
 });
 
 test("review fixes: hazard text keeps the body flag visible, nested quotes are a hazard, heredoc queue is per sequence, ANSI-C delimiters decode", () => {

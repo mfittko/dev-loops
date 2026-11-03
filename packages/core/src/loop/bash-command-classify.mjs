@@ -967,15 +967,15 @@ function blankQuotedForFlags(command) {
  *
  * Two modes. The default (PR-body predicates) is strictly fail-closed against the frozen differential oracle: when
  * `hasQuotePairingHazard(command)` is true it returns the command unchanged, because a caller that would read the unblanked
- * text as more permissive (a foreign `--repo`, an explicit `-X GET`) must not. `precise` (wait and poll predicates) trusts the
+ * text as more permissive (a foreign `--repo`, an explicit `-X GET`) must not. `precise` (the wait predicate) trusts the
  * tokenizer instead of that coarse guard, which removes the hazard false positives. It also blanks the bodies that
  * `blankDataHeredocs` finds to be data, treats a single-quoted or ANSI-C `$(`/backtick as inert, and keeps every
  * quoted span inside a payload word (`isPayloadWord`: after `-c`/`--command`/`eval`, or a `<<<` here-string). Text from an
  * unterminated quote, `$(` or heredoc onward is left as raw executable text in both modes (deny direction). Accepted ceiling, default mode
  * only: a deliberately quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is blanked like any other quoted
  * literal and can evade the ban. Precise mode keeps a quoted whole-word keyword (`'sleep' 5`) visible (`STRUCTURAL_WORD_RE`), so the ceiling does not apply there.
- * `waitView` (the detached-wait operator view) also keeps a quoted span visible unless every segment around it passes `inertQuoteSegment`. `"subst"` (the poll predicates) keeps only a span that holds `$(` or a backtick.
- * @param {string} command @param {boolean} [precise] @param {boolean|"subst"} [waitView] @returns {string}
+ * `waitView` (the detached-wait operator view) also keeps a quoted span visible unless every segment around it passes `inertQuoteSegment`.
+ * @param {string} command @param {boolean} [precise] @param {boolean} [waitView] @returns {string}
  */
 function stripQuotedLiterals(command, precise = false, waitView = false) {
   const tok = tokenizeShellCommand(command);
@@ -991,7 +991,7 @@ function stripQuotedLiterals(command, precise = false, waitView = false) {
   for (const { start, end, kind } of [...tok.spans].sort((a, b) => a.start - b.start)) {
     if (start < pos || start >= limit) continue; // nested in a span already handled, or in the unterminated tail (kept as a guard: a backtick span can start past the opener without a quote)
     const kept = precise
-      ? (kind === "double" && /\$\(|`/.test(text.slice(start + 1, end - 1))) || (waitView && (waitView !== "subst" || /\$\(|`/.test(text.slice(start + 1, end - 1))) && all.some(({ w, seg }) => w.start <= start && end <= w.end && !inertHere(seg))) || payloads.some((w) => w.start <= start && end <= w.end) ||
+      ? (kind === "double" && /\$\(|`/.test(text.slice(start + 1, end - 1))) || (waitView && all.some(({ w, seg }) => w.start <= start && end <= w.end && !inertHere(seg))) || payloads.some((w) => w.start <= start && end <= w.end) ||
         (STRUCTURAL_WORD_RE.test(text.slice(start + 1, end - 1)) && all.some(({ w, words }) => w.end === end && w.raw.length <= end - start + 1 && !/^(?:echo|printf)$/.test(words.find((x) => !x.op)?.value))) // a quoted structural keyword that is a whole word (`'sleep' 5`) still runs: keep it visible
       : /\$\(|`/.test(text.slice(start + 1, end - 1)) || // executable code in quotes: preserve (fail-closed)
         /(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(text.slice(0, start)); // -c/eval payload: real shell syntax
@@ -1001,7 +1001,13 @@ function stripQuotedLiterals(command, precise = false, waitView = false) {
   return out + text.slice(pos);
 }
 
-const STRUCTURAL_WORD_RE = /^(?:while|until|for|do|done|sleep|gh|loop-state|test|\[\[?)$/;
+/** The origin/main quote view the two poll predicates keep byte-for-byte: a balanced quote pair is blanked unless it holds `$(` or a backtick or follows `-c`/`--command`/`eval`. */
+function stripPollQuotes(command) {
+  return command.replace(/(['"])((?:(?!\1).)*)\1/gs, (match, _quote, inner, offset, full) =>
+    /\$\(|`/.test(inner) || /(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(full.slice(0, offset)) ? match : " ");
+}
+
+const STRUCTURAL_WORD_RE =/^(?:while|until|for|do|done|sleep|gh|loop-state|test|\[\[?)$/;
 /** @returns {{w: object, words: object[], k: number}[]} every word in SEGMENTS with its segment's words and index, nested substitutions included. */
 function allWords(segments, out = []) {
   for (const seg of segments) seg.words.forEach((w, k) => { out.push({ w, words: seg.words, k, seg }); for (const sub of w.subs) allWords(sub.segments, out); });
@@ -1093,8 +1099,8 @@ function blankDataHeredocs(command, tok) {
 }
 
 /**
- * Coarse text hazards used by the default (PR-body) mode of `stripQuotedLiterals` and by `blankQuotedForFlags`; the wait and
- * poll predicates no longer use them (they trust the tokenizer). A caller that would read unblanked text as more permissive
+ * Coarse text hazards used by the default (PR-body) mode of `stripQuotedLiterals` and by `blankQuotedForFlags`; the wait
+ * predicate no longer uses them (it trusts the tokenizer). A caller that would read unblanked text as more permissive
  * (a foreign `--repo`, an explicit `-X GET`) must not.
  * ponytail: coarse text hazards (an escaped quote anywhere, a `#` comment with a quote, a quoted heredoc body, an unmatched quote inside a backtick span).
  * @param {string} command @returns {boolean}
@@ -1330,7 +1336,7 @@ export function tokenizeShellCommand(command) {
  * @param {string} command @returns {boolean}
  */
 export function commandIsSleepPollLoop(command) {
-  const whole = stripQuotedLiterals(command.trim(), true, "subst");
+  const whole = stripPollQuotes(command.trim());
   return (
     /(?:while|until|for)\b/i.test(whole) &&
     /\bsleep\b/.test(whole) &&
@@ -1353,7 +1359,7 @@ export function commandIsSleepPollLoop(command) {
  * @param {string} command @returns {boolean}
  */
 export function commandIsFileMarkerPollLoop(command) {
-  const whole = stripQuotedLiterals(command.trim(), true, "subst");
+  const whole = stripPollQuotes(command.trim());
   return (
     /(?:while|until|for)\b/i.test(whole) &&
     /\bsleep\b/.test(whole) &&
