@@ -128,9 +128,13 @@ const ENTROPY_MIN_LENGTH = 20;
 const ENTROPY_THRESHOLD = 4.3;
 
 function hasHighEntropyToken(text) {
-  const candidates = text.match(ENTROPY_CANDIDATE_RE) ?? [];
+  // #3054: split path-like runs at `/` so each segment is scored alone, and
+  // skip timestamped migration file names (`20240101123456_add_x.rb`).
+  // Bare random runs without `/` are scored as before.
+  const candidates = (text.match(ENTROPY_CANDIDATE_RE) ?? []).flatMap((run) => run.split("/"));
   for (const candidate of candidates) {
     if (candidate.length < ENTROPY_MIN_LENGTH) continue;
+    if (/^\d{8,14}_[a-z0-9_]+\.[a-z]+$/u.test(candidate)) continue;
     if (!/[0-9]/.test(candidate) || !/[A-Za-z]/.test(candidate)) continue;
     if (shannonEntropy(candidate) >= ENTROPY_THRESHOLD) return true;
   }

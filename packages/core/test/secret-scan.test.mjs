@@ -452,3 +452,22 @@ test("scanDiffText: a clean diff (no findings) reports ok: true", () => {
   ].join("\n");
   assert.deepEqual(scanDiffText(diff), { ok: true, findings: [] });
 });
+
+test("detector 2 (high-entropy, #3054): path-like docs references and migration file names do NOT block", () => {
+  for (const line of [
+    "See docs/01-Guides/Setup-Notes.markdown for details",
+    "See docs/01-Guides-For-Newcomers/Setup-Notes-And-Tips-2.markdown for details",
+    "See docs/02-Reference-Material/Configuration-Options-Overview/Setup-Notes-1.markdown",
+    "db/migrate/20240101123456_add_example_column.rb",
+  ]) {
+    assert.deepEqual(scanLineText(line), [], line);
+  }
+});
+
+test("detector 2 (high-entropy, #3054): a bare random token and a base64 blob still block", () => {
+  const random = join("kZ9mQ2", "vL7pR4", "wT8nJ1", "zY6cF3", "xB5dH0", "qS2gM8");
+  assert.equal(random.length, 36);
+  assert.equal(scanLineText(`value ${random}`)[0].detectorClass, DETECTOR_CLASSES.HIGH_ENTROPY);
+  const blob = join("aGVsbG8gd29y", "bGQgZm9vIGJhciBi", "YXogcXV4MTIz", "NDU2Nzg5MA==");
+  assert.equal(scanLineText(`blob ${blob}`)[0].detectorClass, DETECTOR_CLASSES.HIGH_ENTROPY);
+});
