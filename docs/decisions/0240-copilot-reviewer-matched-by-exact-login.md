@@ -21,6 +21,7 @@ This ADR amends ADR 0233 and extends ADR 0238 by applying the same exact match, 
 - The commit-author filter: it excludes `copilot-swe-agent` commits.
 - Thread classification: it must recognise every Copilot account.
 - `unresolve-review-thread`: it must act on threads from any Copilot account.
+- `authorMatchesFilter` in `_review-thread-mutations` (the `copilot` author filter of `reply-resolve-review-threads` and `list-review-threads`): like thread classification, the filter must select threads from every Copilot account so that none is skipped.
 - Startup ownership: it must recognise the coding agent.
 - Human-approval exclusions (`isNonHumanLogin` in `merge-approval` and the human review filter in `size-budget-merge-gate`): they exclude every Copilot account from human-approval counting, so the broader match is the fail-closed side. An exact match would let a `copilot-x` account count as a human approver.
 - `copilot-pr-handoff` (last-bot-action baseline and human-comment exclusion): the broader match is the fail-safe side for exclusion, so a `copilot-*` account never counts as operator input.
