@@ -1172,6 +1172,12 @@ test("decideBashGate denies a bare-& backgrounded probe and a sleep-poll loop fo
   assert.equal(decideBashGate({ command: fg, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "dev-loop" }).decision, "allow");
 });
 
+test("decideBashGate denies an until grep -q sleep loop (#3028)", () => {
+  const d = decideBashGate({ command: "until grep -q x f; do sleep 3; done", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
+});
+
 // Copilot review (#2065): the detached-wait deny is evaluated BEFORE the gh pr create/ready/merge
 // classification, so a compound command cannot short-circuit past it via a lifecycle-verb ALLOW path.
 test("decideBashGate denies a backgrounded probe even when paired with a lifecycle verb (no compound short-circuit)", () => {

@@ -577,8 +577,9 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   assert.equal(commandContainsDetachedWaitTool("echo disown is a shell builtin"), false);
   // a polling loop with a LEADING expression is still a polling loop
   assert.equal(commandContainsDetachedWaitTool("gh pr view 1 && while ! gh pr view 1; do sleep 5; done"), true);
-  // a bare mention of `gh` inside another word (grep gh-notes) is NOT a GitHub poll call
-  assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep gh-notes x; done"), false);
+  // a bare mention of `gh` inside another word (grep gh-notes) is NOT a GitHub poll call (commandIsSleepPollLoop);
+  // AC1 of #3028 widened the ban, so the loop is still denied as a sleep loop.
+  assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep gh-notes x; done"), true);
   // until/seq loop forms are detected too
   assert.equal(commandContainsDetachedWaitTool("until gh pr view 1; do sleep 5; done"), true);
   assert.equal(commandContainsDetachedWaitTool("seq 1 10 | while read i; do sleep 1; gh pr view 1; done"), true);
@@ -587,7 +588,8 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   // a bare `seq` sequence-generator (not a loop head) is NOT a polling loop
   assert.equal(commandContainsDetachedWaitTool("seq 1 5 > /tmp/f; sleep 2; gh pr view 1"), false);
   // loop-state must be a command-head CALL, not a substring of a grep/echo target
-  assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep loop-state x; done"), false);
+  // AC1 of #3028 widened the ban: any loop containing sleep is denied.
+  assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep loop-state x; done"), true);
   assert.equal(commandContainsDetachedWaitTool("while true; do sleep 1; loop-state status; done"), true);
 });
 
@@ -683,6 +685,38 @@ test("H2: stripQuotedLiterals no-regression — -c-not-last short-flag clusters 
 test("H1: commandIsFileMarkerPollLoop excludes string (-z/-n) test operators", () => {
   assert.equal(commandIsFileMarkerPollLoop('while [ -z "$x" ]; do sleep 5; done'), false);
   assert.equal(commandIsFileMarkerPollLoop('while [ -n "$x" ]; do sleep 5; done'), false);
+});
+
+test("commandContainsDetachedWaitTool denies any loop containing sleep, whatever the condition (#3028)", () => {
+  for (const cmd of [
+    'until grep -q "x" f; do sleep 3; done',
+    'until ! pgrep -f "bun test test/github" > /dev/null; do sleep 5; done; tail f',
+    "while true; do ls; sleep 5; done",
+    "for i in 1 2 3; do ls; sleep 5; done",
+    "until [ -f f ]; do sleep 5; done",
+    "eval 'until grep -q x f; do sleep 3; done'",
+    "while curl -s u; do sleep 2; done",
+    "timeout 600 bash -c 'until grep -q X f; do sleep 3; done'",
+    "env FOO=1 sh -c 'while true; do sleep 1; done'",
+    "bash -c 'while true; do sleep 1; done' _",
+    "sh -c 'while true; do sleep 1; done' sh arg",
+    "while sleep 5; do cat out.txt; done",
+    "until sleep 1; grep -q x f; do :; done",
+    "( while true; do sleep 1; done )",
+    "(while true; do sleep 1; done)",
+    "time until grep -q x f; do sleep 3; done",
+    "while true; do /bin/sleep 5; done",
+    "while true; do timeout 10 sleep 5; done",
+    "echo $(while true; do sleep 1; done)",
+  ]) assert.equal(commandContainsDetachedWaitTool(cmd), true, cmd);
+  for (const cmd of [
+    'echo "until grep -q x f; do sleep 3; done"',
+    "git commit -m \"$(cat <<'EOF'\nuntil grep -q x f; do sleep 3; done\nEOF\n)\"",
+    "node scripts/github/wait-pr-checks.mjs --pr 5 --timeout 600",
+    "node scripts/github/probe-copilot-review.mjs --pr 5 --timeout 300",
+    "gh run watch 123 --exit-status",
+    "bash -c 'echo hi' sleep",
+  ]) assert.equal(commandContainsDetachedWaitTool(cmd), false, cmd);
 });
 
 // M1 (#2317 follow-up): stripQuotedLiterals only matched a quoted literal WITHOUT the `s` (dotAll)

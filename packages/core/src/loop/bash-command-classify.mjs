@@ -1253,6 +1253,51 @@ export function commandIsFileMarkerPollLoop(command) {
 }
 
 /**
+ * Whether COMMAND holds a `while`/`until`/`for` loop whose body runs `sleep`, whatever the loop condition.
+ * Reads tokenizer segments, so quoted literals and heredoc bodies never count; `eval` and `sh|bash|zsh -c`
+ * payloads are checked again as shell. An incomplete parse fails closed on raw text.
+ * Heads are normalized first: `!`/`if`/`else`/`elif`, a glued `(`, wrappers (`timeout`, `env`, `sudo`, ...) and
+ * path prefixes (`/bin/sleep`) are stripped; a `sleep` right after a loop keyword counts as a sleep head.
+ * ponytail: the check is whole-command (a loop head anywhere plus a sleep head anywhere), so
+ * `for f in a; do echo $f; done; sleep 1` is denied; split the call. Backtick-substitution loops are not parsed.
+ * @param {string} command @returns {boolean}
+ */
+export function commandIsSleepLoop(command) {
+  const { segments, incomplete } = tokenizeShellCommand(command);
+  if (incomplete) return /\b(?:while|until|for)\b/.test(command) && /\bsleep\b/.test(command);
+  const heads = [];
+  const SKIP = /^(?:do|then|\{|command|!|else|elif|if|\()$/;
+  // Index of the normalized head word at or after k, and the head itself.
+  const headAt = (words, k) => {
+    while (k < words.length && (SKIP.test(words[k]) || /^[A-Za-z_]\w*=/.test(words[k]))) k++;
+    if (k >= words.length) return { j: k, head: undefined };
+    const w = [words[k].replace(/^\(+/, ""), ...words.slice(k + 1)];
+    const rest = stripLeadingWrappers(w.join(" "));
+    let j = 0;
+    for (let i = 0; i < w.length; i++) if (stripLeadingWrappers(w.slice(i).join(" ")) === rest) j = i;
+    return { j: k + j, head: rest.split(/\s+/, 1)[0] };
+  };
+  const flat = (segs) => {
+    for (const seg of segs) {
+      const words = seg.words.map((w) => w.value);
+      const { j, head } = headAt(words, 0);
+      heads.push(head);
+      if (/^(?:while|until)$/.test(head ?? "")) heads.push(headAt(words, j + 1).head);
+      let payload;
+      if (head === "eval") payload = words.slice(j + 1).join(" ");
+      else if (/^(?:sh|bash|zsh)$/.test(head ?? "")) {
+        const c = words.findIndex((x, i) => i > j && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(x));
+        payload = c > 0 ? words[c + 1] : undefined;
+      }
+      if (payload && commandIsSleepLoop(payload)) heads.push("while", "sleep");
+      for (const w of seg.words) for (const s of w.subs) flat(s.segments);
+    }
+  };
+  flat(segments);
+  return heads.some((h) => /^(?:while|until|for)$/.test(h)) && heads.includes("sleep");
+}
+
+/**
  * Whether COMMAND contains a bare `&` backgrounding control operator — not `&&` (logical AND) and
  * not a redirection (`2>&1`, `>&2`, `&>file`, `&>>file`). A coarse whole-string check (no shell
  * parse): redirection forms are stripped first, then any surviving lone `&` (not immediately
@@ -1341,7 +1386,7 @@ export function commandContainsDetachedWaitTool(command) {
   }
 
   // (2) Unconditional sleep-poll-loop ban — a gh/loop-state poll OR a bare file-marker poll.
-  if (commandIsSleepPollLoop(whole) || commandIsFileMarkerPollLoop(whole)) {
+  if (commandIsSleepPollLoop(whole) || commandIsFileMarkerPollLoop(whole) || commandIsSleepLoop(whole)) {
     return true;
   }
 
