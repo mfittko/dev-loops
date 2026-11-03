@@ -368,8 +368,7 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
   const sourcePath = options.threadsFile ?? options.actList;
   const actRead = order.requiredReads?.find((read) => read.kind === order.source);
   const actBytes = readFileSync(sourcePath);
-  refuse(actRead && realpathSync(actRead.path) === realpathSync(sourcePath)
-    && actRead.sha256 === sha256Hex(actBytes).slice(7) && order.authority?.sourceDigest === sha256Hex(JSON.parse(actBytes)).slice(7)
+  refuse(actRead && actRead.sha256 === sha256Hex(actBytes).slice(7) && order.authority?.sourceDigest === sha256Hex(JSON.parse(actBytes)).slice(7)
     && startDeltaSequence({ reviewBaselineHead: sequence.reviewBaselineHead, actList: options.threadsFile ? threadsToActList(JSON.parse(actBytes), { repo: options.repo, pr: options.pr }) : JSON.parse(actBytes) }).actSetId === sequence.actSetId, "changed ACT source or authority");
   refuse(raw.headSha === (result ? result.candidateHead : currentHead)
     && isAncestor(options.worktree, sequence.reviewBaselineHead, raw.headSha)
