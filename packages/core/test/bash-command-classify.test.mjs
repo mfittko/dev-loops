@@ -725,6 +725,9 @@ test("commandContainsDetachedWaitTool denies any loop containing sleep, whatever
     "env -i PATH=/bin bash -c 'while true; do sleep 1; done'",
     "xargs -I{} sh -c 'while true; do sleep 1; done'",
     'while true; do sleep 1; done; echo "x',
+    "bash -o pipefail -c 'while true; do sleep 1; done'",
+    "bash -O extglob -c 'while true; do sleep 1; done'",
+    "while true; do sudo -u x sleep 5; done",
   ]) assert.equal(commandContainsDetachedWaitTool(cmd), true, cmd);
   for (const cmd of [
     'echo "while true; do nohup sleep 5; done"',
@@ -742,6 +745,8 @@ test("commandContainsDetachedWaitTool denies any loop containing sleep, whatever
     "node scripts/github/probe-copilot-review.mjs --pr 5 --timeout 300",
     "gh run watch 123 --exit-status",
     "bash -c 'echo hi' sleep",
+    "for f in a b; do timeout 5 grep sleep $f; done",
+    "for f in *.log; do sudo grep sleep $f; done",
   ]) assert.equal(commandContainsDetachedWaitTool(cmd), false, cmd);
 });
 

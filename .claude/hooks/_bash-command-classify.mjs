@@ -1298,15 +1298,25 @@ export function commandIsSleepLoop(command) {
       // A sleep behind a wrapper that takes flags (`nice -n 10 sleep`, `stdbuf -o0 sleep`) or detaches (`nohup`, `exec`).
       let k = 0;
       while (k < words.length && (SKIP.test(words[k]) || /^[A-Za-z_]\w*=/.test(words[k]))) k++;
-      if (k < words.length && SLEEP_WRAPPERS.has(base(words[k])) && words.slice(k + 1).some((x) => base(x) === "sleep")) heads.push("sleep");
+      // Sleep counts only as the command word: after the wrapper, flags (a one-letter flag takes one argument), numbers and nested wrappers are skipped.
+      if (k < words.length && SLEEP_WRAPPERS.has(base(words[k]))) {
+        let m = k + 1;
+        while (m < words.length && base(words[m]) !== "sleep") {
+          const x = words[m];
+          if (/^-[a-zA-Z]$/.test(x) && m + 1 < words.length && base(words[m + 1]) !== "sleep") m++;
+          else if (!/^-/.test(x) && !/^\d+[smhd]?$/.test(x) && !/^[A-Za-z_]\w*=/.test(x) && !SLEEP_WRAPPERS.has(base(x))) break;
+          m++;
+        }
+        if (m < words.length && base(words[m]) === "sleep") heads.push("sleep");
+      }
       const payloads = [];
       if (head === "eval") payloads.push(words.slice(j + 1).join(" "));
       // A `<shell> [flags] -c <payload>` anywhere in the segment, whatever wrapper (`env -i`, `nice -n`, `xargs -I{}`) precedes it.
       words.forEach((w, i) => {
         if (!SLEEP_LOOP_SHELLS.has(base(w))) return;
-        let c = i + 1;
-        while (c < words.length && /^-/.test(words[c]) && !/^-[a-zA-Z]*c[a-zA-Z]*$/.test(words[c])) c++;
-        if (c < words.length && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(words[c]) && words[c + 1] !== undefined) payloads.push(words[c + 1]);
+        // First later `-c` word, so a shell option with an argument (`bash -o pipefail -c`) does not hide the payload.
+        const c = words.findIndex((x, n) => n > i && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(x));
+        if (c > 0 && words[c + 1] !== undefined) payloads.push(words[c + 1]);
       });
       if (payloads.some((p) => commandIsSleepLoop(p))) heads.push("while", "sleep");
       for (const w of seg.words) for (const s of w.subs) flat(s.segments);
