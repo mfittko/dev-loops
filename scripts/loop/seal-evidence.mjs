@@ -25,9 +25,10 @@ export function runCli(argv = process.argv.slice(2), { stdout = process.stdout, 
   if (values.help) { stdout.write(`${USAGE}\n`); return; }
   if (values.kind !== "delta" || !values.file) throw new Error("--kind delta and --file are required");
   const file = path.resolve(cwd, values.file);
-  const parsed = JSON.parse(readFileSync(file, "utf8"));
+  const bytes = readFileSync(file);
+  const parsed = JSON.parse(bytes.toString("utf8"));
   const tmpRoot = values["tmp-root"] ? path.resolve(cwd, values["tmp-root"]) : resolveGateArtifactTmpRoot(cwd);
-  const sealed = sealEvidence(tmpRoot, deltaResultKey(parsed), file, parsed);
+  const sealed = sealEvidence(tmpRoot, deltaResultKey(parsed), file, parsed, bytes);
   process.exitCode = emitResult({ ok: true, sealed }, { jq: values.jq, silent: values.silent, fields: values.fields, stdout });
 }
 

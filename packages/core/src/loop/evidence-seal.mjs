@@ -92,13 +92,14 @@ function assertSameRun(record, parsed, key) {
 
 const sha256Of = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-export function sealEvidence(tmpRoot, key, filePath, parsed) {
+/** `bytes` are the exact bytes `parsed` came from, so the seal covers what was parsed; they default to a read of the path. */
+export function sealEvidence(tmpRoot, key, filePath, parsed, bytes) {
   const record = readRun(tmpRoot, key);
   assertSameRun(record, parsed, key);
   if (record.sealed) throw new EvidenceSealError("evidence_foreign_run", `run ${key} is already sealed and a seal is final; re-run the producer for a new run`);
   const resolved = canonicalPath(filePath);
   if (record.resultPath && record.resultPath !== resolved) throw new EvidenceSealError("evidence_foreign_run", `${filePath} is not the result path briefed for ${key} (${record.resultPath}); re-run the producer`);
-  record.sealed = { path: resolved, sha256: sha256Of(readFileSync(resolved)) };
+  record.sealed = { path: resolved, sha256: sha256Of(bytes ?? readFileSync(resolved)) };
   // Exclusive create makes the seal one-time: of two racing sealers only one wins the claim.
   try { writeFileSync(`${evidenceRunRecordPath(tmpRoot, key)}.sealed`, "", { flag: "wx" }); } catch (error) {
     if (error?.code === "EEXIST") throw new EvidenceSealError("evidence_foreign_run", `run ${key} is already sealed and a seal is final; re-run the producer for a new run`);

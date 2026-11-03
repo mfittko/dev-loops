@@ -413,3 +413,12 @@ test("a sealed result of a superseded input run is evidence_foreign_run at verif
   createEvidenceRun(dir, deltaEvidenceKey(A, B, "fedcba9876543210"), { ...EXPECTED, runId: "fedcba9876543210" });
   assert.equal(reason(() => verify(dir, KEY, file, result())), "evidence_foreign_run");
 });
+
+test("sealEvidence seals the bytes the caller parsed, not a second read of the path", () => {
+  const { dir, file } = setup();
+  const parsedBytes = fs.readFileSync(file);
+  edit(file, { newFindings: [{ severity: "low", summary: "x", evidence: ["e"] }] }); // the file changes after the caller parsed it
+  const sealed = sealEvidence(dir, KEY, file, result(), parsedBytes);
+  assert.equal(sealed.sha256, createHash("sha256").update(parsedBytes).digest("hex"));
+  assert.equal(reason(() => verify(dir, KEY, file, result())), "evidence_digest_mismatch");
+});
