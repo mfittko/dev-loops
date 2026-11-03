@@ -6,7 +6,8 @@
 // This suite drives the REAL hook script (the harness `test/loop/fixer-pull-line-hook.test.mjs`
 // mirrors) for the two actor-independent denies the pre-check used to leave unnamed:
 //   - `ADR-TRIPWIRE-STANDING-WAIVER`: raw `gh pr edit` body writes and `gh api` body writes to
-//     `pulls/<n>`/`issues/<n>`, and
+//     `pulls/<n>`/`issues/<n>` — including either shape behind a `timeout`/`sudo`/path-prefix
+//     wrapper, which must not hide the command head from the pre-check — and
 //   - the `timeout N <sanctioned command>` wrapper.
 // Both apply to EVERY Claude actor, so each is asserted for the operator/main-agent payload
 // (Claude exposes `agent_type` only inside a subagent, so its absence IS the main agent) and for
@@ -79,12 +80,26 @@ test("raw gh pr edit and gh api PR/issue body writes are denied for every Claude
       "gh api -X PATCH repos/o/r/issues/5 --field body=x",
       "gh api -X PATCH repos/o/r/pulls/5 --input body.json",
       "gh api graphql -f query=mutation{updatePullRequest}",
+      // A wrapper prefix must not hide the shape from the pre-check (the classifier's
+      // `SHELL_EXEC_PREFIX` tolerates env/`command`/path prefixes but not `timeout`), or the
+      // nominate-then-decide path fails open on the wrapped form of a shape it already names.
+      "timeout 300 gh pr edit 5 --body-file waiver.md",
+      "timeout 300 gh api -X PATCH repos/o/r/pulls/5 -f body=x",
+      "timeout -k 5 60 gh api -X PATCH repos/o/r/issues/5 --input body.json",
+      "sudo gh pr edit 5 --body 'text with an adr-tripwire:allow line'",
     ]) {
       denyForEveryActor(root, command, /ADR-TRIPWIRE-STANDING-WAIVER/);
     }
     // Naming the shapes must not turn the pre-check into a blanket deny: a read that merely
-    // mentions a body, and the sanctioned launcher writer, still pass through.
-    for (const command of ["grep -n body README.md", "dev-loops-run cli/index.mjs pr edit --body-file waiver.md"]) {
+    // mentions a body, the sanctioned launcher writer, and the wrapper prefix in front of either
+    // still pass through. (A wrapped *sanctioned* command is a separate deny, owned by the
+    // `timeout N <sanctioned command>` rule, so it is asserted in the suite below.)
+    for (const command of [
+      "grep -n body README.md",
+      "dev-loops-run cli/index.mjs pr edit --body-file waiver.md",
+      "timeout 30 gh pr edit 5 --add-label needs-review",
+      "timeout 30 gh api repos/o/r/pulls/5",
+    ]) {
       assert.equal(bash(root, command, undefined).decision, "allow", command);
     }
   });

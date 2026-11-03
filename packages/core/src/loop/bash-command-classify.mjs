@@ -671,6 +671,25 @@ function ghApiRegex() {
 }
 
 /**
+ * Both views of every shell segment of a command: the segment itself, plus its
+ * wrapper-stripped form whenever that differs (`timeout 300 gh pr edit 5 --body x` →
+ * `gh pr edit 5 --body x`, `sudo gh api …` → `gh api …`). `SHELL_EXEC_PREFIX` tolerates
+ * env-assignment / `command` / `env` / binary-path prefixes but NOT a wrapper such as
+ * `timeout`, so a deny anchored on the real command head fails OPEN behind one unless it also
+ * reads this view. The raw view is kept BESIDE the stripped one because it carries the `env`
+ * option forms (`env -C /w gh api …`) that `stripLeadingWrappers` deliberately leaves in place.
+ * Over-report is the safe direction: a view only reaches a head-anchored deny by really
+ * starting with that command's head.
+ * @param {string} command @returns {string[]}
+ */
+function commandSegmentViews(command) {
+  return shellSegments(command).flatMap((segment) => {
+    const stripped = stripLeadingWrappers(segment);
+    return stripped === segment ? [segment] : [segment, stripped];
+  });
+}
+
+/**
  * Return one `{ segment, endpoint }` entry for EVERY `gh api <endpoint>` call (ignoring --help/-h).
  * `endpoint` is the first positional (non-flag) token after `gh api`, skipping value-taking flags and
  * their values (`gh api -X POST repos/...`, `gh api --method POST repos/...`). Env-assignment /
@@ -681,9 +700,19 @@ function ghApiRegex() {
  * @param {string} command @returns {{ segment: string, endpoint: string|null }[]}
  */
 export function extractGhApiEndpointSegments(command) {
+  return extractGhApiEndpoints(shellSegments(command));
+}
+
+/**
+ * The `{ segment, endpoint }` entries of an already-split SEGMENTS list. `segment` is reported as
+ * given, so a caller supplying `commandSegmentViews(command)` gets entries whose head really is
+ * `gh api` (a wrapper prefix would otherwise hide it).
+ * @param {string[]} segments @returns {{ segment: string, endpoint: string|null }[]}
+ */
+function extractGhApiEndpoints(segments) {
   const re = ghApiRegex();
   const out = [];
-  for (const segment of shellSegments(command)) {
+  for (const segment of segments) {
     if (!re.test(segment)) continue;
     const remainder = segment.replace(re, "").replace(/(?:--help|-h)\s*$/i, "").trim();
     if (!remainder) continue;
@@ -872,7 +901,7 @@ function unquoteFlagTokens(segment) {
 export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
   if (SHELL_WRAPPER_RE.test(command) && GH_BODY_WRITER_LITERAL.test(command)) return true;
   const res = [ghBodyWriterRegex("pr")];
-  return shellSegments(command).map(unquoteFlagTokens).some((segment) =>
+  return commandSegmentViews(command).map(unquoteFlagTokens).some((segment) =>
     res.some((re) => {
       if (!re.test(segment)) return false;
       // An explicit --repo/-R that is provably another repo is out of scope (fail closed otherwise).
@@ -899,7 +928,7 @@ export function commandContainsRawPrBodyApiWrite(command, managedSlug = null) {
     && (/updatePullRequest/.test(command) || (/(?:pulls|issues)\/(?:\d+|\{\})/.test(command) && /body=|--input/.test(command)))) return true;
   const owner = managedSlug ? `(?:${managedSlug.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}|\\{owner\\}/\\{repo\\})` : "[^/]+/[^/]+";
   const re = new RegExp(`^(?:repos/${owner}/)?(?:pulls|issues)/\\d+$`, "i");
-  return extractGhApiEndpointSegments(command).map((e) => ({ ...e, segment: unquoteFlagTokens(e.segment) })).some(({ segment, endpoint }) => {
+  return extractGhApiEndpoints(commandSegmentViews(command)).map((e) => ({ ...e, segment: unquoteFlagTokens(e.segment) })).some(({ segment, endpoint }) => {
     if (endpoint && /^graphql$/i.test(endpoint)) return /updatePullRequest/.test(segment);
     if (!endpoint || !re.test(normalizeGhApiEndpoint(endpoint).replace(/\?.*$/, ""))) return false;
     // `--input` supplies the whole payload, so it is a write without a method flag (gh then POSTs).
