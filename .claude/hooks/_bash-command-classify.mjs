@@ -1318,7 +1318,7 @@ export function commandIsSleepLoop(command) {
         while (m < words.length && base(words[m]) !== "sleep") {
           const x = words[m];
           if (/^-[a-zA-Z]$/.test(x) && m + 1 < words.length && base(words[m + 1]) !== "sleep") m++;
-          else if (!/^-/.test(x) && !/^\d+[smhd]?$/.test(x) && !/^[A-Za-z_]\w*=/.test(x) && !SLEEP_WRAPPERS.has(base(x))) break;
+          else if (!/^-/.test(x) && !/^(?:\d+(?:\.\d*)?|\.\d+)[smhd]?$/.test(x) && !/^[A-Za-z_]\w*=/.test(x) && !SLEEP_WRAPPERS.has(base(x))) break;
           m++;
         }
         if (m < words.length && base(words[m]) === "sleep") heads.push("sleep");
@@ -1332,7 +1332,7 @@ export function commandIsSleepLoop(command) {
         const x = words[m];
         const nx = words[m + 1];
         if (/^--[^=]+$/.test(x) && nx !== undefined && !/^-/.test(nx) && !SLEEP_LOOP_SHELLS.has(base(nx)) && !SLEEP_WRAPPERS.has(base(nx))) m += 2;
-        else if (SLEEP_WRAPPERS.has(base(x)) || (/^-/.test(x) && !/^-[a-zA-Z]$/.test(x)) || /^\d+[smhd]?$/.test(x) || /^[A-Za-z_]\w*=/.test(x)) m++;
+        else if (SLEEP_WRAPPERS.has(base(x)) || (/^-/.test(x) && !/^-[a-zA-Z]$/.test(x)) || /^(?:\d+(?:\.\d*)?|\.\d+)[smhd]?$/.test(x) || /^[A-Za-z_]\w*=/.test(x)) m++;
         else if (/^-[a-zA-Z]$/.test(x)) m += m + 1 < words.length && !SLEEP_LOOP_SHELLS.has(base(words[m + 1])) ? 2 : 1;
         else break;
       }
