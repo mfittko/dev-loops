@@ -91,7 +91,10 @@ export const INLINE_DENY_ROWS = [
   "tmp/echo 'x; node -e y'",
   "echo 'true; node -e y' | sh",
   "printf '%s' 'true; node -e y' | bash",
-  "cat (watch 'true; node -e y')",
-  "echo (git submodule foreach 'true; node -e y')",
+  "cat <(watch 'true; node -e y')",
+  "echo >(git submodule foreach 'true; node -e y')",
+  "echo 'true; node -e y' > x.sh; sh x.sh",
+  "printf '%s' 'true; node -e y' > x.sh && sh x.sh",
+  "echo 'true; node -e y' > x.sh\n. ./x.sh",
   "PATH=tmp grep 'x; node -e y'",
 ];
