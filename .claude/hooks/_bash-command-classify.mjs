@@ -1253,10 +1253,15 @@ export function commandIsFileMarkerPollLoop(command) {
   );
 }
 
+const SLEEP_WRAPPERS = new Set(["nohup", "nice", "stdbuf", "exec", "busybox", "env", "time", "sudo", "xargs", "timeout", "command", "ionice", "setsid"]);
+const SLEEP_LOOP_SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
+
 /**
  * Whether COMMAND holds a `while`/`until`/`for` loop whose body runs `sleep`, whatever the loop condition.
  * Reads tokenizer segments, so quoted literals and heredoc bodies never count; `eval` and `sh|bash|zsh -c`
  * payloads are checked again as shell. An incomplete parse fails closed on raw text.
+ * A `sh|bash|zsh|dash|ksh [flags] -c` payload is found at any word position, so `env -i`, `nice -n` and `xargs -I{}` wrappers do not hide it.
+ * A loop opened after `{` (function body) or inside `<(`/`>(` counts, and a `for((` head counts. A sleep behind `nohup`, `nice -n`, `stdbuf`, `exec` counts.
  * Heads are normalized first: `!`/`if`/`else`/`elif`, a glued `(`, wrappers (`timeout`, `env`, `sudo`, ...) and
  * path prefixes (`/bin/sleep`) are stripped; a `sleep` right after a loop keyword counts as a sleep head.
  * ponytail: the check is whole-command (a loop head anywhere plus a sleep head anywhere), so
@@ -1278,24 +1283,37 @@ export function commandIsSleepLoop(command) {
     for (let i = 0; i < w.length; i++) if (stripLeadingWrappers(w.slice(i).join(" ")) === rest) j = i;
     return { j: k + j, head: rest.split(/\s+/, 1)[0] };
   };
+  const base = (w) => w.replace(/^[<>]?\(+/, "").replace(/^.*\//, "");
+  const LOOP = /^(?:while|until|for)\b/;
   const flat = (segs) => {
     for (const seg of segs) {
       const words = seg.words.map((w) => w.value);
       const { j, head } = headAt(words, 0);
-      heads.push(head);
+      heads.push(LOOP.test(head ?? "") ? "while" : head);
       if (/^(?:while|until)$/.test(head ?? "")) heads.push(headAt(words, j + 1).head);
-      let payload;
-      if (head === "eval") payload = words.slice(j + 1).join(" ");
-      else if (/^(?:sh|bash|zsh)$/.test(head ?? "")) {
-        const c = words.findIndex((x, i) => i > j && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(x));
-        payload = c > 0 ? words[c + 1] : undefined;
-      }
-      if (payload && commandIsSleepLoop(payload)) heads.push("while", "sleep");
+      // A loop opened mid-segment: after a `{` (function body) or inside `<(` / `>(` (process substitution).
+      words.forEach((w, i) => {
+        if (((i > 0 && words[i - 1] === "{") || /^[<>]\(/.test(w)) && LOOP.test(w.replace(/^[<>]?\(+/, ""))) heads.push("while");
+      });
+      // A sleep behind a wrapper that takes flags (`nice -n 10 sleep`, `stdbuf -o0 sleep`) or detaches (`nohup`, `exec`).
+      let k = 0;
+      while (k < words.length && (SKIP.test(words[k]) || /^[A-Za-z_]\w*=/.test(words[k]))) k++;
+      if (k < words.length && SLEEP_WRAPPERS.has(base(words[k])) && words.slice(k + 1).some((x) => base(x) === "sleep")) heads.push("sleep");
+      const payloads = [];
+      if (head === "eval") payloads.push(words.slice(j + 1).join(" "));
+      // A `<shell> [flags] -c <payload>` anywhere in the segment, whatever wrapper (`env -i`, `nice -n`, `xargs -I{}`) precedes it.
+      words.forEach((w, i) => {
+        if (!SLEEP_LOOP_SHELLS.has(base(w))) return;
+        let c = i + 1;
+        while (c < words.length && /^-/.test(words[c]) && !/^-[a-zA-Z]*c[a-zA-Z]*$/.test(words[c])) c++;
+        if (c < words.length && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(words[c]) && words[c + 1] !== undefined) payloads.push(words[c + 1]);
+      });
+      if (payloads.some((p) => commandIsSleepLoop(p))) heads.push("while", "sleep");
       for (const w of seg.words) for (const s of w.subs) flat(s.segments);
     }
   };
   flat(segments);
-  return heads.some((h) => /^(?:while|until|for)$/.test(h)) && heads.includes("sleep");
+  return heads.some((h) => LOOP.test(h ?? "")) && heads.includes("sleep");
 }
 
 /**
@@ -1347,7 +1365,8 @@ const WAIT_PROBE_FAMILY_RE = new RegExp(
  *
  *   (1) `nohup`/`disown`/`tmux new-session`/`screen -dm` anywhere in a command segment — denied
  *       UNCONDITIONALLY, with NO wait/probe-family requirement.
- *   (2) A `while`/`until`/`for` sleep-poll loop over `gh`/`loop-state` (`commandIsSleepPollLoop`) —
+ *   (2) A `while`/`until`/`for` sleep-poll loop over `gh`/`loop-state` (`commandIsSleepPollLoop`), a bare
+ *       file-marker poll (`commandIsFileMarkerPollLoop`), or any loop that sleeps (`commandIsSleepLoop`) —
  *       denied UNCONDITIONALLY — it IS the backgrounding signal.
  *   (3) OPTION-C, prevention-only scope: a bare `&` background (`commandHasBareBackgroundOperator`,
  *       including a `timeout …`/`env …`/`sh -c` wrapper of it) that ALSO references the wait/probe
@@ -1386,7 +1405,7 @@ export function commandContainsDetachedWaitTool(command) {
     return true;
   }
 
-  // (2) Unconditional sleep-poll-loop ban — a gh/loop-state poll OR a bare file-marker poll.
+  // (2) Unconditional sleep-poll-loop ban — a gh/loop-state poll, a bare file-marker poll, OR any loop that sleeps (commandIsSleepLoop).
   if (commandIsSleepPollLoop(whole) || commandIsFileMarkerPollLoop(whole) || commandIsSleepLoop(whole)) {
     return true;
   }

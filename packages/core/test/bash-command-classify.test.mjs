@@ -580,6 +580,7 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   // a bare mention of `gh` inside another word (grep gh-notes) is NOT a GitHub poll call (commandIsSleepPollLoop);
   // AC1 of #3028 widened the ban, so the loop is still denied as a sleep loop.
   assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep gh-notes x; done"), true);
+  assert.equal(commandIsSleepPollLoop("for i in $(seq 1 3); do sleep 1; grep gh-notes x; done"), false);
   // until/seq loop forms are detected too
   assert.equal(commandContainsDetachedWaitTool("until gh pr view 1; do sleep 5; done"), true);
   assert.equal(commandContainsDetachedWaitTool("seq 1 10 | while read i; do sleep 1; gh pr view 1; done"), true);
@@ -590,6 +591,7 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   // loop-state must be a command-head CALL, not a substring of a grep/echo target
   // AC1 of #3028 widened the ban: any loop containing sleep is denied.
   assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep loop-state x; done"), true);
+  assert.equal(commandIsSleepPollLoop("for i in $(seq 1 3); do sleep 1; grep loop-state x; done"), false);
   assert.equal(commandContainsDetachedWaitTool("while true; do sleep 1; loop-state status; done"), true);
 });
 
@@ -708,8 +710,32 @@ test("commandContainsDetachedWaitTool denies any loop containing sleep, whatever
     "while true; do /bin/sleep 5; done",
     "while true; do timeout 10 sleep 5; done",
     "echo $(while true; do sleep 1; done)",
+    "while true; do nohup sleep 5; done",
+    "while true; do nice -n 10 sleep 5; done",
+    "while true; do stdbuf -o0 sleep 5; done",
+    "while true; do exec sleep 5; done",
+    "for((i=0;i<3;i++)); do sleep 1; done",
+    "f() { while true; do sleep 1; done; }; f",
+    "cat <(while true; do sleep 1; done)",
+    "env -u FOO bash -c 'while true; do sleep 1; done'",
+    "nice -n 10 sh -c 'while true; do sleep 1; done'",
+    "sudo -u x bash -c 'while true; do sleep 1; done'",
+    "dash -c 'while true; do sleep 1; done'",
+    "ksh -c 'while true; do sleep 1; done'",
+    "env -i PATH=/bin bash -c 'while true; do sleep 1; done'",
+    "xargs -I{} sh -c 'while true; do sleep 1; done'",
+    'while true; do sleep 1; done; echo "x',
   ]) assert.equal(commandContainsDetachedWaitTool(cmd), true, cmd);
   for (const cmd of [
+    'echo "while true; do nohup sleep 5; done"',
+    "nice -n 10 sleep 5",
+    "for f in a b; do echo $f; done",
+    "f() { echo hi; }; f",
+    "cat <(ls)",
+    "env -u FOO bash -c 'echo hi'",
+    "nice -n 10 sh -c 'sleep 1'",
+    "bash -c 'echo hi'",
+    "echo 'while true; do sleep 1; done'",
     'echo "until grep -q x f; do sleep 3; done"',
     "git commit -m \"$(cat <<'EOF'\nuntil grep -q x f; do sleep 3; done\nEOF\n)\"",
     "node scripts/github/wait-pr-checks.mjs --pr 5 --timeout 600",

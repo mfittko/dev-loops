@@ -51,7 +51,7 @@ Symmetrically, for a change targeting the Claude-Code-specific seam that MUST NO
 
 | Rule | Claude Code | Pi |
 |---|---|---|
-| `COPILOT-FOLLOWUP-WAIT-TOOLS`: any `while`/`until`/`for` loop whose body runs `sleep` is denied (`commandIsSleepLoop`) | Claude enforced now | Pi inherits when the Pi deny-set slices land |
+| `COPILOT-FOLLOWUP-WAIT-TOOLS`: any `while`/`until`/`for` loop whose body runs `sleep` is denied (`commandIsSleepLoop`; whole-command: a loop head plus a `sleep` head anywhere in one command is denied, so split such calls) | Claude enforced now | Pi inherits when the Pi deny-set slices land |
 
 ## Comment trust predicate
 
