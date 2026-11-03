@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { access, mkdir, realpath, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -36,7 +36,7 @@ import { commentDeferredFindings, fingerprintFinding, readGateFindingsLedger } f
 import { readClosedPriorRoundLogs, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
-import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
+import { isSealRefusal, readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { codeTreeSkewNote, materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
@@ -611,14 +611,14 @@ async function stampDurableDeferTargets(enriched, options, resolvedRoot) {
 
 /**
  * Read + parse a JSON artifact from disk, failing closed with an actionable
- * message. Shared by the spec-file and spec-authority-verdict loads.
+ * message. Shared by the spec-file and spec-authority-verdict loads; only the findings ledger (`sealed`) carries a seal.
  */
-async function readJsonArtifact(artifactPath, label, parseErr) {
+async function readJsonArtifact(artifactPath, label, parseErr, { sealed = false } = {}) {
   let raw;
   try {
-    raw = await readSealed(artifactPath);
+    raw = sealed ? await readSealed(artifactPath) : await readFile(artifactPath, "utf8");
   } catch (error) {
-    if (error?.code === OUT_OF_BAND_WRITE) throw error;
+    if (isSealRefusal(error)) throw error;
     throw parseErr(`Cannot read ${label} "${artifactPath}": ${error instanceof Error ? error.message : String(error)}`);
   }
   try {
@@ -922,7 +922,7 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
   if (workOrderDigest(order) !== plan.workOrderDigest || materializationHash(renderWorkOrder(order)) !== receipt.materializationHash) {
     throw new Error(`--judge-plan ${options.judgePlan} does not reproduce the work order execution ${plan.executionIdentity} pulled; pass the plan emit-judge-work-order.mjs wrote${await codeTreeSkewNote({ execution: plan.executionIdentity, tmpRoots: [planTmpRoot, path.resolve(receiptTmpRoot)], ...skewRerun(options, resolvedRoot) })}`);
   }
-  const ledger = await readJsonArtifact(resolve(options.findingsFile), "--findings-file", parseError);
+  const ledger = await readJsonArtifact(resolve(options.findingsFile), "--findings-file", parseError, { sealed: true });
   if (sha256Hex(ledger) !== order.authority?.findingsDigest) {
     throw new Error(`--findings-file ${options.findingsFile} is not the ledger the judge work order pinned; re-emit the judge work order for this ledger and re-run the judge`);
   }
@@ -1133,7 +1133,7 @@ export async function judgePassCli(
       overallVerdict, findings: result.enriched, scopeDrift: result.scopeDrift,
       ...(escalationRecords.length > 0 ? { escalations: escalationRecords } : {}),
     };
-    await writeFile(
+    await writeSealed(
       ledgerPath,
       JSON.stringify(
         specAuthorityIdentity ? stampSpecAuthorityIdentity(ledgerRecord, specAuthorityIdentity) : ledgerRecord,

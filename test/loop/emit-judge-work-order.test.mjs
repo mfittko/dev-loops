@@ -70,11 +70,11 @@ test("J1: a spec/identity or head mismatch refuses; a changed ledger changes the
   await withDir(async (root) => {
     const sources = await seed(root);
     const base = await emitJudgeWorkOrder(sources);
-    await writeFile(path.join(root, sources.findingsFile), JSON.stringify({ overallVerdict: "findings_present", findings: [{ severity: "low", summary: "other" }] }));
+    await writeSealed(path.join(root, sources.findingsFile), JSON.stringify({ overallVerdict: "findings_present", findings: [{ severity: "low", summary: "other" }] }));
     assert.notEqual((await emitJudgeWorkOrder(sources)).workOrderDigest, base.workOrderDigest);
     // Fields the work-order canonicalizer drops (sha256, absolute-path strings) still change the ledger pin.
     const pinOf = async (value) => {
-      await writeFile(path.join(root, sources.findingsFile), JSON.stringify({ findings: [{ severity: "low", summary: value, sha256: value }] }));
+      await writeSealed(path.join(root, sources.findingsFile), JSON.stringify({ findings: [{ severity: "low", summary: value, sha256: value }] }));
       return (await emitJudgeWorkOrder(sources)).workOrder.authority.findingsDigest;
     };
     assert.notEqual(await pinOf("/abs/a"), await pinOf("/abs/b"));
@@ -232,7 +232,7 @@ test("J4: two checkout roots emit the same digest; a conflicting rewrite under t
     assert.equal(pa.workOrderDigest, pb.workOrderDigest);
     assert.notEqual(pa.materializationHash, pb.materializationHash);
     const sources = await seed(a);
-    await writeFile(path.join(a, sources.findingsFile), JSON.stringify({ findings: [] }));
+    await writeSealed(path.join(a, sources.findingsFile), JSON.stringify({ findings: [] }));
     await assert.rejects(emitJudgeWorkOrder({ ...sources, roundId: "j1-000000aa" }), /already exists with different content/);
   }));
 });
@@ -355,7 +355,7 @@ test("an omitted --round derives from the gate's local ledgers, so a second head
     const ledger = (headSha) => path.join(root, buildLogPath({ repo: "o/r", pr: 7, gate: "pre_approval_gate", headSha, tmpRoot: "tmp" }));
     // The judge runs before the current head's ledger exists: only the prior head's ledger is on disk.
     await mkdir(path.dirname(ledger(HEAD)), { recursive: true });
-    await writeFile(ledger(HEAD), "{}");
+    await writeSealed(ledger(HEAD), "{}");
     assert.equal((await emitJudgeWorkOrder(first)).workOrder.round, 2);
     assert.equal((await emitJudgeWorkOrder({ ...(await seed(root)), round: 5 })).workOrder.round, 5, "an explicit --round wins");
   });
@@ -374,7 +374,7 @@ test("the work order gives the judge the closed prior rounds' act items with fil
       ],
     };
     await mkdir(path.dirname(ledger("x")), { recursive: true });
-    await writeFile(ledger(`pre_approval_gate-${priorHead}.json`), JSON.stringify(prior));
+    await writeSealed(ledger(`pre_approval_gate-${priorHead}.json`), JSON.stringify(prior));
     await writeFile(ledger(`pre_approval_gate-${priorHead}.act-list.json`), "[]");
     await writeFile(ledger(`pre_approval_gate-${priorHead}.judged-ledger.json`), "{}");
     const plan = await emitJudgeWorkOrder(first);

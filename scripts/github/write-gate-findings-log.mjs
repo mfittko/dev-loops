@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
-import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "./_gate-artifact-seal.mjs";
+import { isSealRefusal, readSealed, writeSealed } from "./_gate-artifact-seal.mjs";
 import path from "node:path";
 import { verifyZeroUnitCarryProvenance } from "./_carried-angles.mjs";
 import { expandDispatchUnits } from "./_dispatch-units.mjs";
@@ -827,8 +827,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     try {
       faninLedger = JSON.parse(await readSealed(faninLedgerPath));
     } catch (error) {
-      throw error?.code === OUT_OF_BAND_WRITE
-        ? Object.assign(new Error(`fan-in ledger ${faninLedgerPath} could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`), { code: OUT_OF_BAND_WRITE })
+      throw isSealRefusal(error)
+        ? Object.assign(new Error(`fan-in ledger ${faninLedgerPath} could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`), { code: error.code })
         : parseError(`fan-in ledger ${faninLedgerPath} could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
     }
     if (faninLedger === null || typeof faninLedger !== "object" || Array.isArray(faninLedger)) {

@@ -106,7 +106,7 @@ test("re-gate emit refuses without a carry-forward plan artifact, proceeds once 
     const priorHead = "d".repeat(40);
     const findingsDir = path.join(repoRoot, "tmp", "gate-findings", "o-r", "pr-7");
     await mkdir(findingsDir, { recursive: true });
-    await writeFile(path.join(findingsDir, `${GATE}-${priorHead}.json`), JSON.stringify({
+    await writeSealed(path.join(findingsDir, `${GATE}-${priorHead}.json`), JSON.stringify({
       headSha: priorHead, gate: GATE, verdict: "findings_present",
       findings: [{ angle: "contradiction-lens", severity: "low", summary: "x" }],
       provenance: { perAngle: [{ angle: "contradiction-lens", reviewer: "r" }] },
@@ -183,19 +183,19 @@ test("listPriorFindingsLogHeads ignores a file whose recorded headSha does not m
     const bogusSha = "d".repeat(40);
     // A file named like a prior log but whose OWN headSha disagrees with the
     // filename (or is absent) is not a genuine keyed ledger — it must not count.
-    await writeFile(path.join(findingsDir, `${GATE}-${bogusSha}.json`), JSON.stringify({ headSha: "e".repeat(40), verdict: "clean" }), "utf8");
-    await writeFile(path.join(findingsDir, `${GATE}-${"f".repeat(40)}.json`), "not json at all", "utf8");
+    await writeSealed(path.join(findingsDir, `${GATE}-${bogusSha}.json`), JSON.stringify({ headSha: "e".repeat(40), verdict: "clean" }), "utf8");
+    await writeSealed(path.join(findingsDir, `${GATE}-${"f".repeat(40)}.json`), "not json at all", "utf8");
     const heads = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
     assert.equal(heads.size, 0, "neither the identity-mismatched nor the unparseable file counts as a prior round");
     // A file whose headSha matches its filename but whose recorded gate/repo/pr
     // belongs to another ledger must NOT count (full-identity validation).
     const foreignSha = "b".repeat(40);
-    await writeFile(path.join(findingsDir, `${GATE}-${foreignSha}.json`), JSON.stringify({ headSha: foreignSha, gate: "draft_gate", repo: REPO, pr: PR, verdict: "clean" }), "utf8");
+    await writeSealed(path.join(findingsDir, `${GATE}-${foreignSha}.json`), JSON.stringify({ headSha: foreignSha, gate: "draft_gate", repo: REPO, pr: PR, verdict: "clean" }), "utf8");
     const headsForeign = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
     assert.equal(headsForeign.size, 0, "a ledger recording a different gate does not count for this gate");
     // A genuine keyed ledger (recorded headSha === filename, matching identity) DOES count.
     const realSha = "a".repeat(40);
-    await writeFile(path.join(findingsDir, `${GATE}-${realSha}.json`), JSON.stringify({ headSha: realSha, gate: GATE, repo: REPO, pr: Number(PR), verdict: "clean" }), "utf8");
+    await writeSealed(path.join(findingsDir, `${GATE}-${realSha}.json`), JSON.stringify({ headSha: realSha, gate: GATE, repo: REPO, pr: Number(PR), verdict: "clean" }), "utf8");
     const heads2 = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
     assert.deepEqual([...heads2], [realSha]);
   });
@@ -207,7 +207,7 @@ test("re-gate emit refuses a plan artifact that is not a genuine resolver outcom
     const priorHead = "d".repeat(40);
     const findingsDir = path.join(repoRoot, "tmp", "gate-findings", "o-r", "pr-7");
     await mkdir(findingsDir, { recursive: true });
-    await writeFile(path.join(findingsDir, `${GATE}-${priorHead}.json`), JSON.stringify({ headSha: priorHead, gate: GATE, verdict: "clean" }), "utf8");
+    await writeSealed(path.join(findingsDir, `${GATE}-${priorHead}.json`), JSON.stringify({ headSha: priorHead, gate: GATE, verdict: "clean" }), "utf8");
     // A hand-written object carrying the five identity fields + a real prevHead,
     // but NO genuine resolver outcome flag, must not satisfy the guard.
     await writeFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.carry-forward-plan.json`),

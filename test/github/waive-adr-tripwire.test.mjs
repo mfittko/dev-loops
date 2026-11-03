@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import { computeSpecDigest, requireSpecFromBody } from "@dev-loops/core/loop/spec-authority";
-import { parseWaiveAdrTripwireCliArgs, runCli, waiveAdrTripwire } from "../../scripts/github/waive-adr-tripwire.mjs";
+import { OUT_OF_BAND_WRITE, UNSEALED, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
+import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { defaultReadRecordedSpecDigest, parseWaiveAdrTripwireCliArgs, runCli, waiveAdrTripwire } from "../../scripts/github/waive-adr-tripwire.mjs";
 import { captureStream } from "../_helpers.mjs";
 
 const HEAD = "d".repeat(40);
@@ -323,4 +328,21 @@ test("fetches the PR base branch and refuses when the fetch fails", async () => 
   await run();
   assert.deepEqual(seen, ["release-x"]);
   await assertRefusal({ fetchBaseBranch: () => { throw new Error("offline"); } }, "base_fetch_failed");
+});
+
+test("the recorded spec digest is read from a sealed ledger and an unsealed or edited ledger fails closed (ADR 0242)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "waive-seal-"));
+  try {
+    const args = { repo: "o/n", pr: 7, headSha: HEAD, repoRoot, gate: "draft_gate" };
+    const file = path.join(repoRoot, buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: HEAD, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ specAuthority: { specDigest: "sha256:x" } }), "utf8");
+    await assert.rejects(() => defaultReadRecordedSpecDigest(args), (err) => err.code === UNSEALED);
+    await writeSealed(file, JSON.stringify({ specAuthority: { specDigest: "sha256:x" } }));
+    assert.equal(await defaultReadRecordedSpecDigest(args), "sha256:x");
+    await writeFile(file, JSON.stringify({ specAuthority: { specDigest: "sha256:y" } }), "utf8");
+    await assert.rejects(() => defaultReadRecordedSpecDigest(args), (err) => err.code === OUT_OF_BAND_WRITE);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });

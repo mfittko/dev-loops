@@ -5,7 +5,7 @@
  *
  * Re-runs the exact integrity check resolve-angle-carry-forward.mjs applies
  * (buildCarryForwardPlan plus its path/recorded-head identity check). On an
- * integrity FAILURE (a seal mismatch, gate_artifact_out_of_band_write, counts)
+ * integrity FAILURE (a seal mismatch, gate_artifact_out_of_band_write, or a missing seal, gate_artifact_unsealed, counts)
  * it moves the log, its keyed fan-in ledger and their .seal sidecars into an audit
  * directory (never deletes) and records the reason and the failure message, so
  * the next round at a later head sees no prior log. On a log that PASSES
@@ -22,7 +22,7 @@ import { buildGateFaninLedgerPath } from "./_gate-artifact-paths.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { normalizeGate } from "./_gate-names.mjs";
 import { buildCarryForwardPlan } from "./resolve-angle-carry-forward.mjs";
-import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
+import { isSealRefusal, readSealed } from "./_gate-artifact-seal.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 
 const USAGE = `Usage: quarantine-gate-findings-log.mjs --repo <owner/name> --pr <N> --gate <draft_gate|pre_approval_gate> --prev-head <full-sha> [--tmp-root <dir>] [--context-tmp-root <dir>]
@@ -122,7 +122,7 @@ export async function quarantineGateFindingsLog({ repo, pr, gate, prevHead, tmpR
     failure = integrityFailure(log, prevHead);
   } catch (err) {
     if (err?.code === "ENOENT") throw typedError("quarantine_log_not_found", `no prior gate findings-log at ${logPath}`);
-    if (err?.code === OUT_OF_BAND_WRITE) failure = err.message;
+    if (isSealRefusal(err)) failure = err.message;
     else if (err instanceof SyntaxError) failure = `prior gate findings-log is not valid JSON: ${err.message}`;
     else throw err;
   }

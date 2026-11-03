@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -56,7 +57,7 @@ async function withLedgerFile(ledger, fn) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "close-gate-findings-ledger-"));
   try {
     const ledgerPath = path.join(tmpDir, "ledger.json");
-    await writeFile(ledgerPath, JSON.stringify(ledger, null, 2), "utf8");
+    await writeSealed(ledgerPath, JSON.stringify(ledger, null, 2), "utf8");
     return await fn(ledgerPath);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
@@ -498,10 +499,10 @@ test("round source (C): real <gate>-*.json findings-log files under --tmp-root c
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
       await mkdir(findingsDir, { recursive: true });
-      await writeFile(path.join(findingsDir, `draft_gate-${HEAD_SHA}.json`), "{}", "utf8");
+      await writeSealed(path.join(findingsDir, `draft_gate-${HEAD_SHA}.json`), "{}", "utf8");
       await writeFile(path.join(findingsDir, "draft_gate-0000000000000000000000000000000000000000.json"), "{}", "utf8");
       await writeFile(path.join(findingsDir, `pre_approval_gate-${HEAD_SHA}.json`), "{}", "utf8"); // other gate — excluded
-      await writeFile(path.join(findingsDir, `draft_gate-${HEAD_SHA}.txt`), "not json", "utf8"); // wrong extension — excluded
+      await writeSealed(path.join(findingsDir, `draft_gate-${HEAD_SHA}.txt`), "not json", "utf8"); // wrong extension — excluded
 
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       // Verdict-surface count is 1; the local fallback (2 real draft_gate-*.json
@@ -1075,7 +1076,7 @@ test("an answered, judge-rejected question found only in a PRIOR local ledger is
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
       await mkdir(findingsDir, { recursive: true });
-      await writeFile(
+      await writeSealed(
         path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
         JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-08-03T00:00:00.000Z", findings: [finding] }),
         "utf8",
@@ -1110,7 +1111,7 @@ test("tier 1 (current ledger) wins over a disagreeing tier 2 (prior local ledger
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
       await mkdir(findingsDir, { recursive: true });
-      await writeFile(
+      await writeSealed(
         path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
         JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-08-03T00:00:00.000Z", findings: [priorFinding] }),
         "utf8",
@@ -1181,7 +1182,7 @@ test("#2381: a current-ledger fingerprint match with a missing judgeDisposition 
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
       await mkdir(findingsDir, { recursive: true });
-      await writeFile(
+      await writeSealed(
         path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
         JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-08-03T00:00:00.000Z", findings: [priorRejectedFinding] }),
         "utf8",
@@ -1215,12 +1216,12 @@ test("#2381: a TIED loggedAt disagreement across prior ledgers is ambiguous — 
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
       await mkdir(findingsDir, { recursive: true });
-      await writeFile(
+      await writeSealed(
         path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
         JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "reject", judgeRationale: "tied A" }] }),
         "utf8",
       );
-      await writeFile(
+      await writeSealed(
         path.join(findingsDir, `draft_gate-${nthHeadSha(2)}.json`),
         JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "act", judgeRationale: "tied B" }] }),
         "utf8",
@@ -1247,13 +1248,13 @@ test("#2381: a MISSING-loggedAt disagreement across prior ledgers is ambiguous �
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
       await mkdir(findingsDir, { recursive: true });
-      await writeFile(
+      await writeSealed(
         path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
         // No `loggedAt` at all: "greatest" is undecidable across the set.
         JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "reject", judgeRationale: "no timestamp" }] }),
         "utf8",
       );
-      await writeFile(
+      await writeSealed(
         path.join(findingsDir, `draft_gate-${nthHeadSha(2)}.json`),
         JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "act", judgeRationale: "timestamped" }] }),
         "utf8",
@@ -1623,7 +1624,7 @@ for (const [label, priorDispositions] of [
         const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
         await mkdir(findingsDir, { recursive: true });
         for (const [i, judgeDisposition] of priorDispositions.entries()) {
-          await writeFile(
+          await writeSealed(
             path.join(findingsDir, `draft_gate-${nthHeadSha(i + 1)}.json`),
             JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ ...finding, judgeDisposition, judgeRationale: `prior ${judgeDisposition}` }] }),
             "utf8",
@@ -1785,7 +1786,7 @@ test("a thread with a prior-ledger judge defer is defer-closed without a rendere
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
       await mkdir(findingsDir, { recursive: true });
-      await writeFile(
+      await writeSealed(
         path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
         JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ ...prior.finding, judgeRationale: "belongs to a follow-up" }] }),
         "utf8",
@@ -2398,7 +2399,7 @@ test("a prior-ledger act with remedyKind evidence_only is replied to and resolve
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
       await mkdir(findingsDir, { recursive: true });
-      await writeFile(
+      await writeSealed(
         path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
         JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ ...finding, judgeDisposition: "act", remedyKind: "evidence_only", judgeRationale: "no file change" }] }),
         "utf8",
@@ -2504,7 +2505,7 @@ test("a tied prior-ledger remedyKind disagreement (same disposition) is ambiguou
       const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
       await mkdir(findingsDir, { recursive: true });
       for (const [n, extra] of [[1, { remedyKind: "evidence_only" }], [2, {}]]) {
-        await writeFile(
+        await writeSealed(
           path.join(findingsDir, `draft_gate-${nthHeadSha(n)}.json`),
           JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "act", judgeRationale: `tied ${n}`, ...extra }] }),
           "utf8",
@@ -2756,7 +2757,7 @@ test("a medium thread rejected only in a PRIOR round's ledger is reject-closed",
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
       await mkdir(findingsDir, { recursive: true });
-      await writeFile(
+      await writeSealed(
         path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
         JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ ...finding, judgeDisposition: "reject", judgeRationale: "prior reject" }] }),
         "utf8",

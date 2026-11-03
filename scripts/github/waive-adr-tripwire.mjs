@@ -8,7 +8,6 @@
  * with a typed reason and leaves the body unchanged. The scope is fixed here;
  * the standing authorization record carries no scope field.
  */
-import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -27,6 +26,7 @@ import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { fetchIssueBody as realFetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
 import { fetchDraftGateEvidence as realFetchDraftGateEvidence } from "./_gate-finding-surface.mjs";
 import { buildLogPath } from "./_gate-artifact-paths.mjs";
+import { isSealRefusal, readSealed } from "./_gate-artifact-seal.mjs";
 import { editPr as realEditPr } from "./edit-pr.mjs";
 import { resolveCapRoundFixed as realResolveCapRoundFixed } from "./write-gate-context.mjs";
 
@@ -97,12 +97,13 @@ async function defaultFetchDefaultBranch({ repo }, { env, ghCommand, runChild })
   return typeof data?.defaultBranchRef?.name === "string" ? data.defaultBranchRef.name : null;
 }
 
-async function defaultReadRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate = "draft_gate" }) {
+export async function defaultReadRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate = "draft_gate" }) {
   const ledgerPath = buildLogPath({ repo, pr, gate, headSha, tmpRoot: resolveGateArtifactTmpRoot(repoRoot) });
   try {
-    const ledger = JSON.parse(await readFile(ledgerPath, "utf8"));
+    const ledger = JSON.parse(await readSealed(ledgerPath));
     return typeof ledger?.specAuthority?.specDigest === "string" ? ledger.specAuthority.specDigest : null;
-  } catch {
+  } catch (error) {
+    if (isSealRefusal(error)) throw error; // an edited or unsealed ledger fails closed, never "no digest recorded"
     return null;
   }
 }

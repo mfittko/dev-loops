@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 import { createHash } from "node:crypto";
-import { readSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
+import { readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 
 import {
   consolidateGateFanin,
@@ -4530,7 +4530,7 @@ test("issue 2511: a mixed-unit carry round-trips through consolidateGateFanin an
         const ledger = await consolidateLedger(dir, { headSha, gate, repoRoot, repo, pr: 7, carriedAngles: ["dry"], carryForwardPlan: carried, resolvedAngles: ["dry", "kiss"] });
         assert.equal(ledger.overallVerdict, "clean");
         // The writer reads provenance from the keyed fan-in ledger.
-        await writeFile(buildGateFaninLedgerPath({ repo, pr: 7, gate, headSha, tmpRoot: path.join(repoRoot, "tmp") }), JSON.stringify({
+        await writeSealed(buildGateFaninLedgerPath({ repo, pr: 7, gate, headSha, tmpRoot: path.join(repoRoot, "tmp") }), JSON.stringify({
           overallVerdict: "clean",
           findings: [],
           provenance: { distinctReviewers: 1, perAngle: [

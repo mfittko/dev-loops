@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -68,7 +69,7 @@ async function withLedgerRepos(ledgers, fn) {
       const ledgerPath = path.join(roots[i], LEDGER_REL);
       await mkdir(path.dirname(ledgerPath), { recursive: true });
       const body = typeof ledgers[i] === "string" ? ledgers[i] : JSON.stringify({ repo: "owner/repo", pr: 42, gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", overallVerdict: "clean", executionMode: "fanout_fanin", ...ledgers[i] });
-      await writeFile(ledgerPath, body, "utf8");
+      await writeSealed(ledgerPath, body, "utf8");
     }
     await fn(repo, roots);
   } finally {
@@ -175,7 +176,7 @@ test("only a visible current-head pre_approval_gate marker reads the act list", 
     // An act-item ledger also exists at the old head, so only the head check keeps it out.
     const oldHead = "0ddba11c0ffee0";
     const oldLedger = path.join(repo, buildLogPath({ repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: oldHead, tmpRoot: "tmp" }));
-    await writeFile(oldLedger, JSON.stringify({ executionMode: "fanout_fanin", findings: [ACT_ITEM] }), "utf8");
+    await writeSealed(oldLedger, JSON.stringify({ executionMode: "fanout_fanin", findings: [ACT_ITEM] }), "utf8");
     for (const marker of [{ ...PA_MARKER, headSha: oldHead }, { ...PA_MARKER, visible: false }]) {
       const { enforcement, check } = await probe(repo, CONFIG_NO_FANOUT, marker);
       assert.equal(enforcement.actList, undefined);
@@ -257,5 +258,18 @@ test("an uncarried stale-head marker never supplies an act list", async () => {
   await withLedgerRepos([{ findings: [ACT_ITEM] }], async (repo) => {
     const { enforcement } = await probeCarried(repo, PA_MARKER);
     assert.equal(enforcement.actList, undefined);
+  });
+});
+
+test("an edited or unsealed ledger fails the provenance read closed and the act list unreadable (ADR 0242)", async () => {
+  const inlineMarker = { ...PA_MARKER, executionMode: "inline_single_agent" };
+  await withLedgerRepos([{ findings: [] }], async (repo, roots) => {
+    const ledger = path.join(roots[0], LEDGER_REL);
+    await writeFile(ledger, JSON.stringify({ findings: [ACT_ITEM] }), "utf8");
+    await assert.rejects(() => probe(repo), (err) => err.code === "gate_artifact_out_of_band_write");
+    assert.ok((await probe(repo, CONFIG_NO_FANOUT, inlineMarker)).check.failures.some((f) => f.includes(`unreadable or malformed (${ledger})`)));
+    await rm(`${ledger}.seal`);
+    await assert.rejects(() => probe(repo), (err) => err.code === "gate_artifact_unsealed");
+    assert.ok((await probe(repo, CONFIG_NO_FANOUT, inlineMarker)).check.failures.some((f) => f.includes(`unreadable or malformed (${ledger})`)));
   });
 });

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, realpath, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -262,7 +263,7 @@ async function writeRawLedger(repoRoot, provenance) {
   const logPath = buildLogPath({ repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, tmpRoot: "tmp" });
   const fullPath = path.join(repoRoot, logPath);
   await mkdir(path.dirname(fullPath), { recursive: true });
-  await writeFile(fullPath, JSON.stringify({
+  await writeSealed(fullPath, JSON.stringify({
     repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD,
     verdict: "clean", loggedAt: "2026-07-19T00:00:00.000Z", findings: [], provenance,
   }), "utf8");
@@ -362,7 +363,7 @@ test("detect-checkpoint-evidence: a fanout_fanin ledger missing a mandatory angl
     const ledgerPath = buildLogPath({ repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, tmpRoot: "tmp" });
     const fullLedgerPath = path.join(repoA, ledgerPath);
     await mkdir(path.dirname(fullLedgerPath), { recursive: true });
-    await writeFile(fullLedgerPath, JSON.stringify({
+    await writeSealed(fullLedgerPath, JSON.stringify({
       repo: "owner/repo", pr: 42, gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: [],
       provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "dry", reviewer: "review-b" }] },
     }) + "\n", "utf8");
@@ -392,7 +393,7 @@ test("detect-checkpoint-evidence: a fanout_fanin ledger naming a FOREIGN angle b
     const ledgerPath = buildLogPath({ repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, tmpRoot: "tmp" });
     const fullLedgerPath = path.join(repoA, ledgerPath);
     await mkdir(path.dirname(fullLedgerPath), { recursive: true });
-    await writeFile(fullLedgerPath, JSON.stringify({
+    await writeSealed(fullLedgerPath, JSON.stringify({
       repo: "owner/repo", pr: 42, gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: [],
       // Mandatory angle covered, but one recorded angle is outside the pool.
       provenance: { distinctReviewers: 2, perAngle: [{ angle: "pr-checklist", reviewer: "review-a" }, { angle: "made-up-angle", reviewer: "review-b" }] },
@@ -422,7 +423,7 @@ test("detect-checkpoint-evidence: a fanout_fanin ledger that simply OMITS proven
     const ledgerPath = buildLogPath({ repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, tmpRoot: "tmp" });
     const fullLedgerPath = path.join(repoA, ledgerPath);
     await mkdir(path.dirname(fullLedgerPath), { recursive: true });
-    await writeFile(fullLedgerPath, JSON.stringify({
+    await writeSealed(fullLedgerPath, JSON.stringify({
       repo: "owner/repo", pr: 42, gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: [],
     }) + "\n", "utf8");
 
@@ -450,14 +451,14 @@ test("angle-contract shadow: a stale checkout's provenance FAILING the angle con
     // is internally consistent but MISSES the mandatory angle.
     const stalePath = path.join(repoB, ledgerPath);
     await mkdir(path.dirname(stalePath), { recursive: true });
-    await writeFile(stalePath, JSON.stringify({
+    await writeSealed(stalePath, JSON.stringify({
       repo: "owner/repo", pr: 42, gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: [],
       provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "dry", reviewer: "review-b" }] },
     }) + "\n", "utf8");
     // repoA (enumerated later) carries the ledger whose provenance PASSES.
     const goodPath = path.join(repoA, ledgerPath);
     await mkdir(path.dirname(goodPath), { recursive: true });
-    await writeFile(goodPath, JSON.stringify({
+    await writeSealed(goodPath, JSON.stringify({
       repo: "owner/repo", pr: 42, gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: [],
       provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist", reviewer: "review-b" }] },
     }) + "\n", "utf8");

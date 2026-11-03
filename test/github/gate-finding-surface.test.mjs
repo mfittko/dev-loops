@@ -666,7 +666,7 @@ async function withLedgerFile(raw, assertRejection) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ledger-validate-"));
   try {
     const ledgerPath = path.join(dir, "ledger.json");
-    await writeFile(ledgerPath, typeof raw === "string" ? raw : JSON.stringify(raw), "utf8");
+    await writeSealed(ledgerPath, typeof raw === "string" ? raw : JSON.stringify(raw), "utf8");
     await assertRejection(ledgerPath);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -938,7 +938,7 @@ async function withLocalLedgerFiles(ledgers, fn) {
     const dir = path.join(tmpRoot, "gate-findings", JDF_REPO.replace("/", "-"), `pr-${JDF_PR}`);
     await mkdir(dir, { recursive: true });
     for (const [filename, content] of Object.entries(ledgers)) {
-      await writeFile(path.join(dir, filename), JSON.stringify(content), "utf8");
+      await writeSealed(path.join(dir, filename), JSON.stringify(content), "utf8");
     }
     return await fn(tmpRoot);
   } finally {
@@ -1417,5 +1417,16 @@ test("readGateFindingsLedger rejects a sealed findings log edited outside the wr
     await writeSealed(ledgerPath, JSON.stringify(VALID_LEDGER));
     await writeFile(ledgerPath, JSON.stringify({ ...VALID_LEDGER, verdict: "clean" }), "utf8");
     await assert.rejects(() => readGateFindingsLedger(ledgerPath), (err) => err.code === OUT_OF_BAND_WRITE && err.file === ledgerPath);
+  });
+});
+
+test("findJudgeDispositionForFingerprint refuses an unsealed and an edited prior ledger (ADR 0242)", async () => {
+  await withLocalLedgerFiles({ [`${JDF_GATE}-headA.json`]: jdfLedger({ loggedAt: "2026-09-01T00:00:00.000Z", disposition: "act" }) }, async (tmpRoot) => {
+    const file = path.join(tmpRoot, "gate-findings", JDF_REPO.replace("/", "-"), `pr-${JDF_PR}`, `${JDF_GATE}-headA.json`);
+    const lookup = () => findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+    await writeFile(file, "{}\n", "utf8");
+    await assert.rejects(lookup, (err) => err.code === OUT_OF_BAND_WRITE);
+    await rm(`${file}.seal`);
+    await assert.rejects(lookup, (err) => err.code === "gate_artifact_unsealed");
   });
 });

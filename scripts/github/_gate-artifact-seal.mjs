@@ -3,15 +3,18 @@
  * findings log. The sanctioned writers call writeSealed; every sanctioned
  * reader calls readSealed. A hand edit changes the bytes but not the seal, so
  * the next read fails with a typed integrity error naming the file.
- * ponytail: a missing seal reads as a legacy artifact and is accepted; a
- * writer that also rewrites the seal is out of reach. Refuse a missing seal
- * once all writers have shipped.
+ * A missing seal is refused with the typed code gate_artifact_unsealed (ADR
+ * 0242). ponytail: a writer that also rewrites the seal is out of reach; issue
+ * 2892 binds the artifact to its producing run.
  */
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 
 export const OUT_OF_BAND_WRITE = "gate_artifact_out_of_band_write";
-const sealPath = (file) => `${file}.seal`;
+export const UNSEALED = "gate_artifact_unsealed";
+/** True for a seal failure a reader must surface instead of swallowing: an edited or an unsealed artifact. */
+export const isSealRefusal = (error) => error?.code === OUT_OF_BAND_WRITE || error?.code === UNSEALED;
+const sealPath =(file) => `${file}.seal`;
 const digest = (text) => createHash("sha256").update(text).digest("hex");
 
 const LOCK_STALE_MS = 30_000;
@@ -47,7 +50,9 @@ export async function readSealed(file) {
   const text = await readFile(file, "utf8");
   let seal;
   try { seal = (await readFile(sealPath(file), "utf8")).trim().toLowerCase(); } catch (error) {
-    if (error?.code === "ENOENT") return text;
+    if (error?.code === "ENOENT") {
+      throw Object.assign(new Error(`${UNSEALED}: ${file} has no seal; re-run the sanctioned writer at that head, or quarantine it with scripts/github/quarantine-gate-findings-log.mjs`), { code: UNSEALED, file });
+    }
     throw error;
   }
   if (seal !== digest(text)) {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -4355,7 +4356,7 @@ async function seedCapFixedRepo(repoRoot, { headSha, seal = true }) {
   const capHead = "c".repeat(40);
   const findings = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-10");
   await mkdir(findings, { recursive: true });
-  const ledger = (head, verdict, i) => writeFile(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict, loggedAt: `2026-11-0${i}T00:00:00.000Z`, findings: [] }), "utf8");
+  const ledger = (head, verdict, i) => writeSealed(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict, loggedAt: `2026-11-0${i}T00:00:00.000Z`, findings: [] }), "utf8");
   for (const [i, head] of ["1", "2", "3"].entries()) await ledger(head.repeat(40), "findings_present", i + 1);
   await ledger(capHead, "findings_present", 4);
   await ledger(headSha, "blocked", 5);
@@ -4455,7 +4456,7 @@ test("detect-pr-gate-coordination-state (ADR 0218): an unreadable cap-round ledg
   try {
     const headSha = "abc1234567".repeat(4);
     await seedCapFixedRepo(tempDir, { headSha, seal: true });
-    await writeFile(path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10", `draft_gate-${"c".repeat(40)}.json`), "not json", "utf8");
+    await writeSealed(path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10", `draft_gate-${"c".repeat(40)}.json`), "not json", "utf8");
     const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "blocked", findingsSummary: "round_cap_reached", nextAction: "stop" });
     const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
     const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));

@@ -41,7 +41,7 @@ const NINE_ITEMS = Array.from({ length: 9 }, (_, i) => `criterion ${i + 1}`);
 async function putJson(repoRoot, relPath, value) {
   const target = path.resolve(repoRoot, relPath);
   await mkdir(path.dirname(target), { recursive: true });
-  await writeFile(target, JSON.stringify(value), "utf8");
+  await writeSealed(target, JSON.stringify(value), "utf8");
 }
 
 async function withRound({ plan = false, ledger, reviewsDir = false }, fn) {
@@ -107,7 +107,7 @@ test("per-angle findings dir without an emit plan refuses an omitted mode and in
 test("a findings file without verifiedItems cannot drop the fan-in ledger's 9 verifiedItems and provenance", async () => {
   await withRound({ plan: true, ledger: LEDGER }, async (write, repoRoot) => {
     const enrichedPath = path.join(repoRoot, "enriched.json");
-    await writeFile(enrichedPath, JSON.stringify({ findings: [] }), "utf8");
+    await writeSealed(enrichedPath, JSON.stringify({ findings: [] }), "utf8");
     const { log } = await write({ findings: undefined, findingsFile: enrichedPath });
     assert.deepEqual(log.verifiedItems, NINE_ITEMS);
     assert.deepEqual(log.provenance, PROVENANCE);
@@ -121,7 +121,7 @@ test("a findings file with conflicting provenance, verifiedItems and overallVerd
   await withRound({ plan: true, ledger: LEDGER }, async (write, repoRoot) => {
     const forgedPath = path.join(repoRoot, "forged.json");
     const forgedProvenance = { distinctReviewers: 1, perAngle: [{ angle: "dry", reviewer: "forged-reviewer" }] };
-    await writeFile(forgedPath, JSON.stringify({
+    await writeSealed(forgedPath, JSON.stringify({
       findings: [], provenance: forgedProvenance, verifiedItems: ["forged"], overallVerdict: "findings_present",
     }), "utf8");
     const { log } = await write({ findings: undefined, findingsFile: forgedPath });

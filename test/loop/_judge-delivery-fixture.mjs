@@ -2,6 +2,7 @@
 // sources, emit the judge work order through the real producer, and pull it
 // through the shared reader so a pull receipt exists.
 import { createHash } from "node:crypto";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -34,7 +35,7 @@ export async function seedJudgeSources(root, { repo = "o/r", pr = 7, gate = "pre
   if (!findingsFile) {
     findingsFile = "judge-fixture/ledger.json";
     await mkdir(path.join(root, "judge-fixture"), { recursive: true });
-    await writeFile(path.join(root, findingsFile), JSON.stringify({ overallVerdict: "findings_present", findings: [{ severity: "high", summary: "a defect" }] }));
+    await writeSealed(path.join(root, findingsFile), JSON.stringify({ overallVerdict: "findings_present", findings: [{ severity: "high", summary: "a defect" }] }));
   }
   let spec = await readFile(path.resolve(root, specFile ?? "-"), "utf8").then(JSON.parse, () => null);
   if (!spec) {

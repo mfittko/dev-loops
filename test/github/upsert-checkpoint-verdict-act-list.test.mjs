@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -45,7 +46,7 @@ const finding = (severity, judgeDisposition) => ({
 
 async function writeLedger(tempDir, { overallVerdict, verdict = overallVerdict, findings, executionMode }) {
   const ledgerPath = path.join(tempDir, "ledger.json");
-  await writeFile(ledgerPath, JSON.stringify({
+  await writeSealed(ledgerPath, JSON.stringify({
     repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD,
     verdict, overallVerdict, loggedAt: "2026-09-23T00:00:00.000Z", findings, executionMode,
   }), "utf8");
@@ -395,7 +396,7 @@ test("a ledger with a drifted executionMode is rejected at read", async () => {
 test("a review-gate post over an unjudged fan-out ledger is not refused for missing judgeDisposition", async () => {
   await withTempDir(async (tempDir) => {
     const ledgerPath = path.join(tempDir, "review-ledger.json");
-    await writeFile(ledgerPath, JSON.stringify({
+    await writeSealed(ledgerPath, JSON.stringify({
       repo: "owner/repo", pr: 17, gate: "review", headSha: HEAD, verdict: "clean", overallVerdict: "clean",
       loggedAt: "2026-09-23T00:00:00.000Z", findings: [preJudgeFinding], executionMode: "fanout_fanin",
     }), "utf8");
@@ -445,7 +446,7 @@ test("a fan-out ledger with no --execution-mode is not refused as an inline post
 test("a review-gate ledger with fan-in findings_present and a sole rejected high posts clean with the no-change-requested next action", async () => {
   await withTempDir(async (tempDir) => {
     const ledgerPath = path.join(tempDir, "review-ledger.json");
-    await writeFile(ledgerPath, JSON.stringify({
+    await writeSealed(ledgerPath, JSON.stringify({
       repo: "owner/repo", pr: 17, gate: "review", headSha: HEAD, verdict: "findings_present", overallVerdict: "findings_present",
       loggedAt: "2026-09-23T00:00:00.000Z", findings: [finding("high", "reject")],
     }), "utf8");

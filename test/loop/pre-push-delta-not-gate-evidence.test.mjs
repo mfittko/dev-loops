@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -81,7 +82,7 @@ test("checkpoint evidence: a delta result beside the findings ledger leaves the 
     const ledgerPath = path.join(repo, ledgerRel);
     await mkdir(path.dirname(ledgerPath), { recursive: true });
     // A ledger with an open act item: merge is refused until the gate re-runs.
-    await writeFile(ledgerPath, JSON.stringify({
+    await writeSealed(ledgerPath, JSON.stringify({
       repo: "owner/repo", pr: 42, gate: "pre_approval_gate", headSha: HEAD, verdict: "findings_present", overallVerdict: "findings_present", executionMode: "fanout_fanin",
       findings: [{ severity: "medium", angle: "correctness", summary: "retry loop never backs off", judgeDisposition: "act" }],
     }));
