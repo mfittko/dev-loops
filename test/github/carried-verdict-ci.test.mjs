@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
+import { trustCommentFixtures } from "../_helpers.mjs";
 import { evidenceDigest, renderCarriedHeadsBody } from "../../scripts/github/_carried-verdict.mjs";
 import { computeBaseMergeCarry } from "../../scripts/github/classify-base-merge-carry.mjs";
 import { readyForReview } from "../../scripts/github/ready-for-review.mjs";
@@ -46,7 +47,7 @@ function router({ origin, cur, record }, ciBucket) {
     const text = args.join(" ");
     if (args[0] === "pr" && args[1] === "checks") return { code: ciBucket === "fail" ? 1 : 0, stdout: JSON.stringify([{ bucket: ciBucket, name: "ci" }]), stderr: "" };
     if (args.includes("baseRefName") && args[1] === "view") return { code: 0, stdout: JSON.stringify({ baseRefName: "main" }), stderr: "" };
-    if (text.includes("issues/7/comments")) return { code: 0, stdout: JSON.stringify([[{ id: 1, body, created_at: "2026-01-01T00:00:00Z" }, ...(record ? [{ ...record, created_at: "2026-01-01T00:00:01Z" }] : [])]]), stderr: "" };
+    if (text.includes("issues/7/comments")) return { code: 0, stdout: JSON.stringify(trustCommentFixtures([[{ id: 1, body, created_at: "2026-01-01T00:00:00Z" }, ...(record ? [{ ...record, created_at: "2026-01-01T00:00:01Z" }] : [])]])), stderr: "" };
     if (args[0] === "api" && args[1] === "user") return { code: 0, stdout: JSON.stringify({ login: "bot" }), stderr: "" };
     if (text.includes("reviewThreads")) {
       return { code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } }), stderr: "" };

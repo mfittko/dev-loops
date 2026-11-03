@@ -3,7 +3,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { onTestFinished, test } from "bun:test";
-import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { runIdFreeEnv, runNode as runNodeHelper, trustGhEntries, writeGhStub as writeGhStubRaw } from "../_helpers.mjs";
+
+const writeGhStubHelper = (tempDir, entries, options) => writeGhStubRaw(tempDir, trustGhEntries(entries), options);
 import { buildFindingMarker, countUnresolvedGateAuthoredThreadsFromRawNodes } from "../../scripts/github/_gate-finding-surface.mjs";
 import { detectCheckpointEvidence } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
