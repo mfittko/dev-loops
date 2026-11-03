@@ -3320,7 +3320,7 @@ for (const route of ["ACT", "THREAD"]) {
       assert.equal(pull(unit, fx.wt).status, 0, "the unchanged consumer admission accepts the order");
       assert.equal(refusal(pull(old, fx.wt)), "stale_dispatch");
       // Cross-harness row (issue 1086): the completion-only plan builds a valid dispatch payload for every harness.
-      for (const harness of ["claude", "pi", "codex"]) assertFixerDispatchPayload({ harness, payload: buildFixerDispatchPayload({ harness, plan: unit, cwd: fx.wt }), plan: unit });
+      for (const harness of ["claude", "pi", "codex"]) assertFixerDispatchPayload({ harness, payload: buildFixerDispatchPayload({ harness, plan: unit, cwd: fx.wt }), plan: unit, cwd: fx.wt });
     });
   });
 }
