@@ -473,6 +473,7 @@ for (const phase of ["commit_only", "full"]) test(`capture preserves genuine ${p
     const files = [old.planPath, old.promptPath, old.workOrder.outputRefs[0], pullReceiptPath(tmp, old.workOrderRef), executionIndexPath(tmp, old.executionIdentity)];
     const before = await Promise.all(files.map((file) => readFile(file)));
     const archive = path.join(path.dirname(old.planPath), old.executionIdentity, "original-fixer-emit-plan.json");
+    git(wt, "commit", "-q", "--allow-empty", "-m", "next");
     await emit({ phase: "commit_only" });
     assert.deepEqual(await readFile(archive), before[0]);
     assert.deepEqual(await Promise.all(files.slice(1).map((file) => readFile(file))), before.slice(1));
@@ -957,7 +958,7 @@ test("delta gate: an act-list --phase full without --delta-result refuses and na
 });
 
 test("push authority: commit_only writes the sequence marker ungranted and the full work order grants the fixer", async () => {
-  await withFixture(async ({ head, root, emit, prepareFull }) => {
+  await withFixture(async ({ head, root, wt, emit, prepareFull }) => {
     const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
     await emit({ deltaResult: undefined, phase: "commit_only" });
     assert.deepEqual(stripExecution(JSON.parse(await readFile(marker, "utf8"))), { baselineHead: head, fullGranted: false, branch: "issue-1" });
@@ -965,6 +966,7 @@ test("push authority: commit_only writes the sequence marker ungranted and the f
     assert.equal(JSON.parse(await readFile(marker, "utf8")).fullGranted, false, "a full emit without a delta result does not grant");
     await (await prepareFull()).full();
     assert.deepEqual(stripExecution(JSON.parse(await readFile(marker, "utf8"))), { baselineHead: head, fullGranted: true, branch: "issue-1" });
+    git(wt, "commit", "-q", "--allow-empty", "-m", "next");
     await emit({ deltaResult: undefined, phase: "commit_only" });
     assert.equal(JSON.parse(await readFile(marker, "utf8")).fullGranted, false, "a new commit_only round revokes the grant");
   });
@@ -1505,13 +1507,14 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
 });
 
 test("F1/F4: changing act list, threads, allowed paths, branch, phase or head changes the digest; equal inputs keep it", async () => {
-  await withFixture(async ({ head, files, emit, writeRecord }) => {
+  await withFixture(async ({ wt, head, files, emit, writeRecord }) => {
     const base = await emit();
     assert.equal((await emit()).workOrderDigest, base.workOrderDigest);
     const variants = [
       await emit({ allowedPaths: ["src"] }),
       await emit({ ...threadsOnly, threadsFile: files.threads }),
-      await emit({ gate: "pre_approval_gate" }),
+      // Issue 2787 C13: a new commit lets commit_only follow the full plan.
+      (git(wt, "commit", "-q", "--allow-empty", "-m", "next"), await emit({ gate: "pre_approval_gate" })),
       await emit({ fetchPr: async () => ({ headRefName: "other", headRefOid: base.workOrder.headSha }) }),
       await emit({ headSha: "b".repeat(40), phase: "commit_only", deltaResult: undefined, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: "b".repeat(40) }), fetchVerdictMarkers: verdictPostedAt("b".repeat(40)) }),
       await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads }),
@@ -2732,9 +2735,10 @@ test("a handback made by filling the skeleton passes check-pre-push-delta input 
 });
 
 test("a threads --phase full prompt names no siteCoverage skeleton, an act-list one does", async () => {
-  await withFixture(async ({ files, emit }) => {
+  await withFixture(async ({ wt, files, emit }) => {
     const threads = await emit({ ...threadsOnly, threadsFile: files.threads });
     assert.doesNotMatch(await readFile(threads.promptPath, "utf8"), /skeleton in the work order JSON/);
+    git(wt, "commit", "-q", "--allow-empty", "-m", "next");
     const act = await emit({ deltaResult: files.delta });
     assert.match(await readFile(act.promptPath, "utf8"), /skeleton in the work order JSON/);
   });
@@ -3173,5 +3177,151 @@ test("issue 2787 C12: a sealed record whose candidate is not the worktree HEAD c
   await withFixture(async (fx) => {
     await fx.writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix", candidateHead: "c".repeat(40), items: [{ ref: "T1", status: "resolved" }], findings: [FINDING] }, { seal: true });
     assert.equal("deltaFindings" in (await threadsCommitOnly(fx)).workOrder, false);
+  });
+});
+
+// Lockout class (issue 2787 C13/C14): an incomplete full plan is delivered by --completion-only and is never superseded by a commit_only emission.
+const pulledFull = async (fx, route) => {
+  const unit = route === "ACT" ? await (await fx.prepareFull()).full()
+    : await fx.emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: fx.files.threads, deltaResult: undefined });
+  assert.equal(pull(unit, fx.wt).status, 0);
+  return unit;
+};
+// The fixer pushed its candidate, so the live PR head is the worktree HEAD.
+const reenter = (fx, route, over = {}) => {
+  const live = git(fx.wt, "rev-parse", "HEAD");
+  return fx.emit({ phase: "full", completionOnly: true, keepRecord: true, deltaResult: undefined, headSha: live, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: live }),
+    ...(route === "THREAD" ? { actListFile: undefined, gate: undefined, threadsFile: fx.files.threads } : {}), ...over });
+};
+const markerOf = (fx) => path.join(fx.root, "tmp", "gate-delta", `${fx.head}.sequence`);
+const noWrite = async (unit) => {
+  assert.equal(existsSync(path.join(path.dirname(unit.planPath), unit.executionIdentity, "original-fixer-emit-plan.json")), false);
+};
+
+for (const route of ["ACT", "THREAD"]) {
+  test(`issue 2787 C13: commit_only refuses while an incomplete ${route} full plan is active at its candidate (PR 2810)`, async () => {
+    await withFixture(async (fx) => {
+      const unit = await pulledFull(fx, route);
+      const plan = await readFile(unit.planPath);
+      const marker = await readFile(markerOf(fx));
+      const commitOnly = () => (route === "ACT" ? fx.emit({ phase: "commit_only", deltaResult: undefined }) : fx.emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: fx.files.threads, deltaResult: undefined }));
+      await assert.rejects(commitOnly(), (error) => error.message.includes(unit.workOrderRef) && /--completion-only/.test(error.message));
+      assert.deepEqual(await readFile(unit.planPath), plan, "the active plan stays current");
+      assert.deepEqual(await readFile(markerOf(fx)), marker);
+      const candidate = unit.workOrder.headSha;
+      // A verified disposition at the candidate, or a new commit, allows the emission.
+      git(fx.wt, "commit", "-q", "--allow-empty", "-m", "new commit");
+      assert.equal((await commitOnly()).workOrder.phase, "commit_only");
+      assert.equal(candidate === git(fx.wt, "rev-parse", "HEAD"), false);
+    });
+  });
+}
+
+test("issue 2787 C13: a complete verified checkpoint at the candidate allows commit_only", async () => {
+  await withFixture(async (fx) => {
+    const unit = await pulledFull(fx, "ACT");
+    const checkpoint = path.join(fx.root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `fixer-disposition-${unit.workOrder.headSha}.json`);
+    await mkdir(path.dirname(checkpoint), { recursive: true });
+    await writeFile(checkpoint, JSON.stringify({ complete: true }));
+    assert.equal((await fx.emit({ phase: "commit_only", deltaResult: undefined })).workOrder.phase, "commit_only");
+  });
+});
+
+for (const route of ["ACT", "THREAD"]) {
+  test(`issue 2787 C14: --completion-only re-enters an incomplete ${route} plan with delivery-only authority`, async () => {
+    await withFixture(async (fx) => {
+      const old = await pulledFull(fx, route);
+      const oldPlan = await readFile(old.planPath);
+      const marker = await readFile(markerOf(fx));
+      const unit = await reenter(fx, route);
+      assert.equal(unit.workOrder.operation, "complete");
+      assert.deepEqual(unit.workOrder.mutationAuthority.allowedPaths, []);
+      assert.equal(unit.workOrder.requiredReads.filter((read) => read.kind === (route === "ACT" ? "threads" : "act-list")).length, 0);
+      assert.equal(unit.workOrder.requiredReads.filter((read) => read.kind === (route === "ACT" ? "act-list" : "threads")).length, 1);
+      assert.deepEqual(await readFile(markerOf(fx)), marker, "no push marker is written or changed");
+      assert.equal(JSON.parse(await readFile(unit.planPath)).workOrderRef, unit.workOrderRef);
+      assert.deepEqual(await readFile(path.join(path.dirname(unit.planPath), old.executionIdentity, "original-fixer-emit-plan.json")), oldPlan);
+      assert.equal(await readFile(unit.promptPath, "utf8"), renderWorkOrder(unit.workOrder));
+      assert.equal(unit.joinRef, `${unit.workOrder.outputRefs[0]}.report`);
+      assert.equal(pull(unit, fx.wt).status, 0, "the unchanged consumer admission accepts the order");
+      assert.equal(refusal(pull(old, fx.wt)), "stale_dispatch");
+    });
+  });
+}
+
+test("issue 2787 C14: a report that predates the pull qualifies and a report that postdates it refuses", async () => {
+  await withFixture(async (fx) => {
+    const old = await pulledFull(fx, "THREAD");
+    await mkdir(path.dirname(old.workOrder.outputRefs[0]), { recursive: true });
+    await writeFile(old.workOrder.outputRefs[0], "{}\n");
+    await assert.rejects(reenter(fx, "THREAD"), /exists and postdates the pull/);
+    await noWrite(old);
+    const past = new Date(Date.now() - 3_600_000);
+    utimesSync(old.workOrder.outputRefs[0], past, past);
+    assert.equal((await reenter(fx, "THREAD")).workOrder.operation, "complete");
+  });
+});
+
+test("issue 2787 C14: a second re-entry keeps the genuine output of the first", async () => {
+  await withFixture(async (fx) => {
+    await pulledFull(fx, "THREAD");
+    const first = await reenter(fx, "THREAD");
+    assert.equal(pull(first, fx.wt).status, 0);
+    await mkdir(path.dirname(first.workOrder.outputRefs[0]), { recursive: true });
+    await writeFile(first.workOrder.outputRefs[0], '{ "genuine": true }\n');
+    await assert.rejects(reenter(fx, "THREAD"), /exists and postdates the pull/);
+    assert.equal(await readFile(first.workOrder.outputRefs[0], "utf8"), '{ "genuine": true }\n');
+    assert.equal(JSON.parse(await readFile(first.planPath)).workOrderRef, first.workOrderRef);
+  });
+});
+
+test("issue 2787 C14: a descendant live head re-enters; a diverged head refuses without a write", async () => {
+  await withFixture(async (fx) => {
+    const old = await pulledFull(fx, "ACT");
+    const candidate = old.workOrder.headSha;
+    git(fx.wt, "commit", "-q", "--allow-empty", "-m", "ci fix");
+    const live = git(fx.wt, "rev-parse", "HEAD");
+    const unit = await reenter(fx, "ACT", { headSha: live, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: live }) });
+    assert.equal(unit.workOrder.headSha, live);
+    assert.equal(unit.workOrder.operation, "complete");
+    assert.equal(unit.workOrderRef.includes(`:${live}:`), true);
+    assert.equal(pull(unit, fx.wt).status, 0);
+    git(fx.wt, "reset", "-q", "--hard", `${candidate}~1`);
+    git(fx.wt, "commit", "-q", "--allow-empty", "-m", "diverged");
+    const diverged = git(fx.wt, "rev-parse", "HEAD");
+    const plan = await readFile(unit.planPath);
+    await assert.rejects(reenter(fx, "ACT", { headSha: diverged, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: diverged }) }), /not an ancestor of the live head/);
+    assert.deepEqual(await readFile(unit.planPath), plan);
+  });
+});
+
+for (const [drift, expected] of [["source", /threads differs from the plan/], ["tree", /clean committed authority changed/], ["branch", /differs from the plan's branch/], ["receipt", /does not authenticate/], ["plan", /does not authenticate|differs/], ["head", /PR head is/]]) {
+  test(`issue 2787 C14: drift of the ${drift} refuses with no write`, async () => {
+    await withFixture(async (fx) => {
+      const old = await pulledFull(fx, "THREAD");
+      const plan = await readFile(old.planPath);
+      let over = {};
+      if (drift === "source") await writeFile(fx.files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], body: "edited" }] }));
+      if (drift === "tree") await writeFile(path.join(fx.wt, "dirty.txt"), "x");
+      if (drift === "branch") over = { fetchPr: async () => ({ headRefName: "other", headRefOid: fx.head }) };
+      if (drift === "head") over = { fetchPr: async () => ({ headRefName: "issue-1", headRefOid: "b".repeat(40) }) };
+      if (drift === "receipt") await rm(pullReceiptPath(path.join(fx.root, "tmp"), old.workOrderRef));
+      if (drift === "plan") await writeFile(old.planPath, JSON.stringify({ ...JSON.parse(plan), workOrderDigest: "0".repeat(64) }));
+      const before = await readFile(old.planPath);
+      await assert.rejects(reenter(fx, "THREAD", over), expected);
+      assert.deepEqual(await readFile(old.planPath), before);
+      await noWrite(old);
+      assert.equal((await readdir(path.join(path.dirname(old.planPath), "work-orders"))).length, 1, "no new work order text");
+    });
+  });
+}
+
+test("issue 2787 C14: --completion-only takes phase full, one source and no other source flag", async () => {
+  await withFixture(async (fx) => {
+    await assert.rejects(reenter(fx, "ACT", { phase: "commit_only" }), /--completion-only takes --phase full/);
+    await assert.rejects(reenter(fx, "ACT", { deltaResult: fx.files.delta }), /--completion-only takes --phase full/);
+    await assert.rejects(reenter(fx, "ACT", { threadsFile: fx.files.threads }), /exactly one of/);
+    await assert.rejects(reenter(fx, "ACT"), /no fixer plan exists/);
+    assert.match((await import("node:fs")).readFileSync(EMITTER, "utf8"), /\[--completion-only\]/);
   });
 });
