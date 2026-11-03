@@ -3259,6 +3259,23 @@ for (const route of ["ACT", "THREAD"]) {
   });
 }
 
+test("issue 2787 C13: an unpulled full plan does not block commit_only at the same HEAD", async () => {
+  await withFixture(async (fx) => {
+    await (await fx.prepareFull()).full();
+    assert.equal((await fx.emit({ phase: "commit_only", deltaResult: undefined })).workOrder.phase, "commit_only");
+  });
+});
+
+test("issue 2787 C13: a THREAD plan whose pinned threads read drifted does not block commit_only at its candidate", async () => {
+  await withFixture(async (fx) => {
+    await pulledFull(fx, "THREAD");
+    await writeFile(fx.files.threads, `${await readFile(fx.files.threads, "utf8")}\n`);
+    await assert.rejects(reenter(fx, "THREAD"), /required read threads differs/);
+    const unit = await fx.emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: fx.files.threads, deltaResult: undefined });
+    assert.equal(unit.workOrder.phase, "commit_only");
+  });
+});
+
 test("issue 2787 C13: a genuine report for the active full plan allows commit_only", async () => {
   await withFixture(async (fx) => {
     const unit = await pulledFull(fx, "ACT");

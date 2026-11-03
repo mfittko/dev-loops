@@ -371,6 +371,15 @@ async function planCandidate(order, readBytes) {
   } catch { return null; }
 }
 
+// The kind of the first pinned required read that is missing or differs from its pinned bytes, else null (shared by C13 and C14).
+async function driftedRequiredRead(order, readBytes) {
+  for (const entry of order.requiredReads ?? []) {
+    const bytes = await readBytes(entry.path);
+    if (entry.required !== true || !bytes || sha256(bytes) !== entry.sha256 || bytes.length !== entry.bytes) return entry.kind;
+  }
+  return null;
+}
+
 /**
  * Issue 2787 C13: a commit_only emission never supersedes an incomplete full plan whose candidate is still the worktree HEAD and whose
  * report is missing. The exit is --completion-only when the PR head is the candidate, else the existing full order (pull it and push).
@@ -393,6 +402,8 @@ async function rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr
   if (verified) return;
   const pulled = await verifyPulledResult({ resultPath: order.outputRefs?.[0], receiptTmpRoot: markerRoot, role: "fixer", workOrderRef: active.workOrderRef, workOrderDigest: active.workOrderDigest, executionIdentity: active.executionIdentity });
   if (pulled.ok || !["result_missing", "result_predates_pull"].includes(pulled.reason)) return;
+  // A drifted pinned read makes --completion-only refuse too, so nothing is superseded and the refusal would name a failing exit.
+  if (await driftedRequiredRead(order, (file) => capture.read(file))) return;
   const exit = headSha === candidate ? "Deliver it with --completion-only (--phase full, the same one source), or commit the new fix first"
     : `Its candidate is not pushed: pull ${active.workOrderRef} and push the candidate, or commit the new fix first`;
   throw new Refusal(`--phase commit_only refused: the full plan ${active.workOrderRef} is active at candidate ${candidate} with no new commit and no verified disposition, so a commit_only plan would supersede it. ${exit}`);
@@ -428,10 +439,8 @@ async function emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRo
   const pulled = await verifyPulledResult({ resultPath: prior.outputRefs[0], receiptTmpRoot, role: "fixer", workOrderRef: original.workOrderRef, workOrderDigest: original.workOrderDigest, executionIdentity: original.executionIdentity });
   if (pulled.ok) refuse(`the report ${prior.outputRefs[0]} exists and postdates the pull; run the verifier steps of that order instead`);
   if (!["result_missing", "result_predates_pull"].includes(pulled.reason)) refuse(`the plan's pull receipt is not valid (${pulled.reason})`);
-  for (const entry of prior.requiredReads) {
-    const bytes = await capture.read(entry.path);
-    if (entry.required !== true || !bytes || sha256(bytes) !== entry.sha256 || bytes.length !== entry.bytes) refuse(`required read ${entry.kind} differs from the plan`);
-  }
+  const drifted = await driftedRequiredRead(prior, (file) => capture.read(file));
+  if (drifted) refuse(`required read ${drifted} differs from the plan`);
   const pinned = prior.requiredReads.filter((entry) => entry.kind === sourceKind);
   if (pinned.length !== 1 || pinned[0].sha256 !== source.read.sha256) refuse(`the ${sourceKind} source differs from the plan's pinned read${pinned.length === 1 && sourceKind === "act-list" ? `; pass the plan's pinned act-list copy ${pinned[0].path} as --act-list-file` : ""}`);
   const candidate = await planCandidate(prior, read);
