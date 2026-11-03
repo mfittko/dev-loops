@@ -156,3 +156,11 @@ test("lingering request after a current-head Copilot error review settles -> non
   );
   assert.equal(status, "none");
 });
+
+test("a copilot-x requested reviewer is not the Copilot reviewer -> none", async () => {
+  const status = await resolveCopilotReviewRequestStatus(
+    { ...CTX, reviewSummary: {} },
+    { runChild: makeRunChild({ requestedReviewersPayload: reviewers("copilot-x") }) },
+  );
+  assert.equal(status, "none");
+});

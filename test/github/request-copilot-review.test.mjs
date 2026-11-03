@@ -210,6 +210,19 @@ test("request-copilot-review issues the REST requested_reviewers POST with the [
   assert.ok(requestCall.args.includes("reviewers[]=copilot-pull-request-reviewer[bot]"));
 });
 
+test("request-copilot-review does not count a copilot-x requested reviewer as requested", async () => {
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+      { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[{"login":"copilot-x"}],"teams":[]}\n' },
+      { assertArgs: PR_VIEW_ARGS, stdout: '{"reviews":[]}\n' },
+      { assertArgs: REQUEST_COPILOT_ARGS, stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+      { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}],"teams":[]}\n' },
+      { assertArgs: PR_VIEW_ARGS, stdout: '{"reviews":[]}\n' },
+    ]);
+
+  assert.equal(result.status, "requested");
+  assert.equal(calls.filter(isCopilotRequestCall).length, 1);
+});
+
 test("request-copilot-review recognizes Copilot under the requested reviewer login returned by GitHub", async () => {
   const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
       {
@@ -2902,4 +2915,17 @@ test("request-copilot-review proceeds once the fixer-disposition checkpoint for 
     assert.equal(result.fixerDispositionWarning, undefined);
     assert.equal(calls.some(isCopilotRequestCall), true);
   }, { checkpoint: true });
+});
+
+test("checkForCopilotComments blocks a bare @copilot comment from a copilot-x account, which is not the sanctioned reviewer", async () => {
+  const { runChild } = makeGhMock([
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "--paginate", "--jq", ".[]"],
+        stdout: JSON.stringify({ id: 1002, body: "@copilot Please re-review this PR", user: { login: "copilot-x" } }) + "\n",
+      },
+    ], { repeatLastOnOverflow: true });
+
+  const result = await checkForCopilotComments({ repo: "owner/repo", pr: 17 }, { runChild });
+
+  assert.deepEqual(result.violationCommentIds, [1002]);
 });

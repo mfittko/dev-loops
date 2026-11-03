@@ -264,6 +264,68 @@ test("probe-copilot-review ignores lookalike non-Copilot logins", async () => {
   }
 });
 
+test("probe-copilot-review excludes untrusted Copilot-named review and conversation text from the concise output", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-trust-"));
+  const baseline = createActivityPayload();
+  const changed = createActivityPayload({
+    reviews: [
+      createReview("r-1", "copilot-x", "INJECTED review text", "User"),
+      createReview("r-2", "copilot-pull-request-reviewer", "TRUSTED review text", "Bot"),
+    ],
+    issueComments: [{ ...createIssueComment("i-1", "Copilot", "INJECTED comment text", "User"), authorAssociation: "NONE" }],
+  });
+  try {
+    const env = await writeGhStub(tempDir, [
+      { stdout: JSON.stringify(baseline) + "\n" },
+      { stdout: JSON.stringify(changed) + "\n" },
+    ]);
+    const result = await watchCopilotReview({ repo: "owner/repo", pr: 17, pollIntervalMs: 1, timeoutMs: 1000 }, { env, ghCommand: "gh" });
+    const text = formatProbeConcise(result);
+    assert.match(text, /TRUSTED review text/);
+    assert.doesNotMatch(text, /INJECTED/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("probe-copilot-review ignores an untrusted copilot-x review-thread comment as fresh Copilot activity", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-thread-trust-"));
+  const baseline = createActivityPayload();
+  const changed = createActivityPayload({ threads: [createThread("c-1", "copilot-x", "INJECTED thread text", "User")] });
+  try {
+    const env = await writeGhStub(tempDir, [
+      { stdout: JSON.stringify(baseline) + "\n" },
+      { stdout: JSON.stringify(changed) + "\n" },
+    ]);
+    const result = await watchCopilotReview({ repo: "owner/repo", pr: 17, pollIntervalMs: 1, timeoutMs: 1 }, { env, ghCommand: "gh" });
+    assert.equal(result.status, "timeout");
+    assert.deepEqual(result.newComments, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("probe-copilot-review drops a Copilot-login User thread comment and a sanctioned-login User review as untrusted", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-user-type-"));
+  const baseline = createActivityPayload();
+  const changed = createActivityPayload({
+    threads: [createThread("c-1", "Copilot", "INJECTED thread text", "User")],
+    reviews: [createReview("r-1", "copilot-pull-request-reviewer", "INJECTED review text", "User")],
+  });
+  try {
+    const env = await writeGhStub(tempDir, [
+      { stdout: JSON.stringify(baseline) + "\n" },
+      { stdout: JSON.stringify(changed) + "\n" },
+    ]);
+    const result = await watchCopilotReview({ repo: "owner/repo", pr: 17, pollIntervalMs: 1, timeoutMs: 1 }, { env, ghCommand: "gh" });
+    assert.equal(result.status, "timeout");
+    assert.deepEqual(result.newComments, []);
+    assert.deepEqual(result.newReviews, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("probe-copilot-review rejects malformed arguments deterministically", async () => {
   const missingPr = await runNode(["--repo", "owner/repo"]);
   assert.equal(missingPr.code, 1);

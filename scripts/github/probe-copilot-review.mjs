@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { setTimeout as delay } from "node:timers/promises";
-import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, parseJsonText, parseReviewThreads } from "../_core-helpers.mjs";
+import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, parseReviewThreads } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
 import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { resolveTimeoutMs } from "../lib/timeout-flag.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { isSanctionedCopilotReviewerLogin, isTrustedGraphqlComment } from "@dev-loops/core/github/comment-trust";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   DEFAULT_POLL_INTERVAL_MS,
@@ -67,6 +68,8 @@ const COPILOT_ACTIVITY_QUERY = [
   "            nodes {",
   "              id",
   "              body",
+  "              authorAssociation",
+  "              viewerDidAuthor",
   "              author {",
   "                login",
   "                __typename",
@@ -79,6 +82,8 @@ const COPILOT_ACTIVITY_QUERY = [
   "        nodes {",
   "          id",
   "          body",
+  "          authorAssociation",
+  "          viewerDidAuthor",
   "          author {",
   "            login",
   "            __typename",
@@ -89,6 +94,8 @@ const COPILOT_ACTIVITY_QUERY = [
   "        nodes {",
   "          id",
   "          body",
+  "          authorAssociation",
+  "          viewerDidAuthor",
   "          author {",
   "            login",
   "            __typename",
@@ -220,7 +227,7 @@ function extractCopilotReviews(payload) {
     return [];
   }
   return reviews
-    .filter((review) => isCopilotLogin(normalizeAuthorLogin(review?.author)))
+    .filter((review) => isSanctionedCopilotReviewerLogin(normalizeAuthorLogin(review?.author)) && isTrustedGraphqlComment(review, { allowCopilot: true }))
     .map((review) => ({
       id: String(review?.id ?? ""),
       authorLogin: normalizeAuthorLogin(review?.author),
@@ -234,7 +241,7 @@ function extractCopilotIssueComments(payload) {
     return [];
   }
   return comments
-    .filter((comment) => isCopilotLogin(normalizeAuthorLogin(comment?.author)))
+    .filter((comment) => isSanctionedCopilotReviewerLogin(normalizeAuthorLogin(comment?.author)) && isTrustedGraphqlComment(comment, { allowCopilot: true }))
     .map((comment) => ({
       id: String(comment?.id ?? ""),
       authorLogin: normalizeAuthorLogin(comment?.author),
@@ -245,7 +252,7 @@ function extractCopilotIssueComments(payload) {
 function parseCopilotActivity(payload) {
   const parsedThreads = parseReviewThreads(payload);
   const newComments = (parsedThreads?.comments ?? [])
-    .filter((comment) => isCopilotLogin(comment.author?.login))
+    .filter((comment) => isSanctionedCopilotReviewerLogin(comment.author?.login) && comment.trusted === true)
     .map((comment) => ({
       id: comment.id,
       threadId: comment.threadId,
