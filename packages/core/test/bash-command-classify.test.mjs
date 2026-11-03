@@ -720,6 +720,7 @@ test("commandContainsDetachedWaitTool denies any loop containing sleep, whatever
     "timeout --signal KILL 5 bash -c 'while true; do sleep 1; done'",
     "sudo --user root bash -c 'while true; do sleep 1; done'",
     "timeout 0.5 bash -c 'while true; do sleep 1; done'",
+    "while true; do env -i gtimeout 5 sleep 1; done",
     "sudo -u root timeout 0.5 bash -c 'while true; do sleep 1; done'",
     "nice -n 10 timeout 0.5 bash -c 'while true; do sleep 1; done'",
     "f() { while true; do sleep 1; done; }; f",
