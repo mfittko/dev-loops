@@ -14,7 +14,7 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { VALID_SEVERITIES, normalizeSeverity, isPastRoundCap, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
-import { deltaResultKey, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
+import { EvidenceSealError, deltaResultKey, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
 import { deltaCoverageBinding, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
@@ -104,7 +104,11 @@ async function readSource(kind, filePath, capture) {
   const bytes = await capture.read(filePath);
   if (bytes === null) throw new Refusal(`required fixer source ${kind} is missing or unreadable: ${filePath}`);
   let parsed;
-  try { parsed = JSON.parse(bytes.toString("utf8")); } catch { throw new Refusal(`required fixer source ${kind} is not JSON: ${filePath}`); }
+  try { parsed = JSON.parse(bytes.toString("utf8")); } catch {
+    // An empty or truncated delta result gets the one typed evidence refusal and its producer-rerun remedy (GATE-EXEC-EVIDENCE-SEALED).
+    if (kind === "delta-result") throw new Refusal(`delta result ${filePath} refused (GATE-EXEC-EVIDENCE-SEALED): ${new EvidenceSealError("evidence_malformed", `${filePath} is empty or not valid JSON; re-run the producer`).message}`);
+    throw new Refusal(`required fixer source ${kind} is not JSON: ${filePath}`);
+  }
   return { read: { kind, path: filePath, sha256: sha256(bytes), bytes: bytes.length, required: true }, parsed };
 }
 

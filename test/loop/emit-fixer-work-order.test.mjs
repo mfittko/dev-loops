@@ -1022,6 +1022,15 @@ test("delta gate: an act-list --phase full with a push-clearing delta result at 
   });
 });
 
+test("an empty or truncated --delta-result refuses with the typed evidence_malformed reason and a producer-rerun remedy", async () => {
+  await withFixture(async ({ files, emit }) => {
+    for (const bad of ["", '{"outcome": "clea']) {
+      await writeFile(files.delta, bad);
+      await assert.rejects(emit({ deltaResult: files.delta, keepRecord: true }), /GATE-EXEC-EVIDENCE-SEALED\): evidence_malformed:[^]*re-run the producer/, JSON.stringify(bad));
+    }
+  });
+});
+
 test("delta gate: an act-list --phase full refuses without a delta record for the result's act set, whatever the result file states", async () => {
   await withFixture(async ({ head, files, emit, recordPath }) => {
     await rm(recordPath);
