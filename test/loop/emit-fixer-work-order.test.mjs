@@ -1850,11 +1850,24 @@ function assertFullPhaseSteps(text, { push }) {
   assert.match(text, /Edit rule: write file content only with the Edit and Write tools\. Never write file content through Bash \(heredoc, redirect, `sed -i`, or cp\/mv onto a tracked file\)\. Scripts the order names, such as the asset generator and `--construct`, may write files\. Never write `fixer-disposition\*\.json`/);
 }
 
+test("complete order without its completesExecution root is refused at pull", async () => {
+  await withFixture(async ({ root, wt, emit, files }) => {
+    const unit = await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    unit.workOrder.operation = "complete";
+    unit.workOrder.mutationAuthority.allowedPaths = [];
+    await sealBaselineUnit(unit, root);
+    const result = pull(unit, wt);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout + result.stderr, /completesExecution/);
+  });
+});
+
 for (const source of ["act-list", "threads"]) test(`complete ${source} pulls delivery-only prose and an empty source grant`, async () => {
   await withFixture(async ({ root, wt, emit, files, prepareFull }) => {
     const unit = source === "act-list" ? await (await prepareFull()).full()
       : await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     unit.workOrder.operation = "complete";
+    unit.workOrder.completesExecution = { executionIdentity: unit.executionIdentity, heads: [unit.workOrder.headSha] };
     unit.workOrder.mutationAuthority.allowedPaths = [];
     await sealBaselineUnit(unit, root);
     const result = pull(unit, wt);
@@ -1884,6 +1897,7 @@ for (const defect of ["phase", "paths", "ordinaryEmpty", "source", "duplicate", 
         : await (await prepareFull()).full();
       const order = unit.workOrder;
       order.operation = "complete";
+      order.completesExecution = { executionIdentity: "f1-aaaaaaaa", heads: [order.headSha] };
       order.mutationAuthority.allowedPaths = [];
       const completion = order.requiredReads.find((read) => read.kind === "completion-input");
       if (defect === "phase") order.phase = "commit_only";
@@ -1922,6 +1936,7 @@ for (const form of ["exact", "missing", "extra", "foreign", "mixed"]) test(`comp
     await writeRecord({ items: [{ ref: "PRRT_T1", status: "resolved" }] });
     const unit = await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     unit.workOrder.operation = "complete";
+    unit.workOrder.completesExecution = { executionIdentity: unit.executionIdentity, heads: [unit.workOrder.headSha] };
     unit.workOrder.mutationAuthority.allowedPaths = [];
     await sealBaselineUnit(unit, root);
     assert.equal(pull(unit, wt).status, 0);
@@ -1965,6 +1980,7 @@ test("complete THREAD runs the emitted --construct, normal and --check against a
     await writeRecord({ candidateHead: candidate, items: [{ ref: "PRRT_T1", status: "resolved" }] });
     const unit = await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     unit.workOrder.operation = "complete";
+    unit.workOrder.completesExecution = { executionIdentity: unit.executionIdentity, heads: [unit.workOrder.headSha] };
     unit.workOrder.headSha = candidate;
     unit.workOrder.mutationAuthority.allowedPaths = [];
     await sealBaselineUnit(unit, root);
@@ -2537,6 +2553,7 @@ for (const route of ["Historical main", "OLD authority", "complete"]) test(`${ro
     const f = await prepareFull({ emitter }), unit = await f.full();
     if (route === "complete") {
       unit.workOrder.operation = "complete";
+      unit.workOrder.completesExecution = { executionIdentity: unit.executionIdentity, heads: [unit.workOrder.headSha] };
       unit.workOrder.mutationAuthority.allowedPaths = [];
       await sealBaselineUnit(unit, root);
     }
@@ -2832,6 +2849,7 @@ for (const form of ["foreign-route", "two-matching"]) test(`complete THREAD --co
     await writeRecord({ candidateHead: candidate, items: [{ ref: "PRRT_T1", status: "resolved" }] });
     const unit = await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     unit.workOrder.operation = "complete";
+    unit.workOrder.completesExecution = { executionIdentity: unit.executionIdentity, heads: [unit.workOrder.headSha] };
     unit.workOrder.headSha = candidate;
     unit.workOrder.mutationAuthority.allowedPaths = [];
     await sealBaselineUnit(unit, root);

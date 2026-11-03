@@ -391,13 +391,13 @@ async function rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr
   const candidate = order?.phase === "full" ? await planCandidate(order, (file) => capture.read(file)) : null;
   // A completion order emitted at a descendant head (C14) keeps the original candidate in its read but is active at its own headSha.
   const worktreeHead = gitIn(cwd, "rev-parse", "HEAD");
-  if (!candidate || ![candidate, active.completesExecution && order.headSha].includes(worktreeHead)) return;
+  if (!candidate || ![candidate, order.completesExecution && order.headSha].includes(worktreeHead)) return;
   const markerRoot = resolveGateArtifactTmpRoot(cwd);
   // A closed or retired plan cannot be completed, so --completion-only would refuse too: nothing is superseded (same checks as emitCompletionOnly).
   const baselines = [order.headSha, order.authority?.reviewBaselineHead].filter(Boolean);
   if (await closureRecorded(markerRoot, baselines, active.executionIdentity)) return;
   // A completion plan belongs to the sequence of the root execution it completes, which close-gate-sequence closes.
-  if (active.completesExecution && await closureRecorded(markerRoot, active.completesExecution.heads, active.completesExecution.executionIdentity)) return;
+  if (order.completesExecution && await closureRecorded(markerRoot, order.completesExecution.heads, order.completesExecution.executionIdentity)) return;
   if (order.source === "act-list") {
     for (const root of new Set([path.resolve(tmpRoot), markerRoot, path.join(resolveRepoRoot(cwd), "tmp")])) if (findRetirementAfter(root, order.gate, baselines.at(-1), emittedAt(active.executionIdentity))) return;
   }
@@ -406,9 +406,9 @@ async function rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr
   const pulled = await verifyPulledResult({ resultPath: order.outputRefs?.[0], receiptTmpRoot: markerRoot, role: "fixer", workOrderRef: active.workOrderRef, workOrderDigest: active.workOrderDigest, executionIdentity: active.executionIdentity });
   // A drifted pinned read makes the pull and --completion-only refuse too, so nothing is superseded and a refusal would name a failing exit.
   if (!pulled.ok && await driftedRequiredRead(order, (file) => capture.read(file))) return;
-  if (active.completesExecution && pulled.reason === "receipt_missing") throw new Refusal(`--phase commit_only refused: the completion order ${active.workOrderRef} is active at candidate ${candidate} and unpulled, so a commit_only plan would supersede it. Pull ${active.workOrderRef} and run its steps, or commit the new fix first`);
+  if (order.completesExecution && pulled.reason === "receipt_missing") throw new Refusal(`--phase commit_only refused: the completion order ${active.workOrderRef} is active at candidate ${candidate} and unpulled, so a commit_only plan would supersede it. Pull ${active.workOrderRef} and run its steps, or commit the new fix first`);
   if (pulled.ok || !["result_missing", "result_predates_pull"].includes(pulled.reason)) return;
-  const exit = active.completesExecution ? `Pull ${active.workOrderRef} and run its steps, or commit the new fix first`
+  const exit = order.completesExecution ? `Pull ${active.workOrderRef} and run its steps, or commit the new fix first`
     : headSha === candidate ? "Deliver it with --completion-only (--phase full, the same one source), or commit the new fix first"
     : `Its candidate is not pushed: pull ${active.workOrderRef} and push the candidate, or commit the new fix first`;
   throw new Refusal(`--phase commit_only refused: the full plan ${active.workOrderRef} is active at candidate ${candidate} with no new commit and no verified disposition, so a commit_only plan would supersede it. ${exit}`);
@@ -430,7 +430,7 @@ async function emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRo
   const read = async (file) => { const bytes = await capture.read(file); if (!bytes) throw Object.assign(new Error(`missing ${file}`), { code: "ENOENT" }); return bytes; };
   const baselines = [prior.headSha, prior.authority?.reviewBaselineHead].filter(Boolean);
   // A second re-entry completes the same root execution as the first, so the root identity propagates.
-  const root = original.completesExecution ?? { executionIdentity: original.executionIdentity, heads: baselines };
+  const root = original.workOrder?.completesExecution ?? { executionIdentity: original.executionIdentity, heads: baselines };
   if (await closureRecorded(receiptTmpRoot, baselines, original.executionIdentity)) refuse(closedText(original.executionIdentity));
   if (await closureRecorded(receiptTmpRoot, root.heads, root.executionIdentity)) refuse(closedText(root.executionIdentity));
   if (prior.source === "act-list") {
@@ -440,7 +440,7 @@ async function emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRo
   }
   const drifted = await driftedRequiredRead(prior, (file) => capture.read(file));
   if (drifted) refuse(`required read ${drifted} differs from the plan`);
-  if (original.completesExecution) {
+  if (original.workOrder?.completesExecution) {
     const unpulled = await verifyPulledResult({ resultPath: prior.outputRefs?.[0], receiptTmpRoot, role: "fixer", workOrderRef: original.workOrderRef, workOrderDigest: original.workOrderDigest, executionIdentity: original.executionIdentity });
     if (unpulled.reason === "receipt_missing") refuse(`the completion order ${original.workOrderRef} was emitted and never pulled; pull ${original.workOrderRef} and run its steps instead`);
   }
@@ -458,7 +458,7 @@ async function emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRo
   try { gitIn(cwd, "merge-base", "--is-ancestor", candidate, headSha); } catch { refuse(`plan candidate ${candidate} is not an ancestor of the live head ${headSha}; run a full gate round`); }
   // The thread verifier needs a clearing delta record whose candidateHead is the pushed head, so a descendant head cannot construct.
   if (sourceKind === "threads" && candidate !== headSha) refuse(`a threads plan re-enters only at its candidate ${candidate}, not at the descendant head ${headSha}; run a full gate round`);
-  const workOrder = { ...prior, operation: "complete", headSha, executionRules: { ...prior.executionRules, contract: fileURLToPath(new URL("agents/fixer.agent.md", PACKAGE_ROOT)) },mutationAuthority: { ...prior.mutationAuthority, allowedPaths: [] }, outputRefs: [path.join(dir, executionIdentity, "fixer-disposition.json")],
+  const workOrder = { ...prior, operation: "complete", completesExecution: root, headSha, executionRules: { ...prior.executionRules, contract: fileURLToPath(new URL("agents/fixer.agent.md", PACKAGE_ROOT)) },mutationAuthority: { ...prior.mutationAuthority, allowedPaths: [] }, outputRefs: [path.join(dir, executionIdentity, "fixer-disposition.json")],
     contracts: await Promise.all(FIXER_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) }))) };
   const invalid = completeAdmissionError(workOrder);
   if (invalid) refuse(invalid);
@@ -468,8 +468,7 @@ async function emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRo
   const promptPath = path.join(dir, "work-orders", `${executionIdentity}.md`);
   await capture.write(promptPath, text);
   await writeExecutionIndex(tmpRoot, identityTriple);
-  const plan = { ...identityTriple, materializationHash: materializationHash(text), promptPath, dispatchPrompt: buildDispatchPointer(identityTriple), workOrder,
-    completesExecution: root };
+  const plan = { ...identityTriple, materializationHash: materializationHash(text), promptPath, dispatchPrompt: buildDispatchPointer(identityTriple), workOrder };
   const tempPath = `${planPath}.tmp-${executionIdentity}`;
   await capture.write(tempPath, `${JSON.stringify(plan, null, 2)}\n`);
   await capture.recheck();
@@ -855,6 +854,8 @@ function completeAdmissionError(order) {
   const ofKind = (kind) => reads.filter((read) => read?.kind === kind);
   const required = (kind) => ofKind(kind).length === 1 && ofKind(kind)[0].required === true;
   const digest = (key) => /^[a-f0-9]{64}$/.test(order.authority?.[key] ?? "");
+  const origin = order.completesExecution;
+  if (typeof origin?.executionIdentity !== "string" || !Array.isArray(origin.heads) || !origin.heads.length) return "complete requires the authenticated completesExecution root";
   if (order.phase !== "full" || !Array.isArray(order.mutationAuthority?.allowedPaths) || order.mutationAuthority.allowedPaths.length) return "complete requires full phase and empty source selectors";
   if (typeof order.mutationAuthority.branch !== "string" || !order.mutationAuthority.branch.trim()
     || !Array.isArray(order.outputRefs) || order.outputRefs.length !== 1 || typeof order.outputRefs[0] !== "string"
@@ -949,7 +950,7 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
   // The record sits at the marker baseline, which is the ref head or the review baseline head; only ENOENT means not closed.
   const closureRoot = resolveGateArtifactTmpRoot(cwd);
   const closureHeads = [headSha, ...(baseline ? [baseline.reviewBaselineHead] : [])];
-  const origin = plan.completesExecution;
+  const origin = order.completesExecution;
   const sequenceClosed = !closureOnly && await closureRecorded(closureRoot, closureHeads, executionIdentity);
   const originClosed = !closureOnly && origin && await closureRecorded(closureRoot, origin.heads, origin.executionIdentity);
   const stale = (sequenceClosed && closedText(executionIdentity))
