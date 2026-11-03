@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   BASH_GATE_RULES,
   decideBashGateDeny,
+  decideMergePrOwnerDeny,
   decideUnresolveOwnerDeny,
 } from "../src/loop/bash-gate-decisions.mjs";
 
@@ -555,4 +556,111 @@ test("a readyGate probe whose `error` is an empty string is refused naming ready
   assert.ok(decision, "an empty `error` must deny instead of degrading to 'not probed'");
   assert.equal(decision.ruleId, null);
   assert.match(decision.reason, /supplied no valid readyGate fact/);
+});
+
+const MERGE_CMD = "dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 2630 --human-approved-by mfittko";
+const MERGE_DENY_FORMS = [
+  MERGE_CMD,
+  "node scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 2902 --standing-authorization",
+  "DEVLOOPS_RUN_ID=x dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5",
+  "cd x && dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5",
+  'bash -c "dev-loops-run scripts/github/merge-pr.mjs --pr 5"',
+  "dev-loops-run --repo-root /wt scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5",
+  "node --import ./x.mjs scripts/github/merge-pr.mjs --pr 5",
+  "{ node scripts/github/merge-pr.mjs --pr 5; }",
+  "if true; then node scripts/github/merge-pr.mjs --pr 5; fi",
+  "for i in 1; do node scripts/github/merge-pr.mjs --pr 5; done",
+  "! node scripts/github/merge-pr.mjs --pr 5",
+  "node scripts/github/merge-pr.mjs --check=false --pr 5",
+  "node scripts/github/merge-pr.mjs --check --check=false --pr 5",
+];
+
+// Denied for a subagent, but not run for the top-level session here: the timeout and inline-interpreter rules would deny those forms on their own.
+const MERGE_DENY_EXTRA_FORMS = [
+  'node scripts/github/merge-pr.mjs --pr 5 "',
+  'node scripts/github/merge-pr.mjs --pr 5 --check "',
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x <<EOF\n--check",
+  "node scripts/github/merge-pr.mjs --pr 5 <<EOF\n--check",
+  "node scripts/github/merge-pr.mjs --pr 5 & echo --check",
+  "node scripts/github/merge-pr.mjs --pr 5 # --check",
+  "dev-loops-run scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by --check --human-approved-by x",
+  "dev-loops-run scripts/github/merge-pr.mjs --repo --check --repo a/b --pr 5",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x --jq --check",
+  "(node scripts/github/merge-pr.mjs --pr 5)",
+  "( dev-loops-run scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x )",
+  "timeout 300 dev-loops-run scripts/github/merge-pr.mjs --repo someone/else --pr 5 --human-approved-by x",
+  "timeout -s KILL 300 node scripts/github/merge-pr.mjs --pr 5",
+  "timeout -s 9 300 node scripts/github/merge-pr.mjs --pr 5",
+  "timeout -k 5 300 node scripts/github/merge-pr.mjs --pr 5",
+  "echo `node scripts/github/merge-pr.mjs --pr 5 --human-approved-by x`",
+  "bash <<EOF\nnode scripts/github/merge-pr.mjs --pr 5\nEOF",
+  "env bash <<EOF\ndev-loops-run scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x\nEOF",
+  "FOO=1 bash <<EOF\nnode scripts/github/merge-pr.mjs --pr 5\nEOF",
+  "sudo sh <<EOF\nnode scripts/github/merge-pr.mjs --pr 5\nEOF",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x --fields --check",
+  "timeout --signal KILL 300 node scripts/github/merge-pr.mjs --pr 5",
+  "(FOO=1 node scripts/github/merge-pr.mjs --pr 5)",
+  "case x in x) node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x;; esac",
+  "f() { node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x; }; f",
+  "function f { node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x; }; f",
+  "coproc node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x",
+  "xargs node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x </dev/null",
+  "echo $(node scripts/github/merge-pr.mjs --pr 5)",
+  'eval "node scripts/github/merge-pr.mjs --pr 5"',
+  "node scripts/github/merge-pr.mjs --repo=a/b --pr=5 --human-approved-by x --jq --check",
+];
+
+const MERGE_ALLOW_FORMS = [
+  "node scripts/github/merge-pr.mjs --pr 5 --standing-authorization --check",
+  "node scripts/github/merge-pr.mjs --check --pr 5",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --check",
+  "dev-loops-run scripts/github/merge-pr.mjs --repo a/b --pr 5 --check",
+  "dev-loops-run scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x --check",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --check --jq .mergeClass",
+  "(node scripts/github/merge-pr.mjs --pr 5 --check)",
+  "bash <<EOF\nnode scripts/github/merge-pr.mjs --pr 5 --check\nEOF",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --silent --check",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 -s --check",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --lightweight --check",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --stable-release --check",
+  "echo `node scripts/github/merge-pr.mjs --pr 5 --check`",
+  "echo '`node scripts/github/merge-pr.mjs --pr 5`'",
+  "node scripts/github/merge-pr.mjs --pr=5 --check",
+  "node scripts/github/merge-pr.mjs --repo=a/b --pr=5 --check",
+  "dev-loops-run scripts/github/merge-pr.mjs --repo a/b --pr 5 --silent --check",
+];
+
+test("merge-pr.mjs --check forms stay allowed for a subagent role (issue 2500)", () => {
+  for (const command of MERGE_ALLOW_FORMS) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: "fixer", command }), null, command);
+  }
+});
+
+test("any subagent role is denied merge-pr.mjs without --check (issue 2500)", () => {
+  for (const role of ["dev-loop", "dev-loops:dev-loop", "gate-coordinator", "fixer"]) {
+    for (const command of [...MERGE_DENY_FORMS, ...MERGE_DENY_EXTRA_FORMS]) {
+      const d = decideBashGateDeny({ ...BASE, role, command });
+      assert.ok(d, `${role}: ${command}`);
+      assert.equal(d.ruleId, null);
+      assert.equal(d.reason, decideMergePrOwnerDeny({ command, role }).reason);
+      assert.match(d.reason, /orchestrator/);
+      assert.match(d.reason, /--check/);
+    }
+  }
+});
+
+test("merge-pr.mjs stays open to the top-level session, to --check and to mere mentions (issue 2500)", () => {
+  for (const command of MERGE_DENY_FORMS) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, command);
+    if (command.includes("--check")) continue;
+    assert.equal(decideBashGateDeny({ ...BASE, role: "fixer", command: command.replace("merge-pr.mjs", "merge-pr.mjs --check") }), null, command);
+  }
+  for (const command of [
+    'git commit -m "run merge-pr.mjs later"',
+    "grep merge-pr.mjs README.md",
+    "cat scripts/github/merge-pr.mjs",
+    "echo node scripts/github/merge-pr.mjs",
+  ]) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: "fixer", command }), null, command);
+  }
 });

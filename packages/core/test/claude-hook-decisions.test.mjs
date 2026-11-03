@@ -1853,10 +1853,26 @@ test("decideBashGate denies hardened raw body-write forms in launcher-only wordi
 test("decideBashGate denies a timeout wrapper in front of a sanctioned command and names --timeout (issue 2755)", () => {
   const gate = (command, agentType) => decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType });
   for (const agentType of [null, "dev-loop"]) {
-    const denied = gate("timeout 300 dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5", agentType);
+    const denied = gate("timeout 300 dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5 --check", agentType);
     assert.equal(denied.decision, "deny");
     assert.match(denied.reason, /--timeout/);
     assert.equal(gate("dev-loops-run scripts/github/wait-pr-checks.mjs --repo mfittko/dev-loops --pr 5 --timeout 300", agentType).decision, "allow");
   }
   assert.equal(decideBashGate({ command: "timeout 300 dev-loops-run scripts/github/merge-pr.mjs", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision, "allow");
+});
+
+test("decideBashGate denies merge-pr.mjs without --check for any subagent, not for the main agent (issue 2500)", () => {
+  const forms = [
+    "dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 2630 --human-approved-by mfittko",
+    "dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 2902 --standing-authorization",
+    "dev-loops-run --repo-root /wt scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5",
+  ];
+  const gate = (command, agentType) => decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType });
+  for (const command of forms) {
+    for (const agentType of ["dev-loop", "dev-loops:dev-loop", "gate-coordinator"]) {
+      assert.equal(gate(command, agentType).decision, "deny", `${agentType}: ${command}`);
+    }
+    assert.equal(gate(command, null).decision, "allow");
+    assert.equal(gate(`${command} --check`, "dev-loop").decision, "allow");
+  }
 });

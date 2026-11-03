@@ -45,6 +45,8 @@ import {
   commandContainsTimeoutWrappedSanctionedTool,
   commandContainsInlineInterpreter,
   commandContainsCodeVerificationEntrypoint,
+  isPayloadWord,
+  tokenizeShellCommand,
 } from "./bash-command-classify.mjs";
 
 /**
@@ -113,8 +115,9 @@ function commandContainsEvidenceWrite(command) {
  * fixture — and `packages/core/test/bash-gate-decisions.test.mjs` asserts this exact list and each
  * rule's exact reason literal, so a reordered or reworded rule fails.
  *
- * Three denies below are inline denials with no registered rule ID — the unresolve owner allowlist,
- * the `timeout`-wrapped sanctioned command deny and the subagent ad-hoc external-write deny — so they
+ * Four denies below are inline denials with no registered rule ID — the unresolve owner allowlist,
+ * the `timeout`-wrapped sanctioned command deny, the subagent ad-hoc external-write deny and the
+ * subagent merge-pr deny — so they
  * return `ruleId: null` and stay out of this list: listing them would mint rule IDs the rule registry
  * does not own.
  */
@@ -194,6 +197,91 @@ export function decideUnresolveOwnerDeny({ command, role }) {
   return null;
 }
 
+const ASSIGNMENT_WORD = /^[A-Za-z_]\w*=/;
+const LAUNCHER_PREFIX = /^(?:env|command|exec|nohup|time|nice|sudo|coproc|xargs)$/;
+const RESERVED_WORD = /^(?:\{|!|then|do|else|elif|if|while|until)$/;
+// The closed list of merge-pr boolean flags (parseArgs in merge-pr.mjs). A dashed word outside it is read as a value-taking option.
+// ponytail: fail-closed ceiling: a future boolean flag missing here makes a `--check` after it count as a value, so the deny fires until the list is extended.
+const BOOLEAN_FLAGS = new Set(["--check", "--stable-release", "--standing-authorization", "--lightweight", "--help", "-h", "--silent", "-s"]);
+const baseName = (value) => value.split("/").pop();
+
+/** The program of one tokenized segment: its words without env assignments, `(`/`)` subshell edges and operators, and the index of the first word after the launcher prefixes. */
+function segmentProgram(words) {
+  const entries = words
+    .filter((w) => !w.op && !ASSIGNMENT_WORD.test(w.raw.replace(/^\(+/, "")))
+    .map((w) => ({ v: w.value.replace(/^\(+|\)+$/g, ""), closes: !w.raw.startsWith("(") && w.raw.endsWith(")") }))
+    .filter((e) => e.v);
+  const values = entries.map((e) => e.v);
+  let i = 0;
+  for (;;) {
+    // A `case` header runs through its first `PATTERN)` word; a `NAME()` function header or a case pattern at the head is skipped; `function NAME` skips its name.
+    if (values[i] === "case") { while (i < values.length && !entries[i].closes) i++; i++; }
+    else if (values[i] === "function") i += 2;
+    else if (entries[i]?.closes) i++;
+    else if (RESERVED_WORD.test(values[i] ?? "")) i++;
+    else if (LAUNCHER_PREFIX.test(baseName(values[i] ?? ""))) for (i++; /^(?:-|\d)/.test(values[i] ?? ""); i++);
+    // `timeout` takes options (with or without value words) and then a duration: skip through the first digit-led word. No duration means no program.
+    // The value word of `-s`/`-k`/`--signal`/`--kill-after` is skipped first, since it can start with a digit (`-s 9`).
+    else if (baseName(values[i] ?? "") === "timeout") { for (i++; i < values.length && !/^\d/.test(values[i]); i += /^(?:-s|-k|--signal|--kill-after)$/.test(values[i]) ? 2 : 1); i++; }
+    else break;
+  }
+  return { values, i };
+}
+
+/** Whether one tokenized segment runs `merge-pr.mjs` as its program (directly, or as any operand after the launcher node/bun/dev-loops-run) with no `--check` word. */
+function segmentRunsMergePrWithoutCheck(words) {
+  const { values, i: start } = segmentProgram(words);
+  let i = start;
+  const head = baseName(values[i] ?? "");
+  if (/^(?:node|bun|dev-loops-run)$/.test(head)) {
+    // A launcher flag may take a separate value word, so any later word named merge-pr.mjs is the script.
+    i = values.findIndex((v, k) => k > i && baseName(v) === "merge-pr.mjs");
+    if (i < 0) return false;
+  } else if (head !== "merge-pr.mjs") return false;
+  // Any `--check=` word voids the allow: the last `--check` token of either form wins in merge-pr, so the gate stays fail-closed and accepts only a bare `--check` word.
+  // A bare `--check` counts only after the script word, a non-dashed word or a boolean flag; any other dashed predecessor is a value-taking option.
+  const rest = values.slice(i);
+  return values.some((v) => v.startsWith("--check=")) || !rest.some((v, k) => k > 0 && v === "--check" && (!rest[k - 1].startsWith("-") || rest[k - 1].includes("=") || BOOLEAN_FLAGS.has(rest[k - 1])));
+}
+
+/** Walks the token tree: a program word, a `$(...)` substitution, a `-c`/`eval` payload or a shell heredoc body that runs merge-pr.mjs without `--check`. */
+function treeRunsMergePr(segments) {
+  return segments.some((seg) => {
+    const { values, i } = segmentProgram(seg.words);
+    return segmentRunsMergePrWithoutCheck(seg.words)
+      || seg.words.some((w, k) => w.subs.some((sub) => treeRunsMergePr(sub.segments)) || (isPayloadWord(seg.words, k) && commandRunsMergePrWithoutCheck(w.value)))
+      || (/^(?:ba|z|da)?sh$/.test(baseName(values[i] ?? "")) && seg.heredocs.some((h) => commandRunsMergePrWithoutCheck(h.body)));
+  });
+}
+
+/**
+ * Structural check on the tokenized command (no word list): some segment's program is `scripts/github/merge-pr.mjs`
+ * and no `--check` word follows it. A mention in an argument, quoted text or comment is not a program word. Incomplete tokenization fails closed.
+ * ponytail: a script written to a file and run later, or a command split across variables, is not followed.
+ * @param {string} command @returns {boolean}
+ */
+export function commandRunsMergePrWithoutCheck(command) {
+  const tok = tokenizeShellCommand(command);
+  if (tok.incomplete) return /merge-pr\.mjs/.test(command);
+  return treeRunsMergePr(tok.segments) || tok.ticks.some((t) => commandRunsMergePrWithoutCheck(t.slice(1, -1)));
+}
+
+/**
+ * Merge ownership (issue 2500): the merge is orchestrator-owned, so any subagent that runs `merge-pr.mjs` without `--check` is denied.
+ * The read-only `--check` mode stays open to every actor. The top-level session (role null) keeps the script. Keys on the role name alone, like the unresolve allowlist.
+ * @param {{command: string, role: string|null|undefined}} params
+ * @returns {{ruleId: null, reason: string}|null}
+ */
+export function decideMergePrOwnerDeny({ command, role }) {
+  if (typeof role !== "string" || !commandRunsMergePrWithoutCheck(command)) return null;
+  return {
+    ruleId: null,
+    reason:
+      `The ${normalizeAgentType(role)} agent may not merge: scripts/github/merge-pr.mjs is owned by the orchestrator (main agent). ` +
+      "Run `merge-pr.mjs --check` (read-only) at the merge-ready point and hand back its result, with the merge-pr command line composed from the approvalPath and approveMergeLine it reports, instead of merging.",
+  };
+}
+
 /**
  * Decide whether a Bash command must be denied by a dev-loop gate boundary.
  *
@@ -229,7 +317,7 @@ export function decideUnresolveOwnerDeny({ command, role }) {
  * @param {{passed: boolean, error: string|null}|null} [params.readyGate] - Draft-gate evidence
  *   probe result for the command's PR; null when the adapter did not probe.
  * @returns {{ruleId: string|null, reason: string}|null} The deny decision, or null to allow.
- *   `ruleId` is null for the three inline denies that carry no registered rule ID and for the
+ *   `ruleId` is null for the four inline denies that carry no registered rule ID and for the
  *   missing-facts deny.
  */
 export function decideBashGateDeny(facts = {}) {
@@ -260,6 +348,10 @@ export function decideBashGateDeny(facts = {}) {
   const unresolve = decideUnresolveOwnerDeny({ command, role });
   if (unresolve) {
     return unresolve;
+  }
+  const mergeOwner = decideMergePrOwnerDeny({ command, role });
+  if (mergeOwner) {
+    return mergeOwner;
   }
 
   // COORDINATOR-VERIFY-BOUNDARY: a known code-verification/build entrypoint (bun run
