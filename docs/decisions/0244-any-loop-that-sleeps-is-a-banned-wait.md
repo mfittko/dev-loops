@@ -14,7 +14,7 @@ Issue [3028](https://github.com/mfittko/dev-loops/issues/3028) reports workers t
 - The predicate `commandIsSleepLoop` in `packages/core/src/loop/bash-command-classify.mjs` reads the `tokenizeShellCommand` segments. Quoted literals and heredoc bodies stay allowed, because the tokenizer does not report them as command heads.
 - Sanctioned waits stay allowed: `wait-pr-checks.mjs`, `probe-copilot-review.mjs`, `gh run watch`, and the harness exit notification for a background command.
 - Claude Code enforces the rule now. Pi inherits the shared predicate when the Pi Bash-gate deny-set slices land. A row in the [cross-harness regression contract](../../skills/docs/cross-harness-regression-contract.md) records this split.
-- The deny reason text lives in the operator-guarded hook decision file. Only the operator changes that text.
+- The deny reason text lives in `packages/core/src/loop/bash-gate-decisions.mjs` (`decideBashGateDeny`, ADR 0245), with its exact-reason assertion in `packages/core/test/bash-gate-decisions.test.mjs`. Only the operator changes that text.
 - Rejected: extending the old ban with more condition patterns (`grep`, `pgrep`, `test -f`). Each new poll shape would need a new pattern, and the hours-long loops in issue 3028 used conditions the old ban did not name.
 
 ## Consequences
