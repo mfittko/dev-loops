@@ -221,7 +221,8 @@ function segmentProgram(words) {
     else if (RESERVED_WORD.test(values[i] ?? "")) i++;
     else if (LAUNCHER_PREFIX.test(baseName(values[i] ?? ""))) for (i++; /^(?:-|\d)/.test(values[i] ?? ""); i++);
     // `timeout` takes options (with or without value words) and then a duration: skip through the first digit-led word. No duration means no program.
-    else if (baseName(values[i] ?? "") === "timeout") { while (++i < values.length && !/^\d/.test(values[i])); i++; }
+    // The value word of `-s`/`-k`/`--signal`/`--kill-after` is skipped first, since it can start with a digit (`-s 9`).
+    else if (baseName(values[i] ?? "") === "timeout") { for (i++; i < values.length && !/^\d/.test(values[i]); i += /^(?:-s|-k|--signal|--kill-after)$/.test(values[i]) ? 2 : 1); i++; }
     else break;
   }
   return { values, i };
@@ -262,7 +263,7 @@ function treeRunsMergePr(segments) {
 export function commandRunsMergePrWithoutCheck(command) {
   const tok = tokenizeShellCommand(command);
   if (tok.incomplete) return /merge-pr\.mjs/.test(command);
-  return treeRunsMergePr(tok.segments);
+  return treeRunsMergePr(tok.segments) || tok.ticks.some((t) => commandRunsMergePrWithoutCheck(t.slice(1, -1)));
 }
 
 /**
