@@ -14,7 +14,7 @@ The Bash gate already holds inline denials with no registered rule ID, such as t
 
 `decideMergePrOwnerDeny` denies any subagent role (`role` non-null) that runs `merge-pr.mjs` without a `--check` word. The check is structural and token-level: it walks the tokenized command and fires only when a segment's program is `merge-pr.mjs`, directly or as the first operand of `node`, `bun` or `dev-loops-run`, after env assignments and launcher prefixes. It also follows `$(...)` substitutions, `-c`/`eval` payloads and shell heredoc bodies. A mention in an argument, quoted text or comment is not a program word. It uses no word list. Incomplete tokenization fails closed.
 
-`--check` stays open to every actor. The top-level session (role null) keeps the script. The deny is inline with `ruleId: null`, so it mints no rule ID. It keys on the role name alone, like the unresolve allowlist, so it is harness-neutral.
+`--check` stays open to every actor. The top-level session (role null) keeps the script. The deny is inline with `ruleId: null`, so it mints no rule ID. It keys on the role name alone, like the unresolve allowlist, so it is harness-neutral. The dev-loop skill and the workflow handoff contract state the matching prose rule: a coordinator hands back the `--check` result and the exact merge command line, and a brief carries no merge step.
 
 ## Consequences
 
