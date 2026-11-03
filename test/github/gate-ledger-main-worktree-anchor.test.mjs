@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -226,7 +227,7 @@ test("reader-side (load-bearing): emit-fanout-dispatch's re-gate guard fires off
     // `cur` a re-gate.
     const ledgerDir = path.join(main, "tmp", "gate-findings", slug, `pr-${pr}`);
     await mkdir(ledgerDir, { recursive: true });
-    await writeFile(path.join(ledgerDir, `${gate}-${prior}.json`), JSON.stringify({
+    await writeSealed(path.join(ledgerDir, `${gate}-${prior}.json`), JSON.stringify({
       repo, pr: 42, gate, headSha: prior, verdict: "findings_present",
       findings: [{ angle: "contradiction-lens", severity: "low", summary: "x" }],
       provenance: { perAngle: [{ angle: "contradiction-lens", reviewer: "r" }] },

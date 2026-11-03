@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -55,7 +56,7 @@ test("--tmp-root equal to the main checkout tmp/ carries forward end to end", as
     const perAngle = [{ angle: "correctness", reviewer: "review-a" }];
     const logPath = buildLogPath({ repo: "o/r", pr: 7, gate: "draft_gate", headSha: prev, tmpRoot });
     mkdirSync(path.dirname(logPath), { recursive: true });
-    writeFileSync(logPath, JSON.stringify({ headSha: prev, verdict: "clean", provenance: { distinctReviewers: 1, perAngle } }));
+    await writeSealed(logPath, JSON.stringify({ headSha: prev, verdict: "clean", provenance: { distinctReviewers: 1, perAngle } }));
     const argv = ["--repo", "o/r", "--pr", "7", "--gate", "draft_gate", "--prev-head", prev, "--head-sha", head, "--tmp-root", tmpRoot];
     const result = await runNode(SCRIPT, argv, { cwd: linked });
     assert.equal(result.code, 0, result.stderr);

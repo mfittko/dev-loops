@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -184,7 +185,7 @@ async function withLedgerFile(fn, { findings = [REJECTED_FINDING] } = {}) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "agreement-ledger-"));
   try {
     const ledgerPath = path.join(tmpDir, "ledger.json");
-    await writeFile(ledgerPath, JSON.stringify({
+    await writeSealed(ledgerPath, JSON.stringify({
       repo: REPO, pr: PR, gate: "draft_gate", headSha: HEAD_SHA, verdict: "findings_present",
       findings,
     }), "utf8");

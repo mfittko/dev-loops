@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -197,7 +198,7 @@ test("postGateFindings accepts findings from --findings-file", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "post-gate-findings-repo-"));
   try {
     const findingsFile = path.join(tmpDir, "findings.json");
-    await writeFile(findingsFile, FINDINGS_JSON, "utf8");
+    await writeSealed(findingsFile, FINDINGS_JSON, "utf8");
     const { env, ghPath } = await writeGhStub(tmpDir, [
       userEntry(),
       {

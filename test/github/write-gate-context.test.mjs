@@ -7570,7 +7570,7 @@ test("writeGateContext: an oversized prior findings-log is written in full to a 
     await mkdir(path.dirname(path.resolve(repoRoot, logPath)), { recursive: true });
     const totalFindings = 35;
     const longSummary = "x".repeat(2000);
-    await writeFile(path.resolve(repoRoot, logPath), JSON.stringify({
+    await writeSealed(path.resolve(repoRoot, logPath), JSON.stringify({
       repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: prevHead,
       verdict: "findings_present",
       findings: Array.from({ length: totalFindings }, (_, i) => ({
@@ -7610,7 +7610,7 @@ test("writeGateContext: a same-head rebuild that changes only the prior disposit
     const prevHead = "4".repeat(40);
     const logPath = path.resolve(repoRoot, buildLogPath({ repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
     await mkdir(path.dirname(logPath), { recursive: true });
-    const writeLog = (summary) => writeFile(logPath, JSON.stringify({
+    const writeLog = (summary) => writeSealed(logPath, JSON.stringify({
       repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: prevHead, verdict: "findings_present",
       findings: [{ angle: "correctness", severity: "medium", summary, judgeDisposition: "reject" }],
     }), "utf8");
@@ -7640,7 +7640,7 @@ test("writeGateContext REFUSES a same-head rebuild that would rewrite the prior 
     const prevHead = "4".repeat(40);
     const logPath = path.resolve(repoRoot, buildLogPath({ repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
     await mkdir(path.dirname(logPath), { recursive: true });
-    const writeLog = (summary) => writeFile(logPath, JSON.stringify({
+    const writeLog = (summary) => writeSealed(logPath, JSON.stringify({
       repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: prevHead, verdict: "findings_present",
       findings: [{ angle: "correctness", severity: "medium", summary, judgeDisposition: "reject" }],
     }), "utf8");
@@ -7836,7 +7836,7 @@ test("writeGateContext: a prior reject-disposed finding for a RE-RUNNING angle i
     const prevHead = "a".repeat(40);
     const logPath = buildLogPath({ repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" });
     await mkdir(path.dirname(path.resolve(repoRoot, logPath)), { recursive: true });
-    await writeFile(path.resolve(repoRoot, logPath), JSON.stringify({
+    await writeSealed(path.resolve(repoRoot, logPath), JSON.stringify({
       repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: prevHead,
       verdict: "findings_present",
       findings: [
@@ -7870,7 +7870,7 @@ test("writeGateContext: round-4 prior dispositions accumulate every closed prior
     const ledgerDir = path.resolve(repoRoot, path.dirname(buildLogPath({ repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: head, tmpRoot: "tmp" })));
     await mkdir(ledgerDir, { recursive: true });
     const f = (summary, judgeDisposition, extra = {}) => ({ angle: "correctness", severity: "low", summary, judgeDisposition, ...extra });
-    const writeLedger = (sha, ledger, gate = "draft_gate") => writeFile(path.join(ledgerDir, `${gate}-${sha}.json`), JSON.stringify({
+    const writeLedger = (sha, ledger, gate = "draft_gate") => writeSealed(path.join(ledgerDir, `${gate}-${sha}.json`), JSON.stringify({
       repo: "owner/repo", pr: 61, gate, headSha: sha, verdict: "findings_present", ...ledger,
     }), "utf8");
     const longSummary = `long ${"x".repeat(3000)}`;
@@ -7889,7 +7889,7 @@ test("writeGateContext: round-4 prior dispositions accumulate every closed prior
     await writeLedger("2".repeat(40), { verdict: undefined, findings: [f("missing verdict", "reject")] });
     await writeLedger(head.padEnd(40, "0"), { findings: [f("current head", "reject")] });
     await writeLedger("3".repeat(40), { findings: [f("other gate", "reject")] }, "pre_approval_gate");
-    await writeFile(path.join(ledgerDir, `draft_gate-${"4".repeat(40)}.json`), "{ not valid json", "utf8");
+    await writeSealed(path.join(ledgerDir, `draft_gate-${"4".repeat(40)}.json`), "{ not valid json", "utf8");
 
     const result = await writeGateContext(parseWriteGateContextCliArgs([
       "--repo", "owner/repo", "--pr", "61", "--gate", "draft_gate", "--head-sha", head, "--angles", '["correctness"]',
@@ -7918,14 +7918,14 @@ test("writeGateContext: a ledger directory holding only unusable ledgers (foreig
     const head = "abc1234567890";
     const ledgerDir = path.resolve(repoRoot, path.dirname(buildLogPath({ repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: head, tmpRoot: "tmp" })));
     await mkdir(ledgerDir, { recursive: true });
-    const writeLedger = (sha, ledger) => writeFile(path.join(ledgerDir, `draft_gate-${sha}.json`), JSON.stringify({
+    const writeLedger = (sha, ledger) => writeSealed(path.join(ledgerDir, `draft_gate-${sha}.json`), JSON.stringify({
       repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: sha, verdict: "findings_present",
       findings: [{ angle: "correctness", severity: "low", summary: "must not seed", judgeDisposition: "reject" }],
       ...ledger,
     }), "utf8");
     await writeLedger("d".repeat(40), { repo: "other/repo" });
     await writeLedger("1".repeat(40), { verdict: "blocked" });
-    await writeFile(path.join(ledgerDir, `draft_gate-${"4".repeat(40)}.json`), "{ not valid json", "utf8");
+    await writeSealed(path.join(ledgerDir, `draft_gate-${"4".repeat(40)}.json`), "{ not valid json", "utf8");
 
     const result = await writeGateContext(parseWriteGateContextCliArgs([
       "--repo", "owner/repo", "--pr", "61", "--gate", "draft_gate", "--head-sha", head, "--angles", '["correctness"]',
@@ -7944,7 +7944,7 @@ test("writeGateContext: prior-round ledger SHA filenames match case-insensitivel
     const head = "abc1234567890";
     const ledgerDir = path.resolve(repoRoot, path.dirname(buildLogPath({ repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: head, tmpRoot: "tmp" })));
     await mkdir(ledgerDir, { recursive: true });
-    const writeLedger = (fileSha, recordedSha, summary) => writeFile(path.join(ledgerDir, `draft_gate-${fileSha}.json`), JSON.stringify({
+    const writeLedger = (fileSha, recordedSha, summary) => writeSealed(path.join(ledgerDir, `draft_gate-${fileSha}.json`), JSON.stringify({
       repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: recordedSha, verdict: "findings_present",
       findings: [{ angle: "correctness", severity: "low", summary, judgeDisposition: "reject" }],
     }), "utf8");
@@ -8648,11 +8648,11 @@ test("countCompletedRounds counts an in-range identity-matching ledger with a mi
     await mkdir(dir, { recursive: true });
     const heads = ["1", "2", "3", "4", "6"].map((c) => c.repeat(40));
     const ledger = (head, extra) => JSON.stringify({ repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: head, loggedAt: "2026-10-27T00:00:00.000Z", ...extra });
-    await writeFile(path.join(dir, `draft_gate-${heads[0]}.json`), ledger(heads[0], { verdict: "findings_present" }), "utf8");
-    await writeFile(path.join(dir, `draft_gate-${heads[1]}.json`), ledger(heads[1], {}), "utf8");
-    await writeFile(path.join(dir, `draft_gate-${heads[2]}.json`), ledger(heads[2], { verdict: "bogus" }), "utf8");
-    await writeFile(path.join(dir, `draft_gate-${heads[3]}.json`), ledger(heads[3], { verdict: "findings_present", repo: "other/repo" }), "utf8");
-    await writeFile(path.join(dir, `draft_gate-${heads[4]}.json`), ledger(heads[4], { verdict: "blocked" }), "utf8");
+    await writeSealed(path.join(dir, `draft_gate-${heads[0]}.json`), ledger(heads[0], { verdict: "findings_present" }), "utf8");
+    await writeSealed(path.join(dir, `draft_gate-${heads[1]}.json`), ledger(heads[1], {}), "utf8");
+    await writeSealed(path.join(dir, `draft_gate-${heads[2]}.json`), ledger(heads[2], { verdict: "bogus" }), "utf8");
+    await writeSealed(path.join(dir, `draft_gate-${heads[3]}.json`), ledger(heads[3], { verdict: "findings_present", repo: "other/repo" }), "utf8");
+    await writeSealed(path.join(dir, `draft_gate-${heads[4]}.json`), ledger(heads[4], { verdict: "blocked" }), "utf8");
     const round = await countCompletedRounds({ repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: "5".repeat(40), tmpRoot }, { repoRoot: tmpRoot });
     assert.equal(round, 1 + 2 + 1, "one closed + two unreadable + the posted round; the foreign and blocked ledgers are excluded");
   } finally {
@@ -8671,7 +8671,7 @@ test("countCompletedRounds skips closed ledgers logged before DRAFT_ROUND_CAP_EF
       for (const [i, loggedAt] of loggedAts.entries()) {
         const head = String(i + 1).repeat(40);
         const log = { repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: head, verdict: "clean", ...(loggedAt === undefined ? {} : { loggedAt }) };
-        await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify(log), "utf8");
+        await writeSealed(path.join(dir, `draft_gate-${head}.json`), JSON.stringify(log), "utf8");
       }
     };
     const pre = "2026-10-26T08:51:12Z";
@@ -8694,7 +8694,7 @@ async function seedClosedRounds(repoRoot, pr, heads) {
   await mkdir(dir, { recursive: true });
   for (const [i, head] of heads.entries()) {
     const findings = i === heads.length - 1 ? [{ severity: "medium", summary: "guard missing", files: ["src/changed.mjs"], line: 2, judgeDisposition: "act", judgeTitle: "Guard is missing", judgeFix: "add the guard" }] : [];
-    await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
+    await writeSealed(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
       repo: "owner/repo", pr, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings,
     }), "utf8");
   }
@@ -8717,7 +8717,7 @@ test("resolveClosureRound returns the cap round head and the prior act items onl
     // A blocked closure ledger does not count, so the next head is again counted cap+1 and resolves from the last closed head.
     await seedClosedRounds(repoRoot, 44, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
     const blockedHead = "6".repeat(40);
-    await writeFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-44", `draft_gate-${blockedHead}.json`), JSON.stringify({
+    await writeSealed(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-44", `draft_gate-${blockedHead}.json`), JSON.stringify({
       repo: "owner/repo", pr: 44, gate: "draft_gate", headSha: blockedHead, verdict: "blocked", loggedAt: "2026-11-09T00:00:00.000Z", findings: [],
     }), "utf8");
     const again = await resolveClosureRound({ ...opts, pr: 44 }, { repoRoot, cap: 4 });
@@ -8732,7 +8732,7 @@ test("resolveClosureRound refuses when the closure count is reached but no close
   try {
     await seedClosedRounds(repoRoot, 46, ["1".repeat(40), "2".repeat(40), "3".repeat(40), "4".repeat(40)]);
     const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-46");
-    for (const name of await readdir(dir)) await writeFile(path.join(dir, name), "{not json", "utf8");
+    for (const name of (await readdir(dir)).filter((n) => n.endsWith(".json"))) await writeSealed(path.join(dir, name), "{not json", "utf8");
     await assert.rejects(resolveClosureRound({ repo: "owner/repo", pr: 46, gate: "draft_gate", headSha }, { repoRoot, cap: 4 }), /cannot be recovered/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
@@ -8745,7 +8745,7 @@ test("resolveClosureRound returns the trimmed, lowercased ledger headSha as from
     await seedClosedRounds(repoRoot, 45, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
     const file = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-45", `draft_gate-${baseSha}.json`);
     const log = JSON.parse(await readFile(file, "utf8"));
-    await writeFile(file, JSON.stringify({ ...log, headSha: ` ${baseSha.toUpperCase()} ` }), "utf8");
+    await writeSealed(file, JSON.stringify({ ...log, headSha: ` ${baseSha.toUpperCase()} ` }), "utf8");
     const closure = await resolveClosureRound({ repo: "owner/repo", pr: 45, gate: "draft_gate", headSha }, { repoRoot, cap: 4 });
     assert.equal(closure.fromHead, baseSha);
   } finally {
@@ -8840,7 +8840,7 @@ test("resolveCapRoundFixed replays the PR 2976 shape: cap round 4, the fixer com
     assert.equal(await resolveCapRoundFixed(opts, { repoRoot }), null, "a delta that still needs a fix does not clear");
     await writeDeltaRecord(repoRoot, baseSha, headSha, "push_to_gate");
     // The blocked round 5 at the fixer head is not a counted round.
-    await writeFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-48", `draft_gate-${"6".repeat(40)}.json`), JSON.stringify({
+    await writeSealed(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-48", `draft_gate-${"6".repeat(40)}.json`), JSON.stringify({
       repo: "owner/repo", pr: 48, gate: "draft_gate", headSha: "6".repeat(40), verdict: "blocked", loggedAt: "2026-11-09T00:00:00.000Z", findings: [],
     }), "utf8");
     const fixed = await resolveCapRoundFixed(opts, { repoRoot });
@@ -8882,9 +8882,9 @@ test("resolveCapRound treats a cap round whose persisted verdict is clean as a c
     await seedClosedRounds(repoRoot, 61, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
     const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-61", `draft_gate-${baseSha}.json`);
     const log = JSON.parse(await readFile(ledger, "utf8"));
-    await writeFile(ledger, JSON.stringify({ ...log, verdict: "clean" }), "utf8");
+    await writeSealed(ledger, JSON.stringify({ ...log, verdict: "clean" }), "utf8");
     assert.equal((await resolveCapRound(opts, { repoRoot })).residue.length, 1, "a clean severity verdict with an open act item is the cap round");
-    await writeFile(ledger, JSON.stringify({ ...log, verdict: "clean", findings: [] }), "utf8");
+    await writeSealed(ledger, JSON.stringify({ ...log, verdict: "clean", findings: [] }), "utf8");
     assert.equal(await resolveCapRound(opts, { repoRoot }), null, "a clean round without an act item is no cap round");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
@@ -8946,10 +8946,10 @@ test("resolveCapRoundFixed accepts a record naming one member of each acted clus
     const log = JSON.parse(await readFile(ledger, "utf8"));
     const [a] = log.findings;
     const b = { ...a, summary: "guard missing elsewhere", line: 9 };
-    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...a, clusterId: 0 }, { ...b, clusterId: 0 }] }), "utf8");
+    await writeSealed(ledger, JSON.stringify({ ...log, findings: [{ ...a, clusterId: 0 }, { ...b, clusterId: 0 }] }), "utf8");
     await writeDeltaRecord(repoRoot, baseSha, headSha, "push", { items: [{ ref: fingerprintFinding(a), status: "resolved" }] });
     assert.ok(await resolveCapRoundFixed(opts, { repoRoot }), "the representative alone covers its cluster");
-    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...a, clusterId: 0 }, { ...b, clusterId: 1 }] }), "utf8");
+    await writeSealed(ledger, JSON.stringify({ ...log, findings: [{ ...a, clusterId: 0 }, { ...b, clusterId: 1 }] }), "utf8");
     assert.equal(await resolveCapRoundFixed(opts, { repoRoot }), null, "a second cluster stays uncovered");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
@@ -8964,7 +8964,7 @@ test("resolveCapRoundFixed needs one ref per acted cluster when clusters share a
     const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-63", `draft_gate-${baseSha}.json`);
     const log = JSON.parse(await readFile(ledger, "utf8"));
     const [a] = log.findings;
-    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...a, clusterId: 0 }, { ...a, line: 9, clusterId: 1 }] }), "utf8");
+    await writeSealed(ledger, JSON.stringify({ ...log, findings: [{ ...a, clusterId: 0 }, { ...a, line: 9, clusterId: 1 }] }), "utf8");
     const fp = fingerprintFinding(a);
     await writeDeltaRecord(repoRoot, baseSha, headSha, "push", { items: [{ ref: fp, status: "resolved" }] });
     assert.equal(await resolveCapRoundFixed(opts, { repoRoot }), null, "the second cluster needs fp#2");
@@ -8985,13 +8985,13 @@ test("resolveCapRoundFixed derives the expected refs from the deduped act list, 
     const [p] = log.findings;
     const q = { ...p, summary: "a different defect" };
     // Ledger [Y:p cid1, X:q cid0, X:p cid0]: the act list keeps Y:p and X:q, so the refs are p and q.
-    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 1 }, { ...q, clusterId: 0 }, { ...p, line: 9, clusterId: 0 }] }), "utf8");
+    await writeSealed(ledger, JSON.stringify({ ...log, findings: [{ ...p, clusterId: 1 }, { ...q, clusterId: 0 }, { ...p, line: 9, clusterId: 0 }] }), "utf8");
     await writeDeltaRecord(repoRoot, baseSha, headSha, "push", { items: [{ ref: fingerprintFinding(p), status: "resolved" }, { ref: fingerprintFinding(q), status: "resolved" }] });
     assert.ok(await resolveCapRoundFixed(opts, { repoRoot }), "refs p and q cover both clusters");
     await writeDeltaRecord(repoRoot, baseSha, headSha, "push", { items: [{ ref: fingerprintFinding(p), status: "resolved" }] });
     assert.equal(await resolveCapRoundFixed(opts, { repoRoot }), null, "q is still required");
     // The unstamped ledger reduces through clusterFindings: a record naming every act ref is accepted, an empty one is not.
-    await writeFile(ledger, JSON.stringify({ ...log, findings: [p, q] }), "utf8");
+    await writeSealed(ledger, JSON.stringify({ ...log, findings: [p, q] }), "utf8");
     await writeDeltaRecord(repoRoot, baseSha, headSha, "push", { items: [{ ref: fingerprintFinding(p), status: "resolved" }, { ref: fingerprintFinding(q), status: "resolved" }] });
     assert.ok(await resolveCapRoundFixed(opts, { repoRoot }), "unstamped findings: every act ref present");
     await writeDeltaRecord(repoRoot, baseSha, headSha, "push", { items: [{ ref: "unrelated", status: "resolved" }] });
@@ -9046,7 +9046,7 @@ test("resolveCapRound keeps a cap_closed finding in the residue with disposition
     const heads = ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha];
     for (const [i, head] of heads.entries()) {
       const findings = i === 3 ? [{ severity: "medium", summary: "closed by the cap", files: ["src/changed.mjs"], line: 3, judgeDisposition: "defer", capClosed: true, judgeTitle: "Closed by the cap" }] : [];
-      await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 53, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings }), "utf8");
+      await writeSealed(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 53, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings }), "utf8");
     }
     const round = await resolveCapRound({ repo: "owner/repo", pr: 53, headSha }, { repoRoot });
     assert.deepEqual(round.residue.map((i) => [i.title, i.disposition]), [["Closed by the cap", "cap_closed"]]);
@@ -9088,7 +9088,7 @@ test("an unreadable cap-round ledger fails closed: no earlier round becomes the 
     const earlier = "3".repeat(40);
     await seedClosedRounds(repoRoot, 56, ["1".repeat(40), "2".repeat(40), earlier, baseSha]);
     await writeDeltaRecord(repoRoot, earlier, headSha);
-    await writeFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-56", `draft_gate-${baseSha}.json`), "{not json", "utf8");
+    await writeSealed(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-56", `draft_gate-${baseSha}.json`), "{not json", "utf8");
     assert.equal(await resolveCapRound(opts, { repoRoot }), null);
     assert.equal(await resolveCapRoundFixed({ ...opts, anyHead: true }, { repoRoot }), null);
   } finally {
@@ -9143,7 +9143,7 @@ test("resolveCapRoundFixed starts the chain at a ledgerless base-only merge of t
     assert.deepEqual(calls.map((c) => [c.fromHead, c.head, c.mainRef]), [[baseSha, merged, "origin/main"]]);
     assert.equal(await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge: async () => false }), null, "a merge that is not base-only is no proof");
     assert.equal(await resolveCapRoundFixed({ ...opts, baseRefName: undefined }, { repoRoot, baseOnlyMerge }), null, "without the base branch the successor is not considered");
-    await writeFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-58", `draft_gate-${merged}.json`), JSON.stringify({ repo: "owner/repo", pr: 58, gate: "draft_gate", headSha: merged, verdict: "blocked", loggedAt: "2026-11-09T00:00:00.000Z", findings: [] }), "utf8");
+    await writeSealed(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-58", `draft_gate-${merged}.json`), JSON.stringify({ repo: "owner/repo", pr: 58, gate: "draft_gate", headSha: merged, verdict: "blocked", loggedAt: "2026-11-09T00:00:00.000Z", findings: [] }), "utf8");
     assert.equal(await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge }), null, "a head with its own ledger is not a ledgerless base merge");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
@@ -9203,7 +9203,7 @@ test("resolveCapRoundFixed seeds a chain from the record of a ledgerless base-on
     await rm(path.join(repoRoot, "tmp", "gate-delta", `${M}.json.seal`));
     assert.equal((await failure(opts)).condition, "items_do_not_cover", "an unsealed M record seeds nothing");
     await writeDeltaRecord(repoRoot, M, C, "push_to_gate");
-    await writeFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-63", `draft_gate-${M}.json`), JSON.stringify({ repo: "owner/repo", pr: 63, gate: "draft_gate", headSha: M, verdict: "blocked", loggedAt: "2026-11-09T00:00:00.000Z", findings: [] }), "utf8");
+    await writeSealed(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-63", `draft_gate-${M}.json`), JSON.stringify({ repo: "owner/repo", pr: 63, gate: "draft_gate", headSha: M, verdict: "blocked", loggedAt: "2026-11-09T00:00:00.000Z", findings: [] }), "utf8");
     assert.equal((await failure(opts)).condition, "items_do_not_cover", "a head with its own ledger seeds nothing");
     await rm(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-63", `draft_gate-${M}.json`));
     const selfMerge = async (args) => args.head === args.fromHead || merge(args);
@@ -9327,7 +9327,7 @@ test("resolveCapRoundFixed reports baseline_orphaned for a sibling cap-round hea
     // A whitespace-padded ledger headSha of a real sibling cap-round head is normalized before the probe, so it is still an orphan.
     await seedClosedRounds(repoRoot, 70, ["1".repeat(40), "2".repeat(40), "3".repeat(40), B]);
     const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-70", `draft_gate-${B}.json`);
-    await writeFile(ledger, (await readFile(ledger, "utf8")).replace(`"headSha":"${B}"`, `"headSha":" ${B}\\n"`), "utf8");
+    await writeSealed(ledger, (await readFile(ledger, "utf8")).replace(`"headSha":"${B}"`, `"headSha":" ${B}\\n"`), "utf8");
     let padded = null;
     assert.equal(await resolveCapRoundFixed({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha: rebased, baseRefName: "main" }, { repoRoot, onFailure: (c) => { padded = c; } }), null);
     assert.equal(padded, "baseline_orphaned", "a whitespace-padded sibling cap-round head is normalized before the probe");
@@ -9345,7 +9345,7 @@ test("resolveCapRoundFixed keeps no_clearing_record for a real ancestor cap-roun
     const failure = async () => { let condition = null; await resolveCapRoundFixed(opts, { repoRoot, onFailure: (c) => { condition = c; } }); return condition; };
     assert.equal(await failure(), "no_clearing_record");
     const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-69", `draft_gate-${A}.json`);
-    await writeFile(ledger, (await readFile(ledger, "utf8")).replace(`"headSha":"${A}"`, `"headSha":" ${A}\\n"`), "utf8");
+    await writeSealed(ledger, (await readFile(ledger, "utf8")).replace(`"headSha":"${A}"`, `"headSha":" ${A}\\n"`), "utf8");
     assert.equal(await failure(), "no_clearing_record", "a whitespace-padded ledger headSha is normalized before the probe");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
@@ -9378,7 +9378,7 @@ test("resolveCapRound lists only the cap-round act items the sealed delta record
     const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-59", `draft_gate-${baseSha}.json`);
     const log = JSON.parse(await readFile(ledger, "utf8"));
     log.findings.push({ severity: "medium", summary: "second gap", files: ["src/dep.mjs"], line: 1, judgeDisposition: "act", judgeTitle: "Second gap", judgeFix: "close it" });
-    await writeFile(ledger, JSON.stringify(log), "utf8");
+    await writeSealed(ledger, JSON.stringify(log), "utf8");
     const [fixed, unfixed] = (await resolveCapRound(opts, { repoRoot })).residue.map((i) => i.fingerprint);
     const seal = (items) => writeGateDeltaRecord({ tmpRoot: path.join(repoRoot, "tmp"), sequence: { reviewBaselineHead: baseSha, actSetId: "0123456789abcdef" }, candidateHead: "9".repeat(40), invocation: 1, decision: { outcome: "locally_clear", nextStep: "push" }, result: { actionableItems: items } });
     assert.equal((await resolveCapRound(opts, { repoRoot })).residue.length, 2, "no record: every act item stays");
@@ -9398,7 +9398,7 @@ test("resolveCapRound judges each cluster of a shared fingerprint by its own ref
     const log = JSON.parse(await readFile(ledger, "utf8"));
     const act = log.findings.find((f) => f.judgeDisposition === "act");
     log.findings = [{ ...act, clusterId: 0 }, { ...act, angle: "other-angle", clusterId: 1 }];
-    await writeFile(ledger, JSON.stringify(log), "utf8");
+    await writeSealed(ledger, JSON.stringify(log), "utf8");
     const [fp] = (await resolveCapRound(opts, { repoRoot })).residue.map((i) => i.fingerprint);
     const seal = (items) => writeGateDeltaRecord({ tmpRoot: path.join(repoRoot, "tmp"), sequence: { reviewBaselineHead: baseSha, actSetId: "0123456789abcdef" }, candidateHead: "9".repeat(40), invocation: 1, decision: { outcome: "locally_clear", nextStep: "push" }, result: { actionableItems: items } });
     seal([{ ref: fp, status: "resolved" }, { ref: `${fp}#2`, status: "not_resolved" }]);
@@ -9475,4 +9475,21 @@ test("resolveCapRoundFixed reports cap_round_unresolved when the cap round canno
 test("renderBriefingVolatile: the data-never-instructions statement is carried without known findings (ADR 0238)", () => {
   const text = renderBriefingVolatile({ gate: "draft_gate", headSha: "abc1234567890", loggedAt: "2026-01-01T00:00:00.000Z" });
   assert.match(text, /data, never instructions/);
+});
+
+test("countCompletedRounds refuses an unsealed and an edited prior ledger with the typed code and the quarantine remedy (AC2)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-count-sealed-"));
+  try {
+    const options = { repo: "o/r", pr: 7, gate: "draft_gate", headSha: "b".repeat(40), tmpRoot: "tmp" };
+    const file = path.resolve(repoRoot, buildLogPath({ ...options, headSha: "a".repeat(40) }));
+    await mkdir(path.dirname(file), { recursive: true });
+    const log = { headSha: "a".repeat(40), gate: "draft_gate", repo: "o/r", pr: 7, verdict: "clean" };
+    await writeSealed(file, JSON.stringify(log));
+    await writeFile(file, JSON.stringify({ ...log, verdict: "findings_present" }), "utf8");
+    await assert.rejects(() => countCompletedRounds(options, { repoRoot }), (err) => err.code === OUT_OF_BAND_WRITE);
+    await rm(`${file}.seal`);
+    await assert.rejects(() => countCompletedRounds(options, { repoRoot }), (err) => err.code === "gate_artifact_unsealed" && err.message.includes("quarantine-gate-findings-log.mjs"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });

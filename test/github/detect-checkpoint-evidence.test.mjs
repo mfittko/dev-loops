@@ -18,6 +18,7 @@
 // `now`; pass a fixed value through it. Enforced mechanically by
 // test/github/deterministic-fixture-time.test.mjs.
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1984,7 +1985,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): a real l
     await mkdir(ledgerDir, { recursive: true });
     // 2 fresh dispatch units (the "process" group + the singleton
     // pr-checklist), 2 distinct reviewers — meets the floor exactly.
-    await writeFile(
+    await writeSealed(
       path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
       `${JSON.stringify({
         gate: "pre_approval_gate", headSha, findings: [],
@@ -2054,7 +2055,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): the SAME
     const headSha = "b".repeat(40);
     const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-22");
     await mkdir(ledgerDir, { recursive: true });
-    await writeFile(
+    await writeSealed(
       path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
       `${JSON.stringify({
         gate: "pre_approval_gate", headSha, findings: [],
@@ -2299,7 +2300,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7, #1601): t
     // The exact ledger the earlier "PASSES requireFanoutProvenance" test above
     // records — legitimately grouped under gates.fanout.groups for a tiered
     // round.
-    await writeFile(
+    await writeSealed(
       path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
       `${JSON.stringify({
         gate: "pre_approval_gate", headSha, findings: [],
@@ -2814,7 +2815,7 @@ test("buildFanoutEnforcement (#1174) re-derives scope fail-closed and sets scope
     const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-17");
     await mkdir(ledgerDir, { recursive: true });
     for (const gate of ["draft_gate", "pre_approval_gate"]) {
-      await writeFile(path.join(ledgerDir, `${gate}-${headSha}.json`), JSON.stringify({ gate, headSha, findings: [] }) + "\n", "utf8");
+      await writeSealed(path.join(ledgerDir, `${gate}-${headSha}.json`), JSON.stringify({ gate, headSha, findings: [] }) + "\n", "utf8");
     }
 
     const { config } = await loadDevLoopConfig({ repoRoot: dir });
@@ -2955,7 +2956,7 @@ test("buildFanoutEnforcement (#1984): a tiny diff touching a risk path is REJECT
     const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-18");
     await mkdir(ledgerDir, { recursive: true });
     for (const gate of ["draft_gate", "pre_approval_gate"]) {
-      await writeFile(path.join(ledgerDir, `${gate}-${headSha}.json`), JSON.stringify({ gate, headSha, findings: [] }) + "\n", "utf8");
+      await writeSealed(path.join(ledgerDir, `${gate}-${headSha}.json`), JSON.stringify({ gate, headSha, findings: [] }) + "\n", "utf8");
     }
 
     const { config } = await loadDevLoopConfig({ repoRoot: dir });
@@ -3016,7 +3017,7 @@ test("buildFanoutEnforcement (#1984): a tiny diff whose size-budget outcome touc
     const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-19");
     await mkdir(ledgerDir, { recursive: true });
     for (const gate of ["draft_gate", "pre_approval_gate"]) {
-      await writeFile(path.join(ledgerDir, `${gate}-${headSha}.json`), JSON.stringify({ gate, headSha, findings: [] }) + "\n", "utf8");
+      await writeSealed(path.join(ledgerDir, `${gate}-${headSha}.json`), JSON.stringify({ gate, headSha, findings: [] }) + "\n", "utf8");
     }
 
     const { config } = await loadDevLoopConfig({ repoRoot: dir });
@@ -3065,7 +3066,7 @@ test("buildFanoutEnforcement accepts a light inline verdict for source + test + 
       const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-20");
       await mkdir(ledgerDir, { recursive: true });
       for (const gate of ["draft_gate", "pre_approval_gate"]) {
-        await writeFile(path.join(ledgerDir, `${gate}-${headSha}.json`), JSON.stringify({ gate, headSha, findings: [] }) + "\n", "utf8");
+        await writeSealed(path.join(ledgerDir, `${gate}-${headSha}.json`), JSON.stringify({ gate, headSha, findings: [] }) + "\n", "utf8");
       }
       const { config } = await loadDevLoopConfig({ repoRoot: dir });
       const marker = { visible: true, headSha, executionMode: "inline_single_agent", inlineReason: "under_threshold" };
@@ -3147,7 +3148,7 @@ test("buildFanoutEnforcement (#1972, AC2): a rename-class .devloops PR validates
     // The fan-out ran under the PR HEAD's NEW config, recording the RENAMED
     // angle (plus the always-mandatory pr-checklist default) — a fully
     // conformant round under the NEW config.
-    await writeFile(
+    await writeSealed(
       path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
       `${JSON.stringify({
         gate: "pre_approval_gate", headSha, findings: [],
@@ -3213,7 +3214,7 @@ test("buildFanoutEnforcement (#1972, AC3): a ledger that violates the PR HEAD co
     // Non-conformant even under the NEW head config: the mandatory
     // "renamed-mandatory" angle is never recorded — the fix changes which
     // config is authoritative, not whether angle coverage is enforced.
-    await writeFile(
+    await writeSealed(
       path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
       `${JSON.stringify({
         gate: "pre_approval_gate", headSha, findings: [],
@@ -3286,7 +3287,7 @@ test("buildFanoutEnforcement (#1972, AC4): angle-layer config falls back to the 
     const unresolvableSha = "f".repeat(40);
     const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-1974");
     await mkdir(ledgerDir, { recursive: true });
-    await writeFile(
+    await writeSealed(
       path.join(ledgerDir, `pre_approval_gate-${unresolvableSha}.json`),
       `${JSON.stringify({
         gate: "pre_approval_gate", headSha: unresolvableSha, findings: [],
@@ -3350,7 +3351,7 @@ test("buildFanoutEnforcement (#1972, AC4): angle-layer config fails closed with 
 
     const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-1975");
     await mkdir(ledgerDir, { recursive: true });
-    await writeFile(
+    await writeSealed(
       path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
       `${JSON.stringify({
         gate: "pre_approval_gate", headSha, findings: [],
@@ -3440,7 +3441,7 @@ test("buildFanoutEnforcement: a broken BASE layer (.pi/dev-loop/defaults) on the
 
     const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-1977");
     await mkdir(ledgerDir, { recursive: true });
-    await writeFile(
+    await writeSealed(
       path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
       `${JSON.stringify({
         gate: "pre_approval_gate", headSha, findings: [],
@@ -3629,7 +3630,7 @@ test("buildFanoutEnforcement: a read failure on a .devloops that genuinely exist
 
     const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-1979");
     await mkdir(ledgerDir, { recursive: true });
-    await writeFile(
+    await writeSealed(
       path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
       `${JSON.stringify({
         gate: "pre_approval_gate", headSha, findings: [],
@@ -4389,7 +4390,7 @@ async function writeLedger(tempDir, gate) {
       { angle: "holistic", reviewer: "review-c" },
     ],
   };
-  await writeFile(path.join(dir, `${gate}-abc1234.json`), JSON.stringify({ gate, headSha: "abc1234", findings: [], provenance }) + "\n", "utf8");
+  await writeSealed(path.join(dir, `${gate}-abc1234.json`), JSON.stringify({ gate, headSha: "abc1234", findings: [], provenance }) + "\n", "utf8");
 }
 
 test("detect-checkpoint-evidence surfaces executionMode in gate markers", async () => {
@@ -4583,7 +4584,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES on an auto-chunked 
     const headSha = "e".repeat(40);
     const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-31");
     await mkdir(path.join(ledgerDir), { recursive: true });
-    await writeFile(
+    await writeSealed(
       path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
       `${JSON.stringify({
         gate: "pre_approval_gate", headSha, findings: [],
@@ -4676,7 +4677,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES a ledger built from
     const headSha = "f".repeat(40);
     const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-32");
     await mkdir(ledgerDir, { recursive: true });
-    await writeFile(
+    await writeSealed(
       path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
       `${JSON.stringify({
         gate: "pre_approval_gate", headSha, findings: [],
@@ -4791,7 +4792,7 @@ test("detect-checkpoint-evidence CLI: evidenceState for a cap-round draft_gate f
         const items = [{ severity: "low", angle: "correctness", summary: "low finding", judgeDisposition: "act", judgeRationale: "r" }];
         const capHead = "a".repeat(40);
         for (const [i, sha] of ["1", "2", "3"].map((c) => c.repeat(40)).concat(capHead).entries()) {
-          await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: sha === capHead ? items : [] }), "utf8");
+          await writeSealed(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: sha === capHead ? items : [] }), "utf8");
         }
         writeGateDeltaRecord({ tmpRoot: path.join(tempDir, "tmp"), sequence: { reviewBaselineHead: capHead, actSetId: "0123456789abcdef" }, candidateHead: "b".repeat(40), invocation: 1, decision: { outcome: "locally_clear", nextStep: "push" }, result: { actionableItems: items.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" })) } });
       }

@@ -36,13 +36,13 @@ async function seed(dir, { valid = false, ledgerRoot = "ctx-tmp", withLedger = t
   const ledgerPath = path.join(dir, buildGateFaninLedgerPath({ repo: REPO, pr: PR, gate: GATE, headSha: PRIOR, tmpRoot: ledgerRoot }));
   await mkdir(path.dirname(logPath), { recursive: true });
   await mkdir(path.dirname(ledgerPath), { recursive: true });
-  await writeFile(logPath, rawLog ?? JSON.stringify({
+  await writeSealed(logPath, rawLog ?? JSON.stringify({
     headSha: PRIOR, gate: GATE, repo: REPO, pr: PR,
     verdict: "findings_present",
     findings: [{ angle: valid ? "contradiction-lens" : "operator-residue", severity: "low", summary: "x" }],
     provenance: { perAngle: [{ angle: "contradiction-lens", reviewer: "r" }] },
   }), "utf8");
-  if (withLedger) await writeFile(ledgerPath, "{}\n", "utf8");
+  if (withLedger) await writeSealed(ledgerPath, "{}\n", "utf8");
   return { logPath, ledgerPath };
 }
 
@@ -56,7 +56,7 @@ test("quarantine moves an integrity-failing log and ledger to the audit dir with
     await assert.rejects(readFile(logPath, "utf8"));
     await assert.rejects(readFile(ledgerPath, "utf8"));
     const files = await readdir(result.auditDir);
-    assert.deepEqual(files.sort(), [path.basename(ledgerPath), path.basename(logPath), "quarantine.json"].sort());
+    assert.deepEqual(files.sort(), [path.basename(ledgerPath), `${path.basename(ledgerPath)}.seal`, path.basename(logPath), `${path.basename(logPath)}.seal`, "quarantine.json"].sort());
     const record = JSON.parse(await readFile(path.join(result.auditDir, "quarantine.json"), "utf8"));
     assert.equal(record.reason, "findings_log_integrity_failure");
     assert.equal(record.status, "complete");
@@ -118,13 +118,13 @@ test("listPriorFindingsLogHeads ignores logs older than the quarantine but count
     await seed(dir);
     const old = path.join(dir, buildLogPath({ repo: REPO, pr: PR, gate: GATE, headSha: "e".repeat(40), tmpRoot: "tmp" }));
     const doc = (h, loggedAt) => JSON.stringify({ headSha: h, gate: GATE, repo: REPO, pr: PR, loggedAt });
-    await writeFile(old, doc("e".repeat(40), new Date(Date.now() - 60000).toISOString()), "utf8");
+    await writeSealed(old, doc("e".repeat(40), new Date(Date.now() - 60000).toISOString()), "utf8");
     const query = () => listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD, tmpRoot: path.join(dir, "tmp") });
     assert.equal((await query()).has("e".repeat(40)), true);
     await run(dir);
     assert.equal((await query()).size, 0);
     const fresh = path.join(dir, buildLogPath({ repo: REPO, pr: PR, gate: GATE, headSha: "f".repeat(40), tmpRoot: "tmp" }));
-    await writeFile(fresh, doc("f".repeat(40), new Date(Date.now() + 60000).toISOString()), "utf8");
+    await writeSealed(fresh, doc("f".repeat(40), new Date(Date.now() + 60000).toISOString()), "utf8");
     assert.deepEqual([...(await query())], ["f".repeat(40)]);
   });
 });
@@ -133,7 +133,7 @@ test("a rolled_back quarantine record sets no cutoff", async () => {
   await withRepo(async (dir) => {
     await seed(dir);
     const old = path.join(dir, buildLogPath({ repo: REPO, pr: PR, gate: GATE, headSha: "e".repeat(40), tmpRoot: "tmp" }));
-    await writeFile(old, JSON.stringify({ headSha: "e".repeat(40), gate: GATE, repo: REPO, pr: PR, loggedAt: new Date(Date.now() - 60000).toISOString() }), "utf8");
+    await writeSealed(old, JSON.stringify({ headSha: "e".repeat(40), gate: GATE, repo: REPO, pr: PR, loggedAt: new Date(Date.now() - 60000).toISOString() }), "utf8");
     const result = await run(dir);
     const recordPath = path.join(result.auditDir, "quarantine.json");
     const record = JSON.parse(await readFile(recordPath, "utf8"));
@@ -148,7 +148,7 @@ test("resolve-angle-carry-forward refuses a --prev-head log written before the q
     await writeFile(path.join(dir, ".devloops"), `version: 1\ngates:\n  preApproval:\n    angles:\n      - name: "contradiction-lens"\n        persona: review\n        prompt: Review the angle.\n`, "utf8");
     await seed(dir);
     const valid = path.join(dir, buildLogPath({ repo: REPO, pr: PR, gate: GATE, headSha: "a".repeat(40), tmpRoot: "tmp" }));
-    await writeFile(valid, JSON.stringify({
+    await writeSealed(valid, JSON.stringify({
       headSha: "a".repeat(40), gate: GATE, repo: REPO, pr: PR, verdict: "clean", findings: [],
       provenance: { perAngle: [{ angle: "contradiction-lens", reviewer: "r" }] },
       loggedAt: new Date(Date.now() - 60000).toISOString(),
@@ -338,5 +338,46 @@ test("resolve-angle-carry-forward surfaces the typed code for a seal-mismatched 
       process.exitCode = prior;
     }
     assert.equal(JSON.parse(errs.join("").trim().split("\n").pop()).code, "gate_artifact_out_of_band_write");
+  });
+});
+
+test("quarantine moves an unsealed prior-head log and records gate_artifact_unsealed", async () => {
+  await withRepo(async (dir) => {
+    const { logPath, ledgerPath } = await seed(dir, { valid: true });
+    await rm(`${logPath}.seal`);
+    const result = await run(dir);
+    assert.match(result.integrityFailure, /gate_artifact_unsealed/);
+    await assert.rejects(readFile(logPath, "utf8"));
+    const files = await readdir(result.auditDir);
+    assert.ok(files.includes(path.basename(logPath)), files.join(","));
+    assert.ok(files.includes(path.basename(ledgerPath)), files.join(","));
+    assert.equal(JSON.parse(await readFile(path.join(result.auditDir, "quarantine.json"), "utf8")).reason, "findings_log_integrity_failure");
+  });
+});
+
+test("resolve-angle-carry-forward and the prior-head listing refuse an unsealed prior log and name the quarantine remedy", async () => {
+  await withRepo(async (dir) => {
+    const { logPath } = await seed(dir, { valid: true });
+    await rm(`${logPath}.seal`);
+    const errs = [];
+    const origErr = process.stderr.write;
+    const prior = process.exitCode;
+    process.stderr.write = (chunk) => { errs.push(String(chunk)); return true; };
+    try {
+      await resolveMain(["--repo", REPO, "--pr", String(PR), "--gate", GATE, "--prev-head", PRIOR, "--head-sha", HEAD, "--tmp-root", "tmp"], { repoRoot: dir, runGit: () => { throw new Error("git must not run"); } });
+    } finally {
+      process.stderr.write = origErr;
+      process.exitCode = prior;
+    }
+    const failure = JSON.parse(errs.join("").trim().split("\n").pop());
+    assert.equal(failure.code, "gate_artifact_unsealed");
+    assert.match(failure.error ?? "", /quarantine-gate-findings-log\.mjs/);
+    const cwd = process.cwd();
+    process.chdir(dir);
+    try {
+      await assert.rejects(() => listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD, tmpRoot: "tmp" }), (err) => err.code === "gate_artifact_unsealed");
+    } finally {
+      process.chdir(cwd);
+    }
   });
 });

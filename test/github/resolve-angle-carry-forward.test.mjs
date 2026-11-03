@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -143,7 +144,7 @@ async function makeCarryForwardRepo({ mandatoryAngles = [], perAngle, mutate, ve
   // fail-closed guard against a findings_present prior verdict, issue #2017).
   const logPath = path.join(repoRoot, buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
   await mkdir(path.dirname(logPath), { recursive: true });
-  await writeFile(logPath, JSON.stringify({
+  await writeSealed(logPath, JSON.stringify({
     headSha: prevHead,
     verdict,
     provenance: { distinctReviewers: perAngle.length, perAngle },
@@ -240,7 +241,7 @@ test("CLI re-runs all angles when reviewed config is reverted to base", async ()
     const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
     const logPath = path.join(repoRoot, buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
     await mkdir(path.dirname(logPath), { recursive: true });
-    await writeFile(logPath, JSON.stringify({ ...cleanLog, headSha: prevHead }));
+    await writeSealed(logPath, JSON.stringify({ ...cleanLog, headSha: prevHead }));
     const result = await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha, "--tmp-root", "tmp"], { repoRoot });
     assert.equal(result.ok, true);
     assert.deepEqual(result.deltaChangedFiles, [".devloops.yaml"]);
@@ -447,7 +448,7 @@ test("CLI re-runs code angles on a DIVERGENT advance where the file equals the m
     ];
     const logPath = path.join(repoRoot, buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
     await mkdir(path.dirname(logPath), { recursive: true });
-    await writeFile(logPath, JSON.stringify({ headSha: prevHead, verdict: "clean", provenance: { distinctReviewers: perAngle.length, perAngle } }), "utf8");
+    await writeSealed(logPath, JSON.stringify({ headSha: prevHead, verdict: "clean", provenance: { distinctReviewers: perAngle.length, perAngle } }), "utf8");
 
     const result = await runMain([
       "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
@@ -510,7 +511,7 @@ test("CLI carries code angles + Copilot convergence across an integrate-only bas
     ];
     const logPath = path.join(repoRoot, buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
     await mkdir(path.dirname(logPath), { recursive: true });
-    await writeFile(logPath, JSON.stringify({ headSha: prevHead, verdict: "clean", provenance: { distinctReviewers: perAngle.length, perAngle } }), "utf8");
+    await writeSealed(logPath, JSON.stringify({ headSha: prevHead, verdict: "clean", provenance: { distinctReviewers: perAngle.length, perAngle } }), "utf8");
 
     const result = await runMain([
       "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
@@ -570,7 +571,7 @@ test("CLI excludes against the CONFIGURED base branch, not a hardcoded origin/ma
     const perAngle = [{ angle: "correctness", reviewer: "review-a" }, { angle: "coverage", reviewer: "review-b" }];
     const logPath = path.join(repoRoot, buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
     await mkdir(path.dirname(logPath), { recursive: true });
-    await writeFile(logPath, JSON.stringify({ headSha: prevHead, verdict: "clean", provenance: { distinctReviewers: perAngle.length, perAngle } }), "utf8");
+    await writeSealed(logPath, JSON.stringify({ headSha: prevHead, verdict: "clean", provenance: { distinctReviewers: perAngle.length, perAngle } }), "utf8");
 
     const result = await runMain([
       "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
@@ -1215,7 +1216,7 @@ test("CLI fails closed when the prior log's own headSha is not --prev-head", asy
   });
   try {
     const logPath = path.join(repoRoot, buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
-    await writeFile(logPath, JSON.stringify({
+    await writeSealed(logPath, JSON.stringify({
       headSha: "0123456789abcdef0123456789abcdef01234567",
       verdict: "clean",
       provenance: { distinctReviewers: 1, perAngle: [{ angle: "coverage", reviewer: "review-b" }] },

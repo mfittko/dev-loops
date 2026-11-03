@@ -9,7 +9,7 @@
  * round number — so the two can never drift apart on a shape they both parse.
  */
 import { createHash } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
@@ -30,7 +30,7 @@ import { PROBLEM_CAP, RECOMMENDATION_CAP, cutAtSentence, normalizeFindingSummary
 import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { carryFromPostedVerdict } from "./_carried-verdict.mjs";
 import { buildLogPath } from "./_gate-artifact-paths.mjs";
-import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
+import { isSealRefusal, readSealed } from "./_gate-artifact-seal.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
@@ -748,7 +748,7 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
   try {
     raw = await readSealed(ledgerPath);
   } catch (err) {
-    if (err?.code === OUT_OF_BAND_WRITE) throw err;
+    if (isSealRefusal(err)) throw err;
     throw fail(`Cannot read gate findings ledger "${ledgerPath}": ${err instanceof Error ? err.message : String(err)}`);
   }
   let parsed;
@@ -1468,11 +1468,12 @@ async function countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, re
 // findJudgeDispositionForFingerprint below picks a winner among them.
 async function collectLocalJudgeDispositionMatches({ dir, filenames, repo, pr, gate, fp }) {
   const matches = [];
-  for (const filename of filenames) {
+  for (const filename of filenames.filter((name) => /^[^.]+\.json$/.test(name.slice(gate.length + 1)))) { // skip unsealed sidecars such as <gate>-<sha>.act-list.json
     let parsed;
     try {
-      parsed = JSON.parse(await readFile(path.join(dir, filename), "utf8"));
-    } catch {
+      parsed = JSON.parse(await readSealed(path.join(dir, filename)));
+    } catch (error) {
+      if (isSealRefusal(error)) throw error; // edited or unsealed ledger: fail closed, never skipped as unreadable
       continue;
     }
     if (!parsed || typeof parsed !== "object") continue;

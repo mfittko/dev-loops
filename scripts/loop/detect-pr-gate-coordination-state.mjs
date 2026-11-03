@@ -21,6 +21,7 @@ import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-co
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
+import { isSealRefusal } from "../github/_gate-artifact-seal.mjs";
 import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
@@ -1290,6 +1291,7 @@ export function buildGateCoordinationEvaluatorInput({
   draftCapRoundFixed = false,
   draftRoundRefused = false,
   draftCapRoundFailure = null,
+  draftCapRoundDetail = null,
 }) {
   return {
     repo: context.repo,
@@ -1354,6 +1356,7 @@ export function buildGateCoordinationEvaluatorInput({
     draftCapRoundFixed,
     draftRoundRefused,
     draftCapRoundFailure,
+    draftCapRoundDetail,
     ...(earlySurface ?? {}),
   };
 }
@@ -1432,8 +1435,15 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   // A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
   let draftCapRoundFailure = null;
   const draftCapRoundFixed = await (runtime.resolveCapRoundFixed ?? resolveCapRoundFixed)({ repo: context.repo, pr: context.pr, headSha: context.currentHeadSha, baseRefName: prBaseRefName, anyHead: context.prData?.isDraft !== true }, { repoRoot, onFailure: (condition) => { draftCapRoundFailure = condition; } }).then(Boolean, () => { draftCapRoundFailure = "cap_round_unresolved"; return false; });
+  // A seal refusal (unsealed or edited prior ledger) is a hard failure: the round is refused and the typed message reaches the report_blocked reason.
+  let draftCapRoundDetail = null;
   const draftRoundRefused = context.prData?.isDraft === true && !draftCapRoundFixed
-    && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), () => false);
+    && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), (error) => {
+      if (!isSealRefusal(error)) return false;
+      draftCapRoundFailure = "ledger_seal_refused";
+      draftCapRoundDetail = error.message;
+      return true;
+    });
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
     context: evaluatorContext,
     maxCopilotRounds,
@@ -1452,6 +1462,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     draftCapRoundFixed,
     draftRoundRefused,
     draftCapRoundFailure,
+    draftCapRoundDetail,
   }));
   // Copilot review request guard: when Copilot has reviewed the PR but no
   // formal review request was made, block pre-approval gate entry. Only

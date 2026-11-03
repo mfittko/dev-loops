@@ -41,7 +41,7 @@ const NINE_ITEMS = Array.from({ length: 9 }, (_, i) => `criterion ${i + 1}`);
 async function putJson(repoRoot, relPath, value) {
   const target = path.resolve(repoRoot, relPath);
   await mkdir(path.dirname(target), { recursive: true });
-  await writeFile(target, JSON.stringify(value), "utf8");
+  await writeSealed(target, JSON.stringify(value), "utf8");
 }
 
 async function withRound({ plan = false, ledger, reviewsDir = false }, fn) {
@@ -107,7 +107,7 @@ test("per-angle findings dir without an emit plan refuses an omitted mode and in
 test("a findings file without verifiedItems cannot drop the fan-in ledger's 9 verifiedItems and provenance", async () => {
   await withRound({ plan: true, ledger: LEDGER }, async (write, repoRoot) => {
     const enrichedPath = path.join(repoRoot, "enriched.json");
-    await writeFile(enrichedPath, JSON.stringify({ findings: [] }), "utf8");
+    await writeSealed(enrichedPath, JSON.stringify({ findings: [] }), "utf8");
     const { log } = await write({ findings: undefined, findingsFile: enrichedPath });
     assert.deepEqual(log.verifiedItems, NINE_ITEMS);
     assert.deepEqual(log.provenance, PROVENANCE);
@@ -121,7 +121,7 @@ test("a findings file with conflicting provenance, verifiedItems and overallVerd
   await withRound({ plan: true, ledger: LEDGER }, async (write, repoRoot) => {
     const forgedPath = path.join(repoRoot, "forged.json");
     const forgedProvenance = { distinctReviewers: 1, perAngle: [{ angle: "dry", reviewer: "forged-reviewer" }] };
-    await writeFile(forgedPath, JSON.stringify({
+    await writeSealed(forgedPath, JSON.stringify({
       findings: [], provenance: forgedProvenance, verifiedItems: ["forged"], overallVerdict: "findings_present",
     }), "utf8");
     const { log } = await write({ findings: undefined, findingsFile: forgedPath });
@@ -212,5 +212,17 @@ test("the findings-log writer emits a seal equal to the sha256 of the written by
     const logPath = path.resolve(repoRoot, buildLogPath(KEY));
     const sealed = createHash("sha256").update(await readFile(logPath, "utf8")).digest("hex");
     assert.equal((await readFile(`${logPath}.seal`, "utf8")).trim(), sealed);
+  });
+});
+
+test("an unsealed keyed fan-in ledger is refused with gate_artifact_unsealed, naming the ledger path (AC2)", async () => {
+  await withRound({ plan: true }, async (write, repoRoot) => {
+    const ledgerPath = path.resolve(repoRoot, buildGateFaninLedgerPath(KEY));
+    await mkdir(path.dirname(ledgerPath), { recursive: true });
+    await writeFile(ledgerPath, JSON.stringify(LEDGER), "utf8");
+    await assert.rejects(
+      () => write(),
+      (err) => err.code === "gate_artifact_unsealed" && err.message.includes(ledgerPath) && err.usage === undefined,
+    );
   });
 });

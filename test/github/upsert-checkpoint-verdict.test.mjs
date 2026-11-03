@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6508,7 +6509,7 @@ test("upsert-checkpoint-verdict refuses a withheld fanout_fanin verdict whose --
     const ledgerPath = path.join(tempDir, "ledger.json");
     // Recorded provenance covers "scope" but not draft_gate's mandatory
     // "pr-description" angle.
-    await writeFile(ledgerPath, JSON.stringify({
+    await writeSealed(ledgerPath, JSON.stringify({
       repo: "owner/repo",
       pr: 17,
       gate: "draft_gate",
@@ -6537,7 +6538,7 @@ test("upsert-checkpoint-verdict refuses a withheld fanout_fanin verdict whose --
     // provenanceConsistencyError accepts this shape (identity present), but
     // the entry attributes its review to no angle; the guard must name that
     // instead of reporting a confusing missing-mandatory-angle error.
-    await writeFile(ledgerPath, JSON.stringify({
+    await writeSealed(ledgerPath, JSON.stringify({
       repo: "owner/repo",
       pr: 17,
       gate: "draft_gate",
@@ -6564,7 +6565,7 @@ test("upsert-checkpoint-verdict fails closed on a withheld fanout_fanin verdict 
   await withTempDir(async (tempDir) => {
     const ledgerPath = path.join(tempDir, "ledger.json");
     // No `provenance` key at all — nothing to prove coverage against.
-    await writeFile(ledgerPath, JSON.stringify({
+    await writeSealed(ledgerPath, JSON.stringify({
       repo: "owner/repo",
       pr: 17,
       gate: "draft_gate",
@@ -6651,7 +6652,7 @@ test("upsert-checkpoint-verdict refuses a withheld fanout_fanin verdict whose --
       "",
     ].join("\n"), "utf8");
     const ledgerPath = path.join(tempDir, "ledger.json");
-    await writeFile(ledgerPath, JSON.stringify({
+    await writeSealed(ledgerPath, JSON.stringify({
       repo: "owner/repo",
       pr: 17,
       gate: "draft_gate",
@@ -7207,7 +7208,7 @@ test("upsert-checkpoint-verdict fails closed on an inline verdict when the base 
 async function stageDurableLedger(repoRoot, { repo = "owner/repo", pr = 17, gate = "draft_gate", headSha, verdict = "clean", findings = [] }) {
   const ledgerPath = path.resolve(repoRoot, buildLogPath({ repo, pr, gate, headSha, tmpRoot: "tmp" }));
   await mkdir(path.dirname(ledgerPath), { recursive: true });
-  await writeFile(ledgerPath, JSON.stringify({ repo, pr, gate, headSha, verdict, findings }), "utf8");
+  await writeSealed(ledgerPath, JSON.stringify({ repo, pr, gate, headSha, verdict, findings }), "utf8");
   // A fanout_fanin round also needs run-gate-validation.mjs's artifact for the head.
   await stageValidationArtifact(repoRoot, { repo, pr, gate, headSha });
   return ledgerPath;
@@ -7676,7 +7677,7 @@ async function writeSingleSurfaceLedger(tempDir, findings, overrides = {}) {
     await writeFile(devloopsPath, "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
   }
   const ledgerPath = path.join(tempDir, "ledger.json");
-  await writeFile(ledgerPath, JSON.stringify({
+  await writeSealed(ledgerPath, JSON.stringify({
     repo: "owner/repo",
     pr: 17,
     gate: "draft_gate",
@@ -8674,7 +8675,7 @@ function reviewGateFindingSurfaceEntries({ issueComments = [], reviews = [], thr
 
 async function writeReviewGateLedger(tempDir, findings, overrides = {}) {
   const ledgerPath = path.join(tempDir, "review-ledger.json");
-  await writeFile(ledgerPath, JSON.stringify({
+  await writeSealed(ledgerPath, JSON.stringify({
     repo: "owner/repo",
     pr: 17,
     gate: "review",
@@ -9657,7 +9658,7 @@ async function writeVerdictLedger(tempDir, { overallVerdict, verdict, findings =
   if (provenance) {
     log.provenance = provenance;
   }
-  await writeFile(ledgerPath, JSON.stringify(log), "utf8");
+  await writeSealed(ledgerPath, JSON.stringify(log), "utf8");
   return ledgerPath;
 }
 
@@ -9795,7 +9796,7 @@ test("#1616: upsert accepts a matching explicit --verdict unchanged", async () =
 test("#1616: upsert fails closed on a present-but-malformed ledger overallVerdict", async () => {
   await withTempDir(async (tempDir) => {
     const ledgerPath = path.join(tempDir, "verdict-ledger.json");
-    await writeFile(ledgerPath, JSON.stringify({
+    await writeSealed(ledgerPath, JSON.stringify({
       repo: "owner/repo",
       pr: 17,
       gate: "draft_gate",
@@ -12361,7 +12362,7 @@ test("tick: the log writeGateFindingsLog produces from an enriched findings file
   try {
     const put = async (rel, value) => {
       await mkdir(path.dirname(path.resolve(writerRoot, rel)), { recursive: true });
-      await writeFile(path.resolve(writerRoot, rel), JSON.stringify(value), "utf8");
+      await writeSealed(path.resolve(writerRoot, rel), JSON.stringify(value), "utf8");
     };
     await writeFile(path.join(writerRoot, ".devloops"), "version: 1\ngates:\n  preApproval:\n    angles:\n      - dry\n      - name: pr-checklist\n        mandatory: true\n      - name: holistic\n        enabled: false\n", "utf8");
     await put(buildGateEmitPlanPath(key), {
@@ -12370,7 +12371,7 @@ test("tick: the log writeGateFindingsLog produces from an enriched findings file
     });
     await put(buildGateFaninLedgerPath(key), { overallVerdict: "clean", findings: [], provenance, verifiedItems: items });
     const enriched = path.join(writerRoot, "enriched.json");
-    await writeFile(enriched, JSON.stringify({ findings: [] }), "utf8");
+    await writeSealed(enriched, JSON.stringify({ findings: [] }), "utf8");
     // The writer's own output, not a hand-built log, feeds the composition.
     const { log } = await writeGateFindingsLog({
       repo: key.repo, pr: key.pr, gate: key.gate, headSha: key.headSha,

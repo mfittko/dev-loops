@@ -666,7 +666,7 @@ async function withLedgerFile(raw, assertRejection) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ledger-validate-"));
   try {
     const ledgerPath = path.join(dir, "ledger.json");
-    await writeFile(ledgerPath, typeof raw === "string" ? raw : JSON.stringify(raw), "utf8");
+    await writeSealed(ledgerPath, typeof raw === "string" ? raw : JSON.stringify(raw), "utf8");
     await assertRejection(ledgerPath);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -938,7 +938,7 @@ async function withLocalLedgerFiles(ledgers, fn) {
     const dir = path.join(tmpRoot, "gate-findings", JDF_REPO.replace("/", "-"), `pr-${JDF_PR}`);
     await mkdir(dir, { recursive: true });
     for (const [filename, content] of Object.entries(ledgers)) {
-      await writeFile(path.join(dir, filename), JSON.stringify(content), "utf8");
+      await writeSealed(path.join(dir, filename), JSON.stringify(content), "utf8");
     }
     return await fn(tmpRoot);
   } finally {
@@ -999,6 +999,18 @@ test("#2381: findJudgeDispositionForFingerprint ignores a ledger whose own recor
     async (tmpRoot) => {
       const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
       assert.deepEqual(result, { disposition: "reject", rationale: "this PR's own reasoning", reason: null });
+    },
+  );
+});
+
+test("ADR 0242: findJudgeDispositionForFingerprint skips an unsealed <gate>-<sha>.act-list.json sidecar", async () => {
+  await withLocalLedgerFiles(
+    { [`${JDF_GATE}-headA.json`]: jdfLedger({ loggedAt: "2026-09-01T00:00:00.000Z", disposition: "act", rationale: "sealed ledger" }) },
+    async (tmpRoot) => {
+      const dir = path.join(tmpRoot, "gate-findings", JDF_REPO.replace("/", "-"), `pr-${JDF_PR}`);
+      await writeFile(path.join(dir, `${JDF_GATE}-headA.act-list.json`), "[]", "utf8");
+      const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+      assert.deepEqual(result, { disposition: "act", rationale: "sealed ledger", reason: null });
     },
   );
 });
@@ -1419,3 +1431,28 @@ test("readGateFindingsLedger rejects a sealed findings log edited outside the wr
     await assert.rejects(() => readGateFindingsLedger(ledgerPath), (err) => err.code === OUT_OF_BAND_WRITE && err.file === ledgerPath);
   });
 });
+
+test("findJudgeDispositionForFingerprint refuses an unsealed and an edited prior ledger (ADR 0242)", async () => {
+  await withLocalLedgerFiles({ [`${JDF_GATE}-headA.json`]: jdfLedger({ loggedAt: "2026-09-01T00:00:00.000Z", disposition: "act" }) }, async (tmpRoot) => {
+    const file = path.join(tmpRoot, "gate-findings", JDF_REPO.replace("/", "-"), `pr-${JDF_PR}`, `${JDF_GATE}-headA.json`);
+    const lookup = () => findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+    await writeFile(file, "{}\n", "utf8");
+    await assert.rejects(lookup, (err) => err.code === OUT_OF_BAND_WRITE);
+    await rm(`${file}.seal`);
+    await assert.rejects(lookup, (err) => err.code === "gate_artifact_unsealed");
+  });
+});
+
+test("readGateFindingsLedger surfaces an unsealed and an edited ledger as typed seal refusals, not a plain read error", async () => {
+  await withLedgerFile(validLedgerForSeal(), async (ledgerPath) => {
+    await rm(`${ledgerPath}.seal`);
+    await assert.rejects(() => readGateFindingsLedger(ledgerPath), { code: "gate_artifact_unsealed" });
+  });
+  await withLedgerFile(validLedgerForSeal(), async (ledgerPath) => {
+    await writeFile(ledgerPath, "{}", "utf8");
+    await assert.rejects(() => readGateFindingsLedger(ledgerPath), { code: "gate_artifact_out_of_band_write" });
+  });
+});
+function validLedgerForSeal() {
+  return { repo: "o/r", pr: 1, gate: "draft_gate", headSha: HEAD_SHA, verdict: "findings_present", loggedAt: "2026-10-25T00:00:00.000Z", findings: [] };
+}

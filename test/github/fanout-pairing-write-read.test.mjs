@@ -7,6 +7,7 @@
 // and a round where one angle of a unit is carried and the rest are fresh
 // (accepted: the re-derivation must match the emitted grouping).
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -73,7 +74,7 @@ async function writeCheck(dir, perAngle) {
 async function readCheck(dir, perAngle) {
   const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-5");
   await mkdir(ledgerDir, { recursive: true });
-  await writeFile(
+  await writeSealed(
     path.join(ledgerDir, `pre_approval_gate-${HEAD_SHA}.json`),
     `${JSON.stringify({ gate: "pre_approval_gate", headSha: HEAD_SHA, findings: [], provenance: { distinctReviewers: countIds(perAngle), perAngle } })}\n`,
     "utf8",
@@ -259,7 +260,7 @@ async function writePacked(dir, gate, groups, perAngle) {
 async function readPacked(dir, gate, provenance) {
   const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-5");
   await mkdir(ledgerDir, { recursive: true });
-  await writeFile(path.join(ledgerDir, `${gate}-${HEAD_SHA}.json`), `${JSON.stringify({ gate, headSha: HEAD_SHA, findings: [], provenance })}\n`, "utf8");
+  await writeSealed(path.join(ledgerDir, `${gate}-${HEAD_SHA}.json`), `${JSON.stringify({ gate, headSha: HEAD_SHA, findings: [], provenance })}\n`, "utf8");
   const { config } = await loadDevLoopConfig({ repoRoot: dir });
   const marker = { visible: true, headSha: HEAD_SHA, executionMode: "fanout_fanin" };
   const enforcement = await buildFanoutEnforcement({

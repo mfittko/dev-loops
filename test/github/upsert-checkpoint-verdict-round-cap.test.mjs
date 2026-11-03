@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -44,7 +45,7 @@ async function writeLedger(tempDir, { overallVerdict = "findings_present", findi
     verdict: "findings_present", overallVerdict, loggedAt: "2026-10-25T00:00:00.000Z", findings,
   };
   if (overallVerdict === null) delete ledger.overallVerdict;
-  await writeFile(ledgerPath, JSON.stringify(ledger), "utf8");
+  await writeSealed(ledgerPath, JSON.stringify(ledger), "utf8");
   return ledgerPath;
 }
 
@@ -54,11 +55,11 @@ async function seedPrior(root, heads, { extraNames = [], unreadable = [] } = {})
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
   for (const head of heads) {
-    await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
+    await writeSealed(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
       repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${head[0]}T00:00:00.000Z`, findings: [],
     }), "utf8");
   }
-  for (const head of unreadable) await writeFile(path.join(dir, `draft_gate-${head}.json`), "{not json", "utf8");
+  for (const head of unreadable) await writeSealed(path.join(dir, `draft_gate-${head}.json`), "{not json", "utf8");
   for (const name of extraNames) await writeFile(path.join(dir, name), "[]", "utf8");
 }
 
@@ -313,7 +314,7 @@ test("a round-5 ledger after four pre-cap rounds does not compose round_cap_reac
       ["3", "findings_present", "2026-10-25T22:04:19.514Z"], ["4", "clean", "2026-10-25T22:32:10.233Z"],
     ];
     for (const [c, verdict, loggedAt] of rounds) {
-      await writeFile(path.join(dir, `draft_gate-${c.repeat(40)}.json`), JSON.stringify({
+      await writeSealed(path.join(dir, `draft_gate-${c.repeat(40)}.json`), JSON.stringify({
         repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: c.repeat(40), verdict, loggedAt, findings: [],
       }), "utf8");
     }
@@ -418,4 +419,19 @@ test("the closure round line renders a normalized full SHA and refuses a short, 
     assert.match(line(input), new RegExp(`closure round: diff from ${rendered}\\b`));
   }
   for (const input of ["abc1234", "", "  ", null, undefined]) assert.doesNotMatch(line(input), /closure round: diff from/, String(input));
+});
+
+test("a --findings-ledger without a seal is refused as gate_artifact_unsealed and an edited one as gate_artifact_out_of_band_write", async () => {
+  await seedPrior(repoRoot, priorHeads);
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-seal-ledger-"));
+  try {
+    const sealed = await writeLedger(dir, { findings: [finding("high", "act")] });
+    await rm(`${sealed}.seal`);
+    assert.match((await post(["--findings-ledger", sealed])).error, /gate_artifact_unsealed/);
+    const edited = await writeLedger(dir, { findings: [finding("high", "act")], name: "edited.json" });
+    await writeFile(edited, "{\"edited\":true}", "utf8");
+    assert.match((await post(["--findings-ledger", edited])).error, /gate_artifact_out_of_band_write/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

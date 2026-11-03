@@ -22,7 +22,8 @@ import { buildGateArtifactPath, buildGateContextPath, buildLogPath } from "../gi
 import { PR_BODY_ABSENT_SENTINEL, listPriorActItems, renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { copilotBodyJudgePath } from "../github/_copilot-body-disposition.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
-import { OUT_OF_BAND_WRITE, readSealed } from "../github/_gate-artifact-seal.mjs";
+import { isSealRefusal, readSealed } from "../github/_gate-artifact-seal.mjs";
+import { CONSOLIDATE_REMEDY } from "../github/_findings-input.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { SLICE_LINKAGE_SENTENCE, sliceLinkageIssues } from "./_slice-linkage.mjs";
 import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "./_operator-focus.mjs";
@@ -57,9 +58,9 @@ class Refusal extends Error {}
 
 async function readSource(kind, filePath) {
   // The findings ledger is a sealed artifact: verify its bytes before pinning them.
-  const reader = kind === "findings" ? async () => Buffer.from(await readSealed(filePath), "utf8") : () => readFile(filePath);
+  const reader = kind === "findings" ? async () => Buffer.from(await readSealed(filePath, { remedy: CONSOLIDATE_REMEDY }), "utf8") : () => readFile(filePath);
   const bytes = await reader().catch((error) => {
-    if (error?.code === OUT_OF_BAND_WRITE) throw new Refusal(error.message);
+    if (isSealRefusal(error)) throw new Refusal(error.message);
     return null;
   });
   const copilotBodyKind = kind === "copilot-body-feedback";

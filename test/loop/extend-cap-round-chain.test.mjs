@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { existsSync, rmSync } from "node:fs";
@@ -32,7 +33,7 @@ async function capFixture({ findings = [] } = {}) {
   const dir = path.join(root, "tmp", "gate-findings", "owner-repo", `pr-${PR}`);
   await mkdir(dir, { recursive: true });
   for (const [i, head] of ["1".repeat(40), "2".repeat(40), "3".repeat(40), A].entries()) {
-    await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
+    await writeSealed(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
       repo: REPO, pr: PR, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: head === A ? findings : [],
     }), "utf8");
   }
@@ -189,7 +190,7 @@ test("the cap-round head equal to the head, or an unfetched cap-round head, refu
     const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
     const gone = "a".repeat(40);
     const dir = path.join(root, "tmp", "gate-findings", "owner-repo", `pr-${PR}`);
-    await writeFile(path.join(dir, `draft_gate-${gone}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: gone, verdict: "findings_present", loggedAt: "2026-11-09T00:00:00.000Z", findings: [] }), "utf8");
+    await writeSealed(path.join(dir, `draft_gate-${gone}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: gone, verdict: "findings_present", loggedAt: "2026-11-09T00:00:00.000Z", findings: [] }), "utf8");
     assert.equal((await extend(root, D)).reason, "no_cap_round_chain");
   } finally {
     await rm(root, { recursive: true, force: true });

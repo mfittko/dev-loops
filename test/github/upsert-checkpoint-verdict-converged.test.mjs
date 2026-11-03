@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -107,7 +108,7 @@ function makeRunChild({ puts, existingReview = true, currentHead = FIX, body = e
 
 async function post(tempDir, { findings, converged, extraArgs = [], runChildOptions = {}, verdict, overallVerdict = "clean", root = repoRoot }) {
   const ledgerPath = path.join(tempDir, "ledger.json");
-  await writeFile(ledgerPath, JSON.stringify({
+  await writeSealed(ledgerPath, JSON.stringify({
     repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, verdict: "clean", overallVerdict,
     loggedAt: "2026-10-20T00:00:00.000Z", findings,
   }), "utf8");
@@ -191,7 +192,7 @@ test("at round count cap+1 a converged post is accepted and a non-converged post
     await mkdir(dir, { recursive: true });
     for (const c of ["1", "2", "3", "4"]) {
       const head = c.repeat(40);
-      await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
+      await writeSealed(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
         repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${c}T00:00:00.000Z`, findings: [],
       }), "utf8");
     }
@@ -434,7 +435,7 @@ test("a converged post is accepted on a cap-fixed PR whose sealed clearing recor
     const findings = [finding("low", 1), finding("nit", 2)];
     for (const head of ["1", "2", "3", A]) {
       const sha = head.length === 1 ? head.repeat(40) : head;
-      await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({
+      await writeSealed(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({
         repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-0${head.length === 1 ? head : 4}T00:00:00.000Z`, findings: sha === A ? findings : [],
       }), "utf8");
     }
@@ -458,7 +459,7 @@ test("a converged post on a cap-fixed PR is still refused when coordination forb
     const findings = [finding("low", 1), finding("nit", 2)];
     for (const head of ["1", "2", "3", A]) {
       const sha = head.length === 1 ? head.repeat(40) : head;
-      await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({
+      await writeSealed(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({
         repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-0${head.length === 1 ? head : 4}T00:00:00.000Z`, findings: sha === A ? findings : [],
       }), "utf8");
     }

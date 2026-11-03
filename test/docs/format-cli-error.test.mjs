@@ -41,3 +41,9 @@ test("both formatters carry the typed code for gate_artifact_out_of_band_write",
   assert.equal(JSON.parse(pure(err)).code, "gate_artifact_out_of_band_write");
   assert.equal(pure(err), canonical(err));
 });
+
+test("both formatters carry the typed code for gate_artifact_unsealed", () => {
+  const err = Object.assign(new Error("gate_artifact_unsealed: f"), { code: "gate_artifact_unsealed" });
+  assert.equal(JSON.parse(pure(err)).code, "gate_artifact_unsealed");
+  assert.equal(pure(err), canonical(err));
+});

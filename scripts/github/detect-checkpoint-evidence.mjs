@@ -17,12 +17,13 @@ import {
 // summarizers (this file, pre-pr-ready-gate.mjs, ready-for-review.mjs,
 // request-copilot-review.mjs) is covered by construction rather than needing
 // its own per-caller filter.
-import { access, readFile } from "node:fs/promises";
+import { access } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "./_gate-finding-surface.mjs";
+import { isSealRefusal, readSealed } from "./_gate-artifact-seal.mjs";
 import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
@@ -736,21 +737,22 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
     return true;
   };
   let firstNonNull = null;
+  let satisfying = null;
   for (const root of checkouts) {
     const full = path.resolve(root, ledgerPath);
     try {
-      const parsed = JSON.parse(await readFile(full, "utf8"));
+      const parsed = JSON.parse(await readSealed(full));
       const prov = parsed && typeof parsed === "object" ? parsed.provenance : null;
       if (prov == null) continue; // ledger present but no provenance — keep scanning.
-      if (satisfies(prov)) {
-        return prov; // satisfying ledger — prefer it over any earlier failing one.
-      }
-      if (firstNonNull === null) firstNonNull = prov; // remember for diagnostics.
-    } catch {
+      // Keep scanning after a satisfying copy: a seal refusal in a later checkout must fail the same way whatever the cwd (like readActListInAny).
+      if (satisfying === null && satisfies(prov)) satisfying = prov; // satisfying ledger — prefer it over any earlier failing one.
+      else if (firstNonNull === null) firstNonNull = prov; // remember for diagnostics.
+    } catch (error) {
+      if (isSealRefusal(error)) throw error; // edited or unsealed: fail closed, never "no ledger"
       // Missing/unreadable/malformed ledger in this checkout — try the next.
     }
   }
-  return firstNonNull;
+  return satisfying ?? firstNonNull;
 }
 /**
  * The judge act list of the pre_approval_gate ledger across the enumerated
@@ -771,8 +773,9 @@ async function readActListInAny(checkouts, ledgerPath, markerExecutionMode) {
     const full = path.resolve(root, ledgerPath);
     let parsed;
     try {
-      parsed = JSON.parse(await readFile(full, "utf8"));
+      parsed = JSON.parse(await readSealed(full));
     } catch (error) {
+      if (isSealRefusal(error)) throw error; // edited or unsealed: fail closed, never "unreadable"
       if (error?.code !== "ENOENT") {
         exists = true;
         unreadable ??= { path: full };

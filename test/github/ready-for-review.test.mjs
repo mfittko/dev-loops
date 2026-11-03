@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -1015,7 +1016,7 @@ test("ready-for-review accepts a base-only merge M of the chain's last clearing 
     const ledgers = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-17");
     await mkdir(ledgers, { recursive: true });
     for (const [i, head] of ["1".repeat(40), "2".repeat(40), A].entries()) {
-      await writeFile(path.join(ledgers, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: [] }));
+      await writeSealed(path.join(ledgers, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: [] }));
     }
     const deltaDir = path.join(tempDir, "tmp", "gate-delta");
     await mkdir(deltaDir, { recursive: true });

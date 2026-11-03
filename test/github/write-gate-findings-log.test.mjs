@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -150,7 +151,7 @@ test("carry-forward uses the real emitter's pending plan for fresh-only provenan
     assert.equal(emitted.code, 0, emitted.stderr);
     const planPath = path.join(contextDir, `draft_gate-${headSha}.emit-plan.json`);
     assert.deepEqual(JSON.parse(await readFile(planPath, "utf8")).units.map((unit) => unit.angles), [["scope"], ["pr-description"]]);
-    await writeFile(path.join(contextDir, `draft_gate-${headSha}.fanin-ledger.json`), JSON.stringify({
+    await writeSealed(path.join(contextDir, `draft_gate-${headSha}.fanin-ledger.json`), JSON.stringify({
       overallVerdict: "clean",
       findings: [],
       provenance: {
@@ -1049,7 +1050,7 @@ test("writeGateFindingsLog accepts findings from --findings-file", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-file-"));
   try {
     const findingsFile = path.join(tmpDir, "findings.json");
-    await writeFile(findingsFile, JSON.stringify([
+    await writeSealed(findingsFile, JSON.stringify([
       { severity: "must-fix", angle: "scope", summary: "bad scope", disposition: "accepted-for-fix" },
     ]), "utf8");
     const result = await writeGateFindingsLog({
@@ -2322,7 +2323,7 @@ test("writeGateFindingsLog rejects a --verdict contradicting a --findings-file w
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-file-conflict-"));
   try {
     const findingsFile = path.join(tmpDir, "findings.json");
-    await writeFile(findingsFile, JSON.stringify({ overallVerdict: "findings_present", findings: [] }), "utf8");
+    await writeSealed(findingsFile, JSON.stringify({ overallVerdict: "findings_present", findings: [] }), "utf8");
     await assert.rejects(
       () => writeGateFindingsLog({
         repo: "o/n",
@@ -2547,7 +2548,7 @@ async function writeCapPrior(tmpDir, { pr = 42, head, findings, gate = "draft_ga
   for (const root of [tmpDir, path.join(tmpDir, "tmp")]) {
     const dir = path.join(root, "gate-findings", "owner-repo", `pr-${pr}`);
     await mkdir(dir, { recursive: true });
-    await writeFile(path.join(dir, `${gate}-${head}.json`), JSON.stringify({
+    await writeSealed(path.join(dir, `${gate}-${head}.json`), JSON.stringify({
       repo: "owner/repo", pr, gate, headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${head[0]}T00:00:00.000Z`, findings,
     }), "utf8");
   }
@@ -3195,6 +3196,27 @@ test("writeGateFindingsLog run from a repo subdirectory reads the repo round cap
     }, { repoRoot: sub });
     const parsed = JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-2243", `draft_gate-${headSha}.json`), "utf8"));
     assert.deepEqual(parsed.findings.map((f) => f.judgeDisposition), ["defer"]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog refuses an unsealed --findings-file with gate_artifact_unsealed (ADR 0242)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-unsealed-"));
+  try {
+    const findingsFile = path.join(tmpDir, "findings.json");
+    await writeFile(findingsFile, "[]", "utf8");
+    await assert.rejects(
+      () => writeGateFindingsLog({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234567890abcdef000000000000000000000", verdict: "clean", findingsFile, tmpRoot: tmpDir }),
+      (err) => err.code === "gate_artifact_unsealed" && err.message.includes(findingsFile) && err.message.includes("--findings <json>"),
+    );
+    // An edited sealed file fails with the out-of-band code.
+    await writeSealed(findingsFile, "[]");
+    await writeFile(findingsFile, "[ ]", "utf8");
+    await assert.rejects(
+      () => writeGateFindingsLog({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234567890abcdef000000000000000000000", verdict: "clean", findingsFile, tmpRoot: tmpDir }),
+      (err) => err.code === "gate_artifact_out_of_band_write",
+    );
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

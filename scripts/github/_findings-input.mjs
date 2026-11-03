@@ -5,7 +5,11 @@
 // is shared here — each tool keeps its own `validate(parsed, flagLabel)`
 // callback since their per-element validation intentionally differs (e.g.
 // disposition enforcement).
-import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
+import { isSealRefusal, readSealed } from "./_gate-artifact-seal.mjs";
+
+/** Refusal remedies for an unsealed --findings-file: the route differs by caller (a tool without --findings must regenerate the ledger). */
+export const CONSOLIDATE_REMEDY = "regenerate the input with consolidate-fanin --ledger-out";
+export const HAND_AUTHORED_REMEDY = "for hand-authored findings pass --findings <json> instead of --findings-file";
 
 // The consolidate-fanin CLI's `--ledger-out` writes a wrapper object
 // `{ overallVerdict, findings }` (the consolidator's computed verdict carried
@@ -38,8 +42,8 @@ function unwrapFindingsPayload(parsed) {
  * the caller-supplied `validate` callback. Returns
  * `{ findings, overallVerdict, provenance }` so a consolidator-produced
  * wrapper object (`{ overallVerdict, findings, provenance? }`, written by
- * consolidate-fanin.mjs's `--ledger-out`, or hand-authored by any other
- * caller) threads its computed verdict and its own `provenance` field
+ * consolidate-fanin.mjs or judge-pass.mjs via their sealed `--ledger-out`)
+ * threads its computed verdict and its own `provenance` field
  * through to the consumer alongside the findings array; a bare array input
  * leaves both undefined.
  *
@@ -47,7 +51,7 @@ function unwrapFindingsPayload(parsed) {
  * @param {{ parseError: (message: string) => Error, validate: (parsed: unknown, flagLabel: string) => unknown[] }} deps
  * @returns {Promise<{ findings: unknown[], overallVerdict?: unknown, provenance?: unknown }>}
  */
-export async function resolveFindingsInput(options, { parseError, validate }) {
+export async function resolveFindingsInput(options, { parseError, validate, remedy = CONSOLIDATE_REMEDY }) {
   if (options.findings !== undefined && options.findingsFile !== undefined) {
     throw parseError("--findings and --findings-file are mutually exclusive; pass only one");
   }
@@ -56,9 +60,9 @@ export async function resolveFindingsInput(options, { parseError, validate }) {
   if (options.findingsFile !== undefined) {
     let raw;
     try {
-      raw = await readSealed(options.findingsFile);
+      raw = await readSealed(options.findingsFile, { remedy });
     } catch (err) {
-      if (err?.code === OUT_OF_BAND_WRITE) throw err;
+      if (isSealRefusal(err)) throw err;
       throw parseError(`Cannot read --findings-file "${options.findingsFile}": ${err instanceof Error ? err.message : String(err)}`);
     }
     try {

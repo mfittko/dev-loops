@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -53,7 +54,7 @@ const LOCATABLE_FINDING = { severity: "must-fix", angle: "correctness", summary:
 
 async function writeReviewLedger(tempDir, findings, overrides = {}) {
   const ledgerPath = path.join(tempDir, "review-ledger.json");
-  await writeFile(ledgerPath, JSON.stringify({
+  await writeSealed(ledgerPath, JSON.stringify({
     repo: "owner/repo",
     pr: 17,
     gate: "review",

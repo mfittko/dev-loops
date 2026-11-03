@@ -1521,7 +1521,9 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-        reason: `The PR is still draft and the next \`draft_gate\` round is past the round cap (\`round_cap_reached\`, ADR 0208), but the cap round's fixer pass is not proven landed with a cleared pre-push delta. ${Object.hasOwn(CAP_ROUND_REFUSAL, input.draftCapRoundFailure) ? CAP_ROUND_REFUSAL[input.draftCapRoundFailure] : CAP_ROUND_REFUSAL.cap_round_unresolved} Round N+1 never runs.`,
+        reason: input.draftCapRoundFailure === "ledger_seal_refused"
+          ? `The PR is still draft and a prior \`draft_gate\` ledger or findings log failed its integrity seal (ADR 0204, ADR 0242), so the next round is refused. ${input.draftCapRoundDetail ?? ""} Re-run the sanctioned writer at the artifact head, or quarantine a prior-head findings log with \`scripts/github/quarantine-gate-findings-log.mjs\`.`
+          : `The PR is still draft and the next \`draft_gate\` round is past the round cap (\`round_cap_reached\`, ADR 0208), but the cap round's fixer pass is not proven landed with a cleared pre-push delta. ${Object.hasOwn(CAP_ROUND_REFUSAL, input.draftCapRoundFailure) ? CAP_ROUND_REFUSAL[input.draftCapRoundFailure] : CAP_ROUND_REFUSAL.cap_round_unresolved}${typeof input.draftCapRoundDetail === "string" && input.draftCapRoundDetail.length > 0 ? ` ${input.draftCapRoundDetail}.` : ""} Round N+1 never runs.`,
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,
