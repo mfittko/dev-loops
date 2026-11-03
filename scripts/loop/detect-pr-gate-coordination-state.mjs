@@ -4,7 +4,6 @@ import { randomBytes } from "node:crypto";
 import {
   buildParseError,
   formatCliError,
-  isCopilotLogin,
   isDirectCliRun,
   parseJsonText,
   parseReviewThreads,
@@ -14,6 +13,7 @@ import {
 import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { isSanctionedCopilotReviewerLogin } from "@dev-loops/core/github/comment-trust";
 import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateEarlySurface } from "./early-surface-checks.mjs";
 import { buildAdrTripwireField, buildSizeBudgetField, evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -1258,7 +1258,7 @@ export function resolveRoundCapCleanFallback({ roundCapCleanEligible, evaluatorR
   return roundCapCleanEligible === true || isRoundCapReachedCleanGrant(evaluatorResult);
 }
 
-async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
     ghCommand,
     ["api", `repos/${repo}/issues/${pr}/timeline`, "--paginate", "--jq",
@@ -1268,7 +1268,7 @@ async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = process.e
   if (result.code !== 0) return false;
   for (const line of result.stdout.trim().split("\n")) {
     const login = line.trim();
-    if (login && isCopilotLogin(login)) return true;
+    if (login && isSanctionedCopilotReviewerLogin(login)) return true;
   }
   return false;
 }
