@@ -39,7 +39,7 @@ const READ_GIT_SUBCOMMANDS = new Set(['diff', 'log', 'show', 'status', 'ls-files
 const SHELL_ACTIVE_RE = /[;&|<>`$\n\r(){}\\'"*?[\]]/;
 
 // The reviewer contract's mandated sentinel and bound-escape scripts, and its `cd <worktree> && ...` prefix.
-const REVIEWER_SCRIPT_RE = /^dev-loops-run scripts\/(?:github\/(?:verify-fresh-review-context|emit-reviewer-blocked)|loop\/seal-evidence)\.mjs(?: .*)?$/;
+const REVIEWER_SCRIPT_RE = /^dev-loops-run (?:--repo-root [\w.\/-]+ )?scripts\/(?:github\/(?:verify-fresh-review-context|emit-reviewer-blocked)|loop\/seal-evidence)\.mjs(?: .*)?$/;
 const CD_PREFIX_RE = /^cd (?:"[\w./-]+"|[\w./-]+) && /;
 const GIT_C_RE = /^git -C (?:"[\w./-]+"|[\w./-]+) /;
 // Flags that make an allowed program execute another program or write a file. Git accepts unique prefixes, so match prefixes.

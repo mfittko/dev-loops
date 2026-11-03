@@ -221,12 +221,13 @@ export const DELTA_EVIDENCE_RULE = "Read patchPath with the read tool. Evidence 
 
 // The bare command, run verbatim by the reviewer after it writes resultPath. Paths outside the shell-inert set would make the reviewer gate block it.
 const SHELL_INERT_PATH = /^[\w./-]+$/;
-export const deltaSealCommand = (resultPath, tmpRoot) => {
+export const deltaSealCommand = (resultPath, tmpRoot, worktree) => {
   tmpRoot = path.resolve(tmpRoot);
-  for (const [name, value] of [["--result-path", resultPath], ["tmp root", tmpRoot]]) {
+  worktree = path.resolve(worktree);
+  for (const [name, value] of [["--result-path", resultPath], ["tmp root", tmpRoot], ["worktree", worktree]]) {
     if (!SHELL_INERT_PATH.test(value)) throw parseError(`${name} ${JSON.stringify(value)} may use only letters, digits, "_", ".", "/" and "-": the reviewer runs input.sealCommand verbatim and the read-only gate blocks any other character (GATE-EXEC-EVIDENCE-SEALED)`);
   }
-  return `dev-loops-run scripts/loop/seal-evidence.mjs --kind delta --file ${resultPath} --tmp-root ${tmpRoot}`;
+  return `dev-loops-run --repo-root ${worktree} scripts/loop/seal-evidence.mjs --kind delta --file ${resultPath} --tmp-root ${tmpRoot}`;
 };
 
 export const deltaPatchPath = (tmpRoot, baseline, candidate) => path.join(tmpRoot, "gate-delta", `${baseline}-${candidate}.patch`);
@@ -502,7 +503,7 @@ export async function runCli(
       writeFileSync(patchPath, diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead));
     }
     // The target authenticateCoverage verified binds the log's repo and pr; without an authenticated plan the chain path refuses.
-    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE, sealCommand: deltaSealCommand(options.resultPath, tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree)) }), ...buildDeltaInput({ sequence, candidateHead: currentHead, runId, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles, staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
+    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE, sealCommand: deltaSealCommand(options.resultPath, tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), options.worktree) }), ...buildDeltaInput({ sequence, candidateHead: currentHead, runId, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles, staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
     // Every input run opens its own unsealed record, so a re-run of the producer at the same heads can seal again. Last step: only a successful input run moves the pointer.
     if (!options.handback) createEvidenceRun(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaEvidenceKey(sequence.reviewBaselineHead, currentHead, runId), { reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead, actSetId: sequence.actSetId, runId }, path.resolve(options.worktree, options.resultPath));
   }
