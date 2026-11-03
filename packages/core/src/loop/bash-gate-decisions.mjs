@@ -198,22 +198,27 @@ export function decideUnresolveOwnerDeny({ command, role }) {
 }
 
 const ASSIGNMENT_WORD = /^[A-Za-z_]\w*=/;
-const LAUNCHER_PREFIX = /^(?:env|command|exec|nohup|time|nice|sudo)$/;
+const LAUNCHER_PREFIX = /^(?:env|command|exec|nohup|time|nice|sudo|coproc|xargs)$/;
 const RESERVED_WORD = /^(?:\{|!|then|do|else|elif|if|while|until)$/;
 // The closed list of merge-pr boolean flags (parseArgs in merge-pr.mjs). A dashed word outside it is read as a value-taking option.
 // ponytail: fail-closed ceiling: a future boolean flag missing here makes a `--check` after it count as a value, so the deny fires until the list is extended.
-const BOOLEAN_FLAGS = new Set(["--check", "--stable-release", "--standing-authorization", "--lightweight", "--help"]);
+const BOOLEAN_FLAGS = new Set(["--check", "--stable-release", "--standing-authorization", "--lightweight", "--help", "-h", "--silent", "-s"]);
 const baseName = (value) => value.split("/").pop();
 
 /** The program of one tokenized segment: its words without env assignments, `(`/`)` subshell edges and operators, and the index of the first word after the launcher prefixes. */
 function segmentProgram(words) {
-  const values = words
+  const entries = words
     .filter((w) => !w.op && !ASSIGNMENT_WORD.test(w.raw.replace(/^\(+/, "")))
-    .map((w) => w.value.replace(/^\(+|\)+$/g, ""))
-    .filter(Boolean);
+    .map((w) => ({ v: w.value.replace(/^\(+|\)+$/g, ""), closes: !w.raw.startsWith("(") && w.raw.endsWith(")") }))
+    .filter((e) => e.v);
+  const values = entries.map((e) => e.v);
   let i = 0;
   for (;;) {
-    if (RESERVED_WORD.test(values[i] ?? "")) i++;
+    // A `case` header runs through its first `PATTERN)` word; a `NAME()` function header or a case pattern at the head is skipped; `function NAME` skips its name.
+    if (values[i] === "case") { while (i < values.length && !entries[i].closes) i++; i++; }
+    else if (values[i] === "function") i += 2;
+    else if (entries[i]?.closes) i++;
+    else if (RESERVED_WORD.test(values[i] ?? "")) i++;
     else if (LAUNCHER_PREFIX.test(baseName(values[i] ?? ""))) for (i++; /^(?:-|\d)/.test(values[i] ?? ""); i++);
     // `timeout` takes options (with or without value words) and then a duration: skip through the first digit-led word. No duration means no program.
     else if (baseName(values[i] ?? "") === "timeout") { while (++i < values.length && !/^\d/.test(values[i])); i++; }
@@ -235,7 +240,7 @@ function segmentRunsMergePrWithoutCheck(words) {
   // Any `--check=` word voids the allow: the last `--check` token of either form wins in merge-pr, so the gate stays fail-closed and accepts only a bare `--check` word.
   // A bare `--check` counts only after the script word, a non-dashed word or a boolean flag; any other dashed predecessor is a value-taking option.
   const rest = values.slice(i);
-  return values.some((v) => v.startsWith("--check=")) || !rest.some((v, k) => k > 0 && v === "--check" && (!rest[k - 1].startsWith("-") || BOOLEAN_FLAGS.has(rest[k - 1])));
+  return values.some((v) => v.startsWith("--check=")) || !rest.some((v, k) => k > 0 && v === "--check" && (!rest[k - 1].startsWith("-") || rest[k - 1].includes("=") || BOOLEAN_FLAGS.has(rest[k - 1])));
 }
 
 /** Walks the token tree: a program word, a `$(...)` substitution, a `-c`/`eval` payload or a shell heredoc body that runs merge-pr.mjs without `--check`. */

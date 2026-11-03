@@ -152,7 +152,7 @@ contract classes as pure read/observe, and the envelope builder names them in on
 read-only route means adding it there too. That keeps the field from contradicting a route's own
 stop rules. Because it derives only from target and strategy, it stays inside the byte-stable prefix.
 
-A coordinator brief never contains a merge step, because a subagent never merges (ADR 0249). At `await_final_human_approval` the hand-back carries the exact `merge-pr.mjs` command line, with `--human-approved-by <login>` and, on a drain merge under standing authorization, `--standing-authorization`, as `merge-pr.mjs --check` reports. The orchestrator or operator runs that command.
+A coordinator brief never contains a merge step, because a subagent never merges (ADR 0249). At `await_final_human_approval` the hand-back carries the exact `merge-pr.mjs` command line, with `--human-approved-by <login>` and, on a drain merge under standing authorization, `--standing-authorization`, as `merge-pr.mjs --check` reports. On `approvalPath: comment_marker` the hand-back also carries the exact `approveMergeLine` that `--check` reports. The orchestrator or operator runs that command.
 
 ## Acceptance templates
 

@@ -597,6 +597,14 @@ const MERGE_DENY_EXTRA_FORMS = [
   "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x --fields --check",
   "timeout --signal KILL 300 node scripts/github/merge-pr.mjs --pr 5",
   "(FOO=1 node scripts/github/merge-pr.mjs --pr 5)",
+  "case x in x) node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x;; esac",
+  "f() { node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x; }; f",
+  "function f { node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x; }; f",
+  "coproc node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x",
+  "xargs node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x </dev/null",
+  "echo $(node scripts/github/merge-pr.mjs --pr 5)",
+  'eval "node scripts/github/merge-pr.mjs --pr 5"',
+  "node scripts/github/merge-pr.mjs --repo=a/b --pr=5 --human-approved-by x --jq --check",
 ];
 
 const MERGE_ALLOW_FORMS = [
@@ -608,6 +616,13 @@ const MERGE_ALLOW_FORMS = [
   "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --check --jq .mergeClass",
   "(node scripts/github/merge-pr.mjs --pr 5 --check)",
   "bash <<EOF\nnode scripts/github/merge-pr.mjs --pr 5 --check\nEOF",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --silent --check",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 -s --check",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --lightweight --check",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --stable-release --check",
+  "node scripts/github/merge-pr.mjs --pr=5 --check",
+  "node scripts/github/merge-pr.mjs --repo=a/b --pr=5 --check",
+  "dev-loops-run scripts/github/merge-pr.mjs --repo a/b --pr 5 --silent --check",
 ];
 
 test("merge-pr.mjs --check forms stay allowed for a subagent role (issue 2500)", () => {
