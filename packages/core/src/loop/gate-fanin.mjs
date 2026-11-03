@@ -1145,10 +1145,12 @@ export function validateJudgeVerdict(verdict) {
   if (typeof sd.rationale !== "string" || sd.rationale.trim().length === 0) {
     throw new Error("judge verdict.scopeDrift.rationale must be a non-empty string");
   }
-  if (!Array.isArray(sd.driftedAreas)) {
+  // #3051: a within_scope verdict may omit driftedAreas; default it to [].
+  const driftedAreas = sd.driftedAreas === undefined && normalizedVerdict === "within_scope" ? [] : sd.driftedAreas;
+  if (!Array.isArray(driftedAreas)) {
     throw new Error("judge verdict.scopeDrift.driftedAreas must be an array");
   }
-  for (const [di, area] of sd.driftedAreas.entries()) {
+  for (const [di, area] of driftedAreas.entries()) {
     if (typeof area !== "string" || area.trim().length === 0) {
       throw new Error(`judge verdict.scopeDrift.driftedAreas[${di}] must be a non-empty string`);
     }
@@ -1198,7 +1200,7 @@ export function validateJudgeVerdict(verdict) {
       }
     }
   }
-  return { headSha: v.headSha, scopeDrift: { ...sd, verdict: normalizedVerdict }, dispositions: v.dispositions };
+  return { headSha: v.headSha, scopeDrift: { ...sd, verdict: normalizedVerdict, driftedAreas }, dispositions: v.dispositions };
 }
 
 /**
