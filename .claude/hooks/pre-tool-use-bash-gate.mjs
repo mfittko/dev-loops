@@ -12,7 +12,7 @@
  *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
  *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
- *   - raw `gh pr edit` body writes (`--body`/`--body-file`) and `gh api` body writes to
+ *   - raw `gh pr edit` body writes (`--body`/`--body-file`/`-b`/`-F`) and `gh api` body writes to
  *     `pulls/<n>` or `issues/<n>` (a `body` field via `-f`/`-F`/`--field`/`--raw-field`, an
  *     `--input` payload, or a `gh api graphql` `updatePullRequest`) — blocked actor-independently
  *     (`ADR-TRIPWIRE-STANDING-WAIVER`): the sanctioned launcher writers are the only body route

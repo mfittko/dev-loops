@@ -5,7 +5,8 @@
 //
 // This suite drives the REAL hook script (the harness `test/loop/fixer-pull-line-hook.test.mjs`
 // mirrors) for the two actor-independent denies the pre-check used to leave unnamed:
-//   - `ADR-TRIPWIRE-STANDING-WAIVER`: raw PR/issue body writes, and
+//   - `ADR-TRIPWIRE-STANDING-WAIVER`: raw `gh pr edit` body writes and `gh api` body writes to
+//     `pulls/<n>`/`issues/<n>`, and
 //   - the `timeout N <sanctioned command>` wrapper.
 // Both apply to EVERY Claude actor, so each is asserted for the operator/main-agent payload
 // (Claude exposes `agent_type` only inside a subagent, so its absence IS the main agent) and for
@@ -63,14 +64,17 @@ const denyForEveryActor = (root, command, reason) => {
   }
 };
 
-test("raw PR/issue body writes are denied for every Claude actor", async () => {
+test("raw gh pr edit and gh api PR/issue body writes are denied for every Claude actor", async () => {
   await withManagedRepo(async (root) => {
-    // The last two pin the API forms the hook header names beyond a plain body field
-    // (an `--input` payload and a `gh api graphql` `updatePullRequest`), so the header
+    // Every `gh pr edit` body form the hook header names is pinned here — the short `-b`/`-F`
+    // flags as well as the long ones — together with the two API forms beyond a plain body
+    // field (an `--input` payload and a `gh api graphql` `updatePullRequest`), so the header
     // cannot drift from what the nominated predicate denies.
     for (const command of [
       "gh pr edit 5 --body-file waiver.md",
       "gh pr edit 5 --body 'text with an adr-tripwire:allow line'",
+      "gh pr edit 5 -b 'text with an adr-tripwire:allow line'",
+      "gh pr edit 5 -F waiver.md",
       "gh api -X PATCH repos/o/r/pulls/5 -f body=x",
       "gh api -X PATCH repos/o/r/issues/5 --field body=x",
       "gh api -X PATCH repos/o/r/pulls/5 --input body.json",
