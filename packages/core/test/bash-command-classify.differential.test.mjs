@@ -130,6 +130,8 @@ const RESIDUE_SHAPES = [
 /** Deny rows from the closed branch (draft_gate rounds 5 to 7, delta reviews): every deny row of commits 1c48f4f46..5c68e78be. */
 const SALVAGED_DENY_ROWS = [
   ...INLINE_DENY_ROWS,
+  "cp /bin/sh tmp/cat; echo 'node scripts/loop/probe-copilot-review.mjs --pr 5 &' | tmp/cat",
+  "echo 'node scripts/loop/probe-copilot-review.mjs --pr 5 &' | PATH=tmp cat",
   // shared fixture table rows (test/fixtures/inline-interpreter-forms.mjs)
   "bash <<< 'x; node -e y'",
   "sh <<< 'x; node -e y'",
