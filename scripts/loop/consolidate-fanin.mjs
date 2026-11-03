@@ -58,13 +58,14 @@ import { verifyPullReceipt, verifyPulledResult } from "../github/_work-order-pro
 import { resolveGateArtifactTmpRoot, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, countDistinctReviewers, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { FANIN_SYNTHETIC_ANGLES, ROUTED_RESIDUE_ANGLE, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, countDistinctReviewers, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { clusterFindings } from "@dev-loops/core/loop/finding-cluster";
 import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
+import { operatorFocusDigestEntry, readOperatorFocusFile } from "./_operator-focus.mjs";
 
-const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>] [--emit-plan <path>]
+const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>] [--emit-plan <path>] [--operator-focus-file <path>] [--spec-authority <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
 --findings-dir into the JSON shapes write-gate-findings-log.mjs, post-gate-findings.mjs
 (--findings / --findings-file), and upsert-checkpoint-verdict.mjs (--findings-json) accept.
@@ -271,6 +272,11 @@ Optional:
                                  (not a tmp/ subdirectory of it); per-gate records from <tmpRoot>/gate-context/**.
                                  With --emit-plan, the keyed fan-in ledger is written here, so this MUST be
                                  the root the plan was emitted under.
+  --operator-focus-file <path>   GATE-EXEC-ROUTED-RESIDUE-INPUT: operator focus JSON whose "residue" entries
+                                 ({ summary, severity?, file?, line? }) become findings under the declared
+                                 angle "operator-routed-residue"; residue requires --emit-plan, which adds a
+                                 provenance.perAngle entry (source "operator-focus", the focus digest). A residue entry without severity
+                                 becomes "medium". A relative path resolves against --repo-root, else the cwd.
   --spec-authority <path>        JSON { specDigest, headSha, contentDigest, checkedCriteria }
                                  (issue 2008 / ADR 0061 AC1). When supplied, stamps the
                                  --ledger-out { overallVerdict, findings } object with the pinned
@@ -602,6 +608,7 @@ export function parseConsolidateFaninCliArgs(argv) {
     emitPlan: undefined,
     tmpRoot: undefined,
     specAuthority: undefined,
+    operatorFocusFile: undefined,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -624,6 +631,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       "emit-plan": { type: "string" },
       "tmp-root": { type: "string" },
       "spec-authority": { type: "string" },
+      "operator-focus-file": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -689,6 +697,9 @@ export function parseConsolidateFaninCliArgs(argv) {
       // Parse shared with write-gate-context.mjs's own --carried-angles flag
       // so the two CLIs' accepted shape and wording can never drift.
       options.carriedAngles = parseCarriedAnglesJsonArray(requireTokenValue(token, parseError), parseError);
+      if (options.carriedAngles.some((a) => baseAngleName(String(a).trim()).toLowerCase() === ROUTED_RESIDUE_ANGLE)) {
+        throw parseError(`--carried-angles may not name the reserved angle "${ROUTED_RESIDUE_ANGLE}" (GATE-EXEC-ROUTED-RESIDUE-INPUT)`);
+      }
       continue;
     }
     if (token.name === "carry-forward-plan") {
@@ -746,6 +757,12 @@ export function parseConsolidateFaninCliArgs(argv) {
         throw parseError("--tmp-root requires a non-empty path");
       }
       options.tmpRoot = tmpRoot;
+      continue;
+    }
+    if (token.name === "operator-focus-file") {
+      const p = requireTokenValue(token, parseError).trim();
+      if (p.length === 0) throw parseError("--operator-focus-file requires a non-empty path");
+      options.operatorFocusFile = p;
       continue;
     }
     if (token.name === "spec-authority") {
@@ -1130,6 +1147,9 @@ export async function consolidateGateFanin(options) {
     }
     validateArtifactShape(parsed, `"${filePath}"`);
     const angle = parsed.angle.trim();
+    if (baseAngleName(angle).toLowerCase() === ROUTED_RESIDUE_ANGLE) {
+      throw new Error(`"${filePath}": angle "${angle}" is reserved for operator-focus residue (GATE-EXEC-ROUTED-RESIDUE-INPUT); only --operator-focus-file may produce it`);
+    }
     // Head-stamp guard: with --head-sha, an artifact must prove it was written
     // against THIS round's head. A stale copy staged from an earlier round is
     // otherwise indistinguishable from a fresh verdict — it would re-raise
@@ -1443,6 +1463,18 @@ export async function consolidateGateFanin(options) {
     }
   }
 
+  // GATE-EXEC-ROUTED-RESIDUE-INPUT: operator-routed residue enters as a fresh, head-stamped artifact under a declared angle.
+  const operatorFocus = await readOperatorFocusFile(options.operatorFocusFile ? path.resolve(options.repoRoot ?? process.cwd(), options.operatorFocusFile) : undefined, { allowResidue: true });
+  if (operatorFocus?.residue) {
+    if (emitPlan === undefined) throw new Error("GATE-EXEC-ROUTED-RESIDUE-INPUT: --operator-focus-file residue requires --emit-plan so the provenance entry exists");
+    rawArtifacts.push({
+      angle: ROUTED_RESIDUE_ANGLE,
+      verdict: "findings_present",
+      ...(options.headSha !== undefined ? { headSha: options.headSha } : {}),
+      findings: operatorFocus.residue.map((r) => ({ ...r, severity: r.severity ?? "medium" })),
+    });
+  }
+
   const angles = rawArtifacts.map((a) => ({
     angle: a.angle.trim(),
     verdict: a.verdict.trim(),
@@ -1599,6 +1631,9 @@ export async function consolidateGateFanin(options) {
     const ledgerWrapper = { overallVerdict: consolidated.verdict, findings };
     if (verifiedItems.length > 0) ledgerWrapper.verifiedItems = verifiedItems;
     if (emitPlan !== undefined) ledgerWrapper.provenance = deriveFaninProvenance(rawArtifacts, emitPlan, options.headSha, options.carryForwardPlan);
+    if (emitPlan !== undefined && operatorFocus?.residue) {
+      ledgerWrapper.provenance.perAngle.push({ angle: ROUTED_RESIDUE_ANGLE, source: "operator-focus", ...operatorFocusDigestEntry(operatorFocus) });
+    }
     const ledgerRecord = stampOptionalSpecAuthority(ledgerWrapper, specAuthorityIdentity);
     const ledgerText = `${JSON.stringify(ledgerRecord, null, 2)}\n`;
     if (options.ledgerOut !== undefined) ledgerTargets.push(options.ledgerOut);

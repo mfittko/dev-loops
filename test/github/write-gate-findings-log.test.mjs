@@ -1236,6 +1236,28 @@ test("parseProvenanceJson accepts a well-formed provenance object", () => {
   assert.deepEqual(prov.perAngle[1], { angle: "safety", reviewer: "review-b" });
 });
 
+test("parseProvenanceJson accepts the operator-focus entry only on the reserved angle, and refuses every other form (#2971)", () => {
+  const digest = "a".repeat(64);
+  const parse = (extra) => parseProvenanceJson(JSON.stringify({
+    distinctReviewers: 1,
+    perAngle: [{ angle: "scope", reviewer: "review-a" }, extra],
+  }));
+  const ok = parse({ angle: "operator-routed-residue", source: "operator-focus", operatorFocusDigest: digest });
+  assert.deepEqual(ok.perAngle[1], { angle: "operator-routed-residue", source: "operator-focus", operatorFocusDigest: digest });
+  const refusal = /source must be "operator-focus" with a 64-hex operatorFocusDigest/;
+  for (const angle of ["security", "correctness", "scope"]) {
+    assert.throws(() => parse({ angle, source: "operator-focus", operatorFocusDigest: digest }), refusal);
+  }
+  assert.throws(() => parse({ angle: "operator-routed-residue", source: "operator-focus", operatorFocusDigest: digest, carriedFromHead: "a".repeat(40) }), refusal);
+  assert.throws(() => parse({ angle: "operator-routed-residue", reviewer: "ghost", source: "operator-focus", operatorFocusDigest: digest }), refusal);
+  assert.throws(() => parse({ angle: "operator-routed-residue", dispatchId: "d", source: "operator-focus", operatorFocusDigest: digest }), refusal);
+  assert.throws(() => parse({ angle: "operator-routed-residue", source: "other", operatorFocusDigest: digest }), refusal);
+  assert.throws(() => parse({ angle: "operator-routed-residue", source: "operator-focus", operatorFocusDigest: "a".repeat(63) }), refusal);
+  assert.throws(() => parse({ angle: "operator-routed-residue", source: "operator-focus", operatorFocusDigest: "A".repeat(64) }), refusal);
+  assert.throws(() => parse({ angle: "operator-routed-residue", operatorFocusDigest: digest }), refusal);
+  assert.throws(() => parse({ angle: "correctness", operatorFocusDigest: digest }), refusal);
+});
+
 test("parseProvenanceJson accepts and normalizes a carried-forward angle (carriedFromHead)", () => {
   const prov = parseProvenanceJson(JSON.stringify({
     distinctReviewers: 1,

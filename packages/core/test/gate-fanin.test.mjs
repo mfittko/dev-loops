@@ -13,6 +13,7 @@ import {
   FANOUT_UNAVAILABLE_MESSAGE,
   fanoutUnavailableError,
   countDistinctReviewers,
+  isOperatorFocusEntry,
   provenanceConsistencyError,
   checkFanoutAngleCoverage,
   checkResolvedAngleEvidence,
@@ -527,6 +528,9 @@ describe("provenance consistency (closes the self-produced loophole)", () => {
     assert.equal(countDistinctReviewers([{ angle: "a", reviewer: "x" }, { angle: "b", reviewer: "x" }]), 1); // dup
     assert.equal(countDistinctReviewers([{ angle: "a", reviewer: "x" }, { angle: "b", dispatchId: "y" }]), 2);
     assert.equal(countDistinctReviewers("nope"), 0);
+    const focus = { angle: "operator-routed-residue", source: "operator-focus", operatorFocusDigest: "a".repeat(64) };
+    assert.equal(countDistinctReviewers([focus]), 0);
+    assert.equal(isOperatorFocusEntry({ ...focus, reviewer: "ghost" }), false);
   });
 
   test("provenanceConsistencyError accepts consistent provenance", () => {
