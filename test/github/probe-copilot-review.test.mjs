@@ -305,6 +305,31 @@ test("probe-copilot-review ignores an untrusted copilot-x review-thread comment 
   }
 });
 
+test("probe-copilot-review ignores a trusted (MEMBER) copilot-x review, issue comment and thread comment", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-x-member-"));
+  const baseline = createActivityPayload();
+  const thread = createThread("c-1", "copilot-x", "LOOKALIKE thread text", "User");
+  thread.comments.nodes[0].authorAssociation = "MEMBER";
+  const changed = createActivityPayload({
+    threads: [thread],
+    reviews: [{ ...createReview("r-1", "copilot-x", "LOOKALIKE review text", "User"), authorAssociation: "MEMBER" }],
+    issueComments: [{ ...createIssueComment("i-1", "copilot-x", "LOOKALIKE comment text", "User"), authorAssociation: "MEMBER" }],
+  });
+  try {
+    const env = await writeGhStub(tempDir, [
+      { stdout: JSON.stringify(baseline) + "\n" },
+      { stdout: JSON.stringify(changed) + "\n" },
+    ]);
+    const result = await watchCopilotReview({ repo: "owner/repo", pr: 17, pollIntervalMs: 1, timeoutMs: 1 }, { env, ghCommand: "gh" });
+    assert.equal(result.status, "timeout");
+    assert.deepEqual(result.newReviews, []);
+    assert.deepEqual(result.newIssueComments, []);
+    assert.deepEqual(result.newComments, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("probe-copilot-review drops a Copilot-login User thread comment and a sanctioned-login User review as untrusted", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-user-type-"));
   const baseline = createActivityPayload();

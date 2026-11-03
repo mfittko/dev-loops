@@ -6,7 +6,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { afterAll, beforeAll, describe, it, test } from "bun:test";
 import { captureStream, makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
-import { checkForCopilotComments, parseRequestCliArgs, performCopilotReviewRequest, runCli } from "../../scripts/github/request-copilot-review.mjs";
+import { checkForCopilotComments, isCopilotReviewObservableViaGraphql, parseRequestCliArgs, performCopilotReviewRequest, runCli } from "../../scripts/github/request-copilot-review.mjs";
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { pullReceiptPath, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
@@ -2928,4 +2928,16 @@ test("checkForCopilotComments blocks a bare @copilot comment from a copilot-x ac
   const result = await checkForCopilotComments({ repo: "owner/repo", pr: 17 }, { runChild });
 
   assert.deepEqual(result.violationCommentIds, [1002]);
+});
+
+test("isCopilotReviewObservableViaGraphql does not treat a copilot-x review request or current-head review as the sanctioned reviewer", async () => {
+  const payload = {
+    data: { repository: { pullRequest: {
+      reviewRequests: { nodes: [{ requestedReviewer: { __typename: "Bot", login: "copilot-x" } }] },
+      reviews: { nodes: [{ author: { login: "copilot-x" }, commit: { oid: "abc123" } }] },
+    } } },
+  };
+  const runChild = async () => ({ code: 0, stdout: JSON.stringify(payload), stderr: "" });
+  const observable = await isCopilotReviewObservableViaGraphql({ repo: "owner/repo", pr: 17, headSha: "abc123" }, { runChild });
+  assert.equal(observable, false);
 });

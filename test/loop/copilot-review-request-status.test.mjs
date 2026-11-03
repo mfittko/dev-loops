@@ -157,6 +157,21 @@ test("lingering request after a current-head Copilot error review settles -> non
   assert.equal(status, "none");
 });
 
+test("a newer copilot-x timeline request does not make a lingering Copilot request active -> none", async () => {
+  const status = await resolveCopilotReviewRequestStatus(
+    {
+      ...CTX,
+      reviewSummary: {
+        hasSubmittedReviewOnCurrentHead: true,
+        latestSubmittedReviewOnCurrentHeadAt: REVIEW_TS,
+      },
+      copilotRequested: true,
+    },
+    { runChild: makeRunChild({ requestedReviewersPayload: reviewers(COPILOT_LOGIN), timelineLines: [timelineEvent(COPILOT_LOGIN, OLDER_REQ_TS), timelineEvent("copilot-x", NEWER_REQ_TS)] }) },
+  );
+  assert.equal(status, "none");
+});
+
 test("a copilot-x requested reviewer is not the Copilot reviewer -> none", async () => {
   const status = await resolveCopilotReviewRequestStatus(
     { ...CTX, reviewSummary: {} },

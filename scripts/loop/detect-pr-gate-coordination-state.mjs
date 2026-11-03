@@ -1258,7 +1258,7 @@ export function resolveRoundCapCleanFallback({ roundCapCleanEligible, evaluatorR
   return roundCapCleanEligible === true || isRoundCapReachedCleanGrant(evaluatorResult);
 }
 
-async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
     ghCommand,
     ["api", `repos/${repo}/issues/${pr}/timeline`, "--paginate", "--jq",
