@@ -18,7 +18,9 @@ Once per head, the gate verdict writer posts a PR note when it skipped unresolve
 
 The repository-permission check (write, maintain, admin) is declined for this issue. Association stays the criterion: it is coarse but fails closed, it locks no maintainer out, it needs no extra API call per author, and the issue Non-goals exclude a configuration surface. The trusted set stays OWNER, MEMBER and COLLABORATOR.
 
-The rule paragraph of `GATE-REVIEW-COMMENT-TRUST` is amended in a follow-up, because other open pull requests hold the contract file.
+The once-per-head untrusted-comments-skipped note is a third exception to `GATE-COMMENT-SINGLE-SURFACE`, next to the opt-in findings comment and the deferred-summary comment.
+
+The rule paragraphs of `GATE-REVIEW-COMMENT-TRUST` and `GATE-COMMENT-SINGLE-SURFACE` in `skills/docs/gate-review-comment-contract.md` are amended in slice 3 of issue 3034, because other open pull requests hold the contract file. This pull request leaves the contract file unchanged.
 
 ## Audit of comment-text readers
 
