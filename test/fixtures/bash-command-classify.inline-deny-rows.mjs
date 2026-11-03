@@ -89,5 +89,9 @@ export const INLINE_DENY_ROWS = [
   "shopt -s expand_aliases\nalias grep='bash -c'\ngrep 'x; node -e y'",
   "hash -p /bin/bash grep; grep 'x; node -e y'",
   "tmp/echo 'x; node -e y'",
+  "echo 'true; node -e y' | sh",
+  "printf '%s' 'true; node -e y' | bash",
+  "cat (watch 'true; node -e y')",
+  "echo (git submodule foreach 'true; node -e y')",
   "PATH=tmp grep 'x; node -e y'",
 ];
