@@ -715,6 +715,11 @@ test("commandContainsDetachedWaitTool denies any loop containing sleep, whatever
     "while true; do stdbuf -o0 sleep 5; done",
     "while true; do exec sleep 5; done",
     "for((i=0;i<3;i++)); do sleep 1; done",
+    "while(true); do sleep 1; done",
+    "until(false); do sleep 1; done",
+    "timeout --signal KILL 5 bash -c 'while true; do sleep 1; done'",
+    "sudo --user root bash -c 'while true; do sleep 1; done'",
+    "timeout 0.5 bash -c 'while true; do sleep 1; done'",
     "f() { while true; do sleep 1; done; }; f",
     "cat <(while true; do sleep 1; done)",
     "env -u FOO bash -c 'while true; do sleep 1; done'",
@@ -760,6 +765,10 @@ test("commandContainsDetachedWaitTool denies any loop containing sleep, whatever
     "printf '%s' bash -c 'while true; do sleep 1; done'",
     "ls; until-ready 3; sleep 1",
     "while-x; sleep 1",
+    "echo 'while(true); do sleep 1; done'",
+    "echo timeout --signal KILL 5 bash -c 'while true; do sleep 1; done'",
+    "echo timeout 0.5 bash -c 'while true; do sleep 1; done'",
+    "for f in a b; do grep 'x)' sleep; done",
   ]) assert.equal(commandContainsDetachedWaitTool(cmd), false, cmd);
 });
 

@@ -1278,8 +1278,8 @@ export function commandIsSleepLoop(command) {
     for (;;) {
       const w = words[k];
       if (w === undefined) return k;
-      const r = /^(?:\d*|&)(?:>>?|<)(.*)$/.exec(w);
-      if (r) k += r[1] ? 1 : 2;
+      const r = redirectionSkip(w);
+      if (r) k += r;
       else if (SKIP.test(w) || /^[A-Za-z_]\w*=/.test(w)) k++;
       else return k;
     }
@@ -1295,7 +1295,7 @@ export function commandIsSleepLoop(command) {
     return { j: k + j, head: rest.split(/\s+/, 1)[0] };
   };
   const base = (w) => w.replace(/^[<>]?\(+/, "").replace(/^.*\//, "");
-  const LOOP = /^(?:while|until|for)(?:$|\(\()/;
+  const LOOP = /^(?:while|until|for)(?:$|\()/;
   const flat = (segs) => {
     for (const seg of segs) {
       const words = seg.words.map((w) => w.value);
@@ -1308,7 +1308,7 @@ export function commandIsSleepLoop(command) {
       });
       // A command after a `case` arm label (`a)`, `a|b)`, `*)`) is a head too.
       words.forEach((w, i) => {
-        if (/^\(?[^\s()$`]*\)$/.test(w)) heads.push(headAt(words, i + 1).head);
+        if (!seg.words[i].single && !seg.words[i].double && /^\(?[^\s()$`]*\)$/.test(w)) heads.push(headAt(words, i + 1).head);
       });
       // A sleep behind a wrapper that takes flags (`nice -n 10 sleep`, `stdbuf -o0 sleep`) or detaches (`nohup`, `exec`).
       const k = skipPrefix(words, 0);
@@ -1330,10 +1330,14 @@ export function commandIsSleepLoop(command) {
       let m = k;
       while (m < words.length && !SLEEP_LOOP_SHELLS.has(base(words[m]))) {
         const x = words[m];
-        if (SLEEP_WRAPPERS.has(base(x)) || (/^-/.test(x) && !/^-[a-zA-Z]$/.test(x)) || /^\d+[smhd]?$/.test(x) || /^[A-Za-z_]\w*=/.test(x)) m++;
+        const nx = words[m + 1];
+        if (/^--[^=]+$/.test(x) && nx !== undefined && !/^-/.test(nx) && !SLEEP_LOOP_SHELLS.has(base(nx)) && !SLEEP_WRAPPERS.has(base(nx))) m += 2;
+        else if (SLEEP_WRAPPERS.has(base(x)) || (/^-/.test(x) && !/^-[a-zA-Z]$/.test(x)) || /^\d+[smhd]?$/.test(x) || /^[A-Za-z_]\w*=/.test(x)) m++;
         else if (/^-[a-zA-Z]$/.test(x)) m += m + 1 < words.length && !SLEEP_LOOP_SHELLS.has(base(words[m + 1])) ? 2 : 1;
         else break;
       }
+      // A wrapper with a long flag or fractional duration (`timeout --signal KILL 5`, `timeout 0.5`): headAt already resolves its shell.
+      if (!(m < words.length && SLEEP_LOOP_SHELLS.has(base(words[m]))) && SLEEP_LOOP_SHELLS.has(base(head ?? ""))) m = j;
       if (m < words.length && SLEEP_LOOP_SHELLS.has(base(words[m]))) {
         // First later `-c` word, so a shell option with an argument (`bash -o pipefail -c`) does not hide the payload.
         const c = words.findIndex((x, n) => n > m && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(x));
