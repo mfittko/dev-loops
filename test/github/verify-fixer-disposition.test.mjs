@@ -1365,7 +1365,7 @@ test("re-entry after reply-succeeded/resolve-failed only resolves, never posts a
 // never block a resolve-only action.
 // ---------------------------------------------------------------------------
 
-// ADR 0239: a thread whose only comment has no login (a deleted account) is untrusted and skipped, so the deleted-account scenario cannot occur.
+// ADR 0238: a thread whose only comment has no login (a deleted account) is untrusted and skipped, so the deleted-account scenario cannot occur.
 
 // ---------------------------------------------------------------------------
 // AC row 5 — resolve success / re-read failure: the resolve mutation LIES

@@ -76,7 +76,7 @@ Options:
                     The output also carries skippedUntrusted (always emitted,
                     an empty array included; list-review-threads omits it when
                     empty): [ { threadId, authors, remedy } ] for unresolved
-                    threads with no trusted comment (ADR 0239), with logins and
+                    threads with no trusted comment (ADR 0238), with logins and
                     no text. summary adds skippedUntrustedThreads and counts
                     only trusted threads as unresolvedThreads. The default
                     capture adds per-thread untrusted/untrustedAuthors and a

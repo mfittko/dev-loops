@@ -84,7 +84,7 @@ export function parseCopilotBodyDispositionMarker(body) {
   };
 }
 
-// ADR 0239: the shared trust predicate lives in comment-trust.mjs; this stays as the REST alias.
+// ADR 0238: the shared trust predicate lives in comment-trust.mjs; this stays as the REST alias.
 export function isTrustedDispositionAuthor(comment) {
   return isTrustedRestComment(comment);
 }

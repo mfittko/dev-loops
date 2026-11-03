@@ -78,7 +78,7 @@ Output (stdout, JSON):
   first trusted comment's text; bodyCommentId is the id of that trusted comment. "trusted": true is the ingestion marker consumers require.
   Comments from authors who are not an OWNER, MEMBER or COLLABORATOR (the Copilot
   reviewer and comments the reading identity authored itself excepted) are never listed
-  (ADR 0239); a thread with only such comments appears in skippedUntrusted (omitted
+  (ADR 0238); a thread with only such comments appears in skippedUntrusted (omitted
   when empty), with author logins and no text. A thread with more than 100 comments
   and no trusted comment on the first page stays listed with an empty body.
 Error output (stderr, JSON):
@@ -198,7 +198,7 @@ function excerptBody(rawBody, max = BODY_EXCERPT_MAX_CHARS) {
   return `${text.slice(0, max)}…`;
 }
 
-// ADR 0239: trust is decided here, at ingestion. The listing shows the text of the first
+// ADR 0238: trust is decided here, at ingestion. The listing shows the text of the first
 // TRUSTED comment of a thread; a thread with comments and none trusted is returned as
 // `skipped` (author logins only, no text). commentId and author come from the root
 // comment (ids and logins are not prompt text), so a reply targets a top-level comment.
@@ -221,7 +221,7 @@ function normalizeThreadNode(node, bodyMax) {
   const author = typeof authorLogin === "string" && authorLogin.length > 0 ? authorLogin : null;
   return {
     threadId: typeof node?.id === "string" ? node.id : "",
-    trusted: true, // ADR 0239 marker: consumers refuse a thread file without it
+    trusted: true, // ADR 0238 marker: consumers refuse a thread file without it
     commentId,
     bodyCommentId,
     author,
@@ -233,7 +233,7 @@ function normalizeThreadNode(node, bodyMax) {
   };
 }
 
-/** Trusted threads only (ADR 0239). Use fetchAllReviewThreadsWithSkips to also read the skipped untrusted threads. */
+/** Trusted threads only (ADR 0238). Use fetchAllReviewThreadsWithSkips to also read the skipped untrusted threads. */
 export async function fetchAllReviewThreads(target, options) {
   return (await fetchAllReviewThreadsWithSkips(target, options)).threads;
 }

@@ -106,7 +106,7 @@ function normalizeComment(comment, threadId, index, { isResolved = false } = {})
     ? null
     : normalizeId(comment.databaseId, null);
 
-  // ADR 0239: trust is decided once, here. An untrusted comment keeps its author
+  // ADR 0238: trust is decided once, here. An untrusted comment keeps its author
   // and id but its text never leaves this function.
   const trusted = isTrustedGraphqlComment(comment, { allowCopilot: true });
   return {
@@ -148,7 +148,7 @@ export function parseReviewThreads(payload) {
       .map((comment) => comment.databaseId)
       .filter((value) => value !== null);
 
-    // A thread with comments and no trusted one is skipped (ADR 0239): it is no unresolved blocker and no act item.
+    // A thread with comments and no trusted one is skipped (ADR 0238): it is no unresolved blocker and no act item.
     // A truncated comments connection (more than one page) is not provably all-untrusted: it stays a blocker.
     const truncated = thread?.comments?.pageInfo?.hasNextPage === true;
     const untrusted = normalizedComments.length > 0 && !truncated && !normalizedComments.some((comment) => comment.trusted);
@@ -196,7 +196,7 @@ export function parseReviewThreads(payload) {
  * node when the payload carries them (`path`/`line`/`isOutdated`); snapshots
  * without them yield `path: null`, `line: null`, `isOutdated: false`.
  *
- * Trust is decided here (ADR 0239): `bodies` holds trusted comment text only, `summary.unresolvedThreads`
+ * Trust is decided here (ADR 0238): `bodies` holds trusted comment text only, `summary.unresolvedThreads`
  * counts trusted threads only, and `summary.skippedUntrustedThreads` counts the unresolved threads with
  * no trusted comment, which `skippedUntrusted` lists with logins and the remedy, never text.
  * (`parseReviewThreads` additionally returns per-thread `untrusted`/`untrustedAuthors` and per-comment `trusted`.)
@@ -215,7 +215,7 @@ export function parseUnresolvedThreadBodies(payload) {
       path: typeof thread?.path === "string" && thread.path.length > 0 ? thread.path : null,
       line: Number.isInteger(thread?.line) ? thread.line : null,
       isOutdated: Boolean(thread?.isOutdated),
-      // ADR 0239: an untrusted comment's text is dropped, so a trusted reply to an untrusted root keeps only the reply.
+      // ADR 0238: an untrusted comment's text is dropped, so a trusted reply to an untrusted root keeps only the reply.
       bodies: extractRawComments(thread)
         .filter((comment) => isTrustedGraphqlComment(comment, { allowCopilot: true }))
         .map((comment) => normalizeBody(comment?.body ?? comment?.bodyText ?? comment?.bodyHTML ?? "")),
