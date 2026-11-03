@@ -975,8 +975,8 @@ function blankQuotedForFlags(command) {
  * unterminated quote, `$(` or heredoc onward is left as raw executable text in both modes (deny direction). Accepted ceiling, default mode
  * only: a deliberately quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is blanked like any other quoted
  * literal and can evade the ban. Precise mode keeps a quoted whole-word keyword (`'sleep' 5`) visible (`STRUCTURAL_WORD_RE`), so the ceiling does not apply there.
- * `waitView` (the detached-wait operator view) also keeps a quoted span visible unless every segment around it passes `inertQuoteSegment`.
- * @param {string} command @param {boolean} [precise] @param {boolean} [waitView] @returns {string}
+ * `waitView` (the detached-wait operator view) also keeps a quoted span visible unless every segment around it passes `inertQuoteSegment`. `"subst"` (the poll predicates) keeps only a span that holds `$(` or a backtick, and not one in a plain `sed` reader (`isPlainSed`).
+ * @param {string} command @param {boolean} [precise] @param {boolean|"subst"} [waitView] @returns {string}
  */
 function stripQuotedLiterals(command, precise = false, waitView = false) {
   const tok = tokenizeShellCommand(command);
@@ -992,7 +992,7 @@ function stripQuotedLiterals(command, precise = false, waitView = false) {
   for (const { start, end, kind } of [...tok.spans].sort((a, b) => a.start - b.start)) {
     if (start < pos || start >= limit) continue; // nested in a span already handled, or in the unterminated tail (kept as a guard: a backtick span can start past the opener without a quote)
     const kept = precise
-      ? (kind === "double" && /\$\(|`/.test(text.slice(start + 1, end - 1))) || (waitView && all.some(({ w, seg }) => w.start <= start && end <= w.end && !inertHere(seg))) || payloads.some((w) => w.start <= start && end <= w.end) ||
+      ? (kind === "double" && /\$\(|`/.test(text.slice(start + 1, end - 1))) || (waitView && (waitView !== "subst" || /\$\(|`/.test(text.slice(start + 1, end - 1))) && all.some(({ w, seg }) => w.start <= start && end <= w.end && !inertHere(seg) && !(waitView === "subst" && isPlainSed(seg)))) || payloads.some((w) => w.start <= start && end <= w.end) ||
         (STRUCTURAL_WORD_RE.test(text.slice(start + 1, end - 1)) && all.some(({ w, words }) => w.end === end && w.raw.length <= end - start + 1 && !/^(?:echo|printf)$/.test(words.find((x) => !x.op)?.value))) // a quoted structural keyword that is a whole word (`'sleep' 5`) still runs: keep it visible
       : /\$\(|`/.test(text.slice(start + 1, end - 1)) || // executable code in quotes: preserve (fail-closed)
         /(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(text.slice(0, start)); // -c/eval payload: real shell syntax
@@ -1053,7 +1053,7 @@ const isTextHost = (seg) => seg.words[0]?.value === "git" && seg.words[1]?.value
 /** Whether the substitution in word K of SEG (a `isTextHost` segment) is inert text: the value of a text flag, never an env-assignment word. */
 function substitutionIsInert(seg, k) {
   const { raw: w } = seg.words[k];
-  if (ENV_ASSIGNMENT_WORD_RE.test(w) || overridesConfig(seg) || !isTextHost(seg)) return false;
+  if (overridesConfig(seg) || !isTextHost(seg)) return false;
   const attached = TEXT_FLAG_ATTACHED_RE.exec(w);
   const raw = attached ? w.slice(attached[0].length) : w;
   return /^(?:\$\(.*\)|"\$\(.*\)")$/s.test(raw) && (attached !== null || TEXT_FLAG_RE.test(seg.words[k - 1]?.value ?? ""));
@@ -1334,7 +1334,7 @@ export function tokenizeShellCommand(command) {
  * @param {string} command @returns {boolean}
  */
 export function commandIsSleepPollLoop(command) {
-  const whole = stripQuotedLiterals(command.trim(), true);
+  const whole = stripQuotedLiterals(command.trim(), true, "subst");
   return (
     /(?:while|until|for)\b/i.test(whole) &&
     /\bsleep\b/.test(whole) &&
@@ -1357,7 +1357,7 @@ export function commandIsSleepPollLoop(command) {
  * @param {string} command @returns {boolean}
  */
 export function commandIsFileMarkerPollLoop(command) {
-  const whole = stripQuotedLiterals(command.trim(), true);
+  const whole = stripQuotedLiterals(command.trim(), true, "subst");
   return (
     /(?:while|until|for)\b/i.test(whole) &&
     /\bsleep\b/.test(whole) &&
@@ -1606,7 +1606,13 @@ function inertQuoteSegment(tok, s) {
   const definesFunction = feedsShell(tok) || tok.segments.some((x) => x.words.some((w) => /^(?:alias|hash|shopt|unalias|enable)$/.test(w.value)) || x.words.some((w) => w.value === "function" || w.raw.includes("()") || /\($/.test(w.value)));
   const anyRedirect = tok.segments.some((x) => x.words.some((w) => REDIRECT_RE.test(w.value))); // an output redirect in any segment (exec >f, braced group) can feed a later one, so no segment is inert
   const [h = "", arg = ""] = s.words.filter((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op).map((w) => w.value);
-  return !definesFunction && !anyRedirect && !s.pipedOut && writeTargets(s).length === 0 && !s.words.some((w) => REDIRECT_RE.test(w.value) || w.raw.includes("(")) && !(h === "printf" && s.words.some((w) => /^-v/.test(w.value))) && !h.includes("/") && !s.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw)) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
+  return !definesFunction && !anyRedirect && !s.pipedOut && writeTargets(s).length === 0 && !s.words.some((w) => w.subs.length > 0 || /^[^'"]*\(/.test(w.raw)) && !(h === "printf" && s.words.some((w) => /^-v/.test(w.value))) && !h.includes("/") && !s.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw)) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
+}
+
+/** A bare `sed` segment that only reads: no in-place flag (`-i`, `-i<suffix>`, a cluster holding `i`, `--in-place`), no `-f` script file, and no `e`/`w` command or `e`/`w` substitute flag in any word. */
+function isPlainSed(seg) {
+  const ws = seg.words.filter((w) => !w.op).map((w) => w.value);
+  return ws[0] === "sed" && !ws.some((v) => /^-[A-Za-z]*[if]|^--(?:in-place|file)/.test(v) || /(?:^|[;{}\s])s(.)(?:(?!\1).)*\1(?:(?!\1).)*\1\w*[ew]/s.test(v) || /(?:^|[;{}\s\d$,!])[ew](?:\s|$)/.test(v));
 }
 
 /**

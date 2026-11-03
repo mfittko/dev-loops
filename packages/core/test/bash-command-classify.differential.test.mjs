@@ -157,6 +157,11 @@ const SALVAGED_DENY_ROWS = [
   "git difftool -x 'true; node -e y'",
   "sudo watch 'true; node -e y'",
   "tmp/git commit -m \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
+  // an executed single-quoted poll loop (a later segment or a non-shell interpreter runs it)
+  "echo 'while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done' > l.sh; bash l.sh",
+  "perl -e 'system q(while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done)'",
+  "sed -n 's/`gh pr view 5`/while sleep 5/e' f",
+  "sed -i 's/`gh pr view 5`/while sleep 5/' f",
   // unit rows (packages/core/test/bash-command-classify.test.mjs)
   "cat > tmp/n <<'EOF'\ndon't\nEOF\ngit commit -m \"a\nb\" && cat > packages/a.mjs <<EOF\nx\nEOF",
   "# don't\necho \"a\nb\" ; cat > packages/a.mjs <<EOF\nx\nEOF",
