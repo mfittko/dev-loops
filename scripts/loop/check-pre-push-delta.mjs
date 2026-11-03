@@ -34,7 +34,7 @@ import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
 import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
-import { createEvidenceRun, EvidenceSealError, deltaEvidenceKey, mintEvidenceRunId, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
+import { createEvidenceRun, EvidenceSealError, mintEvidenceRunId, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { clearSequenceMarker, readSequenceMarker, withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
 import {
   DELTA_MAX_INVOCATIONS,
@@ -505,7 +505,7 @@ export async function runCli(
     // The target authenticateCoverage verified binds the log's repo and pr; without an authenticated plan the chain path refuses.
     payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE, sealCommand: deltaSealCommand(options.resultPath, tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), options.worktree) }), ...buildDeltaInput({ sequence, candidateHead: currentHead, runId, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles, staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
     // Every input run opens its own unsealed record, so a re-run of the producer at the same heads can seal again. Last step: only a successful input run moves the pointer.
-    if (!options.handback) createEvidenceRun(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaEvidenceKey(sequence.reviewBaselineHead, currentHead, runId), { reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead, actSetId: sequence.actSetId, runId }, path.resolve(options.worktree, options.resultPath));
+    if (!options.handback) createEvidenceRun(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), { reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead, actSetId: sequence.actSetId, runId }, path.resolve(options.worktree, options.resultPath));
   }
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
   return payload;

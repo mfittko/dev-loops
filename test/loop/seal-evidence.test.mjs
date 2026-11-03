@@ -30,7 +30,7 @@ function setup(parsed = result()) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seal-evidence-"));
   const file = path.join(dir, "result.json");
   fs.writeFileSync(file, JSON.stringify(parsed));
-  createEvidenceRun(dir, KEY, EXPECTED, file);
+  createEvidenceRun(dir, EXPECTED, file);
   return { dir, file };
 }
 const reason = (fn) => { try { fn(); } catch (error) { return error.reason; } return null; };
@@ -150,7 +150,7 @@ test("a sealed record is final: re-seal of identical bytes and re-seal after an 
   assert.equal(reason(() => sealEvidence(dir, file, result())), "evidence_foreign_run");
   fs.writeFileSync(file, `${JSON.stringify(result())} `);
   assert.equal(reason(() => sealEvidence(dir, file, result())), "evidence_foreign_run");
-  createEvidenceRun(dir, KEY, EXPECTED, file);
+  createEvidenceRun(dir, EXPECTED, file);
   assert.equal(reason(() => verify(dir, file, result())), "evidence_digest_mismatch");
 });
 
@@ -230,7 +230,7 @@ test("check-pre-push-delta --result on an unsealed run gives evidence_unsealed",
   fs.writeFileSync(resultPath, JSON.stringify(result({ runId })));
   const bound = await boundArgs(["--act-list", actList, "--baseline", A, "--result", resultPath, "--invocation", "1"], {}, { seal: false });
   const tmpRoot = bound.seam.tmpRoot ?? resolveGateArtifactTmpRoot(bound.args[bound.args.indexOf("--worktree") + 1]);
-  createEvidenceRun(tmpRoot, deltaEvidenceKey(A, B, runId), { ...EXPECTED, runId }, resultPath);
+  createEvidenceRun(tmpRoot, { ...EXPECTED, runId }, resultPath);
   await assert.rejects(runDeltaCli(bound.args, { ...bound.seam, ...quiet }), /evidence_unsealed/);
 });
 
@@ -337,8 +337,7 @@ test("emit-fixer-work-order refuses an edited (evidence_digest_mismatch) and a f
     fs.writeFileSync(actList, JSON.stringify(ACT_LIST));
     const sealed = result({ candidateHead: A });
     fs.writeFileSync(sealedPath, JSON.stringify(sealed));
-    const key = deltaEvidenceKey(A, A, RUN_ID);
-    createEvidenceRun(dir, key, { ...EXPECTED, candidateHead: A }, sealedPath);
+    createEvidenceRun(dir, { ...EXPECTED, candidateHead: A }, sealedPath);
     sealEvidence(dir, sealedPath, sealed);
     fs.writeFileSync(deltaResult, JSON.stringify(foreign ? sealed : { ...sealed, newFindings: [{ severity: "low", summary: "x", evidence: ["e"] }] }));
     await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), expected);
@@ -358,7 +357,7 @@ test("a briefed result directory that does not exist yet is realpathed through a
   const link = path.join(os.tmpdir(), `seal-evidence-late-link-${process.pid}-${Date.now()}`);
   fs.symlinkSync(dir, link);
   try {
-    createEvidenceRun(dir, KEY, EXPECTED, path.join(link, "later", "result.json"));
+    createEvidenceRun(dir, EXPECTED, path.join(link, "later", "result.json"));
     const file = path.join(dir, "later", "result.json");
     fs.writeFileSync(file, JSON.stringify(result()));
     sealEvidence(dir, file, result());
@@ -383,7 +382,7 @@ test("emit-fixer-work-order refuses a --delta-result whose run was never sealed 
   const deltaResult = path.join(dir, "result.json");
   fs.writeFileSync(actList, JSON.stringify(ACT_LIST));
   fs.writeFileSync(deltaResult, JSON.stringify(result({ candidateHead: A })));
-  createEvidenceRun(dir, deltaEvidenceKey(A, A, RUN_ID), { ...EXPECTED, candidateHead: A }, deltaResult);
+  createEvidenceRun(dir, { ...EXPECTED, candidateHead: A }, deltaResult);
   await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), /GATE-EXEC-EVIDENCE-SEALED.*evidence_unsealed/);
 });
 
@@ -394,8 +393,7 @@ test("emit-fixer-work-order gives the typed evidence refusal for an edited seale
     const deltaResult = path.join(dir, "result.json");
     fs.writeFileSync(actList, JSON.stringify(ACT_LIST));
     fs.writeFileSync(deltaResult, JSON.stringify(result({ candidateHead: A })));
-    const key = deltaEvidenceKey(A, A, RUN_ID);
-    createEvidenceRun(dir, key, { ...EXPECTED, candidateHead: A }, deltaResult);
+    createEvidenceRun(dir, { ...EXPECTED, candidateHead: A }, deltaResult);
     sealEvidence(dir, deltaResult, result({ candidateHead: A }));
     edit(deltaResult, over);
     return emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir });
@@ -412,7 +410,7 @@ test("a sealed result of a superseded input run is evidence_foreign_run at verif
   const { dir, file } = setup();
   sealEvidence(dir, file, result());
   verify(dir, file, result());
-  createEvidenceRun(dir, deltaEvidenceKey(A, B, "fedcba9876543210"), { ...EXPECTED, runId: "fedcba9876543210" }, path.join(dir, "other.json"));
+  createEvidenceRun(dir, { ...EXPECTED, runId: "fedcba9876543210" }, path.join(dir, "other.json"));
   assert.equal(reason(() => verify(dir, file, result())), "evidence_foreign_run");
 });
 

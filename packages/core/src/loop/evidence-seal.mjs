@@ -53,8 +53,9 @@ function writeAtomic(file, content) {
   renameSync(temp, file);
 }
 
-/** Opens a run record. `resultPath` is the briefed result path; sealing any other path is refused. */
-export function createEvidenceRun(tmpRoot, key, expected, resultPath) {
+/** Opens a run record. The key derives from `expected`. `resultPath` is the briefed result path; sealing any other path is refused. */
+export function createEvidenceRun(tmpRoot, expected, resultPath) {
+  const key = deltaResultKey(expected);
   const file = evidenceRunRecordPath(tmpRoot, key);
   // The pointer path validates the identity before anything is written.
   const pointer = currentRunPointerPath(tmpRoot, expected);
