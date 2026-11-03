@@ -594,9 +594,14 @@ const MERGE_DENY_EXTRA_FORMS = [
   "env bash <<EOF\ndev-loops-run scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x\nEOF",
   "FOO=1 bash <<EOF\nnode scripts/github/merge-pr.mjs --pr 5\nEOF",
   "sudo sh <<EOF\nnode scripts/github/merge-pr.mjs --pr 5\nEOF",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x --fields --check",
+  "timeout --signal KILL 300 node scripts/github/merge-pr.mjs --pr 5",
+  "(FOO=1 node scripts/github/merge-pr.mjs --pr 5)",
 ];
 
 const MERGE_ALLOW_FORMS = [
+  "node scripts/github/merge-pr.mjs --pr 5 --standing-authorization --check",
+  "node scripts/github/merge-pr.mjs --check --pr 5",
   "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --check",
   "dev-loops-run scripts/github/merge-pr.mjs --repo a/b --pr 5 --check",
   "dev-loops-run scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x --check",
