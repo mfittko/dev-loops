@@ -23,7 +23,8 @@ import { selectActThreadBinding } from "../../scripts/github/_fixer-act-thread-b
 import { fixerReportPath, materializationHash, pullReceiptPath, pullWorkOrder, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitFixerWorkOrder, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
-import { gitEnvNoDirOverrides } from "../../scripts/loop/_repo-root-resolver.mjs";
+import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
+import { sealDeltaFixture } from "../loop/_seal-fixture.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import * as legacyOwner from "../../scripts/github/_legacy-fixer-revalidation.mjs";
@@ -1933,11 +1934,12 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   await writeFile(originPath, JSON.stringify({ headSha: fixing, siteCoverage }));
   await writeFile(logPath, JSON.stringify({ headSha: baseline, provenance: { perAngle: [{ angle: "correctness" }] } }));
   const args = ["--act-list", actPath, "--baseline", baseline, "--worktree", repoRoot, "--fixer-plan", prior.planPath, "--site-coverage", originPath];
-  const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", logPath], { stdout: { write() {} } });
+  const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", logPath, "--result-path", path.join(tmpRoot, "delta-result.json")], { stdout: { write() {} } });
   if (residual) git("commit", "-q", "--allow-empty", "-m", "candidate B");
   const candidate = git("rev-parse", "HEAD"), items = input.input.actItems.map(({ ref }, index) => ({ ref, status: isResidual(index) ? "cannot_verify" : "resolved", evidence: ["focused check"] }));
   const delta = { ...input.input.resultShape, candidateHead: residual ? fixing : candidate, actionableItems: items, newFindings: [], widenedReads: [], outcome: residual ? "bounded_out" : "locally_clear" };
   await writeFile(deltaPath, JSON.stringify(delta));
+  sealDeltaFixture(resolveGateArtifactTmpRoot(repoRoot), deltaPath);
   assert.equal((await runCli([...args, "--result", deltaPath, "--invocation", residual ? "3" : "1"], { stdout: { write() {} } })).nextStep, residual ? "push_to_gate" : "push");
   const threadBindings = kind === "threadless" ? [] : [{ threadId: "PRRT_MERGED", fingerprints: [ACT_FP, second] }, { threadId: "PRRT_SHARED", fingerprints: [ACT_FP] }];
   const dispositions = threadBindings.map(({ threadId, fingerprints }) => ({ threadId, fixingCommitSha: fixing,
