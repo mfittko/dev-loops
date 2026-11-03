@@ -255,6 +255,7 @@ const SLICE1_FAIL_CLOSED_FLIPS = new Map();
   const R_ESCAPE = 'escaped \\" inside a double-quoted word: the regex paired the quotes wrongly and blanked the loop; the tokenizer keeps the loop visible';
   flip("commandContainsRawPrBodyEdit", "trailing # comment with an apostrophe is a quote-pairing hazard: the stripper blanks nothing, so the flag-looking text in the quoted title stays visible", "gh pr edit 5 --title 'a --body b' # it's");
   flip("commandContainsInlineInterpreter", R_UNCLOSED, 'echo "$(gh pr view 5');
+  flip("commandContainsInlineInterpreter", "gh is no heredoc text host: its quoted cat heredoc body stays visible (host exemption is git commit only)", EOF_PAREN_ROW);
   for (const sep of SEPARATORS) {
     for (const f of ["cat > src/a.mjs <<'EOF'", "cat > tmp/r.mjs <<'EOF' && node tmp/r.mjs"]) flip("commandContainsInlineInterpreter", R_HEREDOC, `${sep}${f}\necho done`);
   }

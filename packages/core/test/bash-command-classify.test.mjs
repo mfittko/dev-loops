@@ -1676,7 +1676,7 @@ test("slice 2: the sanctioned single-segment shapes stay visible when an executo
   assert.equal(commandIsSleepPollLoop("tee />(sh) <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF"), true);
   assert.equal(commandContainsDetachedWaitTool("tee />(sh) <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF"), true);
   assert.equal(commandContainsInlineInterpreter("git commit -m \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\""), false);
-  assert.equal(commandContainsInlineInterpreter("gh pr create --body \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\""), false);
+  assert.equal(commandContainsInlineInterpreter("gh pr create --body \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\""), true); // gh is no text host: the heredoc body stays visible
 });
 
 test("slice 2: quoted literals and cat/tee heredoc bodies that name an interpreter are data; payloads stay visible (#2442)", () => {
@@ -1739,5 +1739,5 @@ test("tokenizeShellCommand: $((expr)) is arithmetic and DELIM) closes a heredoc 
   const closed = "echo \"$(cat <<'EOF'\nbody\nEOF)\"";
   assert.equal(tokenizeShellCommand(closed).incomplete, false);
   assert.equal(tokenizeShellCommand("cat <<'EOF'\nbody\nEOF)").incomplete, true); // outside a substitution `EOF)` is no delimiter
-  assert.equal(commandContainsInlineInterpreter("gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\""), false);
+  assert.equal(commandContainsInlineInterpreter("gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\""), true); // gh is no text host
 });

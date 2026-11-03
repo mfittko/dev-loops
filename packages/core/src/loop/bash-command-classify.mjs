@@ -1037,11 +1037,8 @@ function writeTargets(seg) {
 
 const TEXT_FLAG_RE = /^(?:-m|--message|--body|--title|--notes)$/;
 const TEXT_FLAG_ATTACHED_RE = /^--(?:message|body|title|notes)=/;
-/** A `git commit` or `gh pr|issue comment|create|edit` segment whose head is the bare name: the only hosts whose text flag value is inert. */
-const isTextHost = (seg) => {
-  const [a, b, c] = seg.words.map((w) => w.value);
-  return (a === "git" && b === "commit") || (a === "gh" && /^(?:pr|issue)$/.test(b) && /^(?:comment|create|edit)$/.test(c));
-};
+/** A `git commit` segment whose head is the bare name: the only host whose text flag value is inert. `gh` hosts are excluded. */
+const isTextHost = (seg) => seg.words[0]?.value === "git" && seg.words[1]?.value === "commit";
 /** Whether the substitution in word K of SEG (a `isTextHost` segment) is inert text: the value of a text flag, never an env-assignment word. */
 function substitutionIsInert(seg, k) {
   const w = seg.words[k];
@@ -1057,7 +1054,7 @@ const overridesConfig = (seg) => seg.words.some((w) => /^(?:-c|--config)|alias\.
 /**
  * Heredocs whose body is data (issue 2442 item 8): a `cat` or `tee` heredoc that is closed, whose delimiter is quoted or whose body has no
  * `$(`/backtick, whose segment is not piped onward, and that sits in no `-c`/`eval`/here-string payload.
- * Structural rule, counted over the whole tree: the command is exactly one `cat`/`tee` heredoc segment, or one root `git commit` / `gh pr|issue comment|create|edit` segment (bare head) holding exactly one substitution that holds exactly one `cat` segment that writes no file. A top-level `git commit -F -` or `gh ... --body-file -` heredoc is not a host. Anything else keeps every heredoc body visible, so a later segment or substitution that runs a written file never sees a blanked body.
+ * Structural rule, counted over the whole tree: the command is exactly one `cat`/`tee` heredoc segment, or one root `git commit` segment (bare head) holding exactly one substitution that holds exactly one `cat` segment that writes no file. A top-level `git commit -F -` is not a host. Anything else keeps every heredoc body visible, so a later segment or substitution that runs a written file never sees a blanked body.
  * The host must write no file, carry no env-assignment word and no `-c`/alias override (`substitutionIsInert`); `echo`/`printf` are not hosts. The `cat`/`tee` head is the bare name or a `/bin/` or `/usr/bin/` path, with no env-assignment word and no `<(`/`>(` anywhere in a word.
  * Every other body executes and stays visible.
  * @returns {object[]}
@@ -1072,7 +1069,7 @@ function dataHeredocs(segments) {
   };
   const subs = seg.words.flatMap((w, k) => w.subs.map((sub) => ({ sub, k })));
   if (subs.length === 0) return dataBody(seg);
-  // exactly one inert git commit / gh text-flag substitution holding exactly one substitution-free, file-writing-free cat segment
+  // exactly one inert git commit text-flag substitution holding exactly one substitution-free, file-writing-free cat segment
   if (subs.length !== 1 || !isTextHost(seg) || seg.pipedOut || writeTargets(seg).length !== 0 || seg.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw))) return [];
   const { sub, k } = subs[0];
   if (isPayloadWord(seg.words, k) || !substitutionIsInert(seg, k) || sub.segments.length !== 1) return [];
