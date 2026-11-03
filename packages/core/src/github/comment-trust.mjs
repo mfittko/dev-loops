@@ -36,3 +36,6 @@ export function isTrustedRestComment(comment, options) {
 }
 
 export const UNTRUSTED_COMMENT_REMEDY = "a maintainer (OWNER, MEMBER or COLLABORATOR) replies to or resolves the thread, or restates the finding";
+
+/** Remedy for a skipped PR conversation comment, which has no thread to reply to or resolve. */
+export const UNTRUSTED_CONVERSATION_COMMENT_REMEDY = "a maintainer (OWNER, MEMBER or COLLABORATOR) restates the request in their own comment";
