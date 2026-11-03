@@ -15,7 +15,10 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { test } from "bun:test";
-import { DEFAULT_TEST_PR_BODY, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { DEFAULT_TEST_PR_BODY, makeGhMock as makeGhMockRaw, runIdFreeEnv, runNode as runNodeHelper, trustGhEntries, writeJson as writeJsonHelper } from "../_helpers.mjs";
+
+// Gate-formatted fixture comments need a maintainer identity (ADR 0248).
+const makeGhMock = (entries, options) => makeGhMockRaw(trustGhEntries(entries), options);
 
 import {
   parseReconcileDraftGateCliArgs,

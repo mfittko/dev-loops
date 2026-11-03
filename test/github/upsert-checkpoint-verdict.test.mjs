@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
-import { DEFAULT_TEST_PR_BODY, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, withTempDir, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { DEFAULT_TEST_PR_BODY, makeGhMock as makeGhMockRaw, runIdFreeEnv, runNode as runNodeHelper, trustCommentFixtures, trustGhEntries, withTempDir, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
   assertGateValidationArtifact,
@@ -125,6 +125,13 @@ const augmentInlineReason = (args) => {
     return args;
   }
   return [...args, "--inline-reason", DEFAULT_TEST_INLINE_REASON];
+};
+
+// Gate-formatted fixture comments/reviews need a maintainer identity (ADR 0248).
+// Trusts in place so entries a test pushes after creating the mock stay visible.
+const makeGhMock = (entries, options) => {
+  entries.splice(0, entries.length, ...trustGhEntries(entries));
+  return makeGhMockRaw(entries, options);
 };
 
 // Marker key: the local writeGhStub returns an env carrying its gh `entries` so
@@ -4799,7 +4806,7 @@ test("upsert-checkpoint-verdict self-heals a ROUND-CAP ready PR via draft transi
     // ledger/provenance layer is exercised by its own dedicated tests, not
     // this self-heal scenario, so opt out here to isolate draftGateSatisfied.
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
-    ghEntries.push(
+    ghEntries.push(...trustGhEntries([
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: `{"headRefOid":"${headSha}"}\n` },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
       {
@@ -4809,12 +4816,13 @@ test("upsert-checkpoint-verdict self-heals a ROUND-CAP ready PR via draft transi
           body: postedReviewPayload.body,
           state: "COMMENTED",
           user: { login: "dev-loops-bot" },
+          author_association: "MEMBER",
           submitted_at: "2026-05-30T18:00:00Z",
           commit_id: headSha,
           html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-900",
         }]]) + "\n",
       },
-    );
+    ]));
 
     const detected = await detectCheckpointEvidence({ repo: "owner/repo", pr: 17 }, { env, cwd: tempDir, runChild });
     assert.equal(detected.draftGate.verdict, "clean", JSON.stringify(detected.draftGate));
@@ -7706,6 +7714,8 @@ function singleSurfaceLeadingEntries({ isDraft = true, issueComments = [], revie
     // the light-mode facts (base ref + labels) before the internal-only probe.
     ...(lightFacts ? [{ assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n' }] : []),
     { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+    // The evidence detector also resolves the viewer for its trusted-or-viewer filter (ADR 0248).
+    ...(reviews.length > 0 ? [{ assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' }] : []),
     { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/db.mjs\n" },
     { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify(reviews) + "\n" },
     { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify(issueComments) + "\n" },
@@ -9953,8 +9963,8 @@ function makeAcRunChild({
     if (a.includes("api") && a.includes("user")) return { code: 0, stdout: '{"login":"gate-bot"}\n', stderr: "" };
     if (a.includes("graphql") && a.includes("reviewThreads")) return { code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } }) + "\n", stderr: "" };
     if (a.includes("graphql")) return { code: 0, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n', stderr: "" };
-    if (a.includes("issues/17/comments")) return { code: 0, stdout: JSON.stringify(issueComments) + "\n", stderr: "" };
-    if (a.includes("pulls/17/reviews")) return { code: 0, stdout: JSON.stringify(reviews) + "\n", stderr: "" };
+    if (a.includes("issues/17/comments")) return { code: 0, stdout: JSON.stringify(trustCommentFixtures(issueComments)) + "\n", stderr: "" };
+    if (a.includes("pulls/17/reviews")) return { code: 0, stdout: JSON.stringify(trustCommentFixtures(reviews)) + "\n", stderr: "" };
     if (a.includes("pulls/17/files")) return { code: 0, stdout: JSON.stringify(prFiles) + "\n", stderr: "" };
     // Dispatch pr view --json <fields> on the exact --json field list, so the
     // full pr view (which lists `files` among many fields) is not mistaken for

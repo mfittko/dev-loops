@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { afterAll, beforeAll, describe, it, test } from "bun:test";
-import { captureStream, makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { captureStream, makeGhMock as makeGhMockRaw, runNode as runNodeHelper, trustGhEntries, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+
+// Gate-formatted fixture comments need a maintainer identity (ADR 0248).
+const makeGhMock = (entries, options) => makeGhMockRaw(trustGhEntries(entries), options);
 import { checkForCopilotComments, isCopilotReviewObservableViaGraphql, parseRequestCliArgs, performCopilotReviewRequest, runCli } from "../../scripts/github/request-copilot-review.mjs";
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";

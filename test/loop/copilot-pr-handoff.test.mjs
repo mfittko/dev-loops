@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
-import { makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { makeGhMock as makeGhMockRaw, runIdFreeEnv, runNode as runNodeHelper, trustGhEntries, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+
+// Gate-formatted fixture comments need a maintainer identity (ADR 0248).
+const makeGhMock = (entries, options) => makeGhMockRaw(trustGhEntries(entries), options);
 
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
 import { isBehindBaseMergeState, isConflictingMergeState, parseHandoffCliArgs, runBasePickupPreflight, runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
@@ -3345,7 +3348,7 @@ async function runDraftGateResetScenario({ withDraftGate, factsFail = false, wat
         { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: prView },
       );
     }
-    const { env, ghLogPath: logPath, claimsDir } = await writeGhStubHelper(tempDir, entries, { matchMode: "claims", logCalls: true });
+    const { env, ghLogPath: logPath, claimsDir } = await writeGhStubHelper(tempDir, trustGhEntries(entries), { matchMode: "claims", logCalls: true });
     env.DEVLOOPS_RUN_ID = "";
 
     const run = await runNode(["--repo", "owner/repo", "--pr", "17", ...(watchStatus ? ["--watch-status", watchStatus] : [])], { env, cwd: convergedOnceRepoRoot });
