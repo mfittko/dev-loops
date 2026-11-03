@@ -13,11 +13,21 @@ const RAW_READERS = [
 const WRITE_VERB = /\b(?:DELETE|POST|PATCH)\b/;
 const NEGATION = /\b(?:never|do not|must not|forbidden)\b/i;
 
+// A command span ends at a backtick, a sentence boundary, a semicolon or a comma followed by space,
+// so a write verb in one command never exempts a raw reader in another.
+const SPAN_BREAK = /`|[.;!?](?=\s|$)|,\s/;
+
 function isRawReaderLine(line) {
-  return RAW_READERS.some((pattern) => {
-    const raw = pattern.exec(line);
-    return Boolean(raw) && !WRITE_VERB.test(raw[0]) && !NEGATION.test(line.slice(0, raw.index));
+  let start = 0;
+  const spans = [];
+  line.split(new RegExp(`(${SPAN_BREAK.source})`)).forEach((part, index) => {
+    if (index % 2 === 0) spans.push({ text: part, start }); // odd indexes are the captured breaks
+    start += part.length;
   });
+  return spans.some(({ text, start: spanStart }) => RAW_READERS.some((pattern) => {
+    const raw = pattern.exec(text);
+    return Boolean(raw) && !WRITE_VERB.test(text) && !NEGATION.test(line.slice(0, spanStart + raw.index));
+  }));
 }
 
 test("the matcher flags raw reader forms and exempts negated and write lines", () => {
@@ -28,6 +38,8 @@ test("the matcher flags raw reader forms and exempts negated and write lines", (
     "gh pr view 1 --json comments,reviews",
     "gh api graphql -f query='{ repository { pullRequest { reviewThreads { nodes { id } } } } }'",
     "Read `gh api repos/o/r/pulls/1/reviews`, then POST a reply.",
+    "Run gh pr view 1 --comments, then gh api -X POST repos/o/r/issues/1/comments.",
+    "Run `gh api -X POST repos/o/r/issues/1/comments` and then `gh pr view 1 --comments`.",
   ]) assert.equal(isRawReaderLine(line), true, line);
   for (const line of [
     "never read it with raw `gh api .../reviews`",
@@ -35,6 +47,7 @@ test("the matcher flags raw reader forms and exempts negated and write lines", (
     "do not use gh api repos/o/r/pulls/1/reviews",
     "gh api -X POST repos/{owner}/{repo}/issues/{number}/comments",
     "Use `gh api -X POST repos/o/r/pulls/1/reviews` to submit the review.",
+    "Never run gh pr view 1 --comments. Use gh api -X POST repos/o/r/issues/1/comments instead.",
   ]) assert.equal(isRawReaderLine(line), false, line);
 });
 
