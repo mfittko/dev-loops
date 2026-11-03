@@ -156,10 +156,13 @@ const ADAPTER_FACTS = Object.freeze([
   ["enforceCoordinator", (value) => typeof value === "boolean"],
   // `null`/absent is the meaningful "not probed" value; any other value must be a real probe of the
   // documented `{ passed: boolean, error: string|null }` shape, so a malformed bag is refused instead
-  // of being read as "not probed".
+  // of being read as "not probed". A non-null `error` must be a NON-EMPTY string: both deny sites read
+  // `gateError` for truthiness, so an empty string would be read as "not probed" again and the deny
+  // would misreport the block as missing evidence.
   ["readyGate", (value) =>
     value === null || value === undefined
-    || (typeof value === "object" && typeof value.passed === "boolean" && (value.error === null || typeof value.error === "string"))],
+    || (typeof value === "object" && typeof value.passed === "boolean"
+      && (value.error === null || (typeof value.error === "string" && value.error.length > 0)))],
 ]);
 
 /**

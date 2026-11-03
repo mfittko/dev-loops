@@ -445,6 +445,14 @@ test("readyGate accepts null, its 'not probed' value", () => {
   assert.equal(decision.reason, "gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #5.");
 });
 
+test("readyGate accepts an absent key, its other 'not probed' value", () => {
+  const noReadyGate = { ...READY_PROBE };
+  delete noReadyGate.readyGate;
+  const decision = decideBashGateDeny(noReadyGate);
+  assert.equal(decision.ruleId, "GATE-COMMENT-DRAFT-REQUIREMENTS");
+  assert.equal(decision.reason, "gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #5.");
+});
+
 test("readyGate accepts a well-formed passing probe", () => {
   assert.equal(decideBashGateDeny({ ...READY_PROBE, readyGate: { passed: true, error: null } }), null);
 });
@@ -472,6 +480,31 @@ test("a readyGate probe whose `passed` is a string is refused naming readyGate",
 test("a readyGate probe whose `error` is neither a string nor null is refused naming readyGate", () => {
   const decision = decideBashGateDeny({ ...READY_PROBE, readyGate: { passed: false, error: 0 } });
   assert.ok(decision, "a mistyped `error` must deny instead of degrading to 'not probed'");
+  assert.equal(decision.ruleId, null);
+  assert.match(decision.reason, /supplied no valid readyGate fact/);
+});
+
+test("a readyGate probe with a boolean `passed` but no `error` key is refused naming readyGate", () => {
+  // The form where the error-presence requirement decides the outcome: a natural shape for an adapter
+  // that reports only success. An absent `error` is malformed, never defaulted to null.
+  const decision = decideBashGateDeny({ ...READY_PROBE, readyGate: { passed: true } });
+  assert.ok(decision, "an absent `error` must deny instead of degrading to 'not probed'");
+  assert.equal(decision.ruleId, null);
+  assert.match(decision.reason, /supplied no valid readyGate fact/);
+});
+
+test("a non-object non-null readyGate probe is refused naming readyGate", () => {
+  const decision = decideBashGateDeny({ ...READY_PROBE, readyGate: "probe" });
+  assert.ok(decision, "a non-object probe must deny instead of degrading to 'not probed'");
+  assert.equal(decision.ruleId, null);
+  assert.match(decision.reason, /supplied no valid readyGate fact/);
+});
+
+test("a readyGate probe whose `error` is an empty string is refused naming readyGate", () => {
+  // A well-formed failing probe with an empty message would otherwise be kept by `?? null` and then
+  // read as "not probed" by the truthiness tests at both deny sites, misattributing the block.
+  const decision = decideBashGateDeny({ ...READY_PROBE, readyGate: { passed: false, error: "" } });
+  assert.ok(decision, "an empty `error` must deny instead of degrading to 'not probed'");
   assert.equal(decision.ruleId, null);
   assert.match(decision.reason, /supplied no valid readyGate fact/);
 });
