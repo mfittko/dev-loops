@@ -970,10 +970,10 @@ function blankQuotedForFlags(command) {
  * text as more permissive (a foreign `--repo`, an explicit `-X GET`) must not. `precise` (wait and poll predicates) trusts the
  * tokenizer instead of that coarse guard, which removes the hazard false positives. It also blanks the bodies that
  * `blankDataHeredocs` finds to be data, treats a single-quoted or ANSI-C `$(`/backtick as inert, and keeps every
- * quoted span inside a payload word (`isPayloadWord`, see `payloadFrom`) and every quoted span when `feedsShell(tok)` is true. Text from an
+ * quoted span inside a payload word (`isPayloadWord`, see `payloadFrom`). Text from an
  * unterminated quote, `$(` or heredoc onward is left as raw executable text in both modes (deny direction). Accepted ceiling, default mode
  * only: a deliberately quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is blanked like any other quoted
- * literal and can evade the ban. Precise mode keeps a quoted whole-word keyword (`'sleep' 5`) visible (`STRUCTURAL_WORD_RE`) except behind an `echo`/`printf` head, so the ceiling does not apply there.
+ * literal and can evade the ban.
  * `waitView` (the detached-wait operator view) also keeps a quoted span visible unless every segment around it passes `inertQuoteSegment`. The poll predicates use the default mode, as on origin/main.
  * @param {string} command @param {boolean} [precise] @param {boolean} [waitView] @returns {string}
  */
@@ -982,7 +982,7 @@ function stripQuotedLiterals(command, precise = false, waitView = false) {
   if (!precise && hasQuotePairingHazard(command)) return command;
   const text = precise ? blankDataHeredocs(command, tok) : command;
   const all = precise ? allWords(tok.segments) : [];
-  const payloads = all.filter(({ words, k }) => feedsShell(tok) || isPayloadWord(words, k)).map(({ w }) => w);
+  const payloads = all.filter(({ words, k }) => isPayloadWord(words, k)).map(({ w }) => w);
   const limit = tok.incompleteAt < 0 ? text.length : tok.incompleteAt;
   let out = "";
   let pos = 0;
@@ -991,8 +991,7 @@ function stripQuotedLiterals(command, precise = false, waitView = false) {
     const body = text.slice(start + 1, end - 1);
     const subst = /\$\(|`/.test(body);
     const kept = precise
-      ? (subst && kind === "double") || (waitView && all.some(({ w, seg }) => w.start <= start && end <= w.end && !inertQuoteSegment(tok, seg))) || payloads.some((w) => w.start <= start && end <= w.end) ||
-        (STRUCTURAL_WORD_RE.test(body) && all.some(({ w, words }) => w.end === end && w.raw.length <= end - start + 1 && !/^(?:echo|printf)$/.test(words.find((x) => !x.op)?.value))) // a quoted structural keyword that is a whole word (`'sleep' 5`) still runs: keep it visible
+      ? (subst && kind === "double") || (waitView && all.some(({ w, seg }) => w.start <= start && end <= w.end && !inertQuoteSegment(tok, seg))) || payloads.some((w) => w.start <= start && end <= w.end)
       : subst || // executable code in quotes: preserve (fail-closed)
         /(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(text.slice(0, start)); // -c/eval payload: real shell syntax
     out += text.slice(pos, start) + (kept ? text.slice(start, end) : " ");
@@ -1001,7 +1000,6 @@ function stripQuotedLiterals(command, precise = false, waitView = false) {
   return out + text.slice(pos);
 }
 
-const STRUCTURAL_WORD_RE = /^(?:while|until|for|do|done|sleep|gh|loop-state|test|\[\[?)$/;
 /** @returns {{w: object, words: object[], k: number, seg: object}[]} every word in SEGMENTS with its segment's words and index, nested substitutions included. */
 function allWords(segments, out = []) {
   for (const seg of segments) seg.words.forEach((w, k) => { out.push({ w, words: seg.words, k, seg }); for (const sub of w.subs) allWords(sub.segments, out); });
@@ -1009,7 +1007,6 @@ function allWords(segments, out = []) {
 }
 const EXEC_FLAG_RE = /^(?:-[a-z]*c[a-z]*|--command)$/i;
 const ENV_ASSIGNMENT_WORD_RE = /^[A-Za-z_]\w*=/;
-const SHELL_RE = /^(?:(?:ba|z|da|k|a)?sh|source|\.)$/;
 /** Programs that only read their text (`-c` counts or selects bytes, a here-string is stdin data, an operand is a file name). */
 const TEXT_CONSUMER_RE = /^(?:echo|printf|grep|rg|wc|cat|tee|head|tail|cut|sort|uniq|tr|od|jq|read)$/;
 /** Basename of the program that receives a segment's input and arguments: the first word after env assignments and `env`/`command`/`exec` launchers with their flags. ponytail: `env -u NAME sh` reads NAME as the head. */
@@ -1029,8 +1026,6 @@ const payloadFrom = (words) => {
   const at = words.findIndex((w) => !w.op && (w.value === "eval" || EXEC_FLAG_RE.test(w.value) || (base === "git" && /^(?:-x|--exec(?:=.*)?)$/.test(w.value))));
   return at < 0 ? words.length : at + (words[at].value.startsWith("--exec=") ? 0 : 1);
 };
-/** Whether some segment's output is piped into a shell (`echo '…' | bash`, `{ echo '…'; } | sh`): the text it writes runs, so no quoted word is inert. */
-const feedsShell = (tok) => tok.segments.some((s, i) => (s.pipedOut && SHELL_RE.test(receiverOf(tok.segments[i + 1]?.words ?? []))) || (SHELL_RE.test(receiverOf(s.words)) && s.words.some((w) => w.raw.includes("<("))));
 /** Words that the shell executes as command text: the words `payloadFrom` selects (`-c`/`--command`/`eval`, `watch`/`trap`, `git -x`/`--exec`), or the target of a `<<<` here-string whose consumer is not a text reader. */
 export const isPayloadWord = (words, k) => k >= payloadFrom(words) || (words[k - 1]?.op === "<<<" && !TEXT_CONSUMER_RE.test(receiverOf(words)));
 
