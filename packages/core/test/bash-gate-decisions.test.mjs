@@ -17,11 +17,13 @@ const TARGET = "mfittko/dev-loops";
 // list, each rule's reason strings exactly as the module emits them (including the draft-gate
 // gate-error variants the `readyGate` probe adds to the ready and raw-merge denies), the two inline
 // denies' place in the same ordered body, the fact-validation refusals and the attribution of an
-// unparsable lifecycle verb. Two variants deliberately stay outside the exact-string tables and are
-// pinned by fragment assertions instead: the raw-merge deny's optional "also writes gate evidence"
-// hint (claude-hook-decisions.test.mjs) and the ready verb's unparsable-PR attribution. Reordering
-// two checks, rewording a pinned reason or dropping a rule fails here — which is what makes a later
-// edit to the shared set (or a second adapter that consumes it) safe to review.
+// unparsable lifecycle verb. Every variant is pinned here as a full reason literal, including the
+// raw-merge deny's optional "also writes gate evidence" hint, so a reworded or removed suffix fails
+// this table rather than relying on the Claude seam's fragment assertion
+// (claude-hook-decisions.test.mjs); the ready verb's unparsable-PR attribution has its own
+// exact-string test below. Reordering two checks, rewording a pinned reason or dropping a rule fails
+// here — which is what makes a later edit to the shared set (or a second adapter that consumes it)
+// safe to review.
 const BASE = Object.freeze({
   role: null,
   repoSlug: TARGET,
@@ -121,6 +123,17 @@ const RULE_FIXTURES = [
     reason:
       "gh pr merge is forbidden: route the merge through the sanctioned wrapper `node scripts/github/merge-pr.mjs --repo <owner/name> --pr 5 --human-approved-by <login>`, which runs the full precondition set fail-closed (mandatory approver, merge class, fresh approval) — a raw `gh pr merge` bypasses those (RAW-GH-PR-MERGE-BYPASS)." +
       " (pre-merge gate evidence check also failed: draft-gate guard unavailable)",
+  },
+  {
+    // The raw-merge deny's compound evidence-write variant (#1172): an evidence write chained with the
+    // merge gets a THIRD reason suffix, which the Claude seam pinned only as a fragment. Pinning the
+    // complete emitted reason here gives the hint the same freeze as every other variant, so rewording
+    // or removing "never chain an evidence write with the merge" fails this table.
+    id: "RAW-GH-PR-MERGE-BYPASS",
+    facts: { ...BASE, command: "node scripts/loop/write-gate-findings-log.mjs --pr 5 && gh pr merge 5" },
+    reason:
+      "gh pr merge is forbidden: route the merge through the sanctioned wrapper `node scripts/github/merge-pr.mjs --repo <owner/name> --pr 5 --human-approved-by <login>`, which runs the full precondition set fail-closed (mandatory approver, merge class, fresh approval) — a raw `gh pr merge` bypasses those (RAW-GH-PR-MERGE-BYPASS)." +
+      " This command also writes gate evidence, but hooks evaluate before the command runs — never chain an evidence write with the merge.",
   },
 ];
 
@@ -365,16 +378,24 @@ test("the unresolve owner allowlist is the shared set's FIRST rule", () => {
     "the shared decision must not reach the allowlist through another rule",
   );
   // A command that ALSO trips a registered rule must still report the allowlist: this pins the
-  // allowlist above the first registered rule this command also trips (`WORKTREE-NO-STASH`). It can
-  // NOT be pinned against the FIRST registered rule at all — COORDINATOR-VERIFY-BOUNDARY needs
-  // `enforceCoordinator` plus a coordinator role, and that role owns unresolve, so such a command
-  // never reaches the allowlist.
+  // allowlist above the first registered rule this command also trips (`WORKTREE-NO-STASH`).
   const combined = `${command} && git stash`;
   const allowlist = decideUnresolveOwnerDeny({ command: combined, role: "fixer" });
   assert.ok(allowlist, "the allowlist must deny this combined command");
   const shared = decideBashGateDeny({ ...BASE, role: "fixer", command: combined });
   assert.equal(shared.ruleId, null, "the allowlist carries no registered rule id");
   assert.equal(shared.reason, allowlist.reason, "a registered rule must not outrank the allowlist block");
+  // The FIRST registered rule (COORDINATOR-VERIFY-BOUNDARY) needs `enforceCoordinator` plus a
+  // coordinator role, and `gate-coordinator` — unlike `dev-loop` — does NOT own unresolve, so an
+  // unresolve chained with a code-verification entrypoint trips BOTH bodies and must still report the
+  // allowlist. Swapping the allowlist with that first registered check would surface the coordinator
+  // reason here and fail.
+  const coordinatorCombined = `${command} && bun run verify`;
+  const coordinatorAllowlist = decideUnresolveOwnerDeny({ command: coordinatorCombined, role: "gate-coordinator" });
+  assert.ok(coordinatorAllowlist, "the allowlist must deny an unresolve run by the gate coordinator");
+  const coordinatorShared = decideBashGateDeny({ ...BASE, enforceCoordinator: true, role: "gate-coordinator", command: coordinatorCombined });
+  assert.equal(coordinatorShared.ruleId, null, "the allowlist carries no registered rule id");
+  assert.equal(coordinatorShared.reason, coordinatorAllowlist.reason, "COORDINATOR-VERIFY-BOUNDARY must not outrank the allowlist block");
 });
 
 test("an unparsable lifecycle verb is attributed to the verb's own rule", () => {
