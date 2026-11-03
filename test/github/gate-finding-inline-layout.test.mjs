@@ -458,7 +458,7 @@ test("a merged comment's non-primary fingerprints stay suppressed through fetchA
 
 test("the production upsert call passes the widened body excerpt", () => {
   const src = readFileSync(new URL("../../scripts/github/upsert-checkpoint-verdict.mjs", import.meta.url), "utf8");
-  assert.match(src, /fetchAllReviewThreads\([^)]*\{ \.\.\.gh, bodyMax: MERGED_THREAD_BODY_MAX \}\)/);
+  assert.match(src, /fetchAllReviewThreadsWithSkips\([^)]*\{ \.\.\.gh, bodyMax: MERGED_THREAD_BODY_MAX \}\)/);
   assert.ok(MERGED_THREAD_BODY_MAX > 200);
 });
 
