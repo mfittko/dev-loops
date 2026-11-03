@@ -78,4 +78,6 @@ export const INLINE_DENY_ROWS = [
   "export PATH\\=tmp; grep -ec 'true; node -e y'",
   "declare -x 'PATH'=tmp; grep -ec 'true; node -e y'",
   "builtin printf -vPATH tmp; grep -ec 'true; node -e y'",
+  "echo \"${ true; node -e y; }\"",
+  "echo \"${| true; node -e y; }\"",
 ];

@@ -1760,6 +1760,6 @@ test("round 3: a shell reached through env/command/exec or `<(`, a joined heredo
   assert.equal(commandContainsInlineInterpreter("cat <<EOF\n$\\\n(true; node -e x)\nEOF"), true);
   assert.equal(commandContainsInlineInterpreter("cat <<'EOF'\n$\\\n(true; node -e x)\nEOF"), false);
   // thread 5: a here-string or `-c` counts as payload only for a consumer that executes text
-  for (const c of ["cat <<< 'node -e x'", "head -c 100 'node -e x'", "env head -c 100 'node -e x'"]) assert.equal(commandContainsInlineInterpreter(c), false, c);
+  for (const c of ["cat <<< 'node -e x'", "head -c 100 'node -e x'", "env head -c 100 'node -e x'", 'echo "${HOME}"']) assert.equal(commandContainsInlineInterpreter(c), false, c);
   for (const c of ["bash <<< 'node -e x'", "env bash <<< 'node -e x'", "exec sh -c 'node -e x'"]) assert.equal(commandContainsInlineInterpreter(c), true, c);
 });
