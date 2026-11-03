@@ -451,7 +451,13 @@ export async function emitFixerWorkOrder({
   if (operatorFocusRaw?.items && !actListFile) throw new OperatorFocusRefusal("GATE-EXEC-OPERATOR-FOCUS: operator focus items need an --act-list-file source; a threads source accepts a round only");
   const operatorFocus = actListFile ? bindOperatorFocusItems(operatorFocusRaw, source.parsed) : operatorFocusRaw;
   // A trust-incomplete thread (first comment page all untrusted, more pages exist) stays a blocker but is never a fixer source.
-  if (threadsFile && Array.isArray(source.parsed?.threads)) source.parsed = { ...source.parsed, threads: source.parsed.threads.filter((thread) => thread?.trustIncomplete !== true) };
+  // The filtered payload becomes the pinned threads read, so the read bytes and authority.sourceDigest describe the same payload.
+  if (threadsFile && Array.isArray(source.parsed?.threads) && source.parsed.threads.some((thread) => thread?.trustIncomplete === true)) {
+    const filtered = { ...source.parsed, threads: source.parsed.threads.filter((thread) => thread?.trustIncomplete !== true) };
+    const filteredPath = path.join(dir, executionIdentity, "threads.json"), bytes = Buffer.from(`${JSON.stringify(filtered, null, 2)}\n`);
+    await capture.write(filteredPath, bytes);
+    source = { read: { kind: "threads", path: filteredPath, sha256: sha256(bytes), bytes: bytes.length, required: true }, parsed: filtered };
+  }
   if (threadsFile && (source.parsed?.ok !== true || !Array.isArray(source.parsed.threads) || source.parsed.repo !== repo || Number(source.parsed.pr) !== Number(pr)
     || !source.parsed.threads.every((thread) => thread?.isResolved === false))) {
     const resolved = Array.isArray(source.parsed?.threads) ? source.parsed.threads.filter((thread) => thread?.isResolved === true) : [];

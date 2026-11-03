@@ -875,6 +875,19 @@ test("ADR 0238: a threads file holding a thread without the trusted marker refus
   });
 });
 
+test("ADR 0238: a trust-incomplete thread is dropped from the pinned threads read so the read matches the digested payload", async () => {
+  await withFixture(async ({ files, emit }) => {
+    const incomplete = { ...THREADS.threads[0], threadId: "T2", trusted: false, trustIncomplete: true, body: "" };
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [THREADS.threads[0], incomplete] }));
+    const { workOrder } = await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    const read = workOrder.requiredReads.find((r) => r.kind === "threads");
+    assert.notEqual(read.path, files.threads, "the pinned read is the work-order-owned filtered file");
+    const bytes = await readFile(read.path);
+    assert.equal(sha256Hex(bytes).replace(/^sha256:/, ""), read.sha256);
+    assert.deepEqual(JSON.parse(bytes).threads.map((t) => t.threadId), ["T1"]);
+  });
+});
+
 test("F1: a delta result that does not belong to this act list and head refuses before dispatch", async () => {
   await withFixture(async ({ head, files, emit }) => {
     await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: files.delta }), /--delta-result applies only to an --act-list-file source/);
