@@ -391,7 +391,8 @@ async function rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr
   const candidate = order?.phase === "full" ? await planCandidate(order, (file) => capture.read(file)) : null;
   // A completion order emitted at a descendant head (C14) keeps the original candidate in its read but is active at its own headSha.
   const worktreeHead = gitIn(cwd, "rev-parse", "HEAD");
-  if (!candidate || ![candidate, order.completesExecution && order.headSha].includes(worktreeHead)) return;
+  // A completion order is active only at its own headSha: resetting to the original candidate does not make it active again.
+  if (!candidate || worktreeHead !== (order.completesExecution ? order.headSha : candidate)) return;
   const markerRoot = resolveGateArtifactTmpRoot(cwd);
   // A closed or retired plan cannot be completed, so --completion-only would refuse too: nothing is superseded (same checks as emitCompletionOnly).
   const baselines = [order.headSha, order.authority?.reviewBaselineHead].filter(Boolean);
@@ -401,7 +402,7 @@ async function rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr
   if (order.source === "act-list") {
     for (const root of new Set([path.resolve(tmpRoot), markerRoot, path.join(resolveRepoRoot(cwd), "tmp")])) if (findRetirementAfter(root, order.gate, baselines.at(-1), emittedAt(active.executionIdentity))) return;
   }
-  const verified =await readFile(path.resolve(resolveRepoRoot(cwd), buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: candidate, tmpRoot: markerRoot }))).then((text) => JSON.parse(text).complete === true, () => false);
+  const verified =await readFile(path.resolve(resolveRepoRoot(cwd), buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: candidate, tmpRoot: markerRoot }))).then((text) => { try { return JSON.parse(text).complete === true; } catch { return false; } }, () => false); // a truncated checkpoint is not a verified disposition
   if (verified) return;
   const pulled = await verifyPulledResult({ resultPath: order.outputRefs?.[0], receiptTmpRoot: markerRoot, role: "fixer", workOrderRef: active.workOrderRef, workOrderDigest: active.workOrderDigest, executionIdentity: active.executionIdentity });
   // A drifted pinned read makes the pull and --completion-only refuse too, so nothing is superseded and a refusal would name a failing exit.
@@ -525,6 +526,8 @@ export async function emitFixerWorkOrder({
       source: await readSource(sourceKind, abs(actListFile ?? threadsFile), capture), prState: await fetchPr({ repo, pr }), executionIdentity });
   }
   await capture.preserve(planPath, path.resolve(tmpRoot), resolveGateArtifactTmpRoot(cwd));
+  // A pull can finish between the first guard and preserve capturing the receipt; the capture now pins the receipt state, so re-run the guard against it.
+  if (phase === "commit_only" && originalBytes) await rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr, headSha, tmpRoot });
 
   // The review-body source is built below, once the live PR head is known.
   let source = actListFile ? await readSource("act-list", abs(actListFile), capture) : threadsFile ? await readSource("threads", abs(threadsFile), capture) : ciFile ? await readSource("ci-failure", abs(ciFile), capture) : null;
