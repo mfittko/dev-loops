@@ -128,10 +128,13 @@ const ENTROPY_MIN_LENGTH = 20;
 const ENTROPY_THRESHOLD = 4.3;
 
 function hasHighEntropyToken(text) {
-  // #3054: split path-like runs at `/` so each segment is scored alone, and
-  // skip timestamped migration file names (`20240101123456_add_x.rb`).
-  // Bare random runs without `/` are scored as before.
-  const candidates = (text.match(ENTROPY_CANDIDATE_RE) ?? []).flatMap((run) => run.split("/"));
+  // #3054: split a run at `/` only when it looks like a path (contains `/`
+  // and ends in a file extension) so each segment is scored alone, and skip
+  // timestamped migration file names (`20240101123456_add_x.rb`). Other runs,
+  // including random secrets containing `/`, are scored whole.
+  const candidates = (text.match(ENTROPY_CANDIDATE_RE) ?? []).flatMap((run) =>
+    run.includes("/") && /\.[A-Za-z]{1,10}$/u.test(run) ? run.split("/") : [run],
+  );
   for (const candidate of candidates) {
     if (candidate.length < ENTROPY_MIN_LENGTH) continue;
     if (/^\d{8,14}_[a-z0-9_]+\.[a-z]+$/u.test(candidate)) continue;

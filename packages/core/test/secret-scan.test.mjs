@@ -468,6 +468,9 @@ test("detector 2 (high-entropy, #3054): a bare random token and a base64 blob st
   const random = join("kZ9mQ2", "vL7pR4", "wT8nJ1", "zY6cF3", "xB5dH0", "qS2gM8");
   assert.equal(random.length, 36);
   assert.equal(scanLineText(`value ${random}`)[0].detectorClass, DETECTOR_CLASSES.HIGH_ENTROPY);
+  const slashed = join("wJalrXUtnF", "EMI/K7MDENG/", "bPxRfiCYEX", "AMPLEKEY");
+  assert.equal(slashed.length, 40);
+  assert.equal(scanLineText(`aws_secret ${slashed}`)[0].detectorClass, DETECTOR_CLASSES.HIGH_ENTROPY);
   const blob = join("aGVsbG8gd29y", "bGQgZm9vIGJhciBi", "YXogcXV4MTIz", "NDU2Nzg5MA==");
   assert.equal(scanLineText(`blob ${blob}`)[0].detectorClass, DETECTOR_CLASSES.HIGH_ENTROPY);
 });
