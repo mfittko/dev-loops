@@ -5,7 +5,7 @@
  * Each producer run owns its own record, so a re-run at the same heads opens a new unsealed record and the old seal stays final.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 export class EvidenceSealError extends Error {
@@ -45,6 +45,13 @@ function canonicalPath(filePath) {
   }
 }
 
+// A concurrent reader sees the old or the new file, never a truncated one.
+function writeAtomic(file, content) {
+  const temp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  writeFileSync(temp, content);
+  renameSync(temp, file);
+}
+
 /** Opens a run record. `resultPath`, when given, is the briefed result path; sealing any other path is refused. */
 export function createEvidenceRun(tmpRoot, key, expected, resultPath) {
   const file = evidenceRunRecordPath(tmpRoot, key);
@@ -53,10 +60,10 @@ export function createEvidenceRun(tmpRoot, key, expected, resultPath) {
   mkdirSync(path.dirname(file), { recursive: true });
   // The briefed directory exists before it is resolved, so a symlinked prefix is always realpathed.
   if (resultPath) mkdirSync(path.dirname(path.resolve(resultPath)), { recursive: true });
-  writeFileSync(file, `${JSON.stringify({ key, expected, ...(resultPath ? { resultPath: canonicalPath(resultPath) } : {}), sealed: null })}\n`);
+  writeAtomic(file, `${JSON.stringify({ key, expected, ...(resultPath ? { resultPath: canonicalPath(resultPath) } : {}), sealed: null })}\n`);
   // The newest run of a head pair is the current one; a superseded run's sealed result stops verifying.
   const pointer = currentRunPointerPath(tmpRoot, expected);
-  if (pointer) writeFileSync(pointer, `${expected.runId}\n`);
+  if (pointer) writeAtomic(pointer, `${expected.runId}\n`);
 }
 
 // One pointer per head pair, only for records whose identity carries both heads and a run id.
@@ -71,6 +78,7 @@ function readRun(tmpRoot, key) {
     return JSON.parse(readFileSync(evidenceRunRecordPath(tmpRoot, key), "utf8"));
   } catch (error) {
     if (error?.code === "ENOENT") throw new EvidenceSealError("evidence_run_missing", `no producing run recorded for ${key}; re-run the producer`);
+    if (error instanceof SyntaxError) throw new EvidenceSealError("evidence_malformed", `run record ${key} is not valid JSON; re-run the producer, never repair by hand`);
     throw error;
   }
 }
@@ -91,21 +99,22 @@ export function sealEvidence(tmpRoot, key, filePath, parsed) {
   const resolved = canonicalPath(filePath);
   if (record.resultPath && record.resultPath !== resolved) throw new EvidenceSealError("evidence_foreign_run", `${filePath} is not the result path briefed for ${key} (${record.resultPath}); re-run the producer`);
   record.sealed = { path: resolved, sha256: sha256Of(readFileSync(resolved)) };
-  writeFileSync(evidenceRunRecordPath(tmpRoot, key), `${JSON.stringify(record)}\n`);
+  writeAtomic(evidenceRunRecordPath(tmpRoot, key), `${JSON.stringify(record)}\n`);
   return record.sealed;
 }
 
 /** Verifies `filePath` against its sealed record. `sha256` is the digest of the exact bytes the consumer parsed, so the check covers the bytes that drive the decision. */
 export function verifyEvidence(tmpRoot, key, filePath, parsed, sha256) {
   if (typeof sha256 !== "string") throw new TypeError("verifyEvidence requires the sha256 of the bytes the caller parsed");
-  const record = readRun(tmpRoot, key);
-  assertSameRun(record, parsed, key);
-  const pointer = currentRunPointerPath(tmpRoot, record.expected);
-  // ponytail: a record without a pointer predates it and stays verifiable.
+  // The pointer of the parsed heads comes first, so a foreign result with rewritten heads names the current run, not a missing record.
+  // ponytail: a head pair without a pointer predates it and stays verifiable.
+  const pointer = currentRunPointerPath(tmpRoot, parsed);
   if (pointer && existsSync(pointer)) {
     const current = readFileSync(pointer, "utf8").trim();
-    if (current !== record.expected.runId) throw new EvidenceSealError("evidence_foreign_run", `run ${record.expected.runId} is superseded by run ${current} for these heads; re-run the producer or use the current run's result`);
+    if (current !== parsed.runId) throw new EvidenceSealError("evidence_foreign_run", `run ${parsed.runId} is not the current run ${current} for these heads; re-run the producer or use the current run's result`);
   }
+  const record = readRun(tmpRoot, key);
+  assertSameRun(record, parsed, key);
   if (!record.sealed) throw new EvidenceSealError("evidence_unsealed", `${filePath} was never sealed for ${key}; seal it with seal-evidence.mjs or re-run the producer`);
   if (record.sealed.path !== canonicalPath(filePath)) throw new EvidenceSealError("evidence_foreign_run", `${filePath} is not the file sealed for ${key} (${record.sealed.path}); re-run the producer`);
   if (record.sealed.sha256 !== sha256) {

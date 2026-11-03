@@ -86,8 +86,33 @@ test("PR 2876 case 1: a finding added after sealing gives evidence_digest_mismat
   await assert.rejects(withCli((file) => edit(file, { newFindings: [{ severity: "low", summary: "x", evidence: ["e"] }] })), /evidence_digest_mismatch/);
 });
 
-test("PR 2876 case 2: a result with a rewritten actSetId gives evidence_foreign_run", async () => {
+test("a result with a rewritten actSetId gives evidence_foreign_run", async () => {
   await assert.rejects(withCli((file) => edit(file, { actSetId: "0".repeat(16) })), /evidence_foreign_run/);
+});
+
+test("PR 2876 case 2: a foreign result with its heads rewritten to the current run keeps its own run id and gives evidence_foreign_run", async () => {
+  await assert.rejects(withCli((file) => edit(file, { runId: "fedcba9876543210" })), /evidence_foreign_run/);
+});
+
+test("PR 2876 case 2 with heads that name no run (one head, then both heads) gives evidence_run_missing", async () => {
+  await assert.rejects(withCli((file) => edit(file, { candidateHead: "d".repeat(40) })), /evidence_run_missing/);
+  await assert.rejects(withCli((file) => edit(file, { reviewBaselineHead: "e".repeat(40), candidateHead: "d".repeat(40) })), /evidence_run_missing/);
+});
+
+test("verifyEvidence checks the current-run pointer of the parsed heads before it reads the record", () => {
+  const { dir, file } = setup();
+  sealEvidence(dir, KEY, file, result());
+  const foreign = result({ runId: "fedcba9876543210" });
+  assert.equal(reason(() => verify(dir, deltaEvidenceKey(A, B, "fedcba9876543210"), file, foreign)), "evidence_foreign_run");
+});
+
+test("a truncated run record gives a typed evidence_malformed refusal, and record and pointer writes leave no temp file", () => {
+  const { dir, file } = setup();
+  sealEvidence(dir, KEY, file, result());
+  assert.deepEqual(fs.readdirSync(path.join(dir, "evidence-runs")).filter((name) => name.endsWith(".tmp")), []);
+  fs.writeFileSync(evidenceRunRecordPath(dir, KEY), '{"key":');
+  assert.equal(reason(() => verify(dir, KEY, file, result())), "evidence_malformed");
+  assert.equal(reason(() => sealEvidence(dir, KEY, file, result())), "evidence_malformed");
 });
 
 test("PR 2876 case 2b: heads and actSetId copied from the input shape cannot reseal a sealed run", () => {

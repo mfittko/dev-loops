@@ -199,8 +199,16 @@ test("input.patchPath is the gate-delta patch holding the diffPatch bytes", asyn
   assert.equal(out.input.patchPath, deltaPatchPath(seam.tmpRoot, A, B));
   assert.equal(fs.readFileSync(out.input.patchPath, "utf8"), "diff --git a/x b/x\n");
   assert.equal(out.input.evidenceRule, DELTA_EVIDENCE_RULE);
-  assert.match(out.input.sealCommand, /seal-evidence\.mjs --kind delta --file <result path>/);
-  assert.match(out.input.sealCommand, new RegExp(`--tmp-root ${seam.tmpRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`), "a non-default tmp root is carried");
+  const resultPath = path.join(seam.tmpRoot, "bound-result.json");
+  const bare = (await runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A), "--result-path", resultPath], seam)).input.sealCommand;
+  assert.equal(bare, `dev-loops-run scripts/loop/seal-evidence.mjs --kind delta --file ${resultPath} --tmp-root ${seam.tmpRoot}`, "the bare command with the bound path and the non-default tmp root");
+  assert.equal(decidePiToolCall({ toolName: "bash", input: { command: bare }, agentType: "review" }).block, false, "the review role may run it verbatim");
+});
+
+test("input.sealCommand refuses a bound path the read-only gate would block", async () => {
+  const { actList } = fixture();
+  const seam = headAt(B);
+  await assert.rejects(runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A), "--result-path", path.join(seam.tmpRoot, "a b.json")], seam), /may use only letters/);
 });
 
 test("the real patch file holds the cumulative baseline..candidate git diff", async () => {
