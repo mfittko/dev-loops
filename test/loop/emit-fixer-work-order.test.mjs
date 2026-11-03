@@ -962,6 +962,22 @@ test("C15: the pinned act-list read is the emitter's own copy and survives an ov
   });
 });
 
+test("C15: an overwrite of the caller's act list adds no act-list warning to the request-copilot-review disposition input", async () => {
+  await withFixture(async (fx) => {
+    const unit = await (await fx.prepareFull()).full();
+    assert.equal(pull(unit, fx.wt).status, 0);
+    // request-copilot-review reads the shared resolveFixerDispositionInput seam.
+    const read = () => resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: unit.workOrder.headSha, parsedThreads: { threads: [], comments: [] } },
+      { env: runIdFreeEnv(), repoRoot: fx.wt, runChild: makeGhMock([]).runChild });
+    const steps = async () => ((await read())?.incomplete ?? []).map((entry) => entry.failedStep).sort();
+    const before = await steps();
+    await writeFile(fx.files.actList, "[]");
+    const after = await steps();
+    assert.deepEqual(after, before, "the overwrite changes nothing the consumer reports");
+    assert.equal(after.some((step) => /act-list|differs|changed/i.test(step)), false);
+  });
+});
+
 test("delta gate: an act-list --phase full without --delta-result refuses and names commit_only; commit_only emits", async () => {
   await withFixture(async ({ emit }) => {
     await assert.rejects(emit({ phase: "full", deltaResult: undefined }), /needs --delta-result[^]*--phase commit_only/);
@@ -3303,6 +3319,8 @@ for (const route of ["ACT", "THREAD"]) {
       assert.equal(unit.joinRef, `${unit.workOrder.outputRefs[0]}.report`);
       assert.equal(pull(unit, fx.wt).status, 0, "the unchanged consumer admission accepts the order");
       assert.equal(refusal(pull(old, fx.wt)), "stale_dispatch");
+      // Cross-harness row (issue 1086): the completion-only plan builds a valid dispatch payload for every harness.
+      for (const harness of ["claude", "pi", "codex"]) assertFixerDispatchPayload({ harness, payload: buildFixerDispatchPayload({ harness, plan: unit, cwd: fx.wt }), plan: unit });
     });
   });
 }
@@ -3350,6 +3368,74 @@ test("issue 2787 C14: a descendant live head re-enters; a diverged head refuses 
     const plan = await readFile(unit.planPath);
     await assert.rejects(reenter(fx, "ACT", { headSha: diverged, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: diverged }) }), /not an ancestor of the live head/);
     assert.deepEqual(await readFile(unit.planPath), plan);
+  });
+});
+
+test("issue 2787 C14: a THREAD plan refuses --completion-only at a descendant head, names a full gate round and writes nothing", async () => {
+  await withFixture(async (fx) => {
+    const old = await pulledFull(fx, "THREAD");
+    git(fx.wt, "commit", "-q", "--allow-empty", "-m", "ci fix");
+    const live = git(fx.wt, "rev-parse", "HEAD");
+    const plan = await readFile(old.planPath);
+    await assert.rejects(reenter(fx, "THREAD", { headSha: live, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: live }) }), /only at its candidate[^]*full gate round/);
+    assert.deepEqual(await readFile(old.planPath), plan);
+    await noWrite(old);
+    assert.equal((await readdir(path.join(path.dirname(old.planPath), "work-orders"))).length, 1, "no new work order text");
+  });
+});
+
+test("issue 2787 C15: an overwritten caller act list refuses --completion-only and names the pinned copy", async () => {
+  await withFixture(async (fx) => {
+    const old = await pulledFull(fx, "ACT");
+    const pinned = old.workOrder.requiredReads.find((read) => read.kind === "act-list").path;
+    await writeFile(fx.files.actList, "[]");
+    await assert.rejects(reenter(fx, "ACT"), (error) => /source differs from the plan's pinned read/.test(error.message) && error.message.includes(pinned));
+    await noWrite(old);
+  });
+});
+
+for (const route of ["ACT", "THREAD"]) {
+  test(`issue 2787 C14: --completion-only refuses --operator-focus-file on the ${route} route (rejected form)`, async () => {
+    await withFixture(async (fx) => {
+      const old = await pulledFull(fx, route);
+      const focus = path.join(fx.root, "focus.json");
+      await writeFile(focus, "{}");
+      await assert.rejects(reenter(fx, route, { operatorFocusFile: focus }), /--completion-only takes --phase full[^]*--operator-focus-file/);
+      await noWrite(old);
+      assert.equal((await reenter(fx, route)).workOrder.operation, "complete", "the accepted form still emits");
+    });
+  });
+}
+
+test("issue 2787 C13: a closed or retired full plan no longer blocks commit_only at its candidate", async () => {
+  await withFixture(async (fx) => {
+    const old = await pulledFull(fx, "ACT");
+    const { sequenceClosurePath } = await import("@dev-loops/core/loop/fix-push-authority");
+    const file = sequenceClosurePath(path.join(fx.root, "tmp"), fx.head, old.executionIdentity);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, "{}\n");
+    await assert.rejects(reenter(fx, "ACT"), /closed as abandoned/);
+    assert.equal((await fx.emit({ phase: "commit_only", deltaResult: undefined })).workOrder.phase, "commit_only");
+  });
+  await withFixture(async (fx) => {
+    const old = await pulledFull(fx, "ACT");
+    const file = path.join(fx.root, "tmp/retired-gate-rounds", fx.head, "r1/retirement.json");
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ gate: "draft_gate", retiredAt: new Date(Number(old.executionIdentity.slice(1).split("-")[0]) + 1).toISOString() }));
+    await assert.rejects(reenter(fx, "ACT"), /retired/);
+    assert.equal((await fx.emit({ phase: "commit_only", deltaResult: undefined })).workOrder.phase, "commit_only");
+  });
+});
+
+test("issue 2787 C14: a close of the original execution after the emit refuses the pull of the completion order", async () => {
+  await withFixture(async (fx) => {
+    const old = await pulledFull(fx, "ACT");
+    const unit = await reenter(fx, "ACT");
+    const { sequenceClosurePath } = await import("@dev-loops/core/loop/fix-push-authority");
+    const file = sequenceClosurePath(path.join(fx.root, "tmp"), fx.head, old.executionIdentity);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, "{}\n");
+    assert.equal(refusal(pull(unit, fx.wt)), "stale_dispatch");
   });
 });
 
