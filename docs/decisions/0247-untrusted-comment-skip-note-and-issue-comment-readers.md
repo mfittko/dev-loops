@@ -20,7 +20,7 @@ The repository-permission check (write, maintain, admin) is declined for this is
 
 The once-per-head untrusted-comments-skipped note is a third exception to `GATE-COMMENT-SINGLE-SURFACE`, next to the opt-in findings comment and the deferred-summary comment.
 
-The rule paragraph of `GATE-REVIEW-COMMENT-TRUST` in `skills/docs/gate-review-sub-loop-contract.md`, the `GATE-COMMENT-SINGLE-SURFACE` paragraph in `skills/docs/gate-review-comment-contract.md` and the one-surface wording of `GATE-EXEC-FINDING-THREADS` (sub-loop contract) are amended in slice 3 of issue 3034, because other open pull requests held the contract files. Slice 2 left them unchanged.
+The rule paragraphs of `GATE-REVIEW-COMMENT-TRUST` and `GATE-COMMENT-SINGLE-SURFACE` in `skills/docs/gate-review-comment-contract.md` are amended in slice 3 of issue 3034, because other open pull requests hold the contract file. This pull request leaves the contract file unchanged.
 
 ## Audit of comment-text readers
 
@@ -34,10 +34,7 @@ The rule paragraph of `GATE-REVIEW-COMMENT-TRUST` in `skills/docs/gate-review-su
 | `request-copilot-review` `checkForCopilotComments` | No filter needed. It reads bodies only to detect summon violations and emits comment ids, never body text. |
 | `merge-pr`, `_policy-change-approval`, `_carried-verdict`, `post-gate-findings` | No filter needed. They match gate markers and approvals by viewer-scoped or owner-scoped author, or parse a machine record, and emit no body text. |
 | `detect-refinement-grill-state --comments-file` | No filter needed. It matches a fixed provenance marker and emits booleans and a bypass login, never body text. |
-| `detect-checkpoint-evidence` gate-verdict summaries, marker summarizers, approval facts, carried heads | Filtered in slice 3 ([ADR 0248](./0248-detector-evidence-trust-filter.md)): trusted-or-viewer filter at ingestion. Originally deferred because about 77 fixtures in six test files carried no author or association. |
-| `fetchGateEvidenceComments` (`gh pr ready` guard), `fetchListedFingerprints`, `resolveGateRound` inputs in `close-gate-findings` and `upsert-checkpoint-verdict` | Filtered in slice 3 (ADR 0248). |
-| Review agent prose (`agents/review.agent.md` delta-review step) | Closed in slice 3: it reads through `detect-checkpoint-evidence`, not raw `gh`; a contract test bans raw readers in `skills/` and `agents/`. |
-| `scripts/release/verify-release-approval.mjs` | No filter needed. It accepts only comments whose author login equals the repo owner (or the `--operator` login), matched case-insensitively. It emits a refusal message and the operator login, never comment text, so no body reaches an agent. |
+| `detect-checkpoint-evidence` gate-verdict summaries | Open. Gate-formatted comments and reviews from any account reach summarizeGateReviewComments and the marker summarizers, so a forged verdict can put findingsSummary and nextAction text in front of the coordinator. The fix is a trusted-or-viewer filter at ingestion (association check, or the authenticated viewer login for a gate that posts under a bot identity). It is deferred to the last slice of issue 3034 because about 77 existing fixtures in six test files carry no author or association and need migrating, which exceeds this slice's size budget. |
 
 ## Consequences
 

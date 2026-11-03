@@ -30,3 +30,16 @@ The trusted set has no configuration surface. The owner rule stays `GATE-REVIEW-
 ## Consequences
 
 A gate-shaped comment from a non-maintainer no longer counts as gate evidence. Verdicts posted by the viewer identity keep working wherever `gh api user` resolves. In token-only CI, where the workflow runs the detector with `GITHUB_TOKEN`, `gh api user` fails, so the lookup falls back to association only. A verdict posted there by a bot whose `authorAssociation` is not `OWNER`, `MEMBER` or `COLLABORATOR` is not counted. This decision adds no bot identity to the trusted set. The site list above is final for slice 3; the audit table in [ADR 0247](./0247-untrusted-comment-skip-note-and-issue-comment-readers.md) records each reader. Test fixtures for the detector carry a trusted author, through `trustCommentFixtures` in `test/_helpers.mjs`. Claude and Pi share the same script, so the change is harness-agnostic.
+
+## Audit table update for ADR 0247
+
+This section adds rows to the audit table in [ADR 0247](./0247-untrusted-comment-skip-note-and-issue-comment-readers.md). ADR 0247 stays unchanged.
+
+| Reader | Status |
+|---|---|
+| `detect-checkpoint-evidence` gate-verdict summaries, marker summarizers, approval facts, carried heads | Closed in slice 3: trusted-or-viewer filter at ingestion. ADR 0247 listed it as open because about 77 fixtures in six test files carried no author or association. |
+| `fetchGateEvidenceComments` (`gh pr ready` guard), `fetchListedFingerprints`, `resolveGateRound` inputs in `close-gate-findings` and `upsert-checkpoint-verdict` | Closed in slice 3: same shared predicate. |
+| Review agent prose (`agents/review.agent.md` delta-review step) | Closed in slice 3: it reads through `detect-checkpoint-evidence`, not raw `gh`. A contract test bans raw readers in `skills/` and `agents/`. |
+| `scripts/release/verify-release-approval.mjs` | No filter needed. It accepts only comments whose author login equals the repo owner or the `--operator` login, compared case-insensitively. It emits a refusal message and the operator login, never comment text. |
+
+ADR 0247 names `gate-review-comment-contract.md` as the owner of both `GATE-REVIEW-COMMENT-TRUST` and `GATE-COMMENT-SINGLE-SURFACE`. The owners are `gate-review-sub-loop-contract.md` for `GATE-REVIEW-COMMENT-TRUST` and `GATE-EXEC-FINDING-THREADS`, and `gate-review-comment-contract.md` for `GATE-COMMENT-SINGLE-SURFACE`. This record supersedes that detail in ADR 0247 without rewriting it.
