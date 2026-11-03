@@ -8,14 +8,16 @@ const RAW_READERS = [
   /gh api\b[^\n]*(?:issues|pulls)\/[^\s`]*\/(?:comments|reviews)/,
   /gh api graphql\b[^\n]*reviewThreads/,
 ];
-// A line is allowed when it writes (POST/PATCH/DELETE) or when a negation precedes the raw command.
+// A match is allowed when its own command span writes (POST/PATCH/DELETE) or when a negation precedes it.
+// A write verb elsewhere on the line does not exempt a raw reader.
 const WRITE_VERB = /\b(?:DELETE|POST|PATCH)\b/;
 const NEGATION = /\b(?:never|do not|must not|forbidden)\b/i;
 
 function isRawReaderLine(line) {
-  if (WRITE_VERB.test(line)) return false;
-  const raw = RAW_READERS.map((pattern) => pattern.exec(line)).find(Boolean);
-  return Boolean(raw) && !NEGATION.test(line.slice(0, raw.index));
+  return RAW_READERS.some((pattern) => {
+    const raw = pattern.exec(line);
+    return Boolean(raw) && !WRITE_VERB.test(raw[0]) && !NEGATION.test(line.slice(0, raw.index));
+  });
 }
 
 test("the matcher flags raw reader forms and exempts negated and write lines", () => {
@@ -23,10 +25,16 @@ test("the matcher flags raw reader forms and exempts negated and write lines", (
     "gh api repos/{owner}/{repo}/pulls/{number}/reviews",
     "gh pr view --comments",
     "gh issue view --comments",
+    "gh pr view 1 --json comments,reviews",
+    "gh api graphql -f query='{ repository { pullRequest { reviewThreads { nodes { id } } } } }'",
+    "Read `gh api repos/o/r/pulls/1/reviews`, then POST a reply.",
   ]) assert.equal(isRawReaderLine(line), true, line);
   for (const line of [
     "never read it with raw `gh api .../reviews`",
+    "Never run `gh pr view --comments`.",
+    "do not use gh api repos/o/r/pulls/1/reviews",
     "gh api -X POST repos/{owner}/{repo}/issues/{number}/comments",
+    "Use `gh api -X POST repos/o/r/pulls/1/reviews` to submit the review.",
   ]) assert.equal(isRawReaderLine(line), false, line);
 });
 

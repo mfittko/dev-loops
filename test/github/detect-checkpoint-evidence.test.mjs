@@ -866,6 +866,8 @@ test("detect-checkpoint-evidence fails pre-merge check when only draft gate exis
     assert.deepEqual(payload.preMergeGateCheck.failures, [
       "missing visible clean current-head pre_approval_gate comment",
     ]);
+    // The failure JSON still names the latest trusted verdict heads for a follow-up reviewer's delta bound.
+    assert.ok("headSha" in payload.draftGate && "headSha" in payload.preApprovalGate);
     assert.equal(payload.evidenceState, EVIDENCE_STATE.NOT_ESTABLISHED);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1453,9 +1455,21 @@ test("buildPreMergeGateCheck: escalate sizeOutcome with no human APPROVED review
 test("buildPreMergeGateCheck: escalate sizeOutcome with a human APPROVED review and 0 unresolved CHANGES_REQUESTED passes (AC3)", () => {
   const evidence = cleanEvidence();
   evidence.preApprovalGateMarker.sizeOutcome = "escalate";
-  evidence.reviews = [{ login: "alice", state: "APPROVED", commit_id: "abc1234" }];
+  evidence.reviews = [{ login: "alice", state: "APPROVED", commit_id: "abc1234", trusted: true }];
   const result = buildPreMergeGateCheck(evidence, 0, null);
   assert.equal(result.ok, true, JSON.stringify(result.failures));
+});
+
+test("buildPreMergeGateCheck: an unstamped APPROVED review or approve-merge comment never satisfies the size gate (ADR 0248 fail closed)", () => {
+  for (const patch of [
+    { reviews: [{ login: "alice", state: "APPROVED", commit_id: "abc1234" }] },
+    { comments: [{ login: "carol", body: "approve merge abc1234", type: "User" }] },
+  ]) {
+    const evidence = cleanEvidence();
+    evidence.preApprovalGateMarker.sizeOutcome = "escalate";
+    Object.assign(evidence, patch);
+    assert.equal(buildPreMergeGateCheck(evidence, 0, null).ok, false);
+  }
 });
 
 test("buildPreMergeGateCheck: sizeTouchesT1 true with no APPROVED review fails, even on a pass outcome (remaps sizeTouchesT1 -> touchesT1) (AC2, AC3)", () => {
@@ -1516,7 +1530,7 @@ test("buildPreMergeGateCheck: an unresolved human CHANGES_REQUESTED alongside an
 test("buildPreMergeGateCheck: a solo-owner PR clears the gate via a head-pinned \"approve merge <headSha>\" comment even with no APPROVED review (AC5)", () => {
   const evidence = cleanEvidence();
   evidence.preApprovalGateMarker.sizeOutcome = "escalate";
-  evidence.comments = [{ login: "carol", body: "approve merge abc1234", type: "User" }];
+  evidence.comments = [{ login: "carol", body: "approve merge abc1234", type: "User", trusted: true }];
   const result = buildPreMergeGateCheck(evidence, 0, null);
   assert.equal(result.ok, true, JSON.stringify(result.failures));
 });

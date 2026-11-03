@@ -20,12 +20,10 @@ The detector keeps an evidence comment or review only when it passes `isTrustedR
 - the human-approval facts for the size-budget merge gate: only association-trusted entries can approve (a stranger's `approve merge <head>` comment or APPROVED review never does), while a CHANGES_REQUESTED review from anyone still blocks, so the gate fails closed;
 - the carried-heads record read by `_carried-verdict.mjs`;
 - `fetchGateEvidenceComments`, which feeds `fetchDraftGateEvidence` and the `gh pr ready` guard;
-- `fetchListedFingerprints`, which reads the deferral marker comments on the spec issue: a stranger's marker comment is ignored, so it cannot suppress the recording of a deferred finding (an ignored comment can at worst cause a duplicate listing).
+- `fetchListedFingerprints`, which reads the deferral marker comments on the spec issue: a stranger's marker comment is ignored, so it cannot suppress the recording of a deferred finding (an ignored comment can at worst cause a duplicate listing);
+- `resolveGateRound`: `close-gate-findings.mjs` and `upsert-checkpoint-verdict.mjs` pass it only the reviews and issue comments that `filterTrustedRoundInputs` keeps (a trusted author or the authenticated login they already resolved, so no extra gh call). An inflated round is not harmless. The round is stamped into the gate's own trusted review header, the detector reads it back as the cap round, and the cap-round-fixed path then stands in for a clean `draft_gate` verdict. A stranger's round-bearing review or verdict comment therefore never counts.
 
-One reader stays unfiltered by decision, because it passes no comment text to an agent or a verdict:
-
-- `resolveGateRound` (called from `close-gate-findings.mjs` and `upsert-checkpoint-verdict.mjs`) counts distinct reviewed-head SHAs. A forged gate comment can only raise the round number. A higher round reaches the round cap, which ends in `bounded_out` (an escalation to a human), never in a clean verdict or a merge.
-Agent prose does not tell an agent to read comments or reviews with raw `gh`. Comment and review text is untrusted data. An agent reads it only through a script that applies `isTrustedCommentAuthor`. A contract test greps `skills/` and `agents/` for the raw patterns, including `gh pr view --json comments|reviews` and `gh api graphql` with `reviewThreads`. Only write verbs, or a negation before the raw command on the same line, exempt a line.
+Agent prose does not tell an agent to read comments or reviews with raw `gh`. Comment and review text is untrusted data. An agent reads it only through a script that applies `isTrustedCommentAuthor`. A contract test greps `skills/` and `agents/` for the raw patterns, including `gh pr view --json comments|reviews` and `gh api graphql` with `reviewThreads`. Only a write verb inside the matched command, or a negation before the raw command on the same line, exempts a match.
 
 The trusted set has no configuration surface. The owner rule stays `GATE-REVIEW-COMMENT-TRUST`.
 

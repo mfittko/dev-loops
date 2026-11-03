@@ -162,6 +162,7 @@ Output (stdout, JSON; always includes preMergeGateCheck):
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
   { "ok": false, "error": "..." }
+  A failed pre-merge check also carries draftGate and preApprovalGate (headSha, verdict) so a follow-up reviewer can read the latest trusted verdict head.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success (gate evidence is valid)
@@ -375,8 +376,8 @@ function normalizeGateMarkerSummary(summary) {
 function anyFreshHumanApproval({ currentHeadSha, reviews: allReviews, comments: allComments }) {
   // Only association-trusted entries can approve (ADR 0248); a stranger's
   // "approve merge <head>" comment or APPROVED review never satisfies the gate.
-  const reviews = allReviews.filter((e) => e?.trusted !== false);
-  const comments = allComments.filter((e) => e?.trusted !== false);
+  const reviews = allReviews.filter((e) => e?.trusted === true);
+  const comments = allComments.filter((e) => e?.trusted === true);
   const candidateLogins = new Set();
   for (const entry of reviews) {
     if (typeof entry?.login === "string" && entry.login.length > 0) candidateLogins.add(entry.login);
@@ -1431,6 +1432,9 @@ async function main() {
         currentHeadSha: result.currentHeadSha,
         // Size facts survive a size-approval failure so merge-pr --check can still name the escalated class.
         preApprovalGateMarker: result.preApprovalGateMarker,
+        // The latest trusted verdict heads survive a failed check so a follow-up reviewer can bound its delta.
+        draftGate: result.draftGate,
+        preApprovalGate: result.preApprovalGate,
         preMergeGateCheck,
         staleRunnerCheck,
         staleRunner: result.staleRunner,

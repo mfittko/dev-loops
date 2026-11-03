@@ -22,6 +22,7 @@ import {
   commentDeferredFindings,
   fetchListedFingerprints,
   resolveDeferralCommentTarget,
+  filterTrustedRoundInputs,
   fingerprintFinding,
   isBelowInlineFloor,
   isDeferredAtRound,
@@ -774,7 +775,7 @@ test("listPrReviews excludes PENDING and timestamp-less reviews from round/suppr
   ]]);
   const runChildStub = async () => ({ code: 0, stdout: payload, stderr: "" });
   const reviews = await listPrReviews({ repo: "owner/repo", pr: 17 }, { env: {}, ghCommand: "gh", runChild: runChildStub });
-  assert.deepEqual(reviews, [{ id: 1, body: "real review", author: "octocat" }]);
+  assert.deepEqual(reviews, [{ id: 1, body: "real review", author: "octocat", user: { login: "octocat" }, author_association: null }]);
 });
 
 test("listPrReviews shares the full submitted-review predicate (body/junk branches too)", async () => {
@@ -787,7 +788,7 @@ test("listPrReviews shares the full submitted-review predicate (body/junk branch
   ]]);
   const runChildStub = async () => ({ code: 0, stdout: payload, stderr: "" });
   const reviews = await listPrReviews({ repo: "owner/repo", pr: 17 }, { env: {}, ghCommand: "gh", runChild: runChildStub });
-  assert.deepEqual(reviews, [{ id: 1, body: "real review", author: "octocat" }]);
+  assert.deepEqual(reviews, [{ id: 1, body: "real review", author: "octocat", user: { login: "octocat" }, author_association: null }]);
 });
 
 test("readGateFindingsLedger normalizes the legacy severity spelling on read", async () => {
@@ -1423,6 +1424,31 @@ test("fetchDraftGateEvidence: a stranger's clean draft_gate comment is not evide
   };
   assert.equal(await run("MEMBER"), true);
   assert.equal(await run("NONE"), false);
+});
+
+test("fetchDraftGateEvidence: a stranger's clean draft_gate PR review is not evidence (ADR 0248, review stream)", async () => {
+  const draft = renderGateReviewCommentBody({ gate: "draft_gate", headSha: HEAD_SHA, repo: "o/r", verdict: "clean", findingsSummary: "none", nextAction: "mark ready for review" });
+  const run = async (association) => {
+    const review = { id: 5, state: "COMMENTED", submitted_at: "2026-01-01T00:00:00Z", body: draft, user: { login: "someone", type: "User" }, author_association: association };
+    const runChild = async (_cmd, args) => {
+      const joined = args.map(String).join(" ");
+      if (joined.includes("issues/7/comments")) return { code: 0, stdout: "[[]]", stderr: "" };
+      if (joined.includes("pulls/7/reviews")) return { code: 0, stdout: JSON.stringify([[review]]), stderr: "" };
+      return { code: 1, stdout: "", stderr: "unavailable" };
+    };
+    return (await fetchDraftGateEvidence({ repo: "o/r", pr: 7, headSha: HEAD_SHA }, { env: {}, ghCommand: "gh", runChild })).currentHeadClean;
+  };
+  assert.equal(await run("MEMBER"), true);
+  assert.equal(await run("NONE"), false);
+});
+
+test("filterTrustedRoundInputs drops a stranger's round-bearing review and keeps the viewer's own (ADR 0248)", () => {
+  const body = "<!-- dev-loops:gate-findings-review draft_gate abcdef1 round=3 -->";
+  const stranger = { body, user: { login: "stranger", type: "User" }, author_association: "NONE" };
+  const viewer = { body, user: { login: "gate-bot", type: "Bot" }, author_association: "NONE" };
+  const member = { body, user: { login: "m", type: "User" }, author_association: "MEMBER" };
+  assert.deepEqual(filterTrustedRoundInputs([stranger, viewer, member], "gate-bot"), [viewer, member]);
+  assert.deepEqual(filterTrustedRoundInputs([stranger], null), []);
 });
 
 test("renderVerdictDetailsBlock: a Deferred entry carries issue=<pr> in its marker; other groups do not", () => {

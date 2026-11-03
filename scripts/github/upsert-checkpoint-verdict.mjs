@@ -41,6 +41,7 @@ import {
   findOwnPendingReview,
   findOwnSubmittedReview,
   fingerprintFinding,
+  filterTrustedRoundInputs,
   isBelowInlineFloor,
   isVisibleFinding,
   isLocatableFinding,
@@ -2230,8 +2231,8 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
     pr: options.pr,
     gate: options.gate,
     headSha,
-    reviews,
-    issueComments,
+    reviews: filterTrustedRoundInputs(reviews, login),
+    issueComments: filterTrustedRoundInputs(issueComments, login),
     repoRoot,
   });
   const candidates = ledger.findings.filter((f) => !suppressed.has(fingerprintFinding(f)));

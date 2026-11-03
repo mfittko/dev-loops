@@ -898,7 +898,19 @@ export async function listPrReviews({ repo, pr }, { env, ghCommand, runChild }) 
       id: Number.isInteger(r.id) ? r.id : null,
       body: r.body,
       author: typeof r?.user?.login === "string" && r.user.login.length > 0 ? r.user.login : null,
+      // Trust inputs for filterTrustedRoundInputs (ADR 0248).
+      user: r?.user ?? null,
+      author_association: r?.author_association ?? null,
     }));
+}
+
+/**
+ * Keep only the reviews/comments that may feed resolveGateRound (ADR 0248): a
+ * trusted-association author (Copilot allowed) or the already-resolved viewer
+ * login. Callers hold that login, so this adds no gh call.
+ */
+export function filterTrustedRoundInputs(items, viewerLogin) {
+  return (items ?? []).filter((c) => isTrustedRestComment(c, { allowCopilot: true }) || (Boolean(viewerLogin) && c?.user?.login === viewerLogin));
 }
 
 /**
