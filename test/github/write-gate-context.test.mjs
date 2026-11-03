@@ -9,7 +9,7 @@ import { test } from "bun:test";
 
 import { GATE_ANGLE_SCOPES, loadDevLoopConfig, resolveGateAngles, resolveGateAnglesDynamic, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildAngleRequestGroups, composeReviewerPromptText, INHERIT_MODEL_KEY } from "@dev-loops/core/loop/review-dispatch-plan";
-import { initGitFixture, makeGhMock, runGitFixture } from "../_helpers.mjs";
+import { initGitFixture, makeGhMock, runGitFixture, trustGhEntries } from "../_helpers.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
 import {
@@ -2437,7 +2437,7 @@ test("CLI tripwire (real resolver): the DEFAULT coordination path refuses a draf
     findingsSummary: "no blocking issues found",
     nextAction: "mark ready for review",
   });
-  const { runChild } = makeGhMock([
+  const { runChild } = makeGhMock(trustGhEntries([
     {
       matchByClaims: true,
       assertArgContains: ["view", "closingIssuesReferences"],
@@ -2458,7 +2458,7 @@ test("CLI tripwire (real resolver): the DEFAULT coordination path refuses a draf
       stdout: jsonLine([[{ id: 11, body: cleanDraftGateBody, html_url: "https://example.test/comment/11", updated_at: "2026-05-31T20:00:00Z" }]]),
     },
     { matchByClaims: true, assertArgContains: ["review_requested"], stdout: "\n" },
-  ], { repeatLastOnOverflow: true });
+  ]), { repeatLastOnOverflow: true });
   const priorExitCode = process.exitCode;
   process.exitCode = undefined;
   const origErr = process.stderr.write;
