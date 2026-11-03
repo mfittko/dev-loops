@@ -5,7 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, it, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { initGitFixture, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { initGitFixture, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, trustCommentFixtures, trustGhEntries, writeGhStub as writeGhStubRaw } from "../_helpers.mjs";
+
+const writeGhStubHelper = (tempDir, entries, options) => writeGhStubRaw(tempDir, trustGhEntries(entries), options);
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
 import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
@@ -127,7 +129,7 @@ const runNode = async (args = [], options = {}) => {
 // response so runNode replays them via makeGhMock. Replaces the former PATH gh+git
 // stub scripts — the CLI never shells out, so no real working tree is inspected.
 function writeGhStub(_tempDir, entries) {
-  return { DEVLOOPS_RUN_ID: "", [GH_MOCK_ENTRIES]: entries, [GIT_MOCK]: { stdout: "" } };
+  return { DEVLOOPS_RUN_ID: "", [GH_MOCK_ENTRIES]: trustGhEntries(entries), [GIT_MOCK]: { stdout: "" } };
 }
 
 // In-process git stub: stash a specific git response (porcelain conflict output for
@@ -4237,7 +4239,7 @@ async function runCarryFixture({ nonBaseCommit = false, ci = "SUCCESS", draft = 
       else if (joined.includes("graphql")) out = { data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } };
       else if (joined.includes("/issues/") && joined.includes("comments")) out = [comments];
       else if (joined.includes("/reviews")) out = [[]];
-      return { code: 0, stdout: out === null ? "" : JSON.stringify(out), stderr: "" };
+      return { code: 0, stdout: out === null ? "" : JSON.stringify(trustCommentFixtures(out)), stderr: "" };
     };
     const runtime = { env: runIdFreeEnv({ GH_TOKEN: "t", DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: dir, cwd: dir };
     return { headA, headB, result: await detectPrGateCoordinationState({ repo: "owner/repo", pr: 2819 }, runtime) };

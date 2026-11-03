@@ -8,7 +8,9 @@ import {
   claimRunnerOwnership,
   recordExitSignalForRunner,
 } from "../../scripts/loop/_pr-runner-coordination.mjs";
-import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { runIdFreeEnv, runNode as runNodeHelper, trustGhEntries, writeGhStub as writeGhStubRaw } from "../_helpers.mjs";
+
+const writeGhStubHelper = (tempDir, entries, options) => writeGhStubRaw(tempDir, trustGhEntries(entries), options);
 
 const scriptPath = path.resolve("scripts/github/detect-checkpoint-evidence.mjs");
 

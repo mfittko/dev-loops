@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { initSizeBudgetFixtureRepo, makeGhMock, repeatedLinesContent, runIdFreeEnv, runNode as runNodeHelper } from "../_helpers.mjs";
+import { initSizeBudgetFixtureRepo, makeGhMock, trustGhEntries, repeatedLinesContent, runIdFreeEnv, runNode as runNodeHelper } from "../_helpers.mjs";
 
 // A stub evaluatePrSizeBudget that always passes — for tests exercising
 // OTHER readyForReview() logic (board sync, etc.) via direct function calls,
@@ -52,7 +52,7 @@ const runNode = async (args = [], options = {}) => {
 };
 
 async function writeGhStub(tempDir, entries, options = {}) {
-  const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true, ...options });
+  const { runChild, calls } = makeGhMock(trustGhEntries(entries), { repeatLastOnOverflow: true, ...options });
   ghCallsByRoot.set(tempDir, calls);
   return { env: { DEVLOOPS_RUN_ID: "", [GH_RUNNER]: runChild }, ghLogPath: tempDir };
 }

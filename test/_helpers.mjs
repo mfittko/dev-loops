@@ -30,6 +30,37 @@ export async function withTempDir(fn, { prefix = "dev-loops-test-" } = {}) {
   }
 }
 
+// Stamp comment/review fixtures with a trusted author so the detector trust filter keeps them.
+// Strings are parsed as JSON (returned unchanged on parse failure); objects with a string `body`
+// and no author keys get a trusted MEMBER `user`. Do not use for fixtures asserting untrusted input.
+const AUTHOR_KEYS = ["user", "author", "authorAssociation", "author_association"];
+export function trustCommentFixtures(value) {
+  if (typeof value === "string") {
+    let parsed;
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return value;
+    }
+    return JSON.stringify(trustCommentFixtures(parsed)) + (value.endsWith("\n") ? "\n" : "");
+  }
+  if (Array.isArray(value)) return value.map(trustCommentFixtures);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [key, entry] of Object.entries(value)) out[key] = trustCommentFixtures(entry);
+    if (typeof out.body === "string" && !AUTHOR_KEYS.some((key) => key in out)) {
+      out.user = { login: "fixture-maintainer", type: "User" };
+      out.author_association = "MEMBER";
+    }
+    return out;
+  }
+  return value;
+}
+
+export function trustGhEntries(entries) {
+  return entries.map((entry) => ("stdout" in entry ? { ...entry, stdout: trustCommentFixtures(entry.stdout) } : entry));
+}
+
 // Build a test env that strips the ambient async-context markers from process.env.
 //
 // The dev-loop async path resolves an active run id from the run-id carriers
