@@ -562,7 +562,7 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   // this to "detach AND family reference"; restored to the pre-#2065 unconditional ban (regression
   // guard, main/coordinator context — subagent context is covered separately below).
   assert.equal(commandContainsDetachedWaitTool("nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &"), true);
-  for (const c of ["echo 'node scripts/loop/probe-copilot-review.mjs --pr 5 &' | bash", "git rebase -x 'node scripts/loop/probe-copilot-review.mjs --pr 5 &' HEAD~1", "git rebase --exec='node scripts/loop/probe-copilot-review.mjs --pr 5 &' HEAD~1", "export PATH=tmp:$PATH; grep -ec 'node scripts/loop/probe-copilot-review.mjs --pr 5 &'", "source tmp/f.sh; grep 'node scripts/loop/probe-copilot-review.mjs --pr 5 &'", "source <(echo a; echo 'while true; do sleep 5; gh pr view 5; done')", ". <(echo a; echo 'while true; do sleep 5; gh pr view 5; done')"]) assert.equal(commandContainsDetachedWaitTool(c), true, c);
+  for (const c of ["echo 'node scripts/loop/probe-copilot-review.mjs --pr 5 &' | bash", "git rebase -x 'node scripts/loop/probe-copilot-review.mjs --pr 5 &' HEAD~1", "git rebase --exec='node scripts/loop/probe-copilot-review.mjs --pr 5 &' HEAD~1", "export PATH=tmp:$PATH; grep -ec 'node scripts/loop/probe-copilot-review.mjs --pr 5 &'", "source tmp/f.sh; grep 'node scripts/loop/probe-copilot-review.mjs --pr 5 &'", "echo $(echo 'x; nohup node scripts/loop/probe-copilot-review.mjs --pr 5 &')", "echo `echo 'x; nohup y'`"]) assert.equal(commandContainsDetachedWaitTool(c), true, c);
   for (const c of ['echo "while" "sleep" gh', "grep -c 'node -e x' README.md", "echo eval 'node -e x'"]) assert.equal(commandContainsDetachedWaitTool(c) || commandIsSleepPollLoop(c) || commandContainsInlineInterpreter(c), false, c);
   assert.equal(commandContainsDetachedWaitTool("disown"), true);
   assert.equal(commandContainsDetachedWaitTool("tmux new-session -d -s loop"), true);
@@ -1600,14 +1600,14 @@ test("stripQuotedLiterals callers keep their decisions on tokenizer-backed quoti
 
 test("the wait and poll predicates trust the tokenizer near former quote-pairing hazards (#2442 slice 2)", () => {
   const LOOP = "while true; do gh pr view 5; sleep 5; done";
-  // the loop sits in quotes: data, allowed (these rows are listed as intended removals in the differential test)
+  // the poll predicates keep origin/main's coarse stripper: a quote-pairing hazard keeps the quoted loop visible (fail closed)
   for (const c of [
     `# it's\necho 'LOOP'`.replace("LOOP", LOOP),
     `echo "a \\" ; ${LOOP}"`,
     `echo $'a\\' ; ${LOOP} '`,
     `cat <<'EOF'\nit's\nEOF\necho '${LOOP}'`,
     `echo it\\'s; echo '${LOOP}'`,
-  ]) assert.equal(commandIsSleepPollLoop(c), false, c);
+  ]) assert.equal(commandIsSleepPollLoop(c), true, c);
   // the same hazard text around a real loop stays denied
   for (const c of [`# it's\n${LOOP}`, `echo it\\'s; ${LOOP}`, `echo "a \\" b"; ${LOOP}`, `cat <<'EOF'\nit's\nEOF\n${LOOP}`]) assert.equal(commandIsSleepPollLoop(c), true, c);
 });

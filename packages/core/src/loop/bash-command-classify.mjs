@@ -973,8 +973,8 @@ function blankQuotedForFlags(command) {
  * unterminated quote, `$(` or heredoc onward is left as raw executable text in both modes (deny direction). Accepted ceiling, default mode
  * only: a deliberately quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is blanked like any other quoted
  * literal and can evade the ban. Precise mode keeps a quoted whole-word keyword (`'sleep' 5`) visible (`STRUCTURAL_WORD_RE`) except behind an `echo`/`printf` head, so the ceiling does not apply there.
- * `waitView === true` (the detached-wait operator view) also keeps a quoted span visible unless every segment around it passes `inertQuoteSegment`. `"subst"` (the poll predicates) keeps every span that holds `$(` or a backtick, single-quoted included, whatever its head.
- * @param {string} command @param {boolean} [precise] @param {boolean|"subst"} [waitView] @returns {string}
+ * `waitView` (the detached-wait operator view) also keeps a quoted span visible unless every segment around it passes `inertQuoteSegment`. The poll predicates use the default mode, as on origin/main.
+ * @param {string} command @param {boolean} [precise] @param {boolean} [waitView] @returns {string}
  */
 function stripQuotedLiterals(command, precise = false, waitView = false) {
   const tok = tokenizeShellCommand(command);
@@ -990,7 +990,7 @@ function stripQuotedLiterals(command, precise = false, waitView = false) {
     const body = text.slice(start + 1, end - 1);
     const subst = /\$\(|`/.test(body);
     const kept = precise
-      ? (subst && (kind === "double" || waitView === "subst")) || (waitView === true && all.some(({ w, seg }) => w.start <= start && end <= w.end && !inertQuoteSegment(tok, seg))) || payloads.some((w) => w.start <= start && end <= w.end) ||
+      ? (subst && kind === "double") || (waitView && all.some(({ w, seg }) => w.start <= start && end <= w.end && !inertQuoteSegment(tok, seg))) || payloads.some((w) => w.start <= start && end <= w.end) ||
         (STRUCTURAL_WORD_RE.test(body) && all.some(({ w, words }) => w.end === end && w.raw.length <= end - start + 1 && !/^(?:echo|printf)$/.test(words.find((x) => !x.op)?.value))) // a quoted structural keyword that is a whole word (`'sleep' 5`) still runs: keep it visible
       : subst || // executable code in quotes: preserve (fail-closed)
         /(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(text.slice(0, start)); // -c/eval payload: real shell syntax
@@ -1327,7 +1327,7 @@ export function tokenizeShellCommand(command) {
  * @param {string} command @returns {boolean}
  */
 export function commandIsSleepPollLoop(command) {
-  const whole = stripQuotedLiterals(command.trim(), true, "subst");
+  const whole = stripQuotedLiterals(command.trim());
   return (
     /(?:while|until|for)\b/i.test(whole) &&
     /\bsleep\b/.test(whole) &&
@@ -1350,7 +1350,7 @@ export function commandIsSleepPollLoop(command) {
  * @param {string} command @returns {boolean}
  */
 export function commandIsFileMarkerPollLoop(command) {
-  const whole = stripQuotedLiterals(command.trim(), true, "subst");
+  const whole = stripQuotedLiterals(command.trim());
   return (
     /(?:while|until|for)\b/i.test(whole) &&
     /\bsleep\b/.test(whole) &&
@@ -1597,7 +1597,7 @@ export function commandContainsInlineInterpreter(command) {
  */
 function inertQuoteSegment(tok, s) {
   const [h = "", arg = ""] = s.words.filter((w) => !w.op).map((w) => w.value);
-  return tok.segments.length === 1 && !s.pipedOut && writeTargets(s).length === 0 && !h.includes("/") && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
+  return tok.segments.length === 1 && !s.pipedOut && writeTargets(s).length === 0 && !h.includes("/") && !s.words.some((w) => /\$\(|`|[<>]\(/.test(w.raw)) && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
 }
 
 /**

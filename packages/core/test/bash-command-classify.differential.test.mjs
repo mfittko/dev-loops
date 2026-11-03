@@ -277,7 +277,10 @@ const SLICE1_FAIL_CLOSED_FLIPS = new Map();
   for (const f of ["while ! gh pr view 5; do sleep 5; done", "until gh pr checks 5; do sleep 5; done"]) flip("commandIsSleepPollLoop", R_COMMENT, wrapComment(f));
   flip("commandIsFileMarkerPollLoop", R_COMMENT, wrapComment("while [ ! -f tmp/done ]; do sleep 2; done"));
   for (const name of ["commandContainsDetachedWaitTool", "commandIsSleepPollLoop"]) {
-    for (const loop of [POLL, POLL.replace("$(gh pr view 5)", "`gh pr view 5`")]) flip(name, R_ESCAPE, `echo "a \\" b"; ${loop}`);
+    for (const loop of [POLL, POLL.replace("$(gh pr view 5)", "`gh pr view 5`")]) {
+      flip(name, R_ESCAPE, `echo "a \\" b"; ${loop}`);
+      flip(name, "the poll predicates use origin/main's coarse stripper: a quoted heredoc body is a quote-pairing hazard, so the commit message heredoc stays visible", `git commit -m "$(cat <<'EOF'\n${loop}\nEOF\n)"`);
+    }
   }
 }
 /**
@@ -289,7 +292,7 @@ const REMOVAL_PREDICATES = ["commandContainsInlineInterpreter", "commandContains
 const R_QUOTE_WRAP = "the form sits in a quoted --notes/-m/echo argument: quoted text is inert data (item 9)";
 const R_HEREDOC_WRAP = "the form is the body of a cat/tee heredoc (quoted delimiter) written to a temp path: the body is data (item 8)";
 const R_HAZARD_DATA = "the loop sits in quotes next to a quote-pairing hazard (comment apostrophe, escaped quote, heredoc quote): the tokenizer pairs the quotes correctly, so the loop is data";
-const PINNED_REMOVAL_COUNTS = { [R_QUOTE_WRAP]: 3, [R_HEREDOC_WRAP]: 120, [R_HAZARD_DATA]: 148 }; // rows removed per reason
+const PINNED_REMOVAL_COUNTS = { [R_QUOTE_WRAP]: 3, [R_HEREDOC_WRAP]: 30 }; // rows removed per reason; re-pinned: the poll predicates use origin/main's stripper, so the hazard-data reason removes no row (R_HAZARD_DATA stays as the guard that such rows are denied)
 
 function buildCorpus() {
   const corpus = new Set([...RESIDUE_SHAPES,...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW, ...ARITH_SHIFT_ROWS, ...CHAINED_HEREDOC_ROWS]);
