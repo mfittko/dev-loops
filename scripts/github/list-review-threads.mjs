@@ -80,7 +80,9 @@ Output (stdout, JSON):
   reviewer and comments the reading identity authored itself excepted) are never listed
   (ADR 0238); a thread with only such comments appears in skippedUntrusted (omitted
   when empty), with author logins and no text. A thread with more than 100 comments
-  and no trusted comment on the first page stays listed with an empty body.
+  and no trusted comment on the first page stays listed with an empty body. A reply past
+  the first 100 comments is never read, so the remedy for such a thread is to resolve it
+  or to restate the finding in a new thread.
 Error output (stderr, JSON):
   Argument/usage errors:
     { "ok": false, "error": "...", "usage": "..." }

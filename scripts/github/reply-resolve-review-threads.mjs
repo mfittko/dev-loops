@@ -322,7 +322,8 @@ function hasMessageMapEntry(messageMap, threadId) {
   return messageMap !== null && Object.prototype.hasOwnProperty.call(messageMap, threadId);
 }
 export function planBatchReplyTargets(parsed, author) {
-  const eligibleThreads = parsed.threads.filter((thread) => !thread.isResolved);
+  // An all-untrusted thread is no target (ADR 0238): skip it even when its message map carries an entry.
+  const eligibleThreads = parsed.threads.filter((thread) => !thread.isResolved && !thread.untrusted);
   const matchedTargets = [];
   let skippedThreadCount = 0;
   for (const thread of eligibleThreads) {

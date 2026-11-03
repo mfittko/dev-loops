@@ -1,5 +1,3 @@
-import { isCopilotLogin } from "./copilot-helpers.mjs";
-
 // ADR 0238: the one trust predicate for comment, review and thread text that can
 // reach an agent. Owner rule: GATE-REVIEW-COMMENT-TRUST in
 // skills/docs/gate-review-sub-loop-contract.md.
@@ -22,7 +20,8 @@ export function isTrustedCommentAuthor({ login, type, association } = {}, { allo
   if (name.length === 0) return false;
   const isBot = (typeof type === "string" && type.toLowerCase() === "bot") || /\[bot\]$/i.test(name);
   if (allowCopilot && SANCTIONED_COPILOT_REVIEWER.test(name) && isBot) return true;
-  if (isCopilotLogin(name) || isBot) return false;
+  // Exact sanctioned login only: a human login such as `copilot-fan` is judged by association like any other.
+  if (SANCTIONED_COPILOT_REVIEWER.test(name) || isBot) return false;
   return TRUSTED_ASSOCIATIONS.has(typeof association === "string" ? association.toUpperCase() : "");
 }
 
