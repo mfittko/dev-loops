@@ -1,4 +1,5 @@
 import { SUBMITTED_REVIEW_STATES, isCopilotLogin, normalizeTimestamp } from "../github/copilot-helpers.mjs";
+import { isSanctionedCopilotReviewerLogin } from "../github/comment-trust.mjs";
 import { trimmedOrNull } from "./normalize.mjs";
 
 const ACTIVE_COPILOT_REVIEW_REQUEST_STATUSES = new Set(["requested", "already-requested"]);
@@ -15,7 +16,7 @@ function normalizeReviewRequestEvents(events) {
         ? event.requestedReviewerLogin.trim()
         : "",
     }))
-    .filter((event) => event.createdAtMs !== null && isCopilotLogin(event.requestedReviewerLogin))
+    .filter((event) => event.createdAtMs !== null && isSanctionedCopilotReviewerLogin(event.requestedReviewerLogin))
     .sort((left, right) => left.createdAtMs - right.createdAtMs);
 }
 
@@ -43,7 +44,7 @@ function normalizeReviews(reviews) {
         commitSha,
       };
     })
-    .filter((review) => review.submittedAtMs !== null && isCopilotLogin(review.authorLogin) && SUBMITTED_REVIEW_STATES.has(review.state))
+    .filter((review) => review.submittedAtMs !== null && isSanctionedCopilotReviewerLogin(review.authorLogin) && SUBMITTED_REVIEW_STATES.has(review.state))
     .sort((left, right) => left.submittedAtMs - right.submittedAtMs || left.sortKey - right.sortKey);
 }
 
@@ -57,7 +58,7 @@ function normalizeReviewComments(comments) {
       createdAtMs: normalizeTimestamp(comment?.createdAt),
       authorLogin: typeof comment?.authorLogin === "string" ? comment.authorLogin.trim() : "",
     }))
-    .filter((comment) => comment.createdAtMs !== null && isCopilotLogin(comment.authorLogin))
+    .filter((comment) => comment.createdAtMs !== null && isSanctionedCopilotReviewerLogin(comment.authorLogin))
     .sort((left, right) => left.createdAtMs - right.createdAtMs);
 }
 

@@ -1354,3 +1354,10 @@ test("classifyCopilotReviewBodyDisposition: a headerless zero-file review is unr
     assert.equal(copilotReviewBodySignalsChanges("COMMENTED", body), true);
   }
 });
+
+test("resolveCopilotReviewPresence: a copilot-x review is not the sanctioned reviewer, while Copilot is", () => {
+  const review = (login) => ({ author: { login }, state: "COMMENTED" });
+  assert.equal(resolveCopilotReviewPresence({ reviews: [review("copilot-x")] }).present, false);
+  assert.equal(resolveCopilotReviewPresence({ reviews: [review("Copilot")] }).present, true);
+  assert.equal(resolveCopilotReviewPresence({ reviews: [review("copilot-pull-request-reviewer")] }).present, true);
+});
