@@ -21,6 +21,9 @@ import {
   isValidGithubLogin,
   COPILOT_CONVERGENCE_STATE,
   COPILOT_ABSENT_REVIEW_DISPOSITION,
+  MERGE_CLASS,
+  toReviewFact,
+  projectSubmittedReviewFacts,
 } from "@dev-loops/core/loop/merge-approval";
 import { summarizeCopilotReviews, resolveDraftGateRoundResetMs } from "@dev-loops/core/github/copilot-helpers";
 import { isCopilotReviewObservableViaGraphql } from "./request-copilot-review.mjs";
@@ -48,8 +51,8 @@ function flagValueTrue(token) {
   return !/^(?:false|0|no)$/i.test(String(token.value).trim());
 }
 
-const USAGE = `Usage: merge-pr.mjs --repo <owner/name> --pr <number> --human-approved-by <github-login>
-                   [--method squash|merge|rebase] [--stable-release] [--lightweight]
+const USAGE = `Usage: merge-pr.mjs --repo <owner/name> --pr <number> [--human-approved-by <github-login>]
+                   [--method squash|merge|rebase] [--stable-release] [--lightweight] [--check]
 
 Sanctioned dev-loops merge wrapper (issue #1939). Runs the FULL merge-precondition
 set fail-closed, then performs the merge. Raw \`gh pr merge\` is forbidden — route
@@ -63,8 +66,27 @@ Required:
   --human-approved-by <login>  The human approver's GitHub login. Validated as a
                                real login (not a boolean or free text). Stamped on
                                the machine-readable result and audit trail.
+                               Required unless --check is given.
 
 Optional:
+  --check                      Read-only mode. Runs the full precondition set, never
+                               merges, comments or writes, and prints JSON with
+                               mergeClass (drain|escalated|null), approvalPath
+                               (standing_authorization | human_review |
+                               comment_marker; null with mergeClass null when the
+                               evidence is for another head or lacks the size
+                               outcome or the T1 fact),approveMergeLine (the exact
+                               "approve merge <headSha>" line for comment_marker),
+                               sizeClass, and EVERY failing precondition. Exit 0
+                               whenever the preconditions could be evaluated
+                               (ok:false carries the failures; under
+                               autonomy.humanMergeOnly it carries a
+                               human_merge_only failure). A config load error
+                               still refuses with a nonzero exit and the stderr
+                               refusal JSON. --human-approved-by
+                               is optional with --check. Any actor may run it.
+                               Without --human-approved-by the approval path assumes
+                               no approval exists (approverAssumed: true).
   --method <m>                 Merge method: squash (default) | merge | rebase
   --stable-release             Mark this as a stable-release merge, forcing the
                                escalated approval class (a standing authorization
@@ -167,13 +189,14 @@ export function parseMergePrCliArgs(argv) {
       "stable-release": { type: "boolean" },
       "standing-authorization": { type: "boolean" },
       lightweight: { type: "boolean" },
+      check: { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
     tokens: true,
   });
-  const options = { help: false, repo: undefined, pr: undefined, humanApprovedBy: undefined, method: "squash", stableRelease: false, standingAuthorization: false, lightweight: false };
+  const options = { help: false, repo: undefined, pr: undefined, humanApprovedBy: undefined, method: "squash", stableRelease: false, standingAuthorization: false, lightweight: false, check: false };
   for (const token of tokens) {
     if (token.kind === "positional") throw parseError(`Unknown argument: ${token.value}`);
     if (token.kind !== "option") continue;
@@ -188,6 +211,7 @@ export function parseMergePrCliArgs(argv) {
     if (token.name === "stable-release") { options.stableRelease = flagValueTrue(token); continue; }
     if (token.name === "standing-authorization") { options.standingAuthorization = flagValueTrue(token); continue; }
     if (token.name === "lightweight") { options.lightweight = flagValueTrue(token); continue; }
+    if (token.name === "check") { options.check = flagValueTrue(token); continue; }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -195,10 +219,11 @@ export function parseMergePrCliArgs(argv) {
   if (options.repo === undefined || options.pr === undefined) {
     throw parseError("merge-pr requires both --repo <owner/name> and --pr <number>");
   }
-  if (options.humanApprovedBy === undefined || options.humanApprovedBy === "") {
+  const checkWithoutApprover = options.check && options.humanApprovedBy === undefined;
+  if (!checkWithoutApprover && (options.humanApprovedBy === undefined || options.humanApprovedBy === "")) {
     throw parseError("merge-pr requires --human-approved-by <github-login> (fail-closed: a merge cannot proceed without a recorded human approver)");
   }
-  if (!isValidGithubLogin(options.humanApprovedBy)) {
+  if (!checkWithoutApprover && !isValidGithubLogin(options.humanApprovedBy)) {
     throw parseError(`--human-approved-by must be a real GitHub login, got "${options.humanApprovedBy}"`);
   }
   if (!VALID_METHODS.has(options.method)) {
@@ -217,14 +242,14 @@ export function parseMergePrCliArgs(argv) {
 // current-head pre_approval_gate verdicts, unresolved threads, the runner lock,
 // and fan-out provenance — reused wholesale (non-goal: do not re-derive the set).
 const DETECT_EVIDENCE_PATH = fileURLToPath(new URL("./detect-checkpoint-evidence.mjs", import.meta.url));
-export function buildDetectEvidenceArgv({ repo, pr, baseRefName }) {
-  return [DETECT_EVIDENCE_PATH, "--repo", repo, "--pr", String(pr), ...(baseRefName ? ["--base-ref-name", baseRefName] : [])];
+export function buildDetectEvidenceArgv({ repo, pr, baseRefName, readOnly }) {
+  return [DETECT_EVIDENCE_PATH, "--repo", repo, "--pr", String(pr), ...(baseRefName ? ["--base-ref-name", baseRefName] : []), ...(readOnly ? ["--read-only"] : [])];
 }
-function defaultDetectEvidence({ repo, pr, env, cwd, baseRefName }) {
+function defaultDetectEvidence({ repo, pr, env, cwd, baseRefName, readOnly }) {
   return new Promise((resolve) => {
     execFile(
       process.execPath,
-      buildDetectEvidenceArgv({ repo, pr, baseRefName }),
+      buildDetectEvidenceArgv({ repo, pr, baseRefName, readOnly }),
       { env, cwd, maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
         let parsed = null;
@@ -233,7 +258,9 @@ function defaultDetectEvidence({ repo, pr, env, cwd, baseRefName }) {
         // we could no longer read the size-budget outcome (which sets the merge
         // class), so treat it as a gate_evidence failure and fail closed.
         const ok = !error && parsed !== null;
-        const size = parsed?.preApprovalGate ?? {};
+        // Size facts come from the current-head pre_approval marker the detector validates, and survive its size-approval failure.
+        const marker = parsed?.preApprovalGateMarker;
+        const size = marker && marker.headSha === parsed?.currentHeadSha ? marker : {};
         const failures = Array.isArray(parsed?.preMergeGateCheck?.failures)
           ? parsed.preMergeGateCheck.failures
           : parsed?.error
@@ -614,6 +641,34 @@ async function runPostMergeSteps(context, injected = {}) {
   return result;
 }
 
+// The approval the merge needs or used: a standing authorization, a human APPROVED review, or the
+// head-pinned comment marker (the path to name when nothing satisfied the gate yet).
+// --check without --human-approved-by: not a valid GitHub login, so no review or comment can match it.
+const CHECK_NO_APPROVER = "(no approver)";
+
+function describeApproval({ verdict, headSha, sizeClass }) {
+  const viaPath = { standing_authorization: "standing_authorization", approved_review: "human_review", comment_marker: "comment_marker" };
+  const approvalPath = viaPath[verdict.approvalVia] ?? "comment_marker";
+  return {
+    mergeClass: verdict.mergeClass,
+    approvalPath,
+    approveMergeLine: approvalPath === "comment_marker" ? `approve merge ${headSha}` : null,
+    sizeClass: sizeClass ?? null,
+  };
+}
+
+// The merge record comment. No line starts with the approval marker, so it never reads as an approval.
+export function buildMergeRecordComment({ approvalVia, approvedBy, headSha, mergeClass }) {
+  return `merge-pr record: merged head \`${headSha}\` (${mergeClass} merge); approvalVia \`${approvalVia}\`; approver \`${approvedBy}\`.`;
+}
+
+const POST_MERGE_COMMENT_TIMEOUT_MS = 60_000;
+export async function defaultPostMergeComment({ repo, pr, body, env, ghCommand, runChild, timeoutMs = POST_MERGE_COMMENT_TIMEOUT_MS }) {
+  // runChild kills the gh child at the bound, so a hung request cannot keep the CLI alive.
+  const result = await runChild(ghCommand, ["pr", "comment", String(pr), "--repo", repo, "--body", body], env, undefined, { timeoutMs });
+  if (!result || result.code !== 0) throw new Error(String(result?.stderr ?? "").trim() || (result?.code === null ? "gh pr comment timed out" : "gh pr comment returned no result"));
+}
+
 export async function mergePr(options, runtime = {}) {
   const {
     env = process.env,
@@ -632,6 +687,7 @@ export async function mergePr(options, runtime = {}) {
     evaluateAdrTripwire = defaultEvaluateAdrTripwire,
     waiveAdrTripwire = defaultWaiveAdrTripwire,
     isAncestor = defaultIsAncestor,
+    postMergeComment = defaultPostMergeComment,
   } = runtime;
 
   assertGithubWriteStubbedInTestMode(runChild, "pr merge", { env });
@@ -645,24 +701,27 @@ export async function mergePr(options, runtime = {}) {
 
   const baseRefName = typeof prView?.baseRefName === "string" ? prView.baseRefName.trim() : "";
   const repoRoot = resolveRepoRoot(cwd);
-  const refuseBaseNotIntegrated = (reason, mergeClass) => {
+  const refuseBaseNotIntegrated = (reason, classFields) => {
     const error = new Error(`Merge preconditions not satisfied: base_not_integrated (${reason})`);
     error.mergePrFailure = {
       ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
-      mergeClass, failures: [{ precondition: "base_not_integrated", reason }],
+      ...classFields, failures: [{ precondition: "base_not_integrated", reason }],
     };
     throw error;
   };
-  const rawReviews = flattenPaginatedSlurp(await ghJson(
+  const apiReviews = flattenPaginatedSlurp(await ghJson(
     ["api", "--paginate", "--slurp", `repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`],
     { env, ghCommand, runChild },
-  )).map((r) => ({ id: r?.node_id ?? null, login: r?.user?.login ?? null, state: r?.state ?? null, commit_id: r?.commit_id ?? null, type: r?.user?.type ?? null, body: r?.body ?? "", submitted_at: r?.submitted_at ?? null }));
+  ));
+  const rawReviews = apiReviews.map(toReviewFact);
+  // The approval gate sees only submitted reviews, as gate evidence does: a PENDING draft never shadows an earlier APPROVED review.
+  const submittedReviews = projectSubmittedReviewFacts(apiReviews);
   const comments = flattenPaginatedSlurp(await ghJson(
     ["api", "--paginate", "--slurp", `repos/${options.repo}/issues/${options.pr}/comments?per_page=100`],
     { env, ghCommand, runChild },
   )).map((c) => ({ login: c?.user?.login ?? null, body: c?.body ?? "", type: c?.user?.type ?? null }));
 
-  const evidence = await detectEvidence({ repo: options.repo, pr: options.pr, env, cwd, baseRefName });
+  const evidence = await detectEvidence({ repo: options.repo, pr: options.pr, env, cwd, baseRefName, readOnly: options.check === true });
   const configLoad = await loadConfig({ repoRoot: resolveRepoRoot(cwd) });
 
   // Fail closed on a config load/validation error: an unreadable `.devloops` is
@@ -678,7 +737,9 @@ export async function mergePr(options, runtime = {}) {
   // Under autonomy.humanMergeOnly, merge is a fixed human-only action: the agent
   // must hand off and NOT run even this wrapper (merge-preconditions.md, the
   // humanMergeOnly section). Fail closed before any precondition/merge work.
-  if (resolveHumanMergeOnly(configLoad?.config)) {
+  // --check is read-only, so it reports this as a failure instead of refusing.
+  const humanMergeOnly = resolveHumanMergeOnly(configLoad?.config);
+  if (humanMergeOnly && !options.check) {
     const error = new Error("merge refused: autonomy.humanMergeOnly is set — merge is a human-only action and the agent must hand off, not run the merge wrapper");
     error.mergePrFailure = { ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy, humanMergeOnly: true };
     throw error;
@@ -686,7 +747,7 @@ export async function mergePr(options, runtime = {}) {
 
   // The only base + PR-head fetch of the merge; the ADR tripwire and the ancestry check reuse it.
   const fetchReason = resolveBaseFetchRefusal({ options, baseRefName, headSha: currentHeadSha, repoRoot, fetchPrHead, detectOriginSlug });
-  if (fetchReason !== null) refuseBaseNotIntegrated(fetchReason, null);
+  // --check collects this failure with the rest; a real run raises it after the verdict so an escalated refusal names the approval.
 
   // A standing authorization is NOT established by config alone
   // (autonomy.humanMergeOnly:false authorizes nothing). The orchestrator asserts
@@ -739,8 +800,10 @@ export async function mergePr(options, runtime = {}) {
     { env, ghCommand, runChild, ghJson },
   ).catch((error) => `could not check ADR numbers: ${error instanceof Error ? error.message : String(error)}`);
 
+  const approverAssumed = options.check === true && options.humanApprovedBy === undefined;
   const verdict = evaluateMergePreconditions({
-    humanApprovedBy: options.humanApprovedBy,
+    // --check without an approver passes a sentinel isValidGithubLogin rejects, so no account can match it and the report names the approval still needed.
+    humanApprovedBy: approverAssumed ? CHECK_NO_APPROVER : options.humanApprovedBy,
     mergeable: typeof prView?.mergeable === "string" ? prView.mergeable : null,
     mergeStateStatus: typeof prView?.mergeStateStatus === "string" ? prView.mergeStateStatus : null,
     ciGreen: resolveCiGreenFromRollup(prView?.statusCheckRollup),
@@ -755,7 +818,7 @@ export async function mergePr(options, runtime = {}) {
     touchesT1: evidence.touchesT1,
     unresolvedChangesRequestedCount: countUnresolvedHumanChangesRequested(rawReviews),
     currentHeadSha,
-    reviews: rawReviews,
+    reviews: submittedReviews,
     comments,
     standingAuthorized,
     stableRelease: options.stableRelease === true,
@@ -769,19 +832,70 @@ export async function mergePr(options, runtime = {}) {
       : null,
   });
 
+  // A light-dispatched PR merged without --lightweight resolves the full cap and
+  // can refuse where the composed cap would grant the round-cap fallback. Name
+  // the remedy in the refusal itself.
+  const capConfig = configLoad?.config ?? { version: 1 };
+  const lightweightRemedy = !verdict.ok
+    && verdict.copilotConvergenceState === COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW
+    && options.lightweight !== true
+    && resolveEffectiveCopilotRoundCap(capConfig, { lightweight: true }) < resolveEffectiveCopilotRoundCap(capConfig);
+  const failures = lightweightRemedy
+    ? verdict.failures.map((f) => (f.precondition === "copilot_convergence"
+      ? { ...f, reason: `${f.reason}. If this PR was light-dispatched (and only then), re-run merge-pr with --lightweight so the composed lightweight round cap applies` }
+      : f))
+    : verdict.failures;
+  // Unreadable evidence, or evidence for another head, has no size outcome for this head: sizeClass is unknown, and so is mergeClass unless a stable release forces escalated.
+  const approval = {
+    ...describeApproval({ verdict, headSha: currentHeadSha, sizeClass: evidence.sizeOutcome }),
+    // A missing size outcome or a missing T1 fact also leaves the class unknown, and the approval path with it: nothing is confirmed as standing_authorization or drain.
+    ...(evidenceHeadMismatch || !evidence.sizeOutcome || typeof evidence.touchesT1 !== "boolean"
+      ? { sizeClass: null, ...(options.stableRelease === true ? {} : { mergeClass: null, approvalPath: null, approveMergeLine: null }) }
+      : {}),
+  };
+  // Escalated with no head-pinned approval: name the class, the exact approval line and the size class.
+  const refusalClassFields = verdict.mergeClass === MERGE_CLASS.ESCALATED ? approval : { mergeClass: approval.mergeClass };
+  if (fetchReason !== null && !options.check) refuseBaseNotIntegrated(fetchReason, refusalClassFields);
+
+  if (options.check) {
+    // Read-only: the same remaining steps run, but the ADR waiver re-issue (a PR body write) is refused,
+    // and every failure is collected instead of stopping at the first.
+    // The sentinel approver is not a failure: the report names the approval path instead.
+    const checkFailures = failures.filter((f) => !(f.precondition === "human_approver" && approverAssumed));
+    // GitHub blocks the merge (required check or ruleset) even when the CI projection is green; --check cannot know which rule, so it must not report ok.
+    if (prView?.mergeStateStatus === "BLOCKED") checkFailures.push({ precondition: "merge_state_blocked", reason: "GitHub reports mergeStateStatus BLOCKED (a required check or ruleset is unmet)" });
+    if (humanMergeOnly) checkFailures.push({ precondition: "human_merge_only", reason: "autonomy.humanMergeOnly is set — merge is a human-only action; the agent hands off and does not run the merge" });
+    if (fetchReason !== null) {
+      checkFailures.push({ precondition: "base_not_integrated", reason: fetchReason });
+    } else {
+      const adrCheckReason = await resolveAdrTripwireRefusal({
+        options, baseRefName, body: typeof prView?.body === "string" ? prView.body : "", headSha: currentHeadSha, repoRoot,
+        env, ghCommand, runChild, ghJson, evaluateAdrTripwire,
+        waiveAdrTripwire: async () => ({ ok: false, reason: "check_read_only", detail: "--check does not write the PR body" }),
+      });
+      if (adrCheckReason !== null) checkFailures.push({ precondition: "adr_tripwire", reason: adrCheckReason });
+      const ancestryCheckReason = resolveBaseNotIntegratedRefusal({ baseRefName, headSha: currentHeadSha, repoRoot, isAncestor });
+      if (ancestryCheckReason !== null) checkFailures.push({ precondition: "base_not_integrated", reason: ancestryCheckReason });
+    }
+    return {
+      ok: checkFailures.length === 0,
+      check: true,
+      merged: false,
+      repo: options.repo,
+      pr: options.pr,
+      headSha: currentHeadSha,
+      approvedBy: options.humanApprovedBy ?? null,
+      ...approval,
+      ...(humanMergeOnly ? { humanMergeOnly: true } : {}),
+      approverAssumed,
+      approvalVia: verdict.approvalVia,
+      failures: checkFailures,
+      copilotConvergenceState: verdict.copilotConvergenceState,
+      copilotDisposition: verdict.copilotDisposition,
+    };
+  }
+
   if (!verdict.ok) {
-    // A light-dispatched PR merged without --lightweight resolves the full cap and
-    // can refuse where the composed cap would grant the round-cap fallback. Name
-    // the remedy in the refusal itself.
-    const capConfig = configLoad?.config ?? { version: 1 };
-    const lightweightRemedy = verdict.copilotConvergenceState === COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW
-      && options.lightweight !== true
-      && resolveEffectiveCopilotRoundCap(capConfig, { lightweight: true }) < resolveEffectiveCopilotRoundCap(capConfig);
-    const failures = lightweightRemedy
-      ? verdict.failures.map((f) => (f.precondition === "copilot_convergence"
-        ? { ...f, reason: `${f.reason}. If this PR was light-dispatched (and only then), re-run merge-pr with --lightweight so the composed lightweight round cap applies` }
-        : f))
-      : verdict.failures;
     const error = new Error(`Merge preconditions not satisfied: ${failures.map((f) => `${f.precondition} (${f.reason})`).join("; ")}`);
     error.mergePrFailure = {
       ok: false,
@@ -790,7 +904,7 @@ export async function mergePr(options, runtime = {}) {
       pr: options.pr,
       headSha: currentHeadSha,
       approvedBy: options.humanApprovedBy,
-      mergeClass: verdict.mergeClass,
+      ...refusalClassFields,
       failures,
       copilotConvergenceState: verdict.copilotConvergenceState,
       copilotDisposition: verdict.copilotDisposition,
@@ -820,7 +934,7 @@ export async function mergePr(options, runtime = {}) {
 
   // The one ancestry check runs after the ADR step (the waiver writer refreshes the base too), with no refetch.
   const ancestryReason = resolveBaseNotIntegratedRefusal({ baseRefName, headSha: currentHeadSha, repoRoot, isAncestor });
-  if (ancestryReason !== null) refuseBaseNotIntegrated(ancestryReason, verdict.mergeClass);
+  if (ancestryReason !== null) refuseBaseNotIntegrated(ancestryReason, { mergeClass: verdict.mergeClass });
 
   // All preconditions satisfied — perform the merge. NEVER a tag or publish.
   // runChild resolves for ANY exit code (it only rejects on a spawn error), so a
@@ -881,6 +995,15 @@ export async function mergePr(options, runtime = {}) {
   // timeout, and a killed process must still leave the merge visible.
   const mergeCommit = typeof merged?.mergeCommit?.oid === "string" ? merged.mergeCommit.oid : null;
   stderr.write(`merge-pr: merged ${options.repo}#${options.pr} (merge commit ${mergeCommit ?? "unknown"}); running post-merge steps\n`);
+  // Merge record on the PR: fail-soft, never changes ok, merged or the exit code.
+  try {
+    await postMergeComment({
+      repo: options.repo, pr: options.pr, env, ghCommand, runChild,
+      body: buildMergeRecordComment({ approvalVia: verdict.approvalVia, approvedBy: options.humanApprovedBy, headSha: currentHeadSha, mergeClass: verdict.mergeClass }),
+    });
+  } catch (error) {
+    stderr.write(`merge-pr: merge record comment failed: ${error instanceof Error ? error.message : String(error)}\n`);
+  }
   const headRefName = typeof prView?.headRefName === "string" && prView.headRefName.trim().length > 0 ? prView.headRefName.trim() : null;
   const postMerge = await runPostMergeSteps(
     { mainCheckout: resolveMainWorktreeRoot(cwd), cwd, repo: options.repo, pr: options.pr, branch: headRefName, headSha: currentHeadSha, env },
@@ -922,7 +1045,8 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   }
   try {
     const result = await mergePr(options, runtime);
-    return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
+    // --check exits 0 whenever the preconditions could be evaluated; ok:false in the JSON carries the failures.
+    return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: options.check ? true : result.ok !== false });
   } catch (error) {
     if (error && typeof error === "object" && error.mergePrFailure) {
       stderr.write(`${JSON.stringify({ ...error.mergePrFailure, error: error.message })}\n`);

@@ -80,5 +80,5 @@ test("merge passes gate_evidence once the act list is empty", async () => {
   assert.equal(result.ok, true);
   assert.equal(result.merged, true);
   assert.equal(result.copilotDisposition, "copilot_gate_disabled");
-  assert.equal(calls.runChild.length, 1);
+  assert.deepEqual(calls.runChild.map((c) => c.args.slice(0, 2).join(" ")), ["pr merge", "pr comment"]);
 });
