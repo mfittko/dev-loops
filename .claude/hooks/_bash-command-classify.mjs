@@ -984,8 +984,6 @@ function stripQuotedLiterals(command, precise = false, waitView = false) {
   const all = precise ? allWords(tok.segments) : [];
   const payloads = all.filter(({ words, k }) => feedsShell(tok) || isPayloadWord(words, k)).map(({ w }) => w);
   const limit = tok.incompleteAt < 0 ? text.length : tok.incompleteAt;
-  const textPipe = (seg) => { const i = seg.pipedOut ? tok.segments.indexOf(seg) : -1; const next = tok.segments[i + 1]; return i >= 0 && !!next && !next.pipedOut && /^[A-Za-z][\w.+-]*$/.test(next.words[0]?.raw ?? "") && PURE_READER_RE.test(receiverOf(next.words)); }; // a pipe into the LAST segment, a pure reader (`| grep x`), keeps the quoted text inert; `tee`, `sort -o`, `dd of=` and chains can write a file
-  const inertHere = (seg) => inertQuoteSegment(tok, textPipe(seg) ? { ...seg, pipedOut: false } : seg);
   let out = "";
   let pos = 0;
   for (const { start, end, kind } of [...tok.spans].sort((a, b) => a.start - b.start)) {
@@ -993,7 +991,7 @@ function stripQuotedLiterals(command, precise = false, waitView = false) {
     const body = text.slice(start + 1, end - 1);
     const subst = /\$\(|`/.test(body);
     const kept = precise
-      ? (subst && (kind === "double" || waitView === "subst")) || (waitView === true && all.some(({ w, seg }) => w.start <= start && end <= w.end && !inertHere(seg))) || payloads.some((w) => w.start <= start && end <= w.end) ||
+      ? (subst && (kind === "double" || waitView === "subst")) || (waitView === true && all.some(({ w, seg }) => w.start <= start && end <= w.end && !inertQuoteSegment(tok, seg))) || payloads.some((w) => w.start <= start && end <= w.end) ||
         (STRUCTURAL_WORD_RE.test(body) && all.some(({ w, words }) => w.end === end && w.raw.length <= end - start + 1 && !/^(?:echo|printf)$/.test(words.find((x) => !x.op)?.value))) // a quoted structural keyword that is a whole word (`'sleep' 5`) still runs: keep it visible
       : subst || // executable code in quotes: preserve (fail-closed)
         /(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(text.slice(0, start)); // -c/eval payload: real shell syntax
@@ -1014,8 +1012,6 @@ const ENV_ASSIGNMENT_WORD_RE = /^[A-Za-z_]\w*=/;
 const SHELL_RE = /^(?:(?:ba|z|da|k|a)?sh|source|\.)$/;
 /** Programs that only read their text (`-c` counts or selects bytes, a here-string is stdin data, an operand is a file name). */
 const TEXT_CONSUMER_RE = /^(?:echo|printf|grep|rg|wc|cat|tee|head|tail|cut|sort|uniq|tr|od|jq|read)$/;
-/** Readers that never write a file: the only pipe receivers that leave quoted text inert, and only as the last segment. */
-const PURE_READER_RE = /^(?:grep|rg|wc|head|tail|cut|tr|jq|cat)$/;
 /** Basename of the program that receives a segment's input and arguments: the first word after env assignments and `env`/`command`/`exec` launchers with their flags. ponytail: `env -u NAME sh` reads NAME as the head. */
 function receiverOf(words) {
   const w = words.filter((x) => !x.op && !ENV_ASSIGNMENT_WORD_RE.test(x.raw));
@@ -1598,12 +1594,11 @@ export function commandContainsInlineInterpreter(command) {
 /**
  * Whether the quoted words of segment S are inert text. A quoted word is inert only behind a text head or a repo script runner; any other head keeps its quoted words visible (origin/main's raw split), so `git bisect run 'x; node -e y'` is still seen.
  * The head must be the bare name (no path, no env prefix) and the command must define no function, since either can rebind the name to a program that runs its quoted words.
- * ONE command-wide gate (`quotesMayBeInert`) fails closed for the whole command when any word is an assignment (PATH=, `export PATH=`, `FOO=1 cmd`), a redirect, a `(` word (function definition, subshell, `<(`), `$_`, `function`, `eval`, `-c`, a rebinding word (alias, hash, shopt, unalias, enable), any word whose raw text or unquoted value contains `PATH` (`'PATH'=`, `PATH\=`, `-vPATH`), a `source`/`.` head, a `printf -v`/`read`/`mapfile`/`readarray`/`getopts` head, or when output feeds a shell.
+ * One structural rule: the command must be a single top-level segment (no `;`, `&&`, `||`, `|`, newline), so no earlier segment can rebind PATH, define a function, or source a file, and no later segment can run what this one writes. The first word is the head, so an assignment word (`PATH=x grep …`) is never a text head.
  */
-const quotesMayBeInert = (tok) => !feedsShell(tok) && !tok.segments.some((x) => x.words.some((w, k) => /^(?:alias|hash|shopt|unalias|enable|function|eval|-c|source)$/.test(w.value) || (w.value === "." && k <= 1) || REDIRECT_RE.test(w.value) || ENV_ASSIGNMENT_WORD_RE.test(w.raw) || ENV_ASSIGNMENT_WORD_RE.test(w.value) || w.raw.includes("PATH") || w.value.includes("PATH") || w.raw.includes("(") || w.raw.includes("$_")) || /^(?:read|mapfile|readarray|getopts)$/.test(x.words.find((w) => !w.op)?.value) || (x.words.find((w) => !w.op)?.value === "printf" && x.words.some((w) => /^-v/.test(w.value))));
 function inertQuoteSegment(tok, s) {
   const [h = "", arg = ""] = s.words.filter((w) => !w.op).map((w) => w.value);
-  return quotesMayBeInert(tok) && !s.pipedOut && writeTargets(s).length === 0 && !h.includes("/") && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
+  return tok.segments.length === 1 && !s.pipedOut && writeTargets(s).length === 0 && !h.includes("/") && (/^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/.test(h) || (/^(?:node|bun)$/.test(h) && arg.startsWith("scripts/")));
 }
 
 /**

@@ -1755,7 +1755,7 @@ test("round 3: a shell reached through env/command/exec or `<(`, a joined heredo
   // thread 2: the receiving shell is found behind env/command/exec
   assert.equal(commandContainsInlineInterpreter("{\necho 'true; node -e y'\n} | env sh"), true);
   assert.equal(commandContainsDetachedWaitTool(`echo 'node ${PROBE} --pr 5 &' | env bash`), true);
-  assert.equal(commandContainsDetachedWaitTool(`echo 'node ${PROBE} --pr 5 &' | grep x`), false);
+  assert.equal(commandContainsDetachedWaitTool(`echo 'node ${PROBE} --pr 5 &' | grep x`), true); // multi-segment keeps origin/main's split
   // thread 3: backslash-newline joins before the unquoted-heredoc check
   assert.equal(commandContainsInlineInterpreter("cat <<EOF\n$\\\n(true; node -e x)\nEOF"), true);
   assert.equal(commandContainsInlineInterpreter("cat <<'EOF'\n$\\\n(true; node -e x)\nEOF"), false);
