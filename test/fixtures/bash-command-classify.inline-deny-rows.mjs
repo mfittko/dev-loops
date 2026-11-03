@@ -57,6 +57,7 @@ export const INLINE_DENY_ROWS = [
   "echo(){ eval \"$*\"; }; echo 'x; node -e y'",
   "shopt -s expand_aliases\nalias grep='bash -c'\ngrep 'x; node -e y'",
   "hash -p /bin/bash grep; grep 'x; node -e y'",
+  "tmp/echo 'x; node -e y'",
   "echo 'true; node -e y' | sh",
   "echo 'true; node -e y' > x.sh; sh x.sh",
   "echo 'true; node -e y' > x.sh\n. ./x.sh",

@@ -162,6 +162,8 @@ const SALVAGED_DENY_ROWS = [
   "perl -e 'system q(while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done)'",
   "sed -n 's/`gh pr view 5`/while sleep 5/e' f",
   "sed -i 's/`gh pr view 5`/while sleep 5/' f",
+  "sed -n -e 's/`gh pr view 5`/while sleep 5/e' f",
+  "sed -n --expression='s/`gh pr view 5`/while sleep 5/e' f",
   // unit rows (packages/core/test/bash-command-classify.test.mjs)
   "cat > tmp/n <<'EOF'\ndon't\nEOF\ngit commit -m \"a\nb\" && cat > packages/a.mjs <<EOF\nx\nEOF",
   "# don't\necho \"a\nb\" ; cat > packages/a.mjs <<EOF\nx\nEOF",
@@ -280,15 +282,13 @@ const SLICE1_FAIL_CLOSED_FLIPS = new Map();
  */
 const INTENDED_REMOVALS = new Map();
 const REMOVAL_PREDICATES = ["commandContainsInlineInterpreter", "commandContainsDetachedWaitTool", "commandIsSleepPollLoop", "commandIsFileMarkerPollLoop"];
-const SED_BACKTICK_ROW = "sed -n 's/`gh pr view 5`/while sleep 5/p' f"; // joins the corpus through buildCorpus
 const R_QUOTE_WRAP = "the form sits in a quoted --notes/-m/echo argument: quoted text is inert data (item 9)";
 const R_HEREDOC_WRAP = "the form is the body of a cat/tee heredoc (quoted delimiter) written to a temp path: the body is data (item 8)";
 const R_HAZARD_DATA = "the loop sits in quotes next to a quote-pairing hazard (comment apostrophe, escaped quote, heredoc quote): the tokenizer pairs the quotes correctly, so the loop is data";
-const R_SED_BACKTICK = "backtick inside a single-quoted sed expression is literal text, not a substitution";
-const PINNED_REMOVAL_COUNTS = { [R_QUOTE_WRAP]: 23, [R_HEREDOC_WRAP]: 116, [R_HAZARD_DATA]: 160, [R_SED_BACKTICK]: 2 }; // rows removed per reason
+const PINNED_REMOVAL_COUNTS = { [R_QUOTE_WRAP]: 19, [R_HEREDOC_WRAP]: 116, [R_HAZARD_DATA]: 156 }; // rows removed per reason
 
 function buildCorpus() {
-  const corpus = new Set([SED_BACKTICK_ROW, ...RESIDUE_SHAPES,...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW, ...ARITH_SHIFT_ROWS, ...CHAINED_HEREDOC_ROWS]);
+  const corpus = new Set([...RESIDUE_SHAPES,...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW, ...ARITH_SHIFT_ROWS, ...CHAINED_HEREDOC_ROWS]);
   const forms = [...INLINE_FORMS, ...WAIT_FORMS, ...PR_BODY_FORMS];
   for (const f of forms) {
     for (const sep of SEPARATORS) for (const suf of SUFFIXES) corpus.add(`${sep}${f}${suf}`);
@@ -327,7 +327,6 @@ const PREDICATES = [
     for (const wrap of HEREDOC_BODY_WRAPPERS) removeIf(wrap(row), R_HEREDOC_WRAP);
   }
   for (const [shape, , , flag] of HAZARD_SHAPES) if (flag === DATA) for (const row of hazardRowsOf(shape)) removeIf(row, R_HAZARD_DATA);
-  removeIf(SED_BACKTICK_ROW, R_SED_BACKTICK);
 }
 
 // One SLICE1_FAIL_CLOSED_FLIPS entry per (predicate, row) a hazard shape actually flips, carrying the shape's reason.
@@ -367,12 +366,6 @@ test("differential: the intended-removal set has the pinned size per reason", ()
   const counts = {};
   for (const reason of INTENDED_REMOVALS.values()) counts[reason] = (counts[reason] ?? 0) + 1;
   assert.deepEqual(counts, PINNED_REMOVAL_COUNTS);
-});
-
-test("differential: the sed backtick row is in the corpus and removed only by the wait predicate", () => {
-  assert.equal(main.commandContainsDetachedWaitTool(SED_BACKTICK_ROW), true);
-  assert.equal(head.commandContainsDetachedWaitTool(SED_BACKTICK_ROW), false);
-  assert.ok(INTENDED_REMOVALS.has(rowKey("commandContainsDetachedWaitTool", SED_BACKTICK_ROW)));
 });
 
 test("differential: a frozen-allow/head-deny row is listed in SLICE1_FAIL_CLOSED_FLIPS (hazard shapes generate their entries), and every entry is a real flip", () => {

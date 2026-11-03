@@ -1559,8 +1559,8 @@ test("tokenizeShellCommand: malformed input is incomplete and the classifier den
   assert.equal(commandIsSleepPollLoop("echo $(echo 'while true; do gh pr view 5; sleep 5; done'"), true);
   assert.equal(commandIsSleepPollLoop("cat <<EOF 'while true; do gh pr view 5; sleep 5; done'\nx"), true);
   // an executed single-quoted poll loop stays denied; an inert echo, a body flag and a plain sed reader stay allowed
-  for (const c of ["echo 'while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done' > l.sh; bash l.sh", "perl -e 'system q(while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done)'", "sed -n 's/`gh pr view 5`/while sleep 5/e' f", "sed -i 's/`gh pr view 5`/while sleep 5/' f"]) assert.equal(commandIsSleepPollLoop(c), true, c);
-  for (const c of ["echo 'while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done'", "gh issue create --body 'while true; do sleep 5; gh pr view 5; done'", "sed -n 's/`gh pr view 5`/while sleep 5/p' f"]) assert.equal(commandIsSleepPollLoop(c), false, c);
+  for (const c of ["echo 'while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done' > l.sh; bash l.sh", "perl -e 'system q(while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done)'", "sed -n 's/`gh pr view 5`/while sleep 5/e' f", "sed -i 's/`gh pr view 5`/while sleep 5/' f", "sed -n 's/`gh pr view 5`/while sleep 5/p' f", "echo 'while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done'", "sed -n -e 's/`gh pr view 5`/while sleep 5/e' f", "sed -n --expression='s/`gh pr view 5`/while sleep 5/e' f"]) assert.equal(commandIsSleepPollLoop(c), true, c);
+  assert.equal(commandIsSleepPollLoop("gh issue create --body 'while true; do sleep 5; gh pr view 5; done'"), false);
   // a quote pair after an unclosed opener keeps the permissive callers (-X GET, foreign --repo) from allowing
   assert.equal(commandContainsRawPrBodyApiWrite(`gh api repos/mfittko/dev-loops/pulls/5 -f body=x -f "title=$(echo ' -X GET ' ; true)"`, "mfittko/dev-loops"), true);
   assert.equal(commandContainsRawPrBodyEdit(`gh pr edit 5 --body x --title "$(echo ' --repo other/x ' ; true)"`, "mfittko/dev-loops"), true);
