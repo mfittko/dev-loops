@@ -99,6 +99,11 @@ export function sealEvidence(tmpRoot, key, filePath, parsed) {
   const resolved = canonicalPath(filePath);
   if (record.resultPath && record.resultPath !== resolved) throw new EvidenceSealError("evidence_foreign_run", `${filePath} is not the result path briefed for ${key} (${record.resultPath}); re-run the producer`);
   record.sealed = { path: resolved, sha256: sha256Of(readFileSync(resolved)) };
+  // Exclusive create makes the seal one-time: of two racing sealers only one wins the claim.
+  try { writeFileSync(`${evidenceRunRecordPath(tmpRoot, key)}.sealed`, "", { flag: "wx" }); } catch (error) {
+    if (error?.code === "EEXIST") throw new EvidenceSealError("evidence_foreign_run", `run ${key} is already sealed and a seal is final; re-run the producer for a new run`);
+    throw error;
+  }
   writeAtomic(evidenceRunRecordPath(tmpRoot, key), `${JSON.stringify(record)}\n`);
   return record.sealed;
 }
@@ -107,9 +112,9 @@ export function sealEvidence(tmpRoot, key, filePath, parsed) {
 export function verifyEvidence(tmpRoot, key, filePath, parsed, sha256) {
   if (typeof sha256 !== "string") throw new TypeError("verifyEvidence requires the sha256 of the bytes the caller parsed");
   // The pointer of the parsed heads comes first, so a foreign result with rewritten heads names the current run, not a missing record.
-  // ponytail: a head pair without a pointer predates it and stays verifiable.
   const pointer = currentRunPointerPath(tmpRoot, parsed);
-  if (pointer && existsSync(pointer)) {
+  if (pointer) {
+    if (!existsSync(pointer)) throw new EvidenceSealError("evidence_run_missing", `no current run recorded for these heads (${key}); re-run the producer`);
     const current = readFileSync(pointer, "utf8").trim();
     if (current !== parsed.runId) throw new EvidenceSealError("evidence_foreign_run", `run ${parsed.runId} is not the current run ${current} for these heads; re-run the producer or use the current run's result`);
   }

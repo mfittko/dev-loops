@@ -34,7 +34,7 @@ import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
 import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
-import { createEvidenceRun, deltaEvidenceKey, deltaResultKey, mintEvidenceRunId, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
+import { createEvidenceRun, EvidenceSealError, deltaEvidenceKey, deltaResultKey, mintEvidenceRunId, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { clearSequenceMarker, readSequenceMarker, withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
 import {
   DELTA_MAX_INVOCATIONS,
@@ -405,7 +405,13 @@ export async function runCli(
   // The fixer's commit_only handback. Without it every act item with a site query reports a coverage gap.
   // One read: the same bytes are parsed and digested for the seal check (GATE-EXEC-EVIDENCE-SEALED).
   const resultBytes = options.result ? readFileSync(options.result) : null;
-  const result = resultBytes ? JSON.parse(resultBytes.toString("utf8")) : null;
+  let result = null;
+  if (resultBytes) {
+    try { result = JSON.parse(resultBytes.toString("utf8")); } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      throw new EvidenceSealError("evidence_malformed", `${options.result} is empty or not valid JSON; re-run the producer`);
+    }
+  }
   if (options.result) {
     // The seal check comes first: nothing reads an unverified result, a falsy JSON one included (GATE-EXEC-EVIDENCE-SEALED).
     verifyEvidence(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaResultKey(result), options.result, result, createHash("sha256").update(resultBytes).digest("hex"));

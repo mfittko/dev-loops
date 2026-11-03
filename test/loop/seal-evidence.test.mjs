@@ -242,6 +242,25 @@ test("--result refuses every falsy or non-object JSON result with evidence_malfo
   }
 });
 
+test("--result refuses an empty or truncated result file with evidence_malformed", async () => {
+  for (const body of ["", '{"reviewBaselineHead":']) {
+    await assert.rejects(withCli((file) => fs.writeFileSync(file, body)), /evidence_malformed/, JSON.stringify(body));
+  }
+});
+
+test("the seal is one-time: a claimed seal marker refuses a second sealer even when the record still reads unsealed", () => {
+  const { dir, file } = setup();
+  fs.writeFileSync(`${evidenceRunRecordPath(dir, KEY)}.sealed`, "");
+  assert.equal(reason(() => sealEvidence(dir, KEY, file, result())), "evidence_foreign_run");
+});
+
+test("a missing current-run pointer with a sealed record gives evidence_run_missing", () => {
+  const { dir, file } = setup();
+  sealEvidence(dir, KEY, file, result());
+  fs.rmSync(path.join(dir, "evidence-runs", `current-delta-${A}-${B}.txt`));
+  assert.equal(reason(() => verify(dir, KEY, file, result())), "evidence_run_missing");
+});
+
 test("a failed input run leaves the current-run pointer on the earlier run", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seal-evidence-input-"));
   const actList = path.join(dir, "act-list.json");
