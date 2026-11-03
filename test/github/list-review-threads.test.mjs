@@ -310,9 +310,9 @@ test("fetchAllReviewThreads fails closed on non-advancing and unbounded cursor s
       { repo: "owner/repo", pr: 1 },
       { env: {}, runChild: async () => { cycleCalls += 1; return page(cycleCalls % 2 === 0 ? "A" : "B"); } },
     ),
-    /exceeded 100 pages/,
+    /exceeded 400 pages/,
   );
-  assert.equal(cycleCalls, 100);
+  assert.equal(cycleCalls, 400);
 });
 
 test("list-review-threads --unresolved-only reports skippedUntrusted with logins and remedy, never the untrusted text", async () => {
