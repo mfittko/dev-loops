@@ -1353,6 +1353,94 @@ export function commandIsFileMarkerPollLoop(command) {
   );
 }
 
+const SLEEP_LOOP_SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
+
+/**
+ * Whether COMMAND holds a `while`/`until`/`for` loop whose body runs `sleep`, whatever the loop condition.
+ * Reads tokenizer segments, so quoted literals and heredoc bodies never count; `eval` and `sh|bash|zsh -c`
+ * payloads are checked again as shell. An incomplete parse fails closed on raw text.
+ * A `sh|bash|zsh|dash|ksh [flags] -c` payload is found after wrappers only, so `env -i`, `nice -n` and `xargs -I{}` do not hide it and `echo bash -c ...` is text.
+ * A loop opened after `{` (function body) or inside `<(`/`>(` counts, and a `for((` head counts. A sleep behind `nohup`, `nice -n`, `stdbuf`, `exec` counts.
+ * Heads are normalized first: `!`/`if`/`else`/`elif`, a glued `(`, wrappers (`timeout`, `env`, `sudo`, ...) and
+ * path prefixes (`/bin/sleep`) are stripped; a `sleep` right after a loop keyword counts as a sleep head.
+ * ponytail: the check is whole-command (a loop head anywhere plus a sleep head anywhere), so
+ * `for f in a; do echo $f; done; sleep 1` is denied; split the call. Backtick-substitution loops are not parsed.
+ * @param {string} command @returns {boolean}
+ */
+export function commandIsSleepLoop(command) {
+  const { segments, incomplete } = tokenizeShellCommand(command);
+  if (incomplete) return /\b(?:while|until|for)\b/.test(command) && /\bsleep\b/.test(command);
+  const heads = [];
+  const SKIP = /^(?:do|then|\{|command|builtin|!|else|elif|if|\()$/;
+  // Index past SKIP words, assignments and leading redirections (`2>/dev/null`, `> f`) at or after k.
+  const skipPrefix = (words, k) => {
+    for (;;) {
+      const w = words[k];
+      if (w === undefined) return k;
+      const r = redirectionSkip(w);
+      if (r) k += r;
+      else if (SKIP.test(w) || /^[A-Za-z_]\w*=/.test(w) || (w === "-p" && words[k - 1] === "command") || (w === "--" && (/^(?:command|builtin)$/.test(words[k - 1]) || (words[k - 1] === "-p" && words[k - 2] === "command")))) k++;
+      else return k;
+    }
+  };
+  // Index of the normalized head word at or after k, and the head itself.
+  const headAt = (words, k) => {
+    k = skipPrefix(words, k);
+    if (k >= words.length) return { j: k, head: undefined };
+    const w = [words[k].replace(/^(?:do|then|else)(?=\()/, "").replace(/^\(+/, ""), ...words.slice(k + 1)]; // `do(sleep`: the keyword glued to a subshell
+    const rest = stripLeadingWrappers(w.join(" "));
+    let j = 0;
+    for (let i = 0; i < w.length; i++) if (stripLeadingWrappers(w.slice(i).join(" ")) === rest) j = i;
+    return { j: k + j, head: rest.split(/\s+/, 1)[0] };
+  };
+  const base = (w) => w.replace(/^[<>]?\(+/, "").replace(/^.*\//, "");
+  const LOOP = /^(?:while|until|for)(?:$|\()/;
+  const flat = (segs, text) => {
+    for (const seg of segs) {
+      const words = seg.words.map((w) => w.value);
+      const { j, head } = headAt(words, 0);
+      heads.push(LOOP.test(head ?? "") ? "while" : head);
+      // The condition runs as a command: scan it like a body command (wrappers, `sh -c` and `eval` payloads).
+      if (/^(?:while|until)$/.test(head ?? "") && j + 1 < words.length) flat([{ ...seg, words: seg.words.slice(j + 1) }], text);
+      // A loop opened mid-segment: after a `{` (function body) or inside `<(` / `>(` (process substitution).
+      words.forEach((w, i) => {
+        const open = i > 0 && (words[i - 1] === "{" || /^[\w.-]+\(\)\{$/.test(words[i - 1])) && !seg.words[i - 1].single && !seg.words[i - 1].double && !seg.words[i - 1].ansi; // a quoted `{` is text
+        if ((open || /^[<>]\(/.test(w)) && LOOP.test(w.replace(/^[<>]?\(+/, ""))) heads.push("while");
+        if (open) heads.push(headAt(words, i).head); // a sleep inside a function body
+        if (/^[<>]\(/.test(w) && !seg.words[i].single && !seg.words[i].double) heads.push(headAt([w.replace(/^[<>]\(+/, ""), ...words.slice(i + 1)], 0).head); // `<(sleep 5)`: the executable head
+      });
+      // A command after a `case` arm label (`a)`, `a|b)`, `*)`) is a head too.
+      words.forEach((w, i) => {
+        if (/^\(?[^\s()$`]*\)$/.test(w) && /(?<!\\)\)$/.test(seg.words[i].raw)) heads.push(headAt(words, i + 1).head);
+      });
+      const payloads = [];
+      if (head === "eval") payloads.push(words.slice(j + 1 + +(words[j + 1] === "--")).join(" "));
+      // A shell in command position (found by headAt through stripLeadingWrappers, so `echo bash -c '...'` stays text):
+      // every argument, heredoc body, here-string and pipe producer feeding it is payload.
+      if (SLEEP_LOOP_SHELLS.has(base(head ?? ""))) {
+        for (const w of words.slice(j + 1)) payloads.push(w);
+        for (const h of seg.heredocs) payloads.push(h.body);
+        for (let cur = seg; cur; ) {
+          const prev = segs[segs.indexOf(cur) - 1];
+          if (!prev || !/(?:^|[^|])\|(?!\|)|\|&/.test(text?.slice(cur.start, cur.words[0].start) ?? "")) break;
+          for (const w of prev.words) payloads.push(w.value);
+          for (const h of prev.heredocs) payloads.push(h.body);
+          cur = prev;
+        }
+      }
+      // The payload's own heads join the outer list, so `while true; do sh -c 'sleep 5'; done` counts.
+      for (const p of payloads) {
+        const t = tokenizeShellCommand(p);
+        if (!t.incomplete) flat(t.segments, p);
+        else if (commandIsSleepLoop(p)) heads.push("while", "sleep");
+      }
+      for (const w of seg.words) for (const s of w.subs) flat(s.segments, text);
+    }
+  };
+  flat(segments, command);
+  return heads.some((h) => LOOP.test(h ?? "")) && heads.includes("sleep");
+}
+
 /**
  * Whether COMMAND contains a bare `&` backgrounding control operator — not `&&` (logical AND) and
  * not a redirection (`2>&1`, `>&2`, `&>file`, `&>>file`). A coarse whole-string check (no shell
@@ -1402,7 +1490,8 @@ const WAIT_PROBE_FAMILY_RE = new RegExp(
  *
  *   (1) `nohup`/`disown`/`tmux new-session`/`screen -dm` anywhere in a command segment — denied
  *       UNCONDITIONALLY, with NO wait/probe-family requirement.
- *   (2) A `while`/`until`/`for` sleep-poll loop over `gh`/`loop-state` (`commandIsSleepPollLoop`) —
+ *   (2) A `while`/`until`/`for` sleep-poll loop over `gh`/`loop-state` (`commandIsSleepPollLoop`), a bare
+ *       file-marker poll (`commandIsFileMarkerPollLoop`), or any loop that sleeps (`commandIsSleepLoop`) —
  *       denied UNCONDITIONALLY — it IS the backgrounding signal.
  *   (3) OPTION-C, prevention-only scope: a bare `&` background (`commandHasBareBackgroundOperator`,
  *       including a `timeout …`/`env …`/`sh -c` wrapper of it) that ALSO references the wait/probe
@@ -1443,8 +1532,8 @@ export function commandContainsDetachedWaitTool(command) {
     return true;
   }
 
-  // (2) Unconditional sleep-poll-loop ban — a gh/loop-state poll OR a bare file-marker poll.
-  if (commandIsSleepPollLoop(whole) || commandIsFileMarkerPollLoop(whole)) {
+  // (2) Unconditional sleep-poll-loop ban — a gh/loop-state poll, a bare file-marker poll, OR any loop that sleeps (commandIsSleepLoop).
+  if (commandIsSleepPollLoop(whole) || commandIsFileMarkerPollLoop(whole) || commandIsSleepLoop(whole)) {
     return true;
   }
 
@@ -1483,7 +1572,9 @@ export function commandContainsTimeoutWrappedSanctionedTool(command) {
 }
 
 /** Wrapper binaries whose first argument is the real command to classify. */
-const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command"]);
+const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command", "nohup", "exec", "stdbuf", "setsid", "ionice", "busybox"]);
+// A bare wrapper flag (`-n`, `--user`) takes the next word as its argument, unless that word is itself the command.
+const WRAPPER_FLAG_TARGETS = new Set([...WRAPPER_BINARIES, ...SLEEP_LOOP_SHELLS, "timeout", "gtimeout", "sleep"]);
 
 /**
  * Strip prefixes that hide the real command head, fail-closed (over-report is
@@ -1512,8 +1603,13 @@ export function stripLeadingWrappers(segment) {
   // (b) strip a leading wrapper binary, then re-normalize the remainder
   const head = s.split(/\s+/, 1)[0];
   if (WRAPPER_BINARIES.has(head)) {
-    const rest = s.slice(head.length).trim();
-    if (rest.length > 0) return stripLeadingWrappers(rest);
+    const words = s.slice(head.length).trim().split(/\s+/).filter(Boolean);
+    while (/^-/.test(words[0] ?? "")) {
+      const bare = /^(?:-[A-Za-z]|--[\w-]+)$/.test(words[0]);
+      words.shift();
+      if (bare && words.length > 1 && !WRAPPER_FLAG_TARGETS.has(words[0].replace(/^.*\//, ""))) words.shift();
+    }
+    if (words.length > 0) return stripLeadingWrappers(words.join(" "));
   }
   return s;
 }
@@ -1619,7 +1715,7 @@ function interpreterScanParts(command) {
 export function scanInlineInterpreter(command) {
   // Token-level, not a shell parser: text after each `$(` and inside backtick pairs is checked as a command too.
   // Literal text is blanked for this scan only (the per-segment check below keeps the raw text): quoted-delimiter heredoc bodies in this regex pass (the nested pass in `interpreterScanParts` rescans every body `dataHeredocs` does not classify as data), single-quoted spans outside double quotes, and backslash-escaped characters.
-  // ponytail: ceiling: nested quote context inside `$(...)`, process substitution `<(...)` and subshell `(...)` are not covered; wrapper options (`sudo -u x`, `nice -n 5`, `xargs -I{}`) are not skipped by stripLeadingWrappers (pre-existing).
+  // ponytail: ceiling: nested quote context inside `$(...)`, process substitution `<(...)` and subshell `(...)` are not covered; stripLeadingWrappers skips a bare wrapper flag plus its argument by heuristic, so a flag whose argument is not the next word (`env -i grep sleep`, `sudo -E echo sleep` inside a loop) is denied (fails closed, known ceiling).
   // An unquoted-delimiter heredoc body keeps `$(` live but its quotes and `#` are literal: blank them so apostrophes never pair.
   // The delimiter is any unquoted shell word. A heredoc operator these regexes do not consume (a second heredoc on one line, an unusual delimiter) fails closed below.
   // A heredoc operator counts as consumed only when it is unquoted and outside a comment (`echo "<<'EOF'"` and `# <<'EOF'` are literal text): any other `<<` fails closed below.

@@ -580,8 +580,10 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   assert.equal(commandContainsDetachedWaitTool("echo disown is a shell builtin"), false);
   // a polling loop with a LEADING expression is still a polling loop
   assert.equal(commandContainsDetachedWaitTool("gh pr view 1 && while ! gh pr view 1; do sleep 5; done"), true);
-  // a bare mention of `gh` inside another word (grep gh-notes) is NOT a GitHub poll call
-  assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep gh-notes x; done"), false);
+  // a bare mention of `gh` inside another word (grep gh-notes) is NOT a GitHub poll call (commandIsSleepPollLoop);
+  // AC1 of #3028 widened the ban, so the loop is still denied as a sleep loop.
+  assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep gh-notes x; done"), true);
+  assert.equal(commandIsSleepPollLoop("for i in $(seq 1 3); do sleep 1; grep gh-notes x; done"), false);
   // until/seq loop forms are detected too
   assert.equal(commandContainsDetachedWaitTool("until gh pr view 1; do sleep 5; done"), true);
   assert.equal(commandContainsDetachedWaitTool("seq 1 10 | while read i; do sleep 1; gh pr view 1; done"), true);
@@ -590,7 +592,9 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   // a bare `seq` sequence-generator (not a loop head) is NOT a polling loop
   assert.equal(commandContainsDetachedWaitTool("seq 1 5 > /tmp/f; sleep 2; gh pr view 1"), false);
   // loop-state must be a command-head CALL, not a substring of a grep/echo target
-  assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep loop-state x; done"), false);
+  // AC1 of #3028 widened the ban: any loop containing sleep is denied.
+  assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep loop-state x; done"), true);
+  assert.equal(commandIsSleepPollLoop("for i in $(seq 1 3); do sleep 1; grep loop-state x; done"), false);
   assert.equal(commandContainsDetachedWaitTool("while true; do sleep 1; loop-state status; done"), true);
 });
 
@@ -686,6 +690,140 @@ test("H2: stripQuotedLiterals no-regression — -c-not-last short-flag clusters 
 test("H1: commandIsFileMarkerPollLoop excludes string (-z/-n) test operators", () => {
   assert.equal(commandIsFileMarkerPollLoop('while [ -z "$x" ]; do sleep 5; done'), false);
   assert.equal(commandIsFileMarkerPollLoop('while [ -n "$x" ]; do sleep 5; done'), false);
+});
+
+test("commandContainsDetachedWaitTool denies any loop containing sleep, whatever the condition (#3028)", () => {
+  for (const cmd of [
+    'until grep -q "x" f; do sleep 3; done',
+    'until ! pgrep -f "bun test test/github" > /dev/null; do sleep 5; done; tail f',
+    "while true; do ls; sleep 5; done",
+    "for i in 1 2 3; do ls; sleep 5; done",
+    "until [ -f f ]; do sleep 5; done",
+    "eval 'until grep -q x f; do sleep 3; done'",
+    "while curl -s u; do sleep 2; done",
+    "timeout 600 bash -c 'until grep -q X f; do sleep 3; done'",
+    "env FOO=1 sh -c 'while true; do sleep 1; done'",
+    "bash -c 'while true; do sleep 1; done' _",
+    "sh -c 'while true; do sleep 1; done' sh arg",
+    "while sleep 5; do cat out.txt; done",
+    "until sleep 1; grep -q x f; do :; done",
+    "( while true; do sleep 1; done )",
+    "(while true; do sleep 1; done)",
+    "time until grep -q x f; do sleep 3; done",
+    "while true; do /bin/sleep 5; done",
+    "while true; do timeout 10 sleep 5; done",
+    "echo $(while true; do sleep 1; done)",
+    "while true; do nohup sleep 5; done",
+    "while true; do nice -n 10 sleep 5; done",
+    "while true; do stdbuf -o0 sleep 5; done",
+    "while true; do exec sleep 5; done",
+    "for((i=0;i<3;i++)); do sleep 1; done",
+    "while(true); do sleep 1; done",
+    "until(false); do sleep 1; done",
+    "timeout --signal KILL 5 bash -c 'while true; do sleep 1; done'",
+    "sudo --user root bash -c 'while true; do sleep 1; done'",
+    "timeout 0.5 bash -c 'while true; do sleep 1; done'",
+    "while true; do env -i gtimeout 5 sleep 1; done",
+    "sudo -u root timeout 0.5 bash -c 'while true; do sleep 1; done'",
+    "nice -n 10 timeout 0.5 bash -c 'while true; do sleep 1; done'",
+    "f() { while true; do sleep 1; done; }; f",
+    "cat <(while true; do sleep 1; done)",
+    "env -u FOO bash -c 'while true; do sleep 1; done'",
+    "nice -n 10 sh -c 'while true; do sleep 1; done'",
+    "sudo -u x bash -c 'while true; do sleep 1; done'",
+    "dash -c 'while true; do sleep 1; done'",
+    "ksh -c 'while true; do sleep 1; done'",
+    "env -i PATH=/bin bash -c 'while true; do sleep 1; done'",
+    "xargs -I{} sh -c 'while true; do sleep 1; done'",
+    'while true; do sleep 1; done; echo "x',
+    "bash -o pipefail -c 'while true; do sleep 1; done'",
+    "bash -O extglob -c 'while true; do sleep 1; done'",
+    "bash -euo pipefail -c 'while true; do sleep 1; done'",
+    "for i in 1;do(sleep 0);done",
+    "while true; do case x in 'x') sleep 1;; esac; done",
+    "f(){ while true; do sleep 1; done; }; f",
+    "bash -o pipefail <<'EOF'\nwhile true; do sleep 1; done\nEOF",
+    "bash > out <<'EOF'\nwhile true; do sleep 1; done\nEOF",
+    "echo \"$(echo 'while true; do sleep 1; done' | bash)\"",
+    "while sh -c 'sleep 0; exit 1'; do :; done",
+    "while true; do sudo -u x sleep 5; done",
+    "while true; do sh -c 'sleep 5'; done",
+    "while true; do eval sleep 5; done",
+    "while true; do 2>/dev/null sleep 1; done",
+    "while true; do >/dev/null sleep 1; done",
+    "while true; do case $x in a) sleep 1;; esac; done",
+    "while true; do builtin sleep 1; done",
+    "until grep -q x f; do sleep 5; done",
+    "bash <<'EOF'\nwhile true; do sleep 1; done\nEOF",
+    "bash -s <<'EOF'\nwhile true; do sleep 1; done\nEOF",
+    "echo 'while true; do sleep 1; done' | bash",
+    "while true; do command -p sleep 1; done",
+    "while true; do command sleep 1; done",
+    "s() { sleep 1; }; while true; do s; done",
+    "while true; do s() { sleep 1; }; s; done",
+    "bash -c -- 'while true; do sleep 1; done'",
+    "sh -c -- 'until false; do sleep 2; done'",
+    "for f in a; do echo $f; done; sleep 1",
+    "until grep -q x f; do command -- sleep 5; done",
+    "until grep -q x f; do command -p -- sleep 5; done",
+    "while true; do cat <(sleep 5); done",
+    "while true; do sudo --user root sleep 1; done",
+    "eval -- 'until grep -q x f; do sleep 3; done'",
+    "bash -s -- arg <<'EOF'\nwhile true; do sleep 1; done\nEOF",
+    "bash <<< 'while true; do sleep 1; done'",
+    "cat <<'EOF' | bash\nwhile true; do sleep 1; done\nEOF",
+    "bash /dev/null -c 'while true; do sleep 1; done'",
+    "timeout 1e1 bash -c 'while true; do sleep 1; done'",
+  ]) assert.equal(commandContainsDetachedWaitTool(cmd), true, cmd);
+  for (const cmd of [
+    'echo "while true; do nohup sleep 5; done"',
+    "nice -n 10 sleep 5",
+    "for f in a b; do echo $f; done",
+    "f() { echo hi; }; f",
+    "cat <(ls)",
+    "env -u FOO bash -c 'echo hi'",
+    "nice -n 10 sh -c 'sleep 1'",
+    "bash -c 'echo hi'",
+    "for i in 1;do(echo hi);done",
+    "case x in 'a)') echo sleep;; esac; while true; do :; done",
+    "f(){ echo hi; }; f",
+    "while sh -c 'exit 1'; do :; done",
+    "echo \"$(echo hi | bash)\"",
+    "echo 'while true; do sleep 1; done'",
+    'echo "until grep -q x f; do sleep 3; done"',
+    "git commit -m \"$(cat <<'EOF'\nuntil grep -q x f; do sleep 3; done\nEOF\n)\"",
+    "node scripts/github/wait-pr-checks.mjs --pr 5 --timeout 600",
+    "node scripts/github/probe-copilot-review.mjs --pr 5 --timeout 300",
+    "gh run watch 123 --exit-status",
+    "bash -c 'echo hi' sleep",
+    "for f in a b; do timeout 5 grep sleep $f; done",
+    "for f in *.log; do sudo grep sleep $f; done",
+    "echo 'while true; do 2>/dev/null sleep 1; done'",
+    "case $x in a) sleep 1;; esac",
+    "echo bash -c 'while true; do sleep 1; done'",
+    "printf '%s' bash -c 'while true; do sleep 1; done'",
+    "ls; until-ready 3; sleep 1",
+    "while-x; sleep 1",
+    "echo 'while(true); do sleep 1; done'",
+    "echo timeout --signal KILL 5 bash -c 'while true; do sleep 1; done'",
+    "echo timeout 0.5 bash -c 'while true; do sleep 1; done'",
+    "echo sudo -u root timeout 0.5 bash -c 'while true; do sleep 1; done'",
+    "echo nice -n 10 timeout 0.5 bash -c 'while true; do sleep 1; done'",
+    "for f in a b; do grep 'x)' sleep; done",
+    "cat <<'EOF' > s.sh\nwhile true; do sleep 1; done\nEOF",
+    "command -v sleep",
+    "while true; do command -p ls; done",
+    "s() { ls; }; while true; do s; done",
+    "s() { sleep 1; }; s",
+    "bash -c -- 'echo hi'",
+    "for f in a; do printf '%s\\n' '{' sleep; done",
+    "echo ':' | bash; echo 'while true; do sleep 1; done'",
+    "while true; do sudo --user root echo sleep; done",
+    "while true; do cat <(echo sleep); done",
+    "while true; do command -- ls; done",
+    "eval -- 'echo hi'",
+    "bash <<< 'echo hi'",
+  ]) assert.equal(commandContainsDetachedWaitTool(cmd), false, cmd);
 });
 
 // M1 (#2317 follow-up): stripQuotedLiterals only matched a quoted literal WITHOUT the `s` (dotAll)

@@ -47,6 +47,12 @@ Symmetrically, for a change targeting the Claude-Code-specific seam that MUST NO
 3. Add or extend a test asserting the other harness's behavior directly — do not rely on an untested assumption that the change is inert there.
 4. Run the relevant suite locally (`bun run test:assets`, `bun run test:core`, `bun run test:extension`, or `bun run smoke:headless` as applicable) before opening the pull request.
 
+## Sleep-loop deny
+
+| Rule | Claude Code | Pi |
+|---|---|---|
+| `COPILOT-FOLLOWUP-WAIT-TOOLS`: sleep loops are denied (`commandIsSleepLoop`; the owner rule defines the whole-command policy) | Claude enforced now (PreToolUse Bash-gate) | Pi not yet enforced; inherits when the Pi deny-set slices land |
+
 ## Comment trust predicate
 
 `GATE-REVIEW-COMMENT-TRUST` (ADR 0238, owner: [Gate review sub-loop contract](./gate-review-sub-loop-contract.md)) is enforced in shared scripts and the core module, so Pi and Claude Code take the same path. The cross-harness row is `test/contracts/comment-trust-rule-contract.test.mjs` plus the trust cases in `test/loop/emit-fixer-work-order.test.mjs`; neither depends on a harness identity.
