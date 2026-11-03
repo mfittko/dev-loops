@@ -15,8 +15,10 @@
  *   - raw `gh pr edit` body writes (`--body`/`--body-file`/`-b`/`-F`) and `gh api` body writes to
  *     `pulls/<n>` or `issues/<n>` (a `body` field via `-f`/`-F`/`--field`/`--raw-field`, an
  *     `--input` payload, or a `gh api graphql` `updatePullRequest`) — blocked actor-independently
- *     (`ADR-TRIPWIRE-STANDING-WAIVER`): the sanctioned launcher writers are the only body route
- *     because they refuse a hand-written `adr-tripwire:allow` line.
+ *     (`ADR-TRIPWIRE-STANDING-WAIVER`): the sanctioned launcher writers are the only route for these
+ *     `gh pr` and `gh api` body writes, because they refuse a hand-written `adr-tripwire:allow` line.
+ *     The raw `gh issue edit <n> --body`/`--body-file` command line form is NOT covered by this deny;
+ *     it stays with the subagent-scoped external-write guard, which runs only when `agent_type` is present.
  *   - `timeout N <sanctioned command>` — blocked outright: the wrapper hides the `dev-loops-run`
  *     head from operator allow rules. Run the command bare; wait/probe tools bound themselves.
  *   - `git stash` — blocked outright: `refs/stash` is shared across every worktree over this
