@@ -984,7 +984,7 @@ function stripQuotedLiterals(command, precise = false, waitView = false) {
   const all = precise ? allWords(tok.segments) : [];
   const payloads = all.filter(({ words, k }) => feedsShell(tok) || isPayloadWord(words, k)).map(({ w }) => w);
   const limit = tok.incompleteAt < 0 ? text.length : tok.incompleteAt;
-  const textPipe = (seg) => { const r = seg.pipedOut && tok.segments.includes(seg) ? receiverOf(tok.segments[tok.segments.indexOf(seg) + 1]?.words ?? []) : ""; return r !== "tee" && TEXT_CONSUMER_RE.test(r); }; // a pipe into a text reader (`| grep x`) keeps the quoted text inert; `tee` writes a file
+  const textPipe = (seg) => { const i = seg.pipedOut ? tok.segments.indexOf(seg) : -1; const next = tok.segments[i + 1]; return i >= 0 && !!next && !next.pipedOut && PURE_READER_RE.test(receiverOf(next.words)); }; // a pipe into the LAST segment, a pure reader (`| grep x`), keeps the quoted text inert; `tee`, `sort -o`, `dd of=` and chains can write a file
   const inertHere = (seg) => inertQuoteSegment(tok, textPipe(seg) ? { ...seg, pipedOut: false } : seg);
   let out = "";
   let pos = 0;
@@ -1012,6 +1012,8 @@ const ENV_ASSIGNMENT_WORD_RE = /^[A-Za-z_]\w*=/;
 const SHELL_RE = /^(?:ba|z|da|k|a)?sh$/;
 /** Programs that only read their text (`-c` counts or selects bytes, a here-string is stdin data, an operand is a file name). */
 const TEXT_CONSUMER_RE = /^(?:echo|printf|grep|rg|wc|cat|tee|head|tail|cut|sort|uniq|tr|od|jq|read)$/;
+/** Readers that never write a file: the only pipe receivers that leave quoted text inert, and only as the last segment. */
+const PURE_READER_RE = /^(?:grep|rg|wc|head|tail|cut|tr|jq|cat)$/;
 /** Basename of the program that receives a segment's input and arguments: the first word after env assignments and `env`/`command`/`exec` launchers with their flags. ponytail: `env -u NAME sh` reads NAME as the head. */
 function receiverOf(words) {
   const w = words.filter((x) => !x.op && !ENV_ASSIGNMENT_WORD_RE.test(x.raw));
