@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -15,7 +15,6 @@ import {
   writeGateFindingsLog,
 } from "../../scripts/github/write-gate-findings-log.mjs";
 import { readSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
-import { countCompletedRounds } from "../../scripts/github/write-gate-context.mjs";
 import { buildGateArtifactPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { existsSync } from "node:fs";
 import { isFindingsLogName, readGateFindingsLedger } from "../../scripts/github/_gate-finding-surface.mjs";
@@ -321,7 +320,7 @@ test("writeGateFindingsLog accepts a valid 16-hex fingerprint", async () => {
   }
 });
 
-test("writeGateFindingsLog retains only a finished same-head round at a numbered sibling, with its seal", async () => {
+test("writeGateFindingsLog retains every existing same-head ledger at a numbered sibling, with its seal", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-retain-"));
   try {
     const write = (summary, verdict = "clean") => writeGateFindingsLog({
@@ -340,11 +339,11 @@ test("writeGateFindingsLog retains only a finished same-head round at a numbered
     assert.equal(JSON.parse(await readSealed(second.retainedRound)).findings[0].summary, "one");
     assert.equal(JSON.parse(await readSealed(third.retainedRound)).findings[0].summary, "two");
     assert.equal(JSON.parse(await readFile(third.path, "utf8")).findings[0].summary, "three");
-    // An unjudged findings_present ledger is a same-round rewrite: overwritten, never retained.
+    // An unjudged findings_present ledger is retained too: the writer keeps every existing same-head ledger.
     const unjudged = await write("four", "findings_present");
-    assert.equal(unjudged.retainedRound, first.path.replace(/\.json$/, ".round-3.json"), "the finished clean ledger is retained");
+    assert.equal(unjudged.retainedRound, first.path.replace(/\.json$/, ".round-3.json"));
     const rewrite = await write("five", "findings_present");
-    assert.equal(rewrite.retainedRound, undefined, "an unjudged ledger is overwritten");
+    assert.equal(rewrite.retainedRound, first.path.replace(/\.json$/, ".round-4.json"), "an unjudged ledger is retained as well");
     assert.equal(JSON.parse(await readFile(rewrite.path, "utf8")).findings[0].summary, "five");
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -366,43 +365,6 @@ test("writeGateFindingsLog retains a legacy unsealed finished ledger without a s
 });
 
 const RETAIN_ARGS = { repo: "a/b", pr: 1, gate: "draft_gate", headSha: "abc1234500000000000000000000000000000000", verdict: "clean" };
-
-test("writeGateFindingsLog overwrites a pre-judge clean ledger with unjudged findings and counts the judged rewrite as the same round", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-retain-prejudge-"));
-  try {
-    const findings = JSON.stringify([{ severity: "low", angle: "scope", summary: "x" }]);
-    const first = await writeGateFindingsLog({ ...RETAIN_ARGS, findings, tmpRoot: dir });
-    const second = await writeGateFindingsLog({ ...RETAIN_ARGS, findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "x", judgeDisposition: "reject" }]), tmpRoot: dir });
-    assert.equal(second.retainedRound, undefined, "the unjudged clean write is overwritten");
-    assert.equal(existsSync(first.path.replace(/\.json$/, ".round-1.json")), false);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test("writeGateFindingsLog never retains a judged ledger rewritten for the same round (judge re-run recovery)", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-retain-samerounds-"));
-  try {
-    const findings = JSON.stringify([{ severity: "low", angle: "scope", summary: "x" }]);
-    const judgeVerdict = path.join(dir, "judge-verdict.json");
-    await writeFile(judgeVerdict, JSON.stringify({
-      headSha: RETAIN_ARGS.headSha,
-      scopeDrift: { verdict: "within_scope", rationale: "r", driftedAreas: [] },
-      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "why", criterion: "AC-1" }],
-    }), "utf8");
-    await mkdir(dir, { recursive: true });
-    await writeFile(path.join(dir, ".devloops"), "version: 1\ngates:\n  draft:\n    maxReviewRounds: 4\n", "utf8");
-    const args = { ...RETAIN_ARGS, verdict: "findings_present", findings, judgeVerdict, tmpRoot: dir };
-    const first = await writeGateFindingsLog(args, { repoRoot: dir });
-    const second = await writeGateFindingsLog(args, { repoRoot: dir });
-    assert.equal(second.retainedRound, undefined, "the same-round judged rewrite is not retained");
-    assert.equal(existsSync(first.path.replace(/\.json$/, ".round-1.json")), false);
-    const rounds = await countCompletedRounds({ repo: args.repo, pr: args.pr, gate: args.gate, headSha: args.headSha, tmpRoot: dir }, { repoRoot: dir, includeLiveHead: true });
-    assert.equal(rounds, 2, "one live round plus the round being posted");
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
 
 test("writeGateFindingsLog refuses a tampered live ledger with OUT_OF_BAND_WRITE and retains nothing", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-retain-tamper-"));
@@ -432,6 +394,25 @@ test("claimRetainedRound refuses with EEXIST on a taken retained name and change
     await writeFile(`${taken}.seal`, "own-seal", "utf8");
     await assert.rejects(() => claimRetainedRound(first.path, taken), (err) => err?.code === "EEXIST");
     assert.equal(await readFile(`${taken}.seal`, "utf8"), "own-seal", "the taken round's own seal is unchanged");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("claimRetainedRound leaves the retained round on its own inode, so a rewrite of the live path never reaches it", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-retain-inode-"));
+  try {
+    const first = await writeGateFindingsLog({ ...RETAIN_ARGS, findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "one", judgeDisposition: "reject" }]), tmpRoot: dir });
+    const liveBytes = await readFile(first.path, "utf8");
+    const liveIno = (await stat(first.path)).ino;
+    const retained = first.path.replace(/\.json$/, ".round-1.json");
+    await claimRetainedRound(first.path, retained);
+    assert.equal(existsSync(first.path), false, "the live ledger is unlinked");
+    assert.equal(existsSync(`${first.path}.seal`), false, "the live seal is unlinked");
+    assert.notEqual((await stat(retained)).ino, liveIno, "the retained round does not share the live inode");
+    await writeFile(first.path, "rewritten", "utf8");
+    assert.equal(await readFile(retained, "utf8"), liveBytes, "a write to the live path leaves the retained round unchanged");
+    assert.equal(JSON.parse(await readSealed(retained)).findings[0].summary, "one", "the retained round still reads sealed");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -2802,13 +2783,12 @@ test("writeGateFindingsLog records capClosed on a past-cap defer or reject, neve
     const below = await writeCapRound(tmpDir, raw, dispositions);
     assert.deepEqual(below.map((f) => f.capClosed), Array(5).fill(undefined), "round 3 is below the cap of 4");
     await writeCapPrior(tmpDir, { head: capPriorHeads[2], findings: [] });
-    // The head was written once already (round 3), so the finished live ledger is retained and this rewrite is round 5.
-    const past = await writeCapRound(tmpDir, raw.map((f) => ({ ...f, summary: `${f.summary} again` })), dispositions);
+    const past = await writeCapRound(tmpDir, raw, dispositions);
     assert.deepEqual(past.map((f) => f.capClosed), [
-      { judgeDisposition: "defer", severity: "low", round: 5, cap: 4 },
-      { judgeDisposition: "reject", severity: "nit", round: 5, cap: 4 },
+      { judgeDisposition: "defer", severity: "low", round: 4, cap: 4 },
+      { judgeDisposition: "reject", severity: "nit", round: 4, cap: 4 },
       undefined,
-      { judgeDisposition: "reject", severity: "question", round: 5, cap: 4 },
+      { judgeDisposition: "reject", severity: "question", round: 4, cap: 4 },
       undefined,
     ]);
   } finally {
@@ -2816,21 +2796,6 @@ test("writeGateFindingsLog records capClosed on a past-cap defer or reject, neve
   }
 });
 
-test("a same-head rewrite of a finished ledger counts the retained round: the second write is past the cap like the poster", async () => {
-  const raw = [{ severity: "low", angle: "docs", summary: "low deferred" }];
-  const dispositions = [{ disposition: "defer", followUpDraft: { title: "t", body: "b" } }];
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-capclosed-rewrite-"));
-  try {
-    for (const head of capPriorHeads.slice(0, 2)) await writeCapPrior(tmpDir, { head, findings: [] });
-    const first = await writeCapRound(tmpDir, raw, dispositions);
-    assert.equal(first[0].capClosed, undefined, "round 3 is below the cap of 4");
-    // A new round carries fresh findings; a byte-identical rewrite is the same round.
-    const second = await writeCapRound(tmpDir, [{ ...raw[0], summary: "low deferred again" }], dispositions);
-    assert.deepEqual(second[0].capClosed, { judgeDisposition: "defer", severity: "low", round: 4, cap: 4 }, "the retained round 3 makes the rewrite round 4");
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
-  }
-});
 test("writeGateFindingsLog records capClosed on a past-cap medium reject and refuses a high defer or a missing disposition", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-capclosed-sev-"));
   try {

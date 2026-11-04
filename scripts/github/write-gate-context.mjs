@@ -1864,7 +1864,9 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
  * by SHA) for {@link resolvePriorDispositions}'s latest-wins fold.
  *
  * A retained same-head round (`<gate>-<sha>.round-<n>.json`, kept when a head is
- * re-written) is a closed round at ANY head, including the current one.
+ * re-written) is a closed round at any other head. At the current head it is read only
+ * with `includeRetainedCurrentHead` (the round count), so the disposition, act-item and
+ * cap-round readers keep their pre-retention view of the current head.
  *
  * Filename SHAs match case-insensitively. FAIL OPEN on a path-resolution
  * error (no prior rounds). Per ledger: an unparseable or non-object file is
@@ -1880,7 +1882,7 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
  *
  * @returns {Promise<object[]>}
  */
-export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable }) {
+export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable, includeRetainedCurrentHead = false }) {
   let ledgerDir;
   try {
     const sampleLogPath = buildLogPath({
@@ -1901,7 +1903,7 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
     if (!name.startsWith(namePrefix) || !name.endsWith(".json")) continue;
     const retained = /\.round-\d+\.json$/.test(name);
     const sha = name.slice(namePrefix.length, -".json".length).replace(/\.round-\d+$/, "").toLowerCase();
-    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha) || (!retained && (sha.startsWith(head) || head.startsWith(sha)))) continue;
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha) || ((!retained || !includeRetainedCurrentHead) && (sha.startsWith(head) || head.startsWith(sha)))) continue;
     let log;
     try {
       log = JSON.parse(await readSealed(path.join(ledgerDir, name)));
@@ -1948,42 +1950,14 @@ export const DRAFT_ROUND_CAP_EFFECTIVE_AT = "2026-10-26T08:51:13Z";
  * DRAFT_ROUND_CAP_EFFECTIVE_AT (a closed ledger is skipped only when its `loggedAt` is a UTC timestamp in toISOString form earlier than the cutoff; every other value counts), plus an unreadable ledger at an
  * in-range head (counted regardless of date, since it has no readable `loggedAt`), plus the round being posted. Foreign, mismatched and unclosed ledgers never count.
  */
-export async function countCompletedRounds(options, { repoRoot, includeLiveHead = false }) {
+export async function countCompletedRounds(options, { repoRoot }) {
   let unreadable = 0;
-  const closed = await readClosedPriorRoundLogs(options, { repoRoot, onUnreadable: () => { unreadable += 1; } });
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeRetainedCurrentHead: true, onUnreadable: () => { unreadable += 1; } });
   const cutoff = Date.parse(DRAFT_ROUND_CAP_EFFECTIVE_AT);
   // Only a strict toISOString-form UTC timestamp earlier than the cutoff is skipped; any other value counts (fails toward the cap).
   // The calendar round trip rejects values Date.parse normalizes (2026-02-30, T24:00:00); at most 3 fraction digits.
   const preCap = (loggedAt) => typeof loggedAt === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(loggedAt) && Number.isFinite(Date.parse(loggedAt)) && new Date(loggedAt).toISOString().slice(0, 19) === loggedAt.slice(0, 19) && Date.parse(loggedAt) < cutoff;
-  const live = includeLiveHead && await isLiveHeadRoundFinished(options, { repoRoot });
-  return closed.filter((log) => !preCap(log.loggedAt)).length + unreadable + (live ? 1 : 0) + 1;
-}
-
-/**
- * A finished round (the one predicate for writer retention and the pre-write readers): a clean verdict with no unjudged finding, or findings_present with at least one judged
- * finding or a scopeDrift verdict. An unjudged ledger (a pre-judge clean write included) is an in-progress rewrite of the same round, never a separate round.
- * `identity` ({ repo, pr, gate, headSha }) applies the reader's identity check, and the verdict is trimmed like the reader does.
- */
-export function isFinishedRoundLog(log, identity) {
-  const norm = (v) => (typeof v === "string" ? v.trim().toLowerCase() : null);
-  if (identity && (norm(log?.headSha) !== norm(identity.headSha) || norm(log?.repo) !== norm(identity.repo) || norm(log?.gate) !== norm(identity.gate)
-    || log.pr === undefined || log.pr === null || Number(log.pr) !== Number(identity.pr))) return false;
-  const verdict = typeof log?.verdict === "string" ? log.verdict.trim() : "";
-  const findings = Array.isArray(log?.findings) ? log.findings : [];
-  if (verdict === "clean") return findings.every((f) => f?.judgeDisposition !== undefined);
-  if (verdict !== "findings_present") return false;
-  return log.scopeDrift !== undefined || findings.some((f) => f?.judgeDisposition !== undefined);
-}
-
-/** True when the live current-head ledger exists, is readable and is a finished round: the writer retains it, so it counts as one completed round before the rewrite. */
-export async function isLiveHeadRoundFinished(options, { repoRoot }) {
-  try {
-    const livePath = path.resolve(repoRoot, buildLogPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }));
-    return isFinishedRoundLog(JSON.parse(await readSealed(livePath)), options);
-  } catch (err) {
-    if (err?.code === OUT_OF_BAND_WRITE) throw err;
-    return false;
-  }
+  return closed.filter((log) => !preCap(log.loggedAt)).length + unreadable + 1;
 }
 
 /**
@@ -1991,12 +1965,12 @@ export async function isLiveHeadRoundFinished(options, { repoRoot }) {
  * other gate is never past it. One resolver for the judge pass, the ledger writer and the fixer emitter.
  * @returns {Promise<{ pastCap: boolean, round: number, cap: number, lowFixCapped: boolean }>}
  */
-export async function resolveDraftRoundCap(options, { repoRoot, includeLiveHead = false }) {
+export async function resolveDraftRoundCap(options, { repoRoot }) {
   // GATE-EXEC-LOW-FIX-UNTIL-CAP: pre_approval_gate has no round count and applies the past-cap low/nit coercion in every round.
   if (options.gate !== "draft_gate") return { pastCap: false, round: 0, cap: 0, lowFixCapped: options.gate === "pre_approval_gate" };
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
   const cap = resolveGateConfig(config, "draft").maxReviewRounds;
-  const round = await countCompletedRounds(options, { repoRoot, includeLiveHead });
+  const round = await countCompletedRounds(options, { repoRoot });
   const pastCap = isPastRoundCap(round, cap);
   return { pastCap, round, cap, lowFixCapped: pastCap };
 }
@@ -3955,7 +3929,7 @@ export async function main(
     // GATE-EXEC-ROUND-CAP (ADR 0208): round N+1 never runs; refuse its context. The findings ledger is main-anchored: read it from its own root, not the (possibly relocated) context --tmp-root.
     const cap = resolveGateConfig(config, "draft").maxReviewRounds ?? 0;
     if (options.gate === "draft_gate") {
-      const round = await countCompletedRounds({ ...options, tmpRoot: undefined }, { repoRoot, includeLiveHead: true });
+      const round = await countCompletedRounds({ ...options, tmpRoot: undefined }, { repoRoot });
       if (isRoundRefused(round, cap)) throw new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs; after the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`.`);
     }
     // AC6 (issue 2885): every dispatch runs the freshness check against the PR's own base branch (baseRefName),

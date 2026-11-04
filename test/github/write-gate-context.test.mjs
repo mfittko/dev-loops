@@ -43,7 +43,6 @@ import {
   resolvePrSpecContext,
   resolvePriorDispositions,
   countCompletedRounds,
-  isFinishedRoundLog,
   resolveClosureRound,
   resolveCapRound,
   resolveCapRoundFixed,
@@ -8673,9 +8672,13 @@ test("readClosedPriorRoundLogs and countCompletedRounds treat a retained same-he
     const before = await countCompletedRounds(options, { repoRoot: tmpRoot });
     await writeFile(path.join(dir, `draft_gate-${head}.round-1.json`), ledger({}), "utf8");
     assert.equal(await countCompletedRounds(options, { repoRoot: tmpRoot }), before + 1);
-    assert.equal((await readClosedPriorRoundLogs(options, { repoRoot: tmpRoot })).length, 1);
+    assert.equal((await readClosedPriorRoundLogs(options, { repoRoot: tmpRoot })).length, 0, "the other readers keep their pre-retention view of the current head");
+    assert.equal((await readClosedPriorRoundLogs(options, { repoRoot: tmpRoot, includeRetainedCurrentHead: true })).length, 1);
     await writeFile(path.join(dir, `draft_gate-${head}.round-2.json`), ledger({ repo: "other/repo" }), "utf8");
-    assert.equal((await readClosedPriorRoundLogs(options, { repoRoot: tmpRoot })).length, 1, "identity mismatch dropped");
+    assert.equal((await readClosedPriorRoundLogs(options, { repoRoot: tmpRoot, includeRetainedCurrentHead: true })).length, 1, "identity mismatch dropped");
+    const otherHead = "4".repeat(40);
+    await writeFile(path.join(dir, `draft_gate-${otherHead}.round-1.json`), ledger({ headSha: otherHead }), "utf8");
+    assert.equal((await readClosedPriorRoundLogs(options, { repoRoot: tmpRoot })).length, 1, "a retained round of another head is closed for every reader");
   } finally {
     await rm(tmpRoot, { recursive: true, force: true });
   }
@@ -8694,70 +8697,9 @@ test("readClosedPriorRoundLogs orders retained same-head rounds with equal logge
     await ledger(head, 2);
     await ledger(head, 1);
     await ledger(prior, 3);
-    assert.deepEqual((await readClosedPriorRoundLogs(options, { repoRoot: tmpRoot })).map((l) => l.marker), [3, 1, 2, 10]);
+    assert.deepEqual((await readClosedPriorRoundLogs(options, { repoRoot: tmpRoot, includeRetainedCurrentHead: true })).map((l) => l.marker), [3, 1, 2, 10]);
   } finally {
     await rm(tmpRoot, { recursive: true, force: true });
-  }
-});
-
-test("countCompletedRounds with includeLiveHead counts a finished live same-head ledger once, never an unjudged one", async () => {
-  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-live-head-"));
-  try {
-    const dir = path.join(tmpRoot, "gate-findings", "owner-repo", "pr-5");
-    await mkdir(dir, { recursive: true });
-    const head = "5".repeat(40);
-    const options = { repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: head, tmpRoot };
-    const live = (extra) => writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: head, loggedAt: "2026-10-27T00:00:00.000Z", findings: [], ...extra }), "utf8");
-    const base = await countCompletedRounds(options, { repoRoot: tmpRoot });
-    const count = () => countCompletedRounds(options, { repoRoot: tmpRoot, includeLiveHead: true });
-    assert.equal(await count(), base, "no live ledger");
-    await live({ verdict: "findings_present", findings: [{ severity: "low", summary: "s" }] });
-    assert.equal(await count(), base, "an unjudged findings_present ledger is the same round");
-    await live({ verdict: "findings_present", findings: [{ severity: "low", summary: "s", judgeDisposition: "act" }] });
-    assert.equal(await count(), base + 1, "a judged ledger is a finished round");
-    await live({ verdict: "findings_present", scopeDrift: { verdict: "within_scope" } });
-    assert.equal(await count(), base + 1, "scopeDrift finishes the round");
-    await live({ verdict: "clean" });
-    assert.equal(await count(), base + 1, "a clean ledger is a finished round");
-    await live({ verdict: "clean", findings: [{ severity: "low", summary: "s" }] });
-    assert.equal(await count(), base, "a pre-judge clean ledger with an unjudged finding is the same round");
-    await live({ verdict: " clean " });
-    assert.equal(await count(), base + 1, "the verdict is trimmed like the reader does");
-    await live({ verdict: "clean", headSha: "6".repeat(40) });
-    assert.equal(await count(), base, "a ledger whose recorded headSha differs from its filename is not a round");
-    assert.equal(await countCompletedRounds(options, { repoRoot: tmpRoot }), base, "readers without the flag are unchanged");
-    assert.equal(isFinishedRoundLog({ verdict: "blocked" }), false);
-  } finally {
-    await rm(tmpRoot, { recursive: true, force: true });
-  }
-});
-
-test("CLI refuses a same-head draft_gate rerun with round_cap_reached once a finished live ledger counts as a round", async () => {
-  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
-  const priorExitCode = process.exitCode;
-  const stderrWrite = process.stderr.write.bind(process.stderr);
-  const stdoutWrite = process.stdout.write.bind(process.stdout);
-  let out = "";
-  try {
-    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
-    await seedClosedRounds(repoRoot, 48, ["1".repeat(40), "2".repeat(40), "3".repeat(40)]);
-    process.stdout.write = (chunk) => { out += String(chunk); return true; };
-    process.stderr.write = (chunk) => { out += String(chunk); return true; };
-    const liveFile = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-48", `draft_gate-${headSha}.json`);
-    const live = (verdict) => writeFile(liveFile, JSON.stringify({ repo: "owner/repo", pr: 48, gate: "draft_gate", headSha, verdict, loggedAt: "2026-11-09T00:00:00.000Z", findings: [] }), "utf8");
-    const run = async () => { out = ""; process.exitCode = undefined; await main(["--repo", "owner/repo", "--pr", "48", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha], { repoRoot, run: stubGhRun }); };
-    await live("findings_present");
-    await run();
-    assert.notEqual(process.exitCode, 1, "an unjudged live ledger is the same round");
-    await live("clean");
-    await run();
-    assert.equal(process.exitCode, 1);
-    assert.match(out, /round_cap_reached: this would be draft_gate round 5 and the cap is 4/);
-  } finally {
-    process.stdout.write = stdoutWrite;
-    process.stderr.write = stderrWrite;
-    process.exitCode = priorExitCode;
-    await rm(repoRoot, { recursive: true, force: true });
   }
 });
 
