@@ -427,6 +427,11 @@ test("claimRetainedRound refuses with EEXIST on a taken retained name and change
     await assert.rejects(() => claimRetainedRound(first.path, taken), (err) => err?.code === "EEXIST");
     assert.equal(await readFile(taken, "utf8"), "precreated", "the pre-created round is untouched");
     assert.equal(await readFile(first.path, "utf8"), liveBytes, "the live ledger stays in place");
+    assert.equal(existsSync(`${taken}.seal`), false, "the seal linked by the refused claim is dropped");
+    // A taken round that has its own seal keeps it unchanged.
+    await writeFile(`${taken}.seal`, "own-seal", "utf8");
+    await assert.rejects(() => claimRetainedRound(first.path, taken), (err) => err?.code === "EEXIST");
+    assert.equal(await readFile(`${taken}.seal`, "utf8"), "own-seal", "the taken round's own seal is unchanged");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

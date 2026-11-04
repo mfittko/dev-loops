@@ -1130,8 +1130,13 @@ async function retainSameHeadLedger(fullPath, logPath, existing, identity) {
 // Moves the live ledger and its seal to `retained` without ever replacing an existing file: link fails with EEXIST on a taken name.
 // The seal is linked first (a crash leaves a waiting seal that matches the bytes a retry moves there; EEXIST on the seal is that waiting seal).
 export async function claimRetainedRound(fullPath, retained) {
-  await link(`${fullPath}.seal`, `${retained}.seal`).catch((err) => { if (err?.code !== "ENOENT" && err?.code !== "EEXIST") throw err; });
-  await link(fullPath, retained);
+  let linkedSeal = true;
+  await link(`${fullPath}.seal`, `${retained}.seal`).catch((err) => { linkedSeal = false; if (err?.code !== "ENOENT" && err?.code !== "EEXIST") throw err; });
+  // A refused claim drops only the seal this call linked; a pre-existing seal of the taken round stays.
+  try { await link(fullPath, retained); } catch (err) {
+    if (linkedSeal) await unlink(`${retained}.seal`).catch(() => {});
+    throw err;
+  }
   await unlink(fullPath);
   await unlink(`${fullPath}.seal`).catch((err) => { if (err?.code !== "ENOENT") throw err; });
 }
