@@ -135,7 +135,7 @@ Apply [Structural Quality](../docs/structural-quality.md) standards from the `de
 
 Treat the PR as the main working artifact once it exists.
 
-Before invoking `resolve-dev-loop-startup.mjs --pr <number>` to continue an externally-created PR (one `create-pr` did not just self-assign), claim ownership: `dev-loops-run scripts/github/edit-pr.mjs --repo <owner/name> --pr <number> --add-assignee @me` (skip if already assigned to the viewer). The resolver's single-contributor ownership gate fails closed on a foreign or unclaimed assignee, or a linked issue assigned to another human — see [Public Dev Loop Contract](../docs/public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup).
+Before invoking `resolve-dev-loop-startup.mjs --pr <number>` to continue an externally-created PR (one `create-pr` did not just self-assign), claim ownership by adding `--claim` to that startup call (`loop startup --pr <number> --claim`; it assigns the viewer only when the PR is unassigned, and only on the user's explicit start or continue request for this exact PR). The resolver's single-contributor ownership gate fails closed on a foreign or unclaimed assignee, or a linked issue assigned to another human — see [Public Dev Loop Contract](../docs/public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup).
 
 Inspect: PR body/title (must satisfy [PR description contract](../docs/copilot-loop-operations.md)), closing reference (operator-controlled; subagents must NOT modify), author, review summaries, unresolved comments, latest commits, CI results.
 
