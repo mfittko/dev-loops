@@ -560,3 +560,23 @@ test("a clean cap round whose plain clearing chain ends at the PR head refuses c
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a clean cap round with no record at the cap-round head and a base-only-merge chain ending at the head still extends at the cap-round head", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    runGitFixture(root, ["checkout", "-q", "-b", "base-side", A]);
+    const X = await commit(root, { "src/base.mjs": "export const base = 1;\n" }, "base logic");
+    runGitFixture(root, ["update-ref", "refs/remotes/origin/main", X]);
+    runGitFixture(root, ["checkout", "-q", A]);
+    runGitFixture(root, ["merge", "-q", "--no-ff", "-m", "merge base", X]);
+    const M = String(runGitFixture(root, ["rev-parse", "HEAD"])).trim();
+    const N = await commit(root, { "docs/d.md": "d\n" }, "docs");
+    writeSealedGateDeltaRecord(path.join(root, "tmp"), M, { reviewBaselineHead: M, candidateHead: N, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    assert.equal(existsSync(gateDeltaRecordPath(path.join(root, "tmp"), A)), false);
+    const result = await extend(root, N);
+    assert.equal(result.action, "chain_extended");
+    assert.equal(result.chainEnd, A);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
