@@ -148,6 +148,7 @@ test("hasRunnableCommand accepts quoted angle brackets and rejects unfilled plac
   for (const c of ok) assert.equal(hasRunnableCommand(c), true, c);
   for (const c of bad) assert.equal(hasRunnableCommand(c), false, c);
   const result = evaluatePrGateCoordination(titleInput("WIP: support Map<K, V>"));
+  assert.ok(isTyped(result));
   assert.ok(isTypedOrKnownGap(titleInput("WIP: support Map<K, V>"), result));
 });
 
