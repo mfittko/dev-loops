@@ -624,6 +624,16 @@ const PR_GATE_COORDINATION_MACHINE = {
           PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
         ].includes(action)),
     },
+    {
+      // Issue 3105: a report_blocked result names who decides or a command an agent can run.
+      // The three untyped dead ends are tracked known gaps (slices 5-6 and 9 of issue 3105);
+      // test/loop/gate-no-dead-end.test.mjs owns the full allowlist and walks the input space.
+      name: "blocked-names-decision-or-remedy",
+      check: (result) => result.nextAction !== PR_CHECKPOINT_ACTION.REPORT_BLOCKED
+        || Boolean(result.blockedOn)
+        || Boolean(result.agentRemedy?.command)
+        || /Round N\+1 never runs|^round_cap_reached at|could not map lifecycle state/.test(result.reason),
+    },
   ],
 };
 

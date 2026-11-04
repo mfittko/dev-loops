@@ -82,6 +82,41 @@ export const PR_CHECKPOINT_ACTION = Object.freeze({
   COMPLETE_FIXER_DISPOSITION: COMPLETE_FIXER_DISPOSITION_ACTION,
 });
 
+// Issue 3105: closed enum naming who must decide when a gate result is report_blocked.
+export const BLOCKED_ON = Object.freeze({
+  OPERATOR_DECISION: "operator_decision",
+  HIGH_FINDING_PAST_CAP: "high_finding_past_cap",
+  FAIL_OPEN_FINDING: "fail_open_finding",
+  SECURITY_FINDING: "security_finding",
+  EVIDENCE_INTEGRITY: "evidence_integrity",
+  SPEC_CHANGE: "spec_change",
+  OPERATOR_QUESTION: "operator_question",
+});
+
+// Issue 3105: the command an agent can run to clear a report_blocked CI result.
+function ciAgentRemedy(input, ciStatus) {
+  const pr = input.pr ?? "<pr>";
+  if (ciStatus === "failure") {
+    return { command: `dev-loops loop startup --pr ${pr}`, summary: "Fix the failing required check at the head, push, then re-run gate coordination." };
+  }
+  return {
+    command: `dev-loops-run scripts/github/wait-pr-checks.mjs --repo ${input.repo ?? "<owner/name>"} --pr ${pr} --timeout 600`,
+    summary: "Wait for the head checks to confirm CI, then re-run gate coordination.",
+  };
+}
+
+// Issue 3105: strip the merge-blocking markers (see pr-title-markers.mjs) and name the title edit.
+function titleMarkerAgentRemedy(input) {
+  const title = (input.prTitle ?? "")
+    .replace(/\[\s*(?:WIP|DRAFT)\s*\]|\(\s*(?:WIP|DRAFT)\s*\)|\b(?:WIP|DRAFT)\s*:|DO\s+NOT\s+MERGE|🚧/giu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return {
+    command: `dev-loops-run scripts/github/edit-pr.mjs --repo ${input.repo ?? "<owner/name>"} --pr ${input.pr ?? "<pr>"} --title ${JSON.stringify(title)}`,
+    summary: "Remove the merge-blocking marker from the PR title.",
+  };
+}
+
 function normalizeGateComment(summary = null) {
   if (!summary || typeof summary !== "object") {
     return {
@@ -403,6 +438,7 @@ function buildTitleMarkerBlockedResult({
     allowedNextActions,
     forbiddenActions,
     nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+    agentRemedy: titleMarkerAgentRemedy(input),
     reason: `Blocked: the PR title contains merge-blocking marker(s): ${markers.join(", ")}. Remove them from the title before the PR can leave draft, enter the pre-approval gate, or reach final approval.`,
     mergeStateStatus,
     conflictFiles,
@@ -473,6 +509,8 @@ function buildResult({
   refinementArtifact = null,
   inputRefinementArtifact = null,
   copilotReviewRoundCount = null,
+  blockedOn = null,
+  agentRemedy = null,
 }) {
   const effectiveRefinementArtifact = refinementArtifact ?? inputRefinementArtifact ?? null;
   return {
@@ -496,6 +534,8 @@ function buildResult({
     gateEvidenceRequiredForMerge: true,
     ...(gateEvidenceNote ? { gateEvidenceNote } : {}),
     ...(effectiveRefinementArtifact ? { refinementArtifact: effectiveRefinementArtifact } : {}),
+    ...(blockedOn ? { blockedOn } : {}),
+    ...(agentRemedy ? { agentRemedy } : {}),
   };
 }
 
@@ -1163,6 +1203,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       allowedNextActions,
       forbiddenActions,
       nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+        blockedOn: BLOCKED_ON.OPERATOR_DECISION,
       reason: "The PR is in a blocked lifecycle state, so gate progression must stop for a user decision.",
       mergeStateStatus,
       conflictFiles,
@@ -1350,6 +1391,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+        blockedOn: BLOCKED_ON.OPERATOR_DECISION,
         reason: formatRefinementBlockedReason(refinementLinkedIssue, refinementArtifactStatus, refinementArtifact),
         mergeStateStatus,
         conflictFiles,
@@ -1469,6 +1511,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
           allowedNextActions,
           forbiddenActions,
           nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+        agentRemedy: ciAgentRemedy(input, ciStatus),
           reason: draftGateCarried ? "The draft_gate verdict is carried from an earlier head, and this repo requires green current-head CI before `mark-ready`. The current head is failing CI, so fix the checks before marking ready for review." : "The PR is still draft, and this repo requires green current-head CI before entering `draft_gate`. The current head is failing CI, so fix the checks before retrying the draft gate.",
           mergeStateStatus,
           conflictFiles,
@@ -1595,6 +1638,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
           allowedNextActions,
           forbiddenActions,
           nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+        agentRemedy: ciAgentRemedy(input, ciStatus),
           reason: ciStatus === "crediblyGreen"
             ? "The current head has unconfirmed CI (credibly green), so gate progression remains blocked until CI is confirmed green."
             : "The current head has failing CI, so gate progression remains blocked until the failing checks are fixed and revalidated.",
@@ -1798,6 +1842,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+        agentRemedy: ciAgentRemedy(input, ciStatus),
         reason: ciStatus === "crediblyGreen"
           ? "The current head has unconfirmed CI (credibly green), so gate progression remains blocked until CI is confirmed green."
           : "The current head still has failing CI, so gate progression remains blocked until the failing checks are fixed and revalidated.",
@@ -2334,6 +2379,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+        agentRemedy: ciAgentRemedy(input, ciStatus),
         reason: ciStatus === "crediblyGreen"
           ? "The low-signal heuristic indicates convergence, but the current head has unconfirmed CI (credibly green), so gate progression remains blocked until CI is confirmed green."
           : "The low-signal heuristic indicates convergence, but the current head still has failing CI, so gate progression remains blocked.",
