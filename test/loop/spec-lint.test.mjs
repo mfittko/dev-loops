@@ -447,8 +447,13 @@ const specWith = (row) => [
   "",
 ].join("\n");
 
-test("contract_doc_not_in_matrix: a forecast contract doc must be named in a matrix row", () => {
-  assert.deepEqual(lintContractDocsInMatrix(specWith("`a.mjs` changes.")).map((f) => `${f.kind}:${f.id}`), [`contract_doc_not_in_matrix:${DOC}`]);
+test("contract_doc_not_in_matrix: a forecast contract doc must be named in a matrix row", async () => {
+  const missing = lintContractDocsInMatrix(specWith("`a.mjs` changes."));
+  assert.deepEqual(missing.map((f) => `${f.kind}:${f.id}`), [`contract_doc_not_in_matrix:${DOC}`]);
+  assert.ok(missing[0].detail.reason.includes(DOC));
+  const root = await fixtureRepo();
+  const wired = (await lint({ body: specWith("`a.mjs` changes."), repoRoot: root })).findings.filter((f) => f.kind === "contract_doc_not_in_matrix");
+  assert.deepEqual(wired.map((f) => f.id), [DOC]);
   assert.deepEqual(lintContractDocsInMatrix(specWith(`\`${DOC}\` changes.`)), []);
   assert.deepEqual(lintContractDocsInMatrix("## Size forecast\n\n- forecast: slice=1 wloc=90 files=a.mjs\n"), []);
   const noMatrix = `## Size forecast\n\n- forecast: slice=1 wloc=90 files=${DOC}\n`;
