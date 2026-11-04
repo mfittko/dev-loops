@@ -112,8 +112,30 @@ export async function extendCapRoundChain(options, {
   // ADR 0250: a clean cap round has no fixer pass and no first record: its chain has length zero and the end is the cap-round head.
   const capHeadSha = String(cap?.log?.headSha ?? "").trim().toLowerCase();
   // A sealed clearing chain that already ends at the head leaves no ancestor end. When a record exists at the cap-round head, the cap-head fallback would only hit record_exists: name the runnable exit instead. Without that record the fallback extends at the cap-round head.
-  if (!chainEnd && cleanCap && ends.includes(head) && readGateDeltaRecord(tmpRoot, capHeadSha) !== null) return refuse("chain_reaches_head", `the sealed clearing chain from the cap-round head ends at the PR head ${head.slice(0, 7)}, so no extension can bind to it yet. Push one further docs or tests commit, then rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}; it extends at the chain end and writes nothing now`);
-  if (!chainEnd && cleanCap && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(capHeadSha) && isAncestor(capHeadSha)) chainEnd = capHeadSha;
+  // Only commits that the base does not hold count: a base-only merge brings base commits, not PR logic.
+  // A clean cap round has no fixer pass, so the plain record that cleared cap-round head..E is not a review of those commits: classify from the cap-round head.
+  const classifyRange = async (from) => {
+    const range = [`${from}..${head}`, `^origin/${baseRefName}`];
+    const rules = resolveClassifyRules((await loadDevLoopConfigStrict({ repoRoot })).config);
+    const files = [...new Set(git(repoRoot, ["log", "--no-merges", "--no-renames", "--no-relative", "--ignore-submodules=none", "--name-only", "-z", "--format=", ...range]).split("\0").filter(Boolean))];
+    const logic = files.filter((f) => !["docs", "test"].includes(classifyFile(f, rules)));
+    for (const merge of git(repoRoot, ["rev-list", "--merges", ...range]).split("\n").filter(Boolean)) {
+      const fromHead = git(repoRoot, ["rev-parse", `${merge}^1`]);
+      if (!await isBaseOnlyMergeSince({ fromHead, head: merge, mainRef: `origin/${baseRefName}`, repoRoot })) logic.push(`(merge ${merge.slice(0, 7)} is not a base-only merge)`);
+    }
+    return { files, logic };
+  };
+  const refuseLogic = (from, logic) => refuse("logic_commit_in_range", `GATE-EXEC-ROUND-CAP-CHAIN-EXTEND: commits after ${from.slice(0, 7)} change logic files: ${logic.join(", ")}. Run the fixer plan and the pre-push delta route for them, since no draft_gate round runs past the cap: ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} names the next action. If the baseline is orphaned, restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`);
+  const capHeadValid = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(capHeadSha) && isAncestor(capHeadSha);
+  if (!chainEnd && cleanCap && ends.includes(head) && readGateDeltaRecord(tmpRoot, capHeadSha) !== null) {
+    // Classify cap-round head..HEAD first: a logic commit there makes the pushed-docs remedy below unreachable.
+    if (capHeadValid) {
+      const { logic } = await classifyRange(capHeadSha);
+      if (logic.length > 0) return refuseLogic(capHeadSha, logic);
+    }
+    return refuse("chain_reaches_head", `the sealed clearing chain from the cap-round head ends at the PR head ${head.slice(0, 7)}, so no extension can bind to it yet. Push one further docs or tests commit, then rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}; it extends at the chain end and writes nothing now`);
+  }
+  if (!chainEnd && capHeadValid && cleanCap) chainEnd = capHeadSha;
   if (!chainEnd) {
     // A rebase leaves the cap-round head outside the head's history: no extension can bind, so name the replacement-PR restart.
     // Same probe as resolveCapRoundFixed: only merge-base exit 1 with both commits present proves it; the head itself or an unfetched commit (exit 128) does not.
@@ -124,20 +146,9 @@ export async function extendCapRoundChain(options, {
     return refuse("no_cap_round_chain", `PR #${pr} has no covering sealed cap-round clearing chain ending at an ancestor of ${head.slice(0, 7)}. Complete the cap round's fixer pass and run check-pre-push-delta.mjs --result for the cap-round baseline, or run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} and follow its next action`);
   }
 
-  // Only commits that the base does not hold count: a base-only merge brings base commits, not PR logic.
-  // A clean cap round has no fixer pass, so the plain record that cleared cap-round head..E is not a review of those commits: classify from the cap-round head.
-  const rangeStart = cleanCap && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(capHeadSha) && isAncestor(capHeadSha) ? capHeadSha : chainEnd;
-  const range = [`${rangeStart}..${head}`, `^origin/${baseRefName}`];
-  const rules = resolveClassifyRules((await loadDevLoopConfigStrict({ repoRoot })).config);
-  const files = [...new Set(git(repoRoot, ["log", "--no-merges", "--no-renames", "--no-relative", "--ignore-submodules=none", "--name-only", "-z", "--format=", ...range]).split("\0").filter(Boolean))];
-  const logic = files.filter((f) => !["docs", "test"].includes(classifyFile(f, rules)));
-  for (const merge of git(repoRoot, ["rev-list", "--merges", ...range]).split("\n").filter(Boolean)) {
-    const fromHead = git(repoRoot, ["rev-parse", `${merge}^1`]);
-    if (!await isBaseOnlyMergeSince({ fromHead, head: merge, mainRef: `origin/${baseRefName}`, repoRoot })) logic.push(`(merge ${merge.slice(0, 7)} is not a base-only merge)`);
-  }
-  if (logic.length > 0) {
-    return refuse("logic_commit_in_range", `GATE-EXEC-ROUND-CAP-CHAIN-EXTEND: commits after ${rangeStart.slice(0, 7)} change logic files: ${logic.join(", ")}. Run the fixer plan and the pre-push delta route for them, since no draft_gate round runs past the cap: ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} names the next action. If the baseline is orphaned, restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`);
-  }
+  const rangeStart = cleanCap && capHeadValid ? capHeadSha : chainEnd;
+  const { files, logic } = await classifyRange(rangeStart);
+  if (logic.length > 0) return refuseLogic(rangeStart, logic);
   const recordExists = () => refuse("record_exists", `a delta record for ${chainEnd.slice(0, 7)} already exists and is never overwritten; run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed proof condition`);
   if (readGateDeltaRecord(tmpRoot, chainEnd) !== null) {
     let clearing = false;

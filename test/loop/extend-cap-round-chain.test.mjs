@@ -561,6 +561,22 @@ test("a clean cap round whose plain clearing chain ends at the PR head refuses c
   }
 });
 
+test("a clean cap round whose plain chain reaches the head over a logic commit refuses logic_commit_in_range, not chain_reaches_head", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs d");
+    writeSealedGateDeltaRecord(path.join(root, "tmp"), A, { reviewBaselineHead: A, candidateHead: D, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const result = await extend(root, D);
+    assert.equal(result.reason, "logic_commit_in_range");
+    assert.equal(readSealedGateDeltaRecord(path.join(root, "tmp"), A).extension, undefined);
+    assert.equal(existsSync(gateDeltaRecordPath(path.join(root, "tmp"), D)), false);
+    assert.equal(existsSync(`${gateDeltaRecordPath(path.join(root, "tmp"), D)}.seal`), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a clean cap round with no record at the cap-round head and a base-only-merge chain ending at the head still extends at the cap-round head", async () => {
   const { root, A } = await cleanCapFixture();
   try {
