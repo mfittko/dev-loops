@@ -1104,11 +1104,16 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
 // ponytail: retention runs outside the write lock; the exclusive copy makes a round-number collision fail instead of overwriting, but concurrent same-head writers are otherwise unsupported (move retention under the ledger lock if they ever are).
 async function retainSameHeadLedger(fullPath, logPath) {
   if (!(await access(fullPath).then(() => true, () => false))) return null;
-  try { await readSealed(fullPath); } catch (err) { if (err?.code === OUT_OF_BAND_WRITE) throw err; }
+  try {
+    const live = JSON.parse(await readSealed(fullPath));
+    // An unjudged live ledger is a rewrite inside the same round: it is replaced, not retained.
+    if (Array.isArray(live?.findings) && !live.findings.some((f) => f?.judgeDisposition !== undefined)) return null;
+  } catch (err) { if (err?.code === OUT_OF_BAND_WRITE) throw err; }
   const dir = path.dirname(fullPath);
   const stem = path.basename(fullPath, ".json");
-  const taken = (await readdir(dir)).map((n) => (n.startsWith(`${stem}.round-`) && n.endsWith(".json") ? Number(n.slice(stem.length + 7, -5)) : 0));
-  const next = Math.max(0, ...taken.filter(Number.isInteger)) + 1;
+  const roundOf = (n) => (n.startsWith(`${stem}.round-`) ? /\.round-(\d+)\.json$/.exec(n)?.[1] : undefined);
+  const taken = (await readdir(dir)).map((n) => Number(roundOf(n) ?? 0));
+  const next = Math.max(0, ...taken.filter(Number.isSafeInteger)) + 1;
   await claimRetainedRound(fullPath, path.join(dir, `${stem}.round-${next}.json`));
   return logPath.replace(/\.json$/, `.round-${next}.json`);
 }
