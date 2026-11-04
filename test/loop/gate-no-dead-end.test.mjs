@@ -138,6 +138,7 @@ test("hasRunnableCommand accepts quoted angle brackets and rejects unfilled plac
     "dev-loops-run scripts/github/edit-pr.mjs --repo o/r --pr 7 --title 'map a -> b'",
     "dev-loops-run scripts/github/edit-pr.mjs --repo o/r --pr 7 --title 'support Map<K, V>'",
     "dev-loops loop startup --pr 7",
+    "dev-loops-run scripts/github/edit-pr.mjs --repo o/r --pr 7 --title 'don'\\''t break Array<T>'",
   ];
   const bad = [
     "dev-loops-run scripts/github/wait-pr-checks.mjs --repo <repo> --pr <n> --timeout 600",
