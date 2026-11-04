@@ -283,7 +283,7 @@ const ValidationCommand = z.string().trim().min(1).max(500)
 
 const ChangelogConfig = z.strictObject({
   required: z.boolean().describe("`true` enforces the dev-loops changelog completeness rule (a `changes/<slug>.md` fragment or a `CHANGELOG.md` `## Unreleased` item) before PR creation, in pre-push-delta results and in `test:docs`. Default `false`: the rule is skipped.").optional(),
-}).describe("Changelog completeness opt-in. Only `required: true` enables the check; file presence never does.");
+}).describe("Changelog completeness opt-in. Only `required: true` enables the check; file presence never does. Only the `.devloops` family file is read; the key has no effect in `.pi/dev-loop/defaults.*` or the extension defaults.");
 
 export const ValidationConfig = z
   .strictObject({
@@ -1828,6 +1828,13 @@ function applyParsedLayer(merged, filePath, data, layer, warnings, errors, repoR
     );
     const { primeSharedPrefix: _removed, ...gatesRest } = data.gates;
     data = { ...data, gates: gatesRest };
+  }
+
+  // `changelog` is read only from the `.devloops` family layer (a HEAD-pinned
+  // input under requireHeadInputs); a defaults-layer value is ignored.
+  if (layer !== "devloops" && data?.changelog !== undefined) {
+    const { changelog: _ignored, ...rest } = data;
+    data = rest;
   }
 
   // Validate the file's structure before merging: a schema violation ANYWHERE

@@ -366,6 +366,17 @@ describe("main()", () => {
     }
   });
 
+  it("ignores changelog.required set only in the .pi/dev-loop/defaults layer", async () => {
+    await withTempChangelog(async (root) => {
+      await mkdir(path.join(root, ".pi", "dev-loop"), { recursive: true });
+      await writeFile(path.join(root, ".pi", "dev-loop", "defaults.yaml"), OPT_IN, "utf8");
+      const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" });
+      const log = capturingLog();
+      assert.equal(await main({ root, git, env: {}, log }), 0);
+      assert.deepEqual(log.lines, ["changelog completeness check skipped: changelog.required is not set (LIFECYCLE-CHANGELOG-COMPLETENESS)"]);
+    }, BASE_CHANGELOG, "version: 1\n");
+  });
+
   it("requireHeadInputs reads the opt-in from HEAD, so an uncommitted opt-out does not skip", async () => {
     await withTempChangelog(async (root) => {
       const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {

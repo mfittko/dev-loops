@@ -2073,7 +2073,7 @@
         }
       },
       "additionalProperties": false,
-      "description": "Changelog completeness opt-in. Only `required: true` enables the check; file presence never does."
+      "description": "Changelog completeness opt-in. Only `required: true` enables the check; file presence never does. Only the `.devloops` family file is read; the key has no effect in `.pi/dev-loop/defaults.*` or the extension defaults."
     }
   },
   "required": [

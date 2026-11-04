@@ -94,7 +94,7 @@ async function withTempDir(fn) {
 }
 
 async function writeDevloopsProjectNumber(tempDir, projectNumber) {
-  await writeFile(path.join(tempDir, ".devloops"), `version: 1\ntracker:\n  board:\n    number: ${projectNumber}\nchangelog:\n  required: true\n`, "utf8");
+  await writeFile(path.join(tempDir, ".devloops"), `version: 1\ntracker:\n  board:\n    number: ${projectNumber}\n`, "utf8");
 }
 
 // --- enqueueIssuelessLightweightPr unit tests (AC1, AC3, AC4) ---
@@ -331,7 +331,7 @@ test("create-pr --lightweight with a Closes #N body is tracker-backed and byte-i
     );
 
     assert.equal(result.code, 0);
-    // The validator reads changelog.required from the committed HEAD .devloops; the fixture's is uncommitted, so only the skip notice appears.
+    // The fixture sets no changelog.required, so only the skip notice appears.
     assert.equal(result.stderr, "[create-pr] changelog completeness check skipped: changelog.required is not set (LIFECYCLE-CHANGELOG-COMPLETENESS)\n");
     assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/42\n");
     const ghCalls = (await readFile(ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
