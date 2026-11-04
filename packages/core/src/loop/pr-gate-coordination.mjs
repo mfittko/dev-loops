@@ -1,6 +1,6 @@
 import { DISPOSITION, isCopilotRoundCapReached, STATE } from "./copilot-loop-state.mjs";
 import { CAP_ROUND_FIXED_NEXT_ACTION } from "./review-round-cap.mjs";
-import { findBlockingTitleMarkers } from "./pr-title-markers.mjs";
+import { findBlockingTitleMarkers, stripBlockingTitleMarkers } from "./pr-title-markers.mjs";
 import { evaluateUiE2eScoping } from "./ui-e2e-scoping.mjs";
 import { evaluateUiDesignerReviewScoping } from "./ui-designer-review-scoping.mjs";
 import { trimmedOrNull } from "./normalize.mjs";
@@ -93,28 +93,50 @@ export const BLOCKED_ON = Object.freeze({
   OPERATOR_QUESTION: "operator_question",
 });
 
+// Issue 3105: an agentRemedy needs a real repo and integer PR; otherwise the result names the operator.
+function remedyOrOperator(input, build) {
+  if (typeof input.repo === "string" && input.repo.length > 0 && Number.isInteger(input.pr)) {
+    return { agentRemedy: build(input.repo, input.pr) };
+  }
+  return { blockedOn: BLOCKED_ON.OPERATOR_DECISION };
+}
+
+const shellQuote = (text) => `'${text.replaceAll("'", "'\\''")}'`;
+
 // Issue 3105: the command an agent can run to clear a report_blocked CI result.
 function ciAgentRemedy(input, ciStatus) {
-  const pr = input.pr ?? "<pr>";
-  if (ciStatus === "failure") {
-    return { command: `dev-loops loop startup --pr ${pr}`, summary: "Fix the failing required check at the head, push, then re-run gate coordination." };
-  }
-  return {
-    command: `dev-loops-run scripts/github/wait-pr-checks.mjs --repo ${input.repo ?? "<owner/name>"} --pr ${pr} --timeout 600`,
-    summary: "Wait for the head checks to confirm CI, then re-run gate coordination.",
-  };
+  return remedyOrOperator(input, (repo, pr) => (ciStatus === "failure"
+    ? {
+      command: `dev-loops loop startup --pr ${pr}`,
+      summary: "Fix the failing required check first and push the fix; startup then re-resolves the PR state after the fix push.",
+    }
+    : {
+      command: `dev-loops-run scripts/github/wait-pr-checks.mjs --repo ${repo} --pr ${pr} --timeout 600`,
+      summary: "Wait for the head checks to confirm CI, then re-run gate coordination.",
+    }));
 }
 
 // Issue 3105: strip the merge-blocking markers (see pr-title-markers.mjs) and name the title edit.
 function titleMarkerAgentRemedy(input) {
-  const title = (input.prTitle ?? "")
-    .replace(/\[\s*(?:WIP|DRAFT)\s*\]|\(\s*(?:WIP|DRAFT)\s*\)|\b(?:WIP|DRAFT)\s*:|DO\s+NOT\s+MERGE|🚧/giu, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return {
-    command: `dev-loops-run scripts/github/edit-pr.mjs --repo ${input.repo ?? "<owner/name>"} --pr ${input.pr ?? "<pr>"} --title ${JSON.stringify(title)}`,
+  const title = stripBlockingTitleMarkers(input.prTitle);
+  if (!title || findBlockingTitleMarkers(title).length > 0) {
+    return { blockedOn: BLOCKED_ON.OPERATOR_DECISION };
+  }
+  return remedyOrOperator(input, (repo, pr) => ({
+    command: `dev-loops-run scripts/github/edit-pr.mjs --repo ${repo} --pr ${pr} --title ${shellQuote(title)}`,
     summary: "Remove the merge-blocking marker from the PR title.",
-  };
+  }));
+}
+
+// Issue 3105: type the stuck early-surface stop. An unresolved ref gets a fetch remedy;
+// a non-waivable size block needs the operator.
+function stuckTyping(input, fetchable) {
+  return fetchable
+    ? remedyOrOperator(input, (_repo, pr) => ({
+      command: `git fetch origin && dev-loops loop startup --pr ${pr}`,
+      summary: "Fetch the base and head refs, then re-run startup so the size budget and ADR tripwire re-evaluate.",
+    }))
+    : { blockedOn: BLOCKED_ON.OPERATOR_DECISION };
 }
 
 function normalizeGateComment(summary = null) {
@@ -438,7 +460,7 @@ function buildTitleMarkerBlockedResult({
     allowedNextActions,
     forbiddenActions,
     nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-    agentRemedy: titleMarkerAgentRemedy(input),
+    ...titleMarkerAgentRemedy(input),
     reason: `Blocked: the PR title contains merge-blocking marker(s): ${markers.join(", ")}. Remove them from the title before the PR can leave draft, enter the pre-approval gate, or reach final approval.`,
     mergeStateStatus,
     conflictFiles,
@@ -962,19 +984,24 @@ function applyEarlySurfaceGuard(result, input) {
 
   const decisions = [];
   let stuck = false;
+  let unknownOutcome = false;
+  let operatorStop = false;
   if (adr?.outcome === "block") {
     decisions.push(`ADR tripwire blocks this head: resolve it by choosing exactly one remedy (${ADR_TRIPWIRE_REMEDIES.join("; or ")}).`);
   } else if (adr?.outcome === "unknown") {
     stuck = true;
+    unknownOutcome = true;
     decisions.push("The ADR tripwire outcome is unknown (the base or head ref does not resolve locally); run `git fetch origin` and re-run gate coordination.");
   }
   if (size?.outcome === "block" && size.waivable === true) {
     decisions.push(`The size budget blocks this head (whole-PR logic LOC ${size.wholeLogicLoc}); the operator decides a size-budget waiver (the orchestrator then runs \`pr ready-for-review --waive-size-budget\`) or a split.`);
   } else if (size?.outcome === "block") {
     stuck = true;
+    operatorStop = true;
     decisions.push(`The size budget blocks this head (whole-PR logic LOC ${size.wholeLogicLoc}) and no waiver applies; split the PR.`);
   } else if (size?.outcome === "unknown") {
     stuck = true;
+    unknownOutcome = true;
     decisions.push("The size budget outcome is unknown (the base or head ref does not resolve locally); run `git fetch origin` and re-run gate coordination.");
   }
   if (decisions.length === 0) {
@@ -993,6 +1020,7 @@ function applyEarlySurfaceGuard(result, input) {
     nextAction,
     allowedNextActions: [nextAction],
     forbiddenActions,
+    ...(stuck ? stuckTyping(input, unknownOutcome && !operatorStop) : {}),
     reason: `Clean current-head draft_gate evidence exists, but \`gh pr ready\` is refused (ADR-TRIPWIRE-EARLY-SURFACE): ${decisions.join(" ")}`,
   };
 }
@@ -1203,7 +1231,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       allowedNextActions,
       forbiddenActions,
       nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-        blockedOn: BLOCKED_ON.OPERATOR_DECISION,
+      blockedOn: BLOCKED_ON.OPERATOR_DECISION,
       reason: "The PR is in a blocked lifecycle state, so gate progression must stop for a user decision.",
       mergeStateStatus,
       conflictFiles,
@@ -1511,7 +1539,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
           allowedNextActions,
           forbiddenActions,
           nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-        agentRemedy: ciAgentRemedy(input, ciStatus),
+          ...ciAgentRemedy(input, ciStatus),
           reason: draftGateCarried ? "The draft_gate verdict is carried from an earlier head, and this repo requires green current-head CI before `mark-ready`. The current head is failing CI, so fix the checks before marking ready for review." : "The PR is still draft, and this repo requires green current-head CI before entering `draft_gate`. The current head is failing CI, so fix the checks before retrying the draft gate.",
           mergeStateStatus,
           conflictFiles,
@@ -1638,7 +1666,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
           allowedNextActions,
           forbiddenActions,
           nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-        agentRemedy: ciAgentRemedy(input, ciStatus),
+          ...ciAgentRemedy(input, ciStatus),
           reason: ciStatus === "crediblyGreen"
             ? "The current head has unconfirmed CI (credibly green), so gate progression remains blocked until CI is confirmed green."
             : "The current head has failing CI, so gate progression remains blocked until the failing checks are fixed and revalidated.",
@@ -1842,7 +1870,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-        agentRemedy: ciAgentRemedy(input, ciStatus),
+        ...ciAgentRemedy(input, ciStatus),
         reason: ciStatus === "crediblyGreen"
           ? "The current head has unconfirmed CI (credibly green), so gate progression remains blocked until CI is confirmed green."
           : "The current head still has failing CI, so gate progression remains blocked until the failing checks are fixed and revalidated.",
@@ -2379,7 +2407,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-        agentRemedy: ciAgentRemedy(input, ciStatus),
+        ...ciAgentRemedy(input, ciStatus),
         reason: ciStatus === "crediblyGreen"
           ? "The low-signal heuristic indicates convergence, but the current head has unconfirmed CI (credibly green), so gate progression remains blocked until CI is confirmed green."
           : "The low-signal heuristic indicates convergence, but the current head still has failing CI, so gate progression remains blocked.",

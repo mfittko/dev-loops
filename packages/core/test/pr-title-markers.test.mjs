@@ -151,3 +151,11 @@ test("non-string returns empty array", () => {
 // CASES table's "WIP wip [WIP]" -> ["WIP"] entry above already exercises the
 // same input; findBlockingTitleMarkers's own doc comment states the
 // dedupe-by-construction guarantee instead of a runtime check.
+
+test("stripBlockingTitleMarkers removes detected markers and keeps component names", async () => {
+  const { stripBlockingTitleMarkers } = await import("../src/loop/pr-title-markers.mjs");
+  assert.equal(stripBlockingTitleMarkers("DRAFT"), "");
+  assert.equal(stripBlockingTitleMarkers("[WIP] fix(draft): x"), "fix(draft): x");
+  assert.equal(stripBlockingTitleMarkers("feat/draft: x"), "feat/draft: x");
+  assert.equal(stripBlockingTitleMarkers("WIP: DRAFT: do not merge x 🚧"), "x");
+});

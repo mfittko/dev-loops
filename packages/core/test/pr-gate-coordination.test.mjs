@@ -4713,7 +4713,7 @@ test("title-marker block carries an agentRemedy that edits the title without the
   assert.equal(result.lifecycleState, "title_marker_blocked");
   assert.equal(
     result.agentRemedy.command,
-    'dev-loops-run scripts/github/edit-pr.mjs --repo o/r --pr 842 --title "add authentication flow"',
+    "dev-loops-run scripts/github/edit-pr.mjs --repo o/r --pr 842 --title 'add authentication flow'",
   );
   assert.equal(result.blockedOn, undefined);
 });
@@ -4732,6 +4732,7 @@ test("blocked lifecycle state carries blockedOn operator_decision", () => {
 
 test("failing-CI block carries an agentRemedy that re-runs loop startup", () => {
   const result = evaluatePrGateCoordination({
+    repo: "o/r",
     pr: 266,
     currentHeadSha: "fedcba987654",
     prDraft: false,

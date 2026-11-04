@@ -6,36 +6,13 @@ import {
   evaluatePrGateCoordination,
   PR_CHECKPOINT_ACTION,
 } from "../../packages/core/src/loop/pr-gate-coordination.mjs";
+import { isTypedOrKnownGap, KNOWN_GAPS } from "../../packages/core/src/loop/gate-no-dead-end.mjs";
 import { DISPOSITION, STATE } from "../../packages/core/src/loop/copilot-loop-state.mjs";
 
 // Issue 3105 slice 1: no-dead-end invariant. Every report_blocked result names who decides
 // (`blockedOn`) or the command an agent can run (`agentRemedy.command`), unless it is a listed
 // known gap. The finding-class and override dimensions have no evaluator input yet; slices 2
 // and 8 add them to this walk.
-
-export const isTypedOrKnownGap = (input, result) => result.nextAction !== PR_CHECKPOINT_ACTION.REPORT_BLOCKED
-  || Object.values(BLOCKED_ON).includes(result.blockedOn)
-  || (typeof result.agentRemedy?.command === "string" && result.agentRemedy.command.length > 0)
-  || KNOWN_GAPS.some((gap) => gap.matches(input, result));
-
-// Each entry names the slice that removes it. Remove the entry in that slice.
-const KNOWN_GAPS = [
-  {
-    id: "draft-round-cap-refusal",
-    slice: "5-6",
-    matches: (input, result) => input.draftRoundRefused === true && result.reason.includes("Round N+1 never runs"),
-  },
-  {
-    id: "copilot-cap-ci",
-    slice: "9",
-    matches: (_input, result) => result.reason.startsWith("round_cap_reached at"),
-  },
-  {
-    id: "unmappable-state-default",
-    slice: "9",
-    matches: (_input, result) => result.reason.includes("could not map lifecycle state"),
-  },
-];
 
 const gate = (headSha, verdict) => ({ visible: true, headSha, verdict, contractComplete: true });
 const HEAD = "abc123456789";
@@ -107,4 +84,51 @@ test("the predicate flags a typed result with its remedy stripped", () => {
   assert.ok(isTypedOrKnownGap(input, typed));
   const { agentRemedy: _drop, ...stripped } = typed;
   assert.equal(isTypedOrKnownGap(input, stripped), false);
+});
+
+const titleInput = (prTitle, extra = {}) => ({ pr: 7, repo: "o/r", currentHeadSha: HEAD, prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, prTitle, draftGate: CLEAN, draftGateMarker: CLEAN, ciStatus: "success", maxCopilotRounds: 0, ...extra });
+
+test("early-surface stops are typed across sizeBudget and adrTripwire", () => {
+  const sizes = [null, { outcome: "unknown" }, { outcome: "block", waivable: false }, { outcome: "block", waivable: true }];
+  const adrs = [null, { outcome: "unknown" }];
+  let stuckSeen = 0;
+  for (const sizeBudget of sizes) {
+    for (const adrTripwire of adrs) {
+      for (const ids of [{ pr: 7, repo: "o/r" }, {}]) {
+        const input = {
+          ...ids, currentHeadSha: HEAD, prDraft: true, lifecycleState: STATE.PR_DRAFT_NO_FEEDBACK,
+          draftGate: CLEAN, draftGateMarker: CLEAN, ciStatus: "success", maxCopilotRounds: 0,
+          ...(sizeBudget ? { sizeBudget } : {}), ...(adrTripwire ? { adrTripwire } : {}),
+        };
+        const result = evaluatePrGateCoordination(input);
+        if (result.nextAction !== PR_CHECKPOINT_ACTION.REPORT_BLOCKED) continue;
+        stuckSeen += 1;
+        assert.ok(isTypedOrKnownGap(input, result), JSON.stringify({ sizeBudget, adrTripwire, ids }));
+        if (sizeBudget?.waivable === false) assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
+        else if (ids.pr) assert.match(result.agentRemedy.command, /^git fetch origin && dev-loops loop startup --pr 7$/);
+      }
+    }
+  }
+  assert.ok(stuckSeen > 0);
+});
+
+test("the title remedy single-quotes the title so shell expansions stay inert", () => {
+  const title = "fix: $(touch /tmp/x) `id` it's";
+  const result = evaluatePrGateCoordination(titleInput(`WIP: ${title}`));
+  const command = result.agentRemedy.command;
+  assert.ok(command.endsWith(`--title '${title.replaceAll("'", "'\\''")}'`));
+  assert.equal(command.slice(0, command.indexOf("--title")).includes("$("), false);
+});
+
+test("the title remedy strips markers with the detector's anchors", () => {
+  const cmd = (t) => evaluatePrGateCoordination(titleInput(t)).agentRemedy.command;
+  assert.equal(evaluatePrGateCoordination(titleInput("DRAFT")).blockedOn, BLOCKED_ON.OPERATOR_DECISION);
+  assert.ok(cmd("[WIP] fix(draft): x").endsWith("--title 'fix(draft): x'"));
+  assert.equal(evaluatePrGateCoordination(titleInput("feat/draft: x")).nextAction === PR_CHECKPOINT_ACTION.REPORT_BLOCKED, false);
+});
+
+test("a blocked result without a real repo or integer pr names the operator", () => {
+  const result = evaluatePrGateCoordination(titleInput("WIP: x", { pr: undefined }));
+  assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
+  assert.equal(result.agentRemedy, undefined);
 });

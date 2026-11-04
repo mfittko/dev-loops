@@ -63,13 +63,18 @@
  * marker word (`draft://`, `draft:latest`, `wip:branch`) is read as an
  * unrelated identifier, not a status claim.
  */
+function statusPatterns(word) {
+  return [
+    new RegExp(`(?:^|\\s)\\[\\s*${word}\\s*\\]`, "i"),
+    new RegExp(`(?:^|\\s)\\(\\s*${word}\\s*\\)`, "i"),
+    new RegExp(`(?:^|\\s)${word}\\s*:(?:\\s|$)`, "i"),
+    new RegExp(`^\\s*${word}\\s*$`, "i"),
+  ];
+}
+
 function statusMarkerTester(word) {
-  const bracket = new RegExp(`(?:^|\\s)\\[\\s*${word}\\s*\\]`, "i");
-  const paren = new RegExp(`(?:^|\\s)\\(\\s*${word}\\s*\\)`, "i");
-  const colon = new RegExp(`(?:^|\\s)${word}\\s*:(?:\\s|$)`, "i");
-  const standalone = new RegExp(`^\\s*${word}\\s*$`, "i");
-  return (title) => bracket.test(title) || paren.test(title) || colon.test(title)
-    || standalone.test(title);
+  const patterns = statusPatterns(word);
+  return (title) => patterns.some((re) => re.test(title));
 }
 
 /**
@@ -114,4 +119,27 @@ export function findBlockingTitleMarkers(title) {
     }
   }
   return matched;
+}
+
+/**
+ * Removes every blocking marker {@link findBlockingTitleMarkers} detects, using the same
+ * anchored constructions, so a component name such as `fix(draft): x` is kept.
+ *
+ * @param {unknown} title - The PR title.
+ * @returns {string} The title without markers, whitespace-collapsed and trimmed.
+ */
+export function stripBlockingTitleMarkers(title) {
+  if (typeof title !== "string") {
+    return "";
+  }
+  const patterns = [...statusPatterns("WIP"), ...statusPatterns("DRAFT"), /\bDO\s+NOT\s+MERGE\b/i, /🚧/u]
+    .map((re) => new RegExp(re.source, `${re.flags}g`));
+  let current = title;
+  for (let previous = null; previous !== current;) {
+    previous = current;
+    for (const re of patterns) {
+      current = current.replace(re, " ");
+    }
+  }
+  return current.replace(/\s+/g, " ").trim();
 }
