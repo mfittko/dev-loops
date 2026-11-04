@@ -3209,7 +3209,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
     const gateBlockers = [
       ...collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact),
-      ...(isPastRoundCap(completedRound, cap) ? pastCapBlockers(roundFindings, { pr: Number(options.pr), round: completedRound, cap }) : []),
+      ...(isPastRoundCap(completedRound, cap) ? pastCapBlockers(roundFindings, { round: completedRound, cap }) : []),
     ];
     const composedVerdict = composeCheckpointVerdict({ reviewVerdict: ledgerVerdict, blockers: gateBlockers });
     if (options.verdict === undefined) {

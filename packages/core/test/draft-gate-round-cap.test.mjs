@@ -9,7 +9,7 @@ import { countCompletedRounds } from "../../../scripts/github/write-gate-context
 const act = (severity, extra = {}) => ({ severity, summary: `${severity} act`, judgeDisposition: "act", ...extra });
 const closed = (severity, judgeDisposition, extra = {}) => ({ severity, summary: `${severity} ${judgeDisposition}`, judgeDisposition, ...extra });
 const ctx = { round: 4, cap: 4 };
-const reasons = (findings) => pastCapBlockers(findings, { pr: 9999 }).map((b) => `${b.kind}/${b.reason}`);
+const reasons = (findings) => pastCapBlockers(findings, {}).map((b) => `${b.kind}/${b.reason}`);
 
 describe("draft_gate round cap", () => {
   test("isPastRoundCap: count at or above the cap, never with cap 0", () => {
@@ -20,7 +20,7 @@ describe("draft_gate round cap", () => {
 
   describe("soft cap (GATE-EXEC-SOFT-CAP, ADR 0251)", () => {
     const fix = { judgeFix: "the remedy and the test to add" };
-    const at = (round) => ({ pr: 2944, round, cap: 4 });
+    const at = (round) => ({ round, cap: 4 });
     const blockerReasons = (findings, c) => pastCapBlockers(findings, c).map((b) => b.reason);
     const sd = ["severity_disagreement"];
 
@@ -46,7 +46,7 @@ describe("draft_gate round cap", () => {
       assert.deepEqual(blockerReasons([act("high", { ...fix, resurfaces: "abcd" })], at(5)), ["resurfaced"]);
       assert.deepEqual(pastCapBlockers([act("high", fix)], at(4)), []);
       assert.deepEqual(blockerReasons([act("high", fix)], at(5)), ["new_act"]);
-      assert.deepEqual(blockerReasons([act("high", fix)], { pr: 1, round: 4, cap: 0 }), ["new_act"]);
+      assert.deepEqual(blockerReasons([act("high", fix)], { round: 4, cap: 0 }), ["new_act"]);
     });
 
     test("a question-severity act item blocks, even with judgeFix at the cap round", () => {
@@ -91,8 +91,8 @@ describe("draft_gate round cap", () => {
         ...Array.from({ length: 4 }, () => closed("low", "reject", r)),
         act("medium", { ...fix, resurfaces: "64c4d8f93e0f7ffd" }), act("medium", fix), act("low", fix), act("nit", fix),
       ];
-      assert.deepEqual(pastCapBlockers(ledger, { pr: 2940, round: 4, cap: 4 }), []);
-      assert.deepEqual(pastCapBlockers(ledger, { pr: 2940, round: 5, cap: 4 }), []);
+      assert.deepEqual(pastCapBlockers(ledger, { round: 4, cap: 4 }), []);
+      assert.deepEqual(pastCapBlockers(ledger, { round: 5, cap: 4 }), []);
     });
   });
 

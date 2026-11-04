@@ -1270,7 +1270,7 @@ test("GATE-EXEC-ROUND-CAP: the cap round is refused when the current-head round 
   });
 });
 
-test("GATE-EXEC-ROUND-CAP: the cap round with a string pr (the CLI form) and a targeted medium defer emits; a defer to the PR itself refuses", async () => {
+test("GATE-EXEC-ROUND-CAP: the cap round with a string pr (the CLI form) and a medium defer emits whatever its target; a high defer refuses (GATE-EXEC-SOFT-CAP)", async () => {
   await withFixture(async ({ root, wt, head, files, emit }) => {
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
     const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
@@ -1283,12 +1283,12 @@ test("GATE-EXEC-ROUND-CAP: the cap round with a string pr (the CLI form) and a t
     await current(99);
     assert.equal((await emit({ pr: String(PR), phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
     await current(PR);
-    await assert.rejects(emit({ pr: String(PR), phase: "commit_only", deltaResult: undefined }), (e) => e.refusal === "round_cap_reached");
-    // A medium defer with no target and a high defer refuse; a medium reject with a judgeReason emits.
+    assert.equal((await emit({ pr: String(PR), phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    // A medium defer with no target emits; a high defer and a high reject refuse; a medium reject with a judgeReason emits.
     const closed = (extra) => writeCurrentLog(path.join(root, "tmp"), head, [medium, { severity: "medium", angle: "x", summary: "later", ...extra }]);
     const run = () => emit({ pr: String(PR), phase: "commit_only", deltaResult: undefined });
     await closed({ judgeDisposition: "defer" });
-    await assert.rejects(run(), (e) => e.refusal === "round_cap_reached");
+    assert.equal((await run()).workOrder.source, "act-list");
     await closed({ severity: "high", judgeDisposition: "defer", followUpIssueNumber: 99 });
     await assert.rejects(run(), (e) => e.refusal === "round_cap_reached");
     await closed({ severity: "high", judgeDisposition: "reject", judgeReason: "n/a" });

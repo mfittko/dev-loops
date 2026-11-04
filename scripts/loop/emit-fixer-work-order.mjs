@@ -586,13 +586,13 @@ export async function emitFixerWorkOrder({
     if (cap > 0 && round > cap) {
       throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): act list ${actListFile} belongs to draft_gate round ${round}, after the cap round (cap ${cap}); the verdict is blocked and no fixer order follows it`);
     }
-    // At the cap round the current-head round can still compose blocked (a failOpen finding the judge rejected, a question-severity act item): no fixer order follows a blocked verdict. An unreadable ledger fails closed.
+    // At the cap round the current-head round can still compose blocked (a high act item without a judgeFix, a question act item, a closed finding naming a human decision): no fixer order follows a blocked verdict. An unreadable ledger fails closed.
     if (cap > 0 && round === cap) {
       const repoRoot = resolveRepoRoot(cwd);
       const ledgerFile = path.resolve(repoRoot, buildLogPath({ repo, pr, gate, headSha: capRoundHead, tmpRoot: tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }));
       if (!existsSync(ledgerFile)) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} does not exist; failing closed at the cap round`);
       const { findings: ledgerFindings } = await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): ${m}; failing closed at the cap round`) });
-      const blockers = pastCapBlockers([...ledgerFindings, ...source.parsed], { pr: Number(pr), round, cap }); // Number(pr): the CLI pr is a string; a non-integer yields NaN and fails closed in pastCapBlockers.
+      const blockers = pastCapBlockers([...ledgerFindings, ...source.parsed], { round, cap });
       if (blockers.length > 0) {
         throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the cap round (cap ${cap}) composes blocked (${blockers.map((b) => b.item).join("; ")}); the verdict is blocked and no fixer order follows it`);
       }
