@@ -13,6 +13,7 @@ import {
   verifyEmitPlanProvenance,
   writeGateFindingsLog,
 } from "../../scripts/github/write-gate-findings-log.mjs";
+import { readSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { buildGateArtifactPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { readGateFindingsLedger } from "../../scripts/github/_gate-finding-surface.mjs";
 import { toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
@@ -312,6 +313,30 @@ test("writeGateFindingsLog accepts a valid 16-hex fingerprint", async () => {
     });
     const written = JSON.parse(await readFile(result.path, "utf8"));
     assert.equal(written.findings[0].fingerprint, "0123456789abcdef");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog retains the prior same-head round at a numbered sibling", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-retain-"));
+  try {
+    const write = (summary) => writeGateFindingsLog({
+      repo: "a/b", pr: 1, gate: "draft_gate", headSha: "abc1234500000000000000000000000000000000",
+      verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "low", angle: "scope", summary }]),
+      tmpRoot: dir,
+    });
+    const first = await write("one");
+    assert.equal(first.retainedRound, undefined);
+    const second = await write("two");
+    assert.equal(second.retainedRound, first.path.replace(/\.json$/, ".round-1.json"));
+    const third = await write("three");
+    assert.equal(third.retainedRound, first.path.replace(/\.json$/, ".round-2.json"));
+    const round1 = await readSealed(second.retainedRound);
+    assert.equal(JSON.parse(round1).findings[0].summary, "one");
+    assert.equal(JSON.parse(await readSealed(third.retainedRound)).findings[0].summary, "two");
+    assert.equal(JSON.parse(await readFile(third.path, "utf8")).findings[0].summary, "three");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

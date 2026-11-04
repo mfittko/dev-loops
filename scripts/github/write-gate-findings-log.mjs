@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "./_gate-artifact-seal.mjs";
 import path from "node:path";
 import { verifyZeroUnitCarryProvenance } from "./_carried-angles.mjs";
@@ -1088,10 +1088,26 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // helper. Pure no-op (byte-identical log) when the flag is absent.
   const stampedLog = stampOptionalSpecAuthority(log, specAuthorityIdentity);
   await mkdir(path.dirname(fullPath), { recursive: true });
+  const retainedRound = await retainSameHeadLedger(fullPath, logPath);
   await writeSealed(fullPath, JSON.stringify(stampedLog, null, 2) + "\n");
-  return angleCoverage.warning
-    ? { ok: true, path: logPath, log: stampedLog, warning: angleCoverage.warning }
-    : { ok: true, path: logPath, log: stampedLog };
+  return {
+    ok: true, path: logPath, log: stampedLog,
+    ...(retainedRound ? { retainedRound } : {}),
+    ...(angleCoverage.warning ? { warning: angleCoverage.warning } : {}),
+  };
+}
+// A second write at the same head must not destroy the prior round: rename it (and its seal)
+// to the next free `<gate>-<sha>.round-<n>.json` sibling. Returns the retained path, or null.
+async function retainSameHeadLedger(fullPath, logPath) {
+  if (!(await access(fullPath).then(() => true, () => false))) return null;
+  const dir = path.dirname(fullPath);
+  const stem = path.basename(fullPath, ".json");
+  const taken = (await readdir(dir)).map((n) => (n.startsWith(`${stem}.round-`) && n.endsWith(".json") ? Number(n.slice(stem.length + 7, -5)) : 0));
+  const next = Math.max(0, ...taken.filter(Number.isInteger)) + 1;
+  const retained = path.join(dir, `${stem}.round-${next}.json`);
+  await rename(fullPath, retained);
+  await rename(`${fullPath}.seal`, `${retained}.seal`).catch((err) => { if (err?.code !== "ENOENT") throw err; });
+  return logPath.replace(/\.json$/, `.round-${next}.json`);
 }
 async function main() {
   let options;

@@ -8660,6 +8660,26 @@ test("countCompletedRounds counts an in-range identity-matching ledger with a mi
   }
 });
 
+test("readClosedPriorRoundLogs and countCompletedRounds treat a retained same-head round as closed at the current head", async () => {
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-retained-"));
+  try {
+    const dir = path.join(tmpRoot, "gate-findings", "owner-repo", "pr-5");
+    await mkdir(dir, { recursive: true });
+    const head = "5".repeat(40);
+    const options = { repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: head, tmpRoot };
+    const ledger = (extra) => JSON.stringify({ repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: "2026-10-27T00:00:00.000Z", ...extra });
+    await writeFile(path.join(dir, `draft_gate-${head}.json`), ledger({}), "utf8");
+    const before = await countCompletedRounds(options, { repoRoot: tmpRoot });
+    await writeFile(path.join(dir, `draft_gate-${head}.round-1.json`), ledger({}), "utf8");
+    assert.equal(await countCompletedRounds(options, { repoRoot: tmpRoot }), before + 1);
+    assert.equal((await readClosedPriorRoundLogs(options, { repoRoot: tmpRoot })).length, 1);
+    await writeFile(path.join(dir, `draft_gate-${head}.round-2.json`), ledger({ repo: "other/repo" }), "utf8");
+    assert.equal((await readClosedPriorRoundLogs(options, { repoRoot: tmpRoot })).length, 1, "identity mismatch dropped");
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 test("countCompletedRounds skips closed ledgers logged before DRAFT_ROUND_CAP_EFFECTIVE_AT, counts a missing or unparseable loggedAt", async () => {
   const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-round-landing-"));
   try {

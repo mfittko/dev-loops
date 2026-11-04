@@ -1484,10 +1484,10 @@ async function listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, rep
   return { dir, filenames: entries.filter((name) => name.startsWith(prefix) && name.endsWith(".json")).sort() };
 }
 
-// A findings log is exactly `<gate>-<full sha>.json`. Sidecars (`.act-list.json`, `.judged-ledger.json`, ...)
+// A findings log is `<gate>-<full sha>.json` or a retained same-head round `<gate>-<full sha>.round-<n>.json`. Sidecars (`.act-list.json`, `.judged-ledger.json`, ...)
 // share the prefix and suffix and never count as a round.
 export function isFindingsLogName(gate, name) {
-  return name.startsWith(`${gate}-`) && /^(?:[0-9a-f]{40}|[0-9a-f]{64})\.json$/i.test(name.slice(gate.length + 1));
+  return name.startsWith(`${gate}-`) && /^(?:[0-9a-f]{40}|[0-9a-f]{64})(?:\.round-\d+)?\.json$/i.test(name.slice(gate.length + 1));
 }
 
 async function countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot }) {

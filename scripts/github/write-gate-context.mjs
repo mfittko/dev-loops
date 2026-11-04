@@ -1863,6 +1863,9 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
  * still wins. Ordered oldest round first by the ledger's `loggedAt` (ties
  * by SHA) for {@link resolvePriorDispositions}'s latest-wins fold.
  *
+ * A retained same-head round (`<gate>-<sha>.round-<n>.json`, kept when a head is
+ * re-written) is a closed round at ANY head, including the current one.
+ *
  * Filename SHAs match case-insensitively. FAIL OPEN on a path-resolution
  * error (no prior rounds). Per ledger: an unparseable or non-object file is
  * dropped and reported through `onUnreadable`. FAIL CLOSED on identity: a ledger whose recorded headSha differs
@@ -1896,8 +1899,9 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
   const rounds = [];
   for (const name of names) {
     if (!name.startsWith(namePrefix) || !name.endsWith(".json")) continue;
-    const sha = name.slice(namePrefix.length, -".json".length).toLowerCase();
-    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha) || sha.startsWith(head) || head.startsWith(sha)) continue;
+    const retained = /\.round-\d+\.json$/.test(name);
+    const sha = name.slice(namePrefix.length, -".json".length).replace(/\.round-\d+$/, "").toLowerCase();
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha) || (!retained && (sha.startsWith(head) || head.startsWith(sha)))) continue;
     let log;
     try {
       log = JSON.parse(await readSealed(path.join(ledgerDir, name)));
