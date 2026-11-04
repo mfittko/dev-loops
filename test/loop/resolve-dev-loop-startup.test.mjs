@@ -132,6 +132,7 @@ test("parseResolveDevLoopStartupCliArgs parses --input and --help", () => {
     lightweight: false,
     uiReview: false,
     review: false,
+    claim: false,
     reconcile: true,
   });
   assert.equal(parseResolveDevLoopStartupCliArgs(["--pr", "7", "--no-reconcile"]).reconcile, false);
@@ -151,6 +152,7 @@ test("parseResolveDevLoopStartupCliArgs parses --input and --help", () => {
     lightweight: false,
     uiReview: false,
     review: false,
+    claim: false,
     reconcile: true,
   });
 });
@@ -225,6 +227,21 @@ test("parseResolveDevLoopStartupCliArgs rejects --review combined with --issue/-
       /--review is only valid with --pr/i,
       `expected rejection for ${JSON.stringify(args)}`,
     );
+  }
+});
+
+test("parseResolveDevLoopStartupCliArgs accepts --claim with --issue or --pr and rejects it elsewhere", () => {
+  assert.equal(parseResolveDevLoopStartupCliArgs(["--pr", "7", "--claim"]).claim, true);
+  assert.equal(parseResolveDevLoopStartupCliArgs(["--issue", "7", "--claim"]).claim, true);
+  for (const args of [
+    ["--claim"],
+    ["--pr", "7", "--review", "--claim"],
+    ["--pr", "7", "--ui-review", "--claim"],
+    ["--input", "state.json", "--claim"],
+    ["--plan-file", "p.md", "--claim"],
+    ["--spike", "s.md", "--claim"],
+  ]) {
+    assert.throws(() => parseResolveDevLoopStartupCliArgs(args), /--claim is only valid/, JSON.stringify(args));
   }
 });
 
@@ -1652,7 +1669,7 @@ test("--issue unassigned fails closed naming the exact claim command (no readine
     assert.equal(result.stdout, "");
     assert.match(
       result.stderr,
-      /Issue #511 is not claimed by any contributor.*Claim it first: node scripts\/github\/edit-issue\.mjs --repo mfittko\/dev-loops --issue 511 --add-assignee @me/s,
+      /Issue #511 is not claimed by any contributor.*re-run the same command with --claim.*dev-loops-run scripts\/github\/edit-issue\.mjs --repo mfittko\/dev-loops --issue 511 --add-assignee @me/s,
     );
     assert.doesNotMatch(result.stderr, /--review/);
   }, { prefix: "resolve-dev-loop-ownership-issue-unassigned-" });
@@ -1756,6 +1773,62 @@ test("--pr assigned_to_other fails closed naming the foreign assignee", async ()
   }, { prefix: "resolve-dev-loop-ownership-pr-other-" });
 });
 
+test("--issue --claim on an unassigned issue claims once and proceeds", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
+      { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [] }) },
+      { assertArgs: ["issue", "edit", "511", "--repo", "mfittko/dev-loops", "--add-assignee", "@me"], stdout: "" },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--issue", "511", "--claim"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).ok, true);
+  }, { prefix: "resolve-dev-loop-claim-issue-" });
+});
+
+test("--pr --claim on an unassigned PR claims once and proceeds", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
+      },
+      { assertArgs: ["pr", "edit", "740", "--repo", "mfittko/dev-loops", "--add-assignee", "@me"], stdout: "" },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740", "--claim"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).ok, true);
+  }, { prefix: "resolve-dev-loop-claim-pr-" });
+});
+
+test("--pr --claim on a foreign-assigned PR still refuses and performs no write", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "foreign-dev" }], closingIssuesReferences: [], body: "" }),
+      },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740", "--claim"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
+    });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /PR #740 is assigned to foreign-dev/);
+  }, { prefix: "resolve-dev-loop-claim-pr-other-" });
+});
+
 test("--pr unassigned fails closed naming the exact claim command", async () => {
   await withTempDir(async (tempDir) => {
     await initRepoWithOrigin(tempDir);
@@ -1773,7 +1846,7 @@ test("--pr unassigned fails closed naming the exact claim command", async () => 
     assert.equal(result.stdout, "");
     assert.match(
       result.stderr,
-      /PR #740 is not claimed by any contributor.*Claim it first: node scripts\/github\/edit-pr\.mjs --repo mfittko\/dev-loops --pr 740 --add-assignee @me/s,
+      /PR #740 is not claimed by any contributor.*re-run the same command with --claim.*dev-loops-run scripts\/github\/edit-pr\.mjs --repo mfittko\/dev-loops --pr 740 --add-assignee @me/s,
     );
     assert.match(result.stderr, /read-only review that needs no ownership.*dev-loops loop startup --pr 740 --review/s);
   }, { prefix: "resolve-dev-loop-ownership-pr-unassigned-" });

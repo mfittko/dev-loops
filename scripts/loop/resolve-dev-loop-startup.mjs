@@ -81,6 +81,11 @@ Required (exactly one):
   --plan-file <path>  Path to a phase-doc-format plan to start locally
   --spike <path>  Path to a spike artifact to start a spike loop locally
 Optional modifier:
+  --claim        With --issue <n> or --pr <n> only: if the target is unassigned,
+                 assign the current user (the only write), then start. Pass it
+                 only when the user explicitly asked to start or continue that
+                 exact target. Rejected with --review/--ui-review/--input/
+                 --plan-file/--spike and with no target.
   --review       With --pr only: route the PR to the read-only review strategy
                  instead of the default continue_on_pr path. Requires no
                  ownership. Rejected without --pr, or combined with --issue/
@@ -243,6 +248,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
     lightweight: false,
     uiReview: false,
     review: false,
+    claim: false,
     reconcile: true,
   };
   const { tokens } = parseArgs({
@@ -257,6 +263,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
       lightweight: { type: "boolean" },
       "ui-review": { type: "boolean" },
       review: { type: "boolean" },
+      claim: { type: "boolean" },
       "no-reconcile": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -307,6 +314,10 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
       options.review = true;
       continue;
     }
+    if (token.name === "claim") {
+      options.claim = true;
+      continue;
+    }
     // Read-only callers (the inspect viewer's envelope preview) must not trigger
     // the board self-heal: it is a WRITE path, and its in-flight `gh` fan-out
     // keeps the process alive long after the bundle is on stdout.
@@ -332,6 +343,11 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
   // valid only for an explicitly selected PR target.
   if (options.review && options.pr === undefined) {
     throw parseError("--review is only valid with --pr <n> (rejected with --issue, --input, --plan-file, --spike, or with no --pr).");
+  }
+  // --claim is the one assignee write; valid only for an explicit --issue/--pr
+  // target and never with the read-only review routes.
+  if (options.claim && (options.issue === undefined && options.pr === undefined || options.review || options.uiReview)) {
+    throw parseError("--claim is only valid with --issue <n> or --pr <n> (rejected with --review, --ui-review, --input, --plan-file, --spike, or with no target).");
   }
   if (options.review && options.uiReview) {
     throw parseError("--review and --ui-review are mutually exclusive selectors; provide only one.");
@@ -729,15 +745,24 @@ function resolveOwnershipState(assignees, cwd, env) {
 // requires assigned_to_me and fails closed on anything else. assigned_to_other
 // names the foreign assignee(s); unassigned names the exact claim command so
 // the caller can self-heal (claim, then re-run) instead of guessing.
-function enforceOwnershipGate(ownership, { describeArtifact, claimCommand, reviewRouteHint = "" }) {
+function enforceOwnershipGate(ownership, { describeArtifact, claimCommand, claimArgs, claim, cwd, env, reviewRouteHint = "" }) {
   if (ownership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
     throw new Error(
       `${describeArtifact} is assigned to ${ownership.foreignLogins.join(", ")}, not the current viewer; fail closed — do not start. Have the owner unassign it, or pick a different item.${reviewRouteHint}`,
     );
   }
   if (ownership.state === OWNERSHIP_STATE.UNASSIGNED) {
+    if (claim) {
+      // The only write: add the viewer as assignee, then continue as owner.
+      try {
+        execFileSync("gh", claimArgs, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GH_CALL_TIMEOUT_MS });
+      } catch (err) {
+        throw new Error(`${describeArtifact} could not be claimed (${err instanceof Error ? err.message : String(err)}); fail closed — do not start.`);
+      }
+      return;
+    }
     throw new Error(
-      `${describeArtifact} is not claimed by any contributor; fail closed — do not start. Claim it first: ${claimCommand}${reviewRouteHint}`,
+      `${describeArtifact} is not claimed by any contributor; fail closed — do not start. If the user explicitly asked to start or continue this target, re-run the same command with --claim, or claim it first: ${claimCommand}${reviewRouteHint}`,
     );
   }
 }
@@ -816,7 +841,7 @@ export function buildDraftStart({ repo, pr }) {
     nextAction: `PR #${pr} is an existing draft: a valid start target. Run the draft-start pre-flight \`${preflight}\` and follow its nextAction (\`run_draft_gate\` enters draft_gate while the PR stays draft; \`report_blocked\` reports the spec precondition and stops). The Copilot handoff's \`pr_draft\` stop belongs to the Copilot-only follow-up path and is not an abort here. Do not mark ready or request Copilot review until a clean current-head draft_gate verdict exists.`,
   };
 }
-export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, inputSource, uiReview = false, review = false, env = process.env }) {
+export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, inputSource, uiReview = false, review = false, claim = false, env = process.env }) {
   // The viewer-login memo exists to dedupe gh calls WITHIN one resolution
   // (PR + linked-issue checks); reset it per invocation so a long-lived
   // process (or test) never reuses a stale login across resolutions.
@@ -966,7 +991,11 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
         // not suggest the review selector.
         enforceOwnershipGate(resolveOwnershipState(assignees, repoRoot, env), {
           describeArtifact: `Issue #${issue}`,
-          claimCommand: `node scripts/github/edit-issue.mjs --repo ${repo} --issue ${issue} --add-assignee @me`,
+          claimCommand: `dev-loops-run scripts/github/edit-issue.mjs --repo ${repo} --issue ${issue} --add-assignee @me`,
+          claimArgs: ["issue", "edit", String(issue), "--repo", repo, "--add-assignee", "@me"],
+          claim,
+          cwd: repoRoot,
+          env,
         });
       }
     }
@@ -1032,7 +1061,11 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       const reviewRouteHint = ` For a read-only review that needs no ownership, use: dev-loops loop startup --pr ${pr} --review`;
       enforceOwnershipGate(prOwnership, {
         describeArtifact: `PR #${pr}`,
-        claimCommand: `node scripts/github/edit-pr.mjs --repo ${repo} --pr ${pr} --add-assignee @me`,
+        claimCommand: `dev-loops-run scripts/github/edit-pr.mjs --repo ${repo} --pr ${pr} --add-assignee @me`,
+        claimArgs: ["pr", "edit", String(pr), "--repo", repo, "--add-assignee", "@me"],
+        claim,
+        cwd: repoRoot,
+        env,
         reviewRouteHint,
       });
       // A PR whose linked issue is foreign-owned is foreign too — the issue
@@ -1561,6 +1594,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       cwd: sessionCwd,
       targetPreference,
       inputSource,
+      claim: options.claim,
       env: adapter.getEnv(),
     });
     // --lightweight modifier: the PR body becomes the spec-of-record for
@@ -1578,6 +1612,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       targetPreference,
       uiReview: options.uiReview,
       review: options.review,
+      claim: options.claim,
       env: adapter.getEnv(),
     });
   }
