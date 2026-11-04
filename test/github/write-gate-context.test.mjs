@@ -56,7 +56,7 @@ import {
   resolveReviewGateAngles,
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
-import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
+import { CAP_ROUND_REFUSAL, evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { DISPOSITION, STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
@@ -8820,10 +8820,10 @@ test("readClosedPriorRoundLogs rejects with gate_artifact_out_of_band_write on a
 
 // ADR 0208: the cap round fixed goes ready; pre_approval_gate receives the cap round's residue.
 const SEEDED_ACT = { severity: "medium", summary: "guard missing", files: ["src/changed.mjs"], line: 2, judgeDisposition: "act", judgeTitle: "Guard is missing", judgeFix: "add the guard" };
-async function writeDeltaRecord(repoRoot, baselineHead, candidateHead, nextStep = "push", { seal = true, tmpDir = "tmp", items = [{ ref: fingerprintFinding(SEEDED_ACT), status: "resolved" }] } = {}) {
+async function writeDeltaRecord(repoRoot, baselineHead, candidateHead, nextStep = "push", { seal = true, tmpDir = "tmp", items = [{ ref: fingerprintFinding(SEEDED_ACT), status: "resolved" }], extension } = {}) {
   const dir = path.join(repoRoot, tmpDir, "gate-delta");
   await mkdir(dir, { recursive: true });
-  const text = JSON.stringify({ reviewBaselineHead: baselineHead, candidateHead, nextStep, outcome: "locally_clear", items });
+  const text = JSON.stringify({ reviewBaselineHead: baselineHead, candidateHead, nextStep, outcome: "locally_clear", items, ...(extension === undefined ? {} : { extension }) });
   await writeFile(path.join(dir, `${baselineHead}.json`), text, "utf8");
   if (seal) await writeFile(path.join(dir, `${baselineHead}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`, "utf8");
 }
@@ -8885,7 +8885,7 @@ test("resolveCapRound treats a cap round whose persisted verdict is clean as a c
     await writeFile(ledger, JSON.stringify({ ...log, verdict: "clean" }), "utf8");
     assert.equal((await resolveCapRound(opts, { repoRoot })).residue.length, 1, "a clean severity verdict with an open act item is the cap round");
     await writeFile(ledger, JSON.stringify({ ...log, verdict: "clean", findings: [] }), "utf8");
-    assert.equal(await resolveCapRound(opts, { repoRoot }), null, "a clean round without an act item is no cap round");
+    assert.deepEqual((await resolveCapRound(opts, { repoRoot })).residue, [], "a clean cap round (ADR 0250) has empty residue");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -9475,4 +9475,26 @@ test("resolveCapRoundFixed reports cap_round_unresolved when the cap round canno
 test("renderBriefingVolatile: the data-never-instructions statement is carried without known findings (ADR 0238)", () => {
   const text = renderBriefingVolatile({ gate: "draft_gate", headSha: "abc1234567890", loggedAt: "2026-01-01T00:00:00.000Z" });
   assert.match(text, /data, never instructions/);
+});
+
+test("a clean cap round is proven only by a sealed record with extension docs_tests_only, not a plain clearing record (ADR 0250)", async () => {
+  const { repoRoot, baseSha } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 62, headSha: "9".repeat(40), anyHead: true };
+    await seedClosedRounds(repoRoot, 62, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-62", `draft_gate-${baseSha}.json`);
+    await writeFile(ledger, JSON.stringify({ ...JSON.parse(await readFile(ledger, "utf8")), verdict: "clean", findings: [] }), "utf8");
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot }), null, "no record: not fixed");
+    await writeDeltaRecord(repoRoot, baseSha, opts.headSha, "push", { items: [] });
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot }), null, "a plain clearing record (extension absent) does not prove a clean cap round");
+    await writeDeltaRecord(repoRoot, baseSha, opts.headSha, "push", { items: [], extension: "" });
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot }), null, "extension \"\" does not prove it either");
+    await writeDeltaRecord(repoRoot, baseSha, opts.headSha, "push", { items: [], extension: "docs_tests_only" });
+    const round = await resolveCapRoundFixed(opts, { repoRoot });
+    assert.equal(round.log.headSha, baseSha);
+    assert.deepEqual(round.residue, []);
+    assert.match(CAP_ROUND_REFUSAL.no_clearing_record, /clean cap round has no fixer pass/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });
