@@ -1242,6 +1242,21 @@ test("GATE-EXEC-ROUND-CAP: a medium act list reaches the fixer below and at the 
   });
 });
 
+for (const [severity, refuses] of [["critical", false], ["HIGH", false], ["medium", false], ["low", "low_fix_until_cap"], ["", true]]) test(`GATE-EXEC-SOFT-CAP: a cap-round act item with severity ${JSON.stringify(severity)} ${refuses === true ? "is refused as malformed" : refuses ? "passes the matcher and is refused by " + refuses : "emits a fixer order"}`, async () => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+    const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
+    await mkdir(dir, { recursive: true });
+    const log = (sha) => writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha, verdict: "findings_present", findings: [] }));
+    await log("d".repeat(40));
+    await log(head);
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity, judgeFix: "guard the deref" })]));
+    if (typeof refuses === "string") await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), (e) => e.refusal === refuses);
+    else if (refuses) await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), /not a non-empty judge-pass --out array/);
+    else assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+  });
+});
+
 test("GATE-EXEC-ROUND-CAP: the cap round is refused when the current-head round composes a blocker (round_cap_reached)", async () => {
   await withFixture(async ({ root, wt, head, files, emit }) => {
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
@@ -1485,7 +1500,7 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
     await assert.rejects(emit({ threadsFile: files.threads }), /exactly one of/);
     await assert.rejects(emit({ gate: undefined }), /needs --gate/);
     await assert.rejects(emit({ actListFile: files.threads }), /not a non-empty judge-pass --out array/);
-    for (const bad of [[], [{ title: "please refactor the parser", body: "prose" }], [{ ...ACT[0], judgeDisposition: "defer" }], [{ ...ACT[0], severity: "critical" }], [{ ...ACT[0], summary: " " }]]) {
+    for (const bad of [[], [{ title: "please refactor the parser", body: "prose" }], [{ ...ACT[0], judgeDisposition: "defer" }], [{ ...ACT[0], severity: " " }], [{ ...ACT[0], summary: " " }]]) {
       await writeFile(files.actList, JSON.stringify(bad));
       await assert.rejects(emit(), /not a non-empty judge-pass --out array/, JSON.stringify(bad));
     }

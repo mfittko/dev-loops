@@ -1,3 +1,3 @@
 ### Changed
 
-- Past the draft round cap, only a high finding, a deferred fail-open finding or unreadable evidence blocks; medium and low findings reach the fixer (#3105)
+- At the draft cap round only an unfixable high, a question item, a deferred fail-open finding or unreadable evidence blocks; other findings reach the fixer (#3105)

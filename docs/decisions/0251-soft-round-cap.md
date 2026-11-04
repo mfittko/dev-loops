@@ -13,14 +13,14 @@ Amends [ADR 0208](./0208-draft-cap-round-fixed-goes-ready.md), [ADR 0224](./0224
 ## Decision
 
 1. The cap is soft and applies before `pre_approval_gate`. Rounds 1 through N run in full.
-2. At round N and later, a `round_cap_reached` blocker exists only for a named human decision:
-   - a `high` act item without a non-blank string `judgeFix`, or a `high` the judge defers or rejects;
+2. A `round_cap_reached` blocker exists only for a named human decision. This slice ships the cap-round part (round N). A round after the cap round stays refused under `GATE-EXEC-ROUND-CAP` until a later slice of issue 3105 opens the past-cap path:
+   - a `high` act item without a non-blank string `judgeFix` (at the cap round a `high` act item with a non-blank `judgeFix` goes to the fixer), or a `high` the judge defers or rejects;
    - a `failOpen` finding the judge defers or rejects;
    - a `question`-severity act item;
    - a closed finding with an unknown severity or no valid disposition (evidence integrity, reason `severity_disagreement`).
 3. Security and spec-change blocks ride on severity `high` and the spec digest check. This slice adds no finding field.
-4. A `medium`, `low`, `nit` or unknown-severity act item and a `medium` `defer` or `reject` never block. They reach the fixer and the pre-push delta review.
-5. A `failOpen` finding blocks only when the judge defers or rejects it. A `failOpen` act item goes to the fixer.
+4. A `medium`, `low`, `nit` or unknown-severity act item and a `medium` without `failOpen` that the judge defers or rejects never block. They reach the fixer and the pre-push delta review.
+5. A `failOpen` finding blocks when the judge defers or rejects it. A non-`high` `failOpen` act item goes to the fixer.
 6. A draft-gate `low` act item at the cap round is fixed, not deferred. The `pre_approval_gate` low deferral is unchanged. That behavior change ships in a later slice of issue 3105 and this record states the decision.
 
 The override command, the effective cap, the Copilot-loop cap and the no-dead-end rule are scoped by issue 3105 and follow in later slices.

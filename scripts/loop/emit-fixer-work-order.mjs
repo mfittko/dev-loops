@@ -542,7 +542,7 @@ export async function emitFixerWorkOrder({
     if (ci.headSha !== headSha) throw new Refusal(`ci file ${ciFile} is for headSha ${JSON.stringify(ci.headSha)}, not --head-sha ${headSha}; ${next}`);
     if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name.trim() !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`);
   }
-  const isActItem = (f) => f?.judgeDisposition === "act" && VALID_SEVERITIES.has(f.severity) && typeof f.summary === "string" && f.summary.trim() !== "";
+  const isActItem = (f) => f?.judgeDisposition === "act" && typeof f.severity === "string" && f.severity.trim() !== "" && typeof f.summary === "string" && f.summary.trim() !== "";
   if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
     throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
   }
@@ -582,7 +582,7 @@ export async function emitFixerWorkOrder({
         }
       } catch { /* an unreadable cap-round head or base fails closed: the round_cap_reached refusal below stands */ }
     }
-    // GATE-EXEC-ROUND-CAP: a round after the cap round composes blocked on any act item (a blocked ledger does not count, so a further round is again cap+1); no fixer order follows it.
+    // GATE-EXEC-ROUND-CAP: a round after the cap round is refused (a blocked ledger does not count, so a further round is again cap+1) and gets no fixer order, until a later slice of issue 3105 opens the past-cap path.
     if (cap > 0 && round > cap) {
       throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): act list ${actListFile} belongs to draft_gate round ${round}, after the cap round (cap ${cap}); the verdict is blocked and no fixer order follows it`);
     }
