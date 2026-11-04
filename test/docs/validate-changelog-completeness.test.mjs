@@ -381,6 +381,22 @@ describe("main()", () => {
     }, BASE_CHANGELOG, "version: 1\n");
   });
 
+  it("requireHeadInputs honors an opt-in committed only as .devloops.yaml", async () => {
+    await withTempChangelog(async (root) => {
+      const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+        logSubjects: async () => ["feat: x"],
+        diffNameOnly: async () => ["packages/core/src/x.mjs"],
+        assertHeadInputs: async () => new Map([["CHANGELOG.md", BASE_CHANGELOG]]),
+        pathExistsIn: async (ref, file) => (ref === "HEAD" ? file === ".devloops.yaml" : true),
+        show: async (spec) => (spec === "HEAD:.devloops.yaml" ? OPT_IN : BASE_CHANGELOG),
+      });
+      const log = capturingLog();
+      const code = await main({ root, git, env: {}, log, requireHeadInputs: true });
+      assert.notEqual(code, 0, "HEAD .devloops.yaml opts in and records no changelog note");
+      assert.ok(!log.lines.some((l) => /check skipped/.test(l)));
+    }, BASE_CHANGELOG, "version: 1\n");
+  });
+
   it("fails config load for a malformed changelog setting and never enables the check", async () => {
     for (const devloops of ["version: 1\nchangelog:\n  required: \"yes\"\n", "version: 1\nchangelog:\n  require: true\n"]) {
       await withTempChangelog(async (root) => {

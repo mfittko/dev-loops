@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { createGitClient as createDocGitClient, resolveBaseRef } from "./_doc-git-client.mjs";
+import { DEVLOOPS_CONFIG_PATHS } from "../loop/check-adr-tripwire.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { loadDevLoopConfigStrict, resolveClassifyRules } from "@dev-loops/core/config";
 import {
@@ -231,12 +232,21 @@ export function createGitClient(root, exec = promisify(execFile)) {
 export async function main({ root, base: explicitBase, env = process.env, log = console, git = createGitClient(root), requireHeadInputs = false } = {}) {
   // Opt-in: the rule applies only when the repo sets `changelog.required: true`.
   // A malformed value fails config load here and never enables the check.
-  // With requireHeadInputs the switch comes from the committed HEAD `.devloops`,
+  // With requireHeadInputs the switch comes from the committed HEAD `.devloops*` config file,
   // the same snapshot assertHeadInputs validates, so an uncommitted edit cannot
   // turn enforcement off for a head that opts in.
-  const devloopsOverride = requireHeadInputs
-    ? { raw: (await git.pathExistsIn("HEAD", ".devloops")) ? await git.show("HEAD:.devloops") : null }
-    : undefined;
+  // The HEAD probe follows the loader's file order (DEVLOOPS_CONFIG_PATHS), so
+  // an opt-in committed as .devloops.yaml/.yml/.json is honored as on disk.
+  let devloopsOverride;
+  if (requireHeadInputs) {
+    devloopsOverride = { raw: null };
+    for (const name of DEVLOOPS_CONFIG_PATHS) {
+      if (await git.pathExistsIn("HEAD", name)) {
+        devloopsOverride = { raw: await git.show(`HEAD:${name}`), path: name };
+        break;
+      }
+    }
+  }
   const { config } = await loadDevLoopConfigStrict({ repoRoot: root, ...(devloopsOverride && { devloopsOverride }) });
   if (config?.changelog?.required !== true) {
     log.log("changelog completeness check skipped: changelog.required is not set (LIFECYCLE-CHANGELOG-COMPLETENESS)");
