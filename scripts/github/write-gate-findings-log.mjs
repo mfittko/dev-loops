@@ -18,7 +18,7 @@ import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bou
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { capClosedFor } from "@dev-loops/core/loop/gate-fanin";
-import { listPriorActItems, resolveDraftRoundCap } from "./write-gate-context.mjs";
+import { isFinishedRoundLog, listPriorActItems, resolveDraftRoundCap } from "./write-gate-context.mjs";
 import { clusterFindings, clustersFromStampedIds, projectClusterDisposition } from "@dev-loops/core/loop/finding-cluster";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
@@ -869,7 +869,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // `priorOptions` and the round-cap state are shared by the judge coercion and the cap-closed record below.
   const priorOptions = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot };
   let roundCap;
-  const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot }));
+  const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot, includeLiveHead: true }));
   if (options.judgeVerdict) {
     const judgePath = path.resolve(repoRoot, options.judgeVerdict);
     let judgeVerdict;
@@ -1096,10 +1096,14 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     ...(angleCoverage.warning ? { warning: angleCoverage.warning } : {}),
   };
 }
-// A second write at the same head must not destroy the prior round: rename it (and its seal)
-// to the next free `<gate>-<sha>.round-<n>.json` sibling. Returns the retained path, or null.
+// A second write at the same head must not destroy a finished prior round: rename it (and its seal)
+// to the next free `<gate>-<sha>.round-<n>.json` sibling. An unfinished ledger is a same-round rewrite and is overwritten. Returns the retained path, or null.
+// ponytail: retention runs outside the write lock; concurrent same-head writers are not supported.
 async function retainSameHeadLedger(fullPath, logPath) {
   if (!(await access(fullPath).then(() => true, () => false))) return null;
+  let existing;
+  try { existing = JSON.parse(await readSealed(fullPath)); } catch (err) { if (err?.code === OUT_OF_BAND_WRITE) throw err; return null; }
+  if (!isFinishedRoundLog(existing)) return null;
   const dir = path.dirname(fullPath);
   const stem = path.basename(fullPath, ".json");
   const taken = (await readdir(dir)).map((n) => (n.startsWith(`${stem}.round-`) && n.endsWith(".json") ? Number(n.slice(stem.length + 7, -5)) : 0));

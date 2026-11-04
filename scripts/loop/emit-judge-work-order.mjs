@@ -19,7 +19,7 @@ import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "..
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildLogPath } from "../github/_gate-artifact-paths.mjs";
-import { PR_BODY_ABSENT_SENTINEL, listPriorActItems, renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { PR_BODY_ABSENT_SENTINEL, isLiveHeadRoundFinished, listPriorActItems, renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { copilotBodyJudgePath } from "../github/_copilot-body-disposition.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { OUT_OF_BAND_WRITE, readSealed } from "../github/_gate-artifact-seal.mjs";
@@ -125,7 +125,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     const ledgerTmpRoot = resolveGateArtifactTmpRoot(checkoutRoot);
     const resolved = await resolveGateRound({ repo, pr, gate, headSha, reviews: [], issueComments: [], tmpRoot: ledgerTmpRoot, repoRoot: checkoutRoot });
     const currentLedger = path.resolve(checkoutRoot, buildLogPath({ repo, pr, gate, headSha, tmpRoot: ledgerTmpRoot }));
-    const prior = (await readdir(path.dirname(currentLedger)).catch(() => [])).filter((name) => isFindingsLogName(gate, name) && `${gate}-${headSha}.json` !== name).length;
+    const prior = (await readdir(path.dirname(currentLedger)).catch(() => [])).filter((name) => isFindingsLogName(gate, name) && `${gate}-${headSha}.json` !== name).length + (await isLiveHeadRoundFinished({ repo, pr, gate, headSha, tmpRoot: ledgerTmpRoot }, { repoRoot: checkoutRoot }) ? 1 : 0);
     round = Math.max(resolved, prior + 1);
   }
   tmpRoot ??= path.join(checkoutRoot, "tmp");

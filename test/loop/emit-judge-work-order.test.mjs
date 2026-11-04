@@ -270,6 +270,20 @@ test("J1: --round must be a positive integer, else the emission refuses as inval
   });
 });
 
+test("J1: a finished live same-head ledger counts as one completed round in the derived round; an unjudged one does not", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const base = (await emitJudgeWorkOrder({ ...sources, roundId: "j1-000000aa" })).workOrder.round;
+    const live = path.resolve(root, buildLogPath({ repo: "o/r", pr: 7, gate: "pre_approval_gate", headSha: HEAD, tmpRoot: path.join(root, "tmp") }));
+    await mkdir(path.dirname(live), { recursive: true });
+    const write = (verdict) => writeFile(live, JSON.stringify({ repo: "o/r", pr: 7, gate: "pre_approval_gate", headSha: HEAD, verdict, findings: [] }));
+    await write("findings_present");
+    assert.equal((await emitJudgeWorkOrder({ ...sources, roundId: "j1-000000bb" })).workOrder.round, base, "an unjudged live ledger is the same round");
+    await write("clean");
+    assert.equal((await emitJudgeWorkOrder({ ...sources, roundId: "j1-000000cc" })).workOrder.round, base + 1);
+  });
+});
+
 test("J1: a truncated identity stamp or a partial checkedCriteria refuses", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
