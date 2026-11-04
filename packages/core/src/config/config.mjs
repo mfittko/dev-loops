@@ -1617,20 +1617,11 @@ function mergeAngleArrays(targetRaw, sourceRaw) {
 }
 
 /**
- * Try to read and parse a config file (YAML preferred, JSON fallback).
- * Detects format from file extension: .yaml/.yml → YAML, .json → JSON.
- * Returns the parsed object or null if the file doesn't exist.
- * Throws on read errors other than ENOENT.
- * @param {string} filePath
- * @returns {Promise<object|null>}
- */
-/**
  * Parse already-read config text (YAML or JSON, keyed off `filePath`'s
- * extension) into a plain object. Split out of {@link readConfigFile} so a
- * caller that already has the raw text from somewhere other than this
- * checkout's disk (e.g. `loadDevLoopConfig`'s `devloopsOverride`, which reads
- * a PR head commit's `.devloops` via git) can reuse the exact same parsing
- * rules instead of re-implementing them.
+ * extension) into a plain object. Shared by the on-disk loader and callers
+ * that have the raw text from somewhere other than this checkout's disk
+ * (e.g. `loadDevLoopConfig`'s `devloopsOverride`, which reads a PR head
+ * commit's `.devloops` via git), so both use the exact same parsing rules.
  * @param {string} raw
  * @param {string} filePath - used only for its extension and in error messages
  * @returns {Record<string, unknown>}
@@ -1693,17 +1684,6 @@ export function stripConfigKeyPaths(raw, filePath, keyPaths) {
     if (node !== null && typeof node === "object" && Object.hasOwn(node, last)) delete node[last];
   }
   return JSON.stringify(data);
-}
-
-async function readConfigFile(filePath) {
-  let raw;
-  try {
-    raw = await readFile(filePath, "utf8");
-  } catch (err) {
-    if (err.code === "ENOENT") return null;
-    throw configError(`Cannot read config file: ${err.message}`, err.code, filePath);
-  }
-  return parseConfigContent(raw, filePath);
 }
 
 /**
