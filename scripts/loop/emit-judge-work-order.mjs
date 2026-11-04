@@ -21,6 +21,7 @@ import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWo
 import { buildGateArtifactPath, buildGateContextPath, buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { PR_BODY_ABSENT_SENTINEL, isLiveHeadRoundFinished, listPriorActItems, renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { copilotBodyJudgePath } from "../github/_copilot-body-disposition.mjs";
+import { findingsFileRoundIdentities } from "../github/write-gate-findings-log.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { OUT_OF_BAND_WRITE, readSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
@@ -125,9 +126,11 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     const ledgerTmpRoot = resolveGateArtifactTmpRoot(checkoutRoot);
     const resolved = await resolveGateRound({ repo, pr, gate, headSha, reviews: [], issueComments: [], tmpRoot: ledgerTmpRoot, repoRoot: checkoutRoot });
     const currentLedger = path.resolve(checkoutRoot, buildLogPath({ repo, pr, gate, headSha, tmpRoot: ledgerTmpRoot }));
-    // A judge pass over the live ledger itself (the judge-pass refusal recovery re-emit) judges that ledger's own round, so the live ledger is never a prior round there; the writer skips retention for the same rewrite.
-    // ponytail: a wrapper findings file at a different path with the same raw findings is still counted as a new round here; compare the writer's roundIdentity if that recovery shape matters.
-    const judgesLiveLedger = path.resolve(cwd, findingsFile) === currentLedger;
+    // A judge pass over the live ledger's own round (the judge-pass refusal recovery re-emit) judges that round, so the live ledger is never a prior round there; the writer skips retention for the same rewrite.
+    // The round is the live ledger itself or any findings file (the fan-in ledger) whose writer roundIdentity matches the live ledger's.
+    const live = await readSealed(currentLedger).then(JSON.parse, (err) => { if (err?.code === OUT_OF_BAND_WRITE) throw err; return null; });
+    const judgesLiveLedger = path.resolve(cwd, findingsFile) === currentLedger
+      || (typeof live?.roundIdentity === "string" && (await findingsFileRoundIdentities(path.resolve(cwd, findingsFile)).catch(() => [])).includes(live.roundIdentity));
     const prior = (await readdir(path.dirname(currentLedger)).catch(() => [])).filter((name) => isFindingsLogName(gate, name) && `${gate}-${headSha}.json` !== name).length + (!judgesLiveLedger && await isLiveHeadRoundFinished({ repo, pr, gate, headSha, tmpRoot: ledgerTmpRoot }, { repoRoot: checkoutRoot }) ? 1 : 0);
     round = Math.max(resolved, prior + 1);
   }

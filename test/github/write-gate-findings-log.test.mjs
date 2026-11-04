@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import {
   buildLogPath,
   checkProvenanceAngleCoverage,
+  claimRetainedRound,
   parseProvenanceJson,
   parseWriteGateFindingsLogCliArgs,
   verifyEmitPlanProvenance,
@@ -416,17 +417,16 @@ test("writeGateFindingsLog refuses a tampered live ledger with OUT_OF_BAND_WRITE
   }
 });
 
-test("writeGateFindingsLog refuses to overwrite an existing retained round name", async () => {
+test("claimRetainedRound refuses with EEXIST on a taken retained name and changes nothing", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-retain-exclusive-"));
   try {
-    const write = (summary) => writeGateFindingsLog({ ...RETAIN_ARGS, findings: JSON.stringify([{ severity: "low", angle: "scope", summary, judgeDisposition: "reject" }]), tmpRoot: dir });
-    const first = await write("one");
+    const first = await writeGateFindingsLog({ ...RETAIN_ARGS, findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "one", judgeDisposition: "reject" }]), tmpRoot: dir });
     const taken = first.path.replace(/\.json$/, ".round-1.json");
     await writeFile(taken, "precreated", "utf8");
-    // The pre-created name is taken, so the next free number is used; the taken-name check refuses a collision.
-    const second = await write("two");
-    assert.equal(second.retainedRound, first.path.replace(/\.json$/, ".round-2.json"));
+    const liveBytes = await readFile(first.path, "utf8");
+    await assert.rejects(() => claimRetainedRound(first.path, taken), (err) => err?.code === "EEXIST");
     assert.equal(await readFile(taken, "utf8"), "precreated", "the pre-created round is untouched");
+    assert.equal(await readFile(first.path, "utf8"), liveBytes, "the live ledger stays in place");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

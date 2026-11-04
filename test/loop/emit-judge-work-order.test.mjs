@@ -9,6 +9,7 @@ import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, p
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { buildGateContextPath, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
+import { findingsFileRoundIdentities } from "../../scripts/github/write-gate-findings-log.mjs";
 import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { withTempDir } from "../_helpers.mjs";
 import { TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
@@ -293,6 +294,23 @@ test("J1: re-emitting over the finished live ledger itself (judge-pass refusal r
     await writeFile(live, JSON.stringify({ repo: "o/r", pr: 7, gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: [] }));
     const recovery = await emitJudgeWorkOrder({ ...sources, findingsFile: path.relative(root, live), roundId: "j1-000000dd" });
     assert.equal(recovery.workOrder.round, base, "the judged live ledger is this round, not a prior one");
+  });
+});
+
+test("J1: re-emitting over the fan-in ledger whose roundIdentity the live ledger carries does not count the live ledger as a prior round", async () => {
+  await withDir(async (root) => {
+    const faninFile = "judge-fixture/fanin-ledger.json";
+    const sources = await seed(root);
+    await writeFile(path.join(root, faninFile), JSON.stringify({ overallVerdict: "findings_present", findings: [{ severity: "medium", angle: "scope", summary: "a defect" }] }));
+    const base = (await emitJudgeWorkOrder({ ...sources, findingsFile: faninFile, roundId: "j1-000000aa" })).workOrder.round;
+    const live = path.resolve(root, buildLogPath({ repo: "o/r", pr: 7, gate: "pre_approval_gate", headSha: HEAD, tmpRoot: path.join(root, "tmp") }));
+    await mkdir(path.dirname(live), { recursive: true });
+    const [, faninIdentity] = await findingsFileRoundIdentities(path.join(root, faninFile));
+    const writeLive = (roundIdentity) => writeFile(live, JSON.stringify({ repo: "o/r", pr: 7, gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: [], roundIdentity }));
+    await writeLive("f".repeat(64));
+    assert.equal((await emitJudgeWorkOrder({ ...sources, findingsFile: faninFile, roundId: "j1-000000bb" })).workOrder.round, base + 1, "a different round's live ledger is a prior round");
+    await writeLive(faninIdentity);
+    assert.equal((await emitJudgeWorkOrder({ ...sources, findingsFile: faninFile, roundId: "j1-000000cc" })).workOrder.round, base, "the same round's judged live ledger is not a prior round");
   });
 });
 

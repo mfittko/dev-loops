@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { access, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, link, mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "./_gate-artifact-seal.mjs";
 import path from "node:path";
@@ -324,6 +324,14 @@ function validateFindingsArray(parsed, flagLabel) {
 // plumbing lives in _findings-input.mjs.
 function resolveFindings(options) {
   return resolveFindingsInput(options, { parseError, validate: validateFindingsArray });
+}
+const digestRound = (rawFindings, faninLedger) => createHash("sha256").update(JSON.stringify([rawFindings, faninLedger ?? null])).digest("hex");
+// The round identities a findings file can carry in the writer: with the fan-in ledger (the file is that ledger) or without it.
+// emit-judge-work-order compares these with a live ledger's roundIdentity, so the judge re-emit and the writer agree on one round.
+export async function findingsFileRoundIdentities(findingsFile) {
+  const { findings } = await resolveFindings({ findingsFile });
+  const parsed = JSON.parse(await readSealed(findingsFile));
+  return [digestRound(findings, null), digestRound(findings, parsed)];
 }
 /**
  * Validate + normalize the fan-out provenance object (distinctReviewers +
@@ -872,7 +880,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   let roundCap;
   // A round is identified by its raw (pre-judge) findings and fan-in ledger: a rewrite of the same round (pre-judge to judged write, judge re-run) is neither retained nor counted again.
   // ponytail: two genuine same-head rounds with byte-identical findings and fan-in ledger read as one round; stamp an explicit round id if that matters.
-  const roundIdentity = createHash("sha256").update(JSON.stringify([rawFindings, faninLedger ?? null])).digest("hex");
+  const roundIdentity = digestRound(rawFindings, faninLedger);
   const liveLedger = await readLiveLedger(fullPath);
   const liveIsSameRound = liveLedger?.roundIdentity === roundIdentity;
   const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot, includeLiveHead: !liveIsSameRound }));
@@ -1105,7 +1113,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
 // A second write at the same head must not destroy a finished prior round: rename it (and its seal)
 // to the next free `<gate>-<sha>.round-<n>.json` sibling. An unfinished ledger is a same-round rewrite and is overwritten. Returns the retained path, or null.
 // The seal moves first (a crash then leaves a waiting seal that still matches the moved bytes), and a taken retained name refuses instead of overwriting.
-// ponytail: retention runs outside the write lock and the taken-name check is not atomic; concurrent same-head writers are not supported (move retention under the ledger lock with an exclusive create if they ever are).
+// ponytail: retention runs outside the write lock; the exclusive link makes a round-number collision fail instead of overwriting, but concurrent same-head writers are otherwise unsupported (move retention under the ledger lock if they ever are).
 async function readLiveLedger(fullPath) {
   if (!(await access(fullPath).then(() => true, () => false))) return null;
   try { return JSON.parse(await readSealed(fullPath)); } catch (err) { if (err?.code === OUT_OF_BAND_WRITE) throw err; return null; }
@@ -1116,12 +1124,16 @@ async function retainSameHeadLedger(fullPath, logPath, existing, identity) {
   const stem = path.basename(fullPath, ".json");
   const taken = (await readdir(dir)).map((n) => (n.startsWith(`${stem}.round-`) && n.endsWith(".json") ? Number(n.slice(stem.length + 7, -5)) : 0));
   const next = Math.max(0, ...taken.filter(Number.isInteger)) + 1;
-  const retained = path.join(dir, `${stem}.round-${next}.json`);
-  if (await access(retained).then(() => true, () => false)) throw Object.assign(new Error(`EEXIST: retained round ${retained} already exists`), { code: "EEXIST" });
-  await rename(`${fullPath}.seal`, `${retained}.seal`).catch((err) => { if (err?.code !== "ENOENT") throw err; });
-  // An atomic rename leaves no window where the live and retained names share one inode (writeSealed writes the live path in place); a failed move puts the seal back.
-  await rename(fullPath, retained).catch(async (err) => { await rename(`${retained}.seal`, `${fullPath}.seal`).catch(() => {}); throw err; });
+  await claimRetainedRound(fullPath, path.join(dir, `${stem}.round-${next}.json`));
   return logPath.replace(/\.json$/, `.round-${next}.json`);
+}
+// Moves the live ledger and its seal to `retained` without ever replacing an existing file: link fails with EEXIST on a taken name.
+// The seal is linked first (a crash leaves a waiting seal that matches the bytes a retry moves there; EEXIST on the seal is that waiting seal).
+export async function claimRetainedRound(fullPath, retained) {
+  await link(`${fullPath}.seal`, `${retained}.seal`).catch((err) => { if (err?.code !== "ENOENT" && err?.code !== "EEXIST") throw err; });
+  await link(fullPath, retained);
+  await unlink(fullPath);
+  await unlink(`${fullPath}.seal`).catch((err) => { if (err?.code !== "ENOENT") throw err; });
 }
 async function main() {
   let options;
