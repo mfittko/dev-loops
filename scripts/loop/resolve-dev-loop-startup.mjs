@@ -84,9 +84,10 @@ Optional modifier:
   --claim        With --issue <n> or --pr <n> only: if the target is open and unassigned,
                  assign the current user (the only write; open targets only), then start. Pass it
                  only when the user explicitly asked to start or continue that
-                 exact target. Rejected with --review/--ui-review/--input/
+                 exact target. With --pr, an unreadable linked issue refuses
+                 the claim. Rejected with --review/--ui-review/--input/
                  --plan-file/--spike and with no target.
-  --review       With --pr only: route the PR to the read-only review strategy
+  --review      With --pr only: route the PR to the read-only review strategy
                  instead of the default continue_on_pr path. Requires no
                  ownership. Rejected without --pr, or combined with --issue/
                  --input/--plan-file/--spike, and mutually exclusive with

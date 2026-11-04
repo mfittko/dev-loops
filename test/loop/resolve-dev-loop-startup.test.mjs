@@ -1930,10 +1930,12 @@ test("--pr --claim with a failing pr view refuses and performs no write", async 
     await initRepoWithOrigin(tempDir);
     const ghStub = await writeGhStubHelper(tempDir, [
       { assertArgs: ["pr", "view", "740"], exitCode: 1, stderr: "timeout" },
+      { assertArgs: ["pr", "edit", "740"], stdout: "" },
     ], { matchMode: "claims", logCalls: true });
     const result = await runNode(["--pr", "740", "--claim"], { cwd: tempDir, env: claimEnv(ghStub) });
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
+    assert.doesNotMatch(result.stderr, /could not be claimed/);
     assert.equal(await editCalls(ghStub), 0);
   }, { prefix: "resolve-dev-loop-claim-pr-readfail-" });
 });
@@ -1945,12 +1947,34 @@ test("--issue --claim with a failing assignees read refuses and performs no writ
       noLinkedPrGraphqlEntry(),
       { assertArgs: ["issue", "view", "511", "assignees"], exitCode: 1, stderr: "timeout" },
       { assertArgs: ["issue", "view", "511", "state"], stdout: JSON.stringify({ state: "OPEN" }) },
+      { assertArgs: ["issue", "edit", "511"], stdout: "" },
     ], { matchMode: "claims", logCalls: true });
     const result = await runNode(["--issue", "511", "--claim"], { cwd: tempDir, env: claimEnv(ghStub) });
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
+    assert.doesNotMatch(result.stderr, /could not be claimed/);
     assert.equal(await editCalls(ghStub), 0);
   }, { prefix: "resolve-dev-loop-claim-issue-readfail-" });
+});
+
+test("--pr --claim with an unreadable linked issue refuses and performs no write", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [{ number: 41 }], body: "" }),
+      },
+      { assertArgs: ["issue", "view", "41"], exitCode: 1, stderr: "timeout" },
+      { assertArgs: ["pr", "edit", "740"], stdout: "" },
+      viewerEntry,
+    ], { matchMode: "claims", logCalls: true });
+    const result = await runNode(["--pr", "740", "--claim"], { cwd: tempDir, env: claimEnv(ghStub) });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /linked issue #?41 could not be read/);
+    assert.equal(await editCalls(ghStub), 0);
+  }, { prefix: "resolve-dev-loop-claim-pr-linked-readfail-" });
 });
 
 test("--issue --claim on a closed unassigned issue does not claim", async () => {
