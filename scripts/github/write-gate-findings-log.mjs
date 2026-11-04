@@ -1105,7 +1105,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   const retainedRound = liveIsSameRound ? null : await retainSameHeadLedger(fullPath, logPath, liveLedger, priorOptions);
   await writeSealed(fullPath, JSON.stringify({ ...stampedLog, roundIdentity }, null, 2) + "\n");
   return {
-    ok: true, path: logPath, log: stampedLog,
+    ok: true, path: logPath, log: { ...stampedLog, roundIdentity },
     ...(retainedRound ? { retainedRound } : {}),
     ...(angleCoverage.warning ? { warning: angleCoverage.warning } : {}),
   };
