@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.10-pre.1
+
+### Fixed
+
+- `create-pr` no longer blocks repos without dev-loops changelog files; set `changelog.required: true` to keep the check (#3076)
+
 ## 1.0.9
 
 ### Added
