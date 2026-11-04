@@ -2025,7 +2025,7 @@ function capRoundActRefs(findings, headSha) {
 
 /**
  * The cap round of a draft_gate (ADR 0208): the last closed ledger when the completed rounds (the head being posted excluded) reached the cap and
- * that ledger is `findings_present`. Returns `{ log, residue }` or null. `residue` is the cap round's act items and `capClosed` items as
+ * that ledger is `findings_present` or `clean` (ADR 0250: a clean cap round has empty `residue`). Returns `{ log, residue }` or null. `residue` is the cap round's act items and `capClosed` items as
  * `{ fingerprint, file, line, title, disposition }`, the input `pre_approval_gate` receives.
  */
 export async function resolveCapRound(options, { repoRoot }) {
@@ -2039,7 +2039,7 @@ export async function resolveCapRound(options, { repoRoot }) {
   let unreadable = 0;
   const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, onUnreadable: () => { unreadable += 1; } })).at(-1);
   // The persisted severity verdict can read `clean` for judge-act mediums whose posted review composes findings_present: an open act item makes the round a cap round too.
-  if (unreadable > 0 || !log || (log.verdict !== "findings_present" && listOpenActItems(log.findings).length === 0)) return null;
+  if (unreadable > 0 || !log || (log.verdict !== "findings_present" && log.verdict !== "clean" && listOpenActItems(log.findings).length === 0)) return null;
   // An act item the sealed cap-round delta record marks resolved is fixed, not residue; with no verifiable record every act item stays.
   let items = [];
   try { items = readSealedGateDeltaRecord(resolveGateArtifactTmpRoot(repoRoot), log.headSha)?.items ?? []; } catch { /* unverifiable: keep every item */ }

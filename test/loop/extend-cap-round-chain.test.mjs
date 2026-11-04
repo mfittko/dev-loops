@@ -402,3 +402,59 @@ test("a failing seal write in the exclusive path removes the linked record and r
     await rm(root, { recursive: true, force: true });
   }
 });
+
+/** Clean cap round at A (no fixer pass, no record), the checkout at A. */
+async function cleanCapFixture() {
+  const { root, A } = await capFixture();
+  const dir = path.join(root, "tmp", "gate-findings", "owner-repo", `pr-${PR}`);
+  await writeFile(path.join(dir, `draft_gate-${A}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: A, verdict: "clean", loggedAt: "2026-11-04T00:00:00.000Z", findings: [] }), "utf8");
+  const recordPath = gateDeltaRecordPath(path.join(root, "tmp"), A);
+  rmSync(recordPath, { force: true });
+  rmSync(`${recordPath}.seal`, { force: true });
+  runGitFixture(root, ["checkout", "-q", A]);
+  return { root, A };
+}
+
+test("a clean cap round plus a docs-only commit seals a record bound to the cap-round head (PR 3078 replay)", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const D = await commit(root, { "docs/decisions/0001-x.md": "# x\n" }, "adr");
+    assert.equal(await proof(root, D), null, "before the extension the proof is null");
+    const result = await extend(root, D);
+    assert.deepEqual({ ...result }, { ok: true, action: "chain_extended", chainEnd: A, candidateHead: D, files: ["docs/decisions/0001-x.md"] });
+    assert.ok(await proof(root, D), "the resolveCapRoundFixed seam ready-for-review calls reaches the head");
+    const record = readSealedGateDeltaRecord(path.join(root, "tmp"), A);
+    assert.equal(record.extension, "docs_tests_only");
+    assert.equal(record.outcome, "locally_clear");
+    assert.deepEqual(record.items, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a clean cap round plus a logic commit refuses logic_commit_in_range and writes no record", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const L = await commit(root, { "src/b.mjs": "export const b = 1;\n" }, "logic");
+    assert.equal((await extend(root, L)).reason, "logic_commit_in_range");
+    const recordPath = gateDeltaRecordPath(path.join(root, "tmp"), A);
+    assert.equal(existsSync(recordPath), false);
+    assert.equal(existsSync(`${recordPath}.seal`), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a clean cap round at the PR head writes no record, and an orphaned cap-round head still refuses baseline_orphaned", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    // At the cap-round head the round is the head being posted (no cap round yet): the clean draft_gate verdict path applies, and nothing is written.
+    assert.equal((await extend(root, A)).reason, "no_cap_round_chain");
+    assert.equal(existsSync(gateDeltaRecordPath(path.join(root, "tmp"), A)), false);
+    runGitFixture(root, ["checkout", "-q", "--orphan", "rebased"]);
+    const R = await commit(root, { "docs/r.md": "r\n" }, "rebased");
+    assert.equal((await extend(root, R)).reason, "baseline_orphaned");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

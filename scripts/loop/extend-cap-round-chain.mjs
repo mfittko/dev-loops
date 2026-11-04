@@ -28,7 +28,7 @@ const USAGE = `Usage: extend-cap-round-chain.mjs --repo <owner/name> --pr <numbe
 Extend the sealed cap-round clearing chain over later commits that change docs and tests only
 (GATE-EXEC-ROUND-CAP-CHAIN-EXTEND). The PR head must equal HEAD of the worktree (default: cwd).
 Refuses with a typed reason and writes nothing when any commit after the chain end touches a
-logic file, when no cap-round chain exists, or when the proof does not reach the head afterwards.
+logic file, when no cap-round chain exists (a clean cap round counts as a chain of length zero ending at the cap-round head), or when the proof does not reach the head afterwards.
 Output (stdout, JSON): { "ok": true, "action": "chain_extended" | "already_proven", "chainEnd" (null for already_proven), "candidateHead", "files" }
 Refusal (stderr, JSON, exit 1): { "ok": false, "refused": true, "reason": "<code>", "detail": "..." }
 Reasons: repo_mismatch, pr_state_unreadable, base_fetch_failed, head_mismatch, no_cap_round_chain, baseline_orphaned,
@@ -105,7 +105,11 @@ export async function extendCapRoundChain(options, {
   const isAncestor = (sha) => sha !== head && reaches(sha, head);
   // The latest end: the ancestor end that every other ancestor end precedes, so the logic check never spans commits a later chain cleared.
   const ancestorEnds = ends.filter(isAncestor);
-  const chainEnd = ancestorEnds.find((end) => ancestorEnds.every((other) => reaches(other, end)));
+  let chainEnd = ancestorEnds.find((end) => ancestorEnds.every((other) => reaches(other, end)));
+  // ADR 0250: a clean cap round has no fixer pass and no first record: its chain has length zero and the end is the cap-round head.
+  const capHeadSha = cap?.log?.headSha?.toLowerCase();
+  const cleanCap = cap?.log?.verdict === "clean" && cap.residue.length === 0;
+  if (!chainEnd && cleanCap && isAncestor(capHeadSha)) chainEnd = capHeadSha;
   if (!chainEnd) {
     // A rebase leaves the cap-round head outside the head's history: no extension can bind, so name the replacement-PR restart.
     // Same probe as resolveCapRoundFixed: only merge-base exit 1 with both commits present proves it; the head itself or an unfetched commit (exit 128) does not.
