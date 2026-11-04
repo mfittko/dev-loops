@@ -1882,7 +1882,7 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
  *
  * @returns {Promise<object[]>}
  */
-export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable, includeRetainedCurrentHead = false }) {
+export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable, includeRetainedCurrentHead = false, includeLiveCurrentHead = false }) {
   let ledgerDir;
   try {
     const sampleLogPath = buildLogPath({
@@ -1903,7 +1903,7 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
     if (!name.startsWith(namePrefix) || !name.endsWith(".json")) continue;
     const retained = /\.round-\d+\.json$/.test(name);
     const sha = name.slice(namePrefix.length, -".json".length).replace(/\.round-\d+$/, "").toLowerCase();
-    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha) || ((!retained || !includeRetainedCurrentHead) && (sha.startsWith(head) || head.startsWith(sha)))) continue;
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha) || ((retained ? !includeRetainedCurrentHead : !includeLiveCurrentHead) && (sha.startsWith(head) || head.startsWith(sha)))) continue;
     let log;
     try {
       log = JSON.parse(await readSealed(path.join(ledgerDir, name)));
@@ -1950,9 +1950,9 @@ export const DRAFT_ROUND_CAP_EFFECTIVE_AT = "2026-10-26T08:51:13Z";
  * DRAFT_ROUND_CAP_EFFECTIVE_AT (a closed ledger is skipped only when its `loggedAt` is a UTC timestamp in toISOString form earlier than the cutoff; every other value counts), plus an unreadable ledger at an
  * in-range head (counted regardless of date, since it has no readable `loggedAt`), plus the round being posted. Foreign, mismatched and unclosed ledgers never count.
  */
-export async function countCompletedRounds(options, { repoRoot }) {
+export async function countCompletedRounds(options, { repoRoot, includeLiveCurrentHead = false }) {
   let unreadable = 0;
-  const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeRetainedCurrentHead: true, onUnreadable: () => { unreadable += 1; } });
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot, includeRetainedCurrentHead: true, includeLiveCurrentHead, onUnreadable: () => { unreadable += 1; } });
   const cutoff = Date.parse(DRAFT_ROUND_CAP_EFFECTIVE_AT);
   // Only a strict toISOString-form UTC timestamp earlier than the cutoff is skipped; any other value counts (fails toward the cap).
   // The calendar round trip rejects values Date.parse normalizes (2026-02-30, T24:00:00); at most 3 fraction digits.
@@ -1965,12 +1965,12 @@ export async function countCompletedRounds(options, { repoRoot }) {
  * other gate is never past it. One resolver for the judge pass, the ledger writer and the fixer emitter.
  * @returns {Promise<{ pastCap: boolean, round: number, cap: number, lowFixCapped: boolean }>}
  */
-export async function resolveDraftRoundCap(options, { repoRoot }) {
+export async function resolveDraftRoundCap(options, { repoRoot, includeLiveCurrentHead = false }) {
   // GATE-EXEC-LOW-FIX-UNTIL-CAP: pre_approval_gate has no round count and applies the past-cap low/nit coercion in every round.
   if (options.gate !== "draft_gate") return { pastCap: false, round: 0, cap: 0, lowFixCapped: options.gate === "pre_approval_gate" };
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
   const cap = resolveGateConfig(config, "draft").maxReviewRounds;
-  const round = await countCompletedRounds(options, { repoRoot });
+  const round = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead });
   const pastCap = isPastRoundCap(round, cap);
   return { pastCap, round, cap, lowFixCapped: pastCap };
 }

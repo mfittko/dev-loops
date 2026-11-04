@@ -2785,12 +2785,30 @@ test("writeGateFindingsLog records capClosed on a past-cap defer or reject, neve
     await writeCapPrior(tmpDir, { head: capPriorHeads[2], findings: [] });
     const past = await writeCapRound(tmpDir, raw, dispositions);
     assert.deepEqual(past.map((f) => f.capClosed), [
-      { judgeDisposition: "defer", severity: "low", round: 4, cap: 4 },
-      { judgeDisposition: "reject", severity: "nit", round: 4, cap: 4 },
+      { judgeDisposition: "defer", severity: "low", round: 5, cap: 4 },
+      { judgeDisposition: "reject", severity: "nit", round: 5, cap: 4 },
       undefined,
-      { judgeDisposition: "reject", severity: "question", round: 4, cap: 4 },
+      { judgeDisposition: "reject", severity: "question", round: 5, cap: 4 },
       undefined,
     ]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog counts the live same-head ledger it retains, so its round equals the post-write count", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-capclosed-rewrite-"));
+  try {
+    for (const head of capPriorHeads.slice(0, 2)) await writeCapPrior(tmpDir, { head, findings: [] });
+    const low = { severity: "low", angle: "docs", summary: "low deferred" };
+    const defer = [{ disposition: "defer", followUpDraft: { title: "t", body: "b" } }];
+    const first = await writeCapRound(tmpDir, [low], defer);
+    assert.equal(first[0].capClosed, undefined, "round 3 is below the cap of 4");
+    const rewrite = await writeCapRound(tmpDir, [low], defer);
+    assert.deepEqual(rewrite[0].capClosed, { judgeDisposition: "defer", severity: "low", round: 4, cap: 4 });
+    const { countCompletedRounds } = await import("../../scripts/github/write-gate-context.mjs");
+    const post = await countCompletedRounds({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: CAP_HEAD, tmpRoot: tmpDir }, { repoRoot: tmpDir });
+    assert.equal(post, 4, "post-write readers count the same round as the writer");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
