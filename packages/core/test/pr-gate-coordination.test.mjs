@@ -4763,3 +4763,22 @@ test("draft round-cap refusal stays untyped (known gap, issue 3105 slices 5-6)",
   assert.equal(result.blockedOn, undefined);
   assert.equal(result.agentRemedy, undefined);
 });
+
+test("unconfirmed-CI block carries the exact wait-pr-checks agentRemedy", () => {
+  const result = evaluatePrGateCoordination({
+    repo: "o/r",
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    ciStatus: "crediblyGreen",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.equal(result.agentRemedy.command, "dev-loops-run scripts/github/wait-pr-checks.mjs --repo o/r --pr 266 --timeout 600");
+});

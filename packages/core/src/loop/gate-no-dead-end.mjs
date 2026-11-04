@@ -21,9 +21,15 @@ export const KNOWN_GAPS = [
   },
 ];
 
-const hasRunnableCommand = (command) => typeof command === "string" && command.length > 0 && !/[<>]/.test(command);
+// A placeholder is an unfilled `<name>` token outside single-quoted text; quoted user text (a PR title) is inert.
+export const hasRunnableCommand = (command) => typeof command === "string"
+  && command.length > 0
+  && !/<[a-z][a-z0-9-]*>/i.test(command.replace(/'[^']*'/g, ""));
+
+// The single definition of a typed blocked result; the walker test and the safety rule share it.
+export const isTyped = (result) => Object.values(BLOCKED_ON).includes(result.blockedOn)
+  || hasRunnableCommand(result.agentRemedy?.command);
 
 export const isTypedOrKnownGap = (input, result) => result.nextAction !== PR_CHECKPOINT_ACTION.REPORT_BLOCKED
-  || Object.values(BLOCKED_ON).includes(result.blockedOn)
-  || hasRunnableCommand(result.agentRemedy?.command)
+  || isTyped(result)
   || KNOWN_GAPS.some((gap) => gap.matches(input, result));

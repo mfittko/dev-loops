@@ -6,7 +6,7 @@ import {
   evaluatePrGateCoordination,
   PR_CHECKPOINT_ACTION,
 } from "../../packages/core/src/loop/pr-gate-coordination.mjs";
-import { isTypedOrKnownGap, KNOWN_GAPS } from "../../packages/core/src/loop/gate-no-dead-end.mjs";
+import { hasRunnableCommand, isTyped, isTypedOrKnownGap, KNOWN_GAPS } from "../../packages/core/src/loop/gate-no-dead-end.mjs";
 import { DISPOSITION, STATE } from "../../packages/core/src/loop/copilot-loop-state.mjs";
 
 // Issue 3105 slice 1: no-dead-end invariant. Every report_blocked result names who decides
@@ -64,7 +64,7 @@ test("every report_blocked result is typed or a listed known gap", () => {
     const result = evaluatePrGateCoordination(input);
     if (result.nextAction !== PR_CHECKPOINT_ACTION.REPORT_BLOCKED) continue;
     blocked += 1;
-    const typed = Object.values(BLOCKED_ON).includes(result.blockedOn) || Boolean(result.agentRemedy?.command);
+    const typed = isTyped(result);
     if (!typed) {
       for (const gap of KNOWN_GAPS) if (gap.matches(input, result)) hits.set(gap.id, hits.get(gap.id) + 1);
     }
@@ -131,4 +131,30 @@ test("a blocked result without a real repo or integer pr names the operator", ()
   const result = evaluatePrGateCoordination(titleInput("WIP: x", { pr: undefined }));
   assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
   assert.equal(result.agentRemedy, undefined);
+});
+
+test("hasRunnableCommand accepts quoted angle brackets and rejects unfilled placeholders", () => {
+  const ok = [
+    "dev-loops-run scripts/github/edit-pr.mjs --repo o/r --pr 7 --title 'map a -> b'",
+    "dev-loops-run scripts/github/edit-pr.mjs --repo o/r --pr 7 --title 'support Map<K, V>'",
+    "dev-loops loop startup --pr 7",
+  ];
+  const bad = [
+    "dev-loops-run scripts/github/wait-pr-checks.mjs --repo <repo> --pr <n> --timeout 600",
+    "dev-loops loop startup --pr <n>",
+    "",
+  ];
+  for (const c of ok) assert.equal(hasRunnableCommand(c), true, c);
+  for (const c of bad) assert.equal(hasRunnableCommand(c), false, c);
+  const result = evaluatePrGateCoordination(titleInput("WIP: support Map<K, V>"));
+  assert.ok(isTypedOrKnownGap(titleInput("WIP: support Map<K, V>"), result));
+});
+
+test("a repo that is not a plain slug or a non-positive pr names the operator", () => {
+  for (const extra of [{ repo: "o/r;id" }, { repo: "o/$(id)" }, { repo: "o" }, { repo: "" }, { pr: 0 }, { pr: -1 }]) {
+    const result = evaluatePrGateCoordination(titleInput("WIP: x", extra));
+    assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION, JSON.stringify(extra));
+    assert.equal(result.agentRemedy, undefined);
+  }
+  assert.match(evaluatePrGateCoordination(titleInput("WIP: x", { repo: "mfittko/dev-loops" })).agentRemedy.command, /--repo mfittko\/dev-loops --pr 7/);
 });

@@ -83,6 +83,7 @@ export const PR_CHECKPOINT_ACTION = Object.freeze({
 });
 
 // Issue 3105: closed enum naming who must decide when a gate result is report_blocked.
+// OPERATOR_DECISION is a slice 1 catch-all for results with no runnable remedy; slice 9 narrows it.
 export const BLOCKED_ON = Object.freeze({
   OPERATOR_DECISION: "operator_decision",
   HIGH_FINDING_PAST_CAP: "high_finding_past_cap",
@@ -94,14 +95,17 @@ export const BLOCKED_ON = Object.freeze({
 });
 
 // Issue 3105: an agentRemedy needs a real repo and integer PR; otherwise the result names the operator.
+// The repo must be a plain owner/name slug and the PR positive: the command is run by an agent.
 function remedyOrOperator(input, build) {
-  if (typeof input.repo === "string" && input.repo.length > 0 && Number.isInteger(input.pr)) {
-    return { agentRemedy: build(input.repo, input.pr) };
+  if (typeof input.repo === "string" && /^[\w.-]+\/[\w.-]+$/.test(input.repo) && Number.isInteger(input.pr) && input.pr > 0) {
+    return { agentRemedy: build(shellRepo(input.repo), input.pr) };
   }
   return { blockedOn: BLOCKED_ON.OPERATOR_DECISION };
 }
 
 const shellQuote = (text) => `'${text.replaceAll("'", "'\\''")}'`;
+// A slug of word, dot and dash segments is shell-inert; quote anything else.
+const shellRepo = (repo) => (/^[\w./-]+$/.test(repo) ? repo : shellQuote(repo));
 
 // Issue 3105: the command an agent can run to clear a report_blocked CI result.
 function ciAgentRemedy(input, ciStatus) {
