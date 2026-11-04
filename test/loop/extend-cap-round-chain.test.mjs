@@ -458,3 +458,17 @@ test("a clean cap round at the PR head writes no record, and an orphaned cap-rou
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a clean cap-round ledger that holds an open act finding still refuses no_cap_round_chain and writes no record", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const act = { severity: "medium", summary: "guard missing", files: ["src/a.mjs"], line: 1, judgeDisposition: "act", judgeTitle: "Guard", judgeFix: "add" };
+    const ledger = path.join(root, "tmp", "gate-findings", "owner-repo", `pr-${PR}`, `draft_gate-${A}.json`);
+    await writeFile(ledger, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: A, verdict: "clean", loggedAt: "2026-11-04T00:00:00.000Z", findings: [act] }), "utf8");
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
+    assert.equal((await extend(root, D)).reason, "no_cap_round_chain");
+    assert.equal(existsSync(gateDeltaRecordPath(path.join(root, "tmp"), A)), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

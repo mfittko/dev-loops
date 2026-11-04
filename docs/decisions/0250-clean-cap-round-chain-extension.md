@@ -14,7 +14,7 @@ A PR whose cap round came back clean has no fixer pass and no record. A docs-onl
 
 ## Decision
 
-1. `resolveCapRound` also returns the cap round when the last closed ledger at the cap is `clean`. Its `residue` is empty, so `capRoundCovers` holds vacuously and `pre_approval_gate` receives no residue.
+1. `resolveCapRound` also returns the cap round when the last closed ledger at the cap is `clean`. Its `residue` is empty and `pre_approval_gate` receives no residue. With no act item to cover, `capRoundCovers` accepts only a first record that carries `extension: "docs_tests_only"`, so a plain clearing record bound to a clean cap-round head (a thread-route record over a logic commit) does not prove the round.
 2. `extend-cap-round-chain` treats a clean cap round with no chain end as a chain of length zero. The chain end is the cap-round head, which must be a strict ancestor of the PR head. A clean cap-round head equal to the PR head is the head being posted, so no cap round exists, the clean `draft_gate` verdict path applies and nothing is written. A cap-round head outside the head's history still refuses `baseline_orphaned`.
 3. All later checks of ADR 0224 stay: only docs and tests files count (`logic_commit_in_range` otherwise), a non-base-only merge refuses, the record is created exclusively, and a failed `resolveCapRoundFixed` proof removes it. The sealed record is bound to the cap-round head with `candidateHead` the PR head, `outcome` `locally_clear`, no items and `extension: "docs_tests_only"`.
 

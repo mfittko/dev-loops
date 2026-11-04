@@ -107,9 +107,9 @@ export async function extendCapRoundChain(options, {
   const ancestorEnds = ends.filter(isAncestor);
   let chainEnd = ancestorEnds.find((end) => ancestorEnds.every((other) => reaches(other, end)));
   // ADR 0250: a clean cap round has no fixer pass and no first record: its chain has length zero and the end is the cap-round head.
-  const capHeadSha = cap?.log?.headSha?.toLowerCase();
+  const capHeadSha = String(cap?.log?.headSha ?? "").trim().toLowerCase();
   const cleanCap = cap?.log?.verdict === "clean" && cap.residue.length === 0;
-  if (!chainEnd && cleanCap && isAncestor(capHeadSha)) chainEnd = capHeadSha;
+  if (!chainEnd && cleanCap && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(capHeadSha) && isAncestor(capHeadSha)) chainEnd = capHeadSha;
   if (!chainEnd) {
     // A rebase leaves the cap-round head outside the head's history: no extension can bind, so name the replacement-PR restart.
     // Same probe as resolveCapRoundFixed: only merge-base exit 1 with both commits present proves it; the head itself or an unfetched commit (exit 128) does not.

@@ -2150,7 +2150,10 @@ export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefNam
  */
 export const capRoundCovers = (capRound) => (record) => {
   const refs = new Set((Array.isArray(record.items) ? record.items : []).map((i) => String(i?.ref)));
-  return [...new Set(capRoundActRefs(capRound.log.findings, capRound.log.headSha).values())].every((r) => refs.has(r));
+  const actRefs = [...new Set(capRoundActRefs(capRound.log.findings, capRound.log.headSha).values())];
+  // ADR 0250: a clean cap round has no act item, so only the extend-cap-round-chain record proves it; any other clearing record (a thread-route record over a logic commit) does not.
+  if (actRefs.length === 0 && capRound.log.verdict === "clean") return record.extension === "docs_tests_only";
+  return actRefs.every((r) => refs.has(r));
 };
 
 /**
@@ -2184,7 +2187,7 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
     return false;
   };
   // The first clearing record must name every act item of the cap round: a delta record keyed on the same baseline for another route (a thread review) proves nothing about them.
-  // With no open act item the check is vacuously true: any clearing record then binds, and the cap round rests on the baseline match alone.
+  // With no open act item the check is vacuously true unless the cap round is clean: a clean cap round binds only a record with extension "docs_tests_only" (ADR 0250).
   const covers = capRoundCovers(capRound);
   // The direct chain is tried first: merge-seeded starts (a directory scan and Git probes) are discovered only when it does not prove the round fixed.
   const chainArgs = { tmpRoot, capHead, repo: options.repo, pr: options.pr, repoRoot, baseOnlyMerge };
