@@ -231,7 +231,13 @@ export function createGitClient(root, exec = promisify(execFile)) {
 export async function main({ root, base: explicitBase, env = process.env, log = console, git = createGitClient(root), requireHeadInputs = false } = {}) {
   // Opt-in: the rule applies only when the repo sets `changelog.required: true`.
   // A malformed value fails config load here and never enables the check.
-  const { config } = await loadDevLoopConfigStrict({ repoRoot: root });
+  // With requireHeadInputs the switch comes from the committed HEAD `.devloops`,
+  // the same snapshot assertHeadInputs validates, so an uncommitted edit cannot
+  // turn enforcement off for a head that opts in.
+  const devloopsOverride = requireHeadInputs
+    ? { raw: (await git.pathExistsIn("HEAD", ".devloops")) ? await git.show("HEAD:.devloops") : null }
+    : undefined;
+  const { config } = await loadDevLoopConfigStrict({ repoRoot: root, ...(devloopsOverride && { devloopsOverride }) });
   if (config?.changelog?.required !== true) {
     log.log("changelog completeness check skipped: changelog.required is not set (LIFECYCLE-CHANGELOG-COMPLETENESS)");
     return 0;
