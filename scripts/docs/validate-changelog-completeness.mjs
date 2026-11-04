@@ -3,14 +3,12 @@ import { lstat, readdir, readFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-import { parse as parseYaml } from "yaml";
 import { fileURLToPath } from "node:url";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { createGitClient as createDocGitClient, resolveBaseRef } from "./_doc-git-client.mjs";
-import { DEVLOOPS_CONFIG_PATHS } from "../loop/check-adr-tripwire.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
-import { loadDevLoopConfigStrict, resolveClassifyRules } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveClassifyRules, selectConfigSource } from "@dev-loops/core/config";
 import {
   FRAGMENTS_DIR,
   fragmentBodyClosesSection,
@@ -236,28 +234,14 @@ export async function main({ root, base: explicitBase, env = process.env, log = 
   // With requireHeadInputs the switch comes from the committed HEAD `.devloops*` config file,
   // the same snapshot assertHeadInputs validates, so an uncommitted edit cannot
   // turn enforcement off for a head that opts in.
-  // The HEAD probe follows the loader's file order (DEVLOOPS_CONFIG_PATHS), so
+  // The HEAD probe follows the loader's file order (selectConfigSource), so
   // an opt-in committed as .devloops.yaml/.yml/.json is honored as on disk.
   let devloopsOverride;
   if (requireHeadInputs) {
-    devloopsOverride = { raw: null };
-    // Like findConfigFile: only the bare `.devloops` falls through (when blank, unparseable
-    // as YAML and JSON, or not a plain object) to the next variant; the first existing
-    // extension variant is final, so the loader reports its error as on disk.
-    for (const name of DEVLOOPS_CONFIG_PATHS) {
-      if (!(await git.pathExistsIn("HEAD", name))) continue;
-      const raw = await git.show(`HEAD:${name}`);
-      if (name === DEVLOOPS_CONFIG_PATHS[0]) {
-        let parsed = null;
-        try { parsed = parseYaml(raw); } catch { try { parsed = JSON.parse(raw); } catch { /* unusable */ } }
-        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-          if (devloopsOverride.raw === null) devloopsOverride = { raw, path: name };
-          continue;
-        }
-      }
-      devloopsOverride = { raw, path: name };
-      break;
-    }
+    // Same source-selection rule as the loader's findConfigFile, read from HEAD via git.
+    const found = await selectConfigSource(".devloops", async (name) =>
+      (await git.pathExistsIn("HEAD", name)) ? git.show(`HEAD:${name}`) : null);
+    devloopsOverride = found ? { raw: found.raw, path: found.path } : { raw: null };
   }
   const { config } = await loadDevLoopConfigStrict({ repoRoot: root, ...(devloopsOverride && { devloopsOverride }) });
   if (config?.changelog?.required !== true) {

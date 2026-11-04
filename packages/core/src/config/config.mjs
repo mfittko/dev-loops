@@ -1714,32 +1714,56 @@ async function readConfigFile(filePath) {
  */
 async function findConfigFile(basePaths) {
   const candidates = Array.isArray(basePaths) ? basePaths : [basePaths];
+  const read = async (filePath) => {
+    try {
+      return await readFile(filePath, "utf8");
+    } catch (err) {
+      if (err.code === "ENOENT") return null;
+      throw configError(`Cannot read config file: ${err.message}`, err.code, filePath);
+    }
+  };
 
   for (const basePath of candidates) {
-    // Try bare path first. ENOENT: try extension variants. Other errors
-    // (EISDIR/EACCES) mean the bare file exists but is unreadable — try
-    // extension variants, but surface the original error if none exists.
-    let bareData = null;
-    let bareError = null;
-    try {
-      bareData = await readConfigFile(basePath);
-    } catch (err) {
-      bareError = err;
-    }
-    if (bareData !== null) return { path: basePath, data: bareData };
-
-    for (const ext of [".yaml", ".yml", ".json"]) {
-      const filePath = basePath + ext;
-      const data = await readConfigFile(filePath);
-      if (data !== null) return { path: filePath, data };
-    }
-
-    // No extension variant found either — if the bare path exists but is
-    // unreadable, surface that error rather than silently falling back.
-    if (bareError) throw bareError;
+    const found = await selectConfigSource(basePath, read);
+    if (found) return { path: found.path, data: parseConfigContent(found.raw, found.path) };
   }
 
   return { path: candidates[0] + ".yaml", data: null };
+}
+
+/**
+ * The single source-selection rule for a config base name: the bare file wins
+ * when it parses to a plain object; otherwise (blank, unparseable, non-object,
+ * unreadable, absent) fall through to the first existing `.yaml`, `.yml`,
+ * `.json` variant, which is final (its parse error is the caller's to report).
+ * With no variant, an unusable bare file is returned (a read error is thrown) so
+ * the caller surfaces its own error. Shared by {@link findConfigFile} and
+ * callers that read the same files from elsewhere, such as a git ref.
+ * @param {string} basePath
+ * @param {(filePath: string) => Promise<string|null>} read - resolves `null` when the file is absent
+ * @returns {Promise<{ path: string, raw: string }|null>}
+ */
+export async function selectConfigSource(basePath, read) {
+  let bareRaw = null;
+  let bareError = null;
+  try {
+    bareRaw = await read(basePath);
+    if (bareRaw !== null) parseConfigContent(bareRaw, basePath);
+  } catch (err) {
+    bareError = err;
+  }
+  if (bareRaw !== null && !bareError) return { path: basePath, raw: bareRaw };
+
+  for (const ext of [".yaml", ".yml", ".json"]) {
+    const raw = await read(basePath + ext);
+    if (raw !== null) return { path: basePath + ext, raw };
+  }
+
+  if (bareError) {
+    if (bareRaw !== null) return { path: basePath, raw: bareRaw };
+    throw bareError;
+  }
+  return null;
 }
 
 /**
