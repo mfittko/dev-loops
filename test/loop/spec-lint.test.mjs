@@ -451,4 +451,7 @@ test("contract_doc_not_in_matrix: a forecast contract doc must be named in a mat
   assert.deepEqual(lintContractDocsInMatrix(specWith("`a.mjs` changes.")).map((f) => `${f.kind}:${f.id}`), [`contract_doc_not_in_matrix:${DOC}`]);
   assert.deepEqual(lintContractDocsInMatrix(specWith(`\`${DOC}\` changes.`)), []);
   assert.deepEqual(lintContractDocsInMatrix("## Size forecast\n\n- forecast: slice=1 wloc=90 files=a.mjs\n"), []);
+  const noMatrix = `## Size forecast\n\n- forecast: slice=1 wloc=90 files=${DOC}\n`;
+  assert.deepEqual(lintContractDocsInMatrix(noMatrix), []);
+  assert.deepEqual(lintContractDocsInMatrix(`${noMatrix}\n## AC / DoD matrix\n\nnot a table\n`), []);
 });

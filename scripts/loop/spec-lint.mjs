@@ -46,7 +46,8 @@ size_forecast_missing, size_forecast_malformed, size_forecast_split_required (PL
 a line at or above the resolved default-tier waiverLoc must be split, not disposed;
 a list item that starts with the word "forecast" or contains "wloc=" and does not parse is
 size_forecast_malformed, also not disposable; non-list lines are never claimed),
-simplest_design_missing (DESIGN-SIMPLEST-FIRST; a body with a "## Size forecast" section and no "## Simplest design" section).
+simplest_design_missing (DESIGN-SIMPLEST-FIRST; a body with a "## Size forecast" section and no "## Simplest design" section),
+contract_doc_not_in_matrix (a contract doc in a forecast files= list that no row of a valid AC / DoD matrix names in backticks; a body without a valid matrix is not flagged).
 ADR citation forms: "ADR NNNN", "ADR-<digits>" and docs/decisions/NNNN-*.md links.
 
 ${JQ_OUTPUT_USAGE}
@@ -272,7 +273,9 @@ export function lintContractDocsInMatrix(body) {
     .flatMap((files) => files.split(","))
     .filter((file) => CONTRACT_DOC_RE.test(file));
   if (docs.length === 0) return [];
-  return pathsMissingFromMatrix([...new Set(docs)], body).missing
+  const { matrixInvalid, missing } = pathsMissingFromMatrix([...new Set(docs)], body);
+  if (matrixInvalid) return [];
+  return missing
     .map((doc) => ({ kind: "contract_doc_not_in_matrix", id: doc, detail: { reason: `contract doc \`${doc}\` is in the Size forecast files but no AC / DoD matrix row names it in backticks` } }));
 }
 
