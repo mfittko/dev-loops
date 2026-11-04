@@ -241,17 +241,22 @@ export async function main({ root, base: explicitBase, env = process.env, log = 
   let devloopsOverride;
   if (requireHeadInputs) {
     devloopsOverride = { raw: null };
-    // Like findConfigFile: a blank or unparseable file falls through to the next variant;
-    // the first existing one is kept so the loader reports its error.
+    // Like findConfigFile: only the bare `.devloops` falls through (when blank, unparseable
+    // as YAML and JSON, or not a plain object) to the next variant; the first existing
+    // extension variant is final, so the loader reports its error as on disk.
     for (const name of DEVLOOPS_CONFIG_PATHS) {
       if (!(await git.pathExistsIn("HEAD", name))) continue;
       const raw = await git.show(`HEAD:${name}`);
-      let usable = raw.trim() !== "";
-      if (usable) {
-        try { if (name.endsWith(".json")) JSON.parse(raw); else parseYaml(raw); } catch { usable = false; }
+      if (name === DEVLOOPS_CONFIG_PATHS[0]) {
+        let parsed = null;
+        try { parsed = parseYaml(raw); } catch { try { parsed = JSON.parse(raw); } catch { /* unusable */ } }
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          if (devloopsOverride.raw === null) devloopsOverride = { raw, path: name };
+          continue;
+        }
       }
-      if (usable) { devloopsOverride = { raw, path: name }; break; }
-      if (devloopsOverride.raw === null) devloopsOverride = { raw, path: name };
+      devloopsOverride = { raw, path: name };
+      break;
     }
   }
   const { config } = await loadDevLoopConfigStrict({ repoRoot: root, ...(devloopsOverride && { devloopsOverride }) });

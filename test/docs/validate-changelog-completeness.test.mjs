@@ -424,6 +424,38 @@ describe("main()", () => {
     }, BASE_CHANGELOG, "version: 1\n");
   });
 
+  it("requireHeadInputs stops at a malformed .devloops.yaml instead of loading a later variant", async () => {
+    await withTempChangelog(async (root) => {
+      const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+        assertHeadInputs: async () => new Map([["CHANGELOG.md", BASE_CHANGELOG]]),
+        pathExistsIn: async (ref, file) => (ref === "HEAD" ? file === ".devloops.yaml" || file === ".devloops.yml" : true),
+        show: async (spec) => (spec === "HEAD:.devloops.yaml" ? "a: [unclosed\n" : spec === "HEAD:.devloops.yml" ? "version: 1\n" : BASE_CHANGELOG),
+      });
+      const log = capturingLog();
+      await assert.rejects(main({ root, git, env: {}, log, requireHeadInputs: true }));
+      assert.ok(!log.lines.some((l) => /check skipped/.test(l)));
+    }, BASE_CHANGELOG, "version: 1\n");
+  });
+
+  it("requireHeadInputs falls through a non-object bare .devloops and keeps a JSON-only bare opt-in", async () => {
+    const jsonOptIn = JSON.stringify({ version: 1, changelog: { required: true } });
+    for (const [bare, expectFallthrough] of [["# just a comment\n", true], [jsonOptIn, false]]) {
+      await withTempChangelog(async (root) => {
+        const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+          logSubjects: async () => ["feat: x"],
+          diffNameOnly: async () => ["packages/core/src/x.mjs"],
+          assertHeadInputs: async () => new Map([["CHANGELOG.md", BASE_CHANGELOG]]),
+          pathExistsIn: async () => true,
+          show: async (spec) => (spec === "HEAD:.devloops" ? bare : spec === "HEAD:.devloops.yaml" ? (expectFallthrough ? OPT_IN : "version: 1\n") : BASE_CHANGELOG),
+        });
+        const log = capturingLog();
+        const code = await main({ root, git, env: {}, log, requireHeadInputs: true });
+        assert.notEqual(code, 0, "an opt-in is found and records no changelog note");
+        assert.ok(!log.lines.some((l) => /check skipped/.test(l)));
+      }, BASE_CHANGELOG, "version: 1\n");
+    }
+  });
+
   it("fails config load for a malformed changelog setting and never enables the check", async () => {
     for (const devloops of ["version: 1\nchangelog:\n  required: \"yes\"\n", "version: 1\nchangelog:\n  require: true\n"]) {
       await withTempChangelog(async (root) => {
