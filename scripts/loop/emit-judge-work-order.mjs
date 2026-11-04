@@ -125,7 +125,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     const ledgerTmpRoot = resolveGateArtifactTmpRoot(checkoutRoot);
     const resolved = await resolveGateRound({ repo, pr, gate, headSha, reviews: [], issueComments: [], tmpRoot: ledgerTmpRoot, repoRoot: checkoutRoot });
     const currentLedger = path.resolve(checkoutRoot, buildLogPath({ repo, pr, gate, headSha, tmpRoot: ledgerTmpRoot }));
-    const prior = (await readdir(path.dirname(currentLedger)).catch(() => [])).filter((name) => isFindingsLogName(gate, name) && `${gate}-${headSha}.json` !== name).length;
+    const prior = (await readdir(path.dirname(currentLedger)).catch(() => [])).filter((name) => isFindingsLogName(gate, name)).length;
     round = Math.max(resolved, prior + 1);
   }
   tmpRoot ??= path.join(checkoutRoot, "tmp");

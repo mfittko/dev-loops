@@ -3929,7 +3929,7 @@ export async function main(
     // GATE-EXEC-ROUND-CAP (ADR 0208): round N+1 never runs; refuse its context. The findings ledger is main-anchored: read it from its own root, not the (possibly relocated) context --tmp-root.
     const cap = resolveGateConfig(config, "draft").maxReviewRounds ?? 0;
     if (options.gate === "draft_gate") {
-      const round = await countCompletedRounds({ ...options, tmpRoot: undefined }, { repoRoot });
+      const round = await countCompletedRounds({ ...options, tmpRoot: undefined }, { repoRoot, includeLiveCurrentHead: true });
       if (isRoundRefused(round, cap)) throw new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs; after the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`.`);
     }
     // AC6 (issue 2885): every dispatch runs the freshness check against the PR's own base branch (baseRefName),

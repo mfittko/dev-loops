@@ -8828,6 +8828,28 @@ test("CLI refuses a draft_gate context at count cap+1 with round_cap_reached, al
   }
 });
 
+test("CLI refuses a same-head draft_gate rerun at count cap+1 with round_cap_reached: the live current-head ledger counts", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  const stderrWrite = process.stderr.write.bind(process.stderr);
+  const stdoutWrite = process.stdout.write.bind(process.stdout);
+  let out = "";
+  try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
+    await seedClosedRounds(repoRoot, 47, ["1".repeat(40), "2".repeat(40), "3".repeat(40), headSha]);
+    process.stdout.write = (chunk) => { out += String(chunk); return true; };
+    process.stderr.write = (chunk) => { out += String(chunk); return true; };
+    await main(["--repo", "owner/repo", "--pr", "47", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", headSha], { repoRoot, run: stubGhRun });
+    assert.equal(process.exitCode, 1);
+    assert.match(out, /round_cap_reached/);
+  } finally {
+    process.stdout.write = stdoutWrite;
+    process.stderr.write = stderrWrite;
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("readClosedPriorRoundLogs rejects with gate_artifact_out_of_band_write on a hand-edited sealed prior log (AC2)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-sealed-"));
   try {
