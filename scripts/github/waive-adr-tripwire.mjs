@@ -108,7 +108,7 @@ async function defaultReadRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate
 }
 
 /** Every trigger path must appear, backticked, in some row of the issue's valid AC / DoD matrix. */
-function pathsMissingFromMatrix(paths, issueBody) {
+export function pathsMissingFromMatrix(paths, issueBody) {
   const matrix = detectAcDodMatrix(issueBody);
   if (!matrix.found || !matrix.valid) return { matrixInvalid: true, missing: paths };
   const missing = paths.filter((p) => !matrix.rows.some((row) => `${row.criterion}\n${row.evidence}`.includes(`\`${p}\``)));

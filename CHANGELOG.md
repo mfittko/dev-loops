@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.10-pre.2
+
+### Added
+
+- `loop spec-lint` reports `contract_doc_not_in_matrix` when a contract doc in the Size forecast `files=` list is not named in the AC / DoD matrix, so `pr waive-adr-tripwire` stays reachable (#3081)
+
+### Fixed
+
+- A clean draft_gate cap round followed by a docs-only or tests-only commit now reaches ready-for-review through gate extend-cap-round-chain (#3079)
+
 ## 1.0.10-pre.1
 
 ### Fixed

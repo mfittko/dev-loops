@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, test } from "bun:test";
 
 import { runCli } from "../../cli/index.mjs";
-import { indexDecisionRecords, lintSimplestDesign, lintSizeForecast, lintSpec, main } from "../../scripts/loop/spec-lint.mjs";
+import { indexDecisionRecords, lintContractDocsInMatrix, lintSimplestDesign, lintSizeForecast, lintSpec, main } from "../../scripts/loop/spec-lint.mjs";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const tempDirs = [];
@@ -373,9 +373,9 @@ test("DESIGN-SIMPLEST-FIRST is registered, owned by structural-quality, and cite
   }
   assert.match(await read("agents/refiner.agent.md"), /`## Simplest design` section per issue and per slice/);
   assert.match(await read("skills/loop-grill/SKILL.md"), /The synthesized body and every slice also carry a `## Simplest design` section/);
-  assert.match(await read("skills/loop-grill/SKILL.md"), /`simplest_design_missing`[\s\S]{0,120}grill or a re-grill[\s\S]{0,200}`size_forecast_\*` findings only/);
+  assert.match(await read("skills/loop-grill/SKILL.md"), /`simplest_design_missing`[\s\S]{0,120}grill or a re-grill[\s\S]{0,200}`size_forecast_\*` and `contract_doc_not_in_matrix` findings only/);
   assert.match(await read("skills/loop-grill/SKILL.md"), /`simplest_design_missing` is also not disposable[\s\S]{0,80}only by writing/);
-  assert.match(await read("skills/loop-grill/SKILL.md"), /`size_forecast_malformed` or `simplest_design_missing` finding blocks `grill-clean`/);
+  assert.match(await read("skills/loop-grill/SKILL.md"), /`size_forecast_malformed`, `simplest_design_missing` or `contract_doc_not_in_matrix` finding blocks `grill-clean`/);
   for (const file of ["developer", "fixer", "review", "judge"]) {
     assert.match(await read(`agents/${file}.agent.md`), /DESIGN-SIMPLEST-FIRST/, file);
   }
@@ -431,4 +431,32 @@ test("an unregistered rule-shaped id is still an unknown rule id", async () => {
   const root = await fixtureRepo({ rules: { requiredRules: [], optOutRules: [] } });
   const result = await lint({ body: "Cites FOO-BAR-BAZ.", repoRoot: root });
   assert.deepEqual(result.findings.map((f) => [f.kind, f.id]), [["unknown_rule_id", "FOO-BAR-BAZ"]]);
+});
+
+const DOC = "skills/docs/foo-contract.md";
+const specWith = (row) => [
+  "## Size forecast",
+  "",
+  `- forecast: slice=1 wloc=90 files=a.mjs,${DOC}`,
+  "",
+  "## AC / DoD matrix",
+  "",
+  "| Acceptance criterion | Completion evidence |",
+  "| --- | --- |",
+  `| Row. | ${row} |`,
+  "",
+].join("\n");
+
+test("contract_doc_not_in_matrix: a forecast contract doc must be named in a matrix row", async () => {
+  const missing = lintContractDocsInMatrix(specWith("`a.mjs` changes."));
+  assert.deepEqual(missing.map((f) => `${f.kind}:${f.id}`), [`contract_doc_not_in_matrix:${DOC}`]);
+  assert.ok(missing[0].detail.reason.includes(DOC));
+  const root = await fixtureRepo();
+  const wired = (await lint({ body: specWith("`a.mjs` changes."), repoRoot: root })).findings.filter((f) => f.kind === "contract_doc_not_in_matrix");
+  assert.deepEqual(wired.map((f) => f.id), [DOC]);
+  assert.deepEqual(lintContractDocsInMatrix(specWith(`\`${DOC}\` changes.`)), []);
+  assert.deepEqual(lintContractDocsInMatrix("## Size forecast\n\n- forecast: slice=1 wloc=90 files=a.mjs\n"), []);
+  const noMatrix = `## Size forecast\n\n- forecast: slice=1 wloc=90 files=${DOC}\n`;
+  assert.deepEqual(lintContractDocsInMatrix(noMatrix), []);
+  assert.deepEqual(lintContractDocsInMatrix(`${noMatrix}\n## AC / DoD matrix\n\nnot a table\n`), []);
 });
