@@ -2063,6 +2063,17 @@
       },
       "additionalProperties": false,
       "description": "Validation resolution: gate mode, optional full command, and a path-to-command map. Only the `.devloops` family file is read; the key has no effect in `.pi/dev-loop/defaults.*`. Requires a dev-loops CLI that knows the `validation` key."
+    },
+    "changelog": {
+      "type": "object",
+      "properties": {
+        "required": {
+          "type": "boolean",
+          "description": "`true` enforces the dev-loops changelog completeness rule (a `changes/<slug>.md` fragment or a `CHANGELOG.md` `## Unreleased` item) before PR creation, in pre-push-delta results and in `test:docs`. Default `false`: the rule is skipped."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Changelog completeness opt-in. Only `required: true` enables the check; file presence never does."
     }
   },
   "required": [

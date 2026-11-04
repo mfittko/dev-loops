@@ -309,9 +309,12 @@ function capturingLog() {
   return { lines, log: (...args) => lines.push(args.join(" ")), error: (...args) => lines.push(args.join(" ")) };
 }
 
-async function withTempChangelog(fn, changelog = BASE_CHANGELOG) {
+const OPT_IN = "version: 1\nchangelog:\n  required: true\n";
+
+async function withTempChangelog(fn, changelog = BASE_CHANGELOG, devloops = OPT_IN) {
   const root = await mkdtemp(path.join(tmpdir(), "changelog-gate-"));
   try {
+    if (devloops !== null) await writeFile(path.join(root, ".devloops"), devloops, "utf8");
     await writeFile(path.join(root, "CHANGELOG.md"), changelog, "utf8");
     await fn(root);
   } finally {
@@ -338,11 +341,39 @@ describe("main()", () => {
   it("degrades with a notice and exits 0 when no base ref resolves", async () => {
     const git = makeFakeGit({}); // symbolicRef + mergeBase both throw
     const log = capturingLog();
-    const code = await main({ root: "/tmp", git, env: {}, log });
+    let code;
+    await withTempChangelog(async (root) => { code = await main({ root, git, env: {}, log }); });
     assert.equal(code, 0, "no-history degrade must not fail the check");
     assert.ok(git.mergeBaseCalls.some(([a]) => a === "origin/main"), "candidates were attempted");
     assert.equal(log.lines.length, 1);
     assert.match(log.lines[0], /base ref unavailable/);
+  });
+
+  it("skips with a notice when changelog.required is unset, even for a notable change", async () => {
+    for (const devloops of [null, "version: 1\n", "version: 1\nchangelog:\n  required: false\n"]) {
+      await withTempChangelog(async (root) => {
+        await mkdir(path.join(root, "changes"), { recursive: true });
+        await writeFile(path.join(root, "changes", "README.md"), "readme\n", "utf8");
+        const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+          logSubjects: async () => ["feat: x"],
+          diffNameOnly: async () => ["packages/core/src/x.mjs"],
+        });
+        const log = capturingLog();
+        assert.equal(await main({ root, git, env: {}, log }), 0);
+        assert.deepEqual(log.lines, ["changelog completeness check skipped: changelog.required is not set (LIFECYCLE-CHANGELOG-COMPLETENESS)"]);
+        assert.equal(git.mergeBaseCalls.length, 0, "a skipped check resolves no base");
+      }, BASE_CHANGELOG, devloops);
+    }
+  });
+
+  it("fails config load for a malformed changelog setting and never enables the check", async () => {
+    for (const devloops of ["version: 1\nchangelog:\n  required: \"yes\"\n", "version: 1\nchangelog:\n  require: true\n"]) {
+      await withTempChangelog(async (root) => {
+        const log = capturingLog();
+        await assert.rejects(main({ root, git: makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }), env: {}, log }));
+        assert.equal(log.lines.length, 0);
+      }, BASE_CHANGELOG, devloops);
+    }
   });
 
   it("accepts an ADDED non-empty fragment but not a modified or empty one", async () => {

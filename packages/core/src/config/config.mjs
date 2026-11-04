@@ -281,6 +281,10 @@ const ClassifyConfig = z
 const ValidationCommand = z.string().trim().min(1).max(500)
   .regex(/^[^\p{Cc}]+$/u, "command must be one line with no control characters");
 
+const ChangelogConfig = z.strictObject({
+  required: z.boolean().describe("`true` enforces the dev-loops changelog completeness rule (a `changes/<slug>.md` fragment or a `CHANGELOG.md` `## Unreleased` item) before PR creation, in pre-push-delta results and in `test:docs`. Default `false`: the rule is skipped.").optional(),
+}).describe("Changelog completeness opt-in. Only `required: true` enables the check; file presence never does.");
+
 export const ValidationConfig = z
   .strictObject({
     mode: z.enum(["ci-only", "local"]).describe("`ci-only` (default): current-head CI is the only full-validation authority; the gate records a complete `ci-authoritative` artifact and runs no local suite. `local`: the gate runs the full suite locally (`fullCommand`, else the package.json `verify` script).").optional(),
@@ -1026,6 +1030,7 @@ export const DevLoopConfigSchema = z.strictObject({
   standingAuthorizations: StandingAuthorizationsConfig.optional(),
   classify: ClassifyConfig.optional(),
   validation: ValidationConfig.optional(),
+  changelog: ChangelogConfig.optional(),
 }).superRefine(refineExtraToolsGuidanceKeys);
 
 // ============================================================================
@@ -1105,6 +1110,7 @@ export const FileConfigSchema = z.strictObject({
   standingAuthorizations: StandingAuthorizationsConfig.describe("Operator-recorded standing human authorizations (adrTripwireWaiver), read only from the default branch's .devloops.").optional(),
   classify: ClassifyConfig.optional(),
   validation: ValidationConfig.optional(),
+  changelog: ChangelogConfig.optional(),
   // Unknown keys fail closed like any typo (strictObject).
 });
 

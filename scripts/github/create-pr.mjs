@@ -79,7 +79,7 @@ Behavior:
   - refuses with \`size_split_required_before_pr\` before creating when the local \`origin/<base>...<head>\` whole-PR logic LOC is at or above the resolved default-tier \`waiverLoc\` (PRE-PR-SIZE-CHECK); no override flag; an unknown size does not refuse
   - fetches only \`origin <base>\` before size and changelog checks; refuses with \`base_fetch_failed_before_pr\` on fetch failure
   - validates \`--base\` as a non-empty literal branch name before that fetch: refuses empty values, options, refspecs and revision syntax; valid branch names remain supported
-  - refuses with \`changelog_incomplete_before_pr\` (LIFECYCLE-CHANGELOG-COMPLETENESS) after size checks against the fetched base when the selected head equals checkout HEAD; skips for an unresolved origin base or a different head; no override
+  - refuses with \`changelog_incomplete_before_pr\` (LIFECYCLE-CHANGELOG-COMPLETENESS) after size checks against the fetched base when the selected head equals checkout HEAD; skips for an unresolved origin base or a different head; applies only when \`changelog.required: true\` is set in \`.devloops\`, otherwise prints a skip notice
   - after a successful create, prints one JSON line \`{"adrTripwire":...,"sizeBudget":...}\` (ADR-TRIPWIRE-EARLY-SURFACE);
     a block or unknown outcome is advisory and never refuses the already-created PR
 Examples:
@@ -707,6 +707,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
         if (code !== 0) {
           throw Object.assign(parseError(`LIFECYCLE-CHANGELOG-COMPLETENESS: ${diagnostics.join("; ")}`), { code: CHANGELOG_INCOMPLETE_BEFORE_PR });
         }
+        for (const line of diagnostics) if (line.startsWith("changelog completeness check skipped")) process.stderr.write(`[create-pr] ${line}\n`);
       }
     }
   }

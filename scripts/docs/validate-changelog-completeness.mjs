@@ -229,6 +229,14 @@ export function createGitClient(root, exec = promisify(execFile)) {
  * validate-decision-records.mjs run({ root, git }) shape.
  */
 export async function main({ root, base: explicitBase, env = process.env, log = console, git = createGitClient(root), requireHeadInputs = false } = {}) {
+  // Opt-in: the rule applies only when the repo sets `changelog.required: true`.
+  // A malformed value fails config load here and never enables the check.
+  const { config } = await loadDevLoopConfigStrict({ repoRoot: root });
+  if (config?.changelog?.required !== true) {
+    log.log("changelog completeness check skipped: changelog.required is not set (LIFECYCLE-CHANGELOG-COMPLETENESS)");
+    return 0;
+  }
+
   const base = explicitBase !== undefined
     ? await git.mergeBase(explicitBase, "HEAD")
     : await resolveBaseRef(git, env).catch(() => null);
@@ -287,7 +295,6 @@ export async function main({ root, base: explicitBase, env = process.env, log = 
     addedFilesWithNotes.push(f);
   }
 
-  const { config } = await loadDevLoopConfigStrict({ repoRoot: root });
   const { errors } = validateChangelogCompleteness({
     baseChangelog,
     addedFiles: addedFilesWithNotes,
