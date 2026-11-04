@@ -1257,6 +1257,29 @@ for (const [severity, refuses] of [["critical", false], ["HIGH", false], ["mediu
   });
 });
 
+test("GATE-EXEC-SOFT-CAP: pre_approval_gate keeps the VALID_SEVERITIES matcher (critical and HIGH are refused, medium emits)", async () => {
+  await withFixture(async ({ files, emit }) => {
+    for (const severity of ["critical", "HIGH"]) {
+      await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity, judgeFix: "guard the deref" })]));
+      await assert.rejects(emit({ gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined }), /not a non-empty judge-pass --out array/);
+    }
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
+    assert.equal((await emit({ gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+  });
+});
+
+test("GATE-EXEC-LOW-FIX-UNTIL-CAP: a padded nit severity below the cap in draft round 2 is refused (low_fix_until_cap)", async () => {
+  await withFixture(async ({ root, files, emit }) => {
+    const prior = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${"d".repeat(40)}.json`);
+    await mkdir(path.dirname(prior), { recursive: true });
+    await writeFile(prior, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
+    for (const severity of ["nit", " nit", " nit "]) {
+      await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity })]));
+      await assert.rejects(emit(), (e) => e.refusal === "low_fix_until_cap", severity);
+    }
+  });
+});
+
 test("GATE-EXEC-ROUND-CAP: the cap round is refused when the current-head round composes a blocker (round_cap_reached)", async () => {
   await withFixture(async ({ root, wt, head, files, emit }) => {
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));

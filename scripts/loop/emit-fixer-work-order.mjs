@@ -542,7 +542,7 @@ export async function emitFixerWorkOrder({
     if (ci.headSha !== headSha) throw new Refusal(`ci file ${ciFile} is for headSha ${JSON.stringify(ci.headSha)}, not --head-sha ${headSha}; ${next}`);
     if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name.trim() !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`);
   }
-  const isActItem = (f) => f?.judgeDisposition === "act" && typeof f.severity === "string" && f.severity.trim() !== "" && typeof f.summary === "string" && f.summary.trim() !== "";
+  const isActItem = (f) => f?.judgeDisposition === "act" && typeof f.severity === "string" && (gate === "draft_gate" ? f.severity.trim() !== "" : VALID_SEVERITIES.has(normalizeSeverity(f.severity))) && typeof f.summary === "string" && f.summary.trim() !== "";
   if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
     throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
   }
@@ -597,7 +597,7 @@ export async function emitFixerWorkOrder({
         throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-SOFT-CAP): the cap round (cap ${cap}) composes blocked (${blockers.map((b) => b.item).join("; ")}); the verdict is blocked and no fixer order follows it`);
       }
     }
-    if (lowNitOnly && (lowFixCapped || (actSeverities.every((s) => s === "nit") && round !== 1))) {
+    if (lowNitOnly && (lowFixCapped || (actSeverities.every((s) => normalizeSeverity(s) === "nit") && round !== 1))) {
       const cappedAt = gate === "pre_approval_gate" ? "at pre_approval_gate" : "at or past the draft_gate round cap";
       const where = lowFixCapped ? cappedAt : "outside draft_gate round 1";
       throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${actListFile} holds only low or nit items ${where}; low and nit findings no longer reach the fixer`);
