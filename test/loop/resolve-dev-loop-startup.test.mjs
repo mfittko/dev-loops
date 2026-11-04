@@ -1777,16 +1777,18 @@ test("--issue --claim on an unassigned issue claims once and proceeds", async ()
   await withTempDir(async (tempDir) => {
     await initRepoWithOrigin(tempDir);
     const ghStub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["issue", "view", "511", "state"], stdout: JSON.stringify({ state: "OPEN" }) },
       noLinkedPrGraphqlEntry(),
       { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [] }) },
       { assertArgs: ["issue", "edit", "511", "--repo", "mfittko/dev-loops", "--add-assignee", "@me"], stdout: "" },
-    ], { matchMode: "claims" });
+    ], { matchMode: "claims", logCalls: true });
     const result = await runNode(["--issue", "511", "--claim"], {
       cwd: tempDir,
       env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).ok, true);
+    assert.equal(await editCalls(ghStub), 1);
   }, { prefix: "resolve-dev-loop-claim-issue-" });
 });
 
@@ -1799,13 +1801,14 @@ test("--pr --claim on an unassigned PR claims once and proceeds", async () => {
         stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
       },
       { assertArgs: ["pr", "edit", "740", "--repo", "mfittko/dev-loops", "--add-assignee", "@me"], stdout: "" },
-    ], { matchMode: "claims" });
+    ], { matchMode: "claims", logCalls: true });
     const result = await runNode(["--pr", "740", "--claim"], {
       cwd: tempDir,
       env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
     });
     assert.equal(result.code, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).ok, true);
+    assert.equal(await editCalls(ghStub), 1);
   }, { prefix: "resolve-dev-loop-claim-pr-" });
 });
 
@@ -1818,7 +1821,7 @@ test("--pr --claim on a foreign-assigned PR still refuses and performs no write"
         stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "foreign-dev" }], closingIssuesReferences: [], body: "" }),
       },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
-    ], { matchMode: "claims" });
+    ], { matchMode: "claims", logCalls: true });
     const result = await runNode(["--pr", "740", "--claim"], {
       cwd: tempDir,
       env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
@@ -1826,7 +1829,99 @@ test("--pr --claim on a foreign-assigned PR still refuses and performs no write"
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
     assert.match(result.stderr, /PR #740 is assigned to foreign-dev/);
+    assert.equal(await editCalls(ghStub), 0);
   }, { prefix: "resolve-dev-loop-claim-pr-other-" });
+});
+
+async function editCalls(ghStub) {
+  const log = await readFile(ghStub.ghLogPath, "utf8");
+  return log.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((args) => args[1] === "edit").length;
+}
+
+const claimEnv = (ghStub) => ({ ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) });
+const viewerEntry = { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) };
+
+test("--issue --claim on a foreign-assigned issue refuses and performs no write", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
+      { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "foreign-dev" }] }) },
+      viewerEntry,
+    ], { matchMode: "claims", logCalls: true });
+    const result = await runNode(["--issue", "511", "--claim"], { cwd: tempDir, env: claimEnv(ghStub) });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /Issue #511 is assigned to foreign-dev, not the current viewer/);
+    assert.equal(await editCalls(ghStub), 0);
+  }, { prefix: "resolve-dev-loop-claim-issue-other-" });
+});
+
+test("--claim on a viewer-assigned PR is a no-op", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "" }),
+      },
+      viewerEntry,
+    ], { matchMode: "claims", logCalls: true });
+    const result = await runNode(["--pr", "740", "--claim"], { cwd: tempDir, env: claimEnv(ghStub) });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(await editCalls(ghStub), 0);
+  }, { prefix: "resolve-dev-loop-claim-pr-noop-" });
+});
+
+test("--pr --claim fails closed when the claim write fails", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
+      },
+      { assertArgs: ["pr", "edit", "740"], exitCode: 1, stderr: "boom" },
+    ], { matchMode: "claims", logCalls: true });
+    const result = await runNode(["--pr", "740", "--claim"], { cwd: tempDir, env: claimEnv(ghStub) });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /could not be claimed/);
+  }, { prefix: "resolve-dev-loop-claim-pr-fail-" });
+});
+
+test("--pr --claim with a foreign-owned linked issue refuses before any claim write", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [{ number: 41 }], body: "" }),
+      },
+      { assertArgs: ["issue", "view", "41"], stdout: JSON.stringify({ assignees: [{ login: "foreign-dev" }] }) },
+      viewerEntry,
+    ], { matchMode: "claims", logCalls: true });
+    const result = await runNode(["--pr", "740", "--claim"], { cwd: tempDir, env: claimEnv(ghStub) });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /linked issue #41 is assigned to foreign-dev/);
+    assert.equal(await editCalls(ghStub), 0);
+  }, { prefix: "resolve-dev-loop-claim-pr-linked-" });
+});
+
+test("--pr --claim on a closed unassigned PR does not claim", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "CLOSED", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
+      },
+    ], { matchMode: "claims", logCalls: true });
+    const result = await runNode(["--pr", "740", "--claim"], { cwd: tempDir, env: claimEnv(ghStub) });
+    assert.equal(await editCalls(ghStub), 0);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /not claimed by any contributor/);
+  }, { prefix: "resolve-dev-loop-claim-pr-closed-" });
 });
 
 test("--pr unassigned fails closed naming the exact claim command", async () => {
