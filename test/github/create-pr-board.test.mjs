@@ -331,7 +331,8 @@ test("create-pr --lightweight with a Closes #N body is tracker-backed and byte-i
     );
 
     assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
+    // The validator reads changelog.required from the committed HEAD .devloops; the fixture's is uncommitted, so only the skip notice appears.
+    assert.equal(result.stderr, "[create-pr] changelog completeness check skipped: changelog.required is not set (LIFECYCLE-CHANGELOG-COMPLETENESS)\n");
     assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/42\n");
     const ghCalls = (await readFile(ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
     // linked-PR probe + gh pr create — no board calls
