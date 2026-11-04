@@ -552,7 +552,7 @@ export async function emitFixerWorkOrder({
   const badCluster = actListFile ? source.parsed.find((f) => f.clusterSeverities !== undefined && !(Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 && f.clusterSeverities.every((s) => VALID_SEVERITIES.has(s)))) : undefined;
   if (badCluster) throw new WorkOrderRefusal("invalid_cluster_severities", `invalid_cluster_severities: act item ${JSON.stringify(badCluster.summary)} has clusterSeverities that is not a non-empty array of known severities; re-run judge-pass to regenerate the act list`);
   const actSeverities = actListFile ? source.parsed.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity])) : [];
-  const lowNitOnly = actSeverities.every((s) => s === "low" || s === "nit");
+  const lowNitOnly = actSeverities.every((s) => ["low", "nit"].includes(normalizeSeverity(s)));
   let capRoundHead = headSha; // the head whose ledger and posted verdict the act list belongs to (ADR 0197)
   if (actListFile && (gate === "draft_gate" || lowNitOnly)) {
     // The round state comes from the same --tmp-root as the ledger writer, judge-pass and the verdict poster.

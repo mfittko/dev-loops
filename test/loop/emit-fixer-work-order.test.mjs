@@ -1242,7 +1242,7 @@ test("GATE-EXEC-ROUND-CAP: a medium act list reaches the fixer below and at the 
   });
 });
 
-for (const [severity, refuses] of [["critical", false], ["HIGH", false], ["medium", false], ["low", "low_fix_until_cap"], ["", true]]) test(`GATE-EXEC-SOFT-CAP: a cap-round act item with severity ${JSON.stringify(severity)} ${refuses === true ? "is refused as malformed" : refuses ? "passes the matcher and is refused by " + refuses : "emits a fixer order"}`, async () => {
+for (const [severity, refuses] of [["critical", false], ["HIGH", false], ["medium", false], ["low", "low_fix_until_cap"], ["nice-to-have", "low_fix_until_cap"], ["", true]]) test(`GATE-EXEC-SOFT-CAP: a cap-round act item with severity ${JSON.stringify(severity)} ${refuses === true ? "is refused as malformed" : refuses ? "passes the matcher and is refused by " + refuses : "emits a fixer order"}`, async () => {
   await withFixture(async ({ root, wt, head, files, emit }) => {
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
     const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
