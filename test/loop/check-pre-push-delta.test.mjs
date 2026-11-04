@@ -82,6 +82,15 @@ test("result-only changelog seam checks touched changes paths before writing evi
   }
 });
 
+// Base commit; `optIn` writes the changelog.required opt-in that enables the completeness check.
+function commitBase(dir, { optIn, message = "base" }) {
+  if (optIn) {
+    fs.writeFileSync(path.join(dir, ".devloops"), "version: 1\nchangelog:\n  required: true\n");
+    runGitFixture(dir, ["add", ".devloops"]);
+  }
+  runGitFixture(dir, ["commit", "-q", "--allow-empty", "-m", message]);
+}
+
 test("real delta CLI refuses committed invalid inputs concealed by uncommitted corrections", async () => {
   for (const { length, correction, crlf } of [{ length: 201 }, { length: 200 }, { length: 200, crlf: true }, { length: 0 },
     { length: 201, correction: "changes/note.md" }, { length: 200, correction: "changes/other.md" }, { length: 200, correction: "CHANGELOG.md" }]) {
@@ -89,7 +98,7 @@ test("real delta CLI refuses committed invalid inputs concealed by uncommitted c
   try {
     initGitFixture(dir, { branch: "main", commit: null });
     runGitFixture(dir, ["config", "commit.gpgsign", "false"]);
-    runGitFixture(dir, ["commit", "-q", "--allow-empty", "-m", "base"]);
+    commitBase(dir, { optIn: true });
     const baseline = runGitFixture(dir, ["rev-parse", "HEAD"]);
     runGitFixture(dir, ["update-ref", "refs/remotes/origin/main", baseline]);
     if (length) {
@@ -149,7 +158,7 @@ test("result-mode changelog ignores inherited Git directory overrides", async ()
     for (const [root, message] of [[target, "base"], [decoy, "decoy without origin"]]) {
       initGitFixture(root, { branch: "main", commit: null });
       runGitFixture(root, ["config", "commit.gpgsign", "false"]);
-      runGitFixture(root, ["commit", "-q", "--allow-empty", "-m", message]);
+      commitBase(root, { optIn: root === target, message });
     }
     const baseline = runGitFixture(target, ["rev-parse", "HEAD"]);
     runGitFixture(target, ["update-ref", "refs/remotes/origin/main", baseline]);
@@ -173,6 +182,32 @@ test("result-mode changelog ignores inherited Git directory overrides", async ()
     assert.equal(out.status, 2, out.stderr);
     assert.match(JSON.parse(out.stderr).error, /^LIFECYCLE-CHANGELOG-COMPLETENESS/);
     assert.equal(fs.existsSync(path.join(recordDir, `${baseline}.json`)), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("result mode without changelog.required records a changes-touching diff that has no valid note", async () => {
+  const { dir, threadsFile } = threadsFixture();
+  try {
+    initGitFixture(dir, { branch: "main", commit: null });
+    runGitFixture(dir, ["config", "commit.gpgsign", "false"]);
+    commitBase(dir, { optIn: false });
+    const baseline = runGitFixture(dir, ["rev-parse", "HEAD"]);
+    runGitFixture(dir, ["update-ref", "refs/remotes/origin/main", baseline]);
+    fs.mkdirSync(path.join(dir, "changes"));
+    fs.writeFileSync(path.join(dir, "changes/note.md"), `- ${"x".repeat(194)} (#1)\n`);
+    runGitFixture(dir, ["add", "."]);
+    runGitFixture(dir, ["commit", "-qm", "fix(local): invalid fragment"]);
+    const args = ["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", baseline, "--worktree", dir];
+    const input = (await runDeltaCli([...args, "--spec-identity", "spec@1", "--result-path", path.join(dir, "input-result.json")], quiet)).input;
+    const resultPath = path.join(dir, "review.json");
+    fs.writeFileSync(resultPath, JSON.stringify({ ...input.resultShape,
+      actionableItems: input.actItems.map(({ ref }) => ({ ref, status: "resolved", evidence: ["checked"] })),
+      newFindings: [], widenedReads: [], outcome: "locally_clear",
+    }));
+    sealDeltaFixture(resolveGateArtifactTmpRoot(dir), resultPath);
+    const out = spawnSync(process.execPath, [path.resolve("scripts/loop/check-pre-push-delta.mjs"), ...args, "--result", resultPath, "--invocation", "1"], { cwd: dir, encoding: "utf8" });
+    assert.equal(out.status, 0, out.stderr);
+    assert.equal(fs.existsSync(path.join(resolveGateArtifactTmpRoot(dir), "gate-delta", `${baseline}.json`)), true);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

@@ -4,11 +4,15 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { runNodeWithPrePrRecord, writeGhStub as writeGhStubHelper, initSizeBudgetFixtureRepo, repeatedLinesContent, runGitFixture } from "../_helpers.mjs";
+import { runNodeWithPrePrRecord, writeGhStub as writeGhStubHelper, initSizeBudgetFixtureRepo as initBareFixtureRepo, repeatedLinesContent, runGitFixture } from "../_helpers.mjs";
 
 import { buildCreatePrArgs, main as createPrMain, detectClosingKeyword, extractClosingIssueNumber, resolveBaseDefault } from "../../scripts/github/create-pr.mjs";
 import { resolveBaseBranch } from "@dev-loops/core/config";
 import { writePrePrReviewRecord } from "../../scripts/loop/_pre-pr-review-record.mjs";
+
+// Fixtures opt in to the changelog rule (`changelog.required: true`); the default-off cases use `initBareFixtureRepo`.
+const CHANGELOG_OPT_IN = "changelog:\n  required: true\n";
+const initSizeBudgetFixtureRepo = (cwd, opts = {}) => initBareFixtureRepo(cwd, { ...opts, devloopsYaml: `${opts.devloopsYaml ?? "version: 1\n"}${CHANGELOG_OPT_IN}` });
 
 // Records a clean pre-PR review at `ref` (checks it out, writes, returns to the previous branch).
 function writeFeatureRecord(cwd, ref) {
@@ -21,6 +25,41 @@ function writeFeatureRecord(cwd, ref) {
 const withoutEarlySurface = (stdout) => stdout.split("\n").filter((line) => !line.startsWith("{\"adrTripwire\"")).join("\n");
 const scriptPath = path.resolve("scripts/github/create-pr.mjs");
 const runNode = (args = [], options = {}) => runNodeWithPrePrRecord(scriptPath, args, options);
+
+test("create-pr without changelog.required creates the PR for a code diff and prints the skip notice", async () => {
+  for (const title of ["chore: x", "feat: x", "fix: x"]) {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "create-changelog-off-"));
+    try {
+      await initBareFixtureRepo(cwd, { headFiles: [{ path: "src/code.mjs", content: "export const a = 1;\n" },
+        { path: "changes/README.md", content: "readme\n" }, { path: "CHANGELOG.md", content: "# Changelog\n\n## Unreleased\n" }] });
+      const { env } = await writeGhStub(cwd, [{}]);
+      const result = await runNode(["--base", "main", "--head", "feature", "--title", title, "--body", "notes"], { cwd, env });
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stderr, /changelog completeness check skipped: changelog\.required is not set \(LIFECYCLE-CHANGELOG-COMPLETENESS\)/);
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  }
+});
+
+test("create-pr keeps stderr JSON-only when a later check refuses after the changelog skip", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "create-changelog-off-refuse-"));
+  try {
+    await initBareFixtureRepo(cwd, { headFiles: [{ path: "src/code.mjs", content: "export const a = 1;\n" }] });
+    const { env } = await writeGhStub(cwd, [{}]);
+    const result = await runNode(["--base", "main", "--head", "feature", "--title", "chore: x", "--body", "Closes #5"], { cwd, env });
+    assert.notEqual(result.code, 0);
+    assert.doesNotThrow(() => JSON.parse(result.stderr), result.stderr);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("create-pr with changelog.required refuses a code diff without a note", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "create-changelog-on-"));
+  try {
+    await initSizeBudgetFixtureRepo(cwd);
+    const { env } = await writeGhStub(cwd, [{}]);
+    const result = await runNode(["--base", "main", "--head", "feature", "--title", "chore: x", "--body", "notes"], { cwd, env });
+    assert.equal(JSON.parse(result.stderr).code, "changelog_incomplete_before_pr");
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
 
 test("create-pr checks changelog format and title before any GitHub write", async () => {
   for (const { length, crlf } of [{ length: null }, { length: 201 }, { length: 200 }, { length: 200, crlf: true }]) {
