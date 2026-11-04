@@ -4,6 +4,7 @@ import { findBlockingTitleMarkers, stripBlockingTitleMarkers } from "./pr-title-
 import { evaluateUiE2eScoping } from "./ui-e2e-scoping.mjs";
 import { evaluateUiDesignerReviewScoping } from "./ui-designer-review-scoping.mjs";
 import { trimmedOrNull } from "./normalize.mjs";
+import { isSafeRepoSegment } from "../github/repo-slug.mjs";
 import {
   MALFORMED_AC_DOD_MATRIX_FINDING,
   MISSING_AC_DOD_MATRIX_FINDING,
@@ -96,8 +97,12 @@ export const BLOCKED_ON = Object.freeze({
 
 // Issue 3105: an agentRemedy needs a real repo and integer PR; otherwise the result names the operator.
 // The repo must be a plain owner/name slug and the PR positive: the command is run by an agent.
+const isPlainRepoSlug = (repo) => typeof repo === "string"
+  && /^[\w.-]+\/[\w.-]+$/.test(repo)
+  && repo.split("/").every(isSafeRepoSegment);
+
 function remedyOrOperator(input, build) {
-  if (typeof input.repo === "string" && /^[\w.-]+\/[\w.-]+$/.test(input.repo) && Number.isInteger(input.pr) && input.pr > 0) {
+  if (isPlainRepoSlug(input.repo) && Number.isInteger(input.pr) && input.pr > 0) {
     return { agentRemedy: build(input.repo, input.pr) };
   }
   return { blockedOn: BLOCKED_ON.OPERATOR_DECISION };

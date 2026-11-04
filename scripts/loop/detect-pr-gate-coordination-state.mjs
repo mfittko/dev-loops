@@ -137,8 +137,12 @@ Output (stdout, JSON):
     "forbiddenActions": ["run_pre_approval_gate", "declare_merge_ready"],
     "nextAction": "resolve_merge_conflicts",
     "reason": "...",
-    "fixerDispositionWarning"?: { "warning": "...", "incomplete": [{ "threadId": "...", "failedStep": "..." }] }
+    "fixerDispositionWarning"?: { "warning": "...", "incomplete": [{ "threadId": "...", "failedStep": "..." }] },
+    "blockedOn"?: "operator_decision",
+    "agentRemedy"?: { "command": "...", "summary": "..." }
   }
+  (blockedOn and agentRemedy are present only on report_blocked results; a
+  result carries one of them, never both)
   (fixerDispositionWarning is present only when the fixer disposition is
   incomplete; it is advisory and blocks nothing, ADR 0155)
   (refinementArtifact.planDocPath is present only when specSource is

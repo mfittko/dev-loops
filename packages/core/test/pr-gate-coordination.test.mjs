@@ -4782,3 +4782,17 @@ test("unconfirmed-CI block carries the exact wait-pr-checks agentRemedy", () => 
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
   assert.equal(result.agentRemedy.command, "dev-loops-run scripts/github/wait-pr-checks.mjs --repo o/r --pr 266 --timeout 600");
 });
+
+test("a draft PR with a missing refinement artifact is blocked on the operator decision (#3105)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 7,
+    repo: "o/r",
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    ciStatus: "success",
+    refinementArtifact: { status: "missing" },
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
+});

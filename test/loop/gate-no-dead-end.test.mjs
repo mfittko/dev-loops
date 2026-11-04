@@ -153,7 +153,7 @@ test("hasRunnableCommand accepts quoted angle brackets and rejects unfilled plac
 });
 
 test("a repo that is not a plain slug or a non-positive pr names the operator", () => {
-  for (const extra of [{ repo: "o/r;id" }, { repo: "o/$(id)" }, { repo: "o" }, { repo: "" }, { pr: 0 }, { pr: -1 }]) {
+  for (const extra of [{ repo: "o/r;id" }, { repo: "../.." }, { repo: "./r" }, { repo: "o/.." },{ repo: "o/$(id)" }, { repo: "o" }, { repo: "" }, { pr: 0 }, { pr: -1 }]) {
     const result = evaluatePrGateCoordination(titleInput("WIP: x", extra));
     assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION, JSON.stringify(extra));
     assert.equal(result.agentRemedy, undefined);
