@@ -1936,6 +1936,7 @@ test("--pr --claim with a failing pr view refuses and performs no write", async 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
     assert.doesNotMatch(result.stderr, /could not be claimed/);
+    assert.match(result.stderr, /--claim was not applied/);
     assert.equal(await editCalls(ghStub), 0);
   }, { prefix: "resolve-dev-loop-claim-pr-readfail-" });
 });
@@ -1953,6 +1954,7 @@ test("--issue --claim with a failing assignees read refuses and performs no writ
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
     assert.doesNotMatch(result.stderr, /could not be claimed/);
+    assert.match(result.stderr, /--claim was not applied/);
     assert.equal(await editCalls(ghStub), 0);
   }, { prefix: "resolve-dev-loop-claim-issue-readfail-" });
 });

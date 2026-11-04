@@ -87,7 +87,7 @@ Optional modifier:
                  exact target. With --pr, an unreadable linked issue refuses
                  the claim. Rejected with --review/--ui-review/--input/
                  --plan-file/--spike and with no target.
-  --review      With --pr only: route the PR to the read-only review strategy
+  --review       With --pr only: route the PR to the read-only review strategy
                  instead of the default continue_on_pr path. Requires no
                  ownership. Rejected without --pr, or combined with --issue/
                  --input/--plan-file/--spike, and mutually exclusive with
@@ -765,7 +765,7 @@ function enforceOwnershipGate(ownership, { describeArtifact, claimCommand, claim
     }
     if (claimRequested) {
       throw new Error(
-        `${describeArtifact} is not claimed by any contributor and --claim was not applied (the target is not open, or its state could not be read); fail closed — do not start.${reviewRouteHint}`,
+        `${describeArtifact} is not claimed by any contributor and --claim was not applied (the target is not open, or its assignees or state could not be read); fail closed — do not start.${reviewRouteHint}`,
       );
     }
     throw new Error(
