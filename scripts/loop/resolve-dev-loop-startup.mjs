@@ -761,7 +761,7 @@ function resolveTargetPreference(cwd) {
   ];
   // Check .devloops first (bare or with extension).
   // Bare files try YAML first, then JSON fallback (consistent with
-  // config.mjs readConfigFile behavior).
+  // config.mjs findConfigFile behavior).
   for (const devloopsPath of devloopsCandidates) {
     try {
       const raw = readFileSync(devloopsPath, "utf8");

@@ -281,6 +281,10 @@ const ClassifyConfig = z
 const ValidationCommand = z.string().trim().min(1).max(500)
   .regex(/^[^\p{Cc}]+$/u, "command must be one line with no control characters");
 
+const ChangelogConfig = z.strictObject({
+  required: z.boolean().describe("`true` enforces the dev-loops changelog completeness rule (a `changes/<slug>.md` fragment or a `CHANGELOG.md` `## Unreleased` item) before PR creation, in pre-push-delta results and in `test:docs`. Default `false`: the rule is skipped.").optional(),
+}).describe("Changelog completeness opt-in. Only `required: true` enables the check; file presence never does. Only the `.devloops` family file is read; the key has no effect in `.pi/dev-loop/defaults.*` or the extension defaults.");
+
 export const ValidationConfig = z
   .strictObject({
     mode: z.enum(["ci-only", "local"]).describe("`ci-only` (default): current-head CI is the only full-validation authority; the gate records a complete `ci-authoritative` artifact and runs no local suite. `local`: the gate runs the full suite locally (`fullCommand`, else the package.json `verify` script).").optional(),
@@ -1026,6 +1030,7 @@ export const DevLoopConfigSchema = z.strictObject({
   standingAuthorizations: StandingAuthorizationsConfig.optional(),
   classify: ClassifyConfig.optional(),
   validation: ValidationConfig.optional(),
+  changelog: ChangelogConfig.optional(),
 }).superRefine(refineExtraToolsGuidanceKeys);
 
 // ============================================================================
@@ -1105,6 +1110,7 @@ export const FileConfigSchema = z.strictObject({
   standingAuthorizations: StandingAuthorizationsConfig.describe("Operator-recorded standing human authorizations (adrTripwireWaiver), read only from the default branch's .devloops.").optional(),
   classify: ClassifyConfig.optional(),
   validation: ValidationConfig.optional(),
+  changelog: ChangelogConfig.optional(),
   // Unknown keys fail closed like any typo (strictObject).
 });
 
@@ -1611,20 +1617,11 @@ function mergeAngleArrays(targetRaw, sourceRaw) {
 }
 
 /**
- * Try to read and parse a config file (YAML preferred, JSON fallback).
- * Detects format from file extension: .yaml/.yml → YAML, .json → JSON.
- * Returns the parsed object or null if the file doesn't exist.
- * Throws on read errors other than ENOENT.
- * @param {string} filePath
- * @returns {Promise<object|null>}
- */
-/**
  * Parse already-read config text (YAML or JSON, keyed off `filePath`'s
- * extension) into a plain object. Split out of {@link readConfigFile} so a
- * caller that already has the raw text from somewhere other than this
- * checkout's disk (e.g. `loadDevLoopConfig`'s `devloopsOverride`, which reads
- * a PR head commit's `.devloops` via git) can reuse the exact same parsing
- * rules instead of re-implementing them.
+ * extension) into a plain object. Shared by the on-disk loader and callers
+ * that have the raw text from somewhere other than this checkout's disk
+ * (e.g. `loadDevLoopConfig`'s `devloopsOverride`, which reads a PR head
+ * commit's `.devloops` via git), so both use the exact same parsing rules.
  * @param {string} raw
  * @param {string} filePath - used only for its extension and in error messages
  * @returns {Record<string, unknown>}
@@ -1689,17 +1686,6 @@ export function stripConfigKeyPaths(raw, filePath, keyPaths) {
   return JSON.stringify(data);
 }
 
-async function readConfigFile(filePath) {
-  let raw;
-  try {
-    raw = await readFile(filePath, "utf8");
-  } catch (err) {
-    if (err.code === "ENOENT") return null;
-    throw configError(`Cannot read config file: ${err.message}`, err.code, filePath);
-  }
-  return parseConfigContent(raw, filePath);
-}
-
 /**
  * Find a config file by trying one or more base names in order.
  * Each base name prefers YAML (.yaml, then .yml) before JSON.
@@ -1708,32 +1694,56 @@ async function readConfigFile(filePath) {
  */
 async function findConfigFile(basePaths) {
   const candidates = Array.isArray(basePaths) ? basePaths : [basePaths];
+  const read = async (filePath) => {
+    try {
+      return await readFile(filePath, "utf8");
+    } catch (err) {
+      if (err.code === "ENOENT") return null;
+      throw configError(`Cannot read config file: ${err.message}`, err.code, filePath);
+    }
+  };
 
   for (const basePath of candidates) {
-    // Try bare path first. ENOENT: try extension variants. Other errors
-    // (EISDIR/EACCES) mean the bare file exists but is unreadable — try
-    // extension variants, but surface the original error if none exists.
-    let bareData = null;
-    let bareError = null;
-    try {
-      bareData = await readConfigFile(basePath);
-    } catch (err) {
-      bareError = err;
-    }
-    if (bareData !== null) return { path: basePath, data: bareData };
-
-    for (const ext of [".yaml", ".yml", ".json"]) {
-      const filePath = basePath + ext;
-      const data = await readConfigFile(filePath);
-      if (data !== null) return { path: filePath, data };
-    }
-
-    // No extension variant found either — if the bare path exists but is
-    // unreadable, surface that error rather than silently falling back.
-    if (bareError) throw bareError;
+    const found = await selectConfigSource(basePath, read);
+    if (found) return { path: found.path, data: parseConfigContent(found.raw, found.path) };
   }
 
   return { path: candidates[0] + ".yaml", data: null };
+}
+
+/**
+ * The single source-selection rule for a config base name: the bare file wins
+ * when it parses to a plain object; otherwise (blank, unparseable, non-object,
+ * unreadable, absent) fall through to the first existing `.yaml`, `.yml`,
+ * `.json` variant, which is final (its parse error is the caller's to report).
+ * With no variant, an unusable bare file is returned (a read error is thrown) so
+ * the caller surfaces its own error. Shared by {@link findConfigFile} and
+ * callers that read the same files from elsewhere, such as a git ref.
+ * @param {string} basePath
+ * @param {(filePath: string) => Promise<string|null>} read - resolves `null` when the file is absent
+ * @returns {Promise<{ path: string, raw: string }|null>}
+ */
+export async function selectConfigSource(basePath, read) {
+  let bareRaw = null;
+  let bareError = null;
+  try {
+    bareRaw = await read(basePath);
+    if (bareRaw !== null) parseConfigContent(bareRaw, basePath);
+  } catch (err) {
+    bareError = err;
+  }
+  if (bareRaw !== null && !bareError) return { path: basePath, raw: bareRaw };
+
+  for (const ext of [".yaml", ".yml", ".json"]) {
+    const raw = await read(basePath + ext);
+    if (raw !== null) return { path: basePath + ext, raw };
+  }
+
+  if (bareError) {
+    if (bareRaw !== null) return { path: basePath, raw: bareRaw };
+    throw bareError;
+  }
+  return null;
 }
 
 /**
@@ -1822,6 +1832,13 @@ function applyParsedLayer(merged, filePath, data, layer, warnings, errors, repoR
     );
     const { primeSharedPrefix: _removed, ...gatesRest } = data.gates;
     data = { ...data, gates: gatesRest };
+  }
+
+  // `changelog` is read only from the `.devloops` family layer (a HEAD-pinned
+  // input under requireHeadInputs); a defaults-layer value is ignored.
+  if (layer !== "devloops" && data?.changelog !== undefined) {
+    const { changelog: _ignored, ...rest } = data;
+    data = rest;
   }
 
   // Validate the file's structure before merging: a schema violation ANYWHERE
