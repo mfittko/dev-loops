@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.10-pre.3
+
+### Added
+
+- `dev-loops loop startup --claim` assigns you to an unassigned, open PR or issue inside the startup call you asked for, only after a successful read of the assignees (#3084)
+
 ## 1.0.10-pre.2
 
 ### Added

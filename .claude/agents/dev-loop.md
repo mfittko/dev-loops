@@ -33,7 +33,7 @@ The envelope is the primary handoff artifact — it is derived from resolver out
 
 **Construction sequence:**
 
-1. Run the deterministic startup resolver to produce the authoritative state bundle: `dev-loops-run cli/index.mjs loop startup --issue <n>` for issues, or `dev-loops-run cli/index.mjs loop startup --pr <n>` for PRs. Write the resolver output to a file under the main checkout's tmp root and report that startup-output path in your hand-back so the orchestrator can resume you.
+1. Run the deterministic startup resolver to produce the authoritative state bundle: `dev-loops-run cli/index.mjs loop startup --issue <n>` for issues, or `dev-loops-run cli/index.mjs loop startup --pr <n>` for PRs. Apply the startup `--claim` rule in `skills/dev-loop/SKILL.md`. Write the resolver output to a file under the main checkout's tmp root and report that startup-output path in your hand-back so the orchestrator can resume you.
 2. Pass the resolver output, resolved settings (merged from `.devloops` and `.pi/dev-loop/defaults.yaml`), and current gate state to `buildDevLoopHandoffEnvelope()`.
 3. **Validate the envelope** with `validateHandoffEnvelope()` before consuming any field. If validation returns `ok: false`, reject the handoff with the structured error — do not load requiredReads, do not execute nextAction, do not delegate.
 4. Read the envelope as the first artifact.
