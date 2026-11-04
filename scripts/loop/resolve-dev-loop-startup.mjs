@@ -81,8 +81,8 @@ Required (exactly one):
   --plan-file <path>  Path to a phase-doc-format plan to start locally
   --spike <path>  Path to a spike artifact to start a spike loop locally
 Optional modifier:
-  --claim        With --issue <n> or --pr <n> only: if the target is unassigned,
-                 assign the current user (the only write), then start. Pass it
+  --claim        With --issue <n> or --pr <n> only: if the target is open and unassigned,
+                 assign the current user (the only write; open targets only), then start. Pass it
                  only when the user explicitly asked to start or continue that
                  exact target. Rejected with --review/--ui-review/--input/
                  --plan-file/--spike and with no target.
@@ -746,7 +746,7 @@ function resolveOwnershipState(assignees, cwd, env) {
 // names the foreign assignee(s); unassigned names the exact claim command so
 // the caller can self-heal (claim, then re-run) instead of guessing, or, with
 // the in-process --claim (open targets only), claims once and proceeds.
-function enforceOwnershipGate(ownership, { describeArtifact, claimCommand, claimArgs, claim, cwd, env, reviewRouteHint = "" }) {
+function enforceOwnershipGate(ownership, { describeArtifact, claimCommand, claimArgs, claim, claimRequested = false, cwd, env, reviewRouteHint = "" }) {
   if (ownership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
     throw new Error(
       `${describeArtifact} is assigned to ${ownership.foreignLogins.join(", ")}, not the current viewer; fail closed — do not start. Have the owner unassign it, or pick a different item.${reviewRouteHint}`,
@@ -761,6 +761,11 @@ function enforceOwnershipGate(ownership, { describeArtifact, claimCommand, claim
         throw new Error(`${describeArtifact} could not be claimed (${err instanceof Error ? err.message : String(err)}); fail closed — do not start.`);
       }
       return;
+    }
+    if (claimRequested) {
+      throw new Error(
+        `${describeArtifact} is not claimed by any contributor and --claim was not applied (the target is not open, or its state could not be read); fail closed — do not start.${reviewRouteHint}`,
+      );
     }
     throw new Error(
       `${describeArtifact} is not claimed by any contributor; fail closed — do not start. If the user explicitly asked to start or continue this target, re-run the same command with --claim, or claim it first: ${claimCommand}${reviewRouteHint}`,
@@ -936,9 +941,11 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     // the strategy the pure routing evaluator would select for this
     // canonical state.
     let assignees = [];
+    let assigneesRead = false;
     try {
       const assigneesJson = ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "assignees"], repoRoot, env);
       assignees = assigneesJson.assignees || [];
+      assigneesRead = true;
     } catch {
       warnings.push('issueAssignmentState: using default "unassigned" — gh issue view failed');
     }
@@ -991,7 +998,8 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
         // --claim only claims an OPEN issue; the extra state read runs only
         // when a claim write is actually possible.
         let claimNow = false;
-        if (claim && routingOwnership.state === OWNERSHIP_STATE.UNASSIGNED) {
+        // Claim only after a successful assignees read that showed no assignee.
+        if (claim && assigneesRead && routingOwnership.state === OWNERSHIP_STATE.UNASSIGNED) {
           try {
             claimNow = ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "state"], repoRoot, env).state === "OPEN";
           } catch {
@@ -1005,6 +1013,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
           claimCommand: `dev-loops-run scripts/github/edit-issue.mjs --repo ${repo} --issue ${issue} --add-assignee @me`,
           claimArgs: ["issue", "edit", String(issue), "--repo", repo, "--add-assignee", "@me"],
           claim: claimNow,
+          claimRequested: claim,
           cwd: repoRoot,
           env,
         });
@@ -1016,6 +1025,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
   let prAssignees = [];
   let linkedIssueNumbers = [];
   let prDraft = false;
+  let prRead = false;
   try {
     const prJson = ghJson(
       ["pr", "view", String(pr), "--repo", repo, "--json", "state,mergedAt,assignees,closingIssuesReferences,body,isDraft"],
@@ -1026,6 +1036,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     prAssignees = prJson.assignees || [];
     linkedIssueNumbers = resolveLinkedIssuesFromPr(prJson);
     prDraft = prJson.isDraft === true && artifactState === "open";
+    prRead = true;
   } catch {
     // A plain review is ownership-exempt, so unlike the gated strategies the
     // ownership gate cannot backstop an unreadable PR: fail closed rather than
@@ -1078,7 +1089,8 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       // Copilot-first flow governs them, and their path stays immune to
       // viewer-login resolution entirely. Read-only; with --claim it runs
       // BEFORE the claim write so a refusal leaves no assignment behind.
-      const checkLinkedIssues = () => {
+      const claimNow = claim && prRead && artifactState === "open" && prOwnership.state === OWNERSHIP_STATE.UNASSIGNED;
+      const checkLinkedIssues = ({ strict = false } = {}) => {
         for (const linkedIssueNumber of prOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_COPILOT ? [] : linkedIssueNumbers) {
           let linkedIssueAssignees;
           try {
@@ -1086,7 +1098,10 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
             linkedIssueAssignees = linkedIssueJson.assignees || [];
           } catch {
             // Warn-on-failure posture, same as other reads: an unreadable linked
-            // issue cannot block continuation on its own.
+            // issue cannot block continuation on its own, but it blocks a claim write.
+            if (strict) {
+              throw new Error(`PR #${pr}'s linked issue #${linkedIssueNumber} could not be read; fail closed — do not claim.${reviewRouteHint}`);
+            }
             continue;
           }
           const linkedIssueOwnership = resolveOwnershipState(linkedIssueAssignees, repoRoot, env);
@@ -1097,17 +1112,18 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
           }
         }
       };
-      if (claim) checkLinkedIssues();
+      if (claimNow) checkLinkedIssues({ strict: true });
       enforceOwnershipGate(prOwnership, {
         describeArtifact: `PR #${pr}`,
         claimCommand: `dev-loops-run scripts/github/edit-pr.mjs --repo ${repo} --pr ${pr} --add-assignee @me`,
         claimArgs: ["pr", "edit", String(pr), "--repo", repo, "--add-assignee", "@me"],
-        claim: claim && artifactState === "open",
+        claim: claimNow,
+        claimRequested: claim,
         cwd: repoRoot,
         env,
         reviewRouteHint,
       });
-      if (!claim) checkLinkedIssues();
+      if (!claimNow) checkLinkedIssues();
     }
   }
   // Draft-start route: an existing draft PR is a valid start target. The
