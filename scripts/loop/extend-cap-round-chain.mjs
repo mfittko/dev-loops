@@ -100,7 +100,9 @@ export async function extendCapRoundChain(options, {
   if (reached) return { ok: true, action: "already_proven", chainEnd: null, candidateHead: head, files: [] };
   const cap = await resolveCapRound(proofArgs, { repoRoot });
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
-  const ends = cap ? await clearingChainLastCandidates({ tmpRoot, capHead: cap.log.headSha, repo, pr, baseRefName, repoRoot, covering: capRoundCovers(cap), allowUnsealedEnd: true }) : [];
+  const cleanCap = cap?.log?.verdict === "clean" && cap.residue.length === 0;
+  // A clean cap round has no act item to cover: any sealed clearing chain (a thread-route record over a logic commit) ends at the E the extension record binds to, and the proof then accepts the chain through that record.
+  const ends = cap ? await clearingChainLastCandidates({ tmpRoot, capHead: cap.log.headSha, repo, pr, baseRefName, repoRoot, covering: cleanCap ? () => true : capRoundCovers(cap, tmpRoot), allowUnsealedEnd: true }) : [];
   const reaches = (from, to) => { try { git(repoRoot, ["merge-base", "--is-ancestor", from, to]); return true; } catch { return false; } };
   const isAncestor = (sha) => sha !== head && reaches(sha, head);
   // The latest end: the ancestor end that every other ancestor end precedes, so the logic check never spans commits a later chain cleared.
@@ -108,7 +110,6 @@ export async function extendCapRoundChain(options, {
   let chainEnd = ancestorEnds.find((end) => ancestorEnds.every((other) => reaches(other, end)));
   // ADR 0250: a clean cap round has no fixer pass and no first record: its chain has length zero and the end is the cap-round head.
   const capHeadSha = String(cap?.log?.headSha ?? "").trim().toLowerCase();
-  const cleanCap = cap?.log?.verdict === "clean" && cap.residue.length === 0;
   if (!chainEnd && cleanCap && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(capHeadSha) && isAncestor(capHeadSha)) chainEnd = capHeadSha;
   if (!chainEnd) {
     // A rebase leaves the cap-round head outside the head's history: no extension can bind, so name the replacement-PR restart.

@@ -472,3 +472,21 @@ test("a clean cap-round ledger that holds an open act finding still refuses no_c
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a clean cap round with a plain clearing record seals the extension at the chain end and the proof reaches the head (ADR 0250)", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const B = String(runGitFixture(root, ["rev-list", "--max-count=1", "--all", `^${A}`])).trim();
+    assert.ok(B, "the fixer commit B exists after A");
+    writeSealedGateDeltaRecord(path.join(root, "tmp"), A, { reviewBaselineHead: A, candidateHead: B, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    runGitFixture(root, ["checkout", "-q", B]);
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
+    assert.equal(await proof(root, D), null, "the plain record alone does not prove the clean cap round");
+    const result = await extend(root, D);
+    assert.deepEqual({ ...result }, { ok: true, action: "chain_extended", chainEnd: B, candidateHead: D, files: ["docs/d.md"] });
+    assert.ok(await proof(root, D));
+    assert.equal(readSealedGateDeltaRecord(path.join(root, "tmp"), A).extension, undefined, "the plain record at the cap-round head is never overwritten");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
