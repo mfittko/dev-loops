@@ -14,7 +14,9 @@ import { parseArgs } from "node:util";
 import { loadDevLoopConfigStrict } from "@dev-loops/core/config";
 import { extractSection } from "@dev-loops/core/loop/markdown-sections";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { pathsMissingFromMatrix } from "../github/waive-adr-tripwire.mjs";
 import { resolveSizeBounds } from "./check-size-budget.mjs";
+import { CONTRACT_DOC_RE } from "./check-adr-tripwire.mjs";
 import {
   FORWARD_RULE_REFERENCES,
   NON_RULE_TOKENS,
@@ -261,6 +263,19 @@ export function lintSimplestDesign(body) {
   return [{ kind: "simplest_design_missing", id: "simplest-design", detail: { reason: "no `## Simplest design` section (minimal approach, rejected alternatives, cost comparison)" } }];
 }
 
+/** A contract doc in the forecast `files=` list must be named, backticked, in the AC / DoD matrix so the spec digest covers it. */
+export function lintContractDocsInMatrix(body) {
+  const section = extractSection(stripFencedCode(body), "Size forecast") ?? "";
+  const docs = section.split(/\r?\n/)
+    .map((line) => FORECAST_LINE_RE.exec(line)?.[3])
+    .filter(Boolean)
+    .flatMap((files) => files.split(","))
+    .filter((file) => CONTRACT_DOC_RE.test(file));
+  if (docs.length === 0) return [];
+  return pathsMissingFromMatrix([...new Set(docs)], body).missing
+    .map((doc) => ({ kind: "contract_doc_not_in_matrix", id: doc, detail: { reason: `contract doc \`${doc}\` is in the Size forecast files but no AC / DoD matrix row names it in backticks` } }));
+}
+
 export async function lintSpec({ body, repoRoot }) {
   const rootStat = await stat(repoRoot).catch((error) => {
     if (isMissing(error)) return null;
@@ -280,6 +295,7 @@ export async function lintSpec({ body, repoRoot }) {
   findings.push(...lintSizeForecast(body, resolveSizeBounds(config)));
   checks.sizeForecast = { status: "ran" };
   findings.push(...lintSimplestDesign(body));
+  findings.push(...lintContractDocsInMatrix(body));
   const decisionsDir = path.join(repoRoot, "docs", "decisions");
   const records = await indexDecisionRecords(decisionsDir);
   if (records) {
