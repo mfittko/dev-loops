@@ -1931,9 +1931,12 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
       onUnreadable?.(name);
       continue;
     }
-    rounds.push({ sha, loggedAt: typeof log.loggedAt === "string" ? log.loggedAt : "", log });
+    // The live ledger ranks above every retained round of its head; retained rounds order by their number.
+    const retainedNumber = /\.round-(\d+)\.json$/.exec(name);
+    rounds.push({ sha, loggedAt: typeof log.loggedAt === "string" ? log.loggedAt : "", round: retainedNumber ? Number(retainedNumber[1]) : Infinity, log });
   }
-  rounds.sort((a, b) => (a.loggedAt < b.loggedAt ? -1 : a.loggedAt > b.loggedAt ? 1 : a.sha < b.sha ? -1 : 1));
+  const cmp = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
+  rounds.sort((a, b) => cmp(a.loggedAt, b.loggedAt) || cmp(a.sha, b.sha) || cmp(a.round, b.round));
   return rounds.map((round) => round.log);
 }
 
@@ -1957,20 +1960,26 @@ export async function countCompletedRounds(options, { repoRoot, includeLiveHead 
 }
 
 /**
- * A finished round (the one predicate for writer retention and the pre-write readers): a clean verdict, or findings_present with at least one judged
- * finding or a scopeDrift verdict. An unjudged findings_present ledger is an in-progress rewrite of the same round, never a separate round.
+ * A finished round (the one predicate for writer retention and the pre-write readers): a clean verdict with no unjudged finding, or findings_present with at least one judged
+ * finding or a scopeDrift verdict. An unjudged ledger (a pre-judge clean write included) is an in-progress rewrite of the same round, never a separate round.
+ * `identity` ({ repo, pr, gate, headSha }) applies the reader's identity check, and the verdict is trimmed like the reader does.
  */
-export function isFinishedRoundLog(log) {
-  if (log?.verdict === "clean") return true;
-  if (log?.verdict !== "findings_present") return false;
-  return log.scopeDrift !== undefined || (Array.isArray(log.findings) && log.findings.some((f) => f?.judgeDisposition !== undefined));
+export function isFinishedRoundLog(log, identity) {
+  const norm = (v) => (typeof v === "string" ? v.trim().toLowerCase() : null);
+  if (identity && (norm(log?.headSha) !== norm(identity.headSha) || norm(log?.repo) !== norm(identity.repo) || norm(log?.gate) !== norm(identity.gate)
+    || log.pr === undefined || log.pr === null || Number(log.pr) !== Number(identity.pr))) return false;
+  const verdict = typeof log?.verdict === "string" ? log.verdict.trim() : "";
+  const findings = Array.isArray(log?.findings) ? log.findings : [];
+  if (verdict === "clean") return findings.every((f) => f?.judgeDisposition !== undefined);
+  if (verdict !== "findings_present") return false;
+  return log.scopeDrift !== undefined || findings.some((f) => f?.judgeDisposition !== undefined);
 }
 
 /** True when the live current-head ledger exists, is readable and is a finished round: the writer retains it, so it counts as one completed round before the rewrite. */
 export async function isLiveHeadRoundFinished(options, { repoRoot }) {
   try {
     const livePath = path.resolve(repoRoot, buildLogPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }));
-    return isFinishedRoundLog(JSON.parse(await readSealed(livePath)));
+    return isFinishedRoundLog(JSON.parse(await readSealed(livePath)), options);
   } catch (err) {
     if (err?.code === OUT_OF_BAND_WRITE) throw err;
     return false;

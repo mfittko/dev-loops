@@ -8681,6 +8681,25 @@ test("readClosedPriorRoundLogs and countCompletedRounds treat a retained same-he
   }
 });
 
+test("readClosedPriorRoundLogs orders retained same-head rounds with equal loggedAt by round number, the live ledger last", async () => {
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-round-order-"));
+  try {
+    const dir = path.join(tmpRoot, "gate-findings", "owner-repo", "pr-5");
+    await mkdir(dir, { recursive: true });
+    const head = "5".repeat(40);
+    const prior = "4".repeat(40);
+    const options = { repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: head, tmpRoot };
+    const ledger = (sha, n) => writeFile(path.join(dir, `draft_gate-${sha}${n ? `.round-${n}` : ""}.json`), JSON.stringify({ repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: sha, verdict: "clean", loggedAt: "2026-10-27T00:00:00.000Z", marker: n ?? "live" }), "utf8");
+    await ledger(head, 10);
+    await ledger(head, 2);
+    await ledger(head, 1);
+    await ledger(prior, 3);
+    assert.deepEqual((await readClosedPriorRoundLogs(options, { repoRoot: tmpRoot })).map((l) => l.marker), [3, 1, 2, 10]);
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 test("countCompletedRounds with includeLiveHead counts a finished live same-head ledger once, never an unjudged one", async () => {
   const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-live-head-"));
   try {
@@ -8700,6 +8719,12 @@ test("countCompletedRounds with includeLiveHead counts a finished live same-head
     assert.equal(await count(), base + 1, "scopeDrift finishes the round");
     await live({ verdict: "clean" });
     assert.equal(await count(), base + 1, "a clean ledger is a finished round");
+    await live({ verdict: "clean", findings: [{ severity: "low", summary: "s" }] });
+    assert.equal(await count(), base, "a pre-judge clean ledger with an unjudged finding is the same round");
+    await live({ verdict: " clean " });
+    assert.equal(await count(), base + 1, "the verdict is trimmed like the reader does");
+    await live({ verdict: "clean", headSha: "6".repeat(40) });
+    assert.equal(await count(), base, "a ledger whose recorded headSha differs from its filename is not a round");
     assert.equal(await countCompletedRounds(options, { repoRoot: tmpRoot }), base, "readers without the flag are unchanged");
     assert.equal(isFinishedRoundLog({ verdict: "blocked" }), false);
   } finally {

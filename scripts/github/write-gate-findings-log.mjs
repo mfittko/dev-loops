@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { access, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, link, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "./_gate-artifact-seal.mjs";
 import path from "node:path";
 import { verifyZeroUnitCarryProvenance } from "./_carried-angles.mjs";
@@ -869,7 +870,12 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // `priorOptions` and the round-cap state are shared by the judge coercion and the cap-closed record below.
   const priorOptions = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot };
   let roundCap;
-  const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot, includeLiveHead: true }));
+  // A round is identified by its raw (pre-judge) findings and fan-in ledger: a rewrite of the same round (pre-judge to judged write, judge re-run) is neither retained nor counted again.
+  // ponytail: two genuine same-head rounds with byte-identical findings and fan-in ledger read as one round; stamp an explicit round id if that matters.
+  const roundIdentity = createHash("sha256").update(JSON.stringify([rawFindings, faninLedger ?? null])).digest("hex");
+  const liveLedger = await readLiveLedger(fullPath);
+  const liveIsSameRound = liveLedger?.roundIdentity === roundIdentity;
+  const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot, includeLiveHead: !liveIsSameRound }));
   if (options.judgeVerdict) {
     const judgePath = path.resolve(repoRoot, options.judgeVerdict);
     let judgeVerdict;
@@ -1088,8 +1094,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // helper. Pure no-op (byte-identical log) when the flag is absent.
   const stampedLog = stampOptionalSpecAuthority(log, specAuthorityIdentity);
   await mkdir(path.dirname(fullPath), { recursive: true });
-  const retainedRound = await retainSameHeadLedger(fullPath, logPath);
-  await writeSealed(fullPath, JSON.stringify(stampedLog, null, 2) + "\n");
+  const retainedRound = liveIsSameRound ? null : await retainSameHeadLedger(fullPath, logPath, liveLedger, priorOptions);
+  await writeSealed(fullPath, JSON.stringify({ ...stampedLog, roundIdentity }, null, 2) + "\n");
   return {
     ok: true, path: logPath, log: stampedLog,
     ...(retainedRound ? { retainedRound } : {}),
@@ -1098,19 +1104,23 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
 }
 // A second write at the same head must not destroy a finished prior round: rename it (and its seal)
 // to the next free `<gate>-<sha>.round-<n>.json` sibling. An unfinished ledger is a same-round rewrite and is overwritten. Returns the retained path, or null.
-// ponytail: retention runs outside the write lock; concurrent same-head writers are not supported.
-async function retainSameHeadLedger(fullPath, logPath) {
+// The seal moves first (a crash then leaves a waiting seal that still matches the moved bytes), and the retained name is created exclusively (a number collision refuses instead of overwriting).
+// ponytail: retention runs outside the write lock; concurrent same-head writers are not supported (the exclusive link makes a collision fail, not overwrite).
+async function readLiveLedger(fullPath) {
   if (!(await access(fullPath).then(() => true, () => false))) return null;
-  let existing;
-  try { existing = JSON.parse(await readSealed(fullPath)); } catch (err) { if (err?.code === OUT_OF_BAND_WRITE) throw err; return null; }
-  if (!isFinishedRoundLog(existing)) return null;
+  try { return JSON.parse(await readSealed(fullPath)); } catch (err) { if (err?.code === OUT_OF_BAND_WRITE) throw err; return null; }
+}
+async function retainSameHeadLedger(fullPath, logPath, existing, identity) {
+  if (!existing || !isFinishedRoundLog(existing, identity)) return null;
   const dir = path.dirname(fullPath);
   const stem = path.basename(fullPath, ".json");
   const taken = (await readdir(dir)).map((n) => (n.startsWith(`${stem}.round-`) && n.endsWith(".json") ? Number(n.slice(stem.length + 7, -5)) : 0));
   const next = Math.max(0, ...taken.filter(Number.isInteger)) + 1;
   const retained = path.join(dir, `${stem}.round-${next}.json`);
-  await rename(fullPath, retained);
+  if (await access(retained).then(() => true, () => false)) throw Object.assign(new Error(`EEXIST: retained round ${retained} already exists`), { code: "EEXIST" });
   await rename(`${fullPath}.seal`, `${retained}.seal`).catch((err) => { if (err?.code !== "ENOENT") throw err; });
+  await link(fullPath, retained);
+  await unlink(fullPath);
   return logPath.replace(/\.json$/, `.round-${next}.json`);
 }
 async function main() {
