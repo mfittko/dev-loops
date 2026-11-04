@@ -3,6 +3,7 @@ import { lstat, readdir, readFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
+import { parse as parseYaml } from "yaml";
 import { fileURLToPath } from "node:url";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
@@ -240,11 +241,17 @@ export async function main({ root, base: explicitBase, env = process.env, log = 
   let devloopsOverride;
   if (requireHeadInputs) {
     devloopsOverride = { raw: null };
+    // Like findConfigFile: a blank or unparseable file falls through to the next variant;
+    // the first existing one is kept so the loader reports its error.
     for (const name of DEVLOOPS_CONFIG_PATHS) {
-      if (await git.pathExistsIn("HEAD", name)) {
-        devloopsOverride = { raw: await git.show(`HEAD:${name}`), path: name };
-        break;
+      if (!(await git.pathExistsIn("HEAD", name))) continue;
+      const raw = await git.show(`HEAD:${name}`);
+      let usable = raw.trim() !== "";
+      if (usable) {
+        try { if (name.endsWith(".json")) JSON.parse(raw); else parseYaml(raw); } catch { usable = false; }
       }
+      if (usable) { devloopsOverride = { raw, path: name }; break; }
+      if (devloopsOverride.raw === null) devloopsOverride = { raw, path: name };
     }
   }
   const { config } = await loadDevLoopConfigStrict({ repoRoot: root, ...(devloopsOverride && { devloopsOverride }) });

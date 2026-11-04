@@ -627,6 +627,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   // error, a malformed-ref rejection, or an evaluator bug propagates and
   // refuses PR creation, matching how the ready boundary lets it throw.
   let resolvedHead = "HEAD";
+  const skipNotices = [];
   const baseForDiff = hasBase ? sources.base : baseDefault;
   if (typeof baseForDiff === "string" && baseForDiff.trim().length > 0) {
     const bareBase = baseForDiff.trim().replace(/^origin\//u, "");
@@ -707,7 +708,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
         if (code !== 0) {
           throw Object.assign(parseError(`LIFECYCLE-CHANGELOG-COMPLETENESS: ${diagnostics.join("; ")}`), { code: CHANGELOG_INCOMPLETE_BEFORE_PR });
         }
-        for (const line of diagnostics) if (line.startsWith("changelog completeness check skipped")) process.stderr.write(`[create-pr] ${line}\n`);
+        for (const line of diagnostics) if (line.startsWith("changelog completeness check skipped")) skipNotices.push(line);
       }
     }
   }
@@ -754,6 +755,8 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
       process.stderr.write(`[create-pr] FACADE-LINKED-PR-SINGLE-ARTIFACT: opening replacement PR, replacing linked PR #${guard.replaced} for issue #${closingIssue}.\n`);
     }
   }
+  // Emit the skip notice only after every later wrapper check passed, so a refusal keeps stderr JSON-only.
+  for (const line of skipNotices) process.stderr.write(`[create-pr] ${line}\n`);
   const { code, stdout } = await spawnCreatePr(ghArgs, runtime, { captureStdout: issueLess });
   // ADR-TRIPWIRE-EARLY-SURFACE: report the tripwire and size budget once the PR
   // exists. Advisory only: a block never refuses creation.

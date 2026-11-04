@@ -40,6 +40,17 @@ test("create-pr without changelog.required creates the PR for a code diff and pr
   }
 });
 
+test("create-pr keeps stderr JSON-only when a later check refuses after the changelog skip", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "create-changelog-off-refuse-"));
+  try {
+    await initBareFixtureRepo(cwd, { headFiles: [{ path: "src/code.mjs", content: "export const a = 1;\n" }] });
+    const { env } = await writeGhStub(cwd, [{}]);
+    const result = await runNode(["--base", "main", "--head", "feature", "--title", "chore: x", "--body", "Closes #5"], { cwd, env });
+    assert.notEqual(result.code, 0);
+    assert.doesNotThrow(() => JSON.parse(result.stderr), result.stderr);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
 test("create-pr with changelog.required refuses a code diff without a note", async () => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "create-changelog-on-"));
   try {
