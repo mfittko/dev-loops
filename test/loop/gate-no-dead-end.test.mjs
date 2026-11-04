@@ -138,11 +138,16 @@ test("hasRunnableCommand accepts quoted angle brackets and rejects unfilled plac
     "dev-loops-run scripts/github/edit-pr.mjs --repo o/r --pr 7 --title 'map a -> b'",
     "dev-loops-run scripts/github/edit-pr.mjs --repo o/r --pr 7 --title 'support Map<K, V>'",
     "dev-loops loop startup --pr 7",
+    "dev-loops-run scripts/github/wait-pr-checks.mjs --repo mfittko/dev-loops --pr 7",
+    "git fetch origin && dev-loops loop startup --pr 7",
+    "dev-loops-run scripts/github/edit-pr.mjs --repo mfittko/dev-loops --pr 7 --title 'feat: <x> title'",
     "dev-loops-run scripts/github/edit-pr.mjs --repo o/r --pr 7 --title 'don'\\''t break Array<T>'",
   ];
   const bad = [
     "dev-loops-run scripts/github/wait-pr-checks.mjs --repo <repo> --pr <n> --timeout 600",
     "dev-loops loop startup --pr <n>",
+    "dev-loops-run scripts/github/wait-pr-checks.mjs --repo <owner/name> --pr 7",
+    "dev-loops gate extend-cap-round-chain --head <40-hex>",
     "",
   ];
   for (const c of ok) assert.equal(hasRunnableCommand(c), true, c);

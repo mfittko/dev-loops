@@ -359,6 +359,17 @@ test("pr-gate-coordination adversarial probe: clean pre_approval_gate WITHOUT dr
   assert.equal(safety.ok, true);
 });
 
+test("pr-gate-coordination blocked-names-decision-or-remedy rule rejects an untyped report_blocked result", () => {
+  const machine = getRegisteredMachines().find((m) => m.name === "pr-gate-coordination");
+  assert.ok(machine.safetyRules.some((r) => r.name === "blocked-names-decision-or-remedy"));
+  const untyped = { nextAction: "report_blocked", reason: "something unmapped" };
+  const report = checkSafetyRules([untyped], machine.safetyRules);
+  assert.equal(report.ok, false);
+  assert.ok(report.violations.some((v) => v.rule === "blocked-names-decision-or-remedy"));
+  const typed = checkSafetyRules([{ ...untyped, blockedOn: "operator_decision" }], machine.safetyRules);
+  assert.ok(!typed.violations?.some((v) => v.rule === "blocked-names-decision-or-remedy"));
+});
+
 // ---------------------------------------------------------------------------
 // copilot-loop-state and reviewer-loop-state (issue #1157): registered machines,
 // with one adversarial probe each per COPILOT-STATE-UNRESOLVED-PRIORITY /

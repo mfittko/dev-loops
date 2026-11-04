@@ -142,7 +142,9 @@ Output (stdout, JSON):
     "agentRemedy"?: { "command": "...", "summary": "..." }
   }
   (blockedOn and agentRemedy are present only on report_blocked results; a
-  result carries one of them, never both)
+  result carries at most one of them. Results listed in KNOWN_GAPS in
+  packages/core/src/loop/gate-no-dead-end.mjs carry neither until the
+  issue 3105 slices that remove them land)
   (fixerDispositionWarning is present only when the fixer disposition is
   incomplete; it is advisory and blocks nothing, ADR 0155)
   (refinementArtifact.planDocPath is present only when specSource is
