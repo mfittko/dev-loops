@@ -1259,7 +1259,7 @@ for (const [severity, refuses] of [["critical", false], ["HIGH", false], ["mediu
 
 test("GATE-EXEC-SOFT-CAP: pre_approval_gate keeps the VALID_SEVERITIES matcher (critical and HIGH are refused, medium emits)", async () => {
   await withFixture(async ({ files, emit }) => {
-    for (const severity of ["critical", "HIGH"]) {
+    for (const severity of ["critical", "HIGH", "must-fix", " medium "]) {
       await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity, judgeFix: "guard the deref" })]));
       await assert.rejects(emit({ gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined }), /not a non-empty judge-pass --out array/);
     }

@@ -542,7 +542,7 @@ export async function emitFixerWorkOrder({
     if (ci.headSha !== headSha) throw new Refusal(`ci file ${ciFile} is for headSha ${JSON.stringify(ci.headSha)}, not --head-sha ${headSha}; ${next}`);
     if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name.trim() !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`);
   }
-  const isActItem = (f) => f?.judgeDisposition === "act" && typeof f.severity === "string" && (gate === "draft_gate" ? f.severity.trim() !== "" : VALID_SEVERITIES.has(normalizeSeverity(f.severity))) && typeof f.summary === "string" && f.summary.trim() !== "";
+  const isActItem = (f) => f?.judgeDisposition === "act" && typeof f.severity === "string" && (gate === "draft_gate" ? f.severity.trim() !== "" : VALID_SEVERITIES.has(f.severity)) && typeof f.summary === "string" && f.summary.trim() !== "";
   if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
     throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
   }
