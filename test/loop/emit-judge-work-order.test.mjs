@@ -284,6 +284,18 @@ test("J1: a finished live same-head ledger counts as one completed round in the 
   });
 });
 
+test("J1: re-emitting over the finished live ledger itself (judge-pass refusal recovery) does not count it as a prior round", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const base = (await emitJudgeWorkOrder({ ...sources, roundId: "j1-000000aa" })).workOrder.round;
+    const live = path.resolve(root, buildLogPath({ repo: "o/r", pr: 7, gate: "pre_approval_gate", headSha: HEAD, tmpRoot: path.join(root, "tmp") }));
+    await mkdir(path.dirname(live), { recursive: true });
+    await writeFile(live, JSON.stringify({ repo: "o/r", pr: 7, gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: [] }));
+    const recovery = await emitJudgeWorkOrder({ ...sources, findingsFile: path.relative(root, live), roundId: "j1-000000dd" });
+    assert.equal(recovery.workOrder.round, base, "the judged live ledger is this round, not a prior one");
+  });
+});
+
 test("J1: a truncated identity stamp or a partial checkedCriteria refuses", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);

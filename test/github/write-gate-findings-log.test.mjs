@@ -423,7 +423,7 @@ test("writeGateFindingsLog refuses to overwrite an existing retained round name"
     const first = await write("one");
     const taken = first.path.replace(/\.json$/, ".round-1.json");
     await writeFile(taken, "precreated", "utf8");
-    // The pre-created name is taken, so the next free number is used; the exclusive link keeps a lost race from overwriting.
+    // The pre-created name is taken, so the next free number is used; the taken-name check refuses a collision.
     const second = await write("two");
     assert.equal(second.retainedRound, first.path.replace(/\.json$/, ".round-2.json"));
     assert.equal(await readFile(taken, "utf8"), "precreated", "the pre-created round is untouched");

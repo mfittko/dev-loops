@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { access, link, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "./_gate-artifact-seal.mjs";
 import path from "node:path";
@@ -1104,8 +1104,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
 }
 // A second write at the same head must not destroy a finished prior round: rename it (and its seal)
 // to the next free `<gate>-<sha>.round-<n>.json` sibling. An unfinished ledger is a same-round rewrite and is overwritten. Returns the retained path, or null.
-// The seal moves first (a crash then leaves a waiting seal that still matches the moved bytes), and the retained name is created exclusively (a number collision refuses instead of overwriting).
-// ponytail: retention runs outside the write lock; concurrent same-head writers are not supported (the exclusive link makes a collision fail, not overwrite).
+// The seal moves first (a crash then leaves a waiting seal that still matches the moved bytes), and a taken retained name refuses instead of overwriting.
+// ponytail: retention runs outside the write lock and the taken-name check is not atomic; concurrent same-head writers are not supported (move retention under the ledger lock with an exclusive create if they ever are).
 async function readLiveLedger(fullPath) {
   if (!(await access(fullPath).then(() => true, () => false))) return null;
   try { return JSON.parse(await readSealed(fullPath)); } catch (err) { if (err?.code === OUT_OF_BAND_WRITE) throw err; return null; }
@@ -1119,8 +1119,8 @@ async function retainSameHeadLedger(fullPath, logPath, existing, identity) {
   const retained = path.join(dir, `${stem}.round-${next}.json`);
   if (await access(retained).then(() => true, () => false)) throw Object.assign(new Error(`EEXIST: retained round ${retained} already exists`), { code: "EEXIST" });
   await rename(`${fullPath}.seal`, `${retained}.seal`).catch((err) => { if (err?.code !== "ENOENT") throw err; });
-  await link(fullPath, retained);
-  await unlink(fullPath);
+  // An atomic rename leaves no window where the live and retained names share one inode (writeSealed writes the live path in place); a failed move puts the seal back.
+  await rename(fullPath, retained).catch(async (err) => { await rename(`${retained}.seal`, `${fullPath}.seal`).catch(() => {}); throw err; });
   return logPath.replace(/\.json$/, `.round-${next}.json`);
 }
 async function main() {

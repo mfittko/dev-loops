@@ -125,7 +125,10 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     const ledgerTmpRoot = resolveGateArtifactTmpRoot(checkoutRoot);
     const resolved = await resolveGateRound({ repo, pr, gate, headSha, reviews: [], issueComments: [], tmpRoot: ledgerTmpRoot, repoRoot: checkoutRoot });
     const currentLedger = path.resolve(checkoutRoot, buildLogPath({ repo, pr, gate, headSha, tmpRoot: ledgerTmpRoot }));
-    const prior = (await readdir(path.dirname(currentLedger)).catch(() => [])).filter((name) => isFindingsLogName(gate, name) && `${gate}-${headSha}.json` !== name).length + (await isLiveHeadRoundFinished({ repo, pr, gate, headSha, tmpRoot: ledgerTmpRoot }, { repoRoot: checkoutRoot }) ? 1 : 0);
+    // A judge pass over the live ledger itself (the judge-pass refusal recovery re-emit) judges that ledger's own round, so the live ledger is never a prior round there; the writer skips retention for the same rewrite.
+    // ponytail: a wrapper findings file at a different path with the same raw findings is still counted as a new round here; compare the writer's roundIdentity if that recovery shape matters.
+    const judgesLiveLedger = path.resolve(cwd, findingsFile) === currentLedger;
+    const prior = (await readdir(path.dirname(currentLedger)).catch(() => [])).filter((name) => isFindingsLogName(gate, name) && `${gate}-${headSha}.json` !== name).length + (!judgesLiveLedger && await isLiveHeadRoundFinished({ repo, pr, gate, headSha, tmpRoot: ledgerTmpRoot }, { repoRoot: checkoutRoot }) ? 1 : 0);
     round = Math.max(resolved, prior + 1);
   }
   tmpRoot ??= path.join(checkoutRoot, "tmp");
