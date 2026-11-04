@@ -2024,8 +2024,14 @@ function capRoundActRefs(findings, headSha) {
 }
 
 /**
+ * A clean cap round (ADR 0250): the ledger verdict is `clean` and it holds no open act ref. Shared by `capRoundCovers` and `extend-cap-round-chain`
+ * so the proof and the tool cannot disagree. `capClosed` residue (a past-cap judge defer or reject) does not make a round unclean.
+ */
+export const isCleanCapRound = (capRound) => capRound?.log?.verdict === "clean" && capRoundActRefs(capRound.log.findings, capRound.log.headSha).size === 0;
+
+/**
  * The cap round of a draft_gate (ADR 0208): the last closed ledger when the completed rounds (the head being posted excluded) reached the cap and
- * that ledger is `findings_present` or `clean` (ADR 0250: a clean cap round has empty `residue`). Returns `{ log, residue }` or null. `residue` is the cap round's act items and `capClosed` items as
+ * that ledger is `findings_present` or `clean` (ADR 0250: a clean cap round has no act ref; its `residue` holds only `capClosed` items). Returns `{ log, residue }` or null. `residue` is the cap round's act items and `capClosed` items as
  * `{ fingerprint, file, line, title, disposition }`, the input `pre_approval_gate` receives.
  */
 export async function resolveCapRound(options, { repoRoot }) {
@@ -2152,7 +2158,7 @@ export const capRoundCovers = (capRound, tmpRoot) => (record) => {
   const refs = new Set((Array.isArray(record.items) ? record.items : []).map((i) => String(i?.ref)));
   const actRefs = [...new Set(capRoundActRefs(capRound.log.findings, capRound.log.headSha).values())];
   // ADR 0250: a clean cap round has no act item, so only an extend-cap-round-chain record proves it: the first record carries the extension, or a plain clearing chain (a thread-route record over a logic commit) reaches one.
-  if (actRefs.length === 0 && capRound.log.verdict === "clean") {
+  if (isCleanCapRound(capRound)) {
     const seen = new Set();
     for (let r = record; r && tmpRoot;) {
       if (r.extension === "docs_tests_only") return true;

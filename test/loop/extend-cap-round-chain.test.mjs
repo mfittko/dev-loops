@@ -6,6 +6,7 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import { resolveCapRoundFixed } from "../../scripts/github/write-gate-context.mjs";
+import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { gateDeltaRecordPath, readSealedGateDeltaRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { extendCapRoundChain, parseExtendCapRoundChainCliArgs, runCli } from "../../scripts/loop/extend-cap-round-chain.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
@@ -502,6 +503,59 @@ test("a clean cap round with a plain record over docs commits only seals the ext
     assert.deepEqual([...result.files].sort(), ["docs/b.md", "docs/d.md"]);
     assert.ok(await proof(root, D));
     assert.equal(readSealedGateDeltaRecord(path.join(root, "tmp"), A).extension, undefined, "the plain record at the cap-round head is never overwritten");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a clean cap round holding only a capClosed reject finding plus a docs-only commit seals at the cap-round head", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const nit = { severity: "low", summary: "nit", files: ["src/a.mjs"], line: 1, judgeDisposition: "reject", judgeTitle: "Nit", capClosed: true };
+    const ledger = path.join(root, "tmp", "gate-findings", "owner-repo", `pr-${PR}`, `draft_gate-${A}.json`);
+    await writeFile(ledger, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: A, verdict: "clean", loggedAt: "2026-11-04T00:00:00.000Z", findings: [nit] }), "utf8");
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
+    const result = await extend(root, D);
+    assert.deepEqual({ ...result }, { ok: true, action: "chain_extended", chainEnd: A, candidateHead: D, files: ["docs/d.md"] });
+    assert.ok(await proof(root, D));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a clean-verdict cap round whose act item a sealed fixer record resolved extends at the fixer chain end, not the cap-round head", async () => {
+  const { root, A, B } = await capFixture();
+  try {
+    const act = { severity: "medium", summary: "guard missing", files: ["src/a.mjs"], line: 1, judgeDisposition: "act", judgeTitle: "Guard", judgeFix: "add" };
+    const ledger = path.join(root, "tmp", "gate-findings", "owner-repo", `pr-${PR}`, `draft_gate-${A}.json`);
+    await writeFile(ledger, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: A, verdict: "clean", loggedAt: "2026-11-04T00:00:00.000Z", findings: [act] }), "utf8");
+    const recordPath = gateDeltaRecordPath(path.join(root, "tmp"), A);
+    rmSync(recordPath, { force: true });
+    rmSync(`${recordPath}.seal`, { force: true });
+    writeSealedGateDeltaRecord(path.join(root, "tmp"), A, { reviewBaselineHead: A, candidateHead: B, outcome: "locally_clear", nextStep: "push_to_gate", items: [{ ref: fingerprintFinding(act), status: "resolved" }] });
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
+    const result = await extend(root, D);
+    assert.deepEqual({ ...result }, { ok: true, action: "chain_extended", chainEnd: B, candidateHead: D, files: ["docs/d.md"] });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a clean cap round whose plain clearing chain ends at the PR head refuses chain_reaches_head and writes nothing", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
+    writeSealedGateDeltaRecord(path.join(root, "tmp"), A, { reviewBaselineHead: A, candidateHead: D, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const result = await extend(root, D);
+    assert.equal(result.reason, "chain_reaches_head");
+    assert.match(result.detail, /further docs or tests commit/u);
+    assert.equal(readSealedGateDeltaRecord(path.join(root, "tmp"), A).extension, undefined);
+    assert.equal(existsSync(gateDeltaRecordPath(path.join(root, "tmp"), D)), false);
+    // The exit the remedy names: one further docs commit moves the head past the chain end, and the extension binds there.
+    const E = await commit(root, { "docs/e.md": "e\n" }, "docs e");
+    const next = await extend(root, E);
+    assert.equal(next.action, "chain_extended");
+    assert.equal(next.chainEnd, D);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
