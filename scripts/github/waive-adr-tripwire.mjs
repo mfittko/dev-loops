@@ -8,7 +8,6 @@
  * with a typed reason and leaves the body unchanged. The scope is fixed here;
  * the standing authorization record carries no scope field.
  */
-import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -27,6 +26,7 @@ import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { fetchIssueBody as realFetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
 import { fetchDraftGateEvidence as realFetchDraftGateEvidence } from "./_gate-finding-surface.mjs";
 import { buildLogPath } from "./_gate-artifact-paths.mjs";
+import { readSealed } from "./_gate-artifact-seal.mjs";
 import { editPr as realEditPr } from "./edit-pr.mjs";
 import { resolveCapRoundFixed as realResolveCapRoundFixed } from "./write-gate-context.mjs";
 
@@ -98,9 +98,9 @@ async function defaultFetchDefaultBranch({ repo }, { env, ghCommand, runChild })
 }
 
 async function defaultReadRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate = "draft_gate" }) {
-  const ledgerPath = buildLogPath({ repo, pr, gate, headSha, tmpRoot: resolveGateArtifactTmpRoot(repoRoot) });
   try {
-    const ledger = JSON.parse(await readFile(ledgerPath, "utf8"));
+    const ledgerPath = buildLogPath({ repo, pr, gate, headSha, tmpRoot: resolveGateArtifactTmpRoot(repoRoot) });
+    const ledger = JSON.parse(await readSealed(ledgerPath));
     return typeof ledger?.specAuthority?.specDigest === "string" ? ledger.specAuthority.specDigest : null;
   } catch {
     return null;
@@ -198,8 +198,15 @@ export async function waiveAdrTripwire(options, {
   const gate = await fetchDraftGateEvidence({ repo, pr, headSha }, gh);
   // A post-ready push gets only a pre_approval_gate round, so that verdict is the alternative.
   // Every clean current-head gate is tried in order; the first matching digest wins.
+  // A converged or carried draft_gate marker names the head whose sealed ledger recorded the digest.
+  const markerSource = [gate?.draftGateMarker?.convergedFromHeadSha, gate?.draftGateMarker?.carriedFrom]
+    .find((h) => typeof h === "string" && h.trim() !== "")?.trim().toLowerCase();
+  const sourceHead = markerSource && headSha.startsWith(markerSource) ? headSha : (markerSource ?? headSha);
   const sources = [gate?.currentHeadClean && "draft_gate", gate?.preApprovalCurrentHeadClean && "pre_approval_gate"].filter(Boolean)
-    .map((name) => ({ name, read: () => readRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate: name }) }));
+    .map((name) => {
+      const head = name === "draft_gate" ? sourceHead : headSha;
+      return { name, head, read: () => readRecordedSpecDigest({ repo, pr, headSha: head, repoRoot, gate: name }) };
+    });
   // GATE-EXEC-ROUND-CAP-WAIVER-PROOF: with no clean verdict, the cap-round-fixed proof that ready-for-review.mjs accepts also qualifies.
   if (sources.length === 0) {
     // A config or ledger error fails closed here and in ready-for-review.mjs; only a null proof means "no proof".
@@ -222,12 +229,12 @@ export async function waiveAdrTripwire(options, {
   }
   let digestRefusal = null;
   let matched = false;
-  for (const { name, read } of sources) {
+  for (const { name, head, read } of sources) {
     const recorded = await read();
     if (recorded === currentSpecDigest) { matched = true; break; }
     // A recorded-but-stale digest outranks an unrecorded one in the refusal.
     if (recorded !== null) digestRefusal = refuse("spec_digest_mismatch", `the ${name} recorded specDigest ${recorded}, but issue #${issue} now yields ${currentSpecDigest}`);
-    else digestRefusal ??= refuse("spec_digest_unrecorded", `the ${name} for head ${headSha.slice(0, 7)} recorded no specDigest`);
+    else digestRefusal ??= refuse("spec_digest_unrecorded", `the ${name} for head ${(head ?? headSha).slice(0, 7)} recorded no specDigest`);
   }
   if (!matched) return digestRefusal;
 

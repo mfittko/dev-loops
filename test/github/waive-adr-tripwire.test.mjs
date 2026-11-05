@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { test } from "bun:test";
 
 import { computeSpecDigest, requireSpecFromBody } from "@dev-loops/core/loop/spec-authority";
 import { parseWaiveAdrTripwireCliArgs, runCli, waiveAdrTripwire } from "../../scripts/github/waive-adr-tripwire.mjs";
 import { captureStream } from "../_helpers.mjs";
+import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 
 const HEAD = "d".repeat(40);
 const CONTRACT = "skills/docs/x-contract.md";
@@ -53,7 +59,7 @@ function harness(over = {}) {
     editPr: async (opts, rt) => { edits.push({ opts, rt }); return { ok: true }; },
     ...over,
   };
-  return { edits, run: () => waiveAdrTripwire(OPTIONS, deps) };
+  return { edits, deps, run: () => waiveAdrTripwire(OPTIONS, deps) };
 }
 
 async function assertRefusal(over, reason) {
@@ -323,4 +329,61 @@ test("fetches the PR base branch and refuses when the fetch fails", async () => 
   await run();
   assert.deepEqual(seen, ["release-x"]);
   await assertRefusal({ fetchBaseBranch: () => { throw new Error("offline"); } }, "base_fetch_failed");
+});
+
+const SOURCE = "a".repeat(40);
+const converged = { currentHeadClean: true, draftGateMarker: { headSha: HEAD, convergedFromHeadSha: SOURCE } };
+const carried = { currentHeadClean: true, draftGateMarker: { headSha: HEAD, carriedFrom: SOURCE } };
+
+test("a converged or carried draft_gate marker reads the ledger at the head it names", async () => {
+  for (const marker of [converged, carried]) {
+    const reads = [];
+    const { edits, run } = harness({
+      fetchDraftGateEvidence: async () => marker,
+      readRecordedSpecDigest: async ({ headSha, gate }) => { reads.push([gate, headSha]); return DIGEST; },
+    });
+    assert.equal((await run()).action, "waiver_written");
+    assert.deepEqual(reads, [["draft_gate", SOURCE]]);
+    assert.equal(edits.length, 1);
+  }
+});
+
+test("an unconverged marker, a pre_approval_gate source and an abbreviated current-head marker read the current head", async () => {
+  const cases = [
+    { currentHeadClean: true, draftGateMarker: { headSha: HEAD } },
+    { currentHeadClean: true, draftGateMarker: { headSha: HEAD, convergedFromHeadSha: HEAD.slice(0, 7).toUpperCase() } },
+    { currentHeadClean: false, preApprovalCurrentHeadClean: true, draftGateMarker: { headSha: HEAD, convergedFromHeadSha: SOURCE } },
+  ];
+  for (const evidence of cases) {
+    const reads = [];
+    const { run } = harness({ fetchDraftGateEvidence: async () => evidence, readRecordedSpecDigest: async ({ headSha }) => { reads.push(headSha); return DIGEST; } });
+    assert.equal((await run()).action, "waiver_written");
+    assert.deepEqual(reads, [HEAD]);
+  }
+});
+
+test("a converged source ledger with a stale or missing digest still refuses", async () => {
+  const over = { fetchDraftGateEvidence: async () => converged };
+  await assertRefusal({ ...over, readRecordedSpecDigest: async () => "sha256:edited-after-the-round" }, "spec_digest_mismatch");
+  const unrecorded = await assertRefusal({ ...over, readRecordedSpecDigest: async () => null }, "spec_digest_unrecorded");
+  assert.match(JSON.stringify(unrecorded), /aaaaaaa/);
+  await assertRefusal({
+    fetchDraftGateEvidence: async () => ({ currentHeadClean: true, draftGateMarker: { headSha: HEAD, convergedFromHeadSha: "abc1234" } }),
+    readRecordedSpecDigest: async ({ headSha }) => (/^[0-9a-f]{40}$/.test(headSha) ? DIGEST : null),
+  }, "spec_digest_unrecorded");
+});
+
+test("the default reader fails closed on a source ledger modified after it was sealed", async () => {
+  const repoRoot = realpathSync(mkdtempSync(path.join(tmpdir(), "waive-seal-")));
+  execFileSync("git", ["init", "-q"], { cwd: repoRoot });
+  const ledgerPath = buildLogPath({ repo: "o/n", pr: 9, gate: "draft_gate", headSha: SOURCE, tmpRoot: path.join(repoRoot, "tmp") });
+  mkdirSync(path.dirname(ledgerPath), { recursive: true });
+  const ledger = JSON.stringify({ specAuthority: { specDigest: DIGEST } });
+  await writeSealed(ledgerPath, ledger);
+  const { deps } = harness({ fetchDraftGateEvidence: async () => converged });
+  delete deps.readRecordedSpecDigest;
+  const run = () => waiveAdrTripwire(OPTIONS, { ...deps, repoRoot });
+  assert.equal((await run()).action, "waiver_written");
+  writeFileSync(ledgerPath, ledger.replace(DIGEST, "sha256:forged"));
+  assert.equal((await run()).reason, "spec_digest_unrecorded");
 });
