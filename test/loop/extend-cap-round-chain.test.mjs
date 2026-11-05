@@ -117,7 +117,7 @@ test("refuses a PR head that is not the worktree HEAD and a PR with no cap-round
     const refused = await extend(bare, head);
     assert.equal(refused.reason, "no_cap_round_chain");
     assert.match(refused.detail, /check-pre-push-delta\.mjs --result/);
-    assert.match(refused.detail, /gate-coordination .* routes this refusal back to this command/);
+    assert.match(refused.detail, /gate-coordination .* routes this refusal back to this command, so only the pre-push delta or the replacement-PR restart breaks the cycle/);
   } finally {
     await rm(bare, { recursive: true, force: true });
   }
@@ -188,12 +188,16 @@ test("the cap-round head equal to the head, or an unfetched cap-round head, refu
   const { root, A } = await capFixture();
   try {
     runGitFixture(root, ["checkout", "-q", A]);
-    assert.equal((await extend(root, A)).reason, "no_cap_round_chain");
+    const equal = await extend(root, A);
+    assert.equal(equal.reason, "no_cap_round_chain");
+    assert.match(equal.detail, /check-pre-push-delta\.mjs --result/);
     const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
     const gone = "a".repeat(40);
     const dir = path.join(root, "tmp", "gate-findings", "owner-repo", `pr-${PR}`);
     await writeFile(path.join(dir, `draft_gate-${gone}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: gone, verdict: "findings_present", loggedAt: "2026-11-09T00:00:00.000Z", findings: [] }), "utf8");
-    assert.equal((await extend(root, D)).reason, "no_cap_round_chain");
+    const unfetched = await extend(root, D);
+    assert.equal(unfetched.reason, "no_cap_round_chain");
+    assert.match(unfetched.detail, /git fetch origin \S+ and rerun/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -455,7 +459,9 @@ test("a clean cap round at the PR head writes no record, and an orphaned cap-rou
   const { root, A } = await cleanCapFixture();
   try {
     // At the cap-round head the round is the head being posted (no cap round yet): the clean draft_gate verdict path applies, and nothing is written.
-    assert.equal((await extend(root, A)).reason, "no_cap_round_chain");
+    const clean = await extend(root, A);
+    assert.equal(clean.reason, "no_cap_round_chain");
+    assert.match(clean.detail, /no covering sealed cap-round clearing chain/);
     assert.equal(existsSync(gateDeltaRecordPath(path.join(root, "tmp"), A)), false);
     runGitFixture(root, ["checkout", "-q", "--orphan", "rebased"]);
     const R = await commit(root, { "docs/r.md": "r\n" }, "rebased");
