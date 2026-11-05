@@ -17,7 +17,7 @@ Amends [ADR 0208](./0208-draft-cap-round-fixed-goes-ready.md), [ADR 0224](./0224
    - a `high` act item without a non-blank string `judgeFix` (at the cap round a `high` act item with a non-blank `judgeFix` goes to the fixer), or a `high` the judge defers or rejects;
    - a `failOpen` finding the judge defers or rejects;
    - a `question`-severity act item;
-   - a closed finding with an unknown severity or no valid disposition (evidence integrity, reason `severity_disagreement`).
+   - a closed finding with an unknown severity or no valid disposition, or an act item with a missing or blank severity (evidence integrity, reason `severity_disagreement`).
 3. Security and spec-change blocks ride on severity `high` and the spec digest check. This slice adds no finding field.
 4. A `medium`, `low`, `nit` or unknown-severity act item and a `medium` without `failOpen` that the judge defers or rejects never block. They reach the fixer and the pre-push delta review.
 5. A `failOpen` finding blocks when the judge defers or rejects it. A non-`high` `failOpen` act item goes to the fixer.

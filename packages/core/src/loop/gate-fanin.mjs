@@ -1376,7 +1376,7 @@ export function capClosedFor(finding, { round, cap }) {
  * Blockers a past-cap draft_gate round composes into `blocked` (GATE-EXEC-SOFT-CAP, ADR 0251). A blocker exists only for a named human decision:
  * a `high` act item without a non-blank `judgeFix` (at the cap round a high with a `judgeFix` goes to the fixer; after it a high always blocks),
  * a `question`-severity act item, a `failOpen: true` or `high` finding the judge defers or rejects, and a finding with no valid disposition or severity
- * (evidence integrity, `severity_disagreement`). Medium, low, nit and unknown-severity act items and a medium defer or reject never block: they reach the fixer and the pre-push delta.
+ * and an act item with a missing or blank severity (evidence integrity, `severity_disagreement`). Medium, low, nit and unknown-severity act items and a medium defer or reject never block: they reach the fixer and the pre-push delta.
  * @returns {Array<{ kind: "round_cap_reached", reason: "new_act"|"resurfaced"|"severity_disagreement", item: string }>}
  */
 export function pastCapBlockers(findings, { round, cap } = {}) {
@@ -1388,7 +1388,10 @@ export function pastCapBlockers(findings, { round, cap } = {}) {
     const severity = normalizeSeverity(f?.severity);
     if (isOpenActItem(f)) {
       const hasFix = typeof f.judgeFix === "string" && f.judgeFix.trim().length > 0;
-      if (severity === "question" || (severity === "high" && !(atCap && hasFix))) {
+      if (typeof f.severity !== "string" || f.severity.trim() === "") {
+        // The fixer act-list matcher refuses a missing or blank severity, so the item is an evidence-integrity blocker.
+        blockers.push({ kind: "round_cap_reached", reason: "severity_disagreement", item: label(f, "severity_disagreement") });
+      } else if (severity === "question" || (severity === "high" && !(atCap && hasFix))) {
         const reason = f.resurfaces ? "resurfaced" : "new_act";
         blockers.push({ kind: "round_cap_reached", reason, item: label(f, reason) });
       }

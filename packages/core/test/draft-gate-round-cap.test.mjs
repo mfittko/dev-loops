@@ -26,12 +26,14 @@ describe("draft_gate round cap", () => {
 
     test("medium, low, nit and unknown-severity act items never block, with or without judgeFix, new or resurfaced", () => {
       for (const round of [4, 5]) {
-        for (const severity of ["medium", "low", "nit", "critical", undefined]) {
+        for (const severity of ["medium", "low", "nit", "critical"]) {
           assert.deepEqual(pastCapBlockers([act(severity), act(severity, fix), act(severity, { resurfaces: "abcd" })], at(round)), [], `${severity} round ${round}`);
         }
       }
       assert.deepEqual(reasons([act("medium"), act("low"), act("low")]), []);
-      assert.deepEqual(pastCapBlockers([{ summary: "no severity", judgeDisposition: "act" }], at(4)), []);
+      assert.deepEqual(blockerReasons([{ summary: "no severity", judgeDisposition: "act" }], at(4)), sd);
+      assert.deepEqual(blockerReasons([act("")], at(4)), sd);
+      assert.deepEqual(blockerReasons([act("   ")], at(4)), sd);
     });
 
     test("a failOpen act item does not block", () => {

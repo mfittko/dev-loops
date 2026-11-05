@@ -407,7 +407,7 @@ const GateConfig = z.strictObject({
 // Only the draft gate reads maxReviewRounds, so only gates.draft accepts it.
 // No schema-level `.default()` (same layer-shadowing hazard); resolveGateConfig applies 4.
 const DraftGateConfig = GateConfig.extend({
-  maxReviewRounds: z.number().int().nonnegative().optional().describe("Round cap for the draft gate: a round whose count of completed judged rounds reaches this number is past the cap, and a new act item then blocks with round_cap_reached instead of running another fixer round. 0 disables the cap. Default 4."),
+  maxReviewRounds: z.number().int().nonnegative().optional().describe("Round cap for the draft gate: a round whose count of completed judged rounds reaches this number is past the cap, and at the cap round only a named human decision blocks with round_cap_reached (GATE-EXEC-SOFT-CAP); other act items go to the fixer, and a round after the cap round is refused. 0 disables the cap. Default 4."),
 });
 
 // One named group of angles dispatched together onto a single reviewer under
