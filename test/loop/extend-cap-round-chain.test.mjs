@@ -610,6 +610,40 @@ test("a delta that reaches the head but is not locally_clear refuses delta_range
   }
 });
 
+test("a bounded_out A to L record over logic plus a locally_clear L to D record never seals: the later link does not clear L (forged chain)", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs d");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "bounded_out", nextStep: "push_to_gate", items: [] });
+    writeSealedGateDeltaRecord(tmp, L, { reviewBaselineHead: L, candidateHead: D, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const result = await extend(root, D);
+    assert.equal(result.reason, "delta_range_mismatch");
+    assert.match(result.detail, /outcome bounded_out/u, "names the failing link's outcome");
+    assert.equal(readSealedGateDeltaRecord(tmp, A).extension, undefined);
+    assert.equal(readSealedGateDeltaRecord(tmp, L).extension, undefined);
+    assert.equal(await proof(root, D), null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed proof after sealing delta_covered leaves a record another writer replaced", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const result = await extend(root, L, { resolveProof: async () => { writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [{ ref: "other", status: "resolved" }] }); return null; } });
+    assert.equal(result.reason, "proof_not_reached");
+    assert.match(result.detail, /left in place/u);
+    assert.deepEqual(readSealedGateDeltaRecord(tmp, A).items, [{ ref: "other", status: "resolved" }]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a failed proof after sealing delta_covered restores the delta record byte for byte", async () => {
   const { root, A } = await cleanCapFixture();
   try {

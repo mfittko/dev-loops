@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
  * extend-cap-round-chain: extend the sealed cap-round clearing chain over later commits that
- * change docs and tests only (GATE-EXEC-ROUND-CAP-CHAIN-EXTEND, ADR 0224). It writes one sealed
+ * change docs and tests, or code a locally_clear delta covers (GATE-EXEC-ROUND-CAP-CHAIN-EXTEND, ADR 0224). It writes one sealed
  * clearing record bound to the chain end E with candidateHead = the PR head, so
  * `resolveCapRoundFixed` reaches the head again. It needs no fixer plan. A commit in E..HEAD
  * that touches a logic file refuses (`logic_commit_in_range`, `delta_range_mismatch`) and writes nothing, unless a sealed
- * `locally_clear` pre-push delta record covers exactly the chain link to the head: the tool then seals
+ * `locally_clear` pre-push delta record is bound to the start of the logic range (the cap-round head for a clean cap round) and the PR head: the tool then seals
  * `extension: "delta_covered"` into that record (ADR 0254, issue 3049). For a clean cap
- * round the range starts at the cap-round head, so a plain record over a logic commit never seals.
+ * round the range starts at the cap-round head: only a locally_clear record bound to that head seals, never a plain or bounded_out record, nor a later link.
  */
 import { execFileSync } from "node:child_process";
 import { rmSync } from "node:fs";
@@ -28,10 +28,9 @@ import { defaultFetchOrigin } from "./standing-authorization.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: extend-cap-round-chain.mjs --repo <owner/name> --pr <number> [--worktree <path>]
-Extend the sealed cap-round clearing chain over later commits that change docs and tests only
-(GATE-EXEC-ROUND-CAP-CHAIN-EXTEND). The PR head must equal HEAD of the worktree (default: cwd).
-Commits after the chain end that touch a logic file need a sealed locally_clear pre-push delta record for exactly chain end..PR head (ADR 0254): the tool then seals extension "delta_covered" into that record. It refuses with a typed reason and writes nothing when such commits have no covering delta, when any commit after the chain end touches a
-logic file, when no cap-round chain exists (a clean cap round counts as a chain of length zero ending at the cap-round head), or when the proof does not reach the head afterwards.
+Extend the sealed cap-round clearing chain over later commits that change docs and tests, or code covered by a locally_clear pre-push delta
+(GATE-EXEC-ROUND-CAP-CHAIN-EXTEND, ADR 0254). The PR head must equal HEAD of the worktree (default: cwd).
+Commits after the chain end that touch a logic file need a sealed locally_clear pre-push delta record for exactly chain end..PR head (ADR 0254): the tool then seals extension "delta_covered" into that record. It refuses with a typed reason and writes nothing when such commits have no covering delta, when no cap-round chain exists (a clean cap round counts as a chain of length zero ending at the cap-round head), or when the proof does not reach the head afterwards.
 Output (stdout, JSON): { "ok": true, "action": "chain_extended" | "already_proven", "chainEnd" (null for already_proven), "candidateHead", "files" }
 Refusal (stderr, JSON, exit 1): { "ok": false, "refused": true, "reason": "<code>", "detail": "..." }
 Reasons: repo_mismatch, pr_state_unreadable, base_fetch_failed, head_mismatch, no_cap_round_chain, baseline_orphaned,
@@ -136,28 +135,25 @@ export async function extendCapRoundChain(options, {
     if (other) return refuse("delta_range_mismatch", `GATE-EXEC-ROUND-CAP-CHAIN-EXTEND: commits after ${from.slice(0, 7)} change logic files: ${logic.join(", ")}, and the sealed delta record for ${from.slice(0, 7)} covers ${String(other.candidateHead).slice(0, 7)} with outcome ${other.outcome}, not locally_clear for exactly ${from.slice(0, 7)}..${head.slice(0, 7)}. ${deltaRemedy(from)}`);
     return refuse("logic_commit_in_range", `GATE-EXEC-ROUND-CAP-CHAIN-EXTEND: commits after ${from.slice(0, 7)} change logic files: ${logic.join(", ")}, and no sealed locally_clear delta record covers them. ${deltaRemedy(from)}`);
   };
-  // ADR 0254: a sealed locally_clear delta record that binds a chain link to exactly the PR head covers code commits. Seal the extension into that record, then prove; a failed proof restores the record.
+  // ADR 0254: only a sealed locally_clear delta record whose baseline is the start of the classified logic range and whose candidate is the PR head covers that range. A later link never vouches for logic an earlier link did not clear. Seal the extension into that record, then prove; a failed proof restores it if it is still the record this run wrote.
+  const onDisk = (base) => { try { return JSON.stringify(readGateDeltaRecord(tmpRoot, base)); } catch { return null; } };
   const sealDeltaCovered = async (start) => {
-    const seen = new Set();
-    for (let base = start; /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(base) && !seen.has(base);) {
-      seen.add(base);
-      const record = sealedClearing(base);
-      if (!record) return null;
-      const next = String(record.candidateHead ?? "").toLowerCase();
-      if (next !== head) { base = next; continue; }
-      if (record.outcome !== "locally_clear" || record.extension) return null;
-      writeRecord(tmpRoot, base, { ...record, extension: "delta_covered" });
-      let reachedAfter = null;
-      let proofError;
-      try { reachedAfter = await resolveProof(proofArgs, { repoRoot }); } catch (error) { proofError = error; }
-      if (!reachedAfter) {
-        writeRecord(tmpRoot, base, record);
-        if (proofError) throw proofError;
-        return refuse("proof_not_reached", `the cap-round-fixed proof does not reach ${head.slice(0, 7)} after sealing delta_covered into the record for ${base.slice(0, 7)}; the record was restored. Run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed condition`);
-      }
-      return { ok: true, action: "chain_extended", chainEnd: base, candidateHead: head, files: (await classifyRange(base)).files };
+    const record = sealedClearing(start);
+    if (!record || String(record.candidateHead ?? "").toLowerCase() !== head || record.outcome !== "locally_clear" || record.extension) return null;
+    const before = onDisk(start);
+    if (before === null) return null;
+    writeRecord(tmpRoot, start, { ...record, extension: "delta_covered" });
+    const written = onDisk(start);
+    let reachedAfter = null;
+    let proofError;
+    try { reachedAfter = await resolveProof(proofArgs, { repoRoot }); } catch (error) { proofError = error; }
+    if (!reachedAfter) {
+      const ours = written !== null && onDisk(start) === written;
+      if (ours) writeRecord(tmpRoot, start, record);
+      if (proofError) throw proofError;
+      return refuse("proof_not_reached", `the cap-round-fixed proof does not reach ${head.slice(0, 7)} after sealing delta_covered into the record for ${start.slice(0, 7)}; ${ours ? "the record was restored" : "the record changed since this run wrote it and was left in place"}. Run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed condition`);
     }
-    return null;
+    return { ok: true, action: "chain_extended", chainEnd: start, candidateHead: head, files: (await classifyRange(start)).files };
   };
   const capHeadValid = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(capHeadSha) && isAncestor(capHeadSha);
   if (!chainEnd && cleanCap && ends.includes(head) && readGateDeltaRecord(tmpRoot, capHeadSha) !== null) {
