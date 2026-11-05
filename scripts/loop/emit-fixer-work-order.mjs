@@ -8,7 +8,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { readFile, rename, rm } from "node:fs/promises";
+import { readFile, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -893,6 +893,18 @@ export function fixerPlanPath(ref, tmpRoot) {
   return match ? path.join(buildFixerDir({ repo: match[1], pr: match[2], tmpRoot }), PLAN_FILE) : null;
 }
 
+/** The keyed plan path (issue 3111) for a fixer ref under `tmpRoot`, or null when the ref is not a fixer ref. Never a delta `--fixer-plan`. */
+export function keyedFixerPlanPathForRef(ref, tmpRoot) {
+  const match = FIXER_REF_RE.exec(ref);
+  return match ? keyedFixerPlanPath(buildFixerDir({ repo: match[1], pr: match[2], tmpRoot }), match[4]) : null;
+}
+
+// One plan read: only an absent file is absent; invalid JSON is an integrity refusal, any other I/O error rethrows.
+const readPlanFile = (planPath) => readJson(planPath).catch((err) => {
+  if (!(err instanceof SyntaxError)) throw err;
+  throw new WorkOrderRefusal("local_materialization_integrity_failure", `fixer emit plan ${planPath} is not valid JSON; re-emit the fixer work order, never hand-repair the plan`);
+});
+
 const closedText = (executionIdentity) => `fixer execution ${executionIdentity} belongs to a gate fix sequence that was closed as abandoned`;
 /** True when a closure record exists for the execution at any head; only ENOENT means not closed. */
 const closureRecorded = async (root, heads, executionIdentity) => {
@@ -910,10 +922,7 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
   let newest = null;
   for (const tmpRoot of tmpRoots) {
     const planPath = path.join(buildFixerDir({ repo, pr, tmpRoot }), PLAN_FILE);
-    const plan = await readJson(planPath).catch((err) => {
-      if (!(err instanceof SyntaxError)) throw err;
-      throw new WorkOrderRefusal("local_materialization_integrity_failure", `fixer emit plan ${planPath} is not valid JSON; re-emit the fixer work order, never hand-repair the plan`);
-    });
+    const plan = await readPlanFile(planPath);
     if (!plan) continue;
     if (!newest || emittedAt(plan.executionIdentity) > emittedAt(newest.executionIdentity)) newest = plan;
     if (plan.workOrderRef === ref) own ??= { plan, planPath };
@@ -922,7 +931,7 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
   let keyed = false;
   if (!own) for (const tmpRoot of tmpRoots) {
     const planPath = keyedFixerPlanPath(buildFixerDir({ repo, pr, tmpRoot }), executionIdentity);
-    const plan = await readJson(planPath).catch(() => null);
+    const plan = await readPlanFile(planPath);
     if (plan?.workOrderRef === ref) { own = { plan, planPath }; keyed = true; break; }
   }
   if (!own) {
@@ -976,8 +985,16 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
   const sequenceClosed = !closureOnly && await closureRecorded(closureRoot, closureHeads, executionIdentity);
   const originClosed = !closureOnly && origin && await closureRecorded(closureRoot, origin.heads, origin.executionIdentity);
   const parentId = keyed ? plan.parentExecutionIdentity : null;
+  // One current keyed unit per parent: a newer keyed plan with the same parent supersedes this one.
+  let newerKeyed = null;
+  if (keyed) for (const name of await readdir(path.dirname(planPath)).catch(() => [])) {
+    const id = /^fixer-emit-plan\.(f\d+-[0-9a-f]{8})\.json$/.exec(name)?.[1];
+    if (!id || emittedAt(id) <= emittedAt(executionIdentity)) continue;
+    if ((await readPlanFile(path.join(path.dirname(planPath), name)))?.parentExecutionIdentity === parentId) newerKeyed = id;
+  }
   const parentStale = keyed && (!parentId || newest?.executionIdentity !== parentId
     ? `keyed fixer ref ${ref} is orphaned: its parent execution ${parentId} is no longer the current plan`
+    : newerKeyed ? `keyed fixer ref ${ref} was superseded by a newer keyed plan ${newerKeyed} for the same parent`
     : !closureOnly && await closureRecorded(closureRoot, closureHeads, parentId) && closedText(parentId));
   const stale = parentStale || (sequenceClosed && closedText(executionIdentity))
     || (originClosed && closedText(origin.executionIdentity))
@@ -995,7 +1012,8 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
     stale: stale || undefined,
     closureRoot,
     closureHeads,
-    closureOrigin: origin,
+    // A keyed plan's parent is its closure origin, so admission rechecks the parent closure under the sequence lock.
+    closureOrigin: keyed && parentId ? { heads: closureHeads, executionIdentity: parentId } : origin,
   };
 }
 
