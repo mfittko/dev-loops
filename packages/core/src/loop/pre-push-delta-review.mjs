@@ -201,11 +201,11 @@ function nonEmptyStrings(value) {
  * round reviewed and stays pinned for every invocation in the sequence; a new
  * gate round opens a new sequence.
  * @param {{ reviewBaselineHead: string, actList: unknown, reviewerOnly?: boolean }} input
- * `reviewerOnly` opens a zero-item sequence for the code-range clearing (ADR 0255): no act list, the reviewer reports every finding.
+ * `reviewerOnly` opens the code-range clearing sequence (ADR 0255): the act list is the one derived from the cap-round ledger, or empty for a clean cap round or a chain-end baseline.
  */
 export function startDeltaSequence({ reviewBaselineHead, actList, reviewerOnly = false } = {}) {
   if (!nonEmpty(reviewBaselineHead)) throw new Error("delta sequence requires reviewBaselineHead");
-  const actItems = reviewerOnly ? [] : toDeltaActItems(actList);
+  const actItems = reviewerOnly && (!Array.isArray(actList) || actList.length === 0) ? [] : toDeltaActItems(actList);
   const actSetId = createHash("sha256")
     .update(JSON.stringify(actItems.map((item) => {
       const { ref, angle, severity, file, line, summary } = item;
@@ -261,7 +261,7 @@ export function buildDeltaInput({ sequence, candidateHead, runId, specIdentity =
       candidateHead: head,
       actSetId: sequence.actSetId,
       ...(runId ? { runId } : {}),
-      actionableItems: sequence.reviewerOnly ? [] : [{ ref: "<act item ref>", status: DELTA_ITEM_STATUSES.join("|"), evidence: ["<non-empty string>"] }],
+      actionableItems: sequence.reviewerOnly && sequence.actItems.length === 0 ? [] : [{ ref: "<act item ref>", status: DELTA_ITEM_STATUSES.join("|"), evidence: ["<non-empty string>"] }],
       newFindings: [{
         severity: [...VALID_SEVERITIES].join("|"),
         summary: "<non-empty string>",

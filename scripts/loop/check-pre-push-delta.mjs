@@ -25,7 +25,7 @@
  * unresolved-threads file of the thread route), the result file, the
  * --findings-log file and `git rev-parse HEAD`, runs the stale-surface reads
  * (`git cat-file`, `git diff`, `git grep`), and authenticates ACT coverage without further writes.
- * With --reviewer-only (ADR 0255) both runs apply to baseline..PR head with no act list, fixer plan or coverage record.
+ * With --reviewer-only (ADR 0255) both runs apply to baseline..PR head with the act list derived from the cap-round ledger (--findings-log), no fixer plan or coverage record.
  * Pure result checks live in @dev-loops/core/loop/pre-push-delta-review.
  */
 import { execFile, spawnSync } from "node:child_process";
@@ -54,7 +54,7 @@ import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { fixerPlanPath, locateFixerUnit } from "./emit-fixer-work-order.mjs";
-import { clearingChainWalk } from "../github/write-gate-context.mjs";
+import { capRoundActList, clearingChainWalk } from "../github/write-gate-context.mjs";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
@@ -69,8 +69,8 @@ const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --handback --site-coverage <path> [--worktree <dir>]   (fixer handbackCheck run)
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --result <path> --invocation <1-3> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
        check-pre-push-delta.mjs --threads-file <path> --repo <owner/name> --pr <n> --baseline <sha> ...   (thread route: replaces --act-list)
-       check-pre-push-delta.mjs --reviewer-only --baseline <sha> --pr-head <sha> --spec-identity <id> --result-path <path> [--worktree <dir>]   (code-range clearing, no act list)
-       check-pre-push-delta.mjs --reviewer-only --baseline <sha> --pr-head <sha> --result <path> --invocation <1-3> [--worktree <dir>]
+       check-pre-push-delta.mjs --reviewer-only --baseline <sha> --pr-head <sha> --spec-identity <id> --result-path <path> [--worktree <dir>]   --findings-log <cap-round log> (code-range clearing, act list derived from the ledger)
+       check-pre-push-delta.mjs --reviewer-only --baseline <sha> --pr-head <sha> --findings-log <cap-round log> --result <path> --invocation <1-3> [--worktree <dir>]
 
 Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
 
@@ -86,9 +86,9 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --fixer-plan <path>     Canonical current pulled commit_only plan; pair with --site-coverage for ACT/THREAD closure (required for ACT input/result)
   --findings-log <path>   Required on the act-list route, input mode: the reviewed gate round's findings log (its headSha must equal --baseline, or its sealed clearing chain or a base-only merge must reach --baseline: PRE-PUSH-DELTA-INPUT-CAP-CHAIN);
                           its provenance.perAngle angles join the surface hints (PRE-PUSH-DELTA-INPUT). Refused with --threads-file.
-  --reviewer-only         Code-range clearing without a fixer plan (ADR 0255, GATE-EXEC-ROUND-CAP-CHAIN-EXTEND): a zero-item sequence over baseline..PR head for a PR whose head moved past the cap round.
+  --reviewer-only         Code-range clearing without a fixer plan (ADR 0255, GATE-EXEC-ROUND-CAP-CHAIN-EXTEND): an ACT sequence over baseline..PR head for a PR whose head moved past the cap round. The act list is derived from the cap-round ledger (--findings-log, required): its open act clusters, with no fixer plan or coverage record; empty for a clean cap round or a chain-end baseline.
                           Needs --baseline (an ancestor of the worktree HEAD), --pr-head (equal to the worktree HEAD), --spec-identity and --result-path (input run) or --result and --invocation (result run).
-                          Refuses --act-list, --threads-file, --fixer-plan, --site-coverage, --handback and --findings-log. The invocation bound of 3 still applies and no sequence marker is written.
+                          Refuses --act-list, --threads-file, --fixer-plan, --site-coverage and --handback. The invocation bound of 3 still applies and no sequence marker is written.
                           Base-only merges of origin/<base> are excluded from the patch, the changed files and the stale-surface scan; any other merge in the range refuses (non_base_only_merge).
                           The reviewer reports ALL findings; the record is locally_clear only when the result has no medium-or-higher finding. Run git fetch origin <base> first.
   --handback              The fixer handbackCheck run: waives the --findings-log requirement (it validates --site-coverage, no reviewer input is used)
@@ -177,7 +177,8 @@ export function parseCheckPrePushDeltaArgs(argv) {
   if (values.help) return { help: true };
   const reviewerOnly = values["reviewer-only"] === true;
   if (reviewerOnly) {
-    for (const flag of ["fixer-plan", "site-coverage", "act-list", "threads-file", "findings-log"]) if (values[flag]) throw parseError(`--reviewer-only refuses --${flag}: the code-range clearing has no act list, fixer plan or coverage record`);
+    for (const flag of ["fixer-plan", "site-coverage", "act-list", "threads-file"]) if (values[flag]) throw parseError(`--reviewer-only refuses --${flag}: the act list is derived from the cap-round ledger, with no fixer plan or coverage record`);
+    if (!values["findings-log"]) throw parseError("--reviewer-only requires --findings-log <cap-round findings log>: the act list is derived from it");
     if (values.handback) throw parseError("--reviewer-only refuses --handback");
     if (!values["pr-head"]) throw parseError("--reviewer-only requires --pr-head <sha>: the worktree HEAD must be the PR head");
   } else if (Boolean(values["act-list"]) === Boolean(values["threads-file"])) throw parseError("pass exactly one of --act-list <path> and --threads-file <path>");
@@ -421,10 +422,19 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return { ok: true, help: true };
   }
+  const baselineSha = revParse(options.worktree, options.baseline);
+  // ADR 0255: the reviewer-only act list is derived from the authenticated cap-round ledger; a chain-end baseline (the log is an earlier head) needs no covering, so its list stays empty.
+  let derivedActList = [];
+  if (options.reviewerOnly) {
+    await roundAnglesOf(options.findingsLog, baselineSha, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target: undefined });
+    const log = JSON.parse(readFileSync(options.findingsLog, "utf8"));
+    const logHead = String(log.headSha ?? "").trim().toLowerCase();
+    if (logHead && (baselineSha.startsWith(logHead) || logHead.startsWith(baselineSha))) derivedActList = capRoundActList(log.findings, log.headSha);
+  }
   const sequence = startDeltaSequence({
-    reviewBaselineHead: revParse(options.worktree, options.baseline),
+    reviewBaselineHead: baselineSha,
     reviewerOnly: options.reviewerOnly,
-    actList: options.reviewerOnly ? [] : options.threadsFile
+    actList: options.reviewerOnly ? derivedActList : options.threadsFile
       ? threadsToActList(JSON.parse(readFileSync(options.threadsFile, "utf8")), { repo: options.repo, pr: options.pr })
       : JSON.parse(readFileSync(options.actList, "utf8")),
   });

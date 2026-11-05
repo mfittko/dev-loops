@@ -962,15 +962,23 @@ function reviewerOnlyRepo({ nonBaseOnlyMerge = false, octopus = false, baseChang
   }
   return { dir, baseline, head: git("rev-parse", "HEAD"), tmpRoot: resolveGateArtifactTmpRoot(dir) };
 }
-const reviewerOnlyArgs = ({ dir, baseline, head }) => ["--reviewer-only", "--baseline", baseline, "--pr-head", head, "--worktree", dir];
+// The cap-round ledger at the baseline; --findings-log is required and the act list is derived from it (ADR 0255).
+const CAP_ACT = { severity: "medium", summary: "guard missing", files: ["a.mjs"], line: 1, angle: "correctness", judgeDisposition: "act", judgeTitle: "Guard", judgeFix: "add" };
+function capLog(dir, baseline, findings) {
+  const file = path.join(dir, `cap-log-${baseline.slice(0, 8)}-${findings.length}.json`);
+  fs.writeFileSync(file, JSON.stringify({ headSha: baseline, verdict: findings.length ? "findings_present" : "clean", findings, provenance: { perAngle: [{ angle: "correctness" }] } }));
+  return file;
+}
+const reviewerOnlyArgs = ({ dir, baseline, head }, findings = []) => ["--reviewer-only", "--baseline", baseline, "--pr-head", head, "--findings-log", capLog(dir, baseline, findings), "--worktree", dir];
 const seam = { stdout: { write: () => {} }, fetchBase: () => {} };
 
-async function reviewerOnlyRun(repo, result, { invocation = 1, extraSeam = {} } = {}) {
+async function reviewerOnlyRun(repo, result, { invocation = 1, extraSeam = {}, findings = [], status = "resolved" } = {}) {
   const resultPath = path.join(repo.dir, "reviewer-result.json");
-  const { input } = await runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", resultPath], { ...seam, ...extraSeam });
-  fs.writeFileSync(resultPath, JSON.stringify({ ...input.resultShape, newFindings: [], widenedReads: [], outcome: "locally_clear", ...result }));
+  const { input } = await runDeltaCli([...reviewerOnlyArgs(repo, findings), "--spec-identity", "spec@1", "--result-path", resultPath], { ...seam, ...extraSeam });
+  const actionableItems = input.actItems.map((item) => ({ ref: item.ref, status, evidence: ["a.mjs:1"] }));
+  fs.writeFileSync(resultPath, JSON.stringify({ ...input.resultShape, actionableItems, newFindings: [], widenedReads: [], outcome: status === "resolved" ? "locally_clear" : "needs_fix", ...result }));
   sealDeltaFixture(repo.tmpRoot, resultPath);
-  const decision = await runDeltaCli([...reviewerOnlyArgs(repo), "--result", resultPath, "--invocation", String(invocation)], { ...seam, ...extraSeam });
+  const decision = await runDeltaCli([...reviewerOnlyArgs(repo, findings), "--result", resultPath, "--invocation", String(invocation)], { ...seam, ...extraSeam });
   return { input, decision, record: JSON.parse(fs.readFileSync(path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.json`), "utf8")) };
 }
 const cleanup = (repo) => fs.rmSync(repo.dir, { recursive: true, force: true });
@@ -991,6 +999,22 @@ test("AC1: a reviewer-only delta seals locally_clear for baseline..head across a
     assert.equal(decision.nextStep, "push");
     assert.deepEqual({ b: record.reviewBaselineHead, c: record.candidateHead, o: record.outcome, i: record.items }, { b: repo.baseline, c: repo.head, o: "locally_clear", i: [] });
     assert.ok(fs.existsSync(path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.json.seal`)));
+  } finally { cleanup(repo); }
+});
+
+test("a reviewer-only run over a non-clean cap-round ledger derives the act items, seals them resolved, and an unresolved item seals no locally_clear record", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    const ok = await reviewerOnlyRun(repo, {}, { findings: [CAP_ACT] });
+    assert.deepEqual(ok.input.actItems.map((i) => i.ref), [fingerprintFinding(CAP_ACT)]);
+    assert.equal(ok.decision.outcome, "locally_clear");
+    assert.deepEqual(ok.record.items.map((i) => [i.ref, i.status]), [[fingerprintFinding(CAP_ACT), "resolved"]]);
+    const bad = reviewerOnlyRepo();
+    try {
+      const run = await reviewerOnlyRun(bad, {}, { findings: [CAP_ACT], status: "not_resolved" });
+      assert.equal(run.record.outcome, "needs_fix");
+      assert.equal(run.decision.locallyClear, false);
+    } finally { cleanup(bad); }
   } finally { cleanup(repo); }
 });
 
@@ -1047,7 +1071,7 @@ test("reviewer-only refuses an existing record with another act set, an active m
     writeSequenceMarker({ tmpRoot: repo.tmpRoot, baselineHead: repo.baseline, branch: "issue-1" });
     await assert.rejects(runDeltaCli(args, seam), /active sequence marker/);
     fs.rmSync(path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.sequence`));
-    await assert.rejects(runDeltaCli(["--reviewer-only", "--baseline", repo.head, "--pr-head", repo.head, "--worktree", repo.dir, "--spec-identity", "s", "--result-path", path.join(repo.dir, "r.json")], seam), /equals the baseline/);
+    await assert.rejects(runDeltaCli(["--reviewer-only", "--baseline", repo.head, "--pr-head", repo.head, "--findings-log", capLog(repo.dir, repo.head, []), "--worktree", repo.dir, "--spec-identity", "s", "--result-path", path.join(repo.dir, "r.json")], seam), /equals the baseline/);
     runGitFixture(repo.dir, ["update-ref", "-d", "refs/remotes/origin/main"]);
     await assert.rejects(runDeltaCli(args, seam), /origin\/main does not exist.*git fetch origin main/);
     await assert.rejects(runDeltaCli(args, { ...seam, fetchBase: () => { throw new Error("offline"); } }), /git fetch origin main failed/);
@@ -1098,10 +1122,11 @@ test("--reviewer-only refuses the plan inputs, a missing --pr-head and a worktre
   const repo = reviewerOnlyRepo();
   try {
     const base = reviewerOnlyArgs(repo);
-    for (const extra of [["--fixer-plan", "p"], ["--site-coverage", "s"], ["--handback"], ["--act-list", "a"], ["--threads-file", "t"], ["--findings-log", "l"]]) {
+    for (const extra of [["--fixer-plan", "p"], ["--site-coverage", "s"], ["--handback"], ["--act-list", "a"], ["--threads-file", "t"]]) {
       assert.throws(() => parseCheckPrePushDeltaArgs([...base, ...extra]), /--reviewer-only refuses/);
     }
-    assert.throws(() => parseCheckPrePushDeltaArgs(["--reviewer-only", "--baseline", repo.baseline, "--spec-identity", "s"]), /requires --pr-head/);
-    await assert.rejects(runDeltaCli(["--reviewer-only", "--baseline", repo.baseline, "--pr-head", repo.baseline, "--worktree", repo.dir, "--spec-identity", "s", "--result-path", path.join(repo.dir, "r.json")], seam), /is not --pr-head/);
+    assert.throws(() => parseCheckPrePushDeltaArgs(["--reviewer-only", "--baseline", repo.baseline, "--spec-identity", "s", "--findings-log", "l"]), /requires --pr-head/);
+    assert.throws(() => parseCheckPrePushDeltaArgs(["--reviewer-only", "--baseline", repo.baseline, "--pr-head", repo.head, "--spec-identity", "s"]), /requires --findings-log/);
+    await assert.rejects(runDeltaCli(["--reviewer-only", "--baseline", repo.baseline, "--pr-head", repo.baseline, "--findings-log", capLog(repo.dir, repo.baseline, []), "--worktree", repo.dir, "--spec-identity", "s", "--result-path", path.join(repo.dir, "r.json")], seam), /is not --pr-head/);
   } finally { cleanup(repo); }
 });
