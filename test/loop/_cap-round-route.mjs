@@ -23,7 +23,7 @@ export async function reviewerOnlyRoute(root, { baseline, head, ledgerPath, stat
   const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
   const logPath = path.join(root, "cap-round-log.json");
   writeFileSync(logPath, JSON.stringify({ ...ledger, provenance: ledger.provenance?.perAngle?.length ? ledger.provenance : { perAngle: [{ angle: "correctness" }] } }));
-  const args = ["--reviewer-only", "--baseline", baseline, "--pr-head", head, "--findings-log", logPath, "--worktree", root];
+  const args = ["--reviewer-only", "--repo", ledger.repo, "--pr", String(ledger.pr), "--baseline", baseline, "--pr-head", head, "--findings-log", logPath, "--worktree", root];
   const resultPath = path.join(root, "reviewer-result.json");
   const { input } = await runDeltaCli([...args, "--spec-identity", "spec@1", "--result-path", resultPath], seam);
   const actionableItems = input.actItems.map((item) => ({ ref: item.ref, status, evidence: ["src/x.mjs:1"] }));

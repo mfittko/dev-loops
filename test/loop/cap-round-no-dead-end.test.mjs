@@ -8,7 +8,7 @@ import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { capRoundActList } from "../../scripts/github/write-gate-context.mjs";
 import { writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
-import { coordinationAt, followRemedy, reviewerOnlyRoute } from "./_cap-round-route.mjs";
+import { coordinationAt, extendRoute, followRemedy, reviewerOnlyRoute } from "./_cap-round-route.mjs";
 
 // Issue 3122 / ADR 0255: a draft PR past the cap round never dead-ends. Every combination of cap round, sequence state, base refreshes and later commits
 // reaches mark_ready_for_review, or is an explicit expected block with its reason. Real functions throughout; only the network seams are injected (_cap-round-route.mjs).
@@ -67,8 +67,8 @@ const BLOCKS = {
   head_equals_baseline: { failure: "cap_round_unresolved", trace: /equals the baseline|no_cap_round_chain/ },
   active_sequence_marker: { failure: "no_clearing_record", trace: /active sequence marker/ },
   act_items_open: { failure: "no_clearing_record", trace: /needs_fix|no PR-own commit/ },
-  needs_fix_without_commit: { failure: "no_clearing_record", trace: /no PR-own commit/ },
   chain_reaches_head: { failure: "items_do_not_cover", trace: /chain_reaches_head/ },
+  needs_fix_without_commit: { failure: "no_clearing_record", trace: /no PR-own commit/ },
 };
 function expectedBlock({ clean, sequence, merges, fix, docs }) {
   if (!fix && !docs && merges === 0) return "head_equals_baseline";
@@ -80,10 +80,13 @@ function expectedBlock({ clean, sequence, merges, fix, docs }) {
   return null;
 }
 
+// 72 combinations: 34 reach ready, 38 end in a named block.
+const TALLY = { ready: 34, active_sequence_marker: 17, act_items_open: 10, head_equals_baseline: 6, chain_reaches_head: 3, needs_fix_without_commit: 2 };
 const combos = [];
 for (const clean of [true, false]) for (const sequence of ["open", "closed", "fixer_needs_fix"]) for (const merges of [0, 1, 2]) for (const [fix, docs] of [[true, false], [false, true], [true, true], [false, false]]) combos.push({ clean, sequence, merges, fix, docs });
 
 const READY = ["mark_ready_for_review", "run_pre_approval_gate"];
+const tally = {};
 for (const combo of combos) {
   const name = `cap round ${combo.clean ? "clean" : "with act items"}, sequence ${combo.sequence === "closed" ? "closed (head_moved, no_commit or lost)" : combo.sequence}, ${combo.merges} base refresh(es), fix ${combo.fix}, docs ${combo.docs}`;
   test(name, async () => {
@@ -91,6 +94,7 @@ for (const combo of combos) {
     try {
       const { trace, end } = await followRemedy(s.root, { repo: REPO, pr: PR, head: s.head, baseline: s.A, ledgerPath: s.ledgerPath, reviewerStatus: combo.clean || combo.fix ? "resolved" : "not_resolved" });
       const block = expectedBlock(combo);
+      tally[block ?? "ready"] = (tally[block ?? "ready"] ?? 0) + 1;
       if (block === null) {
         assert.ok(READY.includes(end.nextAction), `${name}: ${end.nextAction} ${end.failure}: ${end.reason}\n${trace.join("\n")}`);
         return;
@@ -101,6 +105,12 @@ for (const combo of combos) {
     } finally { rmSync(s.root, { recursive: true, force: true }); }
   }, 60000);
 }
+
+// The real outcome of every combination, counted from the runs above: each remaining block is named.
+test("matrix tally: every combination is accounted for, and each remaining block is named", () => {
+  if (Object.values(tally).reduce((a, b) => a + b, 0) !== combos.length) return; // a filtered run
+  assert.deepEqual(tally, TALLY);
+});
 
 // The remaining dead ends, each with its typed reason and the remedy the coordinator prints.
 test("baseline_orphaned: a rebase removes the cap-round head, and only the replacement PR remains", async () => {
@@ -161,4 +171,49 @@ test("unsealed_record: an unsealed non-clearing record is taken over, an unseale
     const { end: cleared } = await followRemedy(protectedRecord.root, ctx);
     assert.ok(READY.includes(cleared.nextAction), `${cleared.failure}`);
   } finally { rmSync(takeOver.root, { recursive: true, force: true }); rmSync(protectedRecord.root, { recursive: true, force: true }); }
+});
+
+test("chain-end baseline: a second logic commit after a delta_covered extension is cleared by the reviewer-only delta at the chain end", async () => {
+  const s = scenario({ clean: true, sequence: "lost", merges: 0, fix: true, docs: false });
+  try {
+    const F = s.head;
+    await reviewerOnlyRoute(s.root, { baseline: s.A, head: F, ledgerPath: s.ledgerPath });
+    assert.equal((await extendRoute(s.root, { repo: REPO, pr: PR, head: F })).action, "chain_extended");
+    writeFileSync(path.join(s.root, "src", "a.mjs"), "export const a = 9;\n");
+    runGitFixture(s.root, ["add", "src"]);
+    runGitFixture(s.root, ["commit", "-q", "-m", "second logic commit"]);
+    const L2 = String(runGitFixture(s.root, ["rev-parse", "HEAD"])).trim();
+    const refused = await extendRoute(s.root, { repo: REPO, pr: PR, head: L2 });
+    assert.equal(refused.reason, "logic_commit_in_range");
+    assert.match(refused.detail, new RegExp(`--baseline ${F}`), "the remedy names the chain end as the baseline");
+    await reviewerOnlyRoute(s.root, { baseline: F, head: L2, ledgerPath: s.ledgerPath });
+    // The sealed locally_clear record at the chain end already reaches the head; the extension is the fallback.
+    await extendRoute(s.root, { repo: REPO, pr: PR, head: L2 });
+    const end = await coordinationAt(s.root, { repo: REPO, pr: PR, head: L2 });
+    assert.ok(READY.includes(end.nextAction), `${end.failure}: ${end.reason}`);
+  } finally { rmSync(s.root, { recursive: true, force: true }); }
+});
+
+test("the remaining clean-cap needs_fix dead ends clear with the remedy ADR 0255 names: a docs or tests commit, the reviewer-only take-over, one further docs commit, then extend", async () => {
+  for (const docs of [true, false]) {
+    const s = scenario({ clean: true, sequence: "fixer_needs_fix", merges: 1, fix: false, docs });
+    try {
+      const push = (name) => {
+        writeFileSync(path.join(s.root, "docs", name), `${name}\n`);
+        runGitFixture(s.root, ["add", "docs"]);
+        runGitFixture(s.root, ["commit", "-q", "-m", name]);
+        return String(runGitFixture(s.root, ["rev-parse", "HEAD"])).trim();
+      };
+      mkdirSync(path.join(s.root, "docs"), { recursive: true });
+      // (a) the docs commit exists already; (b) the range holds no PR-own commit until the first push.
+      const head = docs ? s.head : push("d.md");
+      const blocked = await followRemedy(s.root, { repo: REPO, pr: PR, head, baseline: s.A, ledgerPath: s.ledgerPath });
+      assert.equal(blocked.end.nextAction, "report_blocked", `docs ${docs}`);
+      assert.match(blocked.trace.join("\n"), /chain_reaches_head/);
+      const next = push("e.md");
+      await extendRoute(s.root, { repo: REPO, pr: PR, head: next });
+      const end = await coordinationAt(s.root, { repo: REPO, pr: PR, head: next });
+      assert.ok(READY.includes(end.nextAction), `docs ${docs}: ${end.failure}: ${end.reason}`);
+    } finally { rmSync(s.root, { recursive: true, force: true }); }
+  }
 });
