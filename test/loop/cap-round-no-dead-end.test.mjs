@@ -138,3 +138,27 @@ test("synthetic twin of PR 3087: a non-clean cap round whose fixer needs_fix rec
     assert.ok(READY.includes(end.nextAction), `${end.failure}: ${end.reason}`);
   } finally { rmSync(s.root, { recursive: true, force: true }); }
 });
+
+test("unsealed_record: an unsealed non-clearing record is taken over, an unsealed locally_clear one refuses with a runnable rm remedy that clears it", async () => {
+  const sealPath = (s) => path.join(s.root, "tmp", "gate-delta", `${s.A}.json.seal`);
+  const takeOver = scenario({ clean: false, sequence: "fixer_needs_fix", merges: 1, fix: true, docs: false });
+  const protectedRecord = scenario({ clean: false, sequence: "fixer_needs_fix", merges: 1, fix: true, docs: false });
+  try {
+    rmSync(sealPath(takeOver));
+    const { end } = await followRemedy(takeOver.root, { repo: REPO, pr: PR, head: takeOver.head, baseline: takeOver.A, ledgerPath: takeOver.ledgerPath });
+    assert.ok(READY.includes(end.nextAction), `${end.failure}`);
+
+    const recordPath = path.join(protectedRecord.root, "tmp", "gate-delta", `${protectedRecord.A}.json`);
+    const items = capRoundActList([ACT], protectedRecord.A).map((item) => ({ ref: item.ref, status: "resolved" }));
+    writeSealedGateDeltaRecord(path.join(protectedRecord.root, "tmp"), protectedRecord.A, { reviewBaselineHead: protectedRecord.A, candidateHead: protectedRecord.A, actSetId: "fixer-act-set", invocation: 1, outcome: "locally_clear", nextStep: "push_to_gate", items });
+    rmSync(sealPath(protectedRecord));
+    const ctx = { repo: REPO, pr: PR, head: protectedRecord.head, baseline: protectedRecord.A, ledgerPath: protectedRecord.ledgerPath };
+    const refused = await followRemedy(protectedRecord.root, ctx);
+    assert.equal(refused.end.nextAction, "report_blocked");
+    assert.match(refused.trace.join("\n"), /unsealed_record: .*rm -f .*\.seal/);
+    // The remedy: remove the leftover pair, then the route runs again.
+    rmSync(recordPath);
+    const { end: cleared } = await followRemedy(protectedRecord.root, ctx);
+    assert.ok(READY.includes(cleared.nextAction), `${cleared.failure}`);
+  } finally { rmSync(takeOver.root, { recursive: true, force: true }); rmSync(protectedRecord.root, { recursive: true, force: true }); }
+});

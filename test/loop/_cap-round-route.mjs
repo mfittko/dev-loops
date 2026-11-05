@@ -57,7 +57,7 @@ export async function coordinationAt(root, { repo, pr, head }) {
 export async function followRemedy(root, { repo, pr, head, baseline, ledgerPath, reviewerStatus = "resolved" }) {
   const trace = [];
   const step = async (name, fn) => {
-    try { const r = await fn(); trace.push(`${name}: ${r.ok === false ? r.reason : r.action ?? (r.decision ? JSON.stringify(r.decision) : "ok")}`); return r; } catch (error) { trace.push(`${name}: refused ${String(error.message).slice(0, 260)}`); return { ok: false, thrown: error }; }
+    try { const r = await fn(); trace.push(`${name}: ${r.ok === false ? r.reason : r.action ?? (r.decision ? JSON.stringify(r.decision) : "ok")}`); return r; } catch (error) { trace.push(`${name}: refused ${String(error.message).slice(0, 700)}`); return { ok: false, thrown: error }; }
   };
   let end = await coordinationAt(root, { repo, pr, head });
   if (end.fixed) return { trace: ["already proven"], end };
