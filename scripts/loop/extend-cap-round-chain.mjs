@@ -21,6 +21,7 @@ import { CAP_ROUND_REFUSAL } from "@dev-loops/core/loop/pr-gate-coordination";
 import { detectRepoSlug, parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { capRoundCovers, clearingChainLastCandidates, isCleanCapRound, resolveCapRound, resolveCapRoundFixed } from "../github/write-gate-context.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord, writeSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
@@ -102,6 +103,8 @@ export async function extendCapRoundChain(options, {
   if (reached) return { ok: true, action: "already_proven", chainEnd: null, candidateHead: head, files: [] };
   const cap = await resolveCapRound(proofArgs, { repoRoot });
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
+  // The reviewer-only remedies name the cap-round ledger path when the cap round resolved, so no other log is picked.
+  const capLog = cap ? buildLogPath({ repo, pr, gate: "draft_gate", headSha: cap.log.headSha, tmpRoot }) : "<cap-round findings log>";
   const cleanCap = isCleanCapRound(cap);
   // A clean cap round has no act item to cover: any sealed clearing chain (a thread-route record over a logic commit) ends at the E the extension record binds to, and the proof then accepts the chain through that record.
   const ends = cap ? await clearingChainLastCandidates({ tmpRoot, capHead: cap.log.headSha, repo, pr, baseRefName, repoRoot, covering: cleanCap ? () => true : capRoundCovers(cap, tmpRoot), allowUnsealedEnd: true }) : [];
@@ -131,7 +134,7 @@ export async function extendCapRoundChain(options, {
   // Coordination routes no_clearing_record, items_do_not_cover and chain_does_not_reach_head to this command, so a remedy that names gate-coordination alone loops: each remedy names the step that breaks the cycle.
   const deltaRange = (from) => `${from.slice(0, 7)}..${head.slice(0, 7)}`;
   // ADR 0255: the reviewer-only delta needs no fixer plan, coverage record or review thread, so it is the one route that works for a clean and a non-clean cap round after a head move.
-  const deltaRemedy = (from) => `Run the reviewer-only pre-push delta over ${deltaRange(from)}: ${CLI} loop pre-push-delta --reviewer-only --repo ${repo} --pr ${pr} --baseline ${from} --pr-head ${head} --findings-log <cap-round findings log> --spec-identity <id> --result-path <result-file>, have the reviewer fill and seal the result, then run it again with --result <result-file> --invocation <1-3> until its outcome is locally_clear, then rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}. ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} routes this refusal back to this command, so the delta breaks the cycle, not gate-coordination. If the baseline is orphaned, restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`;
+  const deltaRemedy = (from) => `Run the reviewer-only pre-push delta over ${deltaRange(from)}: ${CLI} loop pre-push-delta --reviewer-only --repo ${repo} --pr ${pr} --baseline ${from} --pr-head ${head} --findings-log ${capLog} --spec-identity <id> --result-path <result-file>, have the reviewer fill and seal the result, then run it again with --result <result-file> --invocation <1-3> until its outcome is locally_clear, then rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}. ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} routes this refusal back to this command, so the delta breaks the cycle, not gate-coordination. If the baseline is orphaned, restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`;
   // A sealed clearing record at `from` that did not seal the extension below covers another range or a non-locally_clear outcome: never a cover for from..head.
   const refuseLogic = (from, logic) => {
     const other = sealedClearing(from);
@@ -179,7 +182,7 @@ export async function extendCapRoundChain(options, {
     const proveOrphan = () => { try { git(repoRoot, ["merge-base", "--is-ancestor", capHead, head]); return false; } catch (error) { return error?.status === 1 && present(capHead) && present(head); } };
     if (capHead && capHead.toLowerCase() !== head && proveOrphan()) return refuse("baseline_orphaned", CAP_ROUND_REFUSAL.baseline_orphaned);
     if (capHead && !present(capHead)) return refuse("no_cap_round_chain", `the cap-round head ${capHead.slice(0, 7)} is not in this clone, so no chain can be read. A cap-round head missing from this clone is outside the PR head's fetched history. Run \`git rev-parse --is-shallow-repository\`: if it prints true, run \`git fetch --unshallow\`, otherwise run \`git fetch origin ${capHead}\`. Then rerun \`${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}\`. If the commit is still absent, restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`);
-    return refuse("no_cap_round_chain", `PR #${pr} has no covering sealed cap-round clearing chain ending at an ancestor of ${head.slice(0, 7)}. Run ${CLI} loop pre-push-delta --reviewer-only --repo ${repo} --pr ${pr} --baseline <cap-round head> --pr-head ${head} --findings-log <cap-round findings log> --spec-identity <id> --result-path <result-file> (then --result <result-file> --invocation <1-3>) until it is locally_clear, then rerun this command, or restart on a replacement PR. If the PR head already carries a clean current-head draft_gate verdict, no extension is needed. ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} routes this refusal back to this command, so only the pre-push delta or the replacement-PR restart breaks the cycle: ${CAP_ROUND_REFUSAL.baseline_orphaned}`);
+    return refuse("no_cap_round_chain", `PR #${pr} has no covering sealed cap-round clearing chain ending at an ancestor of ${head.slice(0, 7)}. Run ${CLI} loop pre-push-delta --reviewer-only --repo ${repo} --pr ${pr} --baseline <cap-round head> --pr-head ${head} --findings-log ${capLog} --spec-identity <id> --result-path <result-file> (then --result <result-file> --invocation <1-3>) until it is locally_clear, then rerun this command, or restart on a replacement PR. If the PR head already carries a clean current-head draft_gate verdict, no extension is needed. ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} routes this refusal back to this command, so only the pre-push delta or the replacement-PR restart breaks the cycle: ${CAP_ROUND_REFUSAL.baseline_orphaned}`);
   }
 
   // A delta_covered or docs_tests_only record at the clean cap-round head already cleared capHead..its candidate: classify from that candidate, so a later docs commit extends instead of reclassifying cleared logic.
@@ -195,7 +198,7 @@ export async function extendCapRoundChain(options, {
     let clearing = false;
     try { clearing = DELTA_CLEARING_NEXT_STEPS.includes(readSealedGateDeltaRecord(tmpRoot, chainEnd)?.nextStep); } catch { /* unreadable: not a clearing record */ }
     if (clearing) return recordExists();
-    return refuse("record_not_clearing", `the delta record for ${chainEnd.slice(0, 7)} exists but is not a sealed clearing record and is never overwritten; run ${CLI} loop pre-push-delta --reviewer-only --repo ${repo} --pr ${pr} --baseline ${chainEnd} --pr-head ${head} --findings-log <cap-round findings log> --spec-identity <id> --result-path <result-file> (then --result <result-file> --invocation <1-3>) until it is locally_clear (it takes over a non-clearing or unsealed record with the same act refs), then rerun this command`);
+    return refuse("record_not_clearing", `the delta record for ${chainEnd.slice(0, 7)} exists but is not a sealed clearing record and is never overwritten; run ${CLI} loop pre-push-delta --reviewer-only --repo ${repo} --pr ${pr} --baseline ${chainEnd} --pr-head ${head} --findings-log ${capLog} --spec-identity <id> --result-path <result-file> (then --result <result-file> --invocation <1-3>) until it is locally_clear (it takes over a non-clearing or unsealed record with the same act refs), then rerun this command`);
   }
 
   // One sequence lock (the one the reviewer-only run takes) spans the exclusive create, the proof and the rollback. The proof takes no sequence lock.

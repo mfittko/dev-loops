@@ -928,7 +928,7 @@ test("a refused locally_clear result followed by a no-commit re-emission keeps t
 
 
 // ADR 0255: the PR 3087 state. The cap-round head P1, a fix commit P2, then a base refresh merged in; the sequence is closed (no marker, no plan) and the head moved.
-function reviewerOnlyRepo({ nonBaseOnlyMerge = false, evilMerge = false, octopus = false, baseChanges = false, ownChanges = false, commitAfterMerge = false } = {}) {
+function reviewerOnlyRepo({ conflictOnly = false, nonBaseOnlyMerge = false, evilMerge = false, octopus = false, baseChanges = false, ownChanges = false, commitAfterMerge = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-only-"));
   initGitFixture(dir, { branch: "main", commit: null });
   const git = (...args) => runGitFixture(dir, args);
@@ -947,11 +947,16 @@ function reviewerOnlyRepo({ nonBaseOnlyMerge = false, evilMerge = false, octopus
   git("checkout", "-q", "main");
   fs.writeFileSync(path.join(dir, "refreshed.txt"), "from the base\n");
   if (baseChanges) { fs.mkdirSync(path.join(dir, "changes")); fs.writeFileSync(path.join(dir, "changes", "base.md"), "base\n"); }
+  if (conflictOnly) fs.writeFileSync(path.join(dir, "a.mjs"), "export const a = \"main\";\n");
   git("rm", "-q", "gone.mjs");
   git("add", "."); git("commit", "-qm", "base moves");
   git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"));
   git("checkout", "-q", "pr");
-  git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
+  if (conflictOnly) {
+    assert.throws(() => git("merge", "-q", "--no-ff", "--no-commit", "main")); // add/add conflict on a.mjs
+    fs.writeFileSync(path.join(dir, "a.mjs"), "export const a = 3;\n");
+    git("add", "."); git("commit", "-qm", "refresh base with a resolution");
+  } else git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
   const mergeHead = git("rev-parse", "HEAD");
   if (commitAfterMerge) { fs.writeFileSync(path.join(dir, "a.mjs"), "// uses goneIdentifierName\nexport const a = 3;\n"); git("add", "."); git("commit", "-qm", "fix: a again"); }
   if (nonBaseOnlyMerge || evilMerge || octopus) {
@@ -969,7 +974,7 @@ function reviewerOnlyRepo({ nonBaseOnlyMerge = false, evilMerge = false, octopus
       git("add", "."); git("commit", "-qm", "merge side with a resolution");
     } else git("merge", "-q", "--no-ff", "-m", "merge side", ...(octopus ? ["side", "side2"] : ["side"]));
   }
-  return { dir, baseline, fix, mergeHead, head: git("rev-parse", "HEAD"), tmpRoot: resolveGateArtifactTmpRoot(dir) };
+  return { dir, baseline: conflictOnly ? fix : baseline, fix, mergeHead, head: git("rev-parse", "HEAD"), tmpRoot: resolveGateArtifactTmpRoot(dir) };
 }
 // The cap-round ledger at the baseline; --findings-log is required and the act list is derived from it (ADR 0255).
 const CAP_ACT = { severity: "medium", summary: "guard missing", files: ["a.mjs"], line: 1, angle: "correctness", judgeDisposition: "act", judgeTitle: "Guard", judgeFix: "add" };
@@ -1216,6 +1221,7 @@ test("the reviewer-only run keeps a locally_clear record, an extension, another 
     ["carries an extension", { outcome: "locally_clear", extension: "delta_covered", sameActSet: true, candidateHead: "ORPHAN" }, false, /pr create .*--allow-replacement-pr/],
     ["covers another set of act refs", { items: [{ ref: "other", status: "resolved" }] }, false, /rm -f \S+\.json \S+\.seal/],
     ["not on the PR head's history", { candidateHead: "ORPHAN" }, false, /rm -f \S+\.json \S+\.seal/],
+    ["not on the PR head's history", { candidateHead: "HEAD" }, false, /rm -f \S+\.json \S+\.seal/], // a symbolic ref is no commit SHA
     ["bounded_out", { sameActSet: true, outcome: "locally_clear", invocation: 3, candidateHead: "ORPHAN" }, false, /pr create .*--allow-replacement-pr/],
     ["unsealed_record: .*is locally_clear for another act set.*rm -f \\S+\\.json \\S+\\.seal", { outcome: "locally_clear" }, true],
   ];
@@ -1224,7 +1230,7 @@ test("the reviewer-only run keeps a locally_clear record, an extension, another 
     try {
       await reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], status: "not_resolved" });
       const orphan = runGitFixture(repo.dir, ["commit-tree", "-m", "orphan", "HEAD^{tree}"]);
-      const recordPath = seedFixerRecord(repo, { candidateHead: repo.baseline, ...patch, ...(patch.candidateHead ? { candidateHead: orphan } : {}) });
+      const recordPath = seedFixerRecord(repo, { candidateHead: repo.baseline, ...patch, ...(patch.candidateHead === "ORPHAN" ? { candidateHead: orphan } : {}) });
       if (unsealed) fs.rmSync(`${recordPath}.seal`);
       const before = fs.readFileSync(recordPath, "utf8");
       await assert.rejects(reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], invocation: (patch.invocation ?? 1) + 1 }), (error) => {
@@ -1306,4 +1312,13 @@ test("--pr-head accepts a commit SHA and rejects a symbolic ref", () => {
   const base = ["--reviewer-only", "--repo", "owner/repo", "--pr", "70", "--baseline", "abc1234", "--spec-identity", "s", "--findings-log", "l"];
   assert.equal(parseCheckPrePushDeltaArgs([...base, "--pr-head", "fba27b5"]).prHead, "fba27b5");
   for (const bad of ["HEAD", "issue-3122", "origin/main"]) assert.throws(() => parseCheckPrePushDeltaArgs([...base, "--pr-head", bad]), /--pr-head must be a hex commit SHA/);
+});
+
+test("a reviewer-only run whose only PR-own change is a conflict-resolution merge reviews its resolution diff", async () => {
+  const repo = reviewerOnlyRepo({ conflictOnly: true });
+  try {
+    const { input, decision } = await reviewerOnlyRun(repo, {});
+    assert.match(fs.readFileSync(input.patchPath, "utf8"), /a\.mjs/, "the resolution diff names the resolved path");
+    assert.equal(decision.outcome, "locally_clear");
+  } finally { cleanup(repo); }
 });

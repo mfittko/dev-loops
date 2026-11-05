@@ -367,7 +367,7 @@ async function reviewerOnlyBase(worktree, baseline, head, { revParse, baseOnlyMe
   try { fetchBase(base, { repoRoot }); } catch (error) { throw new Error(`reviewer-only: git fetch origin ${base} failed (${error?.message}); cannot trust the local origin/${base} ref. Run \`git fetch origin ${base}\` and rerun`); }
   try { revParse(worktree, `origin/${base}`); } catch { throw new Error(`reviewer-only: origin/${base} does not exist in ${worktree}; run \`git fetch origin ${base}\` and rerun`); }
 
-  if (revList(worktree, baseline, head, ["--no-merges", `^origin/${base}`]).length === 0) throw new Error(`reviewer-only: ${baseline}..${head} holds no PR-own commit that origin/${base} lacks; there is no code range to clear. ${FIXER_REMEDY}`);
+  const ownCommits = revList(worktree, baseline, head, ["--no-merges", `^origin/${base}`]).length;
   // A merge that is not base-only is reviewed through its resolution diff (`git show --remerge-diff`: the merge against an automatic remerge of its parents), whose paths join the PR-own paths.
   const resolvedPaths = [];
   for (const merge of revList(worktree, baseline, head, ["--merges", `^origin/${base}`])) {
@@ -378,6 +378,8 @@ async function reviewerOnlyBase(worktree, baseline, head, { revParse, baseOnlyMe
     if (shown?.status !== 0) throw new Error(`non_base_only_merge: merge ${merge} in ${baseline}..${head} ${shown || parents.status !== 0 ? "has a resolution diff or parents that cannot be read" : `is an octopus merge (${parents.stdout.trim().split(" ").length - 1} parents)`} (${((shown ?? parents).stderr ?? "").trim() || (shown ?? parents).error?.message}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${REPLACEMENT_REMEDY}`);
     resolvedPaths.push(...shown.stdout.split("\0").filter(Boolean));
   }
+  // A conflict-resolution merge is a PR-own change even with no non-merge commit of its own.
+  if (ownCommits === 0 && resolvedPaths.length === 0) throw new Error(`reviewer-only: ${baseline}..${head} holds no PR-own commit that origin/${base} lacks; there is no code range to clear. ${FIXER_REMEDY}`);
   return { base, resolvedPaths };
 }
 
@@ -476,18 +478,21 @@ export async function runCli(
   }
   const currentHead = revParse(options.worktree, "HEAD");
   // ADR 0255: the reviewer-only route reviews baseline..PR head, so the worktree HEAD is the PR head. Base-only merges in the range are excluded; any other merge refuses.
-  let ownPaths, priorRecord, baseBranch;
+  let ownPaths, priorRecord, baseBranch, noMarker;
   const baselineHead = sequence.reviewBaselineHead;
   if (options.reviewerOnly) {
     if (revParse(options.worktree, options.prHead) !== currentHead) throw new Error(`reviewer-only: worktree HEAD ${currentHead} is not --pr-head ${options.prHead}; check out the PR head and rerun`);
     if (currentHead === baselineHead) throw new Error(`reviewer-only: worktree HEAD ${currentHead} equals the baseline; there is no code range to clear. ${FIXER_REMEDY}`);
     const root = tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree);
-    if (readSequenceMarker(root, baselineHead)) throw new Error(`reviewer-only: an active sequence marker exists for baseline ${baselineHead}; the fixer closes it when it pushes its commit; close an abandoned one with dev-loops gate close-sequence --head ${baselineHead} --repo <owner/name> --pr <n> and rerun`);
+    // Checked under the sequence lock the fixer emission writes its marker under, here and again before the result write.
+    noMarker = () => { if (readSequenceMarker(root, baselineHead)) throw new Error(`reviewer-only: an active sequence marker exists for baseline ${baselineHead}; the fixer closes it when it pushes its commit; close an abandoned one with dev-loops gate close-sequence --head ${baselineHead} --repo <owner/name> --pr <n> and rerun`); };
     // Read and classify under the sequence lock the result run and extend-cap-round-chain take: a record mid-write (seal removed, new record renamed) is never taken for an unsealed one.
     // A record that is not JSON (a crash during its write) refuses like any other unsealed leftover.
     // A candidate missing from the clone is not on the PR head's history.
-    const onHistory = (a, b) => { try { return isAncestor(options.worktree, a, b); } catch { return false; } };
+    // An unsealed record is untrusted: only a hex SHA reaches git, never HEAD, a branch name or an option.
+    const onHistory = (a, b) => { try { return HEAD_SHA_RE.test(a) && isAncestor(options.worktree, a, b); } catch { return false; } };
     await withSequenceLock(root, [baselineHead], () => {
+      noMarker();
       let refusal;
       try { priorRecord = readGateDeltaRecord(root, baselineHead); } catch { refusal = { reason: "is unreadable or not JSON" }; }
       refusal ??= priorRecordRefusal(priorRecord, { sequence, currentHead, isAncestor: onHistory });
@@ -612,6 +617,7 @@ export async function runCli(
     if (options.reviewerOnly) {
       const root = tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree);
       await withSequenceLock(root, [baselineHead], () => {
+        noMarker();
         let now = null;
         try { now = readGateDeltaRecord(root, baselineHead); } catch { /* unreadable differs from the snapshot below */ }
         if (JSON.stringify(now) !== JSON.stringify(priorRecord ?? null)) throw new Error(`reviewer-only: the delta record for baseline ${baselineHead} changed on disk between this run's read and its write (a concurrent run or extend-cap-round-chain); nothing was written. Rerun the input run (without --result)`);
