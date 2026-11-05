@@ -3643,3 +3643,33 @@ test("issue 2787 C13/C14: resetting the worktree to the original candidate does 
     assert.equal(unit.workOrder.phase, "commit_only");
   });
 });
+
+// Issue 3111 AC1 + AC2: a no-commit commit_only emission after a refused delta result is append-only, so the delta coverage still binds.
+test("a same-head no-commit emission with a delta result keeps the plan and marker, and a delta re-invocation still binds to the original coverage", async () => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    const prior = await emit({ phase: "commit_only", deltaResult: undefined });
+    assert.equal(pull(prior, root).status, 0);
+    git(wt, "commit", "-q", "--allow-empty", "-m", "fixing F");
+    const fixing = git(wt, "rev-parse", "HEAD");
+    const report = prior.workOrder.outputRefs[0];
+    await mkdir(path.dirname(report), { recursive: true });
+    await writeFile(report, JSON.stringify({ headSha: fixing, siteCoverage: [{ fingerprint: ACT_REF, returnedSites: [], sites: [], noSitesReason: "  actual query returned nothing  " }] }));
+    const log = path.join(path.dirname(files.actList), "findings.json");
+    await writeFile(log, JSON.stringify({ headSha: head, provenance: { perAngle: [{ angle: "correctness" }] } }));
+    const args = ["--act-list", files.actList, "--baseline", head, "--worktree", wt, "--fixer-plan", prior.planPath, "--site-coverage", report];
+    const input = ["--spec-identity", "spec@1", "--findings-log", log, "--result-path", path.join(path.dirname(log), "delta-result.json")];
+    const first = await runCli([...args, ...input], { stdout: { write() {} } });
+    // The reviewer returned locally_clear for the fixing commit; the result check refused it, so the coordinator re-dispatches the fixer.
+    await writeFile(files.delta, JSON.stringify({ ...first.input.resultShape, actionableItems: first.input.actItems.map(({ ref }) => ({ ref, status: "resolved", evidence: ["focused check"] })), newFindings: [], widenedReads: [], outcome: "locally_clear" }));
+    sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta);
+    const planBytes = await readFile(prior.planPath), markerPath = path.join(root, "tmp/gate-delta", `${head}.sequence`), marker = await readFile(markerPath);
+    // The fixer re-dispatch after the refusal makes no commit.
+    const again = await emit({ phase: "commit_only", keepRecord: true });
+    assert.notEqual(again.planPath, prior.planPath);
+    assert.deepEqual(await readFile(prior.planPath), planBytes, "the bound plan is not superseded");
+    assert.deepEqual(await readFile(markerPath), marker, "the sequence marker keeps the original execution");
+    assert.equal((await locateFixerUnit({ ref: again.workOrderRef, cwd: wt, tmpRoots: [path.join(root, "tmp")] })).stale, undefined, "the new order stays pullable");
+    assert.equal((await locateFixerUnit({ ref: prior.workOrderRef, cwd: wt, tmpRoots: [path.join(root, "tmp")] })).stale, undefined, "the original unit is not superseded");
+    await runCli([...args, ...input], { stdout: { write() {} } });
+  });
+});

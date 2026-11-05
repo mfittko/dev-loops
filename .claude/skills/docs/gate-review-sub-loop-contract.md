@@ -1186,6 +1186,7 @@ If the judge act list is non-empty (a round with an unjudged finding and no act 
 - run the smallest honest validation for the accepted fix scope
 - commit and push fixes on the branch; for a judge act-list fix, push only after the
   delta pre-push review (`PRE-PUSH-DELTA-TRIGGER` in [Pre-push review contract](pre-pr-review-contract.md#delta-mode))
+- a `locally_clear` delta result refused for unaddressed stale-surface hits (`PRE-PUSH-DELTA-RESULT`) reaches the delta reviewer as a re-review demand, not the fixer: the reviewer re-returns the result with each hit's site named in `newFindings[]` or skipped in `siteCoverage[]`. A fixer emission after that refusal that makes no commit is written as a keyed plan beside `fixer-emit-plan.json` and never supersedes it, so the delta re-invocation for the same baseline still binds to the original coverage (issue 3111)
 - <!-- rule: GATE-EXEC-BLOCKING-ONLY-FIX --> `GATE-EXEC-BLOCKING-ONLY-FIX`: At every round,
   the fix cycle covers exactly the judge's act list. The judge is the only authority for a finding's
   disposition (`act`, `defer`, `reject`), and it disposes each cluster once, so one disposition applies to

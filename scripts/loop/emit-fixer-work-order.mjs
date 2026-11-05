@@ -81,6 +81,7 @@ Exit codes: 0 emitted, 1 refused (missing or conflicting source or authority), 2
 const FIXER_REF_RE = /^fixer:([^/\s#]+\/[^/\s#]+)#(\d+):([0-9a-f]{40}|[0-9a-f]{64}):(f(\d+)-[0-9a-f]{8})$/;
 const FIXER_PHASES = ["commit_only", "full"];
 const PLAN_FILE = "fixer-emit-plan.json";
+const keyedFixerPlanPath = (dir, executionIdentity) => path.join(dir, `fixer-emit-plan.${executionIdentity}.json`);
 // Pinned fixer contracts: the work order digest changes when one changes.
 const FIXER_CONTRACTS = ["agents/fixer.agent.md", "skills/docs/gate-review-sub-loop-contract.md", "skills/docs/validation-policy.md", "skills/docs/copilot-loop-operations.md"];
 const PACKAGE_ROOT = new URL("../../", import.meta.url);
@@ -773,6 +774,14 @@ export async function emitFixerWorkOrder({
   await writeExecutionIndex(tmpRoot, identityTriple);
   const plan = { ...identityTriple, materializationHash: materializationHash(text), promptPath, dispatchPrompt, workOrder };
   // Atomic: a concurrent pull never reads a half-written plan. One plan per PR names the only current unit.
+  // Issue 3111: a same-head commit_only re-emission with a delta result is a no-commit emission after a refused delta result. It lands
+  // beside the plan, never over it, so the delta coverage the original execution bound stays authentic; it writes no sequence marker.
+  const prior = phase === "commit_only" && actListFile && delta && originalBytes ? JSON.parse(originalBytes).workOrder : null;
+  // The delta sequence is in flight when the delta result reviewed the unpushed fixing commit (its candidate is the worktree HEAD, not the baseline) and the first fixer delivered its handback.
+  const appendOnly = prior?.phase === "commit_only" && prior.source === "act-list" && prior.headSha === headSha && prior.gate === gate
+    && delta.parsed.candidateHead !== headSha && delta.parsed.candidateHead === gitIn(cwd, "rev-parse", "HEAD").trim()
+    && Boolean(await capture.read(prior.outputRefs?.[0]));
+  const livePlanPath = appendOnly ? keyedFixerPlanPath(dir, executionIdentity) : planPath;
   const tempPath = `${planPath}.tmp-${executionIdentity}`;
   await capture.write(tempPath, `${JSON.stringify(plan, null, 2)}\n`);
   await capture.recheck();
@@ -790,15 +799,15 @@ export async function emitFixerWorkOrder({
       if (oldPlan) await rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr, headSha, tmpRoot });
       // PRE-PUSH-DELTA-PUSH-AUTHORITY: a full emission that skips the delta check never overwrites an ungranted commit_only sequence at this head.
       if (phase === "full" && (reviewId || ciFile) && readSequenceMarker(markerRoot, headSha)?.fullGranted === false) throw new Refusal(`a commit_only sequence is active at ${headSha} and its candidate has no delta review; a ${ciFile ? "--ci-file" : "--review-id"} full emission would grant the push of that unreviewed candidate. Run the delta review and emit the full phase of that sequence, or close it with scripts/loop/close-gate-sequence.mjs, then re-emit`);
-      await rename(tempPath, planPath);
-      writeSequenceMarker({ tmpRoot: markerRoot, baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName, execution: { executionIdentity, workOrderRef: identityTriple.workOrderRef, outputRef } });
+      await rename(tempPath, livePlanPath);
+      if (!appendOnly) writeSequenceMarker({ tmpRoot: markerRoot, baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName, execution: { executionIdentity, workOrderRef: identityTriple.workOrderRef, outputRef } });
     });
   } catch (error) {
     if (error?.code === "SEQUENCE_LOCK_BUSY") throw new WorkOrderRefusal("sequence_lock_busy", `sequence_lock_busy: ${error.message}; no work order was made current, so re-run the emit once the concurrent close or pull finishes`, true);
     throw error;
   }
   // The coordinator's gate wait-for-units --artifact path: a full-phase fixer's final-on-write report (ADR 0223), else the hand-back itself.
-  return { ...plan, planPath, joinRef: phase === "full" && !ciFile ? fixerReportPath(outputRef) : outputRef };
+  return { ...plan, planPath: livePlanPath, joinRef: phase === "full" && !ciFile ? fixerReportPath(outputRef) : outputRef };
   } finally { await capture.release(); }
 }
 
@@ -906,12 +915,19 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
     if (!newest || emittedAt(plan.executionIdentity) > emittedAt(newest.executionIdentity)) newest = plan;
     if (plan.workOrderRef === ref) own ??= { plan, planPath };
   }
+  // A no-commit emission (issue 3111) lives in its own keyed plan and never supersedes the current plan.
+  let keyed = false;
+  if (!own) for (const tmpRoot of tmpRoots) {
+    const planPath = keyedFixerPlanPath(buildFixerDir({ repo, pr, tmpRoot }), executionIdentity);
+    const plan = await readJson(planPath).catch(() => null);
+    if (plan?.workOrderRef === ref) { own = { plan, planPath }; keyed = true; break; }
+  }
   if (!own) {
     return newest && emittedAt(executionIdentity) <= emittedAt(newest.executionIdentity)
       ? { stale: `fixer ref ${ref} was superseded by ${newest.workOrderRef}` } : null;
   }
   const { plan, planPath } = own;
-  if (newest.workOrderRef !== ref) return { stale: `fixer ref ${ref} was superseded by ${newest.workOrderRef}` };
+  if (!keyed && newest.workOrderRef !== ref) return { stale: `fixer ref ${ref} was superseded by ${newest.workOrderRef}` };
   const order = plan.workOrder ?? {};
   if (order.operation === "complete") {
     const error = completeAdmissionError(order);
