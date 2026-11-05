@@ -197,7 +197,8 @@ test("the cap-round head equal to the head, or an unfetched cap-round head, refu
     await writeFile(path.join(dir, `draft_gate-${gone}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: gone, verdict: "findings_present", loggedAt: "2026-11-09T00:00:00.000Z", findings: [] }), "utf8");
     const unfetched = await extend(root, D);
     assert.equal(unfetched.reason, "no_cap_round_chain");
-    assert.match(unfetched.detail, /git fetch origin \S+ and rerun/);
+    assert.match(unfetched.detail, /git fetch origin a{40} .*git fetch --unshallow.*replacement PR/);
+    assert.doesNotMatch(unfetched.detail, /git fetch origin main/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -895,4 +896,19 @@ test("a clean ledger at the PR head resolves no cap round and writes nothing", a
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("every copy of the start-of-logic-range definition carries the one canonical clause", () => {
+  const clause = "the cap-round head for a clean cap round, the end of the already-extended chain when a cap-head record carries an extension, and otherwise the chain end";
+  const files = ["scripts/loop/extend-cap-round-chain.mjs", "packages/core/src/loop/pr-gate-coordination.mjs", "skills/docs/gate-review-sub-loop-contract.md", "docs/decisions/0254-cap-chain-delta-extension.md"];
+  for (const file of files) {
+    const text = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
+    assert.ok(text.includes(clause), file);
+    assert.ok(!text.includes("candidate head of an already-extended cap-head record"), file);
+  }
+  const count = (file) => readFileSync(new URL(`../../${file}`, import.meta.url), "utf8").split(clause).length - 1;
+  assert.equal(count("scripts/loop/extend-cap-round-chain.mjs"), 2);
+  assert.equal(count("packages/core/src/loop/pr-gate-coordination.mjs"), 3);
+  assert.equal(count("docs/decisions/0254-cap-chain-delta-extension.md"), 2);
+  assert.equal(count("skills/docs/gate-review-sub-loop-contract.md"), 1);
 });
