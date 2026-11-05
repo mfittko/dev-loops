@@ -1,6 +1,6 @@
 {
   "name": "@dev-loops/core",
-  "version": "1.0.10-pre.2",
+  "version": "1.0.10-pre.3",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -65,6 +65,7 @@
     "./loop/pr-title-markers": "./src/loop/pr-title-markers.mjs",
     "./loop/public-dev-loop-routing": "./src/loop/public-dev-loop-routing.mjs",
     "./loop/public-dev-loop-routing-contract": "./src/loop/public-dev-loop-routing-contract.mjs",
+    "./loop/gate-no-dead-end": "./src/loop/gate-no-dead-end.mjs",
     "./loop/fix-loop-state": "./src/loop/fix-loop-state.mjs",
     "./loop/refinement-grill-state": "./src/loop/refinement-grill-state.mjs",
     "./loop/queue-board-ordering": "./src/loop/queue-board-ordering.mjs",

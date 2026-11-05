@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 
 import { parseRepoSlug } from "../github/repo-slug.mjs";
-import { severityRank, VALID_SEVERITIES, normalizeSeverity } from "./gate-fanin.mjs";
+import { severityRank, VALID_SEVERITIES, normalizeSeverity, isPastRoundCap } from "./gate-fanin.mjs";
 import { recordedSkipReason, siteCoverageGaps } from "./fixer-disposition.mjs";
 import { sha256Hex } from "./review-dispatch-plan.mjs";
 
@@ -401,13 +401,15 @@ const isLowNitActList = (items) => Array.isArray(items) && items.length > 0
  * A round whose open judge act items are ALL low or nit converges after one commit_only fixer pass whose
  * pre-push delta review is fresh and locally_clear. Any other act item (medium, high, question, unknown) or a
  * mixed list, an empty list, a non-draft_gate gate, or a stale or malformed delta result throws: the caller
- * keeps today's full round. No round count or cap input.
+ * keeps today's full round. Convergence applies only at the cap round or later (`round` at or past a positive `cap`);
+ * below the cap a low or nit act list goes to the fixer and the next full round runs.
  * Returns the converged marker the draft_gate comment at `headSha` records.
- * @param {{ gate?: string, headSha?: string, roundActItems?: unknown, converged?: { fixerCommit?: string, actList?: unknown, deltaResult?: any } }} input
+ * @param {{ gate?: string, headSha?: string, round?: number, cap?: number, roundActItems?: unknown, converged?: { fixerCommit?: string, actList?: unknown, deltaResult?: any } }} input
  * @returns {{ fixerCommit: string, deltaDigest: string }}
  */
-export function composeConvergedDraftGate({ gate, headSha, roundActItems, converged } = {}) {
+export function composeConvergedDraftGate({ gate, headSha, round, cap, roundActItems, converged } = {}) {
   if (gate !== "draft_gate") throw new Error(`converged verdict applies to draft_gate only, got ${JSON.stringify(gate)}`);
+  if (cap > 0 && !isPastRoundCap(round, cap)) throw new Error(`converged verdict applies only at the cap round or later (round ${round}, cap ${cap}); below the cap a low or nit act list goes to the fixer and the next full round runs`);
   if (!FULL_SHA_RE.test(headSha ?? "")) throw new Error("converged verdict requires the full reviewed head sha");
   const fixerCommit = converged?.fixerCommit;
   if (!FULL_SHA_RE.test(fixerCommit ?? "") || fixerCommit === headSha) throw new Error("converged.fixerCommit must be a full sha different from the reviewed head");

@@ -461,7 +461,7 @@
     {
       "id": "GATE-EXEC-LOW-FIX-UNTIL-CAP",
       "enforcement": "runtime",
-      "enforcementNote": "applyJudgeDispositions coerces the disposition (lowFixCapped and round from resolveDraftRoundCap) and emit-fixer-work-order.mjs refuses a low/nit-only act list at or past the draft_gate cap or at pre_approval_gate, or a nit-only list outside draft round 1, with code low_fix_until_cap"
+      "enforcementNote": "applyJudgeDispositions coerces the disposition (lowFixCapped and round from resolveDraftRoundCap) and emit-fixer-work-order.mjs refuses a low/nit-only act list at pre_approval_gate, or a nit-only list outside draft round 1, with code low_fix_until_cap"
     },
     {
       "id": "GATE-EXEC-OPERATOR-FOCUS",
@@ -553,6 +553,11 @@
     {
       "id": "GATE-EXEC-ROUND-RETIREMENT",
       "enforcement": "runtime"
+    },
+    {
+      "id": "GATE-EXEC-SOFT-CAP",
+      "enforcement": "runtime",
+      "enforcementNote": "Enforced by pastCapBlockers in packages/core/src/loop/gate-fanin.mjs, which upsert-checkpoint-verdict.mjs and emit-fixer-work-order.mjs call; the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-SEPARATE-CHAINS"

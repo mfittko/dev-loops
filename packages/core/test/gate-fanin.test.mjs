@@ -2090,3 +2090,18 @@ describe("fan-in never disposes; the judge disposes each cluster and authors its
     assert.doesNotThrow(() => validateJudgeVerdict(verdict(base)));
   });
 });
+
+describe("pastCapBlockers evidence_only act items", () => {
+  const item = (overrides) => ({ severity: "high", summary: "needs a body edit", judgeDisposition: "act", ...overrides });
+
+  test("an evidence_only act item at the cap round composes no blocker while an ordinary high without a fix blocks", () => {
+    assert.deepEqual(fanin.pastCapBlockers([item({ remedyKind: "evidence_only" })], { round: 4, cap: 4 }), []);
+    assert.equal(fanin.pastCapBlockers([item({})], { round: 4, cap: 4 }).length, 1);
+  });
+
+  test("hasSeverityText accepts only a non-blank severity string", () => {
+    assert.equal(fanin.hasSeverityText({ severity: "low" }), true);
+    for (const severity of ["", "  ", undefined, null, 3]) assert.equal(fanin.hasSeverityText({ severity }), false);
+    assert.equal(fanin.hasSeverityText(undefined), false);
+  });
+});

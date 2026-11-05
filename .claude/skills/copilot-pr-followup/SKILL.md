@@ -135,7 +135,7 @@ Apply [Structural Quality](../docs/structural-quality.md) standards from the `de
 
 Treat the PR as the main working artifact once it exists.
 
-Before invoking `resolve-dev-loop-startup.mjs --pr <number>` to continue an externally-created PR (one `create-pr` did not just self-assign), claim ownership: `dev-loops-run scripts/github/edit-pr.mjs --repo <owner/name> --pr <number> --add-assignee @me` (skip if already assigned to the viewer). The resolver's single-contributor ownership gate fails closed on a foreign or unclaimed assignee, or a linked issue assigned to another human — see [Public Dev Loop Contract](../docs/public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup).
+Before invoking `resolve-dev-loop-startup.mjs --pr <number>` to continue an externally-created PR (one `create-pr` did not just self-assign), claim ownership by adding `--claim` to that startup call (`loop startup --pr <number> --claim`; it assigns the viewer only when the PR is unassigned, and only on the user's explicit start or continue request for this exact PR). The resolver's single-contributor ownership gate fails closed on a foreign or unclaimed assignee, or a linked issue assigned to another human — see [Public Dev Loop Contract](../docs/public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup).
 
 Inspect: PR body/title (must satisfy [PR description contract](../docs/copilot-loop-operations.md)), closing reference (operator-controlled; subagents must NOT modify), author, review summaries, unresolved comments, latest commits, CI results.
 
@@ -430,7 +430,7 @@ Both gates run this same checkpoint review chain, owned end-to-end by [Gate Revi
 
    Then re-enter the chain at Phase 1 for the fixed head — [Phase 1.2](../docs/gate-review-sub-loop-contract.md#angle-carry-forward-fail-closed) decides what re-runs, including eligible findings-present angles whose open findings and provenance carry unchanged. Context-builder and fan-in always re-run. Repeat until the consolidated verdict is `clean` for the current head SHA AND 0 unresolved gate-authored threads remain (`GATE-EXEC-REGATE-MANDATORY`, `GATE-EXEC-THREAD-DISPOSITION`).
 
-   Exception: when a `draft_gate` round's judge act list is all `low`/`nit` and the `commit_only` pre-push delta result for the fixer commit is `locally_clear`, do not re-enter Phase 1. Post with `upsert-checkpoint-verdict.mjs --converged-json` (built from the judge act list, the fixer commit and the delta result file) plus `--findings-ledger`. `GATE-EXEC-LOW-NIT-CONVERGENCE` owns the clauses and refusals; any refusal keeps the full round.
+   Exception: when a `draft_gate` round at or past the cap round (`gates.draft.maxReviewRounds`) has a judge act list that is all `low`/`nit` and the `commit_only` pre-push delta result for the fixer commit is `locally_clear`, do not re-enter Phase 1. Post with `upsert-checkpoint-verdict.mjs --converged-json` (built from the judge act list, the fixer commit and the delta result file) plus `--findings-ledger`. `GATE-EXEC-LOW-NIT-CONVERGENCE` owns the clauses and refusals; any refusal keeps the full round. Below the cap, route the low/nit act list to the fixer and run the next full round.
 
 ### Draft gate contract (before marking PR ready for review)
 
