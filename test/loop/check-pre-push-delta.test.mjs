@@ -1225,6 +1225,7 @@ test("the reviewer-only run keeps a locally_clear record, an extension, another 
     ["not on the PR head's history", { candidateHead: "ORPHAN" }, false, /rm -f \S+\.json \S+\.seal/],
     ["not on the PR head's history", { candidateHead: "HEAD" }, false, /rm -f \S+\.json \S+\.seal/], // a symbolic ref is no commit SHA
     ["bounded_out", { sameActSet: true, outcome: "locally_clear", invocation: 3, candidateHead: "ORPHAN" }, false, /pr create .*--allow-replacement-pr/],
+    ["bounded_out", { sameActSet: true, outcome: "locally_clear", invocation: 3, candidateHead: "HEAD" }, false, /pr create .*--allow-replacement-pr/], // a symbolic candidate at the bound
     ["unsealed_record: .*is locally_clear for another act set.*rm -f \\S+\\.json \\S+\\.seal", { outcome: "locally_clear" }, true],
   ];
   for (const [message, patch, unsealed, remedy] of cases) {
