@@ -555,6 +555,11 @@
       "enforcement": "runtime"
     },
     {
+      "id": "GATE-EXEC-SOFT-CAP",
+      "enforcement": "runtime",
+      "enforcementNote": "Enforced by pastCapBlockers in packages/core/src/loop/gate-fanin.mjs, which upsert-checkpoint-verdict.mjs and emit-fixer-work-order.mjs call; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+    },
+    {
       "id": "GATE-EXEC-SEPARATE-CHAINS"
     },
     {
