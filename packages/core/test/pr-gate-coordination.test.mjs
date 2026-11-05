@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 
 import {
+  BLOCKED_ON,
   evaluatePrGateCoordination,
   PR_CHECKPOINT_ACTION,
   PR_CHECKPOINT,
@@ -4691,4 +4692,108 @@ test("round_cap_reached with failing or credibly green required CI and zero thre
     assert.doesNotMatch(result.reason, /loop startup/);
     assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
   }
+});
+
+// Issue 3105 slice 1: report_blocked results name a decision owner or a runnable remedy.
+test("title-marker block carries an agentRemedy that edits the title without the marker", () => {
+  const result = evaluatePrGateCoordination({
+    repo: "o/r",
+    pr: 842,
+    currentHeadSha: "abc123456789",
+    prDraft: false,
+    lifecycleState: STATE.PR_READY_NO_FEEDBACK,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    reviewMode: "internal_only",
+    prTitle: "[WIP] add authentication flow",
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    preApprovalGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+  });
+  assert.equal(result.lifecycleState, "title_marker_blocked");
+  assert.equal(
+    result.agentRemedy.command,
+    "dev-loops-run scripts/github/edit-pr.mjs --repo o/r --pr 842 --title 'add authentication flow'",
+  );
+  assert.equal(result.blockedOn, undefined);
+});
+
+test("blocked lifecycle state carries blockedOn operator_decision", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 5,
+    currentHeadSha: "abc123456789",
+    prDraft: false,
+    lifecycleState: STATE.BLOCKED_NEEDS_USER_DECISION,
+    loopDisposition: DISPOSITION.BLOCKED,
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
+});
+
+test("failing-CI block names the operator until a runnable repair path exists", () => {
+  const result = evaluatePrGateCoordination({
+    repo: "o/r",
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    ciStatus: "failure",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
+  assert.equal(result.agentRemedy, undefined);
+});
+
+test("draft round-cap refusal stays untyped (known gap, issue 3105 slices 5-6)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 9,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    ciStatus: "success",
+    draftRoundRefused: true,
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.equal(result.blockedOn, undefined);
+  assert.equal(result.agentRemedy, undefined);
+});
+
+test("unconfirmed-CI block carries the exact wait-pr-checks agentRemedy", () => {
+  const result = evaluatePrGateCoordination({
+    repo: "o/r",
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    ciStatus: "crediblyGreen",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.equal(result.agentRemedy.command, "dev-loops-run scripts/github/wait-pr-checks.mjs --repo o/r --pr 266 --timeout 600");
+});
+
+test("a draft PR with a missing refinement artifact is blocked on the operator decision (#3105)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 7,
+    repo: "o/r",
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    ciStatus: "success",
+    refinementArtifact: { status: "missing" },
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
 });
