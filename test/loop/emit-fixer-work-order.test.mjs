@@ -3748,6 +3748,29 @@ test("issue 3111: only the newest keyed plan of a parent is current", async () =
   });
 });
 
+// The Write/Edit grant mirrors the keyed staleness of locateFixerUnit (a keyed plan file is never overwritten).
+const keyedGrantFixture = async (fx, over) => {
+  const { prior } = await refusedDeltaFixture(fx, "locally_clear");
+  const keyed = await fx.emit({ phase: "commit_only", keepRecord: true });
+  assert.equal(pull(keyed, fx.root).status, 0);
+  const out = keyed.workOrder.outputRefs[0];
+  assert.equal(hook(fx.wt, out), "allow", "a current pulled keyed fixer holds its grant");
+  await over({ prior, keyed });
+  assert.equal(hook(fx.wt, out), "deny");
+};
+
+test("issue 3111: a keyed fixer loses its Write/Edit grant when a newer same-parent keyed plan is emitted", async () => {
+  await withFixture((fx) => keyedGrantFixture(fx, () => fx.emit({ phase: "commit_only", keepRecord: true })));
+});
+
+test("issue 3111: a keyed fixer loses its Write/Edit grant when a canonical emission supersedes its parent", async () => {
+  await withFixture((fx) => keyedGrantFixture(fx, () => fx.emit({ phase: "commit_only", deltaResult: undefined })));
+});
+
+test("issue 3111: a keyed fixer loses its Write/Edit grant when its parent sequence is closed", async () => {
+  await withFixture((fx) => keyedGrantFixture(fx, ({ prior }) => writeClosure(path.join(fx.root, "tmp"), fx.head, prior.executionIdentity)));
+});
+
 test("issue 3111: an invalid JSON keyed plan is an integrity refusal, not a superseded ref", async () => {
   await withFixture(async (fx) => {
     const { tmpRoots } = await refusedDeltaFixture(fx, "locally_clear");
