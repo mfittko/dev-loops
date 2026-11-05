@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "bun:test";
 
@@ -10,6 +10,8 @@ import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.m
 import { gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { extendCapRoundChain, parseExtendCapRoundChainCliArgs, runCli } from "../../scripts/loop/extend-cap-round-chain.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
+import { runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
+import { sealDeltaFixture } from "./_seal-fixture.mjs";
 
 const REPO = "owner/repo";
 const PR = 70;
@@ -916,23 +918,59 @@ test("every copy of the start-of-logic-range definition carries the one canonica
   assert.equal(count(".claude/skills/docs/gate-review-sub-loop-contract.md"), 1);
 });
 
-test("a reviewer-only delta record with no items covers a logic commit and a base-refresh merge in the range and seals delta_covered (ADR 0255, issue 3122 AC2)", async () => {
+// Produces the record with the reviewer-only CLI (ADR 0255, issue 3122): the input run, a sealed zero-item result, then the result run.
+async function reviewerOnlyDelta(root, baseline, head) {
+  const tmp = path.join(root, "tmp");
+  const seam = { stdout: { write: () => {} }, fetchBase: () => {} };
+  const args = ["--reviewer-only", "--baseline", baseline, "--pr-head", head, "--worktree", root];
+  const resultPath = path.join(root, "reviewer-result.json");
+  const { input } = await runDeltaCli([...args, "--spec-identity", "spec@1", "--result-path", resultPath], seam);
+  writeFileSync(resultPath, JSON.stringify({ ...input.resultShape, newFindings: [], widenedReads: [], outcome: "locally_clear" }));
+  sealDeltaFixture(tmp, resultPath);
+  await runDeltaCli([...args, "--result", resultPath, "--invocation", "1"], seam);
+  return tmp;
+}
+
+// A logic commit L after `from`, then a base-refresh merge: the PR 3087 shape.
+async function logicThenBaseRefresh(root, from) {
+  const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+  runGitFixture(root, ["checkout", "-q", "-b", "base-moves", from]);
+  const X = await commit(root, { "refreshed.txt": "from the base\n" }, "base moves");
+  runGitFixture(root, ["update-ref", "refs/remotes/origin/main", X]);
+  runGitFixture(root, ["checkout", "-q", L]);
+  runGitFixture(root, ["merge", "-q", "--no-ff", "-m", "refresh base", "base-moves"]);
+  return String(runGitFixture(root, ["rev-parse", "HEAD"])).trim();
+}
+
+test("a clean cap round: a record from the reviewer-only CLI covers a logic commit and a base-refresh merge and seals delta_covered (ADR 0255, issue 3122 AC2)", async () => {
   const { root, A } = await cleanCapFixture();
   try {
-    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
-    runGitFixture(root, ["checkout", "-q", "-b", "base-moves", A]);
-    const X = await commit(root, { "refreshed.txt": "from the base\n" }, "base moves");
-    runGitFixture(root, ["update-ref", "refs/remotes/origin/main", X]);
-    runGitFixture(root, ["checkout", "-q", L]);
-    runGitFixture(root, ["merge", "-q", "--no-ff", "-m", "refresh base", "base-moves"]);
-    const head = String(runGitFixture(root, ["rev-parse", "HEAD"])).trim();
-    const tmp = path.join(root, "tmp");
-    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: head, outcome: "locally_clear", nextStep: "push", items: [] });
+    const head = await logicThenBaseRefresh(root, A);
+    const tmp = await reviewerOnlyDelta(root, A, head);
+    const written = readSealedGateDeltaRecord(tmp, A);
+    assert.deepEqual({ o: written.outcome, i: written.items, c: written.candidateHead, n: written.invocation }, { o: "locally_clear", i: [], c: head, n: 1 });
     assert.equal(await proof(root, head), null, "the plain delta record alone does not prove a clean cap round");
     const result = await extend(root, head);
     assert.deepEqual({ ...result, files: [...result.files].sort() }, { ok: true, action: "chain_extended", chainEnd: A, candidateHead: head, files: ["src/x.mjs"] });
     assert.equal(readSealedGateDeltaRecord(tmp, A).extension, "delta_covered");
     assert.ok(await proof(root, head));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a non-clean cap round with a fixer pass: the reviewer-only record at the chain end (a base-refresh merge in the range) already proves the head, and reviewer-only at the cap-round baseline refuses over the covering first record (issue 3122)", async () => {
+  const { root, A, B } = await capFixture();
+  try {
+    const head = await logicThenBaseRefresh(root, B);
+    const tmp = await reviewerOnlyDelta(root, B, head);
+    // The sealed locally_clear record at the chain end E extends the clearing chain A..E..head, so no delta_covered seal is needed (ADR 0254, non-clean chain).
+    assert.equal((await extend(root, head)).action, "already_proven");
+    assert.equal(readSealedGateDeltaRecord(tmp, B).extension, undefined);
+    assert.ok(await proof(root, head));
+    const before = readFileSync(gateDeltaRecordPath(tmp, A), "utf8");
+    await assert.rejects(reviewerOnlyDelta(root, A, head), /another act set already exists/);
+    assert.equal(readFileSync(gateDeltaRecordPath(tmp, A), "utf8"), before, "the covering first record is untouched");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

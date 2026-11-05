@@ -6,10 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { readSequenceMarker, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 
-import { DELTA_EVIDENCE_RULE, deltaPatchPath, parseCheckPrePushDeltaArgs, runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
+import { DELTA_EVIDENCE_RULE, deltaPatchPath, gitStaleSurfaceHits, parseCheckPrePushDeltaArgs, runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { A, B, C, M, boundArgs, coverageRepo } from "./_delta-coverage-fixture.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
@@ -925,93 +925,183 @@ test("a refused locally_clear result followed by a no-commit re-emission keeps t
   assert.deepEqual(input.input.origin, first.binding.origin);
 });
 
-// ADR 0255: the PR 3087 state. The cap-round head P1, a fix commit P2, then a base refresh merged in; the sequence is closed and no plan exists.
-function reviewerOnlyRepo({ nonBaseOnlyMerge = false } = {}) {
+
+// ADR 0255: the PR 3087 state. The cap-round head P1, a fix commit P2, then a base refresh merged in; the sequence is closed (no marker, no plan) and the head moved.
+function reviewerOnlyRepo({ nonBaseOnlyMerge = false, octopus = false, baseChanges = false, ownChanges = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-only-"));
   initGitFixture(dir, { branch: "main", commit: null });
   const git = (...args) => runGitFixture(dir, args);
   git("config", "commit.gpgsign", "false");
-  git("commit", "-q", "--allow-empty", "-m", "base");
+  fs.writeFileSync(path.join(dir, "gone.mjs"), "export const goneIdentifierName = 1;\n");
+  git("add", "."); git("commit", "-qm", "base");
   git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"));
   git("checkout", "-qb", "pr");
-  fs.writeFileSync(path.join(dir, "a.mjs"), "export const a = 1;\n");
+  fs.writeFileSync(path.join(dir, "a.mjs"), "// uses goneIdentifierName\nexport const a = 1;\n");
   git("add", "."); git("commit", "-qm", "feat: a");
   const baseline = git("rev-parse", "HEAD");
-  fs.writeFileSync(path.join(dir, "a.mjs"), "export const a = 2;\n");
-  git("commit", "-qam", "fix: a");
+  fs.writeFileSync(path.join(dir, "a.mjs"), "// uses goneIdentifierName\nexport const a = 2;\n");
+  if (ownChanges) { fs.mkdirSync(path.join(dir, "changes")); fs.writeFileSync(path.join(dir, "changes", "own.md"), "own\n"); }
+  git("add", "."); git("commit", "-qm", "fix: a");
   git("checkout", "-q", "main");
   fs.writeFileSync(path.join(dir, "refreshed.txt"), "from the base\n");
+  if (baseChanges) { fs.mkdirSync(path.join(dir, "changes")); fs.writeFileSync(path.join(dir, "changes", "base.md"), "base\n"); }
+  git("rm", "-q", "gone.mjs");
   git("add", "."); git("commit", "-qm", "base moves");
   git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"));
   git("checkout", "-q", "pr");
   git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
-  if (nonBaseOnlyMerge) {
+  if (nonBaseOnlyMerge || octopus) {
     // A merge of a branch that holds PR-own work is not a base-only merge.
-    git("checkout", "-qb", "side", baseline);
-    fs.writeFileSync(path.join(dir, "side.mjs"), "export const side = 1;\n");
-    git("add", "."); git("commit", "-qm", "feat: side");
+    for (const name of octopus ? ["side", "side2"] : ["side"]) {
+      git("checkout", "-qb", name, baseline);
+      fs.writeFileSync(path.join(dir, `${name}.mjs`), `export const ${name} = 1;\n`);
+      git("add", "."); git("commit", "-qm", `feat: ${name}`);
+    }
     git("checkout", "-q", "pr");
-    git("merge", "-q", "--no-ff", "-m", "merge side", "side");
+    git("merge", "-q", "--no-ff", "-m", "merge side", ...(octopus ? ["side", "side2"] : ["side"]));
   }
-  return { dir, baseline, head: git("rev-parse", "HEAD") };
+  return { dir, baseline, head: git("rev-parse", "HEAD"), tmpRoot: resolveGateArtifactTmpRoot(dir) };
 }
 const reviewerOnlyArgs = ({ dir, baseline, head }) => ["--reviewer-only", "--baseline", baseline, "--pr-head", head, "--worktree", dir];
+const seam = { stdout: { write: () => {} }, fetchBase: () => {} };
 
-async function reviewerOnlyRun(repo, result) {
-  const tmpRoot = resolveGateArtifactTmpRoot(repo.dir);
+async function reviewerOnlyRun(repo, result, { invocation = 1, extraSeam = {} } = {}) {
   const resultPath = path.join(repo.dir, "reviewer-result.json");
-  const { input } = await runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", resultPath], quiet);
+  const { input } = await runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", resultPath], { ...seam, ...extraSeam });
   fs.writeFileSync(resultPath, JSON.stringify({ ...input.resultShape, newFindings: [], widenedReads: [], outcome: "locally_clear", ...result }));
-  sealDeltaFixture(tmpRoot, resultPath);
-  const decision = await runDeltaCli([...reviewerOnlyArgs(repo), "--result", resultPath, "--invocation", "1"], quiet);
-  return { input, decision, record: JSON.parse(fs.readFileSync(path.join(tmpRoot, "gate-delta", `${repo.baseline}.json`), "utf8")), tmpRoot };
+  sealDeltaFixture(repo.tmpRoot, resultPath);
+  const decision = await runDeltaCli([...reviewerOnlyArgs(repo), "--result", resultPath, "--invocation", String(invocation)], { ...seam, ...extraSeam });
+  return { input, decision, record: JSON.parse(fs.readFileSync(path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.json`), "utf8")) };
 }
+const cleanup = (repo) => fs.rmSync(repo.dir, { recursive: true, force: true });
+const MEDIUM = [{ severity: "medium", summary: "open", evidence: ["a.mjs:1"] }];
 
-test("AC1: a reviewer-only delta seals locally_clear for baseline..head across a base-refresh merge with no plan or coverage record", async () => {
+test("AC1: a reviewer-only delta seals locally_clear for baseline..head across a base-refresh merge with no plan, marker or coverage record", async () => {
   const repo = reviewerOnlyRepo();
   try {
-    const { input, decision, record, tmpRoot } = await reviewerOnlyRun(repo, {});
+    assert.equal(readSequenceMarker(repo.tmpRoot, repo.baseline), null, "closed sequence: no marker");
+    assert.equal(fs.existsSync(path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.json`)), false, "no earlier record");
+    const { input, decision, record } = await reviewerOnlyRun(repo, {});
     assert.deepEqual(input.actItems, []);
     assert.deepEqual(input.resultShape.actionableItems, []);
     const patch = fs.readFileSync(input.patchPath, "utf8");
     assert.match(patch, /^\+export const a = 2;$/m);
-    assert.doesNotMatch(patch, /refreshed\.txt/);
+    assert.doesNotMatch(patch, /refreshed\.txt|gone\.mjs/);
     assert.equal(decision.outcome, "locally_clear");
     assert.equal(decision.nextStep, "push");
     assert.deepEqual({ b: record.reviewBaselineHead, c: record.candidateHead, o: record.outcome, i: record.items }, { b: repo.baseline, c: repo.head, o: "locally_clear", i: [] });
-    assert.ok(fs.existsSync(path.join(tmpRoot, "gate-delta", `${repo.baseline}.json.seal`)));
-  } finally { fs.rmSync(repo.dir, { recursive: true, force: true }); }
+    assert.ok(fs.existsSync(path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.json.seal`)));
+  } finally { cleanup(repo); }
 });
 
-test("AC3: a reviewer-only result with a medium finding does not seal a clearing record", async () => {
+test("AC3: a reviewer-only result with a medium or high finding, or a residue claim, does not seal a clearing record", async () => {
   const repo = reviewerOnlyRepo();
   try {
-    const finding = [{ severity: "medium", summary: "open", evidence: ["a.mjs:1"] }];
-    const { decision, record } = await reviewerOnlyRun(repo, { newFindings: finding });
-    assert.equal(decision.locallyClear, false);
-    assert.equal(decision.outcome, "needs_fix");
-    assert.equal(record.outcome, "needs_fix");
-    assert.equal(record.nextStep, "fix_and_rereview");
-    const { record: claimed } = await reviewerOnlyRun(repo, { newFindings: finding, outcome: "locally_clear" });
-    assert.notEqual(claimed.outcome, "locally_clear");
-  } finally { fs.rmSync(repo.dir, { recursive: true, force: true }); }
+    const first = await reviewerOnlyRun(repo, { newFindings: MEDIUM });
+    assert.equal(first.decision.locallyClear, false);
+    assert.equal(first.decision.outcome, "needs_fix");
+    assert.equal(first.record.outcome, "needs_fix");
+    assert.equal(first.record.nextStep, "fix_and_rereview");
+    const high = await reviewerOnlyRun(repo, { newFindings: [{ ...MEDIUM[0], severity: "high" }], outcome: "locally_clear" }, { invocation: 2 });
+    assert.equal(high.record.outcome, "needs_fix");
+    const residue = await reviewerOnlyRun(repo, { newFindings: [{ severity: "low", summary: "still open", evidence: ["a.mjs:1"], residueOf: "x", residueStatus: "open" }], outcome: "locally_clear" }, { invocation: 3 });
+    assert.notEqual(residue.record.outcome, "locally_clear");
+    assert.ok(!["push", "push_to_gate"].includes(residue.record.nextStep));
+  } finally { cleanup(repo); }
 });
 
-test("a reviewer-only run refuses a non-base-only merge in the range and names it", async () => {
-  const repo = reviewerOnlyRepo({ nonBaseOnlyMerge: true });
+test("a reviewer-only result at invocation 3 with an open finding writes no clearing nextStep", async () => {
+  const repo = reviewerOnlyRepo();
   try {
-    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], quiet), new RegExp(`^Error: non_base_only_merge: merge [0-9a-f]{40} in ${repo.baseline}`));
-  } finally { fs.rmSync(repo.dir, { recursive: true, force: true }); }
+    await reviewerOnlyRun(repo, { newFindings: MEDIUM });
+    await reviewerOnlyRun(repo, { newFindings: MEDIUM }, { invocation: 2 });
+    const { record, decision } = await reviewerOnlyRun(repo, { newFindings: MEDIUM }, { invocation: 3 });
+    assert.equal(decision.outcome, "bounded_out");
+    assert.deepEqual({ o: record.outcome, n: record.nextStep }, { o: "bounded_out", n: "restart_on_replacement_pr" });
+    await assert.rejects(reviewerOnlyRun(repo, {}, { invocation: 3 }), /is not the next invocation 4/);
+  } finally { cleanup(repo); }
+});
+
+test("the invocation bound is real: a rerun at invocation 1 over a needs_fix record refuses, and a needs_fix result never replaces a locally_clear record", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    await reviewerOnlyRun(repo, { newFindings: MEDIUM });
+    await assert.rejects(reviewerOnlyRun(repo, {}), /--invocation 1 is not the next invocation 2/);
+    const clear = await reviewerOnlyRun(repo, {}, { invocation: 2 });
+    assert.equal(clear.record.outcome, "locally_clear");
+    await assert.rejects(reviewerOnlyRun(repo, { newFindings: MEDIUM }, { invocation: 3 }), /locally_clear record .* never overwritten/);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.json`), "utf8")).outcome, "locally_clear");
+  } finally { cleanup(repo); }
+});
+
+test("reviewer-only refuses an existing record with another act set, an active marker, a head equal to the baseline and a missing origin base", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    const args = [...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")];
+    const recordPath = path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.json`);
+    fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+    fs.writeFileSync(recordPath, JSON.stringify({ reviewBaselineHead: repo.baseline, candidateHead: repo.head, actSetId: "covering-first-record", invocation: 1, outcome: "locally_clear", nextStep: "push_to_gate", items: [] }));
+    await assert.rejects(runDeltaCli(args, seam), /another act set already exists/);
+    assert.equal(JSON.parse(fs.readFileSync(recordPath, "utf8")).actSetId, "covering-first-record");
+    fs.rmSync(recordPath);
+    writeSequenceMarker({ tmpRoot: repo.tmpRoot, baselineHead: repo.baseline, branch: "issue-1" });
+    await assert.rejects(runDeltaCli(args, seam), /active sequence marker/);
+    fs.rmSync(path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.sequence`));
+    await assert.rejects(runDeltaCli(["--reviewer-only", "--baseline", repo.head, "--pr-head", repo.head, "--worktree", repo.dir, "--spec-identity", "s", "--result-path", path.join(repo.dir, "r.json")], seam), /equals the baseline/);
+    runGitFixture(repo.dir, ["update-ref", "-d", "refs/remotes/origin/main"]);
+    await assert.rejects(runDeltaCli(args, seam), /origin\/main does not exist.*git fetch origin main/);
+    await assert.rejects(runDeltaCli(args, { ...seam, fetchBase: () => { throw new Error("offline"); } }), /git fetch origin main failed/);
+  } finally { cleanup(repo); }
+});
+
+test("a reviewer-only range with no PR-own commit refuses", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    // origin/main now holds every commit of the range.
+    runGitFixture(repo.dir, ["update-ref", "refs/remotes/origin/main", repo.head]);
+    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], seam), /no PR-own commit/);
+  } finally { cleanup(repo); }
+});
+
+test("the changes/ changelog check follows the PR-own paths only", async () => {
+  const own = reviewerOnlyRepo({ ownChanges: true });
+  const base = reviewerOnlyRepo({ baseChanges: true });
+  try {
+    let calls = 0;
+    const validateChangelog = async () => { calls += 1; return 1; };
+    await assert.rejects(reviewerOnlyRun(own, {}, { extraSeam: { validateChangelog } }), /LIFECYCLE-CHANGELOG-COMPLETENESS/);
+    assert.equal(calls, 1);
+    const { decision } = await reviewerOnlyRun(base, {}, { extraSeam: { validateChangelog } });
+    assert.equal(decision.outcome, "locally_clear");
+    assert.equal(calls, 1, "a changes/ file that only the base-only merge brought in does not trigger the check");
+  } finally { cleanup(own); cleanup(base); }
+});
+
+test("identifiers removed by a base-only merge are excluded from the stale-surface scan", () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    assert.ok(gitStaleSurfaceHits(repo.dir, repo.baseline, repo.head).hits.length > 0, "the plain range sees the base removal");
+    assert.deepEqual(gitStaleSurfaceHits(repo.dir, repo.baseline, repo.head, ["a.mjs"]).hits, []);
+  } finally { cleanup(repo); }
+});
+
+test("a reviewer-only run refuses a non-base-only merge and an octopus merge in the range and names the merge", async () => {
+  for (const options of [{ nonBaseOnlyMerge: true }, { octopus: true }]) {
+    const repo = reviewerOnlyRepo(options);
+    try {
+      await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], seam), new RegExp(`^Error: non_base_only_merge: merge [0-9a-f]{40} in ${repo.baseline}.*Only the replacement-PR restart remains`));
+    } finally { cleanup(repo); }
+  }
 });
 
 test("--reviewer-only refuses the plan inputs, a missing --pr-head and a worktree HEAD that is not the PR head", async () => {
   const repo = reviewerOnlyRepo();
   try {
     const base = reviewerOnlyArgs(repo);
-    for (const extra of [["--fixer-plan", "p"], ["--site-coverage", "s"], ["--handback"], ["--act-list", "a"], ["--threads-file", "t"]]) {
+    for (const extra of [["--fixer-plan", "p"], ["--site-coverage", "s"], ["--handback"], ["--act-list", "a"], ["--threads-file", "t"], ["--findings-log", "l"]]) {
       assert.throws(() => parseCheckPrePushDeltaArgs([...base, ...extra]), /--reviewer-only refuses/);
     }
     assert.throws(() => parseCheckPrePushDeltaArgs(["--reviewer-only", "--baseline", repo.baseline, "--spec-identity", "s"]), /requires --pr-head/);
-    await assert.rejects(runDeltaCli(["--reviewer-only", "--baseline", repo.baseline, "--pr-head", repo.baseline, "--worktree", repo.dir, "--spec-identity", "s", "--result-path", path.join(repo.dir, "r.json")], quiet), /is not the PR head/);
-  } finally { fs.rmSync(repo.dir, { recursive: true, force: true }); }
+    await assert.rejects(runDeltaCli(["--reviewer-only", "--baseline", repo.baseline, "--pr-head", repo.baseline, "--worktree", repo.dir, "--spec-identity", "s", "--result-path", path.join(repo.dir, "r.json")], seam), /is not --pr-head/);
+  } finally { cleanup(repo); }
 });

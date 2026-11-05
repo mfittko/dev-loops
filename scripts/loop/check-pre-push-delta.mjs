@@ -59,7 +59,8 @@ import { clearingChainWalk } from "../github/write-gate-context.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
-import { writeGateDeltaRecord } from "./_gate-delta-record.mjs";
+import { readGateDeltaRecord, writeGateDeltaRecord } from "./_gate-delta-record.mjs";
+import { defaultFetchOrigin } from "./standing-authorization.mjs";
 import { createGitClient, main as validateChangelog } from "../docs/validate-changelog-completeness.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
@@ -247,14 +248,12 @@ export const deltaSealCommand = (resultPath, tmpRoot, worktree) => {
 
 export const deltaPatchPath = (tmpRoot, baseline, candidate) => path.join(tmpRoot, "gate-delta", `${baseline}-${candidate}.patch`);
 
-// `git diff baseline..head`, or with `ownBase` (the reviewer-only route, ADR 0255) the diff of only the commits `origin/<ownBase>` does not hold, merges excluded, so a base refresh adds no lines.
-const rangeCommand = (flags, baseline, head, ownBase) => ownBase
-  ? ["log", "-p", "--no-merges", "--reverse", "--format=", ...flags, `${baseline}..${head}`, `^origin/${ownBase}`]
-  : ["diff", ...flags, `${baseline}..${head}`];
+// `git diff baseline..head`; with `ownPaths` (the reviewer-only route, ADR 0255) the cumulative diff limited to the paths the PR-own commits changed, so a base refresh adds no lines.
+const rangeCommand = (flags, baseline, head, ownPaths) => ["diff", ...flags, `${baseline}..${head}`, ...(ownPaths ? ["--", ...ownPaths.map((file) => `:(top,literal)${file}`)] : [])];
 
 // The cumulative baseline..head patch the reviewer reads; formats pinned against operator git config.
-function gitDiffPatch(worktree, baseline, head, ownBase) {
-  const out = spawnSync("git", ["-C", worktree, "-c", "core.quotePath=false", ...rangeCommand(["--unified=3", "--diff-algorithm=myers", "-O/dev/null", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--no-renames", "--no-relative", "--ignore-submodules=none"], baseline, head, ownBase)], {
+function gitDiffPatch(worktree, baseline, head, ownPaths) {
+  const out = spawnSync("git", ["-C", worktree, "-c", "core.quotePath=false", ...rangeCommand(["--unified=3", "--diff-algorithm=myers", "-O/dev/null", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--no-renames", "--no-relative", "--ignore-submodules=none"], baseline, head, ownPaths)], {
     env: gitEnvNoDirOverrides(), maxBuffer: 1024 * 1024 * 1024,
   });
   if (out.status !== 0) throw new Error(`git diff ${baseline}..${head} failed in ${worktree}: ${out.error?.message ?? out.stderr.toString().trim()}`);
@@ -276,18 +275,18 @@ function gitRevList(worktree, from, to, extra = []) {
   return out.stdout.split("\n").filter(Boolean);
 }
 
-function gitChangedPaths(worktree, baseline, head, ownBase) {
-  const out = spawnSync("git", ownBase ? ["log", "--no-merges", "--name-only", "-z", "--format=", "--no-renames", "--no-relative", "--no-ext-diff", `${baseline}..${head}`, `^origin/${ownBase}`] : ["diff", "--name-only", "-z", "--no-renames", "--no-relative", "--no-ext-diff", `${baseline}..${head}`], {
+function gitChangedPaths(worktree, baseline, head, baseBranch) {
+  const out = spawnSync("git", baseBranch ? ["log", "--no-merges", "--name-only", "-z", "--format=", "--no-renames", "--no-relative", "--no-ext-diff", `${baseline}..${head}`, `^origin/${baseBranch}`] : ["diff", "--name-only", "-z", "--no-renames", "--no-relative", "--no-ext-diff", `${baseline}..${head}`], {
     cwd: resolveRepoRoot(worktree), env: gitEnvNoDirOverrides(), encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
   });
   if (out.status !== 0) throw new Error(`git diff changed paths failed: ${out.error?.message ?? out.stderr.trim()}`);
-  return out.stdout.split("\0").filter(Boolean);
+  return [...new Set(out.stdout.split("\0").filter(Boolean))];
 }
 
 // Tracked-file hits of the sentences and identifiers the delta range removed, grepped at the candidate head.
 // A git failure throws (fail closed), including a missing baseline or head object. The diff and grep
 // formats are pinned so operator git config (prefix, color, external diff, textconv, algorithm, renames, path quoting, submodules, diff.orderFile via -O/dev/null, relative paths via --no-relative, hunk merging via --inter-hunk-context=0) cannot blank the check.
-export function gitStaleSurfaceHits(worktreeArg, baseline, head, ownBase) {
+export function gitStaleSurfaceHits(worktreeArg, baseline, head, ownPaths) {
   // Run from the top level so a subdirectory --worktree cannot scope the diff or grep to that subtree.
   const top = spawnSync("git", ["-C", worktreeArg, "rev-parse", "--show-toplevel"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
   if (top.status !== 0 || !top.stdout.trim()) throw new Error(`git rev-parse --show-toplevel failed in ${worktreeArg}: ${top.stderr.trim()}; the stale-surface check cannot locate the repository`);
@@ -297,7 +296,7 @@ export function gitStaleSurfaceHits(worktreeArg, baseline, head, ownBase) {
     const exists = git("cat-file", "-e", `${rev}^{commit}`);
     if (exists.status !== 0) throw new Error(`git cat-file ${rev} failed in ${worktree}: ${exists.stderr.trim()}; the stale-surface check cannot read the delta range`);
   }
-  const diff = git(...rangeCommand(["-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--diff-algorithm=myers", "--no-renames", "-O/dev/null", "--no-relative", "--inter-hunk-context=0"], baseline, head, ownBase));
+  const diff = git(...rangeCommand(["-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--diff-algorithm=myers", "--no-renames", "-O/dev/null", "--no-relative", "--inter-hunk-context=0"], baseline, head, ownPaths));
   if (diff.status !== 0) throw new Error(`git diff ${baseline}..${head} failed in ${worktree}: ${diff.stderr.trim()}; the stale-surface check cannot read the delta range`);
   const grep = (needle, { word }) => {
     const out = git("grep", "-n", "-I", "--full-name", "-F", "--no-color", "--no-recurse-submodules", ...(word ? ["-w"] : []), "-e", needle, head);
@@ -356,14 +355,17 @@ async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerg
 }
 
 // The base branch the reviewer-only range is measured against. A merge in baseline..head that the base does not hold must be a base-only merge (ADR 0197), else the route refuses and names it.
-async function reviewerOnlyBase(worktree, baseline, head, { revParse, baseOnlyMerge, revList }) {
+async function reviewerOnlyBase(worktree, baseline, head, { revParse, baseOnlyMerge, revList, fetchBase }) {
   const repoRoot = resolveRepoRoot(worktree);
   const { config, errors } = await loadDevLoopConfig({ repoRoot });
   if (errors?.length) throw new Error(`.devloops failed to load (${errors.length} error(s)): the reviewer-only route fails closed`);
   const base = resolveBaseBranch(config, { cwd: worktree });
+  try { fetchBase(base, { repoRoot }); } catch { throw new Error(`reviewer-only: git fetch origin ${base} failed; cannot trust the local origin/${base} ref. Run \`git fetch origin ${base}\` and rerun`); }
+  try { revParse(worktree, `origin/${base}`); } catch { throw new Error(`reviewer-only: origin/${base} does not exist in ${worktree}; run \`git fetch origin ${base}\` and rerun`); }
+  if (revList(worktree, baseline, head, ["--no-merges", `^origin/${base}`]).length === 0) throw new Error(`reviewer-only: ${baseline}..${head} holds no PR-own commit that origin/${base} lacks; there is no code range to clear`);
   for (const merge of revList(worktree, baseline, head, ["--merges", `^origin/${base}`])) {
     if (!await baseOnlyMerge({ fromHead: revParse(worktree, `${merge}^1`), head: merge, mainRef: `origin/${base}`, repoRoot })) {
-      throw new Error(`non_base_only_merge: merge ${merge} in ${baseline}..${head} is not a base-only merge of origin/${base}; the reviewer-only route cannot exclude it. Restart on a replacement PR or review the merge through the fixer-plan route`);
+      throw new Error(`non_base_only_merge: merge ${merge} in ${baseline}..${head} is not a base-only merge of origin/${base}; the reviewer-only route cannot exclude it. Only the replacement-PR restart remains`);
     }
   }
   return base;
@@ -412,7 +414,7 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
 
 export async function runCli(
   argv = process.argv.slice(2),
-  { revParse = gitRevParse, diffPatch = gitDiffPatch, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, changedPaths = gitChangedPaths, validateChangelog: changelog = validateChangelog, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, stdout = process.stdout, tmpRoot } = {},
+  { revParse = gitRevParse, diffPatch = gitDiffPatch, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, changedPaths = gitChangedPaths, validateChangelog: changelog = validateChangelog, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, fetchBase = defaultFetchOrigin, stdout = process.stdout, tmpRoot } = {},
 ) {
   const options = parseCheckPrePushDeltaArgs(argv);
   if (options.help) {
@@ -432,10 +434,21 @@ export async function runCli(
   }
   const currentHead = revParse(options.worktree, "HEAD");
   // ADR 0255: the reviewer-only route reviews baseline..PR head, so the worktree HEAD is the PR head. Base-only merges in the range are excluded; any other merge refuses.
-  let ownBase;
+  let ownPaths, priorRecord;
+  const baselineHead = sequence.reviewBaselineHead;
   if (options.reviewerOnly) {
-    if (revParse(options.worktree, options.prHead) !== currentHead) throw new Error(`reviewer-only: worktree HEAD ${currentHead} is not the PR head ${options.prHead}; check out the PR head and rerun`);
-    ownBase = await reviewerOnlyBase(options.worktree, sequence.reviewBaselineHead, currentHead, { revParse, baseOnlyMerge, revList });
+    if (revParse(options.worktree, options.prHead) !== currentHead) throw new Error(`reviewer-only: worktree HEAD ${currentHead} is not --pr-head ${options.prHead}; check out the PR head and rerun`);
+    if (currentHead === baselineHead) throw new Error(`reviewer-only: worktree HEAD ${currentHead} equals the baseline; there is no code range to clear`);
+    const root = tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree);
+    if (readSequenceMarker(root, baselineHead)) throw new Error(`reviewer-only: an active sequence marker exists for baseline ${baselineHead}; close that sequence first`);
+    priorRecord = readGateDeltaRecord(root, baselineHead);
+    if (priorRecord && priorRecord.actSetId !== sequence.actSetId) throw new Error(`reviewer-only: a delta record with another act set already exists for baseline ${baselineHead} and is never overwritten`);
+    // The invocation bound of 3 counts the reviewer-only records at this baseline.
+    const expected = (Number.isInteger(priorRecord?.invocation) ? priorRecord.invocation : 0) + 1;
+    if (options.result && options.invocation !== expected) throw new Error(`reviewer-only: --invocation ${options.invocation} is not the next invocation ${expected} for baseline ${baselineHead}`);
+    const baseBranch = await reviewerOnlyBase(options.worktree, baselineHead, currentHead, { revParse, baseOnlyMerge, revList, fetchBase });
+    ownPaths = changedPaths(options.worktree, baselineHead, currentHead, baseBranch);
+    if (ownPaths.length === 0) throw new Error(`reviewer-only: the PR-own commits in ${baselineHead}..${currentHead} change no file; there is no code range to clear`);
   }
   // The CLI runs before the push, so the fix is unpushed by construction.
   const fixCommitted = currentHead !== sequence.reviewBaselineHead;
@@ -500,18 +513,23 @@ export async function runCli(
     throw new Error(`baseline ${sequence.reviewBaselineHead} is not an ancestor of worktree HEAD ${currentHead}: the delta range must extend the reviewed head`);
   }
   // A custom `staleSurface` may return the hits array alone.
-  const stale = staleSurface(options.worktree, sequence.reviewBaselineHead, currentHead, ownBase);
+  const stale = staleSurface(options.worktree, sequence.reviewBaselineHead, currentHead, ownPaths);
   const staleSurfaceHits = Array.isArray(stale) ? stale : stale.hits;
   const staleSurfaceTruncated = Array.isArray(stale) ? false : stale.truncated === true;
   const truncatedNeedles = Array.isArray(stale) ? [] : stale.truncatedNeedles ?? [];
   let payload;
   if (options.result) {
     // A truncated hit list blocks locally_clear until a finding or a skipped site names the gap.
-    const decision = decideDeltaNextStep({
+    let decision = decideDeltaNextStep({
       sequence, result, invocation: options.invocation, currentHead, siteCoverage, validationCoverage, coverageBinding,
       staleSurfaceHits: staleSurfaceTruncated ? [...staleSurfaceHits, staleSurfaceTruncatedHit()] : staleSurfaceHits,
     });
-    if (changedPaths(options.worktree, sequence.reviewBaselineHead, currentHead, ownBase).some((file) => file.startsWith("changes/"))) {
+    if (options.reviewerOnly) {
+      // Only a locally_clear result writes a clearing step: a bounded_out must not read as push_to_gate (ADR 0255).
+      if (decision.outcome === "bounded_out") decision = { ...decision, nextStep: "restart_on_replacement_pr" };
+      if (priorRecord?.outcome === "locally_clear" && (priorRecord.extension || !decision.locallyClear)) throw new Error(`reviewer-only: the locally_clear record for baseline ${baselineHead} ${priorRecord.extension ? "carries an extension" : "is not replaced by a non-clearing result"} and is never overwritten`);
+    }
+    if ((ownPaths ?? changedPaths(options.worktree, sequence.reviewBaselineHead, currentHead)).some((file) => file.startsWith("changes/"))) {
       const diagnostics = [];
       const log = { log: (...args) => diagnostics.push(args.join(" ")), error: (...args) => diagnostics.push(args.join(" ")) };
       let code;
@@ -541,7 +559,7 @@ export async function runCli(
     if (!options.handback && !options.resultPath) throw parseError("--result-path <path> is required on the reviewer-input run: the run record binds the briefed result path and seal-evidence refuses any other path (GATE-EXEC-EVIDENCE-SEALED)");
     if (!options.handback) { // the fixer handbackCheck stays write-free
       mkdirSync(path.dirname(patchPath), { recursive: true });
-      writeFileSync(patchPath, diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead, ownBase));
+      writeFileSync(patchPath, diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead, ownPaths));
     }
     // The target authenticateCoverage verified binds the log's repo and pr; without an authenticated plan the chain path refuses.
     payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE, sealCommand: deltaSealCommand(options.resultPath, tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), options.worktree) }), ...buildDeltaInput({ sequence, candidateHead: currentHead, runId, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles, staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
