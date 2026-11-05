@@ -130,7 +130,7 @@ export async function extendCapRoundChain(options, {
   // ADR 0254: the remedy for a logic commit is a locally_clear pre-push delta bound to the start of the logic range and the PR head, then this command again.
   // Coordination routes no_clearing_record, items_do_not_cover and chain_does_not_reach_head to this command, so a remedy that names gate-coordination alone loops: each remedy names the step that breaks the cycle.
   const deltaRange = (from) => `${from.slice(0, 7)}..${head.slice(0, 7)}`;
-  const cleanCapRemedy = (from) => `A clean cap round has no act list, so only the thread-route pre-push delta (${CLI} loop pre-push-delta --threads-file <threads-file> --repo ${repo} --pr ${pr} --baseline ${from} --result <result-file> --invocation <1-3>) can produce a covering record for ${deltaRange(from)}. Run it until its outcome is locally_clear, then rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}. gate-coordination routes this refusal back to this command, so it does not break the cycle; the thread-route delta or the replacement-PR restart does: ${CAP_ROUND_REFUSAL.baseline_orphaned}`;
+  const cleanCapRemedy = (from) => `A clean cap round has no act list, so only the thread-route pre-push delta (${CLI} loop pre-push-delta --threads-file <threads-file> --repo ${repo} --pr ${pr} --baseline ${from} --result <result-file> --invocation <1-3>) can produce a covering record for ${deltaRange(from)}. The command needs at least one unresolved review thread and throws without one: when none exists, restart on a replacement PR instead. Run it until its outcome is locally_clear, then rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}. gate-coordination routes this refusal back to this command, so it does not break the cycle; the thread-route delta or the replacement-PR restart does: ${CAP_ROUND_REFUSAL.baseline_orphaned}`;
   const fixerPassRemedy = (from) => `Run the pre-push delta for baseline ${from} at the PR head until its outcome is locally_clear (${CLI} loop pre-push-delta --baseline ${from} --result <result-file> --invocation <1-3> with the act list and fixer files; it writes the sealed record for ${deltaRange(from)}), then rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}. ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} routes this refusal back to this command, so the pre-push delta breaks the cycle, not gate-coordination. If the baseline is orphaned, restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`;
   const deltaRemedy = (from) => cleanCap ? cleanCapRemedy(from) : fixerPassRemedy(from);
   // A sealed clearing record at `from` that did not seal the extension below covers another range or a non-locally_clear outcome: never a cover for from..head.
@@ -148,13 +148,13 @@ export async function extendCapRoundChain(options, {
     if (record.extension) return refuse("proof_not_reached", `the delta record for ${start.slice(0, 7)} already carries ${record.extension} for ${head.slice(0, 7)}, but the cap-round-fixed proof does not reach the head; nothing was written. Run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed condition`);
     // Compare-before-write: narrows, but does not close, the race with a concurrent delta rerun (no lock, no compare-and-swap); a rerun that lands after this check is still overwritten by this stale copy.
     if (onDisk(start) !== JSON.stringify(record)) return refuse("record_changed", `the delta record for ${start.slice(0, 7)} changed on disk since it was validated; nothing was written. Rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}`);
-    writeRecord(tmpRoot, start, { ...record, extension: "delta_covered" });
-    const written = onDisk(start);
+    const written = JSON.stringify({ ...record, extension: "delta_covered" });
+    writeRecord(tmpRoot, start, JSON.parse(written));
     let reachedAfter = null;
     let proofError;
     try { reachedAfter = await resolveProof(proofArgs, { repoRoot }); } catch (error) { proofError = error; }
     if (!reachedAfter) {
-      const ours = written !== null && onDisk(start) === written;
+      const ours = onDisk(start) === written;
       if (ours) writeRecord(tmpRoot, start, record);
       if (proofError) throw proofError;
       return refuse("proof_not_reached", `the cap-round-fixed proof does not reach ${head.slice(0, 7)} after sealing delta_covered into the record for ${start.slice(0, 7)}; ${ours ? "the record was restored" : "the record changed since this run wrote it and was left in place"}. Run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed condition`);

@@ -601,7 +601,7 @@ test("a code commit pushed after the covering delta refuses delta_range_mismatch
     const M = await commit(root, { "src/y.mjs": "export const y = 1;\n" }, "logic M");
     const result = await extend(root, M);
     assert.equal(result.reason, "delta_range_mismatch");
-    assert.match(result.detail, /only the thread-route pre-push delta .*--threads-file.*does not break the cycle/u);
+    assert.match(result.detail, /only the thread-route pre-push delta .*--threads-file.*at least one unresolved review thread.*replacement PR.*does not break the cycle/u);
     assert.equal(readSealedGateDeltaRecord(tmp, A).extension, undefined);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -682,6 +682,23 @@ test("a failed proof after sealing delta_covered leaves a record another writer 
     assert.equal(result.reason, "proof_not_reached");
     assert.match(result.detail, /left in place/u);
     assert.deepEqual(readSealedGateDeltaRecord(tmp, A).items, [{ ref: "other", status: "resolved" }]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed proof after sealing delta_covered does not recreate a record another writer removed", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const recordPath = gateDeltaRecordPath(tmp, A);
+    let calls = 0;
+    const result = await extend(root, L, { resolveProof: async () => { if (calls++ > 0) { rmSync(recordPath, { force: true }); rmSync(`${recordPath}.seal`, { force: true }); } return null; } });
+    assert.equal(result.reason, "proof_not_reached");
+    assert.match(result.detail, /left in place/u);
+    assert.equal(existsSync(recordPath), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -840,6 +857,18 @@ test("a delta record that changed on disk after validation is never overwritten"
     assert.equal(result.reason, "record_changed");
     assert.equal(writes, 0);
     assert.equal(readFileSync(recordPath, "utf8"), before);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a clean ledger at the PR head is the head being posted: no cap round resolves, the generic no_cap_round_chain refusal fires and nothing is written", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const result = await extend(root, A);
+    assert.equal(result.reason, "no_cap_round_chain");
+    assert.match(result.detail, /has no covering sealed cap-round clearing chain/u);
+    assert.equal(readSealedGateDeltaRecord(path.join(root, "tmp"), A), null);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
