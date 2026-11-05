@@ -4,7 +4,7 @@
 
 Accepted, 2026-11-05 ([issue 3105](https://github.com/mfittko/dev-loops/issues/3105)).
 
-Amends the medium `defer` and medium `reject` cap-round blocker clauses of [ADR 0191](./0191-past-cap-judge-disposition-of-a-medium-is-final.md) and the draft-gate low deferral of [ADR 0188](./0188-low-nit-never-block.md) (as amended by [ADR 0196](./0196-pre-approval-gate-low-nit-never-block.md)). [ADR 0208](./0208-draft-cap-round-fixed-goes-ready.md) and [ADR 0224](./0224-cap-round-proof-for-adr-waiver-and-docs-tests-chain-extension.md) stay in force and later slices of issue 3105 supersede their round N+1 refusal. [ADR 0253](./0253-low-nit-convergence-at-the-cap-round.md) ships the draft low change of item 6. Every other decision of those records stays in force, and the records stay unedited.
+Amends the medium `defer` and medium `reject` cap-round blocker clauses of [ADR 0191](./0191-past-cap-judge-disposition-of-a-medium-is-final.md), [ADR 0208](./0208-draft-cap-round-fixed-goes-ready.md), [ADR 0224](./0224-cap-round-proof-for-adr-waiver-and-docs-tests-chain-extension.md) and the draft-gate low deferral of [ADR 0188](./0188-low-nit-never-block.md) (as amended by [ADR 0196](./0196-pre-approval-gate-low-nit-never-block.md)). Every other decision of those records stays in force, and the records stay unedited.
 
 ## Context
 

@@ -6,6 +6,8 @@ Accepted, 2026-11-05 ([issue 3105](https://github.com/mfittko/dev-loops/issues/3
 
 Amends [ADR 0168](./0168-draft-gate-low-nit-convergence.md) and the draft-gate low deferral of [ADR 0188](./0188-low-nit-never-block.md) (as amended by [ADR 0196](./0196-pre-approval-gate-low-nit-never-block.md)). Every other decision of those records stays in force, and the records stay unedited.
 
+Corrects the amendment scope that [ADR 0251](./0251-soft-round-cap.md) states for this slice. ADR 0191 owns the medium cap-round clauses. [ADR 0208](./0208-draft-cap-round-fixed-goes-ready.md) and [ADR 0224](./0224-cap-round-proof-for-adr-waiver-and-docs-tests-chain-extension.md) stay in force until a later slice of issue 3105 supersedes their round N+1 refusal. This record ships the draft low change of ADR 0251 item 6.
+
 ## Context
 
 `GATE-EXEC-LOW-NIT-CONVERGENCE` reads no round count. An all-low/nit act list converges after one fixer pass and a `locally_clear` delta review, so it also fires below the cap and skips the remaining full rounds. At or past the cap, `GATE-EXEC-LOW-FIX-UNTIL-CAP` defers a draft-gate low, so the cap round leaves a low unfixed ([ADR 0251](./0251-soft-round-cap.md) item 6).

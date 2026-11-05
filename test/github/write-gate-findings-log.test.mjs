@@ -3185,16 +3185,17 @@ test("writeGateFindingsLog run from a repo subdirectory reads the repo round cap
     await writeFile(judgeVerdictPath, JSON.stringify({
       headSha,
       scopeDrift: { verdict: "within_scope", rationale: "within AC", driftedAreas: [] },
-      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tempting" }],
+      dispositions: [{ index: 0, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tempting" }],
     }), "utf8");
     await writeFile(path.join(tmpDir, ".devloops"), "version: 1\ngates:\n  draft:\n    maxReviewRounds: 1\n", "utf8");
     await writeGateFindingsLog({
       repo: "owner/repo", pr: 2243, gate: "draft_gate", headSha, verdict: "findings_present",
-      findings: JSON.stringify([{ severity: "low", angle: "docs", summary: "rename variable" }]),
+      findings: JSON.stringify([{ severity: "medium", angle: "docs", summary: "rename variable" }]),
       judgeVerdict: judgeVerdictPath, tmpRoot: tmpDir,
     }, { repoRoot: sub });
     const parsed = JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-2243", `draft_gate-${headSha}.json`), "utf8"));
-    assert.deepEqual(parsed.findings.map((f) => f.judgeDisposition), ["act"]);
+    // Round 1 is the cap round only under the repo cap 1; the default cap 4 records no capClosed.
+    assert.deepEqual(parsed.findings.map((f) => f.capClosed), [{ judgeDisposition: "reject", severity: "medium", round: 1, cap: 1 }]);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

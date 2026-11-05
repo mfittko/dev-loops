@@ -1371,7 +1371,9 @@ test("ADR 0188: the round count comes from the --tmp-root the ledger writer uses
     // A subdirectory cwd reads the repo cap, not the default 4.
     const sub = path.join(wt, "scripts");
     await mkdir(sub, { recursive: true });
-    assert.equal((await emit({ cwd: sub, phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    // Round 3 is past the repo cap 2 and below the default cap 4, so only a repo-cap read refuses.
+    await writeFile(path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${"e".repeat(40)}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "e".repeat(40), verdict: "findings_present", findings: [] }));
+    await assert.rejects(emit({ cwd: sub }), (e) => e.refusal === "round_cap_reached");
   });
 });
 
