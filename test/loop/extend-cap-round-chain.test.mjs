@@ -195,10 +195,12 @@ test("the cap-round head equal to the head, or an unfetched cap-round head, refu
     const gone = "a".repeat(40);
     const dir = path.join(root, "tmp", "gate-findings", "owner-repo", `pr-${PR}`);
     await writeFile(path.join(dir, `draft_gate-${gone}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: gone, verdict: "findings_present", loggedAt: "2026-11-09T00:00:00.000Z", findings: [] }), "utf8");
-    const unfetched = await extend(root, D);
+    const unfetched = await extend(root, D, { fetchPr: async () => ({ headRefOid: D, baseRefName: "trunk" }) });
     assert.equal(unfetched.reason, "no_cap_round_chain");
-    assert.match(unfetched.detail, /git fetch origin a{40} .*git fetch --unshallow.*replacement PR/);
-    assert.doesNotMatch(unfetched.detail, /git fetch origin main/);
+    assert.match(unfetched.detail, /`git rev-parse --is-shallow-repository`.*`git fetch --unshallow`.*`git fetch origin a{40}`/);
+    assert.match(unfetched.detail, /rerun `[^`]*gate extend-cap-round-chain --repo owner\/repo --pr \d+`/);
+    assert.match(unfetched.detail, /still absent.*replacement PR/);
+    assert.doesNotMatch(unfetched.detail, /git fetch origin (trunk|main)|pr-branch|never brings/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -899,16 +901,17 @@ test("a clean ledger at the PR head resolves no cap round and writes nothing", a
 });
 
 test("every copy of the start-of-logic-range definition carries the one canonical clause", () => {
-  const clause = "the cap-round head for a clean cap round, the end of the already-extended chain when a cap-head record carries an extension, and otherwise the chain end";
-  const files = ["scripts/loop/extend-cap-round-chain.mjs", "packages/core/src/loop/pr-gate-coordination.mjs", "skills/docs/gate-review-sub-loop-contract.md", "docs/decisions/0254-cap-chain-delta-extension.md"];
+  const clause = "the cap-round head for a clean cap round whose cap-head record carries no extension, the end of the extended chain when it carries one, and otherwise the chain end";
+  const files = ["scripts/loop/extend-cap-round-chain.mjs", "packages/core/src/loop/pr-gate-coordination.mjs", "skills/docs/gate-review-sub-loop-contract.md", ".claude/skills/docs/gate-review-sub-loop-contract.md", "docs/decisions/0254-cap-chain-delta-extension.md"];
   for (const file of files) {
     const text = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
     assert.ok(text.includes(clause), file);
-    assert.ok(!text.includes("candidate head of an already-extended cap-head record"), file);
+    for (const old of ["candidate head of an already-extended cap-head record", "(the end of the extended chain)", "or the candidate"]) assert.ok(!text.includes(old), `${file}: ${old}`);
   }
   const count = (file) => readFileSync(new URL(`../../${file}`, import.meta.url), "utf8").split(clause).length - 1;
   assert.equal(count("scripts/loop/extend-cap-round-chain.mjs"), 2);
   assert.equal(count("packages/core/src/loop/pr-gate-coordination.mjs"), 3);
   assert.equal(count("docs/decisions/0254-cap-chain-delta-extension.md"), 2);
   assert.equal(count("skills/docs/gate-review-sub-loop-contract.md"), 1);
+  assert.equal(count(".claude/skills/docs/gate-review-sub-loop-contract.md"), 1);
 });
