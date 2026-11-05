@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "bun:test";
 
@@ -454,6 +454,7 @@ test("a clean cap round plus a logic commit refuses logic_commit_in_range and wr
     assert.equal(refused.reason, "logic_commit_in_range");
     assert.doesNotMatch(refused.detail, /act list and fixer files/u);
     assert.match(refused.detail, /reviewer-only --repo \S+ --pr \d+ --baseline/u);
+    assert.ok(refused.detail.includes(`--findings-log ${path.join(realpathSync(root), "tmp", "gate-findings", "owner-repo", `pr-${PR}`, `draft_gate-${A}.json`)}`), "the remedy prints the resolved cap-round ledger path");
     const recordPath = gateDeltaRecordPath(path.join(root, "tmp"), A);
     assert.equal(existsSync(recordPath), false);
     assert.equal(existsSync(`${recordPath}.seal`), false);

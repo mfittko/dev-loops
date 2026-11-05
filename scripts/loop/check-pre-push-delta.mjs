@@ -513,6 +513,8 @@ export async function runCli(
     const { base, resolvedPaths } = await reviewerOnlyBase(options.worktree, baselineHead, currentHead, { revParse, baseOnlyMerge, revList, fetchBase });
     baseBranch = base;
     ownPaths = [...new Set([...changedPaths(options.worktree, baselineHead, currentHead, base), ...resolvedPaths])];
+    // The reviewer reads the plain patch: a resolution that leaves it empty cannot be judged.
+    if (resolvedPaths.length && !diffPatch(options.worktree, baselineHead, currentHead, ownPaths).length) throw new Error(`empty_resolution_patch: the conflict resolution in ${baselineHead}..${currentHead} leaves an empty patch the reviewer cannot read. Only the replacement-PR restart remains: ${REPLACEMENT_REMEDY}`);
     if (ownPaths.length === 0) throw new Error(`reviewer-only: the PR-own commits in ${baselineHead}..${currentHead} change no file; there is no code range to clear. ${FIXER_REMEDY}`);
   }
   // The CLI runs before the push, so the fix is unpushed by construction.

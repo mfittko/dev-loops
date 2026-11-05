@@ -1325,6 +1325,13 @@ test("a reviewer-only run whose only PR-own change is a conflict-resolution merg
   } finally { cleanup(repo); }
 });
 
+test("a conflict-resolution merge whose patch is empty fails closed with the replacement-PR remedy", async () => {
+  const repo = reviewerOnlyRepo({ conflictOnly: true });
+  try {
+    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "s", "--result-path", path.join(repo.dir, "r.json")], { ...seam, diffPatch: () => "" }), /empty_resolution_patch[\s\S]*--allow-replacement-pr/);
+  } finally { cleanup(repo); }
+});
+
 test("the reviewer-only route accepts only the canonical draft_gate cap-round ledger as --findings-log", async () => {
   const repo = reviewerOnlyRepo();
   try {
