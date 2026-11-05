@@ -1957,13 +1957,14 @@ export async function countCompletedRounds(options, { repoRoot }) {
  * @returns {Promise<{ pastCap: boolean, round: number, cap: number, lowFixCapped: boolean }>}
  */
 export async function resolveDraftRoundCap(options, { repoRoot }) {
-  // GATE-EXEC-LOW-FIX-UNTIL-CAP: pre_approval_gate has no round count and applies the past-cap low/nit coercion in every round.
+  // GATE-EXEC-LOW-FIX-UNTIL-CAP: pre_approval_gate has no round count and defers a low in every round.
   if (options.gate !== "draft_gate") return { pastCap: false, round: 0, cap: 0, lowFixCapped: options.gate === "pre_approval_gate" };
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
   const cap = resolveGateConfig(config, "draft").maxReviewRounds;
   const round = await countCompletedRounds(options, { repoRoot });
   const pastCap = isPastRoundCap(round, cap);
-  return { pastCap, round, cap, lowFixCapped: pastCap };
+  // The draft gate fixes a low at the cap round; only pre_approval_gate defers it.
+  return { pastCap, round, cap, lowFixCapped: false };
 }
 
 /** Act items of the closed prior rounds as `{ fingerprint, file, line, title }`, one per fingerprint. */

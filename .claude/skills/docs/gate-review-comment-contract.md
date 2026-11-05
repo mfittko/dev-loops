@@ -344,7 +344,7 @@ A `draft_gate` comment updated by `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) ren
 beyond `GATE-COMMENT-REQUIRED-FIELDS`: `**Converged:** fixer <sha> delta sha256:<digest>`. The
 `<sha>` is the full fixer commit and the digest is the sha256 of the clean pre-push delta result.
 The line appears only on a `clean` `draft_gate` comment, and it is the only case where `clean`
-stands over open judge act items (all low or nit). A body without the line reads back as absent
+stands over open judge act items (all low or nit, at the cap round or later; below the cap the poster refuses a converged post and the next full round runs). A body without the line reads back as absent
 (unchanged). A present line that does not match the format reads back as malformed, and
 `buildPreMergeGateCheck` fails closed on it. Gate coordination treats a valid line as the
 `draft_gate` marker of the fixer commit's head. The line is not merge evidence: merge still needs a

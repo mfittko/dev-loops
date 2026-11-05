@@ -2783,7 +2783,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const fromPassed = group(listOpenActItems(findings.filter((f) => !ledgerFindings.includes(f))));
     const roundActItems = [...new Set([...fromLedger.keys(), ...fromPassed.keys()])]
       .flatMap((k) => ((fromLedger.get(k)?.length ?? 0) >= (fromPassed.get(k)?.length ?? 0) ? fromLedger.get(k) : fromPassed.get(k)));
-    convergedMarker = composeConvergedDraftGate({ gate: options.gate, headSha: canonicalHeadSha, roundActItems, converged: convergedInput });
+    const round = await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot });
+    convergedMarker = composeConvergedDraftGate({ gate: options.gate, headSha: canonicalHeadSha, round, cap: draftGateConfig?.maxReviewRounds ?? 0, roundActItems, converged: convergedInput });
     return [];
   };
   if (!isReviewGate) {

@@ -13,7 +13,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
-import { VALID_SEVERITIES, normalizeSeverity, isPastRoundCap, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
+import { VALID_SEVERITIES, normalizeSeverity, hasSeverityText, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { EvidenceSealError, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
@@ -542,11 +542,11 @@ export async function emitFixerWorkOrder({
     if (ci.headSha !== headSha) throw new Refusal(`ci file ${ciFile} is for headSha ${JSON.stringify(ci.headSha)}, not --head-sha ${headSha}; ${next}`);
     if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name.trim() !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`);
   }
-  const isActItem = (f) => f?.judgeDisposition === "act" && typeof f.severity === "string" && (gate === "draft_gate" ? f.severity.trim() !== "" : VALID_SEVERITIES.has(f.severity)) && typeof f.summary === "string" && f.summary.trim() !== "";
+  const isActItem = (f) => f?.judgeDisposition === "act" && (gate === "draft_gate" ? hasSeverityText(f) : typeof f.severity === "string" && VALID_SEVERITIES.has(f.severity)) && typeof f.summary === "string" && f.summary.trim() !== "";
   if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
     throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
   }
-  // ADR 0188: at or past the draft_gate round cap, low and nit findings never reach the fixer (backstop for hand-built or legacy ledgers). Below the cap a low act is fixed.
+  // ADR 0188: at pre_approval_gate, low and nit findings never reach the fixer (backstop for hand-built or legacy ledgers). At the draft gate a low act is fixed in every round.
   // A nit-only list is fixable in draft round 1 only; any other round, and any gate without a round count, refuses it (the judge pass would have rejected it).
   // A deduped cluster carries every member severity in `clusterSeverities`; the guard reads those, not the representative's.
   const badCluster = actListFile ? source.parsed.find((f) => f.clusterSeverities !== undefined && !(Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 && f.clusterSeverities.every((s) => VALID_SEVERITIES.has(s)))) : undefined;
@@ -577,7 +577,6 @@ export async function emitFixerWorkOrder({
         }
         if (baseOnly) {
           round = cap;
-          lowFixCapped = isPastRoundCap(round, cap);
           capRoundHead = fromHead;
         }
       } catch { /* an unreadable cap-round head or base fails closed: the round_cap_reached refusal below stands */ }
@@ -598,8 +597,7 @@ export async function emitFixerWorkOrder({
       }
     }
     if (lowNitOnly && (lowFixCapped || (actSeverities.every((s) => normalizeSeverity(s) === "nit") && round !== 1))) {
-      const cappedAt = gate === "pre_approval_gate" ? "at pre_approval_gate" : "at or past the draft_gate round cap";
-      const where = lowFixCapped ? cappedAt : "outside draft_gate round 1";
+      const where = lowFixCapped ? "at pre_approval_gate" : "outside draft_gate round 1";
       throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${actListFile} holds only low or nit items ${where}; low and nit findings no longer reach the fixer`);
     }
   }
