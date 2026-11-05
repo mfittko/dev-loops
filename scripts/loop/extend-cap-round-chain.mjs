@@ -127,7 +127,7 @@ export async function extendCapRoundChain(options, {
     return { files, logic };
   };
   const sealedClearing = (base) => { try { const r = readSealedGateDeltaRecord(tmpRoot, base); return r && DELTA_CLEARING_NEXT_STEPS.includes(r.nextStep) ? r : null; } catch { return null; } };
-  // ADR 0254: the remedy for a logic commit is a locally_clear pre-push delta bound to the chain end and the PR head, then this command again.
+  // ADR 0254: the remedy for a logic commit is a locally_clear pre-push delta bound to the start of the logic range and the PR head, then this command again.
   // Coordination routes no_clearing_record, items_do_not_cover and chain_does_not_reach_head to this command, so a remedy that names gate-coordination alone loops: each remedy names the step that breaks the cycle.
   const deltaRange = (from) => `${from.slice(0, 7)}..${head.slice(0, 7)}`;
   const cleanCapRemedy = (from) => `A clean cap round has no act list, so only the thread-route pre-push delta (${CLI} loop pre-push-delta --threads-file <threads-file> --repo ${repo} --pr ${pr} --baseline ${from} --result <result-file> --invocation <1-3>) can produce a covering record for ${deltaRange(from)}. Run it until its outcome is locally_clear, then rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}. gate-coordination routes this refusal back to this command, so it does not break the cycle; the thread-route delta or the replacement-PR restart does: ${CAP_ROUND_REFUSAL.baseline_orphaned}`;

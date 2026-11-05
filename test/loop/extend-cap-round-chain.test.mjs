@@ -686,9 +686,12 @@ test("a failed proof after sealing delta_covered restores the delta record byte 
     const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
     const tmp = path.join(root, "tmp");
     writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const recordPath = gateDeltaRecordPath(tmp, A);
+    const bytes = () => [readFileSync(recordPath, "utf8"), readFileSync(`${recordPath}.seal`, "utf8")];
+    const before = bytes();
     const result = await extend(root, L, { resolveProof: async () => null });
     assert.equal(result.reason, "proof_not_reached");
-    assert.equal(readSealedGateDeltaRecord(tmp, A).extension, undefined, "the sealed pair is restored");
+    assert.deepEqual(bytes(), before, "the record and seal bytes are restored");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
