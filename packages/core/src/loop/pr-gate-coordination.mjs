@@ -928,7 +928,7 @@ export const ADR_TRIPWIRE_REMEDIES = Object.freeze([
 ]);
 
 // The flags every reviewer-only remedy needs (the route binds the findings log to the PR, ADR 0255).
-const REVIEWER_ONLY_FLAGS = " The reviewer-only command takes `--repo <owner/name> --pr <number> --baseline <sha> --pr-head <sha> --findings-log <cap-round findings log>` (`loop pre-push-delta --help`).";
+const REVIEWER_ONLY_FLAGS = " The reviewer-only command takes `--repo <owner/name> --pr <number> --baseline <sha> --pr-head <sha> --findings-log <cap-round findings log>` and, on the input run, `--spec-identity <id> --result-path <result-file>` (`loop pre-push-delta --help`).";
 
 /** The one failed cap-round-fixed condition (`resolveCapRoundFixed` `onFailure`, ADR 0218) and its remedy. */
 export const CAP_ROUND_REFUSAL = Object.freeze({

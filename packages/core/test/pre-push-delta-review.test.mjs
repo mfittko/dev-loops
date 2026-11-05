@@ -107,6 +107,11 @@ const ACT_LIST = [
   },
 ];
 
+test("a reviewer-only sequence maps only an empty act list to an empty act set", () => {
+  assert.deepEqual(startDeltaSequence({ reviewBaselineHead: "a".repeat(40), reviewerOnly: true, actList: [] }).actItems, []);
+  assert.throws(() => startDeltaSequence({ reviewBaselineHead: "a".repeat(40), reviewerOnly: true }));
+});
+
 test("remediation scope changes the actSetId; legacy lists keep theirs", () => {
   const plain = startDeltaSequence({ reviewBaselineHead: A, actList: ACT_LIST });
   const scoped = (siteQuery) => startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], siteQuery }, ...ACT_LIST.slice(1)] });

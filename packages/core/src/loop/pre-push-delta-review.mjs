@@ -205,7 +205,7 @@ function nonEmptyStrings(value) {
  */
 export function startDeltaSequence({ reviewBaselineHead, actList, reviewerOnly = false } = {}) {
   if (!nonEmpty(reviewBaselineHead)) throw new Error("delta sequence requires reviewBaselineHead");
-  const actItems = reviewerOnly && (!Array.isArray(actList) || actList.length === 0) ? [] : toDeltaActItems(actList);
+  const actItems = reviewerOnly && Array.isArray(actList) && actList.length === 0 ? [] : toDeltaActItems(actList);
   const actSetId = createHash("sha256")
     .update(JSON.stringify(actItems.map((item) => {
       const { ref, angle, severity, file, line, summary } = item;

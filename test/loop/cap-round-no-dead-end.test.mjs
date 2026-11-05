@@ -86,7 +86,6 @@ const combos = [];
 for (const clean of [true, false]) for (const sequence of ["open", "closed", "fixer_needs_fix"]) for (const merges of [0, 1, 2]) for (const [fix, docs] of [[true, false], [false, true], [true, true], [false, false]]) combos.push({ clean, sequence, merges, fix, docs });
 
 const READY = ["mark_ready_for_review", "run_pre_approval_gate"];
-const tally = {};
 for (const combo of combos) {
   const name = `cap round ${combo.clean ? "clean" : "with act items"}, sequence ${combo.sequence === "closed" ? "closed (head_moved, no_commit or lost)" : combo.sequence}, ${combo.merges} base refresh(es), fix ${combo.fix}, docs ${combo.docs}`;
   test(name, async () => {
@@ -94,7 +93,6 @@ for (const combo of combos) {
     try {
       const { trace, end } = await followRemedy(s.root, { repo: REPO, pr: PR, head: s.head, baseline: s.A, ledgerPath: s.ledgerPath, reviewerStatus: combo.clean || combo.fix ? "resolved" : "not_resolved" });
       const block = expectedBlock(combo);
-      tally[block ?? "ready"] = (tally[block ?? "ready"] ?? 0) + 1;
       if (block === null) {
         assert.ok(READY.includes(end.nextAction), `${name}: ${end.nextAction} ${end.failure}: ${end.reason}\n${trace.join("\n")}`);
         return;
@@ -106,9 +104,10 @@ for (const combo of combos) {
   }, 60000);
 }
 
-// The real outcome of every combination, counted from the runs above: each remaining block is named.
-test("matrix tally: every combination is accounted for, and each remaining block is named", () => {
-  if (Object.values(tally).reduce((a, b) => a + b, 0) !== combos.length) return; // a filtered run
+// Intentional classifier guard: it compares the test-local expectedBlock classifier with TALLY, so a combination moving between blocks (or becoming a new remaining block) is a visible edit here, not a silent one. The per-combination tests above exercise the code.
+test("classifier guard: the expected-block distribution over the matrix is pinned", () => {
+  const tally = {};
+  for (const block of combos.map(expectedBlock)) tally[block ?? "ready"] = (tally[block ?? "ready"] ?? 0) + 1;
   assert.deepEqual(tally, TALLY);
 });
 

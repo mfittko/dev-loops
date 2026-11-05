@@ -19,7 +19,7 @@ test("GATE-EXEC-ROUND-CAP-CHAIN-EXTEND names the reviewer-only route, its bindin
 test("ADR 0255 amends the remedy of ADR 0254 and the pre-push delta contract names the reviewer-only route", () => {
   assert.match(read("docs/decisions/0255-code-range-delta-without-fixer-plan.md"), /^Amends the remedy of \[ADR 0254\]/m);
   const contract = read("skills/docs/pre-pr-review-contract.md");
-  for (const rule of ["PRE-PUSH-DELTA-TRIGGER", "PRE-PUSH-DELTA-PINNED-BASELINE", "PRE-PUSH-DELTA-RESULT"]) {
+  for (const rule of ["PRE-PUSH-DELTA-TRIGGER", "PRE-PUSH-DELTA-PINNED-BASELINE", "PRE-PUSH-DELTA-RESULT", "PRE-PUSH-DELTA-INPUT-CAP-CHAIN"]) {
     const line = contract.split("\n").find((l) => l.startsWith(`\`${rule}\``));
     assert.match(line, /reviewer-only/, `${rule} names the reviewer-only route`);
   }

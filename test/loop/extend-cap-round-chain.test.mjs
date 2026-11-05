@@ -5,6 +5,8 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "bun:test";
 
+import { withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
+
 import { resolveCapRoundFixed } from "../../scripts/github/write-gate-context.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
@@ -884,6 +886,25 @@ test("a delta record that changed on disk after validation is never overwritten"
     assert.equal(result.reason, "record_changed");
     assert.equal(writes, 0);
     assert.equal(readFileSync(recordPath, "utf8"), before);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sealing delta_covered waits for the sequence lock the reviewer-only run holds", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const before = readFileSync(gateDeltaRecordPath(tmp, A), "utf8");
+    let pending, lockHeld = true;
+    await withSequenceLock(tmp, [A], async () => {
+      pending = extend(root, L, { writeRecord: (...a) => { assert.equal(lockHeld, false, "no write while the delta run holds the lock"); writeSealedGateDeltaRecord(...a); } });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      assert.equal(readFileSync(gateDeltaRecordPath(tmp, A), "utf8"), before, "the write waits for the lock"); lockHeld = false;
+    });
+    assert.equal((await pending).action, "chain_extended");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

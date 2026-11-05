@@ -928,7 +928,7 @@ test("a refused locally_clear result followed by a no-commit re-emission keeps t
 
 
 // ADR 0255: the PR 3087 state. The cap-round head P1, a fix commit P2, then a base refresh merged in; the sequence is closed (no marker, no plan) and the head moved.
-function reviewerOnlyRepo({ nonBaseOnlyMerge = false, evilMerge = false, octopus = false, baseChanges = false, ownChanges = false } = {}) {
+function reviewerOnlyRepo({ nonBaseOnlyMerge = false, evilMerge = false, octopus = false, baseChanges = false, ownChanges = false, commitAfterMerge = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-only-"));
   initGitFixture(dir, { branch: "main", commit: null });
   const git = (...args) => runGitFixture(dir, args);
@@ -943,6 +943,7 @@ function reviewerOnlyRepo({ nonBaseOnlyMerge = false, evilMerge = false, octopus
   fs.writeFileSync(path.join(dir, "a.mjs"), "// uses goneIdentifierName\nexport const a = 2;\n");
   if (ownChanges) { fs.mkdirSync(path.join(dir, "changes")); fs.writeFileSync(path.join(dir, "changes", "own.md"), "own\n"); }
   git("add", "."); git("commit", "-qm", "fix: a");
+  const fix = git("rev-parse", "HEAD");
   git("checkout", "-q", "main");
   fs.writeFileSync(path.join(dir, "refreshed.txt"), "from the base\n");
   if (baseChanges) { fs.mkdirSync(path.join(dir, "changes")); fs.writeFileSync(path.join(dir, "changes", "base.md"), "base\n"); }
@@ -951,6 +952,8 @@ function reviewerOnlyRepo({ nonBaseOnlyMerge = false, evilMerge = false, octopus
   git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"));
   git("checkout", "-q", "pr");
   git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
+  const mergeHead = git("rev-parse", "HEAD");
+  if (commitAfterMerge) { fs.writeFileSync(path.join(dir, "a.mjs"), "// uses goneIdentifierName\nexport const a = 3;\n"); git("add", "."); git("commit", "-qm", "fix: a again"); }
   if (nonBaseOnlyMerge || evilMerge || octopus) {
     // A merge of a branch that holds PR-own work is not a base-only merge.
     for (const name of octopus ? ["side", "side2"] : ["side"]) {
@@ -966,7 +969,7 @@ function reviewerOnlyRepo({ nonBaseOnlyMerge = false, evilMerge = false, octopus
       git("add", "."); git("commit", "-qm", "merge side with a resolution");
     } else git("merge", "-q", "--no-ff", "-m", "merge side", ...(octopus ? ["side", "side2"] : ["side"]));
   }
-  return { dir, baseline, head: git("rev-parse", "HEAD"), tmpRoot: resolveGateArtifactTmpRoot(dir) };
+  return { dir, baseline, fix, mergeHead, head: git("rev-parse", "HEAD"), tmpRoot: resolveGateArtifactTmpRoot(dir) };
 }
 // The cap-round ledger at the baseline; --findings-log is required and the act list is derived from it (ADR 0255).
 const CAP_ACT = { severity: "medium", summary: "guard missing", files: ["a.mjs"], line: 1, angle: "correctness", judgeDisposition: "act", judgeTitle: "Guard", judgeFix: "add" };
@@ -1021,6 +1024,15 @@ test("a reviewer-only run over a non-clean cap-round ledger derives the act item
       assert.equal(run.record.outcome, "needs_fix");
       assert.equal(run.decision.locallyClear, false);
     } finally { cleanup(bad); }
+  } finally { cleanup(repo); }
+});
+
+test("a reviewer-only baseline that is a base-only merge of a non-clean cap-round head derives the cap-round act items", async () => {
+  const repo = reviewerOnlyRepo({ commitAfterMerge: true });
+  try {
+    const args = ["--reviewer-only", "--repo", "owner/repo", "--pr", "70", "--baseline", repo.mergeHead, "--pr-head", repo.head, "--findings-log", capLog(repo.dir, repo.fix, [CAP_ACT]), "--worktree", repo.dir, "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")];
+    const { input } = await runDeltaCli(args, seam);
+    assert.deepEqual(input.actItems.map((i) => i.ref), [fingerprintFinding(CAP_ACT)]);
   } finally { cleanup(repo); }
 });
 
@@ -1138,9 +1150,9 @@ test("a reviewer-only run reviews a merge that is not base-only through its own 
 });
 
 // ADR 0255: the reviewer-only run takes over the fixer's non-clearing record at the baseline when the refs match.
-function seedFixerRecord(repo, patch = {}) {
+function seedFixerRecord(repo, { sameActSet, ...patch } = {}) {
   const recordPath = path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.json`);
-  const record = { ...JSON.parse(fs.readFileSync(recordPath, "utf8")), actSetId: "fixer-act-set", ...patch };
+  const record = { ...JSON.parse(fs.readFileSync(recordPath, "utf8")), ...(sameActSet ? {} : { actSetId: "fixer-act-set" }), ...patch };
   writeSealedGateDeltaRecord(repo.tmpRoot, repo.baseline, record);
   return recordPath;
 }
@@ -1162,10 +1174,10 @@ test("the reviewer-only run takes over a prior non-clearing record with another 
 test("the reviewer-only run keeps a locally_clear record, an extension, another ref set and a foreign candidate protected, and an unsealed one names its remedy", async () => {
   const cases = [
     ["is locally_clear for another act set", { outcome: "locally_clear" }, false],
-    ["carries an extension", { extension: "delta_covered" }, false],
+    ["carries an extension", { outcome: "locally_clear", extension: "delta_covered", sameActSet: true }, false],
     ["covers another set of act refs", { items: [{ ref: "other", status: "resolved" }] }, false],
     ["not on the PR head's history", { candidateHead: "ORPHAN" }, false],
-    ["unsealed_record: .*is locally_clear for another act set.*rm -f .*\\.seal", { outcome: "locally_clear" }, true],
+    ["unsealed_record: .*is locally_clear for another act set.*rm -f \\S+\\.json \\S+\\.seal", { outcome: "locally_clear" }, true],
   ];
   for (const [message, patch, unsealed] of cases) {
     const repo = reviewerOnlyRepo();
@@ -1177,14 +1189,14 @@ test("the reviewer-only run keeps a locally_clear record, an extension, another 
       const before = fs.readFileSync(recordPath, "utf8");
       await assert.rejects(reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], invocation: 2 }), (error) => {
         assert.match(error.message, new RegExp(message));
-        if (!unsealed) assert.match(error.message, /loop gate-coordination/, "a sealed refusal names the runnable remedy");
+        if (!unsealed) assert.match(error.message, /locally_clear|extension/.test(message) ? /gate extend-cap-round-chain/ : /loop gate-coordination/, "a sealed refusal names the runnable remedy");
         assert.doesNotMatch(error.message, /\$\{/, "no uninterpolated placeholder");
         return true;
       });
       assert.equal(fs.readFileSync(recordPath, "utf8"), before, "the record is never overwritten");
     } finally { cleanup(repo); }
   }
-});
+}, 30000); // measured over 5 s: six cases, each seeds a repo and runs two reviewer-only invocations
 
 test("--reviewer-only refuses the plan inputs, a missing --pr-head and a worktree HEAD that is not the PR head", async () => {
   const repo = reviewerOnlyRepo();
