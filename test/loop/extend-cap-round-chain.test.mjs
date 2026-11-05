@@ -92,6 +92,7 @@ test("a logic commit, alone or mixed with docs, refuses and writes no record", a
     const refused = await extend(root, L);
     assert.equal(refused.reason, "logic_commit_in_range");
     assert.match(refused.detail, /src\/b\.mjs/);
+    assert.match(refused.detail, /pre-push-delta --baseline /u);
     const M = await commit(root, { "docs/x.md": "x\n", "src/c.mjs": "export const c = 1;\n" }, "mixed");
     assert.equal((await extend(root, M)).reason, "logic_commit_in_range");
     assert.equal(readSealedGateDeltaRecord(path.join(root, "tmp"), B), null);
@@ -593,7 +594,7 @@ test("a code commit pushed after the covering delta refuses delta_range_mismatch
     const M = await commit(root, { "src/y.mjs": "export const y = 1;\n" }, "logic M");
     const result = await extend(root, M);
     assert.equal(result.reason, "delta_range_mismatch");
-    assert.match(result.detail, /gate-coordination/u);
+    assert.match(result.detail, /only the thread-route pre-push delta .*--threads-file.*does not break the cycle/u);
     assert.equal(readSealedGateDeltaRecord(tmp, A).extension, undefined);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -609,7 +610,23 @@ test("a record already sealed delta_covered for the head refuses proof_not_reach
     const before = readFileSync(gateDeltaRecordPath(tmp, A), "utf8");
     const refused = await extend(root, L, { resolveProof: async () => null });
     assert.equal(refused.reason, "proof_not_reached");
-    assert.match(refused.detail, /gate-coordination/u);
+    assert.match(refused.detail, /already carries delta_covered/u);
+    assert.equal(readFileSync(gateDeltaRecordPath(tmp, A), "utf8"), before);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a record already sealed with another extension for the head refuses proof_not_reached, not a contradictory delta_range_mismatch", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [], extension: "docs_tests_only" });
+    const before = readFileSync(gateDeltaRecordPath(tmp, A), "utf8");
+    const refused = await extend(root, L, { resolveProof: async () => null });
+    assert.equal(refused.reason, "proof_not_reached");
+    assert.match(refused.detail, /already carries docs_tests_only/u);
     assert.equal(readFileSync(gateDeltaRecordPath(tmp, A), "utf8"), before);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -768,7 +785,7 @@ test("a cleared end inside a cyclic chain still seals the covering delta through
   }
 });
 
-test("a logic commit after a delta_covered seal and a docs extension names the chain end as the delta baseline", async () => {
+test("a logic commit after a delta_covered seal and a docs extension refuses with the chain end as the delta baseline, then the delta at the chain end reaches the head", async () => {
   const { root, A } = await cleanCapFixture();
   try {
     await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
