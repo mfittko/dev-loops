@@ -31,7 +31,7 @@ import { editPr as realEditPr } from "./edit-pr.mjs";
 import { resolveCapRoundFixed as realResolveCapRoundFixed } from "./write-gate-context.mjs";
 
 function noProofRefusal({ repo, pr, headSha }) {
-  return refuse("no_clean_draft_gate", `GATE-EXEC-ROUND-CAP-WAIVER-PROOF: no clean draft_gate or pre_approval_gate checkpoint verdict and no cap-round-fixed proof on the current head ${headSha.slice(0, 7)}. For a cap-round PR whose later commits are docs and tests only, run: node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo ${repo} --pr ${pr}. Otherwise run: node <dev-loops-package-root>/cli/index.mjs loop gate-coordination --repo ${repo} --pr ${pr} and follow its next action`);
+  return refuse("no_clean_draft_gate", `GATE-EXEC-ROUND-CAP-WAIVER-PROOF: no clean draft_gate or pre_approval_gate checkpoint verdict and no cap-round-fixed proof on the current head ${headSha.slice(0, 7)}. For a cap-round PR whose later commits are docs and tests only, or code that a locally_clear pre-push delta covers (ADR 0254), run: node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo ${repo} --pr ${pr}. Otherwise run: node <dev-loops-package-root>/cli/index.mjs loop gate-coordination --repo ${repo} --pr ${pr} and follow its next action`);
 }
 
 const USAGE = `Usage: waive-adr-tripwire.mjs --repo <owner/name> --pr <number>
