@@ -412,7 +412,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "offer-human-handoff": "Offer to assign PR to a human reviewer/assignee",
     "size-budget": "Compute PR size/tier budget outcome (pass/escalate/block; pure computation, no enforcement)",
     "close-sequence": "Close an abandoned gate fix sequence marker with a recorded abandonment proof (refuses a live sequence)",
-    "extend-cap-round-chain": "Extend the sealed cap-round clearing chain over later docs-only or tests-only commits (refuses any logic commit)",
+    "extend-cap-round-chain": "Extend the sealed cap-round clearing chain over later docs-only or tests-only commits (code commits need a locally_clear delta that covers them)",
     "resolve-role": "Resolve a review angle's role or Codex conductor/role native settings",
     "resolve-validation": "Resolve gate validation at an exact head (ci-only CI evidence, declared full command, or the pinned-Bun verify script)",
     "wait-for-units": "Block until a gate round's dispatched reviewer or judge units are done, or (--artifact, requires --after <reference file>) a single child's hand-back file is final: it parses with its terminal field (outcome) or stays unchanged for 10 seconds (read-only)",
