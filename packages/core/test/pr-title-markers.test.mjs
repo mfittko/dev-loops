@@ -158,4 +158,11 @@ test("stripBlockingTitleMarkers removes detected markers and keeps component nam
   assert.equal(stripBlockingTitleMarkers("[WIP] fix(draft): x"), "fix(draft): x");
   assert.equal(stripBlockingTitleMarkers("feat/draft: x"), "feat/draft: x");
   assert.equal(stripBlockingTitleMarkers("WIP: DRAFT: do not merge x 🚧"), "x");
+  assert.equal(stripBlockingTitleMarkers("[DO NOT MERGE] fix x"), "fix x");
+  assert.equal(stripBlockingTitleMarkers("(DO NOT MERGE) fix x"), "fix x");
+  assert.equal(stripBlockingTitleMarkers("DO NOT MERGE: fix x"), "fix x");
+  assert.equal(stripBlockingTitleMarkers("fix x DO NOT MERGE"), "fix x");
+  assert.equal(stripBlockingTitleMarkers("[WIP] fix x"), "fix x");
+  assert.equal(stripBlockingTitleMarkers("fix(draft): x"), "fix(draft): x");
+  assert.equal(stripBlockingTitleMarkers("draft-gate cleanup"), "draft-gate cleanup");
 });

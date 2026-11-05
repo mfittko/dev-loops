@@ -72,9 +72,8 @@ function statusPatterns(word) {
   ];
 }
 
-function statusMarkerTester(word) {
-  const patterns = statusPatterns(word);
-  return (title) => patterns.some((re) => re.test(title));
+function matcher(label, patterns) {
+  return { label, patterns, test: (title) => patterns.some((re) => re.test(title)) };
 }
 
 /**
@@ -86,11 +85,12 @@ function statusMarkerTester(word) {
  * title.
  */
 const MARKER_MATCHERS = [
-  { label: "WIP", test: statusMarkerTester("WIP") },
-  { label: "DRAFT", test: statusMarkerTester("DRAFT") },
-  // Flexible (any) whitespace between the phrase words, case-insensitive.
-  { label: "DO NOT MERGE", test: (title) => /\bDO\s+NOT\s+MERGE\b/i.test(title) },
-  { label: "🚧", test: (title) => /🚧/u.test(title) },
+  matcher("WIP", statusPatterns("WIP")),
+  matcher("DRAFT", statusPatterns("DRAFT")),
+  // Flexible (any) whitespace between the phrase words, case-insensitive. The
+  // wrapped forms come first so stripping removes the bracket/paren/colon too.
+  matcher("DO NOT MERGE", [...statusPatterns("DO\\s+NOT\\s+MERGE"), /\bDO\s+NOT\s+MERGE\b/i]),
+  matcher("🚧", [/🚧/u]),
 ];
 
 /**
@@ -132,7 +132,7 @@ export function stripBlockingTitleMarkers(title) {
   if (typeof title !== "string") {
     return "";
   }
-  const patterns = [...statusPatterns("WIP"), ...statusPatterns("DRAFT"), /\bDO\s+NOT\s+MERGE\b/i, /🚧/u]
+  const patterns = MARKER_MATCHERS.flatMap((m) => m.patterns)
     .map((re) => new RegExp(re.source, `${re.flags}g`));
   let current = title;
   for (let previous = null; previous !== current;) {
