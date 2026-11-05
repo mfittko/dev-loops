@@ -1281,7 +1281,7 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
     // ADR 0188: an `act` on a cluster is coerced from the cluster each finding is projected into and the ORIGINAL severities
     // (read before any promotion, so the result never depends on disposition order). failOpen promotes a cluster holding a low
     // to medium and keeps act in every round; else (failOpen is ignored on an all-nit cluster) an all-nit cluster stays act only in
-    // draft round 1 below the cap (the fixer fixes it) and rejects after; a low/nit cluster with a low (its nit members ride along,
+    // draft round 1 (the fixer fixes it) and rejects after; a low/nit cluster with a low (its nit members ride along,
     // one disposition per cluster) stays act at the draft gate and defers at pre_approval_gate.
     let disposition = d.disposition;
     let reason = d.reason;

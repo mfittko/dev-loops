@@ -12,8 +12,8 @@ Amends [ADR 0168](./0168-draft-gate-low-nit-convergence.md) and the draft-gate l
 
 ## Decision
 
-1. `composeConvergedDraftGate` refuses a round below the cap. Convergence applies at the cap round (completed-round count at or above a positive `gates.draft.maxReviewRounds`) or later. Below the cap a low or nit act list goes to the fixer and the next full round runs.
-2. The draft gate fixes a low act item in every round, the cap round included. `resolveDraftRoundCap` returns `lowFixCapped: false` for `draft_gate`. `pre_approval_gate` keeps its low deferral.
+1. `composeConvergedDraftGate` refuses a round below the cap. Convergence applies at the cap round (completed-round count at or above a positive `gates.draft.maxReviewRounds`) or later. Below the cap a low or nit act list goes to the fixer and the next full round runs. With `gates.draft.maxReviewRounds` 0 (no cap) the round condition does not apply.
+2. The draft gate fixes a low act item in every round, the cap round included. `resolveDraftRoundCap` returns `lowFixCapped: false` for `draft_gate`. `pre_approval_gate` keeps its low deferral. An all-nit act in round 1 stays `act` even when round 1 is the cap round (cap 1).
 
 ## Consequences
 
