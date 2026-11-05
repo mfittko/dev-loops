@@ -1855,10 +1855,20 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
 }
 
 /**
+ * The shared finished-round predicate. A live same-head ledger is an in-round rewrite (replaced, not retained, not counted)
+ * only when it has at least one finding and no finding carries a `judgeDisposition`; every other closed ledger, including a clean one with
+ * `findings: []`, is a finished round that the writer retains and the round count includes.
+ */
+export function isInRoundRewrite(log) {
+  return Array.isArray(log?.findings) && log.findings.length > 0 && !log.findings.some((f) => f?.judgeDisposition !== undefined);
+}
+
+/**
  * Discover the closed prior rounds of this gate on this PR: every
  * `<gate>-<fullSha>.json` findings-log ledger in the gate-findings directory
  * at a head other than `options.headSha` (either prefix direction, since
- * --head-sha may be abbreviated). The ledgers live under the MAIN worktree
+ * --head-sha may be abbreviated), plus, with `includeLiveCurrentHead`, the live
+ * current-head ledger once it is a finished round (not an {@link isInRoundRewrite}). The ledgers live under the MAIN worktree
  * tmp/, so a re-gate inside a linked worktree still finds them; --tmp-root
  * still wins. Ordered oldest round first by the ledger's `loggedAt` (ties
  * by SHA) for {@link resolvePriorDispositions}'s latest-wins fold.
@@ -1867,6 +1877,8 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
  * re-written) is a closed round at any other head. At the current head it is read only
  * with `includeRetainedCurrentHead` (the round count), so the disposition, act-item and
  * cap-round readers keep their pre-retention view of the current head.
+ * `includeLiveCurrentHead` reads the live current-head ledger (`<gate>-<sha>.json`) only when the shared finished-round
+ * predicate holds, so it counts exactly when the writer will retain it.
  *
  * Filename SHAs match case-insensitively. FAIL OPEN on a path-resolution
  * error (no prior rounds). Per ledger: an unparseable or non-object file is
@@ -1933,6 +1945,7 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
       onUnreadable?.(name);
       continue;
     }
+    if (!retained && (sha.startsWith(head) || head.startsWith(sha)) && isInRoundRewrite(log)) continue;
     // The live ledger ranks above every retained round of its head; retained rounds order by their number.
     const retainedNumber = /\.round-(\d+)\.json$/.exec(name);
     rounds.push({ sha, loggedAt: typeof log.loggedAt === "string" ? log.loggedAt : "", round: retainedNumber ? Number(retainedNumber[1]) : Infinity, log });

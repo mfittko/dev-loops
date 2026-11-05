@@ -19,7 +19,7 @@ import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bou
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { capClosedFor } from "@dev-loops/core/loop/gate-fanin";
-import { listPriorActItems, resolveDraftRoundCap } from "./write-gate-context.mjs";
+import { isInRoundRewrite, listPriorActItems, resolveDraftRoundCap } from "./write-gate-context.mjs";
 import { clusterFindings, clustersFromStampedIds, projectClusterDisposition } from "@dev-loops/core/loop/finding-cluster";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
@@ -871,7 +871,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   const priorOptions = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot };
   let roundCap;
   const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot, includeLiveCurrentHead: true }));
-  // The writer resolves the round before it retains the live same-head ledger, so it counts that ledger itself: every later reader counts it as the retained round.
+  // The writer resolves the round before it retains the live same-head ledger, so it counts that ledger itself, but only when retention will keep it (the shared isInRoundRewrite predicate): every later reader counts it as the retained round.
   if (options.judgeVerdict) {
     const judgePath = path.resolve(repoRoot, options.judgeVerdict);
     let judgeVerdict;
@@ -1098,16 +1098,16 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     ...(angleCoverage.warning ? { warning: angleCoverage.warning } : {}),
   };
 }
-// A second write at the same head must not destroy the prior round: every existing live ledger (and its seal) is copied
-// to the next free `<gate>-<sha>.round-<n>.json` sibling before the rewrite. Returns the retained path, or null when there was no live ledger.
+// A second write at the same head must not destroy a finished round: every existing live ledger (and its seal) except an in-round rewrite (at least one finding, none judged) is copied
+// to the next free `<gate>-<sha>.round-<n>.json` sibling before the rewrite. Returns the retained path, or null when there was no live ledger or it is an in-round rewrite.
 // A tampered live ledger refuses with OUT_OF_BAND_WRITE before anything is retained.
 // ponytail: retention runs outside the write lock; the exclusive copy makes a round-number collision fail instead of overwriting, but concurrent same-head writers are otherwise unsupported (move retention under the ledger lock if they ever are).
 async function retainSameHeadLedger(fullPath, logPath) {
   if (!(await access(fullPath).then(() => true, () => false))) return null;
   try {
     const live = JSON.parse(await readSealed(fullPath));
-    // An unjudged live ledger is a rewrite inside the same round: it is replaced, not retained.
-    if (Array.isArray(live?.findings) && !live.findings.some((f) => f?.judgeDisposition !== undefined)) return null;
+    // An in-round rewrite (at least one finding, none judged) is replaced, not retained; a finished round, including a clean one with no findings, is retained.
+    if (isInRoundRewrite(live)) return null;
   } catch (err) { if (err?.code === OUT_OF_BAND_WRITE) throw err; }
   const dir = path.dirname(fullPath);
   const stem = path.basename(fullPath, ".json");
