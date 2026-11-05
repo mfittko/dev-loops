@@ -63,12 +63,12 @@ check-pre-push-delta --result), and any non-clearing record for the head refuses
 the PR's own head branch (gh pr view headRefName) and the --allowed-path selectors
 (default "." = the whole repository). A PR head other than --head-sha refuses.
 An --act-list-file source also refuses with verdict_not_posted until the --gate verdict review for --head-sha is posted on the PR (GATE-EXEC-POST-BEFORE-FIX; post it with dev-loops gate upsert-verdict --findings-ledger).
-A commit_only or full emission writes its sequence marker under the head's sequence lock; while a concurrent close or pull holds that lock it refuses with sequence_lock_busy (retryable: no work order was made current, re-run the same emit once the close or pull finishes).
+A commit_only or full emission writes its sequence marker under the head's sequence lock (the keyed no-commit re-emission below writes none); while a concurrent close or pull holds that lock it refuses with sequence_lock_busy (retryable: no work order was made current, re-run the same emit once the close or pull finishes).
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
 (default: the main checkout's tmp/; an explicit --tmp-root inside a linked worktree is refused) and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef }.
 joinRef is the path for gate wait-for-units --artifact (with --after <planPath>): a full-phase fixer's final-on-write report (<outputRef>.report), else the outputRef.
-Each run supersedes the previous emission for this PR. Dispatch the printed
+Each run supersedes the previous emission for this PR, except a same-head no-commit commit_only re-emission with a locally_clear --delta-result: it writes fixer-emit-plan.<executionIdentity>.json beside the canonical plan, writes no sequence marker and prints that keyed path as planPath (a join target, never a delta --fixer-plan). Dispatch the printed
 dispatchPayload (the --harness adapter call carrying only dispatchPrompt) unchanged; an
 unsupported harness refuses. The only operator input is --operator-focus-file, a JSON file { round?: string, items?: [{ fingerprint, decision }] }
 that renders as a bounded, sanitized "Operator focus" section and is pinned by the digest (GATE-EXEC-OPERATOR-FOCUS).
@@ -781,6 +781,7 @@ export async function emitFixerWorkOrder({
   // Only the refused PRE-PUSH-DELTA-RESULT case (a locally_clear result) is append-only; a needs_fix / fix_and_rereview re-dispatch is a committing second fixer and supersedes the plan.
   const appendOnly = prior?.phase === "commit_only" && prior.source === "act-list" && prior.headSha === headSha && prior.gate === gate
     && delta.parsed.outcome === "locally_clear"
+    && delta.parsed.origin?.executionIdentity === JSON.parse(originalBytes).executionIdentity
     && delta.parsed.candidateHead !== headSha && delta.parsed.candidateHead === gitIn(cwd, "rev-parse", "HEAD").trim()
     && Boolean(await capture.read(prior.outputRefs?.[0]));
   const livePlanPath = appendOnly ? keyedFixerPlanPath(dir, executionIdentity) : planPath;
@@ -990,9 +991,9 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
   if (keyed) for (const name of await readdir(path.dirname(planPath)).catch(() => [])) {
     const id = /^fixer-emit-plan\.(f\d+-[0-9a-f]{8})\.json$/.exec(name)?.[1];
     if (!id || emittedAt(id) <= emittedAt(executionIdentity)) continue;
-    // A sibling that does not parse does not name this parent; its own locate still refuses with the integrity failure.
+    // A newer sibling that does not parse fails closed: it counts as superseding, and its own locate still refuses with the integrity failure.
     const sibling = await readPlanFile(path.join(path.dirname(planPath), name)).catch((err) => (err instanceof WorkOrderRefusal ? null : Promise.reject(err)));
-    if (sibling?.parentExecutionIdentity === parentId) newerKeyed = id;
+    if (!sibling || sibling.parentExecutionIdentity === parentId) newerKeyed = id;
   }
   const parentStale = keyed && (!parentId || newest?.executionIdentity !== parentId
     ? `keyed fixer ref ${ref} is orphaned: its parent execution ${parentId} is no longer the current plan`
