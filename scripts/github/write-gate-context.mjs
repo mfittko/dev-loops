@@ -2151,6 +2151,8 @@ export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefNam
   return { ends, heads: [...heads] };
 }
 
+// ADR 0250: extension values a sealed clearing record may carry to prove a clean cap round ("delta_covered": expand step of the issue 3105 chain, no writer yet).
+const CLEAN_CAP_EXTENSIONS = new Set(["docs_tests_only", "delta_covered"]);
 /**
  * The `covers` check of resolveCapRoundFixed, shared with the chain-extension tool so the two cannot disagree:
  * the first clearing record must name every act item of the cap round. Pass it as `covering` to clearingChainLastCandidates.
@@ -2162,13 +2164,13 @@ export const capRoundCovers = (capRound, tmpRoot) => (record) => {
   if (isCleanCapRound(capRound)) {
     const seen = new Set();
     for (let r = record; r && tmpRoot;) {
-      if (r.extension === "docs_tests_only") return true;
+      if (CLEAN_CAP_EXTENSIONS.has(r.extension)) return true;
       const next = normalizeSha(r.candidateHead);
       if (!next || seen.has(next)) return false;
       seen.add(next);
       r = clearingDeltaRecord(tmpRoot, next);
     }
-    return record.extension === "docs_tests_only";
+    return CLEAN_CAP_EXTENSIONS.has(record.extension);
   }
   return actRefs.every((r) => refs.has(r));
 };
