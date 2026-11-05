@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -375,15 +375,19 @@ test("a converged source ledger with a stale or missing digest still refuses", a
 
 test("the default reader fails closed on a source ledger modified after it was sealed", async () => {
   const repoRoot = realpathSync(mkdtempSync(path.join(tmpdir(), "waive-seal-")));
-  execFileSync("git", ["init", "-q"], { cwd: repoRoot });
-  const ledgerPath = buildLogPath({ repo: "o/n", pr: 9, gate: "draft_gate", headSha: SOURCE, tmpRoot: path.join(repoRoot, "tmp") });
-  mkdirSync(path.dirname(ledgerPath), { recursive: true });
-  const ledger = JSON.stringify({ specAuthority: { specDigest: DIGEST } });
-  await writeSealed(ledgerPath, ledger);
-  const { deps } = harness({ fetchDraftGateEvidence: async () => converged });
-  delete deps.readRecordedSpecDigest;
-  const run = () => waiveAdrTripwire(OPTIONS, { ...deps, repoRoot });
-  assert.equal((await run()).action, "waiver_written");
-  writeFileSync(ledgerPath, ledger.replace(DIGEST, "sha256:forged"));
-  assert.equal((await run()).reason, "spec_digest_unrecorded");
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: repoRoot });
+    const ledgerPath = buildLogPath({ repo: "o/n", pr: 9, gate: "draft_gate", headSha: SOURCE, tmpRoot: path.join(repoRoot, "tmp") });
+    mkdirSync(path.dirname(ledgerPath), { recursive: true });
+    const ledger = JSON.stringify({ specAuthority: { specDigest: DIGEST } });
+    await writeSealed(ledgerPath, ledger);
+    const { deps } = harness({ fetchDraftGateEvidence: async () => converged });
+    delete deps.readRecordedSpecDigest;
+    const run = () => waiveAdrTripwire(OPTIONS, { ...deps, repoRoot });
+    assert.equal((await run()).action, "waiver_written");
+    writeFileSync(ledgerPath, ledger.replace(DIGEST, "sha256:forged"));
+    assert.equal((await run()).reason, "spec_digest_unrecorded");
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
 });
