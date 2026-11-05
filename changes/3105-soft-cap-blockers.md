@@ -1,3 +1,3 @@
 ### Changed
 
-- At the draft cap round only an unfixable high, a question item, a deferred fail-open finding or unreadable evidence blocks; other findings reach the fixer (#3105)
+- At the draft cap round only a high without a fix, a high or fail-open finding the judge defers or rejects, a question item or unreadable evidence blocks (#3105)
