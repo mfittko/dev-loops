@@ -778,12 +778,15 @@ export async function emitFixerWorkOrder({
   // beside the plan, never over it, so the delta coverage the original execution bound stays authentic; it writes no sequence marker.
   const prior = phase === "commit_only" && actListFile && delta && originalBytes ? JSON.parse(originalBytes).workOrder : null;
   // The delta sequence is in flight when the delta result reviewed the unpushed fixing commit (its candidate is the worktree HEAD, not the baseline) and the first fixer delivered its handback.
+  // Only the refused PRE-PUSH-DELTA-RESULT case (a locally_clear result) is append-only; a needs_fix / fix_and_rereview re-dispatch is a committing second fixer and supersedes the plan.
   const appendOnly = prior?.phase === "commit_only" && prior.source === "act-list" && prior.headSha === headSha && prior.gate === gate
+    && delta.parsed.outcome === "locally_clear"
     && delta.parsed.candidateHead !== headSha && delta.parsed.candidateHead === gitIn(cwd, "rev-parse", "HEAD").trim()
     && Boolean(await capture.read(prior.outputRefs?.[0]));
   const livePlanPath = appendOnly ? keyedFixerPlanPath(dir, executionIdentity) : planPath;
   const tempPath = `${planPath}.tmp-${executionIdentity}`;
-  await capture.write(tempPath, `${JSON.stringify(plan, null, 2)}\n`);
+  // A keyed plan records its parent execution; locateFixerUnit reports it stale once the parent is superseded or closed.
+  await capture.write(tempPath, `${JSON.stringify(appendOnly ? { ...plan, parentExecutionIdentity: JSON.parse(originalBytes).executionIdentity } : plan, null, 2)}\n`);
   await capture.recheck();
   rejectOriginalRetirement();
   recheckCandidate();
@@ -972,7 +975,11 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
   const origin = order.completesExecution;
   const sequenceClosed = !closureOnly && await closureRecorded(closureRoot, closureHeads, executionIdentity);
   const originClosed = !closureOnly && origin && await closureRecorded(closureRoot, origin.heads, origin.executionIdentity);
-  const stale = (sequenceClosed && closedText(executionIdentity))
+  const parentId = keyed ? plan.parentExecutionIdentity : null;
+  const parentStale = keyed && (!parentId || newest?.executionIdentity !== parentId
+    ? `keyed fixer ref ${ref} is orphaned: its parent execution ${parentId} is no longer the current plan`
+    : !closureOnly && await closureRecorded(closureRoot, closureHeads, parentId) && closedText(parentId));
+  const stale = parentStale || (sequenceClosed && closedText(executionIdentity))
     || (originClosed && closedText(origin.executionIdentity))
     || (changed.length > 0 && `required fixer source(s) ${changed.join(", ")} changed or vanished since emission; re-emit against current authority`)
     || (retired && `fixer execution ${executionIdentity} belongs to a ${order.gate} round at ${headSha} retired as ${retired}`)
