@@ -5,7 +5,7 @@ import { BLOCKED_ON, PR_CHECKPOINT_ACTION } from "./pr-gate-coordination.mjs";
 export const KNOWN_GAPS = [
   {
     id: "draft-round-cap-refusal",
-    slice: "5-6",
+    slice: "6",
     matches: (input, result) => (input === undefined || input.draftRoundRefused === true)
       && result.reason.includes("Round N+1 never runs"),
   },
