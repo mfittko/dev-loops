@@ -915,3 +915,25 @@ test("every copy of the start-of-logic-range definition carries the one canonica
   assert.equal(count("skills/docs/gate-review-sub-loop-contract.md"), 1);
   assert.equal(count(".claude/skills/docs/gate-review-sub-loop-contract.md"), 1);
 });
+
+test("a reviewer-only delta record with no items covers a logic commit and a base-refresh merge in the range and seals delta_covered (ADR 0255, issue 3122 AC2)", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    runGitFixture(root, ["checkout", "-q", "-b", "base-moves", A]);
+    const X = await commit(root, { "refreshed.txt": "from the base\n" }, "base moves");
+    runGitFixture(root, ["update-ref", "refs/remotes/origin/main", X]);
+    runGitFixture(root, ["checkout", "-q", L]);
+    runGitFixture(root, ["merge", "-q", "--no-ff", "-m", "refresh base", "base-moves"]);
+    const head = String(runGitFixture(root, ["rev-parse", "HEAD"])).trim();
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: head, outcome: "locally_clear", nextStep: "push", items: [] });
+    assert.equal(await proof(root, head), null, "the plain delta record alone does not prove a clean cap round");
+    const result = await extend(root, head);
+    assert.deepEqual({ ...result, files: [...result.files].sort() }, { ok: true, action: "chain_extended", chainEnd: A, candidateHead: head, files: ["src/x.mjs"] });
+    assert.equal(readSealedGateDeltaRecord(tmp, A).extension, "delta_covered");
+    assert.ok(await proof(root, head));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
