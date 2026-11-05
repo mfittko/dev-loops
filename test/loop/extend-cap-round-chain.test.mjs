@@ -437,7 +437,10 @@ test("a clean cap round plus a logic commit refuses logic_commit_in_range and wr
   const { root, A } = await cleanCapFixture();
   try {
     const L = await commit(root, { "src/b.mjs": "export const b = 1;\n" }, "logic");
-    assert.equal((await extend(root, L)).reason, "logic_commit_in_range");
+    const refused = await extend(root, L);
+    assert.equal(refused.reason, "logic_commit_in_range");
+    assert.doesNotMatch(refused.detail, /act list and fixer files/u);
+    assert.match(refused.detail, /no act list/u);
     const recordPath = gateDeltaRecordPath(path.join(root, "tmp"), A);
     assert.equal(existsSync(recordPath), false);
     assert.equal(existsSync(`${recordPath}.seal`), false);
@@ -590,8 +593,24 @@ test("a code commit pushed after the covering delta refuses delta_range_mismatch
     const M = await commit(root, { "src/y.mjs": "export const y = 1;\n" }, "logic M");
     const result = await extend(root, M);
     assert.equal(result.reason, "delta_range_mismatch");
-    assert.match(result.detail, /pre-push-delta --baseline /u);
+    assert.match(result.detail, /gate-coordination/u);
     assert.equal(readSealedGateDeltaRecord(tmp, A).extension, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a record already sealed delta_covered for the head refuses proof_not_reached, not delta_range_mismatch, and keeps its bytes", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [], extension: "delta_covered" });
+    const before = readFileSync(gateDeltaRecordPath(tmp, A), "utf8");
+    const refused = await extend(root, L, { resolveProof: async () => null });
+    assert.equal(refused.reason, "proof_not_reached");
+    assert.match(refused.detail, /gate-coordination/u);
+    assert.equal(readFileSync(gateDeltaRecordPath(tmp, A), "utf8"), before);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -763,7 +782,7 @@ test("a logic commit after a delta_covered seal and a docs extension names the c
     const F = await commit(root, { "src/f.mjs": "export const f = 1;\n" }, "logic F");
     const refused = await extend(root, F);
     assert.equal(refused.ok, false);
-    assert.ok(refused.detail.includes(`baseline ${E}`), refused.detail);
+    assert.ok(refused.detail.includes(`for ${E.slice(0, 7)}..`), refused.detail);
     writeSealedGateDeltaRecord(tmp, E, { reviewBaselineHead: E, candidateHead: F, ...clear });
     // The delta at the chain end E extends the chain A..D..E, so the proof reaches F without a further seal.
     const ok = await extend(root, F);

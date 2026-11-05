@@ -128,7 +128,8 @@ export async function extendCapRoundChain(options, {
   };
   const sealedClearing = (base) => { try { const r = readSealedGateDeltaRecord(tmpRoot, base); return r && DELTA_CLEARING_NEXT_STEPS.includes(r.nextStep) ? r : null; } catch { return null; } };
   // ADR 0254: the remedy for a logic commit is a locally_clear pre-push delta bound to the chain end and the PR head, then this command again.
-  const deltaRemedy = (from) => `Run the pre-push delta for baseline ${from} at the PR head until its outcome is locally_clear (${CLI} loop pre-push-delta --baseline ${from} --result <result-file> --invocation <1-3> with the act list and fixer files; it writes the sealed record for ${from.slice(0, 7)}..${head.slice(0, 7)}), then rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}. ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} names the next action. If the baseline is orphaned, restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`;
+  // A clean cap round has no act list, so no pre-push delta producer exists for its code range (ADR 0254 Consequences): name the coordination step and the replacement-PR restart.
+  const deltaRemedy = (from) => cleanCap ? `A clean cap round has no act list, so no pre-push delta can produce a covering record for ${from.slice(0, 7)}..${head.slice(0, 7)}. Run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the next action, or restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}` : `Run the pre-push delta for baseline ${from} at the PR head until its outcome is locally_clear (${CLI} loop pre-push-delta --baseline ${from} --result <result-file> --invocation <1-3> with the act list and fixer files; it writes the sealed record for ${from.slice(0, 7)}..${head.slice(0, 7)}), then rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}. ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} names the next action. If the baseline is orphaned, restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`;
   // A sealed clearing record at `from` that did not seal the extension below covers another range or a non-locally_clear outcome: never a cover for from..head.
   const refuseLogic = (from, logic) => {
     const other = sealedClearing(from);
@@ -139,7 +140,10 @@ export async function extendCapRoundChain(options, {
   const onDisk = (base) => { try { return JSON.stringify(readRecord(tmpRoot, base)); } catch { return null; } };
   const sealDeltaCovered = async (start) => {
     const record = sealedClearing(start);
-    if (!record || String(record.candidateHead ?? "").toLowerCase() !== head || record.outcome !== "locally_clear" || record.extension) return null;
+    if (!record || String(record.candidateHead ?? "").toLowerCase() !== head || record.outcome !== "locally_clear") return null;
+    // Already sealed for this head: the proof fails for another condition, so a delta rerun cannot help. Write nothing.
+    if (record.extension === "delta_covered") return refuse("proof_not_reached", `the delta record for ${start.slice(0, 7)} already carries delta_covered for ${head.slice(0, 7)}, but the cap-round-fixed proof does not reach the head; nothing was written. Run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed condition`);
+    if (record.extension) return null;
     // Compare-before-write: the on-disk record must still be the one validated above, or a concurrent delta rerun would be overwritten by this stale copy.
     if (onDisk(start) !== JSON.stringify(record)) return refuse("record_changed", `the delta record for ${start.slice(0, 7)} changed on disk since it was validated; nothing was written. Rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}`);
     writeRecord(tmpRoot, start, { ...record, extension: "delta_covered" });
