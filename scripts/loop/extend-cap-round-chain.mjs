@@ -146,7 +146,7 @@ export async function extendCapRoundChain(options, {
     if (!record || String(record.candidateHead ?? "").toLowerCase() !== head || record.outcome !== "locally_clear") return null;
     // Already sealed with an extension for this head: the proof fails for another condition, so a delta rerun cannot help. Write nothing.
     if (record.extension) return refuse("proof_not_reached", `the delta record for ${start.slice(0, 7)} already carries ${record.extension} for ${head.slice(0, 7)}, but the cap-round-fixed proof does not reach the head; nothing was written. Run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed condition`);
-    // Compare-before-write: the on-disk record must still be the one validated above, or a concurrent delta rerun would be overwritten by this stale copy.
+    // Compare-before-write: narrows, but does not close, the race with a concurrent delta rerun (no lock, no compare-and-swap); a rerun that lands after this check is still overwritten by this stale copy.
     if (onDisk(start) !== JSON.stringify(record)) return refuse("record_changed", `the delta record for ${start.slice(0, 7)} changed on disk since it was validated; nothing was written. Rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}`);
     writeRecord(tmpRoot, start, { ...record, extension: "delta_covered" });
     const written = onDisk(start);
@@ -178,7 +178,7 @@ export async function extendCapRoundChain(options, {
     const present = (sha) => { try { git(repoRoot, ["cat-file", "-e", `${sha}^{commit}`]); return true; } catch { return false; } };
     const proveOrphan = () => { try { git(repoRoot, ["merge-base", "--is-ancestor", capHead, head]); return false; } catch (error) { return error?.status === 1 && present(capHead) && present(head); } };
     if (capHead && capHead.toLowerCase() !== head && proveOrphan()) return refuse("baseline_orphaned", CAP_ROUND_REFUSAL.baseline_orphaned);
-    return refuse("no_cap_round_chain", `PR #${pr} has no covering sealed cap-round clearing chain ending at an ancestor of ${head.slice(0, 7)}. Complete the cap round's fixer pass and run check-pre-push-delta.mjs --result for the cap-round baseline, or run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} and follow its next action`);
+    return refuse("no_cap_round_chain", `PR #${pr} has no covering sealed cap-round clearing chain ending at an ancestor of ${head.slice(0, 7)}. Complete the cap round's fixer pass and run check-pre-push-delta.mjs --result for the cap-round baseline, then rerun this command, or restart on a replacement PR. ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} routes this refusal back to this command, so the pre-push delta breaks the cycle, not gate-coordination`);
   }
 
   // A delta_covered or docs_tests_only record at the clean cap-round head already cleared capHead..its candidate: classify from that candidate, so a later docs commit extends instead of reclassifying cleared logic.

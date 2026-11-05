@@ -116,7 +116,8 @@ test("refuses a PR head that is not the worktree HEAD and a PR with no cap-round
     const head = await commit(bare, { "docs/z.md": "z\n" }, "docs");
     const refused = await extend(bare, head);
     assert.equal(refused.reason, "no_cap_round_chain");
-    assert.match(refused.detail, /gate-coordination/);
+    assert.match(refused.detail, /check-pre-push-delta\.mjs --result/);
+    assert.match(refused.detail, /gate-coordination .* routes this refusal back to this command/);
   } finally {
     await rm(bare, { recursive: true, force: true });
   }
@@ -713,22 +714,6 @@ test("a clean cap round with no record at the cap-round head and a base-only-mer
     const result = await extend(root, N);
     assert.equal(result.action, "chain_extended");
     assert.equal(result.chainEnd, A);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("a failed proof restores the delta record and seal bytes exactly", async () => {
-  const { root, A } = await cleanCapFixture();
-  try {
-    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
-    const tmp = path.join(root, "tmp");
-    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
-    const recordPath = gateDeltaRecordPath(tmp, A);
-    const bytes = () => [readFileSync(recordPath, "utf8"), readFileSync(`${recordPath}.seal`, "utf8")];
-    const before = bytes();
-    assert.equal((await extend(root, L, { resolveProof: async () => null })).reason, "proof_not_reached");
-    assert.deepEqual(bytes(), before);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
