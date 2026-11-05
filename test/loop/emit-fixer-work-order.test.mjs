@@ -3643,3 +3643,197 @@ test("issue 2787 C13/C14: resetting the worktree to the original candidate does 
     assert.equal(unit.workOrder.phase, "commit_only");
   });
 });
+
+// Issue 3111 AC1 + AC2: a no-commit commit_only emission after a refused delta result is append-only, so the delta coverage still binds.
+test("a same-head no-commit emission with a delta result keeps the plan and marker, and a delta re-invocation still binds to the original coverage", async () => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    const prior = await emit({ phase: "commit_only", deltaResult: undefined });
+    assert.equal(pull(prior, root).status, 0);
+    git(wt, "commit", "-q", "--allow-empty", "-m", "fixing F");
+    const fixing = git(wt, "rev-parse", "HEAD");
+    const report = prior.workOrder.outputRefs[0];
+    await mkdir(path.dirname(report), { recursive: true });
+    await writeFile(report, JSON.stringify({ headSha: fixing, siteCoverage: [{ fingerprint: ACT_REF, returnedSites: [], sites: [], noSitesReason: "  actual query returned nothing  " }] }));
+    const log = path.join(path.dirname(files.actList), "findings.json");
+    await writeFile(log, JSON.stringify({ headSha: head, provenance: { perAngle: [{ angle: "correctness" }] } }));
+    const args = ["--act-list", files.actList, "--baseline", head, "--worktree", wt, "--fixer-plan", prior.planPath, "--site-coverage", report];
+    const input = ["--spec-identity", "spec@1", "--findings-log", log, "--result-path", path.join(path.dirname(log), "delta-result.json")];
+    const first = await runCli([...args, ...input], { stdout: { write() {} } });
+    // The reviewer returned locally_clear for the fixing commit; the result check refused it, so the coordinator re-dispatches the fixer.
+    await writeFile(files.delta, JSON.stringify({ ...first.input.resultShape, actionableItems: first.input.actItems.map(({ ref }) => ({ ref, status: "resolved", evidence: ["focused check"] })), newFindings: [], widenedReads: [], outcome: "locally_clear" }));
+    sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta);
+    const planBytes = await readFile(prior.planPath), markerPath = path.join(root, "tmp/gate-delta", `${head}.sequence`), marker = await readFile(markerPath);
+    // The fixer re-dispatch after the refusal makes no commit.
+    const again = await emit({ phase: "commit_only", keepRecord: true });
+    assert.notEqual(again.planPath, prior.planPath);
+    assert.deepEqual(await readFile(prior.planPath), planBytes, "the bound plan is not superseded");
+    assert.deepEqual(await readFile(markerPath), marker, "the sequence marker keeps the original execution");
+    assert.equal((await locateFixerUnit({ ref: again.workOrderRef, cwd: wt, tmpRoots: [path.join(root, "tmp")] })).stale, undefined, "the new order is locatable and not stale");
+    assert.equal(pull(again, root).status, 0, "the keyed order stays pullable");
+    assert.equal((await locateFixerUnit({ ref: prior.workOrderRef, cwd: wt, tmpRoots: [path.join(root, "tmp")] })).stale, undefined, "the original unit is not superseded");
+    const rerun = await runCli([...args, ...input], { stdout: { write() {} } });
+    assert.deepEqual(rerun.input.origin, first.input.origin, "the re-invocation binds the original execution");
+    assert.equal(rerun.input.origin.executionIdentity, prior.executionIdentity);
+  });
+});
+
+// Setup shared by the issue 3111 tests: a pulled first fixer, a fixing commit and a delta result of `outcome` for it.
+async function refusedDeltaFixture({ root, wt, head, files, emit }, outcome, candidateOf = (fixing) => fixing, originOf = (prior) => prior.executionIdentity) {
+  const prior = await emit({ phase: "commit_only", deltaResult: undefined });
+  assert.equal(pull(prior, root).status, 0);
+  git(wt, "commit", "-q", "--allow-empty", "-m", "fixing F");
+  const report = prior.workOrder.outputRefs[0];
+  await mkdir(path.dirname(report), { recursive: true });
+  const handback = JSON.stringify({ headSha: git(wt, "rev-parse", "HEAD"), siteCoverage: [{ fingerprint: ACT_REF, returnedSites: [], sites: [], noSitesReason: "none" }] });
+  await writeFile(report, handback);
+  const originIdentity = originOf(prior);
+  const binding = { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex(JSON.parse(handback).siteCoverage).slice(7), handbackBytesDigest: sha256Hex(Buffer.from(handback)).slice(7),
+    origin: { workOrderRef: prior.workOrderRef.replace(prior.executionIdentity, originIdentity), workOrderDigest: prior.workOrderDigest, executionIdentity: originIdentity } };
+  const delta = clearingDeltaFor(head, { candidateHead: candidateOf(git(wt, "rev-parse", "HEAD")), outcome, ...binding });
+  await writeFile(files.delta, JSON.stringify(delta));
+  sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta);
+  return { prior, tmpRoots: [path.join(root, "tmp")], markerPath: path.join(root, "tmp/gate-delta", `${head}.sequence`) };
+}
+
+test("issue 3111: a needs_fix re-dispatch with a committing second fixer still supersedes the plan and rewrites the marker", async () => {
+  await withFixture(async (fx) => {
+    const { prior, tmpRoots, markerPath } = await refusedDeltaFixture(fx, "needs_fix");
+    const marker = await readFile(markerPath);
+    const again = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.equal(again.planPath, prior.planPath, "the canonical plan is overwritten");
+    assert.notDeepEqual(await readFile(markerPath), marker, "the marker names the new execution");
+    assert.match((await locateFixerUnit({ ref: prior.workOrderRef, cwd: fx.wt, tmpRoots })).stale, /superseded/);
+  });
+});
+
+test("issue 3111: a keyed plan is stale once its parent is superseded or closed", async () => {
+  const { sequenceClosurePath } = await import("@dev-loops/core/loop/fix-push-authority");
+  await withFixture(async (fx) => {
+    const { prior, tmpRoots } = await refusedDeltaFixture(fx, "locally_clear");
+    const keyed = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.notEqual(keyed.planPath, prior.planPath);
+    assert.equal((await locateFixerUnit({ ref: keyed.workOrderRef, cwd: fx.wt, tmpRoots })).stale, undefined);
+    const closure = sequenceClosurePath(tmpRoots[0], fx.head, prior.executionIdentity);
+    await mkdir(path.dirname(closure), { recursive: true });
+    await writeFile(closure, "{}\n");
+    assert.match((await locateFixerUnit({ ref: keyed.workOrderRef, cwd: fx.wt, tmpRoots })).stale, /closed/);
+  });
+  await withFixture(async (fx) => {
+    const { prior, tmpRoots } = await refusedDeltaFixture(fx, "locally_clear");
+    const keyed = await fx.emit({ phase: "commit_only", keepRecord: true });
+    // A later canonical emission supersedes the parent, so the keyed order is orphaned.
+    await fx.emit({ phase: "commit_only", deltaResult: undefined });
+    assert.match((await locateFixerUnit({ ref: keyed.workOrderRef, cwd: fx.wt, tmpRoots })).stale, /orphaned/);
+  });
+});
+
+test("issue 3111: a locally_clear re-emission outside an in-flight sequence (no first handback) supersedes the plan and rewrites the marker", async () => {
+  await withFixture(async (fx) => {
+    const { prior, markerPath } = await refusedDeltaFixture(fx, "locally_clear");
+    await rm(prior.workOrder.outputRefs[0]);
+    const marker = await readFile(markerPath);
+    const again = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.equal(again.planPath, prior.planPath, "the canonical plan is reused");
+    assert.notDeepEqual(await readFile(markerPath), marker, "the marker names the new execution");
+  });
+});
+
+test("issue 3111: only the newest keyed plan of a parent is current", async () => {
+  await withFixture(async (fx) => {
+    const { tmpRoots } = await refusedDeltaFixture(fx, "locally_clear");
+    const k1 = await fx.emit({ phase: "commit_only", keepRecord: true });
+    const k2 = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.equal((await locateFixerUnit({ ref: k2.workOrderRef, cwd: fx.wt, tmpRoots })).stale, undefined);
+    assert.match((await locateFixerUnit({ ref: k1.workOrderRef, cwd: fx.wt, tmpRoots })).stale, /newer keyed plan/);
+  });
+});
+
+// The Write/Edit grant mirrors the keyed staleness of locateFixerUnit (a keyed plan file is never overwritten).
+const keyedGrantFixture = async (fx, over) => {
+  const { prior } = await refusedDeltaFixture(fx, "locally_clear");
+  const keyed = await fx.emit({ phase: "commit_only", keepRecord: true });
+  assert.equal(pull(keyed, fx.root).status, 0);
+  const out = keyed.workOrder.outputRefs[0];
+  assert.equal(hook(fx.wt, out), "allow", "a current pulled keyed fixer holds its grant");
+  await over({ prior, keyed });
+  assert.equal(hook(fx.wt, out), "deny");
+};
+
+test("issue 3111: a keyed fixer loses its Write/Edit grant when a newer same-parent keyed plan is emitted", async () => {
+  await withFixture((fx) => keyedGrantFixture(fx, () => fx.emit({ phase: "commit_only", keepRecord: true })));
+});
+
+test("issue 3111: a keyed fixer loses its Write/Edit grant when a canonical emission supersedes its parent", async () => {
+  await withFixture((fx) => keyedGrantFixture(fx, () => fx.emit({ phase: "commit_only", deltaResult: undefined })));
+});
+
+test("issue 3111: a keyed fixer loses its Write/Edit grant when its parent sequence is closed", async () => {
+  await withFixture((fx) => keyedGrantFixture(fx, ({ prior }) => writeClosure(path.join(fx.root, "tmp"), fx.head, prior.executionIdentity)));
+});
+
+test("issue 3111: an invalid JSON keyed plan is an integrity refusal, not a superseded ref", async () => {
+  await withFixture(async (fx) => {
+    const { tmpRoots } = await refusedDeltaFixture(fx, "locally_clear");
+    const keyed = await fx.emit({ phase: "commit_only", keepRecord: true });
+    await writeFile(keyed.planPath, "{ truncated");
+    await assert.rejects(locateFixerUnit({ ref: keyed.workOrderRef, cwd: fx.wt, tmpRoots }), (error) => error.refusal === "local_materialization_integrity_failure");
+  });
+});
+
+test("issue 3111: a locally_clear result whose candidate is the baseline or not the worktree HEAD supersedes the plan and rewrites the marker", async () => {
+  for (const pick of ["baseline", "other"]) {
+    await withFixture(async (fx) => {
+      const { prior, markerPath } = await refusedDeltaFixture(fx, "locally_clear", () => (pick === "baseline" ? fx.head : "a".repeat(40)));
+      const marker = await readFile(markerPath);
+      const again = await fx.emit({ phase: "commit_only", keepRecord: true });
+      assert.equal(again.planPath, prior.planPath, `${pick}: the canonical plan is reused`);
+      assert.notDeepEqual(await readFile(markerPath), marker, `${pick}: the marker names the new execution`);
+    });
+  }
+});
+
+test("issue 3111: a locally_clear result sealed for another execution supersedes the plan and rewrites the marker", async () => {
+  await withFixture(async (fx) => {
+    const { prior, markerPath } = await refusedDeltaFixture(fx, "locally_clear", undefined, () => nextExecution());
+    const marker = await readFile(markerPath);
+    const again = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.equal(again.planPath, prior.planPath, "the canonical plan is reused");
+    assert.notDeepEqual(await readFile(markerPath), marker, "the marker names the new execution");
+  });
+});
+
+test("issue 3111: a corrupt same-parent newer keyed sibling marks the older keyed ref stale and refuses its own locate", async () => {
+  await withFixture(async (fx) => {
+    const { tmpRoots } = await refusedDeltaFixture(fx, "locally_clear");
+    const k1 = await fx.emit({ phase: "commit_only", keepRecord: true });
+    const k2 = await fx.emit({ phase: "commit_only", keepRecord: true });
+    await writeFile(k2.planPath, "{ truncated");
+    assert.match((await locateFixerUnit({ ref: k1.workOrderRef, cwd: fx.wt, tmpRoots })).stale, /newer keyed plan/);
+    await assert.rejects(locateFixerUnit({ ref: k2.workOrderRef, cwd: fx.wt, tmpRoots }), (error) => error.refusal === "local_materialization_integrity_failure");
+  });
+});
+
+test("issue 3111: a parent closure landing between locate and the receipt write refuses a keyed pull stale_dispatch", async () => {
+  const { WORK_ORDER_ROLES } = await import("../../scripts/github/_work-order-protocol.mjs");
+  await withFixture(async (fx) => {
+    const { prior, tmpRoots } = await refusedDeltaFixture(fx, "locally_clear");
+    const keyed = await fx.emit({ phase: "commit_only", keepRecord: true });
+    const located = await locateFixerUnit({ ref: keyed.workOrderRef, cwd: fx.wt, tmpRoots });
+    assert.equal(located.stale, undefined);
+    await writeClosure(tmpRoots[0], fx.head, prior.executionIdentity);
+    let wrote = false;
+    await assert.rejects(WORK_ORDER_ROLES.get("fixer").admit(located, async () => { wrote = true; }), (error) => error.refusal === "stale_dispatch");
+    assert.equal(wrote, false);
+  });
+});
+
+test("issue 3111: a keyed fixer that commits exits through a canonical re-emission without a delta result", async () => {
+  await withFixture(async (fx) => {
+    const { prior, tmpRoots } = await refusedDeltaFixture(fx, "locally_clear");
+    const keyed = await fx.emit({ phase: "commit_only", keepRecord: true });
+    git(fx.wt, "commit", "-q", "--allow-empty", "-m", "keyed fixer commit");
+    const canonical = await fx.emit({ phase: "commit_only", deltaResult: undefined });
+    assert.equal(canonical.planPath, prior.planPath, "the canonical plan names the new execution");
+    assert.match((await locateFixerUnit({ ref: keyed.workOrderRef, cwd: fx.wt, tmpRoots })).stale, /orphaned/);
+  });
+});

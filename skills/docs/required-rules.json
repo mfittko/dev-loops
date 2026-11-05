@@ -538,7 +538,7 @@
     {
       "id": "GATE-EXEC-ROUND-CAP-CHAIN-EXTEND",
       "enforcement": "runtime",
-      "enforcementNote": "Enforced by extend-cap-round-chain.mjs, which refuses any commit after the chain end that is not docs or tests and verifies the extension with resolveCapRoundFixed; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+      "enforcementNote": "Enforced by extend-cap-round-chain.mjs, which refuses any commit after the start of the logic range that is not docs or tests unless a sealed locally_clear pre-push delta covers it (delta_covered), and verifies the extension with resolveCapRoundFixed; the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-ROUND-CAP-THREAD-ROUTE",

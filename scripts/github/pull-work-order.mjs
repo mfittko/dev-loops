@@ -14,7 +14,7 @@ import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement"
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { EXECUTION_IDENTITY_RE, WorkOrderRefusal, executionIndexPath, pullWorkOrder, registerWorkOrderRole, workOrderDigest } from "./_work-order-protocol.mjs";
 import { buildGateEmitPlanPath } from "./write-gate-context.mjs";
-import { fixerPlanPath } from "../loop/emit-fixer-work-order.mjs"; // also registers the fixer role adapter
+import { fixerPlanPath, keyedFixerPlanPathForRef } from "../loop/emit-fixer-work-order.mjs"; // also registers the fixer role adapter
 import { TOOLCHAIN_ROOT, isOtherDevLoopsCheckout, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveMainWorktreeRoot } from "../loop/_repo-root-resolver.mjs";
 import "../loop/emit-judge-work-order.mjs"; // registers the judge role adapter
 import "../loop/emit-coordinator-work-order.mjs"; // registers the coordinator role adapter
@@ -96,9 +96,11 @@ function fixerAuthorityWorktree(tmpRoot, execution, mainRoot) {
     // Only the toolchain's own main checkout owns a worktree list this lookup may search.
     if (realpathSync(path.dirname(tmpRoot)) !== realpathSync(mainRoot)) return null;
     const { workOrderRef, workOrderDigest: indexedDigest } = JSON.parse(readFileSync(executionIndexPath(tmpRoot, execution), "utf8"));
-    const planPath = fixerPlanPath(workOrderRef, tmpRoot);
-    if (!planPath) return null;
-    const plan = JSON.parse(readFileSync(planPath, "utf8"));
+    const canonical = fixerPlanPath(workOrderRef, tmpRoot);
+    if (!canonical) return null;
+    // A keyed plan (issue 3111) lives beside the canonical plan; the ref names which one this execution belongs to.
+    let plan = JSON.parse(readFileSync(canonical, "utf8"));
+    if (plan.workOrderRef !== workOrderRef) plan = JSON.parse(readFileSync(keyedFixerPlanPathForRef(workOrderRef, tmpRoot), "utf8"));
     // The ref carries no digest: authenticate the plan's order against the indexed digest before trusting its branch.
     if (plan.workOrderRef !== workOrderRef || workOrderDigest(plan.workOrder) !== indexedDigest) return null;
     const branch = plan.workOrder?.mutationAuthority?.branch;

@@ -892,3 +892,35 @@ test("issue 2787 C12: the sealed delta record carries findings[] only when a fix
     assert.deepEqual(readSealedGateDeltaRecord(tmpRoot, B).findings, [{ severity: "high", summary: "new bug", evidence: "a; b", site: "x.mjs:1" }]);
   } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
 });
+
+// Issue 3111 AC1: a locally_clear result refused for a stale-surface hit, a no-commit fixer re-emission, then the corrected result still binds to the original execution.
+test("a refused locally_clear result followed by a no-commit re-emission keeps the original coverage binding", async () => {
+  const { emitFixerWorkOrder } = await import("../../scripts/loop/emit-fixer-work-order.mjs");
+  const { dir, actList, result } = fixture();
+  const seam = withStale(B);
+  const argv = ["--act-list", actList, "--baseline", A, "--result", result, "--invocation", "1"];
+  const first = await boundArgs(argv, seam);
+  const refused = await runDeltaCli(first.args, first.seam);
+  assert.equal(refused.nextStep, "fix_and_rereview");
+  assert.match(refused.errors.join("\n"), /PRE-PUSH-DELTA-RESULT/);
+  sealDeltaFixture(resolveGateArtifactTmpRoot(coverageRepo), result);
+  const planBytes = fs.readFileSync(first.unit.planPath);
+  const again = await emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "commit_only", actListFile: actList, gate: "draft_gate", cwd: coverageRepo, deltaResult: result,
+    fetchPr: async () => ({ headRefName: "issue-1", headRefOid: A }), fetchVerdictMarkers: async () => ({ draft_gate: { visible: true, contractComplete: true } }), executionIdentity: `f${Date.now() + 1}-0000beef` });
+  assert.notEqual(again.planPath, first.unit.planPath);
+  assert.deepEqual(fs.readFileSync(first.unit.planPath), planBytes, "the bound plan is not superseded");
+  const base = JSON.parse(fs.readFileSync(result, "utf8"));
+  const corrected = path.join(dir, "corrected.json");
+  fs.writeFileSync(corrected, JSON.stringify({ ...base, newFindings: [{ severity: "low", summary: "stale pin in test/contracts/style.test.mjs", evidence: ["e"] }] }));
+  sealDeltaFixture(seam.tmpRoot, corrected);
+  const args = [...first.args];
+  args[args.indexOf("--result") + 1] = corrected;
+  args[args.indexOf("--invocation") + 1] = "2";
+  const done = await runDeltaCli(args, first.seam);
+  assert.equal(done.nextStep, "push");
+  assert.deepEqual(JSON.parse(fs.readFileSync(corrected, "utf8")).origin, first.binding.origin);
+  // The reviewer-input run after the re-emission still authenticates against the original execution.
+  const inputArgs = ["--act-list", actList, "--baseline", A, "--spec-identity", "s", "--findings-log", logFor(A), "--worktree", coverageRepo, "--fixer-plan", first.unit.planPath, "--site-coverage", first.output, "--result-path", path.join(dir, "next-result.json")];
+  const input = await runDeltaCli(inputArgs, first.seam);
+  assert.deepEqual(input.input.origin, first.binding.origin);
+});

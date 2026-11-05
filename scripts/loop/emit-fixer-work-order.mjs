@@ -8,7 +8,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { readFile, rename, rm } from "node:fs/promises";
+import { readFile, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -63,12 +63,12 @@ check-pre-push-delta --result), and any non-clearing record for the head refuses
 the PR's own head branch (gh pr view headRefName) and the --allowed-path selectors
 (default "." = the whole repository). A PR head other than --head-sha refuses.
 An --act-list-file source also refuses with verdict_not_posted until the --gate verdict review for --head-sha is posted on the PR (GATE-EXEC-POST-BEFORE-FIX; post it with dev-loops gate upsert-verdict --findings-ledger).
-A commit_only or full emission writes its sequence marker under the head's sequence lock; while a concurrent close or pull holds that lock it refuses with sequence_lock_busy (retryable: no work order was made current, re-run the same emit once the close or pull finishes).
+A commit_only or full emission writes its sequence marker under the head's sequence lock (the keyed no-commit re-emission below writes none); while a concurrent close or pull holds that lock it refuses with sequence_lock_busy (retryable: no work order was made current, re-run the same emit once the close or pull finishes).
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
 (default: the main checkout's tmp/; an explicit --tmp-root inside a linked worktree is refused) and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef }.
 joinRef is the path for gate wait-for-units --artifact (with --after <planPath>): a full-phase fixer's final-on-write report (<outputRef>.report), else the outputRef.
-Each run supersedes the previous emission for this PR. Dispatch the printed
+Each run supersedes the previous emission for this PR, except a same-head no-commit commit_only re-emission with a locally_clear --delta-result sealed for the canonical plan's execution: it writes fixer-emit-plan.<executionIdentity>.json beside the canonical plan, writes no sequence marker and prints that keyed path as planPath (a join target, never a delta --fixer-plan). Dispatch the printed
 dispatchPayload (the --harness adapter call carrying only dispatchPrompt) unchanged; an
 unsupported harness refuses. The only operator input is --operator-focus-file, a JSON file { round?: string, items?: [{ fingerprint, decision }] }
 that renders as a bounded, sanitized "Operator focus" section and is pinned by the digest (GATE-EXEC-OPERATOR-FOCUS).
@@ -81,6 +81,7 @@ Exit codes: 0 emitted, 1 refused (missing or conflicting source or authority), 2
 const FIXER_REF_RE = /^fixer:([^/\s#]+\/[^/\s#]+)#(\d+):([0-9a-f]{40}|[0-9a-f]{64}):(f(\d+)-[0-9a-f]{8})$/;
 const FIXER_PHASES = ["commit_only", "full"];
 const PLAN_FILE = "fixer-emit-plan.json";
+const keyedFixerPlanPath = (dir, executionIdentity) => path.join(dir, `fixer-emit-plan.${executionIdentity}.json`);
 // Pinned fixer contracts: the work order digest changes when one changes.
 const FIXER_CONTRACTS = ["agents/fixer.agent.md", "skills/docs/gate-review-sub-loop-contract.md", "skills/docs/validation-policy.md", "skills/docs/copilot-loop-operations.md"];
 const PACKAGE_ROOT = new URL("../../", import.meta.url);
@@ -773,8 +774,20 @@ export async function emitFixerWorkOrder({
   await writeExecutionIndex(tmpRoot, identityTriple);
   const plan = { ...identityTriple, materializationHash: materializationHash(text), promptPath, dispatchPrompt, workOrder };
   // Atomic: a concurrent pull never reads a half-written plan. One plan per PR names the only current unit.
+  // Issue 3111: a same-head commit_only re-emission with a delta result is a no-commit emission after a refused delta result. It lands
+  // beside the plan, never over it, so the delta coverage the original execution bound stays authentic; it writes no sequence marker.
+  const prior = phase === "commit_only" && actListFile && delta && originalBytes ? JSON.parse(originalBytes).workOrder : null;
+  // The delta sequence is in flight when the delta result reviewed the unpushed fixing commit (its candidate is the worktree HEAD, not the baseline) and the first fixer delivered its handback.
+  // Only the refused PRE-PUSH-DELTA-RESULT case (a locally_clear result) is append-only; a needs_fix / fix_and_rereview re-dispatch is a committing second fixer and supersedes the plan.
+  const appendOnly = prior?.phase === "commit_only" && prior.source === "act-list" && prior.headSha === headSha && prior.gate === gate
+    && delta.parsed.outcome === "locally_clear"
+    && delta.parsed.origin?.executionIdentity === JSON.parse(originalBytes).executionIdentity
+    && delta.parsed.candidateHead !== headSha && delta.parsed.candidateHead === gitIn(cwd, "rev-parse", "HEAD").trim()
+    && Boolean(await capture.read(prior.outputRefs?.[0]));
+  const livePlanPath = appendOnly ? keyedFixerPlanPath(dir, executionIdentity) : planPath;
   const tempPath = `${planPath}.tmp-${executionIdentity}`;
-  await capture.write(tempPath, `${JSON.stringify(plan, null, 2)}\n`);
+  // A keyed plan records its parent execution; locateFixerUnit reports it stale once the parent is superseded or closed.
+  await capture.write(tempPath, `${JSON.stringify(appendOnly ? { ...plan, parentExecutionIdentity: JSON.parse(originalBytes).executionIdentity } : plan, null, 2)}\n`);
   await capture.recheck();
   rejectOriginalRetirement();
   recheckCandidate();
@@ -790,15 +803,15 @@ export async function emitFixerWorkOrder({
       if (oldPlan) await rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr, headSha, tmpRoot });
       // PRE-PUSH-DELTA-PUSH-AUTHORITY: a full emission that skips the delta check never overwrites an ungranted commit_only sequence at this head.
       if (phase === "full" && (reviewId || ciFile) && readSequenceMarker(markerRoot, headSha)?.fullGranted === false) throw new Refusal(`a commit_only sequence is active at ${headSha} and its candidate has no delta review; a ${ciFile ? "--ci-file" : "--review-id"} full emission would grant the push of that unreviewed candidate. Run the delta review and emit the full phase of that sequence, or close it with scripts/loop/close-gate-sequence.mjs, then re-emit`);
-      await rename(tempPath, planPath);
-      writeSequenceMarker({ tmpRoot: markerRoot, baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName, execution: { executionIdentity, workOrderRef: identityTriple.workOrderRef, outputRef } });
+      await rename(tempPath, livePlanPath);
+      if (!appendOnly) writeSequenceMarker({ tmpRoot: markerRoot, baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName, execution: { executionIdentity, workOrderRef: identityTriple.workOrderRef, outputRef } });
     });
   } catch (error) {
     if (error?.code === "SEQUENCE_LOCK_BUSY") throw new WorkOrderRefusal("sequence_lock_busy", `sequence_lock_busy: ${error.message}; no work order was made current, so re-run the emit once the concurrent close or pull finishes`, true);
     throw error;
   }
   // The coordinator's gate wait-for-units --artifact path: a full-phase fixer's final-on-write report (ADR 0223), else the hand-back itself.
-  return { ...plan, planPath, joinRef: phase === "full" && !ciFile ? fixerReportPath(outputRef) : outputRef };
+  return { ...plan, planPath: livePlanPath, joinRef: phase === "full" && !ciFile ? fixerReportPath(outputRef) : outputRef };
   } finally { await capture.release(); }
 }
 
@@ -881,6 +894,18 @@ export function fixerPlanPath(ref, tmpRoot) {
   return match ? path.join(buildFixerDir({ repo: match[1], pr: match[2], tmpRoot }), PLAN_FILE) : null;
 }
 
+/** The keyed plan path (issue 3111) for a fixer ref under `tmpRoot`, or null when the ref is not a fixer ref. Never a delta `--fixer-plan`. */
+export function keyedFixerPlanPathForRef(ref, tmpRoot) {
+  const match = FIXER_REF_RE.exec(ref);
+  return match ? keyedFixerPlanPath(buildFixerDir({ repo: match[1], pr: match[2], tmpRoot }), match[4]) : null;
+}
+
+// One plan read: only an absent file is absent; invalid JSON is an integrity refusal, any other I/O error rethrows.
+const readPlanFile = (planPath) => readJson(planPath).catch((err) => {
+  if (!(err instanceof SyntaxError)) throw err;
+  throw new WorkOrderRefusal("local_materialization_integrity_failure", `fixer emit plan ${planPath} is not valid JSON; re-emit the fixer work order, never hand-repair the plan`);
+});
+
 const closedText = (executionIdentity) => `fixer execution ${executionIdentity} belongs to a gate fix sequence that was closed as abandoned`;
 /** True when a closure record exists for the execution at any head; only ENOENT means not closed. */
 const closureRecorded = async (root, heads, executionIdentity) => {
@@ -898,20 +923,24 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
   let newest = null;
   for (const tmpRoot of tmpRoots) {
     const planPath = path.join(buildFixerDir({ repo, pr, tmpRoot }), PLAN_FILE);
-    const plan = await readJson(planPath).catch((err) => {
-      if (!(err instanceof SyntaxError)) throw err;
-      throw new WorkOrderRefusal("local_materialization_integrity_failure", `fixer emit plan ${planPath} is not valid JSON; re-emit the fixer work order, never hand-repair the plan`);
-    });
+    const plan = await readPlanFile(planPath);
     if (!plan) continue;
     if (!newest || emittedAt(plan.executionIdentity) > emittedAt(newest.executionIdentity)) newest = plan;
     if (plan.workOrderRef === ref) own ??= { plan, planPath };
+  }
+  // A no-commit emission (issue 3111) lives in its own keyed plan and never supersedes the current plan.
+  let keyed = false;
+  if (!own) for (const tmpRoot of tmpRoots) {
+    const planPath = keyedFixerPlanPath(buildFixerDir({ repo, pr, tmpRoot }), executionIdentity);
+    const plan = await readPlanFile(planPath);
+    if (plan?.workOrderRef === ref) { own = { plan, planPath }; keyed = true; break; }
   }
   if (!own) {
     return newest && emittedAt(executionIdentity) <= emittedAt(newest.executionIdentity)
       ? { stale: `fixer ref ${ref} was superseded by ${newest.workOrderRef}` } : null;
   }
   const { plan, planPath } = own;
-  if (newest.workOrderRef !== ref) return { stale: `fixer ref ${ref} was superseded by ${newest.workOrderRef}` };
+  if (!keyed && newest.workOrderRef !== ref) return { stale: `fixer ref ${ref} was superseded by ${newest.workOrderRef}` };
   const order = plan.workOrder ?? {};
   if (order.operation === "complete") {
     const error = completeAdmissionError(order);
@@ -956,7 +985,21 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
   const origin = order.completesExecution;
   const sequenceClosed = !closureOnly && await closureRecorded(closureRoot, closureHeads, executionIdentity);
   const originClosed = !closureOnly && origin && await closureRecorded(closureRoot, origin.heads, origin.executionIdentity);
-  const stale = (sequenceClosed && closedText(executionIdentity))
+  const parentId = keyed ? plan.parentExecutionIdentity : null;
+  // One current keyed unit per parent: a newer keyed plan with the same parent supersedes this one.
+  let newerKeyed = null;
+  if (keyed) for (const name of await readdir(path.dirname(planPath)).catch(() => [])) {
+    const id = /^fixer-emit-plan\.(f\d+-[0-9a-f]{8})\.json$/.exec(name)?.[1];
+    if (!id || emittedAt(id) <= emittedAt(executionIdentity)) continue;
+    // A newer sibling that does not parse fails closed: it counts as superseding, and its own locate still refuses with the integrity failure.
+    const sibling = await readPlanFile(path.join(path.dirname(planPath), name)).catch((err) => (err instanceof WorkOrderRefusal ? null : Promise.reject(err)));
+    if (!sibling || sibling.parentExecutionIdentity === parentId) newerKeyed = id;
+  }
+  const parentStale = keyed && (!parentId || newest?.executionIdentity !== parentId
+    ? `keyed fixer ref ${ref} is orphaned: its parent execution ${parentId} is no longer the current plan`
+    : newerKeyed ? `keyed fixer ref ${ref} was superseded by a newer keyed plan ${newerKeyed} for the same parent`
+    : !closureOnly && await closureRecorded(closureRoot, closureHeads, parentId) && closedText(parentId));
+  const stale = parentStale || (sequenceClosed && closedText(executionIdentity))
     || (originClosed && closedText(origin.executionIdentity))
     || (changed.length > 0 && `required fixer source(s) ${changed.join(", ")} changed or vanished since emission; re-emit against current authority`)
     || (retired && `fixer execution ${executionIdentity} belongs to a ${order.gate} round at ${headSha} retired as ${retired}`)
@@ -972,7 +1015,8 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
     stale: stale || undefined,
     closureRoot,
     closureHeads,
-    closureOrigin: origin,
+    // A keyed plan's parent is its closure origin, so admission rechecks the parent closure under the sequence lock.
+    closureOrigin: keyed && parentId ? { heads: closureHeads, executionIdentity: parentId } : origin,
   };
 }
 
