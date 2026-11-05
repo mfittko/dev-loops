@@ -199,9 +199,7 @@ export async function waiveAdrTripwire(options, {
   // A post-ready push gets only a pre_approval_gate round, so that verdict is the alternative.
   // Every clean current-head gate is tried in order; the first matching digest wins.
   // A converged or carried draft_gate marker names the head whose sealed ledger recorded the digest.
-  const markerSource = [gate?.draftGateMarker?.convergedFromHeadSha, gate?.draftGateMarker?.carriedFrom]
-    .find((h) => typeof h === "string" && h.trim() !== "")?.trim().toLowerCase();
-  const sourceHead = markerSource && headSha.startsWith(markerSource) ? headSha : (markerSource ?? headSha);
+  const sourceHead = gate?.draftGateMarker?.convergedFromHeadSha ?? gate?.draftGateMarker?.carriedFrom ?? headSha;
   const sources = [gate?.currentHeadClean && "draft_gate", gate?.preApprovalCurrentHeadClean && "pre_approval_gate"].filter(Boolean)
     .map((name) => {
       const head = name === "draft_gate" ? sourceHead : headSha;

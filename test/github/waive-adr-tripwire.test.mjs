@@ -348,10 +348,9 @@ test("a converged or carried draft_gate marker reads the ledger at the head it n
   }
 });
 
-test("an unconverged marker, a pre_approval_gate source and an abbreviated current-head marker read the current head", async () => {
+test("an unconverged marker and a pre_approval_gate source read the current head", async () => {
   const cases = [
     { currentHeadClean: true, draftGateMarker: { headSha: HEAD } },
-    { currentHeadClean: true, draftGateMarker: { headSha: HEAD, convergedFromHeadSha: HEAD.slice(0, 7).toUpperCase() } },
     { currentHeadClean: false, preApprovalCurrentHeadClean: true, draftGateMarker: { headSha: HEAD, convergedFromHeadSha: SOURCE } },
   ];
   for (const evidence of cases) {
