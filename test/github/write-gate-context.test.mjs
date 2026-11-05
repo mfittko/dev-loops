@@ -9498,3 +9498,19 @@ test("a clean cap round is proven only by a sealed record with extension docs_te
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+test("a clean cap round accepts extension delta_covered like docs_tests_only and refuses an unknown extension (#3105)", async () => {
+  const { repoRoot, baseSha } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 62, headSha: "9".repeat(40), anyHead: true };
+    await seedClosedRounds(repoRoot, 62, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-62", `draft_gate-${baseSha}.json`);
+    await writeFile(ledger, JSON.stringify({ ...JSON.parse(await readFile(ledger, "utf8")), verdict: "clean", findings: [] }), "utf8");
+    await writeDeltaRecord(repoRoot, baseSha, opts.headSha, "push", { items: [], extension: "bogus" });
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot }), null, "an unknown extension proves nothing");
+    await writeDeltaRecord(repoRoot, baseSha, opts.headSha, "push", { items: [], extension: "delta_covered" });
+    assert.equal((await resolveCapRoundFixed(opts, { repoRoot })).log.headSha, baseSha);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
