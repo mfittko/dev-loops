@@ -17,7 +17,7 @@ const OWNERS = {
 };
 const RULE_OUTCOME = {
   "GATE-EXEC-JUDGE-PRIME-AUTHORITY": /the judge decides it/,
-  "GATE-EXEC-LOW-FIX-UNTIL-CAP": /At or past the cap it becomes `defer`/,
+  "GATE-EXEC-LOW-FIX-UNTIL-CAP": /At `pre_approval_gate` it becomes `defer`/,
   "GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE": /`merge-pr.mjs` refuses until a fresh human APPROVED review or the head-pinned `approve merge <sha>` line/,
   "GATE-EXEC-OPERATOR-LINE-RELEASE-PUBLISH": /no agent pushes a stable tag or publishes/,
   "ADR-OVER-WAIVER": /the orchestrator adds the ADR to the PR/,
@@ -70,7 +70,7 @@ test("the low/nit refusal and coercion code is pinned to the rule text", async (
 
 // A paraphrased restatement of a rule outcome is a second definition even when no verbatim body is pasted (AC10).
 const OUTCOME_PHRASES = {
-  "GATE-EXEC-LOW-FIX-UNTIL-CAP": [/at or past the cap\b.{0,80}\bdefer\b/i, /\bdefer\b.{0,80}at or past the cap\b/i, /\bfrom round 2\b.{0,80}\bnit\b/i, /\bnit\b.{0,80}\bfrom round 2\b/i, /\bis `act` below the round cap/i, /promoted to `medium`/i],
+  "GATE-EXEC-LOW-FIX-UNTIL-CAP": [/at `pre_approval_gate`.{0,80}\bdefer\b/i, /\bdefer\b.{0,80}at `pre_approval_gate`/i, /\bfrom round 2\b.{0,80}\bnit\b/i, /\bnit\b.{0,80}\bfrom round 2\b/i, /\bis `act` below the round cap/i, /promoted to `medium`/i],
 };
 
 test("S1 rule outcome phrases appear under agents/ and skills/ only in the owning rule line", () => {
@@ -87,5 +87,5 @@ test("S1 rule outcome phrases appear under agents/ and skills/ only in the ownin
     }
   }
   // Negative fixture: the judge-brief wording this guard exists for is detected.
-  assert.match("at or past the cap a `low` is `defer`", OUTCOME_PHRASES["GATE-EXEC-LOW-FIX-UNTIL-CAP"][0]);
+  assert.match("at `pre_approval_gate` a `low` is `defer`", OUTCOME_PHRASES["GATE-EXEC-LOW-FIX-UNTIL-CAP"][0]);
 });

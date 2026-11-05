@@ -8,10 +8,11 @@ const read = (rel) => readFile(new URL(`../../${rel}`, import.meta.url), "utf8")
 test("GATE-EXEC-ROUND-CAP states the cap-round fix, the ready transition and the round N+1 refusal", async () => {
   const contract = await read("skills/docs/gate-review-sub-loop-contract.md");
   const rule = contract.split("<!-- rule: GATE-EXEC-ROUND-CAP -->")[1].split("\n")[1];
-  for (const text of ["composes `findings_present`", "Rounds 1 to N run, including the cap round N", "Round N+1 never runs", "refuses a `draft_gate` post whose count is above the cap with `round_cap_reached`", "`mark_ready_for_review` and never a further draft round", "`resolveCapRoundFixed`", "`ready-for-review.mjs` accepts this \"cap round fixed\" state in place of a clean current-head verdict", "CI, size, ADR tripwire and spec conditions stay fail-closed", "post-cap `blocked` draft verdict", "no marker, cap raise or supersede", "`scope.capRoundResidue`", "ADR 0208", "the cap-round remedy clause", "`GATE-EXEC-SOFT-CAP` states the cap-round blocker set (ADR 0251)", "A `low` deferred to the PR itself stays cap-closed under `GATE-EXEC-LOW-FIX-UNTIL-CAP`"]) {
+  for (const text of ["composes `findings_present`", "Rounds 1 to N run, including the cap round N", "Round N+1 never runs", "refuses a `draft_gate` post whose count is above the cap with `round_cap_reached`", "`mark_ready_for_review` and never a further draft round", "`resolveCapRoundFixed`", "`ready-for-review.mjs` accepts this \"cap round fixed\" state in place of a clean current-head verdict", "CI, size, ADR tripwire and spec conditions stay fail-closed", "post-cap `blocked` draft verdict", "no marker, cap raise or supersede", "`scope.capRoundResidue`", "ADR 0208", "`GATE-EXEC-SOFT-CAP` states the cap-round blocker set (ADR 0251)", "an act list of only `low` or `nit` items and a mixed list follow `GATE-EXEC-SOFT-CAP`", "A `low` deferred to the PR itself at `pre_approval_gate` stays cap-closed under `GATE-EXEC-LOW-FIX-UNTIL-CAP`"]) {
     assert.ok(rule.includes(text), text);
   }
   assert.doesNotMatch(rule, /\b(should|may|usually)\b/i);
+  assert.ok(!rule.includes("remedy clause"), "no dangling remedy clause reference");
   for (const gone of ["a closure round (count cap+1)", "`scope.closureRound`", "`closureRound: true`", "closure round: diff from"]) assert.ok(!rule.includes(gone), gone);
 });
 

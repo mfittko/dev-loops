@@ -1242,7 +1242,7 @@ test("GATE-EXEC-ROUND-CAP: a medium act list reaches the fixer below and at the 
   });
 });
 
-for (const [severity, refuses] of [["critical", false], ["HIGH", false], ["medium", false], ["low", "low_fix_until_cap"], ["nice-to-have", "low_fix_until_cap"], ["", true]]) test(`GATE-EXEC-SOFT-CAP: a cap-round act item with severity ${JSON.stringify(severity)} ${refuses === true ? "is refused as malformed" : refuses ? "passes the matcher and is refused by " + refuses : "emits a fixer order"}`, async () => {
+for (const [severity, refuses] of [["critical", false], ["HIGH", false], ["medium", false], ["low", false], ["nice-to-have", false], ["", true]]) test(`GATE-EXEC-SOFT-CAP: a cap-round act item with severity ${JSON.stringify(severity)} ${refuses === true ? "is refused as malformed" : refuses ? "passes the matcher and is refused by " + refuses : "emits a fixer order"}`, async () => {
   await withFixture(async ({ root, wt, head, files, emit }) => {
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
     const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
@@ -1364,12 +1364,14 @@ test("ADR 0188: the round count comes from the --tmp-root the ledger writer uses
     await writeFile(customPrior, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
     await writeCurrentLog(custom, head);
     await writeCurrentLog(path.join(root, "tmp"), head);
-    await assert.rejects(emit({ tmpRoot: custom }), (e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
-    await assert.rejects(emit(),(e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message) && !/pre_approval_gate/.test(e.message));
+    // The custom root holds a second closed round, so its count passes the cap; the canonical root stays at the cap round, where a low is fixed.
+    await writeFile(path.join(custom, "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${"e".repeat(40)}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "e".repeat(40), verdict: "findings_present", findings: [] }));
+    await assert.rejects(emit({ tmpRoot: custom }), (e) => e.refusal === "round_cap_reached");
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
     // A subdirectory cwd reads the repo cap, not the default 4.
     const sub = path.join(wt, "scripts");
     await mkdir(sub, { recursive: true });
-    await assert.rejects(emit({ cwd: sub }), (e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
+    assert.equal((await emit({ cwd: sub, phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
   });
 });
 
@@ -1527,12 +1529,12 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
       await writeFile(files.actList, JSON.stringify(bad));
       await assert.rejects(emit(), /not a non-empty judge-pass --out array/, JSON.stringify(bad));
     }
-    // ADR 0188: below the draft round cap a low-only act list reaches the fixer; at the cap it is refused.
+    // GATE-EXEC-LOW-FIX-UNTIL-CAP: the draft gate fixes a low-only act list below the cap and at the cap round.
     await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "low" }), withFp({ ...ACT[0], severity: "nit", summary: "rename" })]));
     assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 1 } } }));
     await writeCurrentLog(path.join(root, "tmp"), head);
-    await assert.rejects(emit(), (e) => e.refusal === "low_fix_until_cap" && /GATE-EXEC-LOW-FIX-UNTIL-CAP.*only low or nit items/.test(e.message));
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
     // A deduped [low, medium] cluster carries its full severities, so the representative's low does not trip the cap guard.
     await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "low", clusterSeverities: ["low", "medium"] })]));
     assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
@@ -1541,13 +1543,10 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
     // GATE-EXEC-LOW-FIX-UNTIL-CAP: pre_approval_gate applies the past-cap rule in every round, so a low-only act list is refused (PR 2945 replay).
     await assert.rejects(emit({ gate: "pre_approval_gate" }), (e) => e.refusal === "low_fix_until_cap" && /at pre_approval_gate/.test(e.message));
     await rm(path.join(wt, ".devloops.json"));
-    // A nit-only list is fixable in draft round 1 below the cap; refused at the cap and on a gate with no round count.
+    // A nit-only list is fixable in draft round 1 below the cap; refused on a gate with no round count.
     await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "nit" })]));
     assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
     await assert.rejects(emit({ gate: "pre_approval_gate" }), (e) => e.refusal === "low_fix_until_cap" && /at pre_approval_gate/.test(e.message));
-    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 1 } } }));
-    await assert.rejects(emit(), (e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
-    await rm(path.join(wt, ".devloops.json"));
     await writeFile(files.actList, JSON.stringify(ACT));
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ autonomy: { humanMergeOnly: "nope" } }));
     await assert.rejects(emit(), /dev-loops config is invalid|Schema validation failed/);
