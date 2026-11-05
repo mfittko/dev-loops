@@ -178,7 +178,6 @@ export async function extendCapRoundChain(options, {
     const present = (sha) => { try { git(repoRoot, ["cat-file", "-e", `${sha}^{commit}`]); return true; } catch { return false; } };
     const proveOrphan = () => { try { git(repoRoot, ["merge-base", "--is-ancestor", capHead, head]); return false; } catch (error) { return error?.status === 1 && present(capHead) && present(head); } };
     if (capHead && capHead.toLowerCase() !== head && proveOrphan()) return refuse("baseline_orphaned", CAP_ROUND_REFUSAL.baseline_orphaned);
-    if (cleanCap && capHead && capHead.toLowerCase() === head) return refuse("no_cap_round_chain", `the clean cap-round head is the PR head ${head.slice(0, 7)}, so no cap round exists and the clean draft_gate verdict path applies; no extension is needed and nothing was written`);
     if (capHead && !present(capHead)) return refuse("no_cap_round_chain", `the cap-round head ${capHead.slice(0, 7)} is not fetched, so no chain can be read. Run git fetch origin ${baseRefName} and rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}`);
     return refuse("no_cap_round_chain", `PR #${pr} has no covering sealed cap-round clearing chain ending at an ancestor of ${head.slice(0, 7)}. Complete the cap round's fixer pass and run check-pre-push-delta.mjs --result for the cap-round baseline, then rerun this command, or restart on a replacement PR. ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} routes this refusal back to this command, so only the pre-push delta or the replacement-PR restart breaks the cycle`);
   }
