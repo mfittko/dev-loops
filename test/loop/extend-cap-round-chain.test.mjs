@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { test } from "bun:test";
 
@@ -674,6 +674,115 @@ test("a clean cap round with no record at the cap-round head and a base-only-mer
     const result = await extend(root, N);
     assert.equal(result.action, "chain_extended");
     assert.equal(result.chainEnd, A);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed proof restores the delta record and seal bytes exactly", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const recordPath = gateDeltaRecordPath(tmp, A);
+    const bytes = () => [readFileSync(recordPath, "utf8"), readFileSync(`${recordPath}.seal`, "utf8")];
+    const before = bytes();
+    assert.equal((await extend(root, L, { resolveProof: async () => null })).reason, "proof_not_reached");
+    assert.deepEqual(bytes(), before);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a throwing proof after sealing delta_covered rethrows and restores the record", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const recordPath = gateDeltaRecordPath(tmp, A);
+    const before = readFileSync(recordPath, "utf8");
+    let calls = 0;
+    await assert.rejects(extend(root, L, { resolveProof: async (...a) => { if (calls++ === 0) return resolveCapRoundFixed(...a); throw new Error("ledger read"); } }), /ledger read/);
+    assert.equal(readSealedGateDeltaRecord(tmp, A).extension, undefined);
+    assert.equal(readFileSync(recordPath, "utf8"), before);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a docs commit after a delta_covered seal extends at the end of the covered range", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs d");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: D, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    assert.equal((await extend(root, D)).action, "chain_extended");
+    const E = await commit(root, { "docs/e.md": "e\n" }, "docs e");
+    const result = await extend(root, E);
+    assert.deepEqual({ ...result }, { ok: true, action: "chain_extended", chainEnd: D, candidateHead: E, files: ["docs/e.md"] });
+    assert.ok(await proof(root, E));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an ancestor chain end does not hide a covering delta at the cap-round head", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const X = await commit(root, { "docs/x.md": "x\n" }, "docs x");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: X, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    // A plain record at A over the docs commit is the chain; a delta at A covering the head replaces it as the cover.
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    writeSealedGateDeltaRecord(tmp, X, { reviewBaselineHead: X, candidateHead: X, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const result = await extend(root, L);
+    assert.ok(result.ok, JSON.stringify(result));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a non-clean fixer chain: a delta at the chain end covering the head is accepted, one with an off-history candidate refuses", async () => {
+  const { root, A, B } = await capFixture();
+  try {
+    runGitFixture(root, ["checkout", "-q", "-b", "side", B]);
+    const S = await commit(root, { "src/s.mjs": "export const s = 1;\n" }, "side logic");
+    runGitFixture(root, ["checkout", "-q", B]);
+    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, B, { reviewBaselineHead: B, candidateHead: S, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    // A record at the chain end whose candidate is not on the head's history leaves no ancestor chain end: the delta covers nothing here.
+    const refused = await extend(root, L);
+    assert.equal(refused.ok, false);
+    assert.equal(refused.reason, "no_cap_round_chain");
+    writeSealedGateDeltaRecord(tmp, B, { reviewBaselineHead: B, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const ok = await extend(root, L);
+    assert.ok(ok.ok, JSON.stringify(ok));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a delta record that changed on disk after validation is never overwritten", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const recordPath = gateDeltaRecordPath(tmp, A);
+    const before = readFileSync(recordPath, "utf8");
+    let writes = 0;
+    const result = await extend(root, L, {
+      readRecord: (...a) => ({ ...JSON.parse(readFileSync(gateDeltaRecordPath(a[0], a[1]), "utf8")), outcome: "bounded_out" }),
+      writeRecord: () => { writes += 1; },
+    });
+    assert.equal(result.reason, "record_changed");
+    assert.equal(writes, 0);
+    assert.equal(readFileSync(recordPath, "utf8"), before);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
