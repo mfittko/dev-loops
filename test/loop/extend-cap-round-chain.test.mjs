@@ -986,8 +986,8 @@ test("every copy of the start-of-logic-range definition carries the one canonica
 async function reviewerOnlyDelta(root, baseline, head, { status = "resolved" } = {}) {
   const tmp = path.join(root, "tmp");
   const seam = { stdout: { write: () => {} }, fetchBase: () => {} };
-  const ledger = JSON.parse(readFileSync(path.join(tmp, "gate-findings", "owner-repo", `pr-${PR}`, `draft_gate-${baseline}.json`), "utf8"));
-  const logPath = path.join(root, "cap-round-log.json");
+  const logPath = path.join(tmp, "gate-findings", "owner-repo", `pr-${PR}`, `draft_gate-${baseline}.json`); // the canonical ledger: the route refuses any other file
+  const ledger = JSON.parse(readFileSync(logPath, "utf8"));
   writeFileSync(logPath, JSON.stringify({ ...ledger, provenance: { perAngle: [{ angle: "correctness" }] } }));
   const args = ["--reviewer-only", "--repo", ledger.repo, "--pr", String(ledger.pr), "--baseline", baseline, "--pr-head", head, "--findings-log", logPath, "--worktree", root];
   const resultPath = path.join(root, "reviewer-result.json");

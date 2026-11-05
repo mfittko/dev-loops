@@ -21,7 +21,7 @@ export const extendRoute = (root, { repo, pr, head }) => extendCapRoundChain({ r
 export async function reviewerOnlyRoute(root, { baseline, head, ledgerPath, status = "resolved", extraResult = {} }) {
   const tmp = path.join(root, "tmp");
   const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
-  const logPath = path.join(root, "cap-round-log.json");
+  const logPath = ledgerPath; // the canonical ledger itself: the route refuses any other file
   writeFileSync(logPath, JSON.stringify({ ...ledger, provenance: ledger.provenance?.perAngle?.length ? ledger.provenance : { perAngle: [{ angle: "correctness" }] } }));
   const args = ["--reviewer-only", "--repo", ledger.repo, "--pr", String(ledger.pr), "--baseline", baseline, "--pr-head", head, "--findings-log", logPath, "--worktree", root];
   const resultPath = path.join(root, "reviewer-result.json");

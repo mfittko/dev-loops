@@ -461,6 +461,10 @@ export async function runCli(
   if (options.reviewerOnly) {
     const log = JSON.parse(readFileSync(options.findingsLog, "utf8"));
     if (log.repo !== options.repo || log.pr !== options.pr) throw new Error(`reviewer-only: findings log ${options.findingsLog} is for ${log.repo}#${log.pr}, not ${options.repo}#${options.pr}; pass the cap-round log of this PR`);
+    // The act list and its id derive from this file, so it must be the canonical draft_gate ledger at its own head: not another gate's log, not a copy.
+    const canonicalLog = buildLogPath({ repo: log.repo, pr: log.pr, gate: "draft_gate", headSha: log.headSha, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree) });
+    const sameFile = (() => { try { return realpathSync(options.findingsLog) === realpathSync(canonicalLog); } catch { return false; } })();
+    if (log.gate !== "draft_gate" || !sameFile) throw new Error(`reviewer-only: findings log ${options.findingsLog} is not the draft_gate cap-round ledger ${canonicalLog}; pass that file`);
     const route = {};
     await roundAnglesOf(options.findingsLog, baselineSha, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target: { repo: options.repo, pr: options.pr }, route });
     if (!route.chainEnd) derivedActList = capRoundActList(log.findings, log.headSha);

@@ -11,6 +11,7 @@ import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 
 import { DELTA_EVIDENCE_RULE, deltaPatchPath, gitStaleSurfaceHits, parseCheckPrePushDeltaArgs, runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
+import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { A, B, C, M, boundArgs, coverageRepo } from "./_delta-coverage-fixture.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 import { sealDeltaFixture } from "./_seal-fixture.mjs";
@@ -979,8 +980,9 @@ function reviewerOnlyRepo({ conflictOnly = false, nonBaseOnlyMerge = false, evil
 // The cap-round ledger at the baseline; --findings-log is required and the act list is derived from it (ADR 0255).
 const CAP_ACT = { severity: "medium", summary: "guard missing", files: ["a.mjs"], line: 1, angle: "correctness", judgeDisposition: "act", judgeTitle: "Guard", judgeFix: "add" };
 function capLog(dir, baseline, findings) {
-  const file = path.join(dir, `cap-log-${baseline.slice(0, 8)}-${findings.length}.json`);
-  fs.writeFileSync(file, JSON.stringify({ repo: "owner/repo", pr: 70, headSha: baseline, verdict: findings.length ? "findings_present" : "clean", findings, provenance: { perAngle: [{ angle: "correctness" }] } }));
+  const file = buildLogPath({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha: baseline, tmpRoot: resolveGateArtifactTmpRoot(dir) });
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha: baseline, verdict: findings.length ? "findings_present" : "clean", findings, provenance: { perAngle: [{ angle: "correctness" }] } }));
   return file;
 }
 const reviewerOnlyArgs = ({ dir, baseline, head }, findings = []) => ["--reviewer-only", "--repo", "owner/repo", "--pr", "70", "--baseline", baseline, "--pr-head", head, "--findings-log", capLog(dir, baseline, findings), "--worktree", dir];
@@ -1320,5 +1322,20 @@ test("a reviewer-only run whose only PR-own change is a conflict-resolution merg
     const { input, decision } = await reviewerOnlyRun(repo, {});
     assert.match(fs.readFileSync(input.patchPath, "utf8"), /a\.mjs/, "the resolution diff names the resolved path");
     assert.equal(decision.outcome, "locally_clear");
+  } finally { cleanup(repo); }
+});
+
+test("the reviewer-only route accepts only the canonical draft_gate cap-round ledger as --findings-log", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    const canonical = capLog(repo.dir, repo.baseline, []);
+    const log = JSON.parse(fs.readFileSync(canonical, "utf8"));
+    const copy = path.join(repo.dir, "copy.json");
+    const otherGate = path.join(repo.dir, "other-gate.json");
+    fs.writeFileSync(copy, JSON.stringify(log));
+    fs.writeFileSync(otherGate, JSON.stringify({ ...log, gate: "pre_approval_gate" }));
+    const run = (file) => runDeltaCli([...reviewerOnlyArgs(repo).slice(0, -4), "--findings-log", file, "--worktree", repo.dir, "--spec-identity", "s", "--result-path", path.join(repo.dir, "r.json")], seam);
+    assert.ok((await run(canonical)).input, "the canonical ledger is accepted");
+    for (const file of [copy, otherGate]) await assert.rejects(run(file), /is not the draft_gate cap-round ledger/);
   } finally { cleanup(repo); }
 });
