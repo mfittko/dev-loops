@@ -990,7 +990,9 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
   if (keyed) for (const name of await readdir(path.dirname(planPath)).catch(() => [])) {
     const id = /^fixer-emit-plan\.(f\d+-[0-9a-f]{8})\.json$/.exec(name)?.[1];
     if (!id || emittedAt(id) <= emittedAt(executionIdentity)) continue;
-    if ((await readPlanFile(path.join(path.dirname(planPath), name)))?.parentExecutionIdentity === parentId) newerKeyed = id;
+    // A sibling that does not parse does not name this parent; its own locate still refuses with the integrity failure.
+    const sibling = await readPlanFile(path.join(path.dirname(planPath), name)).catch((err) => (err instanceof WorkOrderRefusal ? null : Promise.reject(err)));
+    if (sibling?.parentExecutionIdentity === parentId) newerKeyed = id;
   }
   const parentStale = keyed && (!parentId || newest?.executionIdentity !== parentId
     ? `keyed fixer ref ${ref} is orphaned: its parent execution ${parentId} is no longer the current plan`

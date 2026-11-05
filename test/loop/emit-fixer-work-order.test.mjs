@@ -3678,14 +3678,14 @@ test("a same-head no-commit emission with a delta result keeps the plan and mark
 });
 
 // Setup shared by the issue 3111 tests: a pulled first fixer, a fixing commit and a delta result of `outcome` for it.
-async function refusedDeltaFixture({ root, wt, head, files, emit }, outcome) {
+async function refusedDeltaFixture({ root, wt, head, files, emit }, outcome, candidateOf = (fixing) => fixing) {
   const prior = await emit({ phase: "commit_only", deltaResult: undefined });
   assert.equal(pull(prior, root).status, 0);
   git(wt, "commit", "-q", "--allow-empty", "-m", "fixing F");
   const report = prior.workOrder.outputRefs[0];
   await mkdir(path.dirname(report), { recursive: true });
   await writeFile(report, JSON.stringify({ headSha: git(wt, "rev-parse", "HEAD"), siteCoverage: [{ fingerprint: ACT_REF, returnedSites: [], sites: [], noSitesReason: "none" }] }));
-  const delta = clearingDeltaFor(head, { candidateHead: git(wt, "rev-parse", "HEAD"), outcome });
+  const delta = clearingDeltaFor(head, { candidateHead: candidateOf(git(wt, "rev-parse", "HEAD")), outcome });
   await writeFile(files.delta, JSON.stringify(delta));
   sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta);
   return { prior, tmpRoots: [path.join(root, "tmp")], markerPath: path.join(root, "tmp/gate-delta", `${head}.sequence`) };
@@ -3750,6 +3750,29 @@ test("issue 3111: an invalid JSON keyed plan is an integrity refusal, not a supe
     const keyed = await fx.emit({ phase: "commit_only", keepRecord: true });
     await writeFile(keyed.planPath, "{ truncated");
     await assert.rejects(locateFixerUnit({ ref: keyed.workOrderRef, cwd: fx.wt, tmpRoots }), (error) => error.refusal === "local_materialization_integrity_failure");
+  });
+});
+
+test("issue 3111: a locally_clear result whose candidate is the baseline or not the worktree HEAD supersedes the plan and rewrites the marker", async () => {
+  for (const pick of ["baseline", "other"]) {
+    await withFixture(async (fx) => {
+      const { prior, markerPath } = await refusedDeltaFixture(fx, "locally_clear", () => (pick === "baseline" ? fx.head : "a".repeat(40)));
+      const marker = await readFile(markerPath);
+      const again = await fx.emit({ phase: "commit_only", keepRecord: true });
+      assert.equal(again.planPath, prior.planPath, `${pick}: the canonical plan is reused`);
+      assert.notDeepEqual(await readFile(markerPath), marker, `${pick}: the marker names the new execution`);
+    });
+  }
+});
+
+test("issue 3111: a corrupt newer keyed plan of another parent does not fail the locate of a valid keyed ref", async () => {
+  await withFixture(async (fx) => {
+    const { tmpRoots } = await refusedDeltaFixture(fx, "locally_clear");
+    const k1 = await fx.emit({ phase: "commit_only", keepRecord: true });
+    const k2 = await fx.emit({ phase: "commit_only", keepRecord: true });
+    await writeFile(k2.planPath, "{ truncated");
+    assert.equal((await locateFixerUnit({ ref: k1.workOrderRef, cwd: fx.wt, tmpRoots })).stale, undefined);
+    await assert.rejects(locateFixerUnit({ ref: k2.workOrderRef, cwd: fx.wt, tmpRoots }), (error) => error.refusal === "local_materialization_integrity_failure");
   });
 });
 
