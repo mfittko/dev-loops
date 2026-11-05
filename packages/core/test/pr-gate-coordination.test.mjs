@@ -4730,7 +4730,7 @@ test("blocked lifecycle state carries blockedOn operator_decision", () => {
   assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
 });
 
-test("failing-CI block carries an agentRemedy that re-runs loop startup", () => {
+test("failing-CI block names the operator until a runnable repair path exists", () => {
   const result = evaluatePrGateCoordination({
     repo: "o/r",
     pr: 266,
@@ -4746,7 +4746,8 @@ test("failing-CI block carries an agentRemedy that re-runs loop startup", () => 
     preApprovalGateMarker: gate({ visible: false }),
   });
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
-  assert.match(result.agentRemedy.command, /loop startup --pr 266/);
+  assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
+  assert.equal(result.agentRemedy, undefined);
 });
 
 test("draft round-cap refusal stays untyped (known gap, issue 3105 slices 5-6)", () => {

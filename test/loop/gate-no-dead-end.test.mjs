@@ -127,6 +127,12 @@ test("the title remedy strips markers with the detector's anchors", () => {
   assert.equal(evaluatePrGateCoordination(titleInput("feat/draft: x")).nextAction === PR_CHECKPOINT_ACTION.REPORT_BLOCKED, false);
 });
 
+test("a title that edit-pr would read as a flag names the operator", () => {
+  const result = evaluatePrGateCoordination(titleInput("WIP: --check support"));
+  assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
+  assert.equal(result.agentRemedy, undefined);
+});
+
 test("a blocked result without a real repo or integer pr names the operator", () => {
   const result = evaluatePrGateCoordination(titleInput("WIP: x", { pr: undefined }));
   assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
@@ -149,6 +155,7 @@ test("hasRunnableCommand accepts quoted angle brackets and rejects unfilled plac
     "dev-loops-run scripts/github/wait-pr-checks.mjs --repo <owner/name> --pr 7",
     "dev-loops gate extend-cap-round-chain --head <40-hex>",
     "",
+    "   ",
   ];
   for (const c of ok) assert.equal(hasRunnableCommand(c), true, c);
   for (const c of bad) assert.equal(hasRunnableCommand(c), false, c);

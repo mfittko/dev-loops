@@ -112,21 +112,19 @@ const shellQuote = (text) => `'${text.replaceAll("'", "'\\''")}'`;
 
 // Issue 3105: the command an agent can run to clear a report_blocked CI result.
 function ciAgentRemedy(input, ciStatus) {
-  return remedyOrOperator(input, (repo, pr) => (ciStatus === "failure"
-    ? {
-      command: `dev-loops loop startup --pr ${pr}`,
-      summary: "Fix the failing required check first and push the fix; startup then re-resolves the PR state after the fix push.",
-    }
-    : {
-      command: `dev-loops-run scripts/github/wait-pr-checks.mjs --repo ${repo} --pr ${pr} --timeout 600`,
-      summary: "Wait for the head checks to confirm CI, then re-run gate coordination.",
-    }));
+  // Failing CI has no runnable repair command yet (startup routes back to the same block), so the operator fallback applies.
+  if (ciStatus === "failure") return { blockedOn: BLOCKED_ON.OPERATOR_DECISION };
+  return remedyOrOperator(input, (repo, pr) => ({
+    command: `dev-loops-run scripts/github/wait-pr-checks.mjs --repo ${repo} --pr ${pr} --timeout 600`,
+    summary: "Wait for the head checks to confirm CI, then re-run gate coordination.",
+  }));
 }
 
 // Issue 3105: strip the merge-blocking markers (see pr-title-markers.mjs) and name the title edit.
 function titleMarkerAgentRemedy(input) {
   const title = stripBlockingTitleMarkers(input.prTitle);
-  if (!title || findBlockingTitleMarkers(title).length > 0) {
+  // edit-pr.mjs rejects a --title value that starts with "--", even when shell-quoted.
+  if (!title || title.startsWith("--") || findBlockingTitleMarkers(title).length > 0) {
     return { blockedOn: BLOCKED_ON.OPERATOR_DECISION };
   }
   return remedyOrOperator(input, (repo, pr) => ({

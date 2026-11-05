@@ -24,7 +24,7 @@ export const KNOWN_GAPS = [
 // A placeholder is any unfilled `<...>` token outside single-quoted text (`<n>`, `<owner/name>`, `<40-hex>`); quoted user text (a PR title) is inert.
 // The strip consumes the `'\''` escape that shellQuote emits for an apostrophe.
 export const hasRunnableCommand = (command) => typeof command === "string"
-  && command.length > 0
+  && command.trim().length > 0
   && !/<[^<>\s]+>/.test(command.replace(/'(?:[^']|'\\'')*'/g, ""));
 
 // The single definition of a typed blocked result; the walker test and the safety rule share it.
