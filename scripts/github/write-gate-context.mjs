@@ -2151,7 +2151,7 @@ export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefNam
   return { ends, heads: [...heads] };
 }
 
-// ADR 0250: extension values a sealed clearing record may carry to prove a clean cap round ("delta_covered": expand step of the issue 3105 chain, no writer yet).
+// Extension values a sealed clearing record may carry to prove a clean cap round (ADR 0250 records `docs_tests_only`).
 const CLEAN_CAP_EXTENSIONS = new Set(["docs_tests_only", "delta_covered"]);
 /**
  * The `covers` check of resolveCapRoundFixed, shared with the chain-extension tool so the two cannot disagree:
@@ -2206,7 +2206,7 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
     return false;
   };
   // The first clearing record must name every act item of the cap round: a delta record keyed on the same baseline for another route (a thread review) proves nothing about them.
-  // With no open act item the check is vacuously true unless the cap round is clean: a clean cap round binds only a record chain that carries an extension in `CLEAN_CAP_EXTENSIONS` (docs_tests_only, delta_covered) (ADR 0250).
+  // With no open act item the check is vacuously true unless the cap round is clean: a clean cap round binds only a record chain that carries an extension in `CLEAN_CAP_EXTENSIONS` (docs_tests_only, delta_covered).
   const covers = capRoundCovers(capRound, tmpRoot);
   // The direct chain is tried first: merge-seeded starts (a directory scan and Git probes) are discovered only when it does not prove the round fixed.
   const chainArgs = { tmpRoot, capHead, repo: options.repo, pr: options.pr, repoRoot, baseOnlyMerge };
