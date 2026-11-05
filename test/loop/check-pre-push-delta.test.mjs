@@ -15,6 +15,7 @@ import { A, B, C, M, boundArgs, coverageRepo } from "./_delta-coverage-fixture.m
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 import { sealDeltaFixture } from "./_seal-fixture.mjs";
 import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
+import { writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { decidePiToolCall } from "../../extension/readonly-role-gate.ts";
 
 const ACT = { ref: "act-1", severity: "low", angle: "correctness", summary: "s", judgeDisposition: "act" };
@@ -927,7 +928,7 @@ test("a refused locally_clear result followed by a no-commit re-emission keeps t
 
 
 // ADR 0255: the PR 3087 state. The cap-round head P1, a fix commit P2, then a base refresh merged in; the sequence is closed (no marker, no plan) and the head moved.
-function reviewerOnlyRepo({ nonBaseOnlyMerge = false, octopus = false, baseChanges = false, ownChanges = false } = {}) {
+function reviewerOnlyRepo({ nonBaseOnlyMerge = false, evilMerge = false, octopus = false, baseChanges = false, ownChanges = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-only-"));
   initGitFixture(dir, { branch: "main", commit: null });
   const git = (...args) => runGitFixture(dir, args);
@@ -950,7 +951,7 @@ function reviewerOnlyRepo({ nonBaseOnlyMerge = false, octopus = false, baseChang
   git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"));
   git("checkout", "-q", "pr");
   git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
-  if (nonBaseOnlyMerge || octopus) {
+  if (nonBaseOnlyMerge || evilMerge || octopus) {
     // A merge of a branch that holds PR-own work is not a base-only merge.
     for (const name of octopus ? ["side", "side2"] : ["side"]) {
       git("checkout", "-qb", name, baseline);
@@ -958,7 +959,12 @@ function reviewerOnlyRepo({ nonBaseOnlyMerge = false, octopus = false, baseChang
       git("add", "."); git("commit", "-qm", `feat: ${name}`);
     }
     git("checkout", "-q", "pr");
-    git("merge", "-q", "--no-ff", "-m", "merge side", ...(octopus ? ["side", "side2"] : ["side"]));
+    if (evilMerge) {
+      // A merge that carries content of its own (a conflict resolution): the resolution diff names evil.mjs, which no parent holds.
+      git("merge", "-q", "--no-ff", "--no-commit", "side");
+      fs.writeFileSync(path.join(dir, "evil.mjs"), "export const evil = 1;\n");
+      git("add", "."); git("commit", "-qm", "merge side with a resolution");
+    } else git("merge", "-q", "--no-ff", "-m", "merge side", ...(octopus ? ["side", "side2"] : ["side"]));
   }
   return { dir, baseline, head: git("rev-parse", "HEAD"), tmpRoot: resolveGateArtifactTmpRoot(dir) };
 }
@@ -1042,7 +1048,7 @@ test("a reviewer-only result at invocation 3 with an open finding writes no clea
     const { record, decision } = await reviewerOnlyRun(repo, { newFindings: MEDIUM }, { invocation: 3 });
     assert.equal(decision.outcome, "bounded_out");
     assert.deepEqual({ o: record.outcome, n: record.nextStep }, { o: "bounded_out", n: "restart_on_replacement_pr" });
-    await assert.rejects(reviewerOnlyRun(repo, {}, { invocation: 3 }), /is not the next invocation 4/);
+    await assert.rejects(reviewerOnlyRun(repo, {}, { invocation: 3 }), /invocation bound of 3 is reached/);
   } finally { cleanup(repo); }
 });
 
@@ -1065,7 +1071,7 @@ test("reviewer-only refuses an existing record with another act set, an active m
     const recordPath = path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.json`);
     fs.mkdirSync(path.dirname(recordPath), { recursive: true });
     fs.writeFileSync(recordPath, JSON.stringify({ reviewBaselineHead: repo.baseline, candidateHead: repo.head, actSetId: "covering-first-record", invocation: 1, outcome: "locally_clear", nextStep: "push_to_gate", items: [] }));
-    await assert.rejects(runDeltaCli(args, seam), /another act set already exists/);
+    await assert.rejects(runDeltaCli(args, seam), /is locally_clear for another act set and is never overwritten/);
     assert.equal(JSON.parse(fs.readFileSync(recordPath, "utf8")).actSetId, "covering-first-record");
     fs.rmSync(recordPath);
     writeSequenceMarker({ tmpRoot: repo.tmpRoot, baselineHead: repo.baseline, branch: "issue-1" });
@@ -1109,11 +1115,68 @@ test("identifiers removed by a base-only merge are excluded from the stale-surfa
   } finally { cleanup(repo); }
 });
 
-test("a reviewer-only run refuses a non-base-only merge and an octopus merge in the range and names the merge", async () => {
-  for (const options of [{ nonBaseOnlyMerge: true }, { octopus: true }]) {
-    const repo = reviewerOnlyRepo(options);
+test("a reviewer-only run refuses an octopus merge in the range and names the merge", async () => {
+  const repo = reviewerOnlyRepo({ octopus: true });
+  try {
+    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], seam), new RegExp(`^Error: non_base_only_merge: merge [0-9a-f]{40} in ${repo.baseline}.*Only the replacement-PR restart remains`));
+  } finally { cleanup(repo); }
+});
+
+test("a reviewer-only run reviews a merge that is not base-only through its own commits and its resolution diff", async () => {
+  const clean = reviewerOnlyRepo({ nonBaseOnlyMerge: true });
+  const evil = reviewerOnlyRepo({ evilMerge: true });
+  try {
+    const cleanRun = await reviewerOnlyRun(clean, {});
+    assert.match(fs.readFileSync(cleanRun.input.patchPath, "utf8"), /side\.mjs/, "the merged PR-own commit is reviewed");
+    assert.equal(cleanRun.decision.outcome, "locally_clear");
+    const evilRun = await reviewerOnlyRun(evil, {});
+    const patch = fs.readFileSync(evilRun.input.patchPath, "utf8");
+    assert.match(patch, /evil\.mjs/, "the resolution diff names the file only the merge holds");
+    assert.doesNotMatch(patch, /refreshed\.txt/);
+    assert.equal(evilRun.decision.outcome, "locally_clear");
+  } finally { cleanup(clean); cleanup(evil); }
+});
+
+// ADR 0255: the reviewer-only run takes over the fixer's non-clearing record at the baseline when the refs match.
+function seedFixerRecord(repo, patch = {}) {
+  const recordPath = path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.json`);
+  const record = { ...JSON.parse(fs.readFileSync(recordPath, "utf8")), actSetId: "fixer-act-set", ...patch };
+  writeSealedGateDeltaRecord(repo.tmpRoot, repo.baseline, record);
+  return recordPath;
+}
+
+test("the reviewer-only run takes over a prior non-clearing record with another actSetId but the same refs and continues its invocation count", async () => {
+  for (const unsealed of [false, true]) {
+    const repo = reviewerOnlyRepo();
     try {
-      await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], seam), new RegExp(`^Error: non_base_only_merge: merge [0-9a-f]{40} in ${repo.baseline}.*Only the replacement-PR restart remains`));
+      await reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], status: "not_resolved" });
+      const recordPath = seedFixerRecord(repo, { candidateHead: repo.baseline });
+      if (unsealed) fs.rmSync(`${recordPath}.seal`);
+      await assert.rejects(reviewerOnlyRun(repo, {}, { findings: [CAP_ACT] }), /--invocation 1 is not the next invocation 2/);
+      const { record } = await reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], invocation: 2 });
+      assert.deepEqual({ o: record.outcome, i: record.invocation, same: record.actSetId !== "fixer-act-set" }, { o: "locally_clear", i: 2, same: true });
+    } finally { cleanup(repo); }
+  }
+});
+
+test("the reviewer-only run keeps a locally_clear record, an extension, another ref set and a foreign candidate protected, and an unsealed one names its remedy", async () => {
+  const cases = [
+    ["is locally_clear for another act set", { outcome: "locally_clear" }, false],
+    ["carries an extension", { extension: "delta_covered" }, false],
+    ["covers another set of act refs", { items: [{ ref: "other", status: "resolved" }] }, false],
+    ["not on the PR head's history", { candidateHead: "ORPHAN" }, false],
+    ["unsealed_record: .*is locally_clear for another act set.*rm -f .*\\.seal", { outcome: "locally_clear" }, true],
+  ];
+  for (const [message, patch, unsealed] of cases) {
+    const repo = reviewerOnlyRepo();
+    try {
+      await reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], status: "not_resolved" });
+      const orphan = runGitFixture(repo.dir, ["commit-tree", "-m", "orphan", "HEAD^{tree}"]);
+      const recordPath = seedFixerRecord(repo, { candidateHead: repo.baseline, ...patch, ...(patch.candidateHead ? { candidateHead: orphan } : {}) });
+      if (unsealed) fs.rmSync(`${recordPath}.seal`);
+      const before = fs.readFileSync(recordPath, "utf8");
+      await assert.rejects(reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], invocation: 2 }), new RegExp(message));
+      assert.equal(fs.readFileSync(recordPath, "utf8"), before, "the record is never overwritten");
     } finally { cleanup(repo); }
   }
 });
