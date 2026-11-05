@@ -4,7 +4,7 @@
 
 Accepted, 2026-11-05 ([issue 3105](https://github.com/mfittko/dev-loops/issues/3105)).
 
-Amends the medium `defer` and medium `reject` cap-round blocker clauses of [ADR 0191](./0191-past-cap-judge-disposition-of-a-medium-is-final.md) and the draft-gate low deferral of [ADR 0188](./0188-low-nit-never-block.md) (as amended by [ADR 0196](./0196-pre-approval-gate-low-nit-never-block.md)). [ADR 0208](./0208-draft-cap-round-fixed-goes-ready.md) and [ADR 0224](./0224-cap-round-proof-for-adr-waiver-and-docs-tests-chain-extension.md) stay in force and later slices of issue 3105 supersede their round N+1 refusal. Every other decision of those records stays in force, and the records stay unedited.
+Amends the medium `defer` and medium `reject` cap-round blocker clauses of [ADR 0191](./0191-past-cap-judge-disposition-of-a-medium-is-final.md) and the draft-gate low deferral of [ADR 0188](./0188-low-nit-never-block.md) (as amended by [ADR 0196](./0196-pre-approval-gate-low-nit-never-block.md)). [ADR 0208](./0208-draft-cap-round-fixed-goes-ready.md) and [ADR 0224](./0224-cap-round-proof-for-adr-waiver-and-docs-tests-chain-extension.md) stay in force and later slices of issue 3105 supersede their round N+1 refusal. [ADR 0253](./0253-low-nit-convergence-at-the-cap-round.md) ships the draft low change of item 6. Every other decision of those records stays in force, and the records stay unedited.
 
 ## Context
 
@@ -19,9 +19,9 @@ Amends the medium `defer` and medium `reject` cap-round blocker clauses of [ADR 
    - a `question`-severity act item;
    - a closed finding with an unknown severity or no valid disposition, or an act item with a missing or blank severity (evidence integrity, reason `severity_disagreement`).
 3. Security and spec-change blocks ride on severity `high` and the spec digest check. This slice adds no finding field.
-4. A `medium`, `low`, `nit` or unknown-severity act item and a `medium` that the judge defers or rejects without `failOpen` never block. They reach the fixer and the pre-push delta review.
-5. A non-`high` `failOpen` act item goes to the fixer (the blocking case is item 2).
-6. A draft-gate `low` act item at the cap round is fixed, not deferred. The `pre_approval_gate` low deferral is unchanged. [ADR 0253](./0253-low-nit-convergence-at-the-cap-round.md) ships that change.
+4. A `medium`, `low`, `nit` or unknown-severity act item and a `medium` without `failOpen` that the judge defers or rejects never block. They reach the fixer and the pre-push delta review.
+5. A `failOpen` finding blocks when the judge defers or rejects it. A non-`high` `failOpen` act item goes to the fixer.
+6. A draft-gate `low` act item at the cap round is fixed, not deferred. The `pre_approval_gate` low deferral is unchanged. That behavior change ships in a later slice of issue 3105 and this record states the decision.
 
 The override command, the effective cap, the Copilot-loop cap and the no-dead-end rule are scoped by issue 3105 and follow in later slices.
 
