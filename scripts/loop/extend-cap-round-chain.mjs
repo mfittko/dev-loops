@@ -140,28 +140,22 @@ export async function extendCapRoundChain(options, {
   };
   // ADR 0254: only a sealed locally_clear delta record whose baseline is the start of the logic range and whose candidate is the PR head covers that range. A later link never vouches for logic an earlier link did not clear. Seal the extension into that record, then prove; a failed proof restores it if it is still the record this run wrote.
   const onDisk = (base) => { try { return JSON.stringify(readRecord(tmpRoot, base)); } catch { return null; } };
-  const sealDeltaCovered = async (start) => {
+  // One sequence lock (the one the reviewer-only run takes) spans compare, seal, proof and restore. The proof takes no sequence lock.
+  const sealDeltaCovered = (start) => withSequenceLock(tmpRoot, [start], () => sealLocked(start));
+  const sealLocked = async (start) => {
     const record = sealedClearing(start);
     if (!record || String(record.candidateHead ?? "").toLowerCase() !== head || record.outcome !== "locally_clear") return null;
     // Already sealed with an extension for this head: the proof fails for another condition, so a delta rerun cannot help. Write nothing.
     if (record.extension) return refuse("proof_not_reached", `the delta record for ${start.slice(0, 7)} already carries ${record.extension} for ${head.slice(0, 7)}, but the cap-round-fixed proof does not reach the head; nothing was written. Run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed condition`);
-    // Compare and write under the sequence lock the reviewer-only run takes, so a concurrent delta write cannot interleave.
     const written = JSON.stringify({ ...record, extension: "delta_covered" });
-    const changed = await withSequenceLock(tmpRoot, [start], () => {
-      if (onDisk(start) !== JSON.stringify(record)) return true;
-      writeRecord(tmpRoot, start, JSON.parse(written));
-      return false;
-    });
-    if (changed) return refuse("record_changed", `the delta record for ${start.slice(0, 7)} changed on disk since it was validated; nothing was written. Rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}`);
+    if (onDisk(start) !== JSON.stringify(record)) return refuse("record_changed", `the delta record for ${start.slice(0, 7)} changed on disk since it was validated; nothing was written. Rerun ${CLI} gate extend-cap-round-chain --repo ${repo} --pr ${pr}`);
+    writeRecord(tmpRoot, start, JSON.parse(written));
     let reachedAfter = null;
     let proofError;
     try { reachedAfter = await resolveProof(proofArgs, { repoRoot }); } catch (error) { proofError = error; }
     if (!reachedAfter) {
-      const ours = await withSequenceLock(tmpRoot, [start], () => {
-        const mine = onDisk(start) === written;
-        if (mine) writeRecord(tmpRoot, start, record);
-        return mine;
-      });
+      const ours = onDisk(start) === written;
+      if (ours) writeRecord(tmpRoot, start, record);
       if (proofError) throw proofError;
       return refuse("proof_not_reached", `the cap-round-fixed proof does not reach ${head.slice(0, 7)} after sealing delta_covered into the record for ${start.slice(0, 7)}; ${ours ? "the record was restored" : "the record changed since this run wrote it and was left in place"}. Run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed condition`);
     }
@@ -204,6 +198,11 @@ export async function extendCapRoundChain(options, {
     return refuse("record_not_clearing", `the delta record for ${chainEnd.slice(0, 7)} exists but is not a sealed clearing record and is never overwritten; run ${CLI} loop pre-push-delta --reviewer-only --repo ${repo} --pr ${pr} --baseline ${chainEnd} --pr-head ${head} --findings-log <cap-round findings log> --spec-identity <id> --result-path <result-file> (then --result <result-file> --invocation <1-3>) until it is locally_clear (it takes over a non-clearing or unsealed record with the same act refs), then rerun this command`);
   }
 
+  // One sequence lock (the one the reviewer-only run takes) spans the exclusive create, the proof and the rollback. The proof takes no sequence lock.
+  return withSequenceLock(tmpRoot, [chainEnd], () => extendDocsTests({ tmpRoot, chainEnd, head, repo, pr, files, proofArgs, repoRoot, recordExists, resolveProof, writeRecord }));
+}
+
+async function extendDocsTests({ tmpRoot, chainEnd, head, repo, pr, files, proofArgs, repoRoot, recordExists, resolveProof, writeRecord }) {
   const record = { reviewBaselineHead: chainEnd, candidateHead: head, outcome: "locally_clear", nextStep: "push_to_gate", items: [], extension: "docs_tests_only" };
   // Exclusive create: a record another writer lands between the read above and this write is never replaced.
   try {

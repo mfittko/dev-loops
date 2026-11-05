@@ -910,6 +910,48 @@ test("sealing delta_covered waits for the sequence lock the reviewer-only run ho
   }
 });
 
+// ADR 0255 decision 9: one sequence lock spans seal, proof and restore on both paths; a contender never gets between them.
+const busy = (tmp, baseline) => withSequenceLock(tmp, [baseline], () => "acquired", { waitMs: 60 }).catch((error) => error.code);
+
+test("the delta_covered seal holds the sequence lock through the proof and its restore", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    let duringProof;
+    const result = await extend(root, L, { resolveProof: async () => { duringProof = await busy(tmp, A); return null; } });
+    assert.equal(result.reason, "proof_not_reached");
+    assert.equal(duringProof, "SEQUENCE_LOCK_BUSY", "the lock is held while the proof runs");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the docs_tests_only create waits for the sequence lock and holds it through the proof and its rollback", async () => {
+  const { root, B } = await capFixture();
+  try {
+    const D = await commit(root, { "docs/decisions/0001-x.md": "# x\n" }, "docs");
+    const tmp = path.join(root, "tmp");
+    let pending;
+    await withSequenceLock(tmp, [B], async () => {
+      pending = extend(root, D);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      assert.equal(existsSync(gateDeltaRecordPath(tmp, B)), false, "the exclusive create waits for the lock");
+    });
+    assert.equal((await pending).action, "chain_extended");
+    rmSync(gateDeltaRecordPath(tmp, B), { force: true });
+    rmSync(`${gateDeltaRecordPath(tmp, B)}.seal`, { force: true });
+    let duringProof;
+    const refused = await extend(root, D, { resolveProof: async () => { duringProof = await busy(tmp, B); return null; } });
+    assert.equal(refused.reason, "proof_not_reached");
+    assert.equal(duringProof, "SEQUENCE_LOCK_BUSY", "the lock is held while the proof runs");
+    assert.equal(existsSync(gateDeltaRecordPath(tmp, B)), false, "the rollback removed the record");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a clean ledger at the PR head resolves no cap round and writes nothing", async () => {
   const { root, A } = await cleanCapFixture();
   try {
