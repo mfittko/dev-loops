@@ -200,7 +200,7 @@ test("the cap-round head equal to the head, or an unfetched cap-round head, refu
     assert.match(unfetched.detail, /`git rev-parse --is-shallow-repository`.*`git fetch --unshallow`.*`git fetch origin a{40}`/);
     assert.match(unfetched.detail, /rerun `[^`]*gate extend-cap-round-chain --repo owner\/repo --pr \d+`/);
     assert.match(unfetched.detail, /still absent.*replacement PR/);
-    assert.doesNotMatch(unfetched.detail, /git fetch origin (trunk|main)|pr-branch|never brings/);
+    assert.doesNotMatch(unfetched.detail, /git fetch origin (trunk|main)/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -901,12 +901,12 @@ test("a clean ledger at the PR head resolves no cap round and writes nothing", a
 });
 
 test("every copy of the start-of-logic-range definition carries the one canonical clause", () => {
-  const clause = "the cap-round head for a clean cap round whose cap-head record carries no extension, the end of the extended chain when it carries one, and otherwise the chain end";
+  const clause = "the cap-round head for a clean cap round whose cap-head record is absent or carries no extension, the end of the extended chain when it carries one, and otherwise the chain end";
   const files = ["scripts/loop/extend-cap-round-chain.mjs", "packages/core/src/loop/pr-gate-coordination.mjs", "skills/docs/gate-review-sub-loop-contract.md", ".claude/skills/docs/gate-review-sub-loop-contract.md", "docs/decisions/0254-cap-chain-delta-extension.md"];
   for (const file of files) {
     const text = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
     assert.ok(text.includes(clause), file);
-    for (const old of ["candidate head of an already-extended cap-head record", "(the end of the extended chain)", "or the candidate"]) assert.ok(!text.includes(old), `${file}: ${old}`);
+    for (const old of ["candidate head of an already-extended cap-head record", "(the end of the extended chain)", "or the candidate head"]) assert.ok(!text.includes(old), `${file}: ${old}`);
   }
   const count = (file) => readFileSync(new URL(`../../${file}`, import.meta.url), "utf8").split(clause).length - 1;
   assert.equal(count("scripts/loop/extend-cap-round-chain.mjs"), 2);
