@@ -7,7 +7,7 @@ import { test } from "bun:test";
 
 import { resolveCapRoundFixed } from "../../scripts/github/write-gate-context.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
-import { gateDeltaRecordPath, readSealedGateDeltaRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
+import { gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { extendCapRoundChain, parseExtendCapRoundChainCliArgs, runCli } from "../../scripts/loop/extend-cap-round-chain.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 
@@ -704,6 +704,28 @@ test("a failed proof after sealing delta_covered does not recreate a record anot
   }
 });
 
+test("a failed read right after the write does not stop the restore of the record this run wrote", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const recordPath = gateDeltaRecordPath(tmp, A);
+    const before = [readFileSync(recordPath, "utf8"), readFileSync(`${recordPath}.seal`, "utf8")];
+    let afterWrite = false;
+    const result = await extend(root, L, {
+      writeRecord: (...a) => { writeSealedGateDeltaRecord(...a); afterWrite = true; },
+      resolveProof: async () => { afterWrite = false; return null; },
+      readRecord: (...a) => { if (afterWrite) throw new Error("read failed between write and proof"); return readGateDeltaRecord(...a); },
+    });
+    assert.equal(result.reason, "proof_not_reached");
+    assert.match(result.detail, /was restored/u);
+    assert.deepEqual([readFileSync(recordPath, "utf8"), readFileSync(`${recordPath}.seal`, "utf8")], before);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a failed proof after sealing delta_covered restores the delta record byte for byte", async () => {
   const { root, A } = await cleanCapFixture();
   try {
@@ -862,12 +884,13 @@ test("a delta record that changed on disk after validation is never overwritten"
   }
 });
 
-test("a clean ledger at the PR head is the head being posted: no cap round resolves, the generic no_cap_round_chain refusal fires and nothing is written", async () => {
+test("a clean ledger at the PR head resolves no cap round and writes nothing", async () => {
   const { root, A } = await cleanCapFixture();
   try {
     const result = await extend(root, A);
     assert.equal(result.reason, "no_cap_round_chain");
     assert.match(result.detail, /has no covering sealed cap-round clearing chain/u);
+    assert.match(result.detail, /no extension is needed/u);
     assert.equal(readSealedGateDeltaRecord(path.join(root, "tmp"), A), null);
   } finally {
     await rm(root, { recursive: true, force: true });
