@@ -13,6 +13,7 @@ import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs
 import { seedJudgeSources } from "../loop/_judge-delivery-fixture.mjs";
 import { withTempDir } from "../_helpers.mjs";
 import { findRetirementAfter, main as pullMain, pullDelegationTarget, shouldRetryFixerPullLocally } from "../../scripts/github/pull-work-order.mjs";
+import { keyedFixerPlanPathForRef } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { shellQuote } from "../../scripts/lib/checkout-delegation-refusal.mjs";
 import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
 import { decideFixerWriteGuard } from "../../packages/core/src/claude/hook-decisions.mjs";
@@ -645,6 +646,23 @@ test("pullDelegationTarget: a main-anchored fixer pull delegates to the linked d
     await rm(executionIndexPath(path.join(main, "tmp"), FIXER_ID));
     await seedFixerPlan(main, "gone");
     assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), null);
+  });
+});
+
+test("pullDelegationTarget: a keyed fixer plan beside a canonical plan of another ref delegates to the keyed order's branch worktree", async () => {
+  await withDir(async (base) => {
+    const main = path.join(base, "main");
+    const git = await seedFixerMain(main);
+    const linked = path.join(base, "keyed-unit");
+    git(["worktree", "add", "-q", "-b", "issue-11", linked]);
+    await seedDelegateCheckout(linked);
+    const tmp = path.join(main, "tmp");
+    const keyedId = "f1790000000002-abcdef34";
+    const workOrderRef = `fixer:o/r#7:${HEAD}:${keyedId}`;
+    const workOrder = { mutationAuthority: { branch: "issue-11", allowedPaths: ["."] } };
+    await writeExecutionIndex(tmp, { executionIdentity: keyedId, workOrderRef, workOrderDigest: workOrderDigest(workOrder) });
+    await writeFile(keyedFixerPlanPathForRef(workOrderRef, tmp), JSON.stringify({ workOrderRef, workOrder }), "utf8");
+    assert.equal(pullDelegationTarget(keyedId, [tmp], { toolchainRoot: main, env: {} }), linked);
   });
 });
 
