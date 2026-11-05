@@ -1537,6 +1537,9 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 1 } } }));
     await writeCurrentLog(path.join(root, "tmp"), head);
     assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    // ADR 0253 decision 2: a nit-only list in round 1 stays act when round 1 is the cap round (cap 1).
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "nit" })]));
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
     // A deduped [low, medium] cluster carries its full severities, so the representative's low does not trip the cap guard.
     await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "low", clusterSeverities: ["low", "medium"] })]));
     assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
