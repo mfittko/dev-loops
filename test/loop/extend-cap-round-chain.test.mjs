@@ -749,7 +749,31 @@ test("a cleared end inside a cyclic chain still seals the covering delta through
   }
 });
 
-test("a non-clean fixer chain: a delta at the chain end covering the head is accepted, one with an off-history candidate refuses", async () => {
+test("a logic commit after a delta_covered seal and a docs extension names the chain end as the delta baseline", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs d");
+    const tmp = path.join(root, "tmp");
+    const clear = { outcome: "locally_clear", nextStep: "push_to_gate", items: [] };
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: D, ...clear });
+    assert.equal((await extend(root, D)).action, "chain_extended");
+    const E = await commit(root, { "docs/e.md": "e\n" }, "docs e");
+    assert.equal((await extend(root, E)).action, "chain_extended");
+    const F = await commit(root, { "src/f.mjs": "export const f = 1;\n" }, "logic F");
+    const refused = await extend(root, F);
+    assert.equal(refused.ok, false);
+    assert.ok(refused.detail.includes(`baseline ${E}`), refused.detail);
+    writeSealedGateDeltaRecord(tmp, E, { reviewBaselineHead: E, candidateHead: F, ...clear });
+    // The delta at the chain end E extends the chain A..D..E, so the proof reaches F without a further seal.
+    const ok = await extend(root, F);
+    assert.equal(ok.action, "already_proven", JSON.stringify(ok));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a non-clean fixer chain: a plain chain-end delta is already proven, one with an off-history candidate refuses", async () => {
   const { root, A, B } = await capFixture();
   try {
     runGitFixture(root, ["checkout", "-q", "-b", "side", B]);
@@ -764,7 +788,7 @@ test("a non-clean fixer chain: a delta at the chain end covering the head is acc
     assert.equal(refused.reason, "no_cap_round_chain");
     writeSealedGateDeltaRecord(tmp, B, { reviewBaselineHead: B, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
     const ok = await extend(root, L);
-    assert.ok(ok.ok, JSON.stringify(ok));
+    assert.equal(ok.action, "already_proven", JSON.stringify(ok));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -179,7 +179,8 @@ export async function extendCapRoundChain(options, {
   const capRecord = cleanCap && capHeadValid ? sealedClearing(capHeadSha) : null;
   const capCandidate = String(capRecord?.candidateHead ?? "").toLowerCase();
   const clearedEnd = ["delta_covered", "docs_tests_only"].includes(capRecord?.extension) && /^[0-9a-f]{40}$/u.test(capCandidate) && isAncestor(capCandidate) ? capCandidate : null;
-  const rangeStart = clearedEnd ?? (cleanCap && capHeadValid ? capHeadSha : chainEnd);
+  // A later extension past the cleared end moves the start to the chain end, so the remedy never names a baseline whose record this tool wrote.
+  const rangeStart = (clearedEnd && chainEnd !== clearedEnd && reaches(clearedEnd, chainEnd) ? chainEnd : clearedEnd) ?? (cleanCap && capHeadValid ? capHeadSha : chainEnd);
   const { files, logic } = await classifyRange(rangeStart);
   if (logic.length > 0) return await sealDeltaCovered(rangeStart) ?? refuseLogic(rangeStart, logic);
   const recordExists = () => refuse("record_exists", `a delta record for ${chainEnd.slice(0, 7)} already exists and is never overwritten; run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed proof condition`);
