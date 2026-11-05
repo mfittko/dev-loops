@@ -2160,7 +2160,8 @@ const CLEAN_CAP_EXTENSIONS = new Set(["docs_tests_only", "delta_covered"]);
 export const capRoundCovers = (capRound, tmpRoot) => (record) => {
   const refs = new Set((Array.isArray(record.items) ? record.items : []).map((i) => String(i?.ref)));
   const actRefs = [...new Set(capRoundActRefs(capRound.log.findings, capRound.log.headSha).values())];
-  // ADR 0250: a clean cap round has no act item, so only an extend-cap-round-chain record proves it: the first record carries the extension, or a plain clearing chain (a thread-route record over a logic commit) reaches one.
+  // A clean cap round has no act item, so only a record whose extension is in CLEAN_CAP_EXTENSIONS proves it (ADR 0250 for docs_tests_only):
+  // the first record carries one, or a clearing chain over later heads reaches one.
   if (isCleanCapRound(capRound)) {
     const seen = new Set();
     for (let r = record; r && tmpRoot;) {
