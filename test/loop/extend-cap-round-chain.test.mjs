@@ -729,18 +729,21 @@ test("a docs commit after a delta_covered seal extends at the end of the covered
   }
 });
 
-test("an ancestor chain end does not hide a covering delta at the cap-round head", async () => {
+test("a cleared end inside a cyclic chain still seals the covering delta through the main logic path", async () => {
   const { root, A } = await cleanCapFixture();
   try {
     const X = await commit(root, { "docs/x.md": "x\n" }, "docs x");
-    const tmp = path.join(root, "tmp");
-    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: X, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
     const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
-    // A plain record at A over the docs commit is the chain; a delta at A covering the head replaces it as the cover.
-    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
-    writeSealedGateDeltaRecord(tmp, X, { reviewBaselineHead: X, candidateHead: X, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
-    const result = await extend(root, L);
+    const tmp = path.join(root, "tmp");
+    const clear = { outcome: "locally_clear", nextStep: "push_to_gate", items: [] };
+    // A cleared X (docs_tests_only); the delta X..L covers the head; L..A closes a cycle, so the walk has no end and neither the chain-reaches-head branch nor an ancestor end applies.
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: X, ...clear, extension: "docs_tests_only" });
+    writeSealedGateDeltaRecord(tmp, X, { reviewBaselineHead: X, candidateHead: L, ...clear });
+    writeSealedGateDeltaRecord(tmp, L, { reviewBaselineHead: L, candidateHead: A, ...clear });
+    let calls = 0;
+    const result = await extend(root, L, { resolveProof: async () => (calls++ === 0 ? null : {}) });
     assert.ok(result.ok, JSON.stringify(result));
+    assert.equal(readSealedGateDeltaRecord(tmp, X).extension, "delta_covered");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

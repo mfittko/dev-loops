@@ -5,7 +5,7 @@
  * clearing record bound to the chain end E with candidateHead = the PR head, so
  * `resolveCapRoundFixed` reaches the head again. It needs no fixer plan. A commit in E..HEAD
  * that touches a logic file refuses (`logic_commit_in_range`, `delta_range_mismatch`) and writes nothing, unless a sealed
- * `locally_clear` pre-push delta record is bound to the start of the logic range (the cap-round head for a clean cap round) and the PR head: the tool then seals
+ * `locally_clear` pre-push delta record is bound to the start of the logic range (the cap-round head for a clean cap round, or the candidate head of an already-extended cap-head record (the end of the extended chain), otherwise the chain end) and the PR head: the tool then seals
  * `extension: "delta_covered"` into that record (ADR 0254, issue 3049). For a clean cap
  * round the range starts at the cap-round head: only a locally_clear record bound to that head seals, never a plain or bounded_out record, nor a later link.
  */
@@ -30,7 +30,7 @@ import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } fro
 const USAGE = `Usage: extend-cap-round-chain.mjs --repo <owner/name> --pr <number> [--worktree <path>]
 Extend the sealed cap-round clearing chain over later commits that change docs and tests, or code covered by a locally_clear pre-push delta
 (GATE-EXEC-ROUND-CAP-CHAIN-EXTEND, ADR 0254). The PR head must equal HEAD of the worktree (default: cwd).
-Commits after the chain end that touch a logic file need a sealed locally_clear pre-push delta record for exactly the start of the logic range..PR head (the cap-round head for a clean cap round, otherwise the chain end; ADR 0254): the tool then seals extension "delta_covered" into that record. It refuses with a typed reason and writes nothing when such commits have no covering delta, when no cap-round chain exists (a clean cap round counts as a chain of length zero ending at the cap-round head), or when the proof does not reach the head afterwards.
+Commits after the chain end that touch a logic file need a sealed locally_clear pre-push delta record for exactly the start of the logic range..PR head (the cap-round head for a clean cap round, or the candidate head of an already-extended cap-head record (the end of the extended chain), otherwise the chain end; ADR 0254): the tool then seals extension "delta_covered" into that record. It refuses with a typed reason and writes nothing when such commits have no covering delta, when no cap-round chain exists (a clean cap round counts as a chain of length zero ending at the cap-round head), or when the proof does not reach the head afterwards.
 Output (stdout, JSON): { "ok": true, "action": "chain_extended" | "already_proven", "chainEnd" (null for already_proven), "candidateHead", "files" }
 Refusal (stderr, JSON, exit 1): { "ok": false, "refused": true, "reason": "<code>", "detail": "..." }
 Reasons: repo_mismatch, pr_state_unreadable, base_fetch_failed, head_mismatch, no_cap_round_chain, baseline_orphaned,
