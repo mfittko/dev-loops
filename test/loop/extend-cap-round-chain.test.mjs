@@ -474,7 +474,7 @@ test("a clean cap-round ledger that holds an open act finding still refuses no_c
   }
 });
 
-test("a clean cap round with a plain record over a logic commit refuses logic_commit_in_range even with a docs commit after it (ADR 0250)", async () => {
+test("a clean cap round with a delta record over a logic commit that does not reach the head refuses delta_range_mismatch (ADR 0254)", async () => {
   const { root, A } = await cleanCapFixture();
   try {
     const B = String(runGitFixture(root, ["rev-list", "--max-count=1", "--all", `^${A}`])).trim();
@@ -483,7 +483,7 @@ test("a clean cap round with a plain record over a logic commit refuses logic_co
     runGitFixture(root, ["checkout", "-q", B]);
     const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
     assert.equal(await proof(root, D), null, "the plain record alone does not prove the clean cap round");
-    assert.equal((await extend(root, D)).reason, "logic_commit_in_range");
+    assert.equal((await extend(root, D)).reason, "delta_range_mismatch");
     assert.equal(await proof(root, D), null);
     assert.equal(readSealedGateDeltaRecord(path.join(root, "tmp"), A).extension, undefined, "the plain record at the cap-round head is never overwritten");
   } finally {
@@ -561,21 +561,69 @@ test("a clean cap round whose plain clearing chain ends at the PR head refuses c
   }
 });
 
-test("a clean cap round whose plain chain reaches the head over a logic commit refuses logic_commit_in_range, not chain_reaches_head", async () => {
+test("a clean cap round whose sealed locally_clear delta covers exactly the cap-round head to the PR head over a logic commit seals delta_covered (ADR 0254, issue 3049 AC2)", async () => {
   const { root, A } = await cleanCapFixture();
   try {
     await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
     const D = await commit(root, { "docs/d.md": "d\n" }, "docs d");
-    writeSealedGateDeltaRecord(path.join(root, "tmp"), A, { reviewBaselineHead: A, candidateHead: D, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: D, outcome: "locally_clear", nextStep: "push_to_gate", items: [{ ref: "t1", status: "resolved" }] });
+    assert.equal(await proof(root, D), null, "the plain delta record alone does not prove a clean cap round");
     const result = await extend(root, D);
-    assert.equal(result.reason, "logic_commit_in_range");
-    assert.equal(readSealedGateDeltaRecord(path.join(root, "tmp"), A).extension, undefined);
-    assert.equal(existsSync(gateDeltaRecordPath(path.join(root, "tmp"), D)), false);
-    assert.equal(existsSync(`${gateDeltaRecordPath(path.join(root, "tmp"), D)}.seal`), false);
+    assert.deepEqual({ ...result, files: [...result.files].sort() }, { ok: true, action: "chain_extended", chainEnd: A, candidateHead: D, files: ["docs/d.md", "src/x.mjs"] });
+    const record = readSealedGateDeltaRecord(tmp, A);
+    assert.equal(record.extension, "delta_covered");
+    assert.deepEqual(record.items, [{ ref: "t1", status: "resolved" }], "the delta's own fields are kept");
+    assert.ok(await proof(root, D));
+    assert.equal((await extend(root, D)).action, "already_proven");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a code commit pushed after the covering delta refuses delta_range_mismatch and leaves the record untouched (issue 3049 AC3)", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const M = await commit(root, { "src/y.mjs": "export const y = 1;\n" }, "logic M");
+    const result = await extend(root, M);
+    assert.equal(result.reason, "delta_range_mismatch");
+    assert.match(result.detail, /pre-push-delta --baseline /u);
+    assert.equal(readSealedGateDeltaRecord(tmp, A).extension, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a delta that reaches the head but is not locally_clear refuses delta_range_mismatch (bounded_out is no cover)", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "bounded_out", nextStep: "push", items: [] });
+    assert.equal((await extend(root, L)).reason, "delta_range_mismatch");
+    assert.equal(readSealedGateDeltaRecord(tmp, A).extension, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed proof after sealing delta_covered restores the delta record byte for byte", async () => {
+  const { root, A } = await cleanCapFixture();
+  try {
+    const L = await commit(root, { "src/x.mjs": "export const x = 1;\n" }, "logic L");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const result = await extend(root, L, { resolveProof: async () => null });
+    assert.equal(result.reason, "proof_not_reached");
+    assert.equal(readSealedGateDeltaRecord(tmp, A).extension, undefined, "the sealed pair is restored");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 
 test("a clean cap round with no record at the cap-round head and a base-only-merge chain ending at the head still extends at the cap-round head", async () => {
   const { root, A } = await cleanCapFixture();
