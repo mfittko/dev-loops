@@ -4750,7 +4750,7 @@ test("failing-CI block names the operator until a runnable repair path exists", 
   assert.equal(result.agentRemedy, undefined);
 });
 
-test("draft round-cap refusal stays untyped without a chain-extendable condition (known gap, issue 3105 slice 6)", () => {
+test("draft round-cap refusal without a failure condition names the operator (ADR 0255)", () => {
   const result = evaluatePrGateCoordination({
     pr: 9,
     currentHeadSha: "abc123456789",
@@ -4761,7 +4761,7 @@ test("draft round-cap refusal stays untyped without a chain-extendable condition
     draftRoundRefused: true,
   });
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
-  assert.equal(result.blockedOn, undefined);
+  assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
   assert.equal(result.agentRemedy, undefined);
 });
 
@@ -4772,9 +4772,11 @@ test("draft round-cap refusal for a chain-extendable condition carries the exten
     assert.equal(result.agentRemedy.command, "dev-loops gate extend-cap-round-chain --repo o/r --pr 9", condition);
     assert.match(result.reason, /delta_covered/, condition);
   }
-  for (const condition of ["baseline_orphaned", "unsealed_record", "cap_round_unresolved"]) {
-    assert.equal(evaluatePrGateCoordination({ ...base, draftCapRoundFailure: condition }).agentRemedy, undefined, condition);
+  for (const condition of ["baseline_orphaned", "cap_round_unresolved"]) {
+    const result = evaluatePrGateCoordination({ ...base, draftCapRoundFailure: condition });
+    assert.deepEqual({ remedy: result.agentRemedy, on: result.blockedOn }, { remedy: undefined, on: BLOCKED_ON.OPERATOR_DECISION }, condition);
   }
+  assert.equal(evaluatePrGateCoordination({ ...base, draftCapRoundFailure: "unsealed_record" }).agentRemedy.command, "dev-loops gate extend-cap-round-chain --repo o/r --pr 9");
   // Without a plain repo slug the extendable condition names the operator instead of an unrunnable command.
   assert.equal(evaluatePrGateCoordination({ ...base, repo: undefined, draftCapRoundFailure: "no_clearing_record" }).blockedOn, BLOCKED_ON.OPERATOR_DECISION);
 });

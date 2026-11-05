@@ -94,7 +94,7 @@ test("a logic commit, alone or mixed with docs, refuses and writes no record", a
     const refused = await extend(root, L);
     assert.equal(refused.reason, "logic_commit_in_range");
     assert.match(refused.detail, /src\/b\.mjs/);
-    assert.match(refused.detail, /pre-push-delta --baseline /u);
+    assert.match(refused.detail, /pre-push-delta --reviewer-only --baseline /u);
     const M = await commit(root, { "docs/x.md": "x\n", "src/c.mjs": "export const c = 1;\n" }, "mixed");
     assert.equal((await extend(root, M)).reason, "logic_commit_in_range");
     assert.equal(readSealedGateDeltaRecord(path.join(root, "tmp"), B), null);
@@ -118,7 +118,7 @@ test("refuses a PR head that is not the worktree HEAD and a PR with no cap-round
     const head = await commit(bare, { "docs/z.md": "z\n" }, "docs");
     const refused = await extend(bare, head);
     assert.equal(refused.reason, "no_cap_round_chain");
-    assert.match(refused.detail, /check-pre-push-delta\.mjs --result/);
+    assert.match(refused.detail, /loop pre-push-delta --reviewer-only --baseline/);
     assert.match(refused.detail, /gate-coordination .* routes this refusal back to this command, so only the pre-push delta or the replacement-PR restart breaks the cycle/);
   } finally {
     await rm(bare, { recursive: true, force: true });
@@ -192,7 +192,7 @@ test("the cap-round head equal to the head, or an unfetched cap-round head, refu
     runGitFixture(root, ["checkout", "-q", A]);
     const equal = await extend(root, A);
     assert.equal(equal.reason, "no_cap_round_chain");
-    assert.match(equal.detail, /check-pre-push-delta\.mjs --result/);
+    assert.match(equal.detail, /loop pre-push-delta --reviewer-only --baseline/);
     const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
     const gone = "a".repeat(40);
     const dir = path.join(root, "tmp", "gate-findings", "owner-repo", `pr-${PR}`);
@@ -298,7 +298,7 @@ test("a non-clearing or unsealed record at the chain end refuses record_not_clea
     const refused = await extend(root, D);
     assert.equal(refused.reason, "record_not_clearing");
     assert.doesNotMatch(refused.detail, /extend-cap-round-chain|gate-coordination/);
-    assert.match(refused.detail, /check-pre-push-delta\.mjs --result/);
+    assert.match(refused.detail, /loop pre-push-delta --reviewer-only --baseline/);
     assert.deepEqual(readSealedGateDeltaRecord(tmp, B), before);
     rmSync(path.join(tmp, "gate-delta", `${B}.json.seal`));
     assert.equal((await extend(root, D)).reason, "record_not_clearing");
@@ -451,7 +451,7 @@ test("a clean cap round plus a logic commit refuses logic_commit_in_range and wr
     const refused = await extend(root, L);
     assert.equal(refused.reason, "logic_commit_in_range");
     assert.doesNotMatch(refused.detail, /act list and fixer files/u);
-    assert.match(refused.detail, /no act list/u);
+    assert.match(refused.detail, /reviewer-only --baseline/u);
     const recordPath = gateDeltaRecordPath(path.join(root, "tmp"), A);
     assert.equal(existsSync(recordPath), false);
     assert.equal(existsSync(`${recordPath}.seal`), false);
@@ -606,7 +606,7 @@ test("a code commit pushed after the covering delta refuses delta_range_mismatch
     const M = await commit(root, { "src/y.mjs": "export const y = 1;\n" }, "logic M");
     const result = await extend(root, M);
     assert.equal(result.reason, "delta_range_mismatch");
-    assert.match(result.detail, /only the thread-route pre-push delta .*--threads-file.*at least one unresolved review thread.*replacement PR.*does not break the cycle/u);
+    assert.match(result.detail, /reviewer-only pre-push delta over .*--reviewer-only --baseline .*--pr-head.*replacement PR/u);
     assert.equal(readSealedGateDeltaRecord(tmp, A).extension, undefined);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -837,7 +837,7 @@ test("a logic commit after a delta_covered seal and a docs extension refuses wit
     const F = await commit(root, { "src/f.mjs": "export const f = 1;\n" }, "logic F");
     const refused = await extend(root, F);
     assert.equal(refused.ok, false);
-    assert.ok(refused.detail.includes(`for ${E.slice(0, 7)}..`), refused.detail);
+    assert.ok(refused.detail.includes(`over ${E.slice(0, 7)}..`), refused.detail);
     writeSealedGateDeltaRecord(tmp, E, { reviewBaselineHead: E, candidateHead: F, ...clear });
     // The delta at the chain end E extends the chain A..D..E, so the proof reaches F without a further seal.
     const ok = await extend(root, F);
