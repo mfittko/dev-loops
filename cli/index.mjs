@@ -443,7 +443,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "ui-review-teardown": "Tear down the UI-review worktree/app and emit the side-effect ledger",
     "visual-grill-capture": "Drive a headless browser to a described screen and capture it for loop-grill",
     "audit-session": "Audit Pi or Claude Code session transcripts to measure token efficiency and context snowballing",
-    "pre-push-delta": "Build the delta-mode pre-push review input or check its result before an act-list or thread-route fix push",
+    "pre-push-delta": "Build the delta-mode pre-push review input or check its result before an act-list or thread-route fix push, or a reviewer-only code-range clearing (--reviewer-only)",
     "pre-pr-review": "Write the pre-PR review record for the current head after the stale-surface sweep (required by pr create); --scan prints the sweep only",
     "spec-lint": "Lint an issue body offline against required-rules.json and docs/decisions",
     "implementation-brief": "Print the canonical review expectations of a spec body, offline and read-only",
