@@ -2,26 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
-## 1.0.10-pre.3
+## 1.0.10
 
 ### Added
 
+- `loop pre-push-delta --reviewer-only` seals a locally_clear record for a code range, its act list derived from the cap-round ledger, so the cap-round chain extends after a head move (#3122)
+- Cap-round refusals name the operator for `baseline_orphaned` and `cap_round_unresolved`, `unsealed_record` carries an `agentRemedy`, and remedies name `loop pre-push-delta --reviewer-only` (#3122)
 - `dev-loops loop startup --claim` assigns you to an unassigned, open PR or issue inside the startup call you asked for, only after a successful read of the assignees (#3084)
-
-## 1.0.10-pre.2
-
-### Added
-
 - `loop spec-lint` reports `contract_doc_not_in_matrix` when a contract doc in the Size forecast `files=` list is not named in the AC / DoD matrix, so `pr waive-adr-tripwire` stays reachable (#3081)
 
+### Changed
+
+- The cap-round proof reader accepts a sealed clearing record with extension `delta_covered`, the expand step for code commits past the cap-round head (#3049, #3105)
+- `gate extend-cap-round-chain` accepts code commits past the cap-round head when a locally_clear delta covers exactly that range, and past-cap routing names it (#3049, #3105)
+- Low and nit convergence applies only at the draft cap round or later, and the draft gate fixes a low at the cap round (#3105)
+- At the draft cap round only a high without a fix, a high or fail-open finding the judge defers or rejects, a question item or unreadable evidence blocks (#3105)
+- Gate coordination blocked results now name a decision (`blockedOn`; `operator_decision` is the slice 1 catch-all) or a runnable remedy command (#3105)
+
 ### Fixed
 
+- A second gate round at an unchanged head no longer overwrites the earlier findings log: it stays as a retained `<gate>-<sha>.round-<n>.json` round and the round count includes it (#3080, #3066)
+- `pr waive-adr-tripwire` reads the spec digest from the sealed ledger of the round a converged or carried draft_gate marker names (#3101)
+- A no-commit fixer emission after a refused `locally_clear` delta result keeps the bound fixer plan; the refusal goes to the delta reviewer (#3111)
 - A clean draft_gate cap round followed by a docs-only or tests-only commit now reaches ready-for-review through gate extend-cap-round-chain (#3079)
-
-## 1.0.10-pre.1
-
-### Fixed
-
 - `create-pr` no longer blocks repos without dev-loops changelog files; set `changelog.required: true` to keep the check (#3076)
 
 ## 1.0.9
