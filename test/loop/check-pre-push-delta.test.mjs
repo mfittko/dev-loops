@@ -929,7 +929,7 @@ test("a refused locally_clear result followed by a no-commit re-emission keeps t
 
 
 // ADR 0255: the PR 3087 state. The cap-round head P1, a fix commit P2, then a base refresh merged in; the sequence is closed (no marker, no plan) and the head moved.
-function reviewerOnlyRepo({ conflictOnly = false, nonBaseOnlyMerge = false, evilMerge = false, octopus = false, baseChanges = false, ownChanges = false, commitAfterMerge = false } = {}) {
+function reviewerOnlyRepo({ conflictOnly = false, nonBaseOnlyMerge = false, evilMerge = false, octopus = false, baseChanges = false, ownChanges = false, commitAfterMerge = false, netRevert = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-only-"));
   initGitFixture(dir, { branch: "main", commit: null });
   const git = (...args) => runGitFixture(dir, args);
@@ -944,6 +944,7 @@ function reviewerOnlyRepo({ conflictOnly = false, nonBaseOnlyMerge = false, evil
   fs.writeFileSync(path.join(dir, "a.mjs"), "// uses goneIdentifierName\nexport const a = 2;\n");
   if (ownChanges) { fs.mkdirSync(path.join(dir, "changes")); fs.writeFileSync(path.join(dir, "changes", "own.md"), "own\n"); }
   git("add", "."); git("commit", "-qm", "fix: a");
+  if (netRevert) { fs.writeFileSync(path.join(dir, "a.mjs"), "// uses goneIdentifierName\nexport const a = 1;\n"); git("add", "."); git("commit", "-qm", "revert: a"); }
   const fix = git("rev-parse", "HEAD");
   git("checkout", "-q", "main");
   fs.writeFileSync(path.join(dir, "refreshed.txt"), "from the base\n");
@@ -1325,6 +1326,13 @@ test("a conflict-resolution merge whose patch is empty fails closed with the rep
   const repo = reviewerOnlyRepo({ conflictOnly: true });
   try {
     await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "s", "--result-path", path.join(repo.dir, "r.json")], { ...seam, diffPatch: () => "" }), /empty_resolution_patch[\s\S]*--allow-replacement-pr/);
+  } finally { cleanup(repo); }
+});
+
+test("PR-own commits that net-revert a file leave an empty patch and fail closed with the replacement-PR remedy", async () => {
+  const repo = reviewerOnlyRepo({ netRevert: true });
+  try {
+    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "s", "--result-path", path.join(repo.dir, "r.json")], seam), /empty_resolution_patch[\s\S]*--allow-replacement-pr/);
   } finally { cleanup(repo); }
 });
 

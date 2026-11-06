@@ -482,7 +482,7 @@ export async function runCli(
   }
   const currentHead = revParse(options.worktree, "HEAD");
   // ADR 0255: the reviewer-only route reviews baseline..PR head, so the worktree HEAD is the PR head. Base-only merges in the range are excluded; any other merge refuses.
-  let ownPaths, priorRecord, baseBranch, noMarker;
+  let ownPaths, priorRecord, baseBranch, noMarker, reviewerPatch;
   const baselineHead = sequence.reviewBaselineHead;
   if (options.reviewerOnly) {
     if (revParse(options.worktree, options.prHead) !== currentHead) throw new Error(`reviewer-only: worktree HEAD ${currentHead} is not --pr-head ${options.prHead}; check out the PR head and rerun`);
@@ -513,9 +513,10 @@ export async function runCli(
     const { base, resolvedPaths } = await reviewerOnlyBase(options.worktree, baselineHead, currentHead, { revParse, baseOnlyMerge, revList, fetchBase });
     baseBranch = base;
     ownPaths = [...new Set([...changedPaths(options.worktree, baselineHead, currentHead, base), ...resolvedPaths])];
-    // The reviewer reads the plain patch: a resolution that leaves it empty cannot be judged.
-    if (resolvedPaths.length && !diffPatch(options.worktree, baselineHead, currentHead, ownPaths).length) throw new Error(`empty_resolution_patch: the conflict resolution in ${baselineHead}..${currentHead} leaves an empty patch the reviewer cannot read. Only the replacement-PR restart remains: ${REPLACEMENT_REMEDY}`);
     if (ownPaths.length === 0) throw new Error(`reviewer-only: the PR-own commits in ${baselineHead}..${currentHead} change no file; there is no code range to clear. ${FIXER_REMEDY}`);
+    // The reviewer reads this plain patch: an empty one (an empty conflict resolution, net-reverting commits) cannot be judged.
+    reviewerPatch = diffPatch(options.worktree, baselineHead, currentHead, ownPaths);
+    if (!reviewerPatch.length) throw new Error(`empty_resolution_patch: the PR-own range ${baselineHead}..${currentHead} leaves an empty patch the reviewer cannot read. Only the replacement-PR restart remains: ${REPLACEMENT_REMEDY}`);
   }
   // The CLI runs before the push, so the fix is unpushed by construction.
   const fixCommitted = currentHead !== sequence.reviewBaselineHead;
@@ -594,7 +595,7 @@ export async function runCli(
     if (options.reviewerOnly) {
       // The reviewer read the input run's patch: the result run recomputes it and refuses a different range (a moved origin/<base> changes the PR-own paths).
       const readPatch = deltaPatchPath(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), baselineHead, currentHead);
-      if (!existsSync(readPatch) || !readFileSync(readPatch).equals(diffPatch(options.worktree, baselineHead, currentHead, ownPaths))) throw new Error(`reviewer-only: the range ${baselineHead}..${currentHead} now differs from the patch the reviewer read (${readPatch}); origin/${baseBranch} or the branch moved after the input run. Rerun the input run (without --result) and have the reviewer judge the new patch`);
+      if (!existsSync(readPatch) || !readFileSync(readPatch).equals(reviewerPatch)) throw new Error(`reviewer-only: the range ${baselineHead}..${currentHead} now differs from the patch the reviewer read (${readPatch}); origin/${baseBranch} or the branch moved after the input run. Rerun the input run (without --result) and have the reviewer judge the new patch`);
       // Only a locally_clear result writes a clearing step: a bounded_out must not read as push_to_gate (ADR 0255).
       if (decision.outcome === "bounded_out") decision = { ...decision, nextStep: "restart_on_replacement_pr" };
       if (priorRecord?.outcome === "locally_clear" && !decision.locallyClear) throw new Error(`reviewer-only: the locally_clear record for baseline ${baselineHead} is not replaced by a non-clearing result and is never overwritten. ${CHAIN_END_REMEDY}`);
@@ -640,7 +641,7 @@ export async function runCli(
     if (!options.handback && !options.resultPath) throw parseError("--result-path <path> is required on the reviewer-input run: the run record binds the briefed result path and seal-evidence refuses any other path (GATE-EXEC-EVIDENCE-SEALED)");
     if (!options.handback) { // the fixer handbackCheck stays write-free
       mkdirSync(path.dirname(patchPath), { recursive: true });
-      writeFileSync(patchPath, diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead, ownPaths));
+      writeFileSync(patchPath, reviewerPatch ?? diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead, ownPaths));
     }
     // The target binds the log's repo and pr: authenticateCoverage's for a plan, --repo/--pr for the reviewer-only route; without one the chain path refuses.
     payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE, sealCommand: deltaSealCommand(options.resultPath, tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), options.worktree) }), ...buildDeltaInput({ sequence, candidateHead: currentHead, runId, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles, staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
