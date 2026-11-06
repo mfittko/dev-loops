@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { readSequenceMarker, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { readSequenceMarker, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 
 import { DELTA_EVIDENCE_RULE, deltaPatchPath, gitStaleSurfaceHits, parseCheckPrePushDeltaArgs, runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
@@ -1090,23 +1090,18 @@ test("the reviewer-only run classifies the prior record under the sequence lock,
   try {
     const record = { reviewBaselineHead: repo.baseline, candidateHead: repo.head, actSetId: "other", invocation: 1, outcome: "locally_clear", nextStep: "push_to_gate", items: [], extension: "delta_covered" };
     writeSealedGateDeltaRecord(repo.tmpRoot, repo.baseline, record);
-    const seal = path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.json.seal`);
-    const sealBytes = fs.readFileSync(seal);
-    let pending;
-    await withSequenceLock(repo.tmpRoot, [repo.baseline], async () => {
-      fs.rmSync(seal);
-      pending = runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], seam);
-      pending.catch(() => {});
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      fs.writeFileSync(seal, sealBytes);
-    });
-    await assert.rejects(pending, (error) => {
+    // The isAncestor seam runs inside the classification: it records whether the sequence lock directory exists at that call.
+    const lockDir = path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.sequence-lock`);
+    const heldAtClassification = [];
+    const isAncestor = () => { heldAtClassification.push(fs.existsSync(lockDir)); return true; };
+    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], { ...seam, isAncestor }), (error) => {
       assert.match(error.message, /carries an extension/);
       assert.doesNotMatch(error.message, /unsealed_record/);
       return true;
     });
+    assert.deepEqual(heldAtClassification, [true], "the prior record is classified while the sequence lock is held");
   } finally { cleanup(repo); }
-}, 15000);
+});
 
 test("the invocation bound is real: a rerun at invocation 1 over a needs_fix record refuses, and a needs_fix result never replaces a locally_clear record", async () => {
   const repo = reviewerOnlyRepo();

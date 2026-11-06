@@ -899,13 +899,17 @@ test("sealing delta_covered waits for the sequence lock the reviewer-only run ho
     const tmp = path.join(root, "tmp");
     writeSealedGateDeltaRecord(tmp, A, { reviewBaselineHead: A, candidateHead: L, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
     const before = readFileSync(gateDeltaRecordPath(tmp, A), "utf8");
-    let pending, lockHeld = true;
-    await withSequenceLock(tmp, [A], async () => {
-      pending = extend(root, L, { writeRecord: (...a) => { assert.equal(lockHeld, false, "no write while the delta run holds the lock"); writeSealedGateDeltaRecord(...a); } });
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      assert.equal(readFileSync(gateDeltaRecordPath(tmp, A), "utf8"), before, "the write waits for the lock"); lockHeld = false;
+    // The read and write seams record whether the sequence lock directory exists at the call.
+    const lockDir = `${gateDeltaRecordPath(tmp, A)}`.replace(/\.json$/, ".sequence-lock");
+    const held = [];
+    const result = await extend(root, L, {
+      readRecord: (...a) => { held.push(["read", existsSync(lockDir)]); return readGateDeltaRecord(...a); },
+      writeRecord: (...a) => { held.push(["write", existsSync(lockDir)]); writeSealedGateDeltaRecord(...a); },
     });
-    assert.equal((await pending).action, "chain_extended");
+    assert.equal(result.action, "chain_extended");
+    assert.ok(held.some(([kind]) => kind === "write"), "the seal wrote a record");
+    assert.deepEqual(held.filter(([, isHeld]) => !isHeld), [], "every read and write runs under the sequence lock");
+    assert.notEqual(readFileSync(gateDeltaRecordPath(tmp, A), "utf8"), before, "the seal wrote the extension");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -934,13 +938,11 @@ test("the docs_tests_only create waits for the sequence lock and holds it throug
   try {
     const D = await commit(root, { "docs/decisions/0001-x.md": "# x\n" }, "docs");
     const tmp = path.join(root, "tmp");
-    let pending;
-    await withSequenceLock(tmp, [B], async () => {
-      pending = extend(root, D);
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      assert.equal(existsSync(gateDeltaRecordPath(tmp, B)), false, "the exclusive create waits for the lock");
-    });
-    assert.equal((await pending).action, "chain_extended");
+    const lockDir = gateDeltaRecordPath(tmp, B).replace(/\.json$/, ".sequence-lock");
+    const held = [];
+    const created = await extend(root, D, { writeRecord: (...a) => { held.push(existsSync(lockDir)); writeSealedGateDeltaRecord(...a); } });
+    assert.equal(created.action, "chain_extended");
+    assert.deepEqual(held, [true], "the exclusive create runs under the sequence lock");
     rmSync(gateDeltaRecordPath(tmp, B), { force: true });
     rmSync(`${gateDeltaRecordPath(tmp, B)}.seal`, { force: true });
     let duringProof;
