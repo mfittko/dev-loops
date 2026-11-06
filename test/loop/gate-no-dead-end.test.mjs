@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { test } from "bun:test";
 
 import {
   BLOCKED_ON,
+  CAP_ROUND_REFUSAL,
   evaluatePrGateCoordination,
   PR_CHECKPOINT_ACTION,
 } from "../../packages/core/src/loop/pr-gate-coordination.mjs";
 import { hasRunnableCommand, isTyped, isTypedOrKnownGap, KNOWN_GAPS } from "../../packages/core/src/loop/gate-no-dead-end.mjs";
 import { DISPOSITION, STATE } from "../../packages/core/src/loop/copilot-loop-state.mjs";
+import { SUBCOMMAND_ROUTES } from "../../cli/index.mjs";
+import { parseExtendCapRoundChainCliArgs } from "../../scripts/loop/extend-cap-round-chain.mjs";
 
 // Issue 3105 slice 1: no-dead-end invariant. Every report_blocked result names who decides
 // (`blockedOn`) or the command an agent can run (`agentRemedy.command`), unless it is a listed
@@ -171,4 +176,36 @@ test("a repo that is not a plain slug or a non-positive pr names the operator", 
     assert.equal(result.agentRemedy, undefined);
   }
   assert.match(evaluatePrGateCoordination(titleInput("WIP: x", { repo: "mfittko/dev-loops" })).agentRemedy.command, /--repo mfittko\/dev-loops --pr 7/);
+});
+
+// Issue 3122 / ADR 0255: the cap-round dead end. Every cap-round block names the operator or a command that exists and that the extension route accepts,
+// and every remedy text the cap-round tools print names a command in the CLI registry.
+const COMMAND_PATTERN = /(?:dev-loops|cli\/index\.mjs|\$\{CLI\}) (gate|loop|pr) ([a-z][a-z-]*)/g;
+
+test("every cap-round block is typed: a command that parses on the extension route, or the operator", () => {
+  const failures = [undefined, ...Object.keys(CAP_ROUND_REFUSAL)];
+  let commands = 0;
+  for (const draftCapRoundFailure of failures) {
+    const result = evaluatePrGateCoordination({ pr: 7, repo: "o/r", currentHeadSha: HEAD, prDraft: true, lifecycleState: STATE.PR_DRAFT_NO_FEEDBACK, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", maxCopilotRounds: 0, draftRoundRefused: true, draftCapRoundFixed: false, draftCapRoundFailure });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, String(draftCapRoundFailure));
+    assert.ok(isTyped(result), `${draftCapRoundFailure} is untyped`);
+    if (!result.agentRemedy) { assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION, String(draftCapRoundFailure)); continue; }
+    commands += 1;
+    const command = result.agentRemedy.command;
+    assert.ok(hasRunnableCommand(command), command);
+    const [, group, sub, ...args] = command.split(" ");
+    assert.ok(SUBCOMMAND_ROUTES[group]?.[sub], `${command} is not a CLI command`);
+    assert.doesNotThrow(() => parseExtendCapRoundChainCliArgs(args), command);
+  }
+  assert.ok(commands >= 4);
+});
+
+test("the remedy texts of the cap-round tools name only CLI commands that exist", () => {
+  for (const file of ["packages/core/src/loop/pr-gate-coordination.mjs", "scripts/loop/extend-cap-round-chain.mjs", "scripts/loop/check-pre-push-delta.mjs"]) {
+    const source = readFileSync(path.join(import.meta.dir, "..", "..", file), "utf8");
+    const seen = [...source.matchAll(COMMAND_PATTERN)].map((m) => `${m[1]} ${m[2]}`);
+    assert.ok(seen.length > 0, file);
+    for (const command of seen) { const [group, sub] = command.split(" "); assert.ok(SUBCOMMAND_ROUTES[group]?.[sub], `${file} names the missing command "${command}"`); }
+    if (!file.endsWith("check-pre-push-delta.mjs")) assert.doesNotMatch(source, /check-pre-push-delta\.mjs --result`|run check-pre-push-delta\.mjs --result/, `${file} names a script instead of a command`);
+  }
 });

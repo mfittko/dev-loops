@@ -2002,13 +2002,18 @@ export async function resolveClosureRound(options, { repoRoot, cap }) {
  * every finding is stamped, else clusterFindings), dedupeActListByCluster keeps one finding per cluster, and toDeltaActItems suffixes a repeated
  * fingerprint (fp, fp#2, ...). Returns a Map from each open act finding (every cluster member) to its cluster's ref.
  */
-function capRoundActRefs(findings, headSha) {
+function capRoundActSet(findings, headSha) {
   const all = Array.isArray(findings) ? findings : [];
   const clusters = all.every((f) => Number.isInteger(f?.clusterId)) ? clustersFromStampedIds(all) : clusterFindings(all, { headSha }).clusters;
   const act = all.filter(isOpenActItem);
   const kept = dedupeActListByCluster(act, clusters, all);
   const counts = new Map();
   const refs = kept.map((f) => { const fp = fingerprintFinding(f), n = (counts.get(fp) ?? 0) + 1; counts.set(fp, n); return n > 1 ? `${fp}#${n}` : fp; });
+  return { all, clusters, act, kept, refs };
+}
+
+function capRoundActRefs(findings, headSha) {
+  const { all, clusters, act, refs } = capRoundActSet(findings, headSha);
   // kept follows first appearance of each cluster in act order; unresolvable membership stays one entry per finding.
   const clusterOf = new Map();
   clusters.forEach((c, ci) => c.memberIndices?.forEach((m) => clusterOf.set(all[m], ci)));
@@ -2022,6 +2027,18 @@ function capRoundActRefs(findings, headSha) {
     out.set(f, refs[slotOfCluster.get(ci)]);
   }
   return out;
+}
+
+/**
+ * The cap round's open act list in the shape toDeltaActItems accepts (ADR 0255): one entry per acted cluster, its `ref` the same cluster ref capRoundActRefs yields,
+ * so a reviewer-only record that resolves these items satisfies capRoundCovers. Remediation scope fields are left out: there is no fixer plan or coverage record.
+ */
+export function capRoundActList(findings, headSha) {
+  const { kept, refs } = capRoundActSet(findings, headSha);
+  return kept.map((f, i) => ({
+    ref: refs[i], fingerprint: fingerprintFinding(f), judgeDisposition: "act", angle: f.angle, severity: f.severity, summary: f.judgeTitle ?? f.summary,
+    judgeRationale: f.judgeRationale, file: resolveFindingFile(f) ?? undefined, line: f.line,
+  }));
 }
 
 /**

@@ -200,11 +200,12 @@ function nonEmptyStrings(value) {
  * Open a delta sequence for one gate round. The baseline is the head that gate
  * round reviewed and stays pinned for every invocation in the sequence; a new
  * gate round opens a new sequence.
- * @param {{ reviewBaselineHead: string, actList: unknown }} input
+ * @param {{ reviewBaselineHead: string, actList: unknown, reviewerOnly?: boolean }} input
+ * `reviewerOnly` opens the code-range clearing sequence (ADR 0255): the act list is the one derived from the cap-round ledger, or empty for a clean cap round or a chain-end baseline.
  */
-export function startDeltaSequence({ reviewBaselineHead, actList } = {}) {
+export function startDeltaSequence({ reviewBaselineHead, actList, reviewerOnly = false } = {}) {
   if (!nonEmpty(reviewBaselineHead)) throw new Error("delta sequence requires reviewBaselineHead");
-  const actItems = toDeltaActItems(actList);
+  const actItems = reviewerOnly && Array.isArray(actList) && actList.length === 0 ? [] : toDeltaActItems(actList);
   const actSetId = createHash("sha256")
     .update(JSON.stringify(actItems.map((item) => {
       const { ref, angle, severity, file, line, summary } = item;
@@ -216,7 +217,7 @@ export function startDeltaSequence({ reviewBaselineHead, actList } = {}) {
     })))
     .digest("hex")
     .slice(0, 16);
-  return Object.freeze({ reviewBaselineHead: reviewBaselineHead.trim(), actSetId, actItems });
+  return Object.freeze({ reviewBaselineHead: reviewBaselineHead.trim(), actSetId, actItems, ...(reviewerOnly ? { reviewerOnly: true } : {}) });
 }
 
 /**
@@ -260,7 +261,7 @@ export function buildDeltaInput({ sequence, candidateHead, runId, specIdentity =
       candidateHead: head,
       actSetId: sequence.actSetId,
       ...(runId ? { runId } : {}),
-      actionableItems: [{ ref: "<act item ref>", status: DELTA_ITEM_STATUSES.join("|"), evidence: ["<non-empty string>"] }],
+      actionableItems: sequence.reviewerOnly && sequence.actItems.length === 0 ? [] : [{ ref: "<act item ref>", status: DELTA_ITEM_STATUSES.join("|"), evidence: ["<non-empty string>"] }],
       newFindings: [{
         severity: [...VALID_SEVERITIES].join("|"),
         summary: "<non-empty string>",
@@ -300,10 +301,10 @@ export function deltaFixerFindings(result) {
  * @param {{ actionableItems?: Array<{status?: string}>, newFindings?: Array<{severity?: string}> }} result
  * @returns {"locally_clear"|"needs_fix"}
  */
-export function deriveDeltaOutcome(result) {
+export function deriveDeltaOutcome(result, { reviewerOnly = false } = {}) {
   const items = Array.isArray(result?.actionableItems) ? result.actionableItems : [];
   const findings = Array.isArray(result?.newFindings) ? result.newFindings : [];
-  const allResolved = items.length > 0 && items.every((item) => item?.status === "resolved");
+  const allResolved = (items.length > 0 || reviewerOnly) && items.every((item) => item?.status === "resolved");
   const blockingFinding = findings.some((f) => isOpenResidue(f) || (!nonEmpty(f?.residueOf) && severityRank(f?.severity) <= MEDIUM_RANK));
   return allResolved && !blockingFinding ? "locally_clear" : "needs_fix";
 }
@@ -372,7 +373,7 @@ export function validateDeltaResult(result, { sequence, siteCoverage = [], valid
   }
 
   if (!DELTA_OUTCOMES.includes(result.outcome)) errors.push(`outcome ${JSON.stringify(result.outcome)} is unknown`);
-  else if (result.outcome === "locally_clear" && deriveDeltaOutcome(result) !== "locally_clear") {
+  else if (result.outcome === "locally_clear" && deriveDeltaOutcome(result, { reviewerOnly: sequence?.reviewerOnly === true }) !== "locally_clear") {
     errors.push("locally_clear requires every act item resolved and no new finding of severity medium or higher");
   } else if (result.outcome === "locally_clear" && !membershipOnly) {
     const open = unaddressedStaleSurfaceHits(staleSurfaceHits, { newFindings: findings ?? [], siteCoverage: validationCoverage });

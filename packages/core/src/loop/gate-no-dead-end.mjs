@@ -4,12 +4,6 @@ import { BLOCKED_ON, PR_CHECKPOINT_ACTION } from "./pr-gate-coordination.mjs";
 // `input` is undefined when the caller has no evaluator input (the conformance validator).
 export const KNOWN_GAPS = [
   {
-    id: "draft-round-cap-refusal",
-    slice: "6",
-    matches: (input, result) => (input === undefined || input.draftRoundRefused === true)
-      && result.reason.includes("Round N+1 never runs"),
-  },
-  {
     id: "copilot-cap-ci",
     slice: "9",
     matches: (_input, result) => result.reason.startsWith("round_cap_reached at"),
