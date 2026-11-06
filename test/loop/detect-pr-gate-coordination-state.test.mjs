@@ -4492,3 +4492,21 @@ for (const [source, advisory] of [["ci-failure", false], ["threads", true]]) tes
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("detect-pr-gate-coordination-state (#3080): a live current-head draft ledger at the cap round counts toward the round refusal", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-live-round-"));
+  try {
+    const headSha = "abc1234567".repeat(4);
+    await seedCapFixedRepo(tempDir, { headSha, seal: false });
+    const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+    await rm(path.join(findings, `draft_gate-${"c".repeat(40)}.json`));
+    await writeFile(path.join(findings, `draft_gate-${headSha}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha, verdict: "findings_present", loggedAt: "2026-11-05T00:00:00.000Z", findings: [] }), "utf8");
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "blocked", findingsSummary: "round_cap_reached", nextAction: "stop" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
+    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

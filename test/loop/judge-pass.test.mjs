@@ -463,6 +463,25 @@ for (const [label, maxReviewRounds, expectedActs] of [["at the round cap", 1, 4]
   assert.equal(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8")).length, expectedActs);
 });
 
+test("judgePassCli: after the round's own durable ledger is written, round 1 keeps an all-nit act cluster (GATE-EXEC-LOW-FIX-UNTIL-CAP)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-own-ledger-"));
+  await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
+  // The conductor runs judge-pass after write-gate-findings-log wrote this round's judged ledger at the head.
+  const ledgerDir = path.join(tmpDir, "tmp", "gate-findings", "mfittko-dev-loops", "pr-3080");
+  await mkdir(ledgerDir, { recursive: true });
+  await writeFile(path.join(ledgerDir, `draft_gate-${HEAD}.json`), JSON.stringify({
+    repo: "mfittko/dev-loops", pr: 3080, gate: "draft_gate", headSha: HEAD, verdict: "findings_present", loggedAt: "2026-11-05T00:00:00.000Z",
+    findings: [finding({ severity: "nit", summary: "a nit", judgeDisposition: "act" })],
+  }));
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ severity: "nit", summary: "a nit" })] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tidy" }] })));
+  const payload = await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "3080", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json", tmpRoot: "./tmp" },
+    { repoRoot: tmpDir, ...stubDeferralDeps().deps },
+  );
+  assert.equal(payload.actCount, 1, "round 1 keeps the all-nit act cluster");
+});
+
 test("runJudgePass never defers an unstamped [low, medium] duplicate cluster through the low-nit coercion (ADR 0188)", () => {
   const findings = ledger(
     locatedFinding({ severity: "low", angle: "correctness", summary: "null deref (low report)" }),

@@ -8660,6 +8660,49 @@ test("countCompletedRounds counts an in-range identity-matching ledger with a mi
   }
 });
 
+test("readClosedPriorRoundLogs and countCompletedRounds treat a retained same-head round as closed at the current head", async () => {
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-retained-"));
+  try {
+    const dir = path.join(tmpRoot, "gate-findings", "owner-repo", "pr-5");
+    await mkdir(dir, { recursive: true });
+    const head = "5".repeat(40);
+    const options = { repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: head, tmpRoot };
+    const ledger = (extra) => JSON.stringify({ repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: "2026-10-27T00:00:00.000Z", ...extra });
+    await writeFile(path.join(dir, `draft_gate-${head}.json`), ledger({}), "utf8");
+    const before = await countCompletedRounds(options, { repoRoot: tmpRoot });
+    await writeFile(path.join(dir, `draft_gate-${head}.round-1.json`), ledger({}), "utf8");
+    assert.equal(await countCompletedRounds(options, { repoRoot: tmpRoot }), before + 1);
+    assert.equal((await readClosedPriorRoundLogs(options, { repoRoot: tmpRoot })).length, 0, "the other readers keep their pre-retention view of the current head");
+    assert.equal((await readClosedPriorRoundLogs(options, { repoRoot: tmpRoot, includeRetainedCurrentHead: true })).length, 1);
+    await writeFile(path.join(dir, `draft_gate-${head}.round-2.json`), ledger({ repo: "other/repo" }), "utf8");
+    assert.equal((await readClosedPriorRoundLogs(options, { repoRoot: tmpRoot, includeRetainedCurrentHead: true })).length, 1, "identity mismatch dropped");
+    const otherHead = "4".repeat(40);
+    await writeFile(path.join(dir, `draft_gate-${otherHead}.round-1.json`), ledger({ headSha: otherHead }), "utf8");
+    assert.equal((await readClosedPriorRoundLogs(options, { repoRoot: tmpRoot })).length, 1, "a retained round of another head is closed for every reader");
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("readClosedPriorRoundLogs orders retained same-head rounds with equal loggedAt by round number, the live ledger last", async () => {
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-round-order-"));
+  try {
+    const dir = path.join(tmpRoot, "gate-findings", "owner-repo", "pr-5");
+    await mkdir(dir, { recursive: true });
+    const head = "5".repeat(40);
+    const prior = "4".repeat(40);
+    const options = { repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: head, tmpRoot };
+    const ledger = (sha, n) => writeFile(path.join(dir, `draft_gate-${sha}${n ? `.round-${n}` : ""}.json`), JSON.stringify({ repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: sha, verdict: "clean", loggedAt: "2026-10-27T00:00:00.000Z", marker: n ?? "live" }), "utf8");
+    await ledger(head, 10);
+    await ledger(head, 2);
+    await ledger(head, 1);
+    await ledger(prior, 3);
+    assert.deepEqual((await readClosedPriorRoundLogs(options, { repoRoot: tmpRoot, includeRetainedCurrentHead: true })).map((l) => l.marker), [3, 1, 2, 10]);
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 test("countCompletedRounds skips closed ledgers logged before DRAFT_ROUND_CAP_EFFECTIVE_AT, counts a missing or unparseable loggedAt", async () => {
   const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-round-landing-"));
   try {
@@ -8777,6 +8820,28 @@ test("CLI refuses a draft_gate context at count cap+1 with round_cap_reached, al
     process.exitCode = undefined;
     await main(["--repo", "owner/repo", "--pr", "52", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha], { repoRoot, run: stubGhRun });
     assert.notEqual(process.exitCode, 1);
+  } finally {
+    process.stdout.write = stdoutWrite;
+    process.stderr.write = stderrWrite;
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI refuses a same-head draft_gate rerun at count cap+1 with round_cap_reached: the live current-head ledger counts", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  const stderrWrite = process.stderr.write.bind(process.stderr);
+  const stdoutWrite = process.stdout.write.bind(process.stdout);
+  let out = "";
+  try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
+    await seedClosedRounds(repoRoot, 47, ["1".repeat(40), "2".repeat(40), "3".repeat(40), headSha]);
+    process.stdout.write = (chunk) => { out += String(chunk); return true; };
+    process.stderr.write = (chunk) => { out += String(chunk); return true; };
+    await main(["--repo", "owner/repo", "--pr", "47", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", headSha], { repoRoot, run: stubGhRun });
+    assert.equal(process.exitCode, 1);
+    assert.match(out, /round_cap_reached/);
   } finally {
     process.stdout.write = stdoutWrite;
     process.stderr.write = stderrWrite;

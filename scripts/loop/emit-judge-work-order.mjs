@@ -19,7 +19,7 @@ import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "..
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildLogPath } from "../github/_gate-artifact-paths.mjs";
-import { PR_BODY_ABSENT_SENTINEL, listPriorActItems, renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { PR_BODY_ABSENT_SENTINEL, isInRoundRewrite, listPriorActItems, renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { copilotBodyJudgePath } from "../github/_copilot-body-disposition.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { OUT_OF_BAND_WRITE, readSealed } from "../github/_gate-artifact-seal.mjs";
@@ -125,7 +125,13 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     const ledgerTmpRoot = resolveGateArtifactTmpRoot(checkoutRoot);
     const resolved = await resolveGateRound({ repo, pr, gate, headSha, reviews: [], issueComments: [], tmpRoot: ledgerTmpRoot, repoRoot: checkoutRoot });
     const currentLedger = path.resolve(checkoutRoot, buildLogPath({ repo, pr, gate, headSha, tmpRoot: ledgerTmpRoot }));
-    const prior = (await readdir(path.dirname(currentLedger)).catch(() => [])).filter((name) => isFindingsLogName(gate, name) && `${gate}-${headSha}.json` !== name).length;
+    const names = (await readdir(path.dirname(currentLedger)).catch(() => [])).filter((name) => isFindingsLogName(gate, name));
+    // The live current-head ledger counts only when the writer will retain it (the shared isInRoundRewrite predicate).
+    let rewrite = false;
+    if (names.includes(path.basename(currentLedger))) {
+      try { rewrite = isInRoundRewrite(JSON.parse(await readSealed(currentLedger))); } catch (err) { if (err?.code === OUT_OF_BAND_WRITE) throw err; }
+    }
+    const prior = names.length - (rewrite ? 1 : 0);
     round = Math.max(resolved, prior + 1);
   }
   tmpRoot ??= path.join(checkoutRoot, "tmp");

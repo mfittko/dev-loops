@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "./_gate-artifact-seal.mjs";
 import path from "node:path";
 import { verifyZeroUnitCarryProvenance } from "./_carried-angles.mjs";
@@ -18,7 +19,7 @@ import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bou
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { capClosedFor } from "@dev-loops/core/loop/gate-fanin";
-import { listPriorActItems, resolveDraftRoundCap } from "./write-gate-context.mjs";
+import { isInRoundRewrite, listPriorActItems, resolveDraftRoundCap } from "./write-gate-context.mjs";
 import { clusterFindings, clustersFromStampedIds, projectClusterDisposition } from "@dev-loops/core/loop/finding-cluster";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
@@ -869,7 +870,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // `priorOptions` and the round-cap state are shared by the judge coercion and the cap-closed record below.
   const priorOptions = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot };
   let roundCap;
-  const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot }));
+  const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot, includeLiveCurrentHead: true }));
+  // The writer resolves the round before it retains the live same-head ledger, so it counts that ledger itself, but only when retention will keep it (the shared isInRoundRewrite predicate): every later reader counts it as the retained round.
   if (options.judgeVerdict) {
     const judgePath = path.resolve(repoRoot, options.judgeVerdict);
     let judgeVerdict;
@@ -1088,10 +1090,46 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // helper. Pure no-op (byte-identical log) when the flag is absent.
   const stampedLog = stampOptionalSpecAuthority(log, specAuthorityIdentity);
   await mkdir(path.dirname(fullPath), { recursive: true });
+  const retainedRound = await retainSameHeadLedger(fullPath, logPath);
   await writeSealed(fullPath, JSON.stringify(stampedLog, null, 2) + "\n");
-  return angleCoverage.warning
-    ? { ok: true, path: logPath, log: stampedLog, warning: angleCoverage.warning }
-    : { ok: true, path: logPath, log: stampedLog };
+  return {
+    ok: true, path: logPath, log: stampedLog,
+    ...(retainedRound ? { retainedRound } : {}),
+    ...(angleCoverage.warning ? { warning: angleCoverage.warning } : {}),
+  };
+}
+// A second write at the same head must not destroy a finished round: every existing live ledger (and its seal) except an in-round rewrite (at least one finding, none judged) is copied
+// to the next free `<gate>-<sha>.round-<n>.json` sibling before the rewrite. Returns the retained path, or null when there was no live ledger or it is an in-round rewrite.
+// A tampered live ledger refuses with OUT_OF_BAND_WRITE before anything is retained.
+// ponytail: retention runs outside the write lock; the exclusive copy makes a round-number collision fail instead of overwriting, but concurrent same-head writers are otherwise unsupported (move retention under the ledger lock if they ever are).
+async function retainSameHeadLedger(fullPath, logPath) {
+  if (!(await access(fullPath).then(() => true, () => false))) return null;
+  try {
+    const live = JSON.parse(await readSealed(fullPath));
+    // An in-round rewrite (at least one finding, none judged) is replaced, not retained; a finished round, including a clean one with no findings, is retained.
+    if (isInRoundRewrite(live)) return null;
+  } catch (err) { if (err?.code === OUT_OF_BAND_WRITE) throw err; }
+  const dir = path.dirname(fullPath);
+  const stem = path.basename(fullPath, ".json");
+  const roundOf = (n) => (n.startsWith(`${stem}.round-`) ? /\.round-(\d+)\.json$/.exec(n)?.[1] : undefined);
+  const taken = (await readdir(dir)).map((n) => Number(roundOf(n) ?? 0));
+  const next = Math.max(0, ...taken.filter(Number.isSafeInteger)) + 1;
+  await claimRetainedRound(fullPath, path.join(dir, `${stem}.round-${next}.json`));
+  return logPath.replace(/\.json$/, `.round-${next}.json`);
+}
+// Moves the live ledger and its seal to `retained` without ever replacing an existing file: COPYFILE_EXCL fails with EEXIST on a taken name.
+// The copies are separate inodes, so a later rewrite of the live path never writes through to the retained round.
+// The seal is copied first (a crash leaves a waiting seal that matches the bytes a retry copies there; EEXIST on the seal is that waiting seal).
+export async function claimRetainedRound(fullPath, retained) {
+  let copiedSeal = true;
+  await copyFile(`${fullPath}.seal`, `${retained}.seal`, fsConstants.COPYFILE_EXCL).catch((err) => { copiedSeal = false; if (err?.code !== "ENOENT" && err?.code !== "EEXIST") throw err; });
+  // A refused claim drops only the seal this call copied; a pre-existing seal of the taken round stays.
+  try { await copyFile(fullPath, retained, fsConstants.COPYFILE_EXCL); } catch (err) {
+    if (copiedSeal) await unlink(`${retained}.seal`).catch(() => {});
+    throw err;
+  }
+  await unlink(fullPath);
+  await unlink(`${fullPath}.seal`).catch((err) => { if (err?.code !== "ENOENT") throw err; });
 }
 async function main() {
   let options;
