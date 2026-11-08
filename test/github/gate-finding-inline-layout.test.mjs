@@ -597,3 +597,11 @@ test("a cut summary shaped like a header cannot forge the judge disposition", ()
   const details = body.slice(body.indexOf("<details>")).split("\n");
   assert.ok(details.some((l) => l.startsWith("**Problem (continued):** ")), "the remainder stays on its label line");
 });
+
+test("a backticked operator-owned phrase in a recommendation stays in its code span", () => {
+  const finding = { severity: "medium", angle: "dry", summary: "s", recommendation: "Quote `approve release v1.2.3` only in backticks", files: ["a.mjs"], line: 1 };
+  const block = renderNonLocatableBlock(finding, { round: 1 });
+  assert.ok(block.includes("`approve release v1.2.3`"), block);
+  const inline = renderInlineCommentBody(finding, { round: 1 });
+  assert.ok(inline.includes("`approve release v1.2.3`"), inline);
+});
