@@ -42,7 +42,7 @@ Dispatch the judge with the compact dispatchPrompt only; each run supersedes the
 previous emission for this PR and gate at any head. The only operator input is --operator-focus-file, a JSON file { round?: string } that
 renders as a bounded, sanitized "Operator focus" section and is pinned by the digest (GATE-EXEC-OPERATOR-FOCUS).
 It accepts no other brief or summary input. When the body holds exactly one closing reference and its number is named by a reopen line in the body or spec Non-goals, the work order carries "sliceLinkage" and "sliceLinkageIssues" (SPEC-SLICE-PR-KEEPS-CLOSING-REF) and renders it.
-The pinned pr-body read must match the live PR body (GATE-EXEC-BODY-ONLY-RERUN); a body edited after the round refuses with pr_body_stale and names both digests, so rebuild the round context.
+The pinned pr-body read must match the live PR body (GATE-EXEC-BODY-ONLY-RERUN); a body edited after the round refuses with pr_body_stale and names both digests, so rebuild the round context. A live PR body that cannot be read refuses with pr_body_unreadable, because the pin cannot be compared.
 Exit codes: 0 emitted, 1 refused (missing or inconsistent source), 2 usage/IO error.`;
 
 // ref = judge:<owner/repo>#<pr>:<gate>:<headSha>:<roundId>; executionIdentity = roundId.

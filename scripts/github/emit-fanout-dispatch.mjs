@@ -85,6 +85,11 @@ Optional:
                                older artifact); a PRESENT-but-empty pendingGroups
                                requires every resolved angle to be carried with
                                --carry-forward-plan proof, or refuses zero units.
+                               The persisted plan also keeps the completed prior
+                               units marked "resumed": true, so its count can
+                               exceed the stdout count. Only the stdout "units"
+                               are dispatched, and --expected-dispatch-units
+                               takes the stdout count.
   --carry-forward-plan <json>  Resolver output (or its carried array). Required
                                for a zero-unit pending round; persisted with the
                                keyed plan for fan-in and provenance verification.
@@ -438,10 +443,21 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // The success-only WRITE at the end of main is unchanged — this removes,
   // it does not pre-persist anything.
   // A --pending emission replaces the keyed plan with the pending units only. The prior plan is read first so
-  // units that completed in an earlier wave of this round can stay in the persisted plan (see resumedUnits below).
-  const priorPlan = pendingOnly
-    ? await readFile(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), "utf8").then((text) => JSON.parse(text), () => null)
-    : null;
+  // units that completed in an earlier wave of this round can stay in the persisted plan (see mergedUnits below).
+  // The rm below destroys the plan, so a --pending run keeps the prior plan bytes in a sidecar the rm leaves alone:
+  // a refused --pending run followed by a successful one still finds the prior units. fan-in never reads the sidecar.
+  const priorPlanSidecar = `${buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot })}.prior`;
+  let priorPlan = null;
+  if (pendingOnly) {
+    const priorText = await readFile(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), "utf8").catch(() => null)
+      ?? await readFile(priorPlanSidecar, "utf8").catch(() => null);
+    try {
+      priorPlan = priorText === null ? null : JSON.parse(priorText);
+    } catch {
+      priorPlan = null; // a truncated or malformed prior plan contributes no resumed unit
+    }
+    if (priorPlan !== null) await writeFile(priorPlanSidecar, priorText, "utf8").catch(() => {});
+  }
   try {
     await rm(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), { force: true });
   } catch (err) {

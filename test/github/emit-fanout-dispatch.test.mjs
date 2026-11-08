@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
@@ -2274,6 +2275,79 @@ test("a PR-body-only edit re-runs only the body-reading unit and the round-1 led
     const written = await closeRound();
     assert.deepEqual(written.log.provenance.perAngle.map((entry) => entry.angle).sort(), [...angles].sort());
     assert.ok((await readdir(path.dirname(written.path ?? buildGateFaninLedgerPath({ ...id, tmpRoot })))).some((name) => name === `${gate}-${HEAD_SHA}.round-1.json`));
+  });
+});
+
+test("a pending emit marks no unit resumed for another head or gate, a malformed prior plan or a partly completed unit, and survives a refused run", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const gate = "draft_gate";
+    const angles = ["srp", "soc", "ocp", "lsp", "isp", "pr-description"];
+    await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: { fanout: { groups: [{ name: "design-solid", angles }], maxAnglesPerGroup: 6 } } }), "utf8");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    assert.deepEqual(errors, []);
+    const tmpRoot = path.join(repoRoot, "tmp");
+    const id = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA };
+    const planPath = buildGateEmitPlanPath({ ...id, tmpRoot });
+    const findingsDir = buildGateReviewsDir({ ...id, tmpRoot });
+    const build = async (prBody) => {
+      const completedAngles = await readCompletedAnglesForHead({ ...id, tmpRoot: "tmp", prBodySha256: createHash("sha256").update(renderPrBodyRead(prBody)).digest("hex") }, { repoRoot });
+      const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles), "--pr-body", prBody]);
+      return writeGateContext({ ...options, config, fanoutDispatch: resolveFanoutDispatch(config, "draft", angles, { completedAngles, maxAnglesPerGroup: 6 }) }, { repoRoot });
+    };
+    const emitArgs = (extra = []) => ["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, ...extra];
+    const emitPending = (extra = []) => runEmitCli(emitArgs(["--pending", ...extra]), { cwd: repoRoot });
+    const readPlan = async () => JSON.parse(await readFile(planPath, "utf8"));
+    const seedRound = async () => {
+      await build("Original");
+      assert.equal(runEmitCli(emitArgs(), { cwd: repoRoot }).status, 0);
+      await mkdir(findingsDir, { recursive: true });
+      for (const angle of angles) await writeFile(path.join(findingsDir, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: HEAD_SHA, findings: [] }), "utf8");
+      await build("Edited");
+    };
+    await seedRound();
+    const full = await readPlan();
+    const prior = JSON.stringify(full);
+    const resumedOf = (plan) => plan.units.filter((unit) => unit.resumed === true);
+
+    // A prior plan for another head or gate contributes no resumed unit.
+    for (const foreign of [{ ...full, headSha: "f".repeat(40) }, { ...full, gate: "pre_approval_gate" }]) {
+      await writeFile(planPath, JSON.stringify(foreign), "utf8");
+      await rm(`${planPath}.prior`, { force: true });
+      const out = emitPending();
+      assert.equal(out.status, 0, out.stderr || out.stdout);
+      assert.deepEqual(resumedOf(await readPlan()), []);
+    }
+    // A malformed prior plan falls back to no resumed unit instead of aborting the emission.
+    await writeFile(planPath, '{"gate":', "utf8");
+    await rm(`${planPath}.prior`, { force: true });
+    const malformed = emitPending();
+    assert.equal(malformed.status, 0, malformed.stderr || malformed.stdout);
+    assert.deepEqual(resumedOf(await readPlan()), []);
+
+    // A unit with one pending angle is re-emitted, never marked resumed.
+    await writeFile(planPath, prior, "utf8");
+    await rm(`${planPath}.prior`, { force: true });
+    await rm(path.join(findingsDir, "srp.json"));
+    await build("Edited");
+    const partly = emitPending();
+    assert.equal(partly.status, 0, partly.stderr || partly.stdout);
+    assert.ok(JSON.parse(partly.stdout).units.some((unit) => unit.angles.includes("srp")));
+    assert.ok(!(await readPlan()).units.some((unit) => unit.resumed === true && unit.angles.includes("srp")));
+
+    // A refused --pending run followed by a successful one keeps the resumed units.
+    await rm(`${planPath}.prior`, { force: true });
+    await writeFile(planPath, prior, "utf8");
+    await writeFile(path.join(findingsDir, "srp.json"), JSON.stringify({ angle: "srp", verdict: "clean", headSha: HEAD_SHA, findings: [] }), "utf8");
+    await rm(findingsDir, { recursive: true, force: true });
+    await mkdir(findingsDir, { recursive: true });
+    for (const angle of angles.filter((angle) => angle !== "pr-description")) await writeFile(path.join(findingsDir, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: HEAD_SHA, findings: [] }), "utf8");
+    await build("Edited again");
+    const refused = emitPending(["--operator-focus-file", path.join(repoRoot, "missing-focus.json")]);
+    assert.notEqual(refused.status, 0);
+    assert.equal(existsSync(planPath), false, "a refused run leaves no keyed plan");
+    const retried = emitPending();
+    assert.equal(retried.status, 0, retried.stderr || retried.stdout);
+    assert.ok(resumedOf(await readPlan()).length > 0, "the prior units survive the refused run");
   });
 });
 

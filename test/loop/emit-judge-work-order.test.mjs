@@ -625,7 +625,15 @@ test("a pinned pr-body that differs from the live PR body refuses, names both di
   });
 });
 
-test("a body-only rebuild keeps the spec-digest refusal", async () => {
+test("a pinned pr-body file rewritten on disk after the round was built refuses", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    await writeFile(path.join(root, "judge-fixture", "pr-body.md"), "Declared scope: rewritten after seeding.\n");
+    await assert.rejects(emitJudgeWorkOrder(sources), /pr-body .* changed since the round was built/);
+  });
+});
+
+test("a spec file rewritten after the body was rebound refuses with the spec-identity mismatch", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
     await bindEvidenceToPrBody(root, sources, "Declared scope: a body-only edit.\n");

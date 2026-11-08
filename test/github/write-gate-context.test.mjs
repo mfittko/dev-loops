@@ -9785,3 +9785,73 @@ test("a body-only rebuild treats an artifact older than its sentinel as in fligh
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+test("a body-only rebuild also retires a pending non-body unit whose findings_present artifact left a live sentinel", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-findings-"));
+  try {
+    await buildGateContext(bodyRerunInput("Original"), { repoRoot });
+    const reviews = await seedCompleteBodyRound(repoRoot);
+    await writeFile(path.join(reviews, "correctness.json"), JSON.stringify({ angle: "correctness", verdict: "findings_present", headSha: BODY_RERUN_SHA, findings: [] }), "utf8");
+    const second = await buildGateContext(bodyRerunInput("Edited"), { repoRoot });
+    assert.deepEqual(second.artifact.fanout.pendingGroups.map((g) => g.name).sort(), ["correctness", "process", "renderer-security"]);
+    assert.deepEqual(second.bodyOnlyRerun.scopes.sort(), Object.values(bodyRerunUnits).sort());
+    const live = await readdir(path.join(repoRoot, "tmp"));
+    assert.ok(!live.some((n) => n.startsWith("checkpoint-context-sentinel-") && n.includes(BODY_RERUN_SHA)), live.join(","));
+    assert.ok(!existsSync(path.join(reviews, "correctness.json")), "the findings_present artifact moved with its unit");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a body edit drops the verifiedItems angles acceptance-criteria and pr-checklist from the completed set", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-verified-"));
+  try {
+    const first = await buildGateContext(bodyRerunInput("Original"), { repoRoot });
+    const reviews = await seedCompleteBodyRound(repoRoot, []);
+    for (const angle of ["acceptance-criteria", "pr-checklist"]) {
+      await writeFile(path.join(reviews, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: BODY_RERUN_SHA, findings: [], verifiedItems: [] }), "utf8");
+    }
+    const id = { repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: BODY_RERUN_SHA };
+    const prior = first.artifact.requiredReads.find((r) => r.kind === "pr-body").sha256;
+    const changed = await readCompletedAnglesForHead({ ...id, prBodySha256: "f".repeat(64) }, { repoRoot });
+    assert.ok(!changed.includes("acceptance-criteria") && !changed.includes("pr-checklist"), changed.join(","));
+    const same = await readCompletedAnglesForHead({ ...id, prBodySha256: prior }, { repoRoot });
+    assert.ok(same.includes("acceptance-criteria") && same.includes("pr-checklist"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("an abbreviated head on the no-sentinel body-only path refuses with the full-SHA remedy and moves nothing", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-abbrev-"));
+  const abbreviated = BODY_RERUN_SHA.slice(0, 12);
+  const input = (prBody) => ({ ...bodyRerunInput(prBody), headSha: abbreviated });
+  try {
+    await buildGateContext(input("Original"), { repoRoot });
+    const reviews = path.resolve(repoRoot, buildGateReviewsDir({ repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: abbreviated }));
+    await mkdir(reviews, { recursive: true });
+    await writeFile(path.join(reviews, "pr-description.json"), JSON.stringify({ angle: "pr-description", verdict: "clean", headSha: abbreviated, findings: [] }), "utf8");
+    await assert.rejects(buildGateContext(input("Edited"), { repoRoot }), /GATE-EXEC-BODY-ONLY-RERUN.*FULL 40- or 64-char head SHA.*--head-sha/s);
+    assert.ok(existsSync(path.join(reviews, "pr-description.json")), "a refusal moves no file");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a PR-body spec edit under live sentinels refuses and moves nothing", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-spec-"));
+  const input = (prBody) => ({ ...bodyRerunInput(prBody), acceptanceCriteriaSource: "none" });
+  try {
+    await buildGateContext(input("Original"), { repoRoot });
+    const reviews = await seedCompleteBodyRound(repoRoot);
+    const snapshot = async () => [...(await readdir(path.join(repoRoot, "tmp"))).sort(), ...(await readdir(reviews)).sort()];
+    const before = await snapshot();
+    await assert.rejects(buildGateContext(input("Edited"), { repoRoot }), /GATE-EXEC-BODY-ONLY-RERUN.*spec of record.*Retire the round/s);
+    assert.deepEqual(await snapshot(), before);
+    // The same edit passes when a linked issue carries the spec.
+    const linked = await buildGateContext({ ...bodyRerunInput("Edited"), acceptanceCriteriaSource: "linked-issue" }, { repoRoot });
+    assert.ok(linked.bodyOnlyRerun);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});

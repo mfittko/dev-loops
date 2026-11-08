@@ -204,6 +204,19 @@ test("round_retired: removed plan and a newer retirement record for the gate", a
   });
 });
 
+test("a scoped body-only retirement ends the wait only for a unit it names", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]], ["h", ["b"]]]);
+    await setMtime(planPath, 100);
+    const record = path.join(root, "tmp", "retired-gate-rounds", HEAD, "round-1", "retirement.json");
+    await writeJson(record, { gate: GATE, retiredAt: new Date(200000).toISOString(), scopes: ["other"] });
+    assert.equal((await run(root, planPath, { timeoutMs: 1 })).outcome, "timeout");
+    await writeJson(record, { gate: GATE, retiredAt: new Date(200000).toISOString(), scopes: ["h"] });
+    assert.equal((await run(root, planPath, { timeoutMs: 1 })).outcome, "round_retired");
+    assert.equal((await run(root, planPath, { timeoutMs: 1, units: ["g"] })).outcome, "timeout");
+  });
+});
+
 test("a partially written retirement record is not retired yet and is re-checked", async () => {
   await withDir(async (root) => {
     const { planPath } = await seedPlan(root, [["g", ["a"]]]);

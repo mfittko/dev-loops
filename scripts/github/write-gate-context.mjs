@@ -32,7 +32,7 @@ import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { VERIFIED_ITEMS_ANGLES, baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { anchorBaseRef, normalizeBaseBranch } from "../lib/anchor-base-ref.mjs";
 import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-write-remote-freshness-guard.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
@@ -612,6 +612,12 @@ export { buildGateContextPath };
 // skip-completed resume scan.
 export { buildGateReviewsDir };
 
+// The body-only rerun set (GATE-EXEC-BODY-ONLY-RERUN): the always-surface angles plus the verifiedItems angles, whose
+// labels are copied from the PR body checklists. Local to this path: angleReviewSurface keeps serving carry-forward.
+export function readsPrBody(angle) {
+  return angleReviewSurface(angle).kind === "always" || VERIFIED_ITEMS_ANGLES.has(baseAngleName(String(angle).trim()));
+}
+
 /**
  * AC3 — same-head skip-completed resume. Scan the per-angle findings
  * directory for this head and return the angle names that already have a CLEAN
@@ -634,7 +640,8 @@ export { buildGateReviewsDir };
  *
  * When `prBodySha256` is given and differs from the pr-body read of the
  * previous context at this head (GATE-EXEC-BODY-ONLY-RERUN), the angles with
- * surface "always" are not complete: they read the PR body, so they re-run.
+ * surface "always" and the verifiedItems angles are not complete: they read
+ * the PR body, so they re-run (see readsPrBody).
  *
  * @returns {Promise<string[]>} angle names with a clean artifact at this head
  */
@@ -661,7 +668,7 @@ export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpR
     }
     if (parsed && parsed.verdict === "clean" && String(parsed.headSha ?? "").trim().toLowerCase() === want) {
       if (typeof parsed.angle !== "string" || parsed.angle.length === 0) continue;
-      if (bodyChanged && angleReviewSurface(parsed.angle).kind === "always") continue;
+      if (bodyChanged && readsPrBody(parsed.angle)) continue;
       completed.push(parsed.angle);
     }
   }
@@ -3381,6 +3388,11 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       if (scanError !== null) {
         throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}): the live-sentinel scan failed (${scanError.code ?? scanError.message}), so an in-flight fan-out cannot be ruled out; retire the round: ${retireCommand}`);
       }
+      // A PR whose spec-of-record is the PR body (no linked issue) treats a body edit as a spec edit: every angle was
+      // reviewed against the old spec, so a rerun of the body units alone is not enough (AC3, existing spec-digest refusal).
+      if (options.acceptanceCriteriaSource === "none" && priorBodySha256 !== null && liveSentinels.length > 0) {
+        throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}): the PR body is the spec of record (acceptanceCriteriaSource none) and its digest changed from ${priorBodySha256.slice(0, 12)} to ${prBodyRead.sha256.slice(0, 12)} while ${liveSentinels.length} reviewer sentinel(s) are live, so every angle was reviewed against the old spec. Retire the round explicitly before rebuilding: ${retireCommand}`);
+      }
       const fullSha = (name) => name.slice(0, -".json".length).split("-").at(-1);
       const reviewsDir = path.resolve(repoRoot, buildGateReviewsDir({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" }));
       const scopes = [];
@@ -3396,12 +3408,17 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       };
       for (const unit of options.fanoutDispatch.pendingGroups) {
         const angles = Array.isArray(unit?.angles) ? unit.angles : [];
-        if (!angles.some((angle) => angleReviewSurface(angle).kind === "always")) continue;
+        const readsBody = angles.some(readsPrBody);
         const scope = dispatchUnitScope(options.gate, unit);
         const sentinel = liveSentinels.find((name) => name.startsWith(`${CHECKPOINT_SENTINEL_PREFIX}${scope}-`) && /^[0-9a-f]{40,64}$/.test(name.slice(CHECKPOINT_SENTINEL_PREFIX.length + scope.length + 1, -".json".length)));
         const artifacts = angles.map((angle) => path.join(reviewsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`));
+        // A pending unit that holds no body-reading angle but finished with a live sentinel (a findings_present
+        // artifact) is re-emitted too, so its sentinel must retire or the reviewer's fresh-context guard refuses it.
+        if (!sentinel && !readsBody) continue;
         if (sentinel) {
-          if (!artifacts.every((file) => existsSync(file)) || !(await Promise.all(artifacts.map((file) => wroteAfter(file, sentinel)))).every(Boolean)) {
+          const finished = artifacts.every((file) => existsSync(file)) && (await Promise.all(artifacts.map((file) => wroteAfter(file, sentinel)))).every(Boolean);
+          if (!finished && !readsBody) continue; // a non-body unit still in flight keeps its sentinel and its work
+          if (!finished) {
             throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}) while unit ${scope}, which reads the PR body, is in flight; wait for it to write its findings, or retire the round: ${retireCommand}`);
           }
           scopes.push(scope);
@@ -3410,6 +3427,9 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         findingsFiles.push(...artifacts.filter((file) => existsSync(file)));
       }
       if (scopes.length > 0 || findingsFiles.length > 0) {
+        if (retireHead === null && !/^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(options.headSha)) {
+          throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}): no unit holds a live sentinel to name the full head, and retirement needs the FULL 40- or 64-char head SHA; rerun with --head-sha <full sha>`);
+        }
         const retirement = await retireGateRound({
           gate: options.gate,
           headSha: retireHead ?? options.headSha,
@@ -3519,7 +3539,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {string[]} [input.touchedFiles]
  * @param {string|null} [input.acceptanceCriteria]
  * @param {string|null} [input.validationPosture]
- * @param {string|null} [input.prBody] — PR description text, inlined into the rendered briefing evidence file
+ * @param {string|null} [input.prBody] — PR description text, written to the round-bound `pr-body` read (`<gate>-<headSha>.pr-body-<digest12>.md`), never into the evidence file
  * @param {string|null} [input.issueBody] — linked-issue body text, inlined under `acceptanceCriteria`'s label; omitted when absent
  * @param {number} [input.maxFileBytes] — per-file cap for the adjacent-code bundle (default DEFAULT_MAX_FILE_BYTES)
  * @param {number|null} [input.availableReviewers] — harness remaining reviewer budget for the preflight; null/omitted = unexposed (proceed, no shortfall proven)
@@ -3661,6 +3681,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
       diffOutput,
       adjacentCode,
       acceptanceCriteria: input.acceptanceCriteria ?? null,
+      ...(typeof input.acceptanceCriteriaSource === "string" ? { acceptanceCriteriaSource: input.acceptanceCriteriaSource } : {}),
       validationPosture: input.validationPosture ?? null,
       prBody: input.prBody ?? null,
       issueBody: input.issueBody ?? null,

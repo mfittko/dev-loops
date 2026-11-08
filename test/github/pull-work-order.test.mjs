@@ -185,6 +185,27 @@ test("a ref bound to a retired same-head round refuses as stale even when a newe
   });
 });
 
+test("a scoped body-only retirement retires only the named unit: a kept unit still pulls", async () => {
+  await withDir(async (root) => {
+    const unit = await emitRound(root);
+    const record = path.join(root, "tmp", "retired-gate-rounds", HEAD, "round-1", "retirement.json");
+    await mkdir(path.dirname(record), { recursive: true });
+    const retiredAt = new Date(Date.now() + 60_000).toISOString();
+    // A whole-round query and a unit outside the record's scopes ignore the scoped record.
+    await writeFile(record, JSON.stringify({ gate: GATE, retiredAt, scopes: ["some-other-unit"] }));
+    assert.equal(findRetirementAfter(path.join(root, "tmp"), GATE, HEAD, 0), null);
+    assert.equal(findRetirementAfter(path.join(root, "tmp"), GATE, HEAD, 0, unit.scope), null);
+    assert.equal(pull(unit, root).status, 0);
+    assert.equal(pullShort(unit.executionIdentity, root).status, 0);
+    // The named unit refuses as retired.
+    await writeFile(record, JSON.stringify({ gate: GATE, retiredAt, scopes: [unit.scope] }));
+    assert.equal(findRetirementAfter(path.join(root, "tmp"), GATE, HEAD, 0), null);
+    assert.equal(findRetirementAfter(path.join(root, "tmp"), GATE, HEAD, 0, unit.scope), "round-1");
+    assert.equal(refusal(pull(unit, root)).refusal, "stale_dispatch");
+    assert.equal(refusal(pullShort(unit.executionIdentity, root)).refusal, "stale_dispatch");
+  });
+});
+
 test("a ref from a superseded same-head round refuses as stale_dispatch, never as a retryable typo", async () => {
   await withDir(async (root) => {
     const old = await emitRound(root);

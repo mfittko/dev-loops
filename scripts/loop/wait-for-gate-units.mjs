@@ -188,12 +188,14 @@ export async function waitForUnits({ artifact, after, emitPlan, judgePlan, units
   const { gate, headSha, role, units } = selectUnits({ plan: await readPlan(planPath), judge: judgePlan !== undefined, wanted });
   const receipts = receiptTmpRoot ?? resolveGateArtifactTmpRoot(path.dirname(path.resolve(tmpRoot)));
   const started = now();
+  // A whole-round record retires the round; a scoped (body-only rerun) record retires only the units it names.
+  const roundRetired = () => retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs) || units.some((unit) => retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs, unit.scope));
   for (;;) {
     const result = (outcome, missing = [], done = []) => ({ ok: true, outcome, gate, headSha, unitCount: units.length, done, missing, elapsedMs: now() - started });
-    if (!await exists(planPath) || retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs)) return result("round_retired");
+    if (!await exists(planPath) || roundRetired()) return result("round_retired");
     const checks = await Promise.all(units.map((unit) => checkUnit(unit, { role, receiptTmpRoot: receipts, tmpRoot, headSha })));
     // A round retired while the checks were in flight must not advance on their stale result.
-    if (!await exists(planPath) || retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs)) return result("round_retired");
+    if (!await exists(planPath) || roundRetired()) return result("round_retired");
     const missing = checks.filter(Boolean);
     const done = units.filter((_, index) => checks[index] === null).map((unit) => unit.scope);
     if (missing.length === 0) return result("all_done", [], done);
