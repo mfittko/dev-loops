@@ -671,7 +671,7 @@ export async function runCli(
   } else {
     // Validate the input first: a failed input run must not open a record or move the current-run pointer (GATE-EXEC-EVIDENCE-SEALED).
     const target = options.reviewerOnly ? { repo: options.repo, pr: options.pr } : authenticatedTarget;
-    const roundAngles = await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target });
+    const roundAngles = await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target, prBase });
     const runId = options.handback ? undefined : mintEvidenceRunId();
     const patchPath = options.handback ? undefined : deltaPatchPath(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), sequence.reviewBaselineHead, currentHead, runId);
     if (!options.handback && !options.resultPath) throw parseError("--result-path <path> is required on the reviewer-input run: the run record binds the briefed result path and seal-evidence refuses any other path (GATE-EXEC-EVIDENCE-SEALED)");

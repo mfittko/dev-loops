@@ -1135,6 +1135,19 @@ test("AC1: the reviewer-only route reads the PR baseRefName for the fetch and th
   } finally { cleanup(repo); }
 });
 
+test("AC1: roundAnglesOf measures an earlier-head log against the PR's base on the input and the result run", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    runGitFixture(repo.dir, ["update-ref", "refs/remotes/origin/release", runGitFixture(repo.dir, ["rev-parse", "refs/remotes/origin/main"])]);
+    const logHead = "a".repeat(40);
+    const mainRefs = new Set();
+    const release = { ...seam, fetchPr: async () => ({ baseRefName: "release" }), baseOnlyMerge: async ({ fromHead, mainRef }) => { mainRefs.add(mainRef); return fromHead === logHead; } };
+    const args = [...reviewerOnlyArgs(repo).map((arg, i, all) => (all[i - 1] === "--findings-log" ? capLog(repo.dir, logHead, []) : arg)), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")];
+    assert.ok((await runDeltaCli(args, release)).input);
+    assert.deepEqual([...mainRefs], ["origin/release"], "no call measures against the configured branch");
+  } finally { cleanup(repo); }
+});
+
 test("AC2: a record that turns malformed between the first read and the write-time compare refuses and stays unchanged", async () => {
   const repo = reviewerOnlyRepo();
   try {
@@ -1301,7 +1314,7 @@ test("the reviewer-only run takes over a prior non-clearing record with another 
       assert.deepEqual({ o: record.outcome, i: record.invocation, same: record.actSetId !== "fixer-act-set" }, { o: "locally_clear", i: 2, same: true });
     } finally { cleanup(repo); }
   }
-});
+}, 30000); // two cases, each seeds a repo and runs three reviewer-only invocations; over 5 s under load
 
 test("the reviewer-only run keeps a locally_clear record, an extension, another ref set and a foreign candidate protected, and an unsealed one names its remedy", async () => {
   const cases = [
