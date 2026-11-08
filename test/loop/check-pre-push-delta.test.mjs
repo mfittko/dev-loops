@@ -1137,7 +1137,7 @@ test("AC1: the reviewer-only route reads the PR baseRefName for the fetch and th
   } finally { cleanup(repo); }
 });
 
-test("AC1: roundAnglesOf measures an earlier-head log against the PR's base on the input and the result run", async () => {
+test("AC1: roundAnglesOf measures an earlier-head log against the PR's base on the input run", async () => {
   const repo = reviewerOnlyRepo();
   try {
     runGitFixture(repo.dir, ["update-ref", "refs/remotes/origin/release", runGitFixture(repo.dir, ["rev-parse", "refs/remotes/origin/main"])]);
@@ -1183,6 +1183,26 @@ test("AC3: under diff.ignoreSubmodules=all a gitlink change stays in the path se
     await assert.rejects(runDeltaCli(args, { ...seam, diffPatch: () => "diff --git a/docs.md b/docs.md\n+docs\n" }), /gitlink_not_in_patch.*vendor\/sub/);
     // The stale-surface diff pins the same flag: the removed gitlink line reaches the scan instead of failing or vanishing.
     assert.doesNotThrow(() => gitStaleSurfaceHits(repo.dir, repo.baseline, moved.head, ["vendor/sub", "docs.md"]));
+  } finally { cleanup(repo); }
+});
+
+test("a deleted gitlink under diff.ignoreSubmodules=all is refused when the patch does not name it, and a header only counts at a line start", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    const git = (...args) => runGitFixture(repo.dir, args);
+    git("config", "diff.ignoreSubmodules", "all");
+    git("update-index", "--add", "--cacheinfo", `160000,${"a".repeat(40)},vendor/sub`);
+    git("commit", "-qm", "add gitlink");
+    const baseline = git("rev-parse", "HEAD");
+    git("update-index", "--force-remove", "vendor/sub");
+    fs.writeFileSync(path.join(repo.dir, "docs.md"), "docs\n");
+    git("add", "docs.md"); git("commit", "-qm", "drop the gitlink");
+    const moved = { ...repo, baseline, head: git("rev-parse", "HEAD") };
+    const args = [...reviewerOnlyArgs(moved), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")];
+    await assert.rejects(runDeltaCli(args, { ...seam, diffPatch: () => "diff --git a/docs.md b/docs.md\n+docs\n" }), /gitlink_not_in_patch.*vendor\/sub/);
+    await assert.rejects(runDeltaCli(args, { ...seam, diffPatch: () => "diff --git a/docs.md b/docs.md\n+ diff --git a/vendor/sub b/vendor/sub\n" }), /gitlink_not_in_patch.*vendor\/sub/);
+    const { input } = await runDeltaCli(args, { ...seam, diffPatch: () => 'diff --git a/docs.md b/docs.md\n+docs\ndiff --git "a/vendor/sub" "b/vendor/sub"\n' });
+    assert.ok(input.patchPath);
   } finally { cleanup(repo); }
 });
 

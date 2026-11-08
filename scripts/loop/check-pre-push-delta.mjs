@@ -272,12 +272,21 @@ function remergeSection(repoRoot, merge) {
   return Buffer.concat([Buffer.from(`\n# Resolution diff of merge ${merge} (git show --remerge-diff)\n`), out.stdout]);
 }
 
+// True when the cumulative part of the patch (before any remerge section) has a `diff --git` header line for `file`, in plain or C-quoted form.
+function patchNamesFile(patch, file) {
+  const text = patch.toString("utf8");
+  const cut = text.indexOf("\n# Resolution diff of merge ");
+  const lines = (cut === -1 ? text : text.slice(0, cut)).split("\n");
+  const quoted = JSON.stringify(file);
+  return lines.some((l) => l === `diff --git a/${file} b/${file}` || l === `diff --git "a/${quoted.slice(1, -1)}" "b/${quoted.slice(1, -1)}"`);
+}
+
 // The paths in `ownPaths` whose entry is a gitlink (mode 160000) on either side of baseline..head.
 function gitlinkPaths(worktree, baseline, head, ownPaths) {
   const out = spawnSync("git", ["-C", worktree, ...rangeCommand(["--raw", "-z", "--no-renames", "--no-ext-diff", "--no-relative", "--ignore-submodules=none"], baseline, head, ownPaths)], { encoding: "utf8", env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
   if (out.status !== 0) throw new Error(`git diff --raw ${baseline}..${head} failed in ${worktree}: ${out.stderr.trim()}`);
   const fields = out.stdout.split("\0");
-  return fields.flatMap((field, i) => (field.startsWith(":") && field.split(" ").slice(0, 2).includes("160000") ? [fields[i + 1]] : []));
+  return fields.flatMap((field, i) => (field.startsWith(":") && field.slice(1).split(" ").slice(0, 2).includes("160000") ? [fields[i + 1]] : []));
 }
 
 function gitIsAncestor(worktree, ancestor, descendant) {
@@ -380,10 +389,14 @@ async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerg
 }
 
 // The base branch the reviewer-only range is measured against. A merge in baseline..head that the base does not hold must be a base-only merge (ADR 0197), else the route refuses and names it.
-async function reviewerOnlyBase(worktree, baseline, head, { revParse, baseOnlyMerge, revList, fetchBase, base }) {
+// Refreshes origin/<base> and requires it to resolve: a stale or absent base ref fails here, before any measurement against it.
+function fetchAndResolveBase(worktree, base, { revParse, fetchBase }) {
   const repoRoot = resolveRepoRoot(worktree);
   try { fetchBase(base, { repoRoot }); } catch (error) { throw new Error(`reviewer-only: git fetch origin ${base} failed (${error?.message}); cannot trust the local origin/${base} ref. Run \`git fetch origin ${base}\` and rerun`); }
   try { revParse(worktree, `origin/${base}`); } catch { throw new Error(`reviewer-only: origin/${base} does not exist in ${worktree}; run \`git fetch origin ${base}\` and rerun`); }
+}
+async function reviewerOnlyBase(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base }) {
+  const repoRoot = resolveRepoRoot(worktree);
 
   const ownCommits = revList(worktree, baseline, head, ["--no-merges", `^origin/${base}`]).length;
   // A merge that is not base-only is reviewed through its resolution diff (`git show --remerge-diff`: the merge against an automatic remerge of its parents), whose paths join the PR-own paths.
@@ -496,6 +509,7 @@ export async function runCli(
     if (log.gate !== "draft_gate" || !sameFile) throw new Error(`reviewer-only: findings log ${options.findingsLog} is not the draft_gate cap-round ledger ${canonicalLog}; pass that file`);
     const route = {};
     prBase = await readPrBase(fetchPr, { repo: options.repo, pr: options.pr });
+    fetchAndResolveBase(options.worktree, prBase, { revParse, fetchBase });
     await roundAnglesOf(options.findingsLog, baselineSha, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target: { repo: options.repo, pr: options.pr }, route, prBase });
     if (!route.chainEnd) derivedActList = capRoundActList(log.findings, log.headSha);
   }
@@ -540,7 +554,7 @@ export async function runCli(
     // A locally_clear record that used the last invocation cleared its act items: the chain-end route applies, not the replacement-PR restart.
     if (expected > DELTA_MAX_INVOCATIONS) throw new Error(priorRecord?.outcome === "locally_clear" && onHistory(priorRecord.candidateHead, currentHead) ? `reviewer-only: the locally_clear record for baseline ${baselineHead} used the last invocation and is never overwritten. ${CHAIN_END_REMEDY}` : `reviewer-only: the invocation bound of ${DELTA_MAX_INVOCATIONS} is reached for baseline ${baselineHead}; bounded_out, restart_on_replacement_pr: ${REPLACEMENT_REMEDY}`);
     if (options.result && options.invocation !== expected) throw new Error(`reviewer-only: --invocation ${options.invocation} is not the next invocation ${expected} for baseline ${baselineHead}`);
-    const { base, resolvedPaths, resolvedMerges } = await reviewerOnlyBase(options.worktree, baselineHead, currentHead, { revParse, baseOnlyMerge, revList, fetchBase, base: prBase });
+    const { base, resolvedPaths, resolvedMerges } = await reviewerOnlyBase(options.worktree, baselineHead, currentHead, { revParse, baseOnlyMerge, revList, base: prBase });
     baseBranch = base;
     ownPaths = [...new Set([...changedPaths(options.worktree, baselineHead, currentHead, base), ...resolvedPaths])];
     if (ownPaths.length === 0) throw new Error(`reviewer-only: the PR-own commits in ${baselineHead}..${currentHead} change no file; there is no code range to clear. ${FIXER_REMEDY}`);
@@ -551,7 +565,7 @@ export async function runCli(
     reviewerPatch = Buffer.concat([reviewerPatch, ...resolvedMerges.map((merge) => remergeSection(resolveRepoRoot(options.worktree), merge))]);
   }
   if (reviewerPatch) {
-    const unnamed = gitlinkPaths(options.worktree, baselineHead, currentHead, ownPaths).filter((file) => !reviewerPatch.includes(`diff --git a/${file} b/${file}`));
+    const unnamed = gitlinkPaths(options.worktree, baselineHead, currentHead, ownPaths).filter((file) => !patchNamesFile(reviewerPatch, file));
     if (unnamed.length) throw new Error(`gitlink_not_in_patch: the PR-own range ${baselineHead}..${currentHead} changes the gitlink path(s) ${unnamed.join(", ")} that the reviewer patch does not name, so the reviewer cannot judge them. Only the replacement-PR restart remains: ${REPLACEMENT_REMEDY}`);
   }
   // The CLI runs before the push, so the fix is unpushed by construction.
@@ -631,7 +645,8 @@ export async function runCli(
     if (options.reviewerOnly) {
       // The reviewer read the input run's patch: the result run recomputes it and refuses a different range (a moved origin/<base> changes the PR-own paths).
       const readPatch = deltaPatchPath(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), baselineHead, currentHead, result.runId);
-      if (!existsSync(readPatch) || !readFileSync(readPatch).equals(reviewerPatch)) throw new Error(`reviewer-only: the range ${baselineHead}..${currentHead} now differs from the patch the reviewer read (${readPatch}); origin/${baseBranch} or the branch moved after the input run. Rerun the input run (without --result) and have the reviewer judge the new patch`);
+      const readBack = (() => { try { return readFileSync(readPatch); } catch { return null; } })();
+      if (!readBack?.equals(reviewerPatch)) throw new Error(`reviewer-only: the range ${baselineHead}..${currentHead} now differs from the patch the reviewer read (${readPatch}); origin/${baseBranch} or the branch moved after the input run. Rerun the input run (without --result) and have the reviewer judge the new patch`);
       // Only a locally_clear result writes a clearing step: a bounded_out must not read as push_to_gate (ADR 0255).
       if (decision.outcome === "bounded_out") decision = { ...decision, nextStep: "restart_on_replacement_pr" };
       if (priorRecord?.outcome === "locally_clear" && !decision.locallyClear) throw new Error(`reviewer-only: the locally_clear record for baseline ${baselineHead} is not replaced by a non-clearing result and is never overwritten. ${CHAIN_END_REMEDY}`);

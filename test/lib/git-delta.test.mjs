@@ -351,3 +351,20 @@ test("isBaseOnlyMergeSince: a non-ancestor fromHead and an unresolved mainRef ar
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("isBaseOnlyMergeSince: under diff.ignoreSubmodules=all a merge that drops the PR's gitlink is not base-only", async () => {
+  const { root, prevHead } = await makeBaseMoveRepo();
+  try {
+    git(root, ["config", "diff.ignoreSubmodules", "all"]);
+    git(root, ["reset", "-q", "--hard", prevHead]);
+    git(root, ["update-index", "--add", "--cacheinfo", `160000,${prevHead},vendor/sub`]);
+    git(root, ["commit", "-q", "-m", "PR gitlink"]);
+    const gitlinkHead = git(root, ["rev-parse", "HEAD"]).trim().toLowerCase();
+    git(root, ["merge", "-q", "--no-commit", "--no-ff", "origin/main"]);
+    git(root, ["rm", "-q", "--cached", "vendor/sub"]);
+    git(root, ["commit", "-q", "-m", "merge that drops the gitlink"]);
+    assert.equal(await baseOnly(root, gitlinkHead), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
