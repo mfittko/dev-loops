@@ -24,7 +24,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
@@ -640,7 +640,8 @@ export { buildGateReviewsDir };
  */
 export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot = "tmp", prBodySha256 = null }, { repoRoot = process.cwd() } = {}) {
   const priorBodySha256 = typeof prBodySha256 === "string" ? await readPriorPrBodySha256({ repo, pr, gate, headSha, tmpRoot }, { repoRoot }) : null;
-  const bodyChanged = priorBodySha256 !== null && priorBodySha256 !== prBodySha256;
+  // A missing prior digest counts as changed: an always-angle artifact cannot be shown to have read this body.
+  const bodyChanged = typeof prBodySha256 === "string" && priorBodySha256 !== prBodySha256;
   const dir = path.resolve(repoRoot, buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot }));
   const want = String(headSha).trim().toLowerCase();
   let entries;
@@ -817,6 +818,11 @@ export const PR_BODY_ABSENT_SENTINEL = "(no PR description is shown)";
 export function renderPrBodyRead(prBody) {
   const trimmed = typeof prBody === "string" ? prBody.trim() : "";
   return `${trimmed.length > 0 ? trimmed : PR_BODY_ABSENT_SENTINEL}\n`;
+}
+
+/** The sha256 of the rendered `pr-body` read. */
+export function prBodySha256(prBody) {
+  return createHash("sha256").update(renderPrBodyRead(prBody ?? null)).digest("hex");
 }
 
 /**
@@ -3311,7 +3317,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   let prBodyRead = null;
   if (!options.prefixFile) {
     const text = renderPrBodyRead(options.prBody ?? null);
-    const sha256 = createHash("sha256").update(text).digest("hex");
+    const sha256 = prBodySha256(options.prBody);
     const prBodyPath = buildGateArtifactPath({
       repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", suffix: `.pr-body-${sha256.slice(0, 12)}.md`,
     });
@@ -3343,51 +3349,6 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     }
   }
 
-  // Body-only rebuild (GATE-EXEC-BODY-ONLY-RERUN): a changed pr-body digest at
-  // this head sends every pending dispatch unit that holds an always-surface
-  // angle back to a fresh run. A completed unit retires (sentinel, dispatch
-  // record, findings artifacts) so its re-run reviewer starts uncontaminated;
-  // a started unit without every artifact is in flight and refuses the rebuild.
-  // Units without such an angle keep their sentinels and clean artifacts.
-  let bodyOnlyRerun = null;
-  if (prBodyRead && options.fanoutDispatch?.pendingGroups) {
-    const priorBodySha256 = await readPriorPrBodySha256(options, { repoRoot });
-    if (priorBodySha256 !== null && priorBodySha256 !== prBodyRead.sha256) {
-      const { names: liveSentinels } = await scanLiveSentinels();
-      const fullSha = (name) => name.slice(0, -".json".length).split("-").at(-1);
-      const reviewsDir = path.resolve(repoRoot, buildGateReviewsDir({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" }));
-      const scopes = [];
-      const findingsFiles = [];
-      let retireHead = null;
-      for (const unit of options.fanoutDispatch.pendingGroups) {
-        const angles = Array.isArray(unit?.angles) ? unit.angles : [];
-        if (!angles.some((angle) => angleReviewSurface(angle).kind === "always")) continue;
-        const scope = dispatchUnitScope(options.gate, unit);
-        const sentinel = liveSentinels.find((name) => name.startsWith(`${CHECKPOINT_SENTINEL_PREFIX}${scope}-`) && /^[0-9a-f]{40,64}$/.test(name.slice(CHECKPOINT_SENTINEL_PREFIX.length + scope.length + 1, -".json".length)));
-        if (!sentinel) continue;
-        const artifacts = angles.map((angle) => path.join(reviewsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`));
-        if (!artifacts.every((file) => existsSync(file))) {
-          throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}) while unit ${scope}, which reads the PR body, is in flight; wait for it to write its findings, or retire the round: ${retireCommand}`);
-        }
-        scopes.push(scope);
-        findingsFiles.push(...artifacts);
-        retireHead = fullSha(sentinel);
-      }
-      if (scopes.length > 0) {
-        const retirement = await retireGateRound({
-          gate: options.gate,
-          headSha: retireHead,
-          reason: `GATE-EXEC-BODY-ONLY-RERUN: pr-body ${priorBodySha256.slice(0, 12)} to ${prBodyRead.sha256.slice(0, 12)}`,
-          scopes,
-          findingsFiles,
-          noFindingsArtifacts: true,
-          tmpRoot: path.resolve(repoRoot, "tmp"),
-        });
-        bodyOnlyRerun = { retired: retirement.retired, retirementDir: retirement.retirementDir, scopes };
-      }
-    }
-  }
-
   // Render the volatile tail before destructive writes, so malformed inputs
   // preserve any prior valid context. It is physically separate from the prefix.
   // acceptanceCriteria is deliberately NOT threaded here — see
@@ -3402,6 +3363,66 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     prBodyRead,
     worktreeRoot: path.resolve(repoRoot),
   });
+
+  // Body-only rebuild (GATE-EXEC-BODY-ONLY-RERUN): a changed pr-body digest at
+  // this head (or no readable prior digest) sends every pending dispatch unit
+  // that holds an always-surface angle back to a fresh run. Runs after the
+  // volatile render so a malformed input throws before anything retires. A
+  // completed unit retires (sentinel, dispatch record, findings artifacts) so
+  // its re-run reviewer starts uncontaminated; a unit with a sentinel but not
+  // every artifact is in flight and refuses the rebuild. A completed unit
+  // without a live sentinel still loses its stale always-angle artifacts.
+  // Units without such an angle keep their sentinels and clean artifacts.
+  let bodyOnlyRerun = null;
+  if (prBodyRead && options.fanoutDispatch?.pendingGroups) {
+    const priorBodySha256 = await readPriorPrBodySha256(options, { repoRoot });
+    if (priorBodySha256 !== prBodyRead.sha256) {
+      const { names: liveSentinels, scanError } = await scanLiveSentinels();
+      if (scanError !== null) {
+        throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}): the live-sentinel scan failed (${scanError.code ?? scanError.message}), so an in-flight fan-out cannot be ruled out; retire the round: ${retireCommand}`);
+      }
+      const fullSha = (name) => name.slice(0, -".json".length).split("-").at(-1);
+      const reviewsDir = path.resolve(repoRoot, buildGateReviewsDir({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" }));
+      const scopes = [];
+      const findingsFiles = [];
+      let retireHead = null;
+      // An artifact older than the sentinel belongs to an earlier round, so it does not prove the unit finished.
+      const wroteAfter = async (artifact, sentinel) => {
+        try {
+          return (await stat(artifact)).mtimeMs >= (await stat(path.resolve(repoRoot, "tmp", sentinel))).mtimeMs;
+        } catch {
+          return false;
+        }
+      };
+      for (const unit of options.fanoutDispatch.pendingGroups) {
+        const angles = Array.isArray(unit?.angles) ? unit.angles : [];
+        if (!angles.some((angle) => angleReviewSurface(angle).kind === "always")) continue;
+        const scope = dispatchUnitScope(options.gate, unit);
+        const sentinel = liveSentinels.find((name) => name.startsWith(`${CHECKPOINT_SENTINEL_PREFIX}${scope}-`) && /^[0-9a-f]{40,64}$/.test(name.slice(CHECKPOINT_SENTINEL_PREFIX.length + scope.length + 1, -".json".length)));
+        const artifacts = angles.map((angle) => path.join(reviewsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`));
+        if (sentinel) {
+          if (!artifacts.every((file) => existsSync(file)) || !(await Promise.all(artifacts.map((file) => wroteAfter(file, sentinel)))).every(Boolean)) {
+            throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}) while unit ${scope}, which reads the PR body, is in flight; wait for it to write its findings, or retire the round: ${retireCommand}`);
+          }
+          scopes.push(scope);
+          retireHead = fullSha(sentinel);
+        }
+        findingsFiles.push(...artifacts.filter((file) => existsSync(file)));
+      }
+      if (scopes.length > 0 || findingsFiles.length > 0) {
+        const retirement = await retireGateRound({
+          gate: options.gate,
+          headSha: retireHead ?? options.headSha,
+          reason: `GATE-EXEC-BODY-ONLY-RERUN: pr-body ${(priorBodySha256 ?? "none").slice(0, 12)} to ${prBodyRead.sha256.slice(0, 12)}`,
+          scopes,
+          findingsFiles,
+          noFindingsArtifacts: true,
+          tmpRoot: path.resolve(repoRoot, "tmp"),
+        });
+        bodyOnlyRerun = { retired: retirement.retired, retirementDir: retirement.retirementDir, scopes };
+      }
+    }
+  }
   const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants, capRoundResidue }), ...(requiredReads ? { requiredReads } : {}), loggedAt };
   // Keep the marker available only when prefix AND referenced stable files
   // are unchanged on disk (the prefix hash-binds the evidence and full diff).
@@ -3619,7 +3640,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // AC3: same-head skip-completed resume — angles with a clean artifact
   // already stamped at this head are excluded from `preflight.requiredReviewers`
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
-  const completedAngles = input.completedAngles ?? await readCompletedAnglesForHead({ repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, prBodySha256: createHash("sha256").update(renderPrBodyRead(input.prBody ?? null)).digest("hex") }, { repoRoot });
+  const completedAngles = input.completedAngles ?? await readCompletedAnglesForHead({ repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, ...(input.prefixFile ? {} : { prBodySha256: prBodySha256(input.prBody) }) }, { repoRoot });
   const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: input.carriedAngles ?? null, singleWave: !isReviewGate });
 
   const writeResult = await writeGateContext(
@@ -4229,7 +4250,7 @@ export async function main(
       // --prefix-file (config is a local file read).
       // AC3: same-head skip-completed resume (angles with a clean artifact
       // at this head are excluded from the required count + pending plan).
-      const completedAngles = await readCompletedAnglesForHead({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", ...(options.prefixFile ? {} : { prBodySha256: createHash("sha256").update(renderPrBodyRead(options.prBody ?? null)).digest("hex") }) }, { repoRoot });
+      const completedAngles = await readCompletedAnglesForHead({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", ...(options.prefixFile ? {} : { prBodySha256: prBodySha256(options.prBody) }) }, { repoRoot });
       options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles, singleWave: options.gate !== "review" });
     }
     const result = await writeGateContext(options, { repoRoot });

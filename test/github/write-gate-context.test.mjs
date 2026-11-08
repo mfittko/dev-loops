@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, link, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9636,12 +9636,13 @@ const bodyRerunUnits = { process: "draft-gate-group-process", correctness: "draf
 async function seedCompleteBodyRound(repoRoot, scopes = Object.values(bodyRerunUnits)) {
   const reviews = path.resolve(repoRoot, buildGateReviewsDir({ repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: BODY_RERUN_SHA }));
   await mkdir(reviews, { recursive: true });
-  for (const angle of BODY_RERUN_ANGLES) {
-    await writeFile(path.join(reviews, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: BODY_RERUN_SHA, findings: [] }), "utf8");
-  }
+  // Sentinels first, as a real fan-out writes them; an artifact older than its sentinel counts as in flight.
   for (const scope of scopes) {
     await writeFile(path.join(repoRoot, "tmp", `checkpoint-context-sentinel-${scope}-${BODY_RERUN_SHA}.json`), "{}\n", "utf8");
     await writeFile(path.join(repoRoot, "tmp", `checkpoint-dispatch-prompt-${scope}-${BODY_RERUN_SHA}.json`), "{}\n", "utf8");
+  }
+  for (const angle of BODY_RERUN_ANGLES) {
+    await writeFile(path.join(reviews, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: BODY_RERUN_SHA, findings: [] }), "utf8");
   }
   return reviews;
 }
@@ -9708,6 +9709,78 @@ test("a body-only rebuild refuses while a body unit is in flight, leaves other g
     });
     assert.deepEqual(await snapshot(), before, "a refusal moves no file");
     assert.ok(before.includes(other));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a body-only rebuild refuses on a broken live-sentinel scan", { skip: SKIP_UNDER_ROOT }, async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-scanerr-"));
+  const tmpDir = path.join(repoRoot, "tmp");
+  try {
+    await buildGateContext(bodyRerunInput("Original"), { repoRoot });
+    await seedCompleteBodyRound(repoRoot);
+    await chmod(tmpDir, 0o111);
+    await assert.rejects(buildGateContext(bodyRerunInput("Edited"), { repoRoot }), /GATE-EXEC-BODY-ONLY-RERUN.*live-sentinel scan failed/s);
+  } finally {
+    await chmod(tmpDir, 0o755).catch(() => {});
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a body edit moves the always-angle artifacts of a completed unit that has no live sentinel", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-nosentinel-"));
+  try {
+    await buildGateContext(bodyRerunInput("Original"), { repoRoot });
+    const reviews = await seedCompleteBodyRound(repoRoot, []);
+    const second = await buildGateContext(bodyRerunInput("Edited"), { repoRoot });
+    for (const angle of ["pr-description", "gate-evidence", "renderer-security"]) assert.ok(!existsSync(path.join(reviews, `${angle}.json`)), `${angle} artifact moved`);
+    assert.ok(existsSync(path.join(reviews, "correctness.json")));
+    assert.deepEqual(second.bodyOnlyRerun.scopes, []);
+    const record = JSON.parse(await readFile(path.join(second.bodyOnlyRerun.retirementDir, "retirement.json"), "utf8"));
+    assert.deepEqual(record.scopes, []);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a missing prior context counts as a changed body for the always-angle artifacts", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-noprior-"));
+  try {
+    const reviews = await seedCompleteBodyRound(repoRoot, []);
+    const id = { repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: BODY_RERUN_SHA };
+    assert.deepEqual((await readCompletedAnglesForHead({ ...id, prBodySha256: "f".repeat(64) }, { repoRoot })).sort(), ["correctness", "scope"]);
+    const built = await buildGateContext(bodyRerunInput("Original"), { repoRoot });
+    assert.deepEqual(built.artifact.fanout.pendingGroups.map((g) => g.name).sort(), ["process", "renderer-security"]);
+    assert.ok(!existsSync(path.join(reviews, "renderer-security.json")));
+    assert.ok(existsSync(path.join(reviews, "correctness.json")));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a malformed input throws before a body-only rebuild retires any unit", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-malformed-"));
+  try {
+    await buildGateContext(bodyRerunInput("Original"), { repoRoot });
+    const reviews = await seedCompleteBodyRound(repoRoot);
+    const snapshot = async () => [...(await readdir(path.join(repoRoot, "tmp"))).sort(), ...(await readdir(reviews)).sort()];
+    const before = await snapshot();
+    await assert.rejects(buildGateContext({ ...bodyRerunInput("Edited"), validationPosture: "line one\nline two" }, { repoRoot }), /validationPosture must not contain a newline/);
+    assert.deepEqual(await snapshot(), before);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a body-only rebuild treats an artifact older than its sentinel as in flight", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-stale-artifact-"));
+  try {
+    await buildGateContext(bodyRerunInput("Original"), { repoRoot });
+    const reviews = await seedCompleteBodyRound(repoRoot);
+    const old = new Date(Date.now() - 60_000);
+    await utimes(path.join(reviews, "pr-description.json"), old, old);
+    await assert.rejects(buildGateContext(bodyRerunInput("Edited"), { repoRoot }), /GATE-EXEC-BODY-ONLY-RERUN.*in flight/s);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

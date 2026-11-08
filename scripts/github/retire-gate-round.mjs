@@ -290,6 +290,7 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
 
   const moved = [];
   const movedDispatchPromptRecords = [];
+  const movedFindingsFiles = [];
   let findingsDirRetired = false;
   // `partial` is an explicit flag, never derived from counts alone: a failed
   // findings-dir move after every record moved is still a PARTIAL retirement
@@ -304,12 +305,23 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
       dispatchPromptRecords: movedDispatchPromptRecords,
       findingsDir: findingsDirPresent ? findingsDir : null,
       findingsDirRetired,
-      ...(findingsFiles.length > 0 ? { findingsFiles } : {}),
+      ...(scopes === null ? {} : { scopes }),
+      ...(findingsFiles.length > 0 ? { findingsFiles: movedFindingsFiles } : {}),
       partial,
     };
     await writeFile(path.join(retirementDir, "retirement.json"), JSON.stringify(record, null, 2) + "\n", "utf8");
   };
   try {
+    // Findings files move first: a failure then leaves a sentinel without its
+    // artifact, which the body-only in-flight check refuses.
+    if (findingsFiles.length > 0) {
+      const movedFilesDir = path.join(retirementDir, "findings-artifacts");
+      await mkdir(movedFilesDir, { recursive: true });
+      for (const file of findingsFiles) {
+        await rename(file, path.join(movedFilesDir, path.basename(file)));
+        movedFindingsFiles.push(file);
+      }
+    }
     for (const name of sentinels) {
       await rename(path.join(tmpRoot, name), path.join(retirementDir, name));
       moved.push(name);
@@ -322,11 +334,6 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
       await rename(findingsDir, path.join(retirementDir, "findings-artifacts"));
       findingsDirRetired = true;
     }
-    if (findingsFiles.length > 0) {
-      const movedFilesDir = path.join(retirementDir, "findings-artifacts");
-      await mkdir(movedFilesDir, { recursive: true });
-      for (const file of findingsFiles) await rename(file, path.join(movedFilesDir, path.basename(file)));
-    }
     await writeRecord(false);
     return { ok: true, gate, headSha, retired: moved.length, sentinels: moved, dispatchPromptRecords: movedDispatchPromptRecords, findingsDirRetired, retirementDir, noop: false };
   } catch (err) {
@@ -334,7 +341,7 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
     // still write the audit record with the partial state — an unaudited
     // half-retired round would be worse than the failure itself.
     await writeRecord(true).catch(() => {});
-    const error = new Error(`${err instanceof Error ? err.message : String(err)} — partial retirement: ${moved.length}/${sentinels.length} sentinel(s) and ${movedDispatchPromptRecords.length}/${dispatchPromptRecords.length} dispatch-prompt record(s) already moved to ${retirementDir}`);
+    const error = new Error(`${err instanceof Error ? err.message : String(err)} — partial retirement: ${moved.length}/${sentinels.length} sentinel(s) and ${movedDispatchPromptRecords.length}/${dispatchPromptRecords.length} dispatch-prompt record(s) and ${movedFindingsFiles.length}/${findingsFiles.length} findings file(s) already moved to ${retirementDir}`);
     error.partiallyRetired = moved;
     error.partiallyRetiredDispatchPromptRecords = movedDispatchPromptRecords;
     error.retirementDir = retirementDir;

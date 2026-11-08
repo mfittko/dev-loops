@@ -571,3 +571,21 @@ test("scopes and findingsFiles narrow the retirement to the named units and arti
     assert.deepEqual(record.sentinels, [sentinelName(scope, HEAD_A)]);
   });
 });
+
+test("a findings-file move failure leaves the sentinel live and records the moved files", async () => {
+  await withTmpRoot(async (tmpRoot) => {
+    const scope = "draft-gate-group-process";
+    await writeFile(path.join(tmpRoot, sentinelName(scope, HEAD_A)), "{}\n", "utf8");
+    const reviews = path.join(tmpRoot, `reviews-${HEAD_A}`);
+    await mkdir(reviews);
+    await writeFile(path.join(reviews, "scope.json"), "{}\n", "utf8");
+    const findingsFiles = [path.join(reviews, "scope.json"), path.join(reviews, "missing.json")];
+    const error = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "body only", scopes: [scope], findingsFiles, noFindingsArtifacts: true, tmpRoot }).catch((e) => e);
+    assert.match(error.message, /1\/2 findings file\(s\) already moved/);
+    assert.ok((await readdir(tmpRoot)).includes(sentinelName(scope, HEAD_A)), "the sentinel stays live");
+    const record = JSON.parse(await readFile(path.join(error.retirementDir, "retirement.json"), "utf8"));
+    assert.equal(record.partial, true);
+    assert.deepEqual(record.findingsFiles, [findingsFiles[0]]);
+    assert.deepEqual(record.scopes, [scope]);
+  });
+});
