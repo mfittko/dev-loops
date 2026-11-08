@@ -3,7 +3,11 @@
 // registry (operator-owned-lines.mjs) both import it: no second marker regex.
 import { stripMarkdownCodeForScan } from "./copilot-helpers.mjs";
 
-const MARKER_RE = /<!--\s*dev-loops:copilot-body-disposition\s+review=(\S+)\s+head=([0-9a-fA-F]{40})\s+(?:fix=([0-9a-fA-F]{40})|operator)\s*-->/;
+const markerBody = (form) => `\\s*dev-loops:copilot-body-disposition\\s+review=(\\S+)\\s+head=([0-9a-fA-F]{40})\\s+${form}\\s*`;
+const MARKER_RE = new RegExp(`<!--${markerBody("(?:fix=([0-9a-fA-F]{40})|operator)")}-->`);
+
+/** Global, case-insensitive pattern for an `operator`-form marker, also in its entity-encoded delimiter spelling. Built from the same grammar as the parser. */
+export const operatorMarkerWrapPattern = () => new RegExp(`(?:<|&lt;)!--${markerBody("operator")}--(?:>|&gt;)`, "gi");
 
 // Only bare markdown counts: fenced blocks, inline code spans, and `>` quote
 // lines are dropped before matching, so a quoted or code-formatted marker is

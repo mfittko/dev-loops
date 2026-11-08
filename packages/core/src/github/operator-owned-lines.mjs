@@ -9,7 +9,7 @@
  * `standingAuthorization` says whether `--standing-authorization` clears the entry.
  * Pure; no I/O.
  */
-import { hasOperatorDispositionMarker } from "./copilot-body-disposition-marker.mjs";
+import { hasOperatorDispositionMarker, operatorMarkerWrapPattern } from "./copilot-body-disposition-marker.mjs";
 import { stripNonAssertionMarkdown } from "./non-assertion-markdown.mjs";
 
 const APPROVE_MERGE_LINE_RE = /^[ \t>*-]*approve\s+merge(?:\s|$)/imu;
@@ -72,7 +72,7 @@ const WRAP_RES = Object.freeze([
   /approve\s+merge/gi,
   /approve\s+release/gi,
   /adr-tripwire:allow/gi,
-  /(?:<|&lt;)!--\s*dev-loops:copilot-body-disposition\s+review=\S+\s+head=[0-9a-f]{40}\s+operator\s*--(?:>|&gt;)/gi,
+  operatorMarkerWrapPattern(),
 ]);
 
 /** `text` with every operator-owned phrase wrapped in a code span (whitespace inside it collapsed to one line). */

@@ -140,3 +140,22 @@ test("the wrap is gate-surface only: comment-issue still refuses the same text",
     assert.match(JSON.parse(stderr.get()).error, /^OPERATOR-OWNED-LINE: /);
   }
 });
+
+test("wrap pattern and the marker parser agree on the grammar, raw and entity-encoded", () => {
+  const encoded = MARKER.replace("<!--", "&lt;!--").replace("-->", "--&gt;");
+  for (const marker of [MARKER, encoded, MARKER.toUpperCase().replace(/DEV-LOOPS/, "dev-loops")]) {
+    const wrapped = wrapOperatorOwnedPhrases(marker);
+    assert.ok(wrapped.startsWith("`") && wrapped.endsWith("`"), marker);
+  }
+  // A fix-form marker is not operator-owned: neither the parser nor the wrap accepts it.
+  const fix = `<!-- dev-loops:copilot-body-disposition review=9 head=${SHA} fix=${SHA} -->`;
+  assert.equal(wrapOperatorOwnedPhrases(fix), fix);
+  assert.equal(parseCopilotBodyDispositionMarker(fix)?.operator, false);
+});
+
+test("escapeProse keeps a wrapped operator phrase from fusing with an adjacent multi-backtick span", () => {
+  const a = escapeProse("approve merge``<img src=https://evil.example/p.png>``");
+  assert.equal(a, "`approve merge` ``<img src=https://evil.example/p.png>``");
+  const b = escapeProse("``<img src=x>``approve merge");
+  assert.equal(b, "``<img src=x>`` `approve merge`");
+});
