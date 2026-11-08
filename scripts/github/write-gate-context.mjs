@@ -32,7 +32,7 @@ import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, findAngleEntry, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { VERIFIED_ITEMS_ANGLES, baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { VERIFIED_ITEMS_ANGLES, baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves, validateAngleResult } from "@dev-loops/core/loop/gate-fanin";
 import { anchorBaseRef, normalizeBaseBranch } from "../lib/anchor-base-ref.mjs";
 import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-write-remote-freshness-guard.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
@@ -617,10 +617,11 @@ export { buildGateReviewsDir };
 // verifiedItems angle (labels copied from the PR body checklists). An angle with no config entry fails closed to body-reading.
 // Local to this path: angleReviewSurface keeps serving carry-forward.
 const PR_BODY_PROMPT = /\b(?:PR|pull[ -]?request)(?:['’]s)?[\s-]+(?:body|bodies|description|descriptions)\b/i;
-export function readsPrBody(angle, config, gate) {
+export function readsPrBody(angle, config) {
   const name = baseAngleName(String(angle).trim());
   if (angleReviewSurface(angle).kind === "always" || VERIFIED_ITEMS_ANGLES.has(name)) return true;
-  const entry = findAngleEntry(config, name, gate === "draft_gate" ? "draft" : gate === "pre_approval_gate" ? "preApproval" : undefined);
+  // The same ungated lookup the dispatch emitter uses (resolveReviewerRole), so this check reads the prompt the reviewer receives.
+  const entry = findAngleEntry(config, name);
   return !entry || entry.readsPrBody === true || PR_BODY_PROMPT.test(entry.prompt ?? "");
 }
 
@@ -675,7 +676,7 @@ export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpR
     }
     if (parsed && parsed.verdict === "clean" && String(parsed.headSha ?? "").trim().toLowerCase() === want) {
       if (typeof parsed.angle !== "string" || parsed.angle.length === 0) continue;
-      if (bodyChanged && readsPrBody(parsed.angle, config, gate)) continue;
+      if (bodyChanged && readsPrBody(parsed.angle, config)) continue;
       completed.push(parsed.angle);
     }
   }
@@ -694,7 +695,7 @@ export async function dropBodyReadingCarriedAngles(carriedAngles, { repo, pr, ga
   if (!Array.isArray(carriedAngles) || carriedAngles.length === 0 || typeof bodySha256 !== "string") return carriedAngles;
   const baseline = await readPrBodyBaselineSha256({ repo, pr, gate, headSha, tmpRoot }, { repoRoot });
   if (baseline === bodySha256) return carriedAngles;
-  return carriedAngles.filter((angle) => !readsPrBody(angle, config, gate));
+  return carriedAngles.filter((angle) => !readsPrBody(angle, config));
 }
 
 /**
@@ -2028,6 +2029,8 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
       onUnreadable?.(name);
       continue;
     }
+    // A stamped ledger that never finished (an aborted or intermediate write) is no round at any head, current or earlier.
+    if (log.roundIdentity !== undefined && log.roundIdentity?.completed !== true) continue;
     if (!retained && (sha.startsWith(head) || head.startsWith(sha)) && isInRoundRewrite(log, options.roundIdentity)) continue;
     // The live ledger ranks above every retained round of its head; retained rounds order by their number.
     const retainedNumber = /\.round-(\d+)\.json$/.exec(name);
@@ -3446,8 +3449,11 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   let priorBodyState = null;
   if (prBodyRead && options.fanoutDispatch?.pendingGroups) {
     const priorBodySha256 = options.carriedPriorBodySha256 !== undefined ? options.carriedPriorBodySha256 : await readPriorPrBodySha256(options, { repoRoot });
-    const priorCarriedAngles = options.carriedPriorCarriedAngles ?? (await readGateContext(options, { repoRoot }).catch(() => null))?.fanout?.preflight?.carriedAngles ?? [];
-    priorBodyState = { priorBodySha256, priorCarriedAngles };
+    // The earlier round dispatched its recorded groups (packed under its own carried set), so the in-flight check reads that membership, never this build's.
+    const priorFanout = options.carriedPriorGroups !== undefined ? { groups: options.carriedPriorGroups, preflight: { carriedAngles: options.carriedPriorCarriedAngles } } : (await readGateContext(options, { repoRoot }).catch(() => null))?.fanout;
+    const priorCarriedAngles = priorFanout?.preflight?.carriedAngles ?? [];
+    const priorGroups = Array.isArray(priorFanout?.groups) ? priorFanout.groups : options.fanoutDispatch.groups ?? [];
+    priorBodyState = { priorBodySha256, priorCarriedAngles, priorGroups };
     if (priorBodySha256 !== prBodyRead.sha256) {
       const { names: liveSentinels, scanError } = await scanLiveSentinels();
       if (scanError !== null) {
@@ -3476,7 +3482,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           const head = String(parsed?.headSha ?? "").trim().toLowerCase();
           // The artifact must stamp a full SHA; only an abbreviated --head-sha may match by prefix.
           const isFullSha = (sha) => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha);
-          return Array.isArray(parsed?.findings) && isFullSha(head) && (isFullSha(wantHead) ? head === wantHead : wantHead.length > 0 && head.startsWith(wantHead)) && baseAngleName(String(parsed.angle).trim().toLowerCase()) === baseAngleName(String(angle).trim().toLowerCase());
+          return validateAngleResult(parsed) === null && isFullSha(head) && (isFullSha(wantHead) ? head === wantHead : wantHead.length > 0 && head.startsWith(wantHead)) && baseAngleName(String(parsed.angle).trim().toLowerCase()) === baseAngleName(String(angle).trim().toLowerCase());
         } catch {
           return false;
         }
@@ -3492,31 +3498,36 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       const configuredGroupNames = new Set((options.config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
       // The dispatched membership is the earlier round's, so both loops strip the prior context's carried set, never the current build's.
       const priorCarried = new Set(priorCarriedAngles.map((angle) => String(angle).trim().toLowerCase()));
-      for (const group of expandDispatchUnits(options.fanoutDispatch.groups ?? [], configuredGroupNames)) {
+      // The earlier round's recorded units (its own packing, its carried set stripped) are what its sentinels and artifacts belong to.
+      // A unit is pending now when its scope is pending or any of its angles sits in a pending unit (a newly carried angle keeps the group scope; a new packing renames it).
+      const keyOf = (angle) => String(angle).trim().toLowerCase();
+      const pendingKeys = new Set(options.fanoutDispatch.pendingGroups.flatMap((unit) => (Array.isArray(unit?.angles) ? unit.angles : []).map(keyOf)));
+      const covered = new Set();
+      for (const group of expandDispatchUnits(priorGroups, configuredGroupNames)) {
         if (!Array.isArray(group?.angles)) continue;
-        const unit = { ...group, angles: group.angles.filter((angle) => !priorCarried.has(String(angle).trim().toLowerCase())) };
+        const unit = { ...group, angles: group.angles.filter((angle) => !priorCarried.has(keyOf(angle))) };
+        unit.angles.forEach((angle) => covered.add(keyOf(angle)));
+        if (unit.angles.length === 0) continue;
         const scope = dispatchUnitScope(options.gate, unit);
         const sentinel = sentinelOf(scope);
-        if (unit.angles.length === 0 || pendingScopes.has(scope) || !sentinel) continue;
-        if (!(await Promise.all(unit.angles.map((angle) => finishedArtifact(angle, sentinel)))).every(Boolean)) refuseInFlight(scope);
-      }
-      // The pending membership regains a body-reading angle that the earlier round carried (never dispatched, so no artifact):
-      // check in-flight state against the membership that round dispatched, excluding the angles its context recorded as carried.
-      for (const unit of options.fanoutDispatch.pendingGroups) {
-        const angles = Array.isArray(unit?.angles) ? unit.angles : [];
-        const dispatched = angles.filter((angle) => !priorCarried.has(String(angle).trim().toLowerCase()));
-        const scope = dispatchUnitScope(options.gate, { ...unit, angles: dispatched });
-        const sentinel = sentinelOf(scope);
+        const pending = pendingScopes.has(scope) || unit.angles.some((angle) => pendingKeys.has(keyOf(angle)));
         // A pending unit that holds no body-reading angle but finished with a live sentinel (a findings_present
         // artifact) is re-emitted too, so its sentinel must retire or the reviewer's fresh-context guard refuses it.
-        if (!sentinel && !angles.some((angle) => readsPrBody(angle, options.config, options.gate))) continue;
         if (sentinel) {
           // Any unfinished unit refuses: a non-body unit left live would be re-dispatched by the next --pending emission under a new execution.
-          if (!(await Promise.all(dispatched.map((angle) => finishedArtifact(angle, sentinel)))).every(Boolean)) refuseInFlight(scope);
+          if (!(await Promise.all(unit.angles.map((angle) => finishedArtifact(angle, sentinel)))).every(Boolean)) refuseInFlight(scope);
+          if (!pending) continue;
           scopes.push(scope);
           retireHead = fullSha(sentinel);
+        } else if (!pending || !unit.angles.some((angle) => readsPrBody(angle, options.config))) {
+          continue;
         }
-        findingsFiles.push(...angles.map(artifactOf).filter((file) => existsSync(file)));
+        findingsFiles.push(...unit.angles.map(artifactOf).filter((file) => existsSync(file)));
+      }
+      // A pending body-reading angle the earlier round never recorded has no sentinel but may hold a stale artifact.
+      for (const unit of options.fanoutDispatch.pendingGroups) {
+        const fresh = (Array.isArray(unit?.angles) ? unit.angles : []).filter((angle) => !covered.has(keyOf(angle)));
+        if (fresh.some((angle) => readsPrBody(angle, options.config))) findingsFiles.push(...fresh.map(artifactOf).filter((file) => existsSync(file)));
       }
       if (scopes.length > 0 || findingsFiles.length > 0) {
         if (retireHead === null && !/^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(options.headSha)) {
@@ -3577,7 +3588,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         // pointer/hash/plan without the failed path before publishing a marker.
         process.stderr.write(`[gate-context] full-diff capture failed (continuing without scope.diffPath): ${error.message}\n`);
         await rm(fullPath, { force: true });
-        return await writeGateContext({ ...options, diffPath: null, diffToWrite: null, carriedPrBodyBaselineSha256: prBodyBaselineSha256, ...(priorBodyState ? { carriedPriorBodySha256: priorBodyState.priorBodySha256, carriedPriorCarriedAngles: priorBodyState.priorCarriedAngles } : {}) }, { repoRoot });
+        return await writeGateContext({ ...options, diffPath: null, diffToWrite: null, carriedPrBodyBaselineSha256: prBodyBaselineSha256, ...(priorBodyState ? { carriedPriorBodySha256: priorBodyState.priorBodySha256, carriedPriorCarriedAngles: priorBodyState.priorCarriedAngles, carriedPriorGroups: priorBodyState.priorGroups } : {}) }, { repoRoot });
       }
     }
     if (pendingFilteredDiff) await writeFile(path.resolve(repoRoot, pendingFilteredDiff.path), pendingFilteredDiff.text, "utf8");

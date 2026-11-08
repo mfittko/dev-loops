@@ -903,7 +903,7 @@ const MAX_ANGLE_NAME_LENGTH = 200;
  * @param {unknown} result
  * @returns {string|null}
  */
-function validateAngleResult(result) {
+export function validateAngleResult(result) {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return "angle result must be an object";
   }
@@ -1259,7 +1259,8 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
   // finding's own index when the ledger carries no stamped clusters), and the
   // one disposition and its prose apply to every member.
   const stamped = enriched.every((f) => Number.isInteger(f?.clusterId));
-  const clusterOf = (i) => (stamped ? enriched[i].clusterId : i);
+  // An unstamped ledger with appended stamped findings (the pinned Copilot body cluster) keeps each stamped finding in its own cluster.
+  const clusterOf = (i) => (Number.isInteger(enriched[i]?.clusterId) ? enriched[i].clusterId : i);
   const clusterIds = new Set(enriched.map((_f, i) => clusterOf(i)));
   // Unstamped (legacy) ledgers cluster later (judge-pass and the ledger writer), so the coercion reads the same clusters up front.
   const projectedClusters = stamped ? [] : clusterFindings(enriched, { headSha: validated.headSha }).clusters;
@@ -1270,7 +1271,7 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
     }
     const memberIndices = stamped
       ? enriched.flatMap((_f, i) => (clusterOf(i) === d.index ? [i] : []))
-      : projectedClusters.find((c) => c.memberIndices.includes(d.index)).memberIndices;
+      : [...new Set([...(projectedClusters.find((c) => c.memberIndices.includes(d.index))?.memberIndices ?? []), ...enriched.flatMap((_f, i) => (clusterOf(i) === d.index ? [i] : []))])];
     if (d.disposition === "defer") {
       // GATE-EXEC-THREAD-DISPOSITION: a high, a question and an all-nit cluster are never deferred.
       const blocked = neverDeferredSeverity(memberIndices.map((i) => enriched[i]));

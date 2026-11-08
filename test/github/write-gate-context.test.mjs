@@ -9826,7 +9826,7 @@ test("a body-only rebuild also retires a pending non-body unit whose findings_pr
   try {
     await buildGateContext(bodyRerunInput("Original"), { repoRoot });
     const reviews = await seedCompleteBodyRound(repoRoot);
-    await writeFile(path.join(reviews, "holistic.json"), JSON.stringify({ angle: "holistic", verdict: "findings_present", headSha: BODY_RERUN_SHA, findings: [] }), "utf8");
+    await writeFile(path.join(reviews, "holistic.json"), JSON.stringify({ angle: "holistic", verdict: "findings_present", headSha: BODY_RERUN_SHA, findings: [{ severity: "low", summary: "A finding." }] }), "utf8");
     const second = await buildGateContext(bodyRerunInput("Edited"), { repoRoot });
     assert.deepEqual(second.artifact.fanout.pendingGroups.map((g) => g.name).sort(), ["holistic", "process", "renderer-security"]);
     assert.deepEqual(second.bodyOnlyRerun.scopes.sort(), Object.values(bodyRerunUnits).sort());
@@ -10296,10 +10296,9 @@ test("readsPrBody recognises every PR-body phrasing in an angle prompt (issue 30
     assert.equal(reads(prompt), true, prompt);
   }
   for (const prompt of ["Check the prior body.", "Check the PRs.", "Docs only.", "Read the PR text."]) assert.equal(reads(prompt), false, prompt);
-  // The gate being built decides: preApproval's entry reads the body, draft's does not.
+  // The lookup is ungated, like the dispatch emitter's: draft's entry wins, so the check reads the prompt the reviewer receives.
   const split = { gates: { draft: { angles: [{ name: "docs", prompt: "Docs." }] }, preApproval: { angles: [{ name: "docs", prompt: "Check the PR body." }] } } };
-  assert.equal(readsPrBody("docs", split, "pre_approval_gate"), true);
-  assert.equal(readsPrBody("docs", split, "draft_gate"), false);
+  assert.equal(readsPrBody("docs", split), false);
 });
 
 test("a body-only rebuild accepts an artifact whose angle differs only by case or whitespace (issue 3080)", async () => {
