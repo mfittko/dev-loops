@@ -3392,7 +3392,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       }
       // A PR whose spec-of-record is the PR body (no linked issue) treats a body edit as a spec edit: every angle was
       // reviewed against the old spec, so a rerun of the body units alone is not enough (AC3, existing spec-digest refusal).
-      if ((options.acceptanceCriteriaSource === "none" || options.hasClosingIssue === false) && priorBodySha256 !== null && liveSentinels.length > 0) {
+      if ((options.acceptanceCriteriaSource === "none" || options.hasClosingIssue === false || options.bodyNamesClosingIssue === false) && priorBodySha256 !== null && liveSentinels.length > 0) {
         throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}): the PR body is the spec of record (the PR closes no issue) and its digest changed from ${priorBodySha256.slice(0, 12)} to ${prBodyRead.sha256.slice(0, 12)} while ${liveSentinels.length} reviewer sentinel(s) are live, so every angle was reviewed against the old spec. Retire the round explicitly before rebuilding: ${retireCommand}`);
       }
       const fullSha = (name) => name.slice(0, -".json".length).split("-").at(-1);
@@ -3685,6 +3685,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
       acceptanceCriteria: input.acceptanceCriteria ?? null,
       ...(typeof input.acceptanceCriteriaSource === "string" ? { acceptanceCriteriaSource: input.acceptanceCriteriaSource } : {}),
       ...(typeof input.hasClosingIssue === "boolean" ? { hasClosingIssue: input.hasClosingIssue } : {}),
+      ...(typeof input.bodyNamesClosingIssue === "boolean" ? { bodyNamesClosingIssue: input.bodyNamesClosingIssue } : {}),
       validationPosture: input.validationPosture ?? null,
       prBody: input.prBody ?? null,
       issueBody: input.issueBody ?? null,
@@ -3828,9 +3829,10 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
   const acProvided = options.acceptanceCriteria != null;
   const needsIssue = !acProvided;
   if (!needsBody && !needsIssue) {
-    // No gh call here: the supplied body's Closes/Fixes/Resolves keyword decides hasClosingIssue, so the
-    // body-only rebuild's PR-body-spec refusal never fails open on an unresolved closing issue.
-    options.hasClosingIssue = resolveLinkedIssuesFromPr({ body: options.prBody }).length > 0;
+    // No gh call here: hasClosingIssue stays undefined (unknown, so angle resolution fails closed), because a
+    // sidebar-linked issue is invisible to the body. The body's Closes/Fixes/Resolves keyword feeds only the
+    // body-only rebuild's PR-body-spec refusal, so that refusal never fails open on an unresolved closing issue.
+    options.bodyNamesClosingIssue = resolveLinkedIssuesFromPr({ body: options.prBody }).length > 0;
     options.acceptanceCriteriaSource = "provided";
     return options;
   }

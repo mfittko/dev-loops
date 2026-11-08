@@ -4564,10 +4564,12 @@ test("resolvePrSpecContext: all three spec flags provided short-circuits before 
   assert.equal(options.issueBody, "flag issue");
   assert.equal(options.acceptanceCriteria, "docs/plan.md");
   assert.equal(options.acceptanceCriteriaSource, "provided");
-  assert.equal(options.hasClosingIssue, false);
+  assert.equal(options.hasClosingIssue, undefined);
+  assert.equal(options.bodyNamesClosingIssue, false);
   const closing = { repo: "owner/repo", pr: 7, prBody: "Closes #5", acceptanceCriteria: "docs/plan.md" };
   await resolvePrSpecContext(closing, { run });
-  assert.equal(closing.hasClosingIssue, true);
+  assert.equal(closing.hasClosingIssue, undefined);
+  assert.equal(closing.bodyNamesClosingIssue, true);
 });
 
 test("main: whitespace-only spec flags resolve as if omitted — live body fetched, issue resolved, prefix rendered, never 'provided' (#1540)", async () => {
@@ -9911,7 +9913,7 @@ test("a body-only rebuild refuses while a non-body unit is in flight and moves n
 
 test("a PR-body spec edit refuses when the caller supplied an acceptance-criteria pointer but the PR closes no issue", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-spec-provided-"));
-  const input = (prBody) => ({ ...bodyRerunInput(prBody), acceptanceCriteriaSource: "provided", hasClosingIssue: false });
+  const input = (prBody) => ({ ...bodyRerunInput(prBody), acceptanceCriteriaSource: "provided", bodyNamesClosingIssue: false });
   try {
     await buildGateContext(input("Original"), { repoRoot });
     await seedCompleteBodyRound(repoRoot);
