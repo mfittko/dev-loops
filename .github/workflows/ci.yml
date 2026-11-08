@@ -174,7 +174,9 @@ jobs:
     needs:
       - changes
     if: needs.changes.outputs.inspect_run_viewer == 'true'
-    runs-on: ubuntu-latest
+    # Playwright 1.60.0 has no WebKit build for ubuntu-26.04 (what ubuntu-latest now resolves to).
+    # Revisit when Playwright supports WebKit on Ubuntu 26.04.
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Check out repository
@@ -190,7 +192,9 @@ jobs:
     needs:
       - changes
     if: needs.changes.outputs.presentations == 'true'
-    runs-on: ubuntu-latest
+    # Playwright 1.60.0 has no WebKit build for ubuntu-26.04 (what ubuntu-latest now resolves to).
+    # Revisit when Playwright supports WebKit on Ubuntu 26.04.
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Check out repository
@@ -211,7 +215,9 @@ jobs:
     needs:
       - changes
     if: needs.changes.outputs.articles == 'true'
-    runs-on: ubuntu-latest
+    # Playwright 1.60.0 has no WebKit build for ubuntu-26.04 (what ubuntu-latest now resolves to).
+    # Revisit when Playwright supports WebKit on Ubuntu 26.04.
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Check out repository
