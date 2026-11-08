@@ -6,6 +6,8 @@ import { guardCommentBodyNoIssuePrIds } from "../src/github/comment-id-guard.mjs
 import { parseCopilotBodyDispositionMarker } from "../src/github/copilot-body-disposition-marker.mjs";
 import { verifyFreshHumanApproval } from "../src/loop/merge-approval.mjs";
 import { resolveApprovalState } from "../../../scripts/release/verify-release-approval.mjs";
+import { APPROVAL_CODE_SPAN_FIXTURES } from "../../../scripts/lib/code-span-fixtures.mjs";
+import { extractWaiverLines } from "../../../scripts/loop/adr-waiver-markers.mjs";
 
 const SHA = "a".repeat(40);
 const FIX = "b".repeat(40);
@@ -61,14 +63,41 @@ test("the shared guard refuses every entry and allowedRefs never clears it", () 
   assert.throws(() => guardCommentBodyNoIssuePrIds("approve release v1.2.3", { standingAuthorization: true }), /OPERATOR-OWNED-LINE/);
 });
 
-test("approve-release refuses every text the release reader accepts", () => {
+const releaseState = (body) => resolveApprovalState({ version: "1.2.3", operator: "op", releaseRef: "2026-01-01T00:00:00Z", comments: [{ author: "op", body, createdAt: "2026-02-01T00:00:00Z" }] });
+
+// Bodies where the reader and the guard once disagreed (whitespace and case-folding bypasses).
+const ADVERSARIAL_RELEASE_BODIES = [
+  " > approve release v1.2.3",
+  "﻿> approve release v1.2.3",
+  "　> approve release v1.2.3",
+  " ```\napprove release v1.2.3\n```",
+  "\f```\napprove release v1.2.3\n```",
+  "ſapprove release v1.2.3",
+  "Kapprove release v1.2.3",
+  "ok ſapprove release v1.2.3",
+];
+
+test("approve-release: genuine and adversarial bodies are reader approvals and the guard refuses each", () => {
   const genuine = ["approve release v1.2.3", "Approve release v1.2.3.", "Looks good.\n\napprove release v1.2.3\n"];
-  for (const body of genuine) {
-    const state = resolveApprovalState({ version: "1.2.3", operator: "op", releaseRef: "2026-01-01T00:00:00Z", comments: [{ author: "op", body, createdAt: "2026-02-01T00:00:00Z" }] });
-    assert.equal(state.approved, true, body);
-    assert.ok(findOperatorOwnedLineRefusal(body), body);
+  for (const body of [...genuine, ...ADVERSARIAL_RELEASE_BODIES]) {
+    assert.equal(releaseState(body).approved, true, JSON.stringify(body));
+    assert.ok(findOperatorOwnedLineRefusal(body), JSON.stringify(body));
   }
-  // negated/instructional clauses are refused too, a backticked mention passes
+});
+
+test("approve-release: reader approves implies guard refuses over every code-span fixture", () => {
+  for (const f of APPROVAL_CODE_SPAN_FIXTURES) {
+    const body = f.body.replace("v1.0.0", "v1.2.3");
+    if (releaseState(body).approved) assert.ok(findOperatorOwnedLineRefusal(body), f.name);
+  }
+});
+
+test("approve-release: the guard over-refuses no code-span fixture", () => {
+  const refused = APPROVAL_CODE_SPAN_FIXTURES.filter((f) => findOperatorOwnedLineRefusal(f.body)).map((f) => f.name);
+  assert.deepEqual(refused, []);
+});
+
+test("approve-release: negated/instructional clauses are refused, a backticked mention passes", () => {
   assert.ok(findOperatorOwnedLineRefusal("do not approve release v1.2.3"));
   assert.equal(findOperatorOwnedLineRefusal("post `approve release v1.2.3` yourself"), null);
 });
@@ -76,7 +105,8 @@ test("approve-release refuses every text the release reader accepts", () => {
 test("approve-merge refuses every text verifyFreshHumanApproval accepts, quote and fence lines included", () => {
   for (const body of [`approve merge ${SHA}`, `> approve merge ${SHA}`, `\`\`\`\napprove merge ${SHA}\n\`\`\``]) {
     const result = verifyFreshHumanApproval({ approvedBy: "op", currentHeadSha: SHA, comments: [{ user: { login: "op" }, author_association: "OWNER", body }] });
-    if (result.satisfied) assert.ok(findOperatorOwnedLineRefusal(body), body);
+    assert.equal(result.satisfied, true, body);
+    assert.ok(findOperatorOwnedLineRefusal(body), body);
   }
   assert.ok(findOperatorOwnedLineRefusal(`> approve merge ${SHA}`));
   assert.equal(findOperatorOwnedLineRefusal("the operator must type approve merge <sha>"), null);
@@ -89,5 +119,13 @@ test("operator marker: refused after a fix marker, refused for every match, fix 
   assert.equal(findOperatorOwnedLineRefusal(fixMarker), null);
   for (const body of [`\`\`\`\n${operatorMarker()}\n\`\`\``, `inline \`${operatorMarker()}\``, `> ${operatorMarker()}`]) {
     assert.equal(findOperatorOwnedLineRefusal(body), null, body);
+  }
+});
+
+test("adr-tripwire-allow: the registry line match agrees with the waiver reader on a sample set", () => {
+  const samples = ["adr-tripwire:allow reason", "  adr-tripwire:allow reason", " adr-tripwire:allow reason", "adr-tripwire:allow", "adr-tripwire:allowed", "see adr-tripwire:allow mid line", "x\nadr-tripwire:allow r", "`adr-tripwire:allow r`", "\tadr-tripwire:allow\tr"];
+  for (const body of samples) {
+    const entry = OPERATOR_OWNED_LINES.find((e) => e.id === "adr-tripwire-allow");
+    assert.equal(entry.matches(body), extractWaiverLines(body).length > 0, JSON.stringify(body));
   }
 });

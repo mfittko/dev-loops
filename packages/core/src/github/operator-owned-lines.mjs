@@ -9,10 +9,12 @@
  * `standingAuthorization` says whether `--standing-authorization` clears the entry.
  * Pure; no I/O.
  */
-import { bareMarkdown, hasOperatorDispositionMarker } from "./copilot-body-disposition-marker.mjs";
+import { hasOperatorDispositionMarker } from "./copilot-body-disposition-marker.mjs";
+import { stripNonAssertionMarkdown } from "./non-assertion-markdown.mjs";
 
 const APPROVE_MERGE_LINE_RE = /^[ \t>*-]*approve\s+merge(?:\s|$)/imu;
-const APPROVE_RELEASE_RE = /\bapprove\s+release\s+v?\d/iu;
+// No `u` flag: the flags match the reader's, so U+017F and U+212A stay non-word for `\b`.
+const APPROVE_RELEASE_RE = /\bapprove\s+release\s+v?\d/i;
 const WAIVER_LINE_RE = /^\s*adr-tripwire:allow(?:\s|$)/mu;
 
 const refusal = (label, tail) => `OPERATOR-OWNED-LINE: refusing a comment with ${label}. ${tail} The human posts the line.`;
@@ -28,7 +30,7 @@ export const OPERATOR_OWNED_LINES = Object.freeze([
   Object.freeze({
     id: "approve-release",
     label: "`approve release v<version>`",
-    matches: (body) => APPROVE_RELEASE_RE.test(bareMarkdown(body)),
+    matches: (body) => APPROVE_RELEASE_RE.test(stripNonAssertionMarkdown(body)),
     standingAuthorization: false,
     refusal: refusal("`approve release v<version>`", "That phrase is the operator's stable-release approval. No agent writes it and no flag overrides this."),
   }),
