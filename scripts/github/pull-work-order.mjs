@@ -58,7 +58,7 @@ async function locateReviewUnit({ ref, digest, execution, tmpRoots }) {
     const plan = await readJson(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }));
     const unit = plan?.units?.find((candidate) => candidate.workOrderRef === ref);
     if (!unit) continue;
-    const retired = executionRound ? await findRetirementAfter(tmpRoot, gate, headSha, Number(emittedAtMs)) : null;
+    const retired = executionRound ? await (findRetirementAfter(tmpRoot, gate, headSha, Number(emittedAtMs)) ?? findRetirementAfter(tmpRoot, gate, headSha, Number(emittedAtMs), unit.scope)) : null;
     // A parsed round other than the plan's was superseded by a re-emission.
     const superseded = executionRound && executionRound !== plan.roundId
       && `execution ${execution} belongs to ${gate} round ${executionRound} at ${headSha}, superseded by round ${plan.roundId}`;

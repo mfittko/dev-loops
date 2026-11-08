@@ -44,3 +44,18 @@ test("GATE-EXEC-OPERATOR-FOCUS is owned by the gate review sub-loop contract and
   assertRuleOwned("GATE-EXEC-OPERATOR-FOCUS", "skills/docs/gate-review-sub-loop-contract.md");
   assert.match(readFileSync(new URL("../../skills/docs/required-rules.json", import.meta.url), "utf8"), /"id": "GATE-EXEC-OPERATOR-FOCUS"/);
 });
+
+test("GATE-EXEC-BODY-ONLY-RERUN is owned by the gate review sub-loop contract, registered and names its clauses", () => {
+  assertRuleOwned("GATE-EXEC-BODY-ONLY-RERUN", "skills/docs/gate-review-sub-loop-contract.md");
+  assert.match(readFileSync(new URL("../../skills/docs/required-rules.json", import.meta.url), "utf8"), /"id": "GATE-EXEC-BODY-ONLY-RERUN"/);
+  const rule = extractOwnedText(readFileSync(new URL("../../skills/docs/gate-review-sub-loop-contract.md", import.meta.url), "utf8"), "GATE-EXEC-BODY-ONLY-RERUN");
+  for (const needle of ["pr-body", "pr_body_stale", "ADR 0256", "always"]) assert.ok(rule.includes(needle), needle);
+});
+
+test("the gate contract states the retained-round rule on the round cap and the disposition memory", () => {
+  const contract = readFileSync(new URL("../../skills/docs/gate-review-sub-loop-contract.md", import.meta.url), "utf8");
+  const cap = extractOwnedText(contract, "GATE-EXEC-ROUND-CAP");
+  for (const needle of [".round-<n>.json", "isInRoundRewrite", "resolveGateRound"]) assert.ok(cap.includes(needle), needle);
+  const memory = contract.split("\n").find((line) => line.startsWith("**Disposition memory into a re-running reviewer's briefing"));
+  assert.ok(memory.includes(".round-<n>.json"));
+});

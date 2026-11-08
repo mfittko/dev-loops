@@ -20,7 +20,7 @@ import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES, computeReviewerUnitBudget } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "../loop/_operator-focus.mjs";
-import { expandDispatchUnits, isPackedUnitName, normalizeUnitAngles, sanitizeScopeSegment, unitScopeSegment } from "./_dispatch-units.mjs";
+import { dispatchUnitScope, expandDispatchUnits, normalizeUnitAngles, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 
 const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--operator-focus-file <path>] [--tmp-root <path>] [--help]
 The SANCTIONED one-shot gate fan-out dispatch step: given a gate +
@@ -59,7 +59,7 @@ Each emitted prompt is a bounded reviewer work order (reference seeding): the
 invariant prefix with its \`## Required reads\` manifest, the volatile tail, and
 a per-unit angle-suffix that carries each angle's persona and prompt, resolved
 here via resolveReviewerRole against the merged .devloops and shipped defaults.
-Bulk evidence (PR/issue bodies, diff, validation) stays in the referenced files;
+Bulk evidence (linked-issue bodies, diff, validation) stays in the referenced files, and the PR body is a separate pr-body read;
 the reviewer reads them in full itself.
 
 Run write-gate-context.mjs FIRST (it writes the briefing prefix, evidence file,
@@ -85,6 +85,11 @@ Optional:
                                older artifact); a PRESENT-but-empty pendingGroups
                                requires every resolved angle to be carried with
                                --carry-forward-plan proof, or refuses zero units.
+                               The persisted plan also keeps the completed prior
+                               units marked "resumed": true, so its count can
+                               exceed the stdout count. Only the stdout "units"
+                               are dispatched, and --expected-dispatch-units
+                               takes the stdout count.
   --carry-forward-plan <json>  Resolver output (or its carried array). Required
                                for a zero-unit pending round; persisted with the
                                keyed plan for fan-in and provenance verification.
@@ -134,30 +139,6 @@ Exit codes:
      error, or invalid --jq filter)`.trim();
 
 const parseError = buildParseError(USAGE);
-
-/**
- * Derive the reviewer-sentinel/prompt-layout scope for a resolved dispatch unit.
- * An ordinary singleton unit dispatches under its angle name
- * (`<gatePrefix><angle>`). A packed bin (even a one-angle bin) and every
- * multi-angle unit dispatch under `<gatePrefix>group-<segment>`, where
- * `<segment>` is unitScopeSegment(unit.name) — the leading `group:` auto-chunk
- * marker (see resolveFanoutGroups' chunk naming) is stripped BEFORE
- * sanitizing, whatever the unit's origin: a configured group's name is not
- * guaranteed marker-free either (e.g. a split sub-unit's base name can itself
- * be an auto-chunk name carrying the marker), so this never special-cases
- * "came from config" vs "auto-chunked". The scope keys the sentinel/prompt
- * layout only; the EXACT unit name is carried separately as the provenance
- * `group`. Pure.
- * @param {string} gate normalized gate id
- * @param {{ name: string, angles: string[] }} unit
- * @returns {string}
- */
-export function dispatchUnitScope(gate, unit) {
-  const prefix = gateScopePrefix(gate);
-  const angles = Array.isArray(unit?.angles) ? unit.angles : [];
-  if (angles.length === 1 && !isPackedUnitName(unit?.name)) return `${prefix}${sanitizeScopeSegment(angles[0])}`;
-  return `${prefix}group-${unitScopeSegment(unit?.name)}`;
-}
 
 // Human phrasing for each PROHIBITED_REVIEWER_OPERATIONS kind. The RENDERED
 // SET is still driven off the array (buildAngleNamingSuffix below maps over
@@ -461,6 +442,31 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // path's freshness for. ENOENT on the rm is fine (no prior plan exists).
   // The success-only WRITE at the end of main is unchanged — this removes,
   // it does not pre-persist anything.
+  // A --pending emission replaces the keyed plan with the pending units only. The prior plan is read first so
+  // units that completed in an earlier wave of this round can stay in the persisted plan (see mergedUnits below).
+  // The rm below destroys the plan, so the latest persisted plan bytes live in a sidecar the rm leaves alone, refreshed after
+  // every successful emission: a refused run followed by a --pending run finds the latest prior units. fan-in never reads the sidecar.
+  const priorPlanSidecar = `${buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot })}.prior`;
+  let priorPlan = null;
+  if (pendingOnly) {
+    const priorText = await readFile(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), "utf8").catch(() => null)
+      ?? await readFile(priorPlanSidecar, "utf8").catch(() => null);
+    try {
+      priorPlan = priorText === null ? null : JSON.parse(priorText);
+    } catch {
+      priorPlan = null; // a truncated or malformed prior plan contributes no resumed unit
+    }
+    if (priorPlan !== null) {
+      try {
+        await writeFile(priorPlanSidecar, priorText, "utf8");
+      } catch (err) {
+        // The rm below destroys the only readable copy, so refuse while no backup exists. This refusal precedes the rm,
+        // so the previous keyed plan survives this failed run: the one exception to the start-of-flow removal above.
+        process.stderr.write(`${formatCliError(err)}\n`);
+        return 2;
+      }
+    }
+  }
   try {
     await rm(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), { force: true });
   } catch (err) {
@@ -857,9 +863,25 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const payload = { ok: true, gate, headSha, repo, pr, pending: pendingOnly, roundId, count: emitted.length, maxConcurrent, units: emitted };
   if (carryProof !== undefined) payload.carried = carryProof;
   const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
+  // Units of the prior plan whose angles all completed in this round and are not re-emitted keep their fan-in
+  // provenance: they stay in the persisted plan, marked resumed, but never in the dispatch list printed above.
+  const completedAngles = new Set(artifact.fanout?.preflight?.completedAngles ?? []);
+  const emittedAngles = new Set(emitted.flatMap((unit) => unit.angles));
+  const priorUnits = priorPlan?.gate === gate && priorPlan.headSha === headSha && Array.isArray(priorPlan.units) ? priorPlan.units.filter((unit) => unit !== null && typeof unit === "object") : [];
+  const isResumed = (unit) => Array.isArray(unit.angles) && unit.angles.length > 0
+    && unit.angles.every((angle) => completedAngles.has(angle) && !emittedAngles.has(angle));
+  // The prior unit order stays: the findings-log sibling check needs split-group parts adjacent and in order.
+  const emittedByScope = new Map(emitted.map((unit) => [unit.scope, unit]));
+  const mergedUnits = priorUnits.flatMap((unit) => (isResumed(unit) ? [{ ...unit, resumed: true }] : emittedByScope.has(unit.scope) ? [emittedByScope.get(unit.scope)] : []));
+  const placed = new Set(mergedUnits.map((unit) => unit.scope));
+  const persistedUnits = [...mergedUnits, ...emitted.filter((unit) => !placed.has(unit.scope))];
+  const persistedPayload = persistedUnits.length > emitted.length ? { ...payload, units: persistedUnits, count: persistedUnits.length } : payload;
   try {
     await mkdir(path.dirname(planPath), { recursive: true });
-    await persistPlan(planPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    const persistedText = `${JSON.stringify(persistedPayload, null, 2)}\n`;
+    await persistPlan(planPath, persistedText, "utf8");
+    // Every successful emission, pending or not, refreshes the sidecar so a later --pending run never falls back to an older plan.
+    await writeFile(priorPlanSidecar, persistedText, "utf8").catch(() => {});
   } catch (err) {
     try {
       await rm(planPath, { force: true });

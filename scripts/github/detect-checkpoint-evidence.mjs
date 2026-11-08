@@ -163,6 +163,8 @@ Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
   { "ok": false, "error": "..." }
   A failed pre-merge check also carries draftGate and preApprovalGate (headSha, verdict) so a follow-up reviewer can read the latest trusted verdict head.
+  { "ok": false, "error": "...", "status": "...", "message": "...", "staleRunner": {...}, "staleRunnerCheck": { "ok": false, "failures": [...] }, "preMergeGateCheck": { "ok": false, "failures": [...] } }
+  A stale or signalled runner claim (stale_runner, exit_signal_recorded) writes this shape. Its preMergeGateCheck carries failures only, with no draftGate or preApprovalGate.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success (gate evidence is valid)
@@ -1459,7 +1461,7 @@ async function main() {
           ? [`stale runner: ${error.staleRunner.staleRunner?.runId} claimed ${error.staleRunner.staleRunner?.claimedAgeMs}ms ago, last updated ${error.staleRunner.staleRunner?.updatedAgeMs}ms ago (max age ${error.staleRunner.staleRunner?.maxAgeMs}ms)`]
           : error.staleRunner.status === "exit_signal_recorded"
           ? [`exit signal recorded for run ${error.staleRunner.activeRun?.runId}: refuse to merge`]
-          : [],
+          : [`runner claim check failed (${error.staleRunner.status}): ${error.staleRunner.message}; release or clear the runner claim`],
       };
       process.stderr.write(`${JSON.stringify({
         ok: false,
@@ -1475,6 +1477,8 @@ async function main() {
           filePath: error.staleRunner.filePath,
         },
         staleRunnerCheck,
+        // The merge gate reads preMergeGateCheck.failures, so a stale claim names its run there instead of a bare error string.
+        preMergeGateCheck: { ok: false, failures: [...staleRunnerCheck.failures, "the posted gate verdicts were not read"] },
       })}\n`);
       process.exitCode = 1;
       return;

@@ -8,16 +8,19 @@ import { test } from "bun:test";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, pullWorkOrder, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { buildGateContextPath, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { renderPrBodyRead } from "../../scripts/github/write-gate-context.mjs";
 import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
-import { withTempDir } from "../_helpers.mjs";
+import { withTempDir, writeGhStub } from "../_helpers.mjs";
 import { TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { bindEvidenceToPrBody, seedJudgeSources } from "./_judge-delivery-fixture.mjs";
 import { SPEC_AUTHORITY_OUTCOME_VALUES, SPEC_AUTHORITY_VERDICT_SCHEMA, validateSpecAuthorityVerdict } from "../../packages/core/src/loop/spec-authority.mjs";
 
 const HEAD = "d".repeat(40);
 const withDir = (fn) => withTempDir(async (dir) => fn(await realpath(dir)), { prefix: "dev-loops-judge-wo-" });
-const node = (script, args, cwd) => spawnSync("node", [path.resolve(script), ...args], { cwd, encoding: "utf8" });
+const node = (script, args, cwd, env) => spawnSync("node", [path.resolve(script), ...args], { cwd, encoding: "utf8", ...(env ? { env } : {}) });
+// The emitter's default live PR body read goes through gh; stub it with the fixture body.
+const ghEnv = async (dir, body = "Declared scope: fix the finding.\n") => (await writeGhStub(dir, [{ stdout: JSON.stringify({ body }) }], { repeatLastOnOverflow: true })).env;
 const pull = (plan, cwd, over = {}) => node("scripts/github/pull-work-order.mjs", [
   "--ref", over.ref ?? plan.workOrderRef, "--digest", over.digest ?? plan.workOrderDigest, "--execution", over.execution ?? plan.executionIdentity,
 ], cwd);
@@ -49,11 +52,12 @@ test("J1: the producer derives the work order from the round's sources, pins the
   await withDir(async (root) => {
     const sources = await seed(root);
     const plan = await emitJudgeWorkOrder(sources);
-    assert.deepEqual(plan.workOrder.requiredReads.map((read) => read.kind),["findings", "spec", "spec-identity", "evidence"]);
+    assert.deepEqual(plan.workOrder.requiredReads.map((read) => read.kind),["findings", "spec", "spec-identity", "evidence", "pr-body"]);
     assert.match(plan.workOrder.authority.specDigest, /^sha256:/);
     assert.deepEqual(plan.workOrder.contracts.map((c) => c.path), ["agents/judge.agent.md", "skills/docs/spec-authority-contract.md"]);
+    const env = await ghEnv(root);
     const cli = (extra) => node("scripts/loop/emit-judge-work-order.mjs", ["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD,
-      "--findings-file", sources.findingsFile, "--spec-file", sources.specFile, "--identity-file", sources.identityFile, ...extra], root);
+      "--findings-file", sources.findingsFile, "--spec-file", sources.specFile, "--identity-file", sources.identityFile, ...extra], root, env);
     for (const flag of ["--brief", "--payload", "--summary-file"]) assert.equal(cli([flag, "x"]).status, 2, `${flag} is not an input`);
     assert.equal(JSON.parse(cli(["--tmp-root", "tmp"]).stdout).ok, true, "the checkout's own tmp root is accepted");
     for (const tmpRoot of ["scripts/tmp", path.join(root, "..", "elsewhere")]) {
@@ -175,6 +179,16 @@ test("J3: a superseded ref, a changed spec or ledger, and a retired round refuse
   });
 });
 
+test("J3: a scoped (body-only rerun) retirement after emission refuses the pull as stale_dispatch", async () => {
+  await withDir(async (root) => {
+    const second = await emitJudgeWorkOrder(await seed(root));
+    const retired = path.join(root, "tmp", "retired-gate-rounds", HEAD, "r1");
+    await mkdir(retired, { recursive: true });
+    await writeFile(path.join(retired, "retirement.json"), JSON.stringify({ gate: "pre_approval_gate", scopes: ["pre-approval-gate-group-process"], retiredAt: new Date().toISOString() }));
+    assert.equal(refusal(pull(second, root)), "stale_dispatch");
+  });
+});
+
 test("J3: after the head moves, a newer emission at the new head supersedes the old head's ref at pull", async () => {
   await withDir(async (root) => {
     const first = await emitJudgeWorkOrder({ ...(await seed(root)), roundId: "j1-000000aa" });
@@ -218,7 +232,7 @@ test("J3: an emission from a checkout subdirectory lands under the checkout root
     await mkdir(sub);
     const rel = (p) => path.join("..", p);
     const out = JSON.parse(node("scripts/loop/emit-judge-work-order.mjs", ["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD,
-      "--findings-file", rel(sources.findingsFile), "--spec-file", rel(sources.specFile), "--identity-file", rel(sources.identityFile)], sub).stdout);
+      "--findings-file", rel(sources.findingsFile), "--spec-file", rel(sources.specFile), "--identity-file", rel(sources.identityFile)], sub, await ghEnv(root)).stdout);
     assert.equal(out.ok, true, out.error);
     assert.ok(out.planPath.startsWith(path.join(root, "tmp", "gate-judge")), out.planPath);
     assert.equal(pull(out, sub).status, 0);
@@ -248,7 +262,7 @@ test("J4: a colliding execution index entry for the next identity refuses the em
     process.stdout.write = (chunk) => (out.push(String(chunk)), true);
     try {
       await main(["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-file", sources.findingsFile,
-        "--spec-file", sources.specFile, "--identity-file", sources.identityFile], { cwd: root, roundId: next.executionIdentity });
+        "--spec-file", sources.specFile, "--identity-file", sources.identityFile], { cwd: root, roundId: next.executionIdentity, fetchLivePrBody: sources.fetchLivePrBody });
     } finally {
       process.stdout.write = write;
     }
@@ -409,7 +423,7 @@ test("J1: the --round CLI accepts only /^[1-9][0-9]*$/ and carries it to the wor
       process.stdout.write = (chunk) => (out.push(String(chunk)), true);
       try {
         await main(["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-file", sources.findingsFile,
-          "--spec-file", sources.specFile, "--identity-file", sources.identityFile, ...extra], { cwd: root });
+          "--spec-file", sources.specFile, "--identity-file", sources.identityFile, ...extra], { cwd: root, fetchLivePrBody: sources.fetchLivePrBody });
       } finally {
         process.stdout.write = write;
       }
@@ -501,7 +515,7 @@ async function runJudgeMain(root, sources, extra) {
   process.stderr.write = (chunk) => (err.push(String(chunk)), true);
   try {
     const code = await main(["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-file", sources.findingsFile,
-      "--spec-file", sources.specFile, "--identity-file", sources.identityFile, ...extra], { cwd: root });
+      "--spec-file", sources.specFile, "--identity-file", sources.identityFile, ...extra], { cwd: root, fetchLivePrBody: sources.fetchLivePrBody });
     return { code, stdout: out.join(""), stderr: err.join("") };
   } finally {
     process.stdout.write = writeOut;
@@ -579,7 +593,7 @@ test("the slice-linkage arming needs exactly one closing reference that a reopen
   });
 });
 
-test("the PR body parser reads only the evidence's own section: a fenced body arms, and a quoted `## PR body` block in the linked issue never counts", async () => {
+test("slice linkage reads only the pr-body read: a fenced body arms, and a quoted `## PR body` block in the linked issue never counts", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
     // Accepted: a body holding a code fence renders with a longer fence and still arms.
@@ -592,14 +606,50 @@ test("the PR body parser reads only the evidence's own section: a fenced body ar
   });
 });
 
-test("an evidence read with no PR body section refuses judge emission", async () => {
+test("a context with no pr-body read refuses judge emission", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
-    const evidence = "## Diff\n\nnothing\n";
-    await writeFile(path.join(root, "judge-fixture", "evidence.md"), evidence);
     const contextPath = path.join(root, buildGateContextPath(sources));
-    await writeFile(contextPath, JSON.stringify({ requiredReads: [{ kind: "evidence", path: "judge-fixture/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex"), bytes: Buffer.byteLength(evidence), required: true }] }));
-    await assert.rejects(emitJudgeWorkOrder(sources), /has no `## PR body` section/);
+    const context = JSON.parse(await readFile(contextPath, "utf8"));
+    await writeFile(contextPath, JSON.stringify({ requiredReads: context.requiredReads.filter((read) => read.kind !== "pr-body") }));
+    await assert.rejects(emitJudgeWorkOrder(sources), /no gate-context pr-body read/);
+  });
+});
+
+test("a pinned pr-body that differs from the live PR body refuses, names both digests and leaves the pin unchanged", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const pinnedPath = path.join(root, "judge-fixture", "pr-body.md");
+    const before = await readFile(pinnedPath, "utf8");
+    const digest = (text) => createHash("sha256").update(text).digest("hex");
+    const live = "Declared scope: edited after the round.\n";
+    await assert.rejects(emitJudgeWorkOrder({ ...sources, fetchLivePrBody: async () => live }), (err) => {
+      assert.equal(err.refusal, "pr_body_stale");
+      assert.ok(err.message.includes(digest(before)) && err.message.includes(digest(renderPrBodyRead(live))), err.message);
+      assert.match(err.message, /GATE-EXEC-BODY-ONLY-RERUN/);
+      return true;
+    });
+    assert.equal(await readFile(pinnedPath, "utf8"), before, "the emitter never rewrites the pin");
+    await assert.rejects(emitJudgeWorkOrder({ ...sources, fetchLivePrBody: async () => { throw new Error("offline"); } }), (err) => err.refusal === "pr_body_unreadable");
+    assert.equal((await emitJudgeWorkOrder(sources)).workOrder.requiredReads.at(-1).kind, "pr-body");
+  });
+});
+
+test("a pinned pr-body file rewritten on disk after the round was built refuses", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    await writeFile(path.join(root, "judge-fixture", "pr-body.md"), "Declared scope: rewritten after seeding.\n");
+    await assert.rejects(emitJudgeWorkOrder(sources), /pr-body .* changed since the round was built/);
+  });
+});
+
+test("a spec file rewritten after the body was rebound refuses with the spec-identity mismatch", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    await bindEvidenceToPrBody(root, sources, "Declared scope: a body-only edit.\n");
+    await emitJudgeWorkOrder(sources);
+    await writeFile(path.join(root, sources.specFile), JSON.stringify({ acceptanceCriteria: ["Changed"], definitionOfDone: [], nonGoals: [] }));
+    await assert.rejects(emitJudgeWorkOrder(sources), /re-run spec-context\.mjs/);
   });
 });
 

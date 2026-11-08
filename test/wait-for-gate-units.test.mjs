@@ -204,6 +204,19 @@ test("round_retired: removed plan and a newer retirement record for the gate", a
   });
 });
 
+test("a scoped body-only retirement ends the wait only for a unit it names", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]], ["h", ["b"]]]);
+    await setMtime(planPath, 100);
+    const record = path.join(root, "tmp", "retired-gate-rounds", HEAD, "round-1", "retirement.json");
+    await writeJson(record, { gate: GATE, retiredAt: new Date(200000).toISOString(), scopes: ["other"] });
+    assert.equal((await run(root, planPath, { timeoutMs: 1 })).outcome, "timeout");
+    await writeJson(record, { gate: GATE, retiredAt: new Date(200000).toISOString(), scopes: ["h"] });
+    assert.equal((await run(root, planPath, { timeoutMs: 1 })).outcome, "round_retired");
+    assert.equal((await run(root, planPath, { timeoutMs: 1, units: ["g"] })).outcome, "timeout");
+  });
+});
+
 test("a partially written retirement record is not retired yet and is re-checked", async () => {
   await withDir(async (root) => {
     const { planPath } = await seedPlan(root, [["g", ["a"]]]);
@@ -239,6 +252,19 @@ test("judge plan waits on the single judge unit with role judge", async () => {
     const done =await waitForUnits({ ...opts, ...fakeClock() });
     assert.equal(done.outcome, "all_done");
     assert.equal(done.unitCount, 1);
+  });
+});
+
+test("a scoped body-only retirement ends a judge-plan wait", async () => {
+  await withDir(async (root) => {
+    const verdict = path.join(root, "tmp", "judge", "judge-verdict.json");
+    const identity = { workOrderRef: `judge:o/r#7:${GATE}:${HEAD}:r1`, workOrderDigest: "sha256:j", executionIdentity: "r1" };
+    const planPath = path.join(root, "tmp", "judge", "judge-emit-plan.json");
+    await writeJson(planPath, { ...identity, workOrder: { roundIdentity: { gate: GATE, headSha: HEAD }, outputRefs: [verdict] } });
+    await setMtime(planPath, 100);
+    await writeJson(path.join(root, "tmp", "retired-gate-rounds", HEAD, "round-1", "retirement.json"), { gate: GATE, retiredAt: new Date(200000).toISOString(), scopes: ["h"] });
+    const opts = { judgePlan: planPath, tmpRoot: path.join(root, "tmp"), receiptTmpRoot: path.join(root, "tmp"), timeoutMs: 4000, ...fakeClock() };
+    assert.equal((await waitForUnits(opts)).outcome, "round_retired");
   });
 });
 
