@@ -55,6 +55,14 @@ test("--standing-authorization clears only the entries that accept it", () => {
   assert.equal(findOperatorOwnedLineRefusal(`${operatorMarker()}\napprove merge ${SHA}`, { standingAuthorization: true })?.includes("approve merge"), true);
 });
 
+test("standingAuthorization clears the operator marker only for boolean true", () => {
+  assert.equal(findOperatorOwnedLineRefusal(operatorMarker(), { standingAuthorization: true }), null);
+  for (const v of ["false", "true", 1, {}, false, undefined]) {
+    assert.match(findOperatorOwnedLineRefusal(operatorMarker(), { standingAuthorization: v }), /OPERATOR-OWNED-LINE/);
+    assert.throws(() => guardCommentBodyNoIssuePrIds(operatorMarker(), { standingAuthorization: v }), /OPERATOR-OWNED-LINE/);
+  }
+});
+
 test("the shared guard refuses every entry and allowedRefs never clears it", () => {
   for (const entry of OPERATOR_OWNED_LINES) {
     assert.throws(() => guardCommentBodyNoIssuePrIds(SAMPLES[entry.id]), /OPERATOR-OWNED-LINE/, entry.id);

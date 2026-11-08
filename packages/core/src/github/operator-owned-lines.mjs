@@ -54,7 +54,7 @@ export const OPERATOR_OWNED_LINES = Object.freeze([
 export function findOperatorOwnedLineRefusal(body, { standingAuthorization = false } = {}) {
   if (typeof body !== "string") return null;
   for (const entry of OPERATOR_OWNED_LINES) {
-    if (standingAuthorization && entry.standingAuthorization) continue;
+    if (standingAuthorization === true && entry.standingAuthorization) continue;
     if (entry.matches(body)) return entry.refusal;
   }
   return null;

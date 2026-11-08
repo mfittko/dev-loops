@@ -32,6 +32,8 @@ outcome does not block but is recorded on the result for a later phase to act on
 T1-slice waiver additionally requires --approved-by <human> naming a human
 approver (an unwaivable block — absoluteHardLoc, config errors, ambiguous, or
 substantially-unclassified — is never waivable, no matter these flags).
+The waiver comment record also refuses an operator-owned line (OPERATOR-OWNED-LINE)
+through the registry, so a --reason carrying one exits 1.
 
 For a tracker-backed PR (one or more closing issue references), also enforces
 the PR-description contract on the PR's own body (Acceptance criteria +
