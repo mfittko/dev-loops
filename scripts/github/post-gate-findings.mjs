@@ -365,7 +365,7 @@ export function renderFindingsCommentBody({ gate, headSha, findings, omittedCoun
     for (const finding of group) {
       // Sanitize free-text fields so embedded newlines/whitespace don't break
       // the single-line Markdown list item.
-      const summary = sanitizeInline(finding.summary);
+      const summary = escapeProse(finding.summary);
       const dispositionSuffix = finding.disposition ? ` — _${sanitizeInline(finding.disposition)}_` : "";
       // Judge relevance-based disposition, alongside the
       // prior ledger disposition field.

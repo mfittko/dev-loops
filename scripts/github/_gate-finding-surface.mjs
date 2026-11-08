@@ -397,7 +397,7 @@ export function renderFindingLine({ severity, angle, summary, judgeDisposition, 
   const judgeSuffix = typeof judgeDisposition === "string" && judgeDisposition.trim().length > 0
     ? ` — judge: ${sanitizeInline(judgeDisposition)}${renderJudgeDetail({ judgeReason, followUpIssueNumber })}`
     : "";
-  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary).replace(/judge:/gi, "judge -")}${judgeSuffix}`;
+  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${escapeProse(summary).replace(/judge:/gi, "judge -")}${judgeSuffix}`;
 }
 
 function renderRecommendationLine(recommendation) {
