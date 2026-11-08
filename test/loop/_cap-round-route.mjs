@@ -11,7 +11,7 @@ import { extendCapRoundChain } from "../../scripts/loop/extend-cap-round-chain.m
 import { runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { sealDeltaFixture } from "./_seal-fixture.mjs";
 
-const seam = { stdout: { write: () => {} }, fetchBase: () => {} };
+const seam = { stdout: { write: () => {} }, fetchBase: () => {}, fetchPr: async () => ({ baseRefName: "main" }) };
 
 export const extendRoute = (root, { repo, pr, head }) => extendCapRoundChain({ repo, pr, worktree: root }, {
   detectOriginSlug: () => repo, fetchPr: async () => ({ headRefOid: head, baseRefName: "main" }), fetchBaseBranch: () => {},
