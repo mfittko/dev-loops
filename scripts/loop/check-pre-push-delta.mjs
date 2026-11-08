@@ -258,7 +258,7 @@ const rangeCommand = (flags, baseline, head, ownPaths) => ["diff", ...flags, `${
 
 // The cumulative baseline..head patch the reviewer reads; formats pinned against operator git config.
 function gitDiffPatch(worktree, baseline, head, ownPaths) {
-  const out = spawnSync("git", ["-C", worktree, "-c", "core.quotePath=false", ...rangeCommand(["--unified=3", "--diff-algorithm=myers", "-O/dev/null", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--no-renames", "--no-relative", "--ignore-submodules=none"], baseline, head, ownPaths)], {
+  const out = spawnSync("git", ["-C", worktree, "-c", "core.quotePath=false", ...rangeCommand(["--unified=3", "--diff-algorithm=myers", "-O/dev/null", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--no-renames", "--no-relative", "--ignore-submodules=none", "--submodule=short"], baseline, head, ownPaths)], {
     env: gitEnvNoDirOverrides(), maxBuffer: 1024 * 1024 * 1024,
   });
   if (out.status !== 0) throw new Error(`git diff ${baseline}..${head} failed in ${worktree}: ${out.error?.message ?? out.stderr.toString().trim()}`);
@@ -266,7 +266,7 @@ function gitDiffPatch(worktree, baseline, head, ownPaths) {
 }
 
 // `git show --remerge-diff` of a two-parent merge: the merge against an automatic remerge of its parents, with the merge settings and output formats pinned.
-const gitRemergeShow = (repoRoot, merge, outputFlags, encoding) => spawnSync("git", ["-C", repoRoot, "-c", "core.quotePath=false", "-c", "merge.renames=true", "-c", "merge.directoryRenames=false", "-c", "merge.conflictStyle=merge", "-c", "merge.renameLimit=7000", "show", "--remerge-diff", "--format=", ...outputFlags, "--no-renames", "--ignore-submodules=none", merge], { encoding, env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
+const gitRemergeShow = (repoRoot, merge, outputFlags, encoding) => spawnSync("git", ["-C", repoRoot, "-c", "core.quotePath=false", "-c", "merge.renames=true", "-c", "merge.directoryRenames=false", "-c", "merge.conflictStyle=merge", "-c", "merge.renameLimit=7000", "show", "--remerge-diff", "--format=", ...outputFlags, "--no-renames", "--ignore-submodules=none", "--submodule=short", merge], { encoding, env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
 function remergeSection(repoRoot, merge) {
   const out = gitRemergeShow(repoRoot, merge, ["--unified=3", "--diff-algorithm=myers", "-O/dev/null", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--no-relative"]);
   if (out.status !== 0) throw new Error(`git show --remerge-diff ${merge} failed in ${repoRoot}: ${out.stderr.toString().trim()}`);
@@ -327,7 +327,7 @@ export function gitStaleSurfaceHits(worktreeArg, baseline, head, ownPaths) {
     const exists = git("cat-file", "-e", `${rev}^{commit}`);
     if (exists.status !== 0) throw new Error(`git cat-file ${rev} failed in ${worktree}: ${exists.stderr.trim()}; the stale-surface check cannot read the delta range`);
   }
-  const diff = git(...rangeCommand(["-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--diff-algorithm=myers", "--no-renames", "-O/dev/null", "--no-relative", "--ignore-submodules=none", "--inter-hunk-context=0"], baseline, head, ownPaths));
+  const diff = git(...rangeCommand(["-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--diff-algorithm=myers", "--no-renames", "-O/dev/null", "--no-relative", "--ignore-submodules=none", "--submodule=short", "--inter-hunk-context=0"], baseline, head, ownPaths));
   if (diff.status !== 0) throw new Error(`git diff ${baseline}..${head} failed in ${worktree}: ${diff.stderr.trim()}; the stale-surface check cannot read the delta range`);
   const grep = (needle, { word }) => {
     const out = git("grep", "-n", "-I", "--full-name", "-F", "--no-color", "--no-recurse-submodules", ...(word ? ["-w"] : []), "-e", needle, head);

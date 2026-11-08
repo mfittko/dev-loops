@@ -396,7 +396,8 @@ test("baseline equality refuses invocations that cannot authenticate input-only 
     await assert.rejects(runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", A, "--spec-identity", "s", ...(extra.includes("--result") ? [] : ["--result-path", path.join(os.tmpdir(), "r.json")]), ...extra], seam), /no delta review applies \(worktree HEAD \w+, baseline \w+, \d+ item\(s\)\)/);
     assert.equal(fs.existsSync(marker), true);
     assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`)), false);
-    assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta", `${A}-${A}.patch`)), false);
+    const deltaDir = path.join(seam.tmpRoot, "gate-delta");
+    assert.deepEqual((fs.existsSync(deltaDir) ? fs.readdirSync(deltaDir) : []).filter((f) => f.endsWith(".patch")), []);
   }
 });
 
@@ -1173,7 +1174,7 @@ test("AC3: under diff.ignoreSubmodules=all a gitlink change stays in the path se
   const repo = reviewerOnlyRepo();
   try {
     const git = (...args) => runGitFixture(repo.dir, args);
-    git("config", "diff.ignoreSubmodules", "all");
+    git("config", "diff.ignoreSubmodules", "all"); git("config", "diff.submodule", "log");
     git("update-index", "--add", "--cacheinfo", `160000,${"a".repeat(40)},vendor/sub`);
     fs.writeFileSync(path.join(repo.dir, "docs.md"), "docs\n");
     git("add", "docs.md"); git("commit", "-qm", "docs and a gitlink");
@@ -1192,7 +1193,7 @@ test("AC3: the stale-surface diff keeps a removed gitlink line under diff.ignore
   const repo = reviewerOnlyRepo();
   try {
     const git = (...args) => runGitFixture(repo.dir, args);
-    git("config", "diff.ignoreSubmodules", "all");
+    git("config", "diff.ignoreSubmodules", "all"); git("config", "diff.submodule", "log");
     git("update-index", "--add", "--cacheinfo", `160000,${"a".repeat(40)},vendor/sub.md`);
     fs.writeFileSync(path.join(repo.dir, "notes.txt"), `Subproject commit ${"a".repeat(40)}\n`);
     git("add", "notes.txt"); git("commit", "-qm", "add a gitlink");

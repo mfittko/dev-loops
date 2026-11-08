@@ -4,6 +4,8 @@
 
 Accepted — 2026-10-21 ([PR 2906](https://github.com/mfittko/dev-loops/pull/2906))
 
+Amended by `PRE-PUSH-DELTA-PATCH-ARTIFACT` in `skills/docs/pre-pr-review-contract.md`: the input run writes the run-bound path `<tmp-root>/gate-delta/<reviewBaselineHead>-<candidateHead>-<runId>.patch`.
+
 Extends [0141](./0141-delta-review-changed-line-lens-and-stale-surface-check.md) and [0094](./0094-pre-push-reviewer-delta-mode.md) by reference. It amends neither.
 
 ## Context
@@ -14,7 +16,7 @@ Extends [0141](./0141-delta-review-changed-line-lens-and-stale-surface-check.md)
 
 Add the rule `PRE-PUSH-DELTA-PATCH-ARTIFACT` to `skills/docs/pre-pr-review-contract.md`, implemented in `scripts/loop/check-pre-push-delta.mjs`.
 
-The delta input run (the run without `--result`) writes the cumulative patch to `<tmp-root>/gate-delta/<reviewBaselineHead>-<candidateHead>.patch`. It carries that path as `input.patchPath` and an `input.evidenceRule`. The `--handback` run writes nothing and prints neither field.
+The delta input run (the run without `--result`) writes the cumulative patch to `<tmp-root>/gate-delta/<reviewBaselineHead>-<candidateHead>-<runId>.patch`. It carries that path as `input.patchPath` and an `input.evidenceRule`. The `--handback` run writes nothing and prints neither field.
 
 The reviewer reads `patchPath` with the read tool and does not run `git diff`. Evidence is a file:line, or a test's path:line, read from disk. The reviewer runs no tests, builds, or other commands that mutate or execute anything. For a site query it uses only the shell-inert read/search programs the review role gate allows (`git grep`, `grep`, `rg`). The coordinator briefs the reviewer with the input artifact paths only and still inlines no diff bytes.
 
