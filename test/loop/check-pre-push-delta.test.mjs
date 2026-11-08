@@ -1417,6 +1417,20 @@ test("a reviewer-only run whose only PR-own change is a conflict-resolution merg
   } finally { cleanup(repo); }
 });
 
+test("AC6: the reviewer patch of a conflict-resolution merge that drops a base change holds the remerge diff, and the result run recomputes the same bytes", async () => {
+  const repo = reviewerOnlyRepo({ conflictOnly: true });
+  try {
+    const { input, decision } = await reviewerOnlyRun(repo, {});
+    const patch = fs.readFileSync(input.patchPath, "utf8");
+    const mergeSha = runGitFixture(repo.dir, ["rev-parse", repo.head]);
+    assert.match(patch, new RegExp(`^# Resolution diff of merge ${mergeSha} \\(git show --remerge-diff\\)$`, "m"));
+    const section = patch.slice(patch.indexOf("# Resolution diff of merge"));
+    assert.match(section, /^-export const a = "main";$/m, "the base-side line the resolution dropped is shown");
+    assert.match(section, /^\+export const a = 3;$/m);
+    assert.equal(decision.outcome, "locally_clear", "the result run recomputed the same bytes");
+  } finally { cleanup(repo); }
+});
+
 test("a conflict-resolution merge whose patch is empty fails closed with the replacement-PR remedy", async () => {
   const repo = reviewerOnlyRepo({ conflictOnly: true });
   try {

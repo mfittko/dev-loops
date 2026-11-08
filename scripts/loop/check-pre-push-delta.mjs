@@ -92,7 +92,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
                           --repo and --pr bind the log to the PR: the log must carry the same repo and pr, and the cap-round log reaches a chain-end baseline through the sealed clearing chain of that PR.
                           Needs --baseline (an ancestor of the worktree HEAD), --pr-head (equal to the worktree HEAD), --spec-identity and --result-path (input run) or --result and --invocation (result run).
                           Refuses --act-list, --threads-file, --fixer-plan, --site-coverage and --handback. The invocation bound of 3 still applies and no sequence marker is written.
-                          Base-only merges of origin/<base> are excluded from the patch, the changed files and the stale-surface scan; a merge that is not base-only is reviewed through its PR-own commits and its resolution diff (git show --remerge-diff); an octopus merge refuses (non_base_only_merge). A prior non-clearing record at the baseline with the same act refs, no extension and a candidate on the PR head history is taken over (its invocation count continues).
+                          Base-only merges of origin/<base> are excluded from the patch, the changed files and the stale-surface scan; a merge that is not base-only is reviewed through its PR-own commits and its resolution diff (git show --remerge-diff, appended to the patch under a "# Resolution diff of merge" heading); an octopus merge refuses (non_base_only_merge). A prior non-clearing record at the baseline with the same act refs, no extension and a candidate on the PR head history is taken over (its invocation count continues).
                           The reviewer reports ALL findings; the record is locally_clear only when the result has no medium-or-higher finding and no open residueOf finding (no skipReason) at any severity (PRE-PUSH-DELTA-RESIDUE). Run git fetch origin <base> first.
   --handback              The fixer handbackCheck run: waives the --findings-log requirement (it validates --site-coverage, no reviewer input is used)
   --result <path>         The reviewer's DeltaPrePushReviewResult JSON
@@ -264,6 +264,14 @@ function gitDiffPatch(worktree, baseline, head, ownPaths) {
   return out.stdout;
 }
 
+// `git show --remerge-diff` of a two-parent merge: the merge against an automatic remerge of its parents, with the merge settings and output formats pinned.
+const gitRemergeShow = (repoRoot, merge, outputFlags, encoding) => spawnSync("git", ["-C", repoRoot, "-c", "core.quotePath=false", "-c", "merge.renames=true", "-c", "merge.directoryRenames=false", "-c", "merge.conflictStyle=merge", "-c", "merge.renameLimit=7000", "show", "--remerge-diff", "--format=", ...outputFlags, "--no-renames", "--ignore-submodules=none", merge], { encoding, env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
+function remergeSection(repoRoot, merge) {
+  const out = gitRemergeShow(repoRoot, merge, ["--unified=3", "--diff-algorithm=myers", "-O/dev/null", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--no-relative"]);
+  if (out.status !== 0) throw new Error(`git show --remerge-diff ${merge} failed in ${repoRoot}: ${out.stderr.toString().trim()}`);
+  return Buffer.concat([Buffer.from(`\n# Resolution diff of merge ${merge} (git show --remerge-diff)\n`), out.stdout]);
+}
+
 // The paths in `ownPaths` whose entry is a gitlink (mode 160000) on either side of baseline..head.
 function gitlinkPaths(worktree, baseline, head, ownPaths) {
   const out = spawnSync("git", ["-C", worktree, ...rangeCommand(["--raw", "-z", "--no-renames", "--no-ext-diff", "--no-relative", "--ignore-submodules=none"], baseline, head, ownPaths)], { encoding: "utf8", env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
@@ -379,18 +387,19 @@ async function reviewerOnlyBase(worktree, baseline, head, { revParse, baseOnlyMe
 
   const ownCommits = revList(worktree, baseline, head, ["--no-merges", `^origin/${base}`]).length;
   // A merge that is not base-only is reviewed through its resolution diff (`git show --remerge-diff`: the merge against an automatic remerge of its parents), whose paths join the PR-own paths.
-  const resolvedPaths = [];
+  const resolvedPaths = [], resolvedMerges = [];
   for (const merge of revList(worktree, baseline, head, ["--merges", `^origin/${base}`])) {
     if (await baseOnlyMerge({ fromHead: revParse(worktree, `${merge}^1`), head: merge, mainRef: `origin/${base}`, repoRoot })) continue;
     const parents = spawnSync("git", ["-C", repoRoot, "rev-list", "--parents", "-n", "1", merge], { encoding: "utf8", env: gitEnvNoDirOverrides() });
     const shown = parents.status === 0 && parents.stdout.trim().split(" ").length === 3
-      ? spawnSync("git", ["-C", repoRoot, "-c", "merge.renames=true", "-c", "merge.directoryRenames=false", "-c", "merge.conflictStyle=merge", "-c", "merge.renameLimit=7000", "show", "--remerge-diff", "--format=", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", merge], { encoding: "utf8", env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 }) : null;
+      ? gitRemergeShow(repoRoot, merge, ["--name-only", "-z"], "utf8") : null;
     if (shown?.status !== 0) throw new Error(`non_base_only_merge: merge ${merge} in ${baseline}..${head} ${shown || parents.status !== 0 ? "has a resolution diff or parents that cannot be read" : `is an octopus merge (${parents.stdout.trim().split(" ").length - 1} parents)`} (${((shown ?? parents).stderr ?? "").trim() || (shown ?? parents).error?.message}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${REPLACEMENT_REMEDY}`);
     resolvedPaths.push(...shown.stdout.split("\0").filter(Boolean));
+    resolvedMerges.push(merge);
   }
   // A conflict-resolution merge is a PR-own change even with no non-merge commit of its own.
   if (ownCommits === 0 && resolvedPaths.length === 0) throw new Error(`reviewer-only: ${baseline}..${head} holds no PR-own commit that origin/${base} lacks; there is no code range to clear. ${FIXER_REMEDY}`);
-  return { base, resolvedPaths };
+  return { base, resolvedPaths, resolvedMerges };
 }
 
 async function authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor, { closureOnly = false } = {}) {
@@ -531,13 +540,15 @@ export async function runCli(
     // A locally_clear record that used the last invocation cleared its act items: the chain-end route applies, not the replacement-PR restart.
     if (expected > DELTA_MAX_INVOCATIONS) throw new Error(priorRecord?.outcome === "locally_clear" && onHistory(priorRecord.candidateHead, currentHead) ? `reviewer-only: the locally_clear record for baseline ${baselineHead} used the last invocation and is never overwritten. ${CHAIN_END_REMEDY}` : `reviewer-only: the invocation bound of ${DELTA_MAX_INVOCATIONS} is reached for baseline ${baselineHead}; bounded_out, restart_on_replacement_pr: ${REPLACEMENT_REMEDY}`);
     if (options.result && options.invocation !== expected) throw new Error(`reviewer-only: --invocation ${options.invocation} is not the next invocation ${expected} for baseline ${baselineHead}`);
-    const { base, resolvedPaths } = await reviewerOnlyBase(options.worktree, baselineHead, currentHead, { revParse, baseOnlyMerge, revList, fetchBase, base: prBase });
+    const { base, resolvedPaths, resolvedMerges } = await reviewerOnlyBase(options.worktree, baselineHead, currentHead, { revParse, baseOnlyMerge, revList, fetchBase, base: prBase });
     baseBranch = base;
     ownPaths = [...new Set([...changedPaths(options.worktree, baselineHead, currentHead, base), ...resolvedPaths])];
     if (ownPaths.length === 0) throw new Error(`reviewer-only: the PR-own commits in ${baselineHead}..${currentHead} change no file; there is no code range to clear. ${FIXER_REMEDY}`);
     // The reviewer reads this plain patch: an empty one (an empty conflict resolution, net-reverting commits) cannot be judged.
     reviewerPatch = Buffer.from(diffPatch(options.worktree, baselineHead, currentHead, ownPaths));
     if (!reviewerPatch.length) throw new Error(`empty_resolution_patch: the PR-own range ${baselineHead}..${currentHead} leaves an empty patch the reviewer cannot read. Only the replacement-PR restart remains: ${REPLACEMENT_REMEDY}`);
+    // The cumulative diff shows a conflict merge's final content only: append what the resolution changed against the automatic remerge, so a dropped base-side change is visible.
+    reviewerPatch = Buffer.concat([reviewerPatch, ...resolvedMerges.map((merge) => remergeSection(resolveRepoRoot(options.worktree), merge))]);
   }
   if (reviewerPatch) {
     const unnamed = gitlinkPaths(options.worktree, baselineHead, currentHead, ownPaths).filter((file) => !reviewerPatch.includes(`diff --git a/${file} b/${file}`));
