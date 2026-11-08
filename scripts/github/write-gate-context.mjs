@@ -1312,7 +1312,7 @@ function renderRequiredReadsSection(requiredReads, worktreeRoot) {
  * ({@link renderBriefingEvidence}); this prefix binds it by sha256 and byte
  * count. Pure and deterministic: identical input always renders identical
  * bytes. The CLI resolves live PR/issue bodies from GitHub before rendering the
- * evidence, so a same-head rebuild after a live linked-issue edit changes the
+ * evidence, so a same-head rebuild after a live description edit of the linked issue changes the
  * evidence hash and yields DIFFERENT prefix bytes (a PR-body edit does not: the
  * body is the separate round-bound pr-body read) — a conductor MUST NOT
  * rebuild the context while reviewers for that head are still running

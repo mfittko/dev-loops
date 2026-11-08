@@ -354,6 +354,11 @@
       "id": "GATE-EXEC-BLOCKING-ONLY-FIX"
     },
     {
+      "id": "GATE-EXEC-BODY-ONLY-RERUN",
+      "enforcement": "runtime",
+      "enforcementNote": "Enforced by writeGateContext and readCompletedAnglesForHead in write-gate-context.mjs (pr-body read, body-unit retirement, in-flight refusal) and emitJudgeWorkOrder in emit-judge-work-order.mjs (stale pinned pr-body refusal); the rule body in gate-review-sub-loop-contract.md owns the clauses"
+    },
+    {
       "id": "GATE-EXEC-BRIEFING-PREFIX",
       "enforcement": "runtime"
     },
