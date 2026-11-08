@@ -387,7 +387,7 @@ export async function commentDeferredFindings(
 export function renderJudgeDetail({ judgeReason, followUpIssueNumber }) {
   const target = Number.isInteger(followUpIssueNumber) && followUpIssueNumber > 0 ? ` (follow-up ${followUpIssueNumber})` : "";
   const reason = typeof judgeReason === "string" && judgeReason.trim().length > 0
-    ? ` - ${sanitizeInline(neutralizeBareIssuePrIds(judgeReason)).replace(/judge:/gi, "judge -")}`
+    ? ` - ${escapeProse(neutralizeBareIssuePrIds(judgeReason)).replace(/judge:/gi, "judge -")}`
     : "";
   return `${target}${reason}`;
 }
