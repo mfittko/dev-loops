@@ -9,6 +9,7 @@
  */
 import { createHash } from "node:crypto";
 
+import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { validateBaseMergeCarryEvidence } from "@dev-loops/core/loop/base-merge-verdict-carry";
 
 import { isGhBinaryMissing, restFetchPrView } from "./_gh-rest-fallback.mjs";
@@ -45,7 +46,9 @@ async function upsertCarriedHead({ repo, pr, comments, entry }, runJson) {
   // untouched), capped at MAX_ENTRIES, so the comment stays far below the GitHub body limit. A pruned head
   // is simply re-recorded on its next carry.
   const kept = entries.filter((e) => (e.gate !== entry.gate || e.originHead === entry.originHead) && !(e.gate === entry.gate && e.headSha === entry.headSha));
-  const body = renderCarriedHeadsBody([...kept, entry].slice(-MAX_ENTRIES));
+  // Only the known string fields survive: an existing record cannot smuggle arbitrary text into the new body.
+  const pick = (e) => Object.fromEntries(["gate", "originHead", "headSha", "decision", "evidenceDigest"].map((k) => [k, typeof e[k] === "string" ? e[k] : ""]));
+  const body = guardCommentBodyNoIssuePrIds(renderCarriedHeadsBody([...kept, entry].slice(-MAX_ENTRIES).map(pick)), { ref: "carried-heads record comment body" });
   const saved = comment?.id
     ? await runJson(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${comment.id}`, "-f", `body=${body}`])
     : await runJson(["api", "-X", "POST", `repos/${repo}/issues/${pr}/comments`, "-f", `body=${body}`]);

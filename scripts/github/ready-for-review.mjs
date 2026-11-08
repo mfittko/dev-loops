@@ -15,6 +15,7 @@ import { verifyPolicyChangeApproval, policyChangeApprovalRefusal } from "./_poli
 import { evaluateCommentDiscipline as realEvaluateCommentDiscipline } from "../loop/check-comment-discipline.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { sanitizeInline } from "./post-gate-findings.mjs";
+import { findOperatorOwnedLineRefusal } from "@dev-loops/core/github/operator-owned-lines";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: ready-for-review.mjs --repo <owner/name> --pr <number> [--waive-size-budget --reason <text> [--approved-by <human>]]
@@ -31,6 +32,8 @@ outcome does not block but is recorded on the result for a later phase to act on
 T1-slice waiver additionally requires --approved-by <human> naming a human
 approver (an unwaivable block — absoluteHardLoc, config errors, ambiguous, or
 substantially-unclassified — is never waivable, no matter these flags).
+The waiver comment record also refuses an operator-owned line (OPERATOR-OWNED-LINE)
+through the registry; --reason is sanitized inline, so it cannot form one.
 
 For a tracker-backed PR (one or more closing issue references), also enforces
 the PR-description contract on the PR's own body (Acceptance criteria +
@@ -187,6 +190,8 @@ function renderSizeBudgetWaiverCommentBody({ headSha, sizeBudget, reason, approv
 
 async function postSizeBudgetWaiverComment({ repo, pr, headSha, sizeBudget, reason, approvedBy }, { env, ghCommand, runChild: runChildImpl }) {
   const body = renderSizeBudgetWaiverCommentBody({ headSha, sizeBudget, reason, approvedBy });
+  const refusal = findOperatorOwnedLineRefusal(body);
+  if (refusal) throw new Error(refusal);
   const result = await runChildImpl(ghCommand, ["pr", "comment", String(pr), "--repo", repo, "--body", body], env);
   if (result.code !== 0) throw new Error(`Failed to post size-budget waiver record: ${result.stderr.trim() || `exit code ${result.code}`}`);
 }

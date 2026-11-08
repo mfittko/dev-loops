@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
+import { wrapOperatorOwnedPhrases } from "@dev-loops/core/github/operator-owned-lines";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isFullyJudged, isOpenActItem, isPastRoundCap, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, pastCapBlockers, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
@@ -28,7 +29,7 @@ import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
-import { listIssueComments, resolveAuthenticatedLogin, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
+import { escapeProse, listIssueComments, resolveAuthenticatedLogin, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { VALID_DISPOSITIONS } from "./write-gate-findings-log.mjs";
 import {
   buildCommentableLineSet,
@@ -526,9 +527,10 @@ function normalizeExecutionMode(value) {
 // at column 0 of a rendered verdict comment and be mistaken for a genuine
 // machine artifact by the shared comment summarizers. This covers the
 // free-text findings-summary/next-action/--findings-file paths below, which
-// render with newlines preserved and no other escaping.
+// render with newlines preserved and no other escaping. The same free text also
+// gets every bare operator-owned phrase wrapped in a code span (ADR 0258).
 function encodeMachineArtifactMarkerDelimiters(value) {
-  return value.replace(/<!--/gu, "&lt;!--").replace(/-->/gu, "--&gt;");
+  return wrapOperatorOwnedPhrases(value.replace(/<!--/gu, "&lt;!--").replace(/-->/gu, "--&gt;"));
 }
 // Blockquote-prefix every continuation line (2nd line onward) of a newline-preserving
 // free-text field (currently only --findings-file content) before it is spliced into
@@ -870,7 +872,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       if (reason.length === 0) {
         throw parseError("--inline-reason must be a non-empty string");
       }
-      options.inlineReason = enforcePostedCommentLimit(reason, MAX_GATE_COMMENT_TEXT_LENGTH, "--inline-reason");
+      options.inlineReason = wrapOperatorOwnedPhrases(enforcePostedCommentLimit(reason, MAX_GATE_COMMENT_TEXT_LENGTH, "--inline-reason"));
       continue;
     }
     if (token.name === "allowed-refs") {
@@ -1068,7 +1070,8 @@ for (const disposition of RESOLVED_DISPOSITIONS) {
 // (post-gate-findings.mjs's sanitizeCodeSpan/sanitizeInline) — one shared
 // implementation so the two files can never drift out of parity. Behavior is
 // documented at that owner; sanitizeStructuredCodeSpan renders enum
-// labels/paths/refs, sanitizeStructuredInline renders the finding summary.
+// labels/paths/refs, sanitizeStructuredInline renders bare labels (severity, angle).
+// The finding summary goes through escapeProse, not these.
 const sanitizeStructuredCodeSpan = sanitizeCodeSpan;
 const sanitizeStructuredInline = sanitizeInline;
 // Normalize a single finding object into a deterministic render entry, or null
@@ -1434,7 +1437,7 @@ function renderBodyOnlyFindingLine(finding, ctx) {
   // or no severity at all never renders a double space or a dangling " — ".
   const marker = [emoji, safeSeverity].filter(Boolean).join(" ");
   const markerPrefix = marker ? `${marker} — ` : "";
-  const summary = sanitizeStructuredInline(finding.summary);
+  const summary = escapeProse(finding.summary);
   const location = renderBodyOnlyFindingLocation(finding, ctx);
   const dispositionSuffix = finding.disposition
     ? ` — _\`${sanitizeStructuredCodeSpan(finding.disposition)}\`_`
@@ -1784,7 +1787,7 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
   // summary, which would read as double punctuation and make machine-added text
   // indistinguishable from operator prose. Parity: both the structured and
   // free-text findings-summary paths get this same treatment.
-  const normalizedGateEvidenceNote = typeof gateEvidenceNote === "string" ? collapseWhitespace(gateEvidenceNote) : "";
+  const normalizedGateEvidenceNote = typeof gateEvidenceNote === "string" ? wrapOperatorOwnedPhrases(collapseWhitespace(gateEvidenceNote)) : "";
   if (normalizedGateEvidenceNote.length > 0) {
     lines.push(
       "",

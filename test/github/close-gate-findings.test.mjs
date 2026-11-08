@@ -561,6 +561,13 @@ test("buildMeritRationale collapses embedded double quotes so the wrapped summar
   assert.doesNotMatch(rationale, /"foo"/);
 });
 
+test("buildMeritRationale keeps code spans in the summary and the judge reason", () => {
+  const body = `${buildFindingMarker({ fp: "aaaaaaaaaaaaaaaa", severity: "low", angle: "correctness", round: 1 })}\n**low** (\`correctness\`): accepts \`approve release v1.2.3\``;
+  const rationale = buildMeritRationale({ body, judgeReason: "see `approve release v1.2.3`" });
+  assert.match(rationale, /accepts `approve release v1\.2\.3`/);
+  assert.match(rationale, /; see `approve release v1\.2\.3`\.$/);
+});
+
 // A judge defer is authorized by ledger evidence only (the rendered suffix ends the untrusted summary line), so a deferred fixture carries a ledger finding and uses its real fingerprint.
 function deferEvidence(summary, severity = "high") {
   const finding = { severity, angle: "perf", summary, judgeDisposition: "defer", followUpDraft: { title: "t", body: "b" } };
