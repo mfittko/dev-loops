@@ -194,6 +194,7 @@ export async function waiveAdrTripwire(options, {
   const paths = [...new Set(tripwire.triggers.map((t) => t.path))].sort();
 
   let issueBody;
+  let issueUnreadable = false;
   if (refsIssues.length === 0) {
     issueBody = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
   } else {
@@ -201,8 +202,9 @@ export async function waiveAdrTripwire(options, {
     const fetched = [];
     for (const n of refsIssues) {
       // An unreadable target (deleted, transferred, a PR number) carries no matrix.
-      const text = await fetchIssueBody({ repo, issue: n }, { env, ghCommand, runChild }).catch(() => "");
-      fetched.push({ n, text });
+      let unreadable = false;
+      const text = await fetchIssueBody({ repo, issue: n }, { env, ghCommand, runChild }).catch(() => { unreadable = true; return ""; });
+      fetched.push({ n, text, unreadable });
     }
     const carrying = fetched.filter(({ text }) => { const m = detectAcDodMatrix(text); return m.found && m.valid; });
     if (carrying.length > 1) {
@@ -211,12 +213,13 @@ export async function waiveAdrTripwire(options, {
     const chosen = carrying[0] ?? fetched[0];
     issue = chosen.n;
     issueBody = chosen.text;
+    issueUnreadable = chosen.unreadable;
     if (linkedIssues.length > 0 && (linkedIssues.length !== 1 || linkedIssues[0] !== issue)) {
       return refuse("not_exactly_one_tracker_issue", `PR #${pr} links #${issue} via Refs but GitHub closing references are ${linkedIssues.join(", ")}`);
     }
   }
   const { matrixInvalid, missing } = pathsMissingFromMatrix(paths, issueBody);
-  if (matrixInvalid) return refuse("issue_matrix_invalid", `linked issue #${issue} has no valid AC / DoD matrix`);
+  if (matrixInvalid) return refuse("issue_matrix_invalid", issueUnreadable ? `linked issue #${issue} could not be read` : `linked issue #${issue} has no valid AC / DoD matrix`);
   if (missing.length > 0) {
     return refuse("contract_doc_not_in_matrix", `contract doc(s) not named as a backticked path in a row of issue #${issue}'s AC / DoD matrix: ${missing.join(", ")}`, { missing });
   }

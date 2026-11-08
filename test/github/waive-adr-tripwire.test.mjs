@@ -161,9 +161,17 @@ test("refuses two matrix-carrying Refs targets and names both", async () => {
 for (const body of ["Refs #7, #8\n", "Refs #7 and #8\n", "Refs #7, #8 and #9\n"]) {
   test(`a Refs list ${JSON.stringify(body)} feeds every number to the ambiguity check`, async () => {
     const result = await assertRefusal({ fetchPr: refsPr(body) }, "ambiguous_refs_tracker_issue");
-    assert.match(result.detail, /#7, #8/u);
+    assert.deepEqual(result.issues, [...body.matchAll(/#(\d+)/gu)].map((m) => Number(m[1])));
   });
 }
+
+test("an unreadable only Refs target refuses issue_matrix_invalid naming the read failure", async () => {
+  const result = await assertRefusal({
+    fetchPr: refsPr("Refs #7\n"),
+    fetchIssueBody: async () => { throw new Error("gh issue view failed"); },
+  }, "issue_matrix_invalid");
+  assert.match(result.detail, /#7 could not be read/u);
+});
 
 test("an unreadable Refs target is treated as non-matrix-carrying", async () => {
   const { run } = harness({
