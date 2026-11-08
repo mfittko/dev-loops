@@ -267,7 +267,7 @@ export function buildDeltaInput({ sequence, candidateHead, runId, specIdentity =
         summary: "<non-empty string>",
         evidence: ["<non-empty string>"],
         // Set for a same-class site of an act item; skipReason copies the reason that input.siteCoverage records for that site.
-        residueOf: "<act item ref, optional>",
+        residueOf: "<act item ref, optional; an open residueOf finding (no skipReason) blocks locally_clear at any severity: PRE-PUSH-DELTA-RESIDUE>",
         site: "<site name in input.siteCoverage, required with skipReason>",
         skipReason: "<non-empty string, optional>",
       }],
@@ -374,7 +374,7 @@ export function validateDeltaResult(result, { sequence, siteCoverage = [], valid
 
   if (!DELTA_OUTCOMES.includes(result.outcome)) errors.push(`outcome ${JSON.stringify(result.outcome)} is unknown`);
   else if (result.outcome === "locally_clear" && deriveDeltaOutcome(result, { reviewerOnly: sequence?.reviewerOnly === true }) !== "locally_clear") {
-    errors.push("locally_clear requires every act item resolved and no new finding of severity medium or higher");
+    errors.push("locally_clear requires every act item resolved, no new finding of severity medium or higher, and no residueOf finding without a skipReason equal to the recorded reason, at any severity (PRE-PUSH-DELTA-RESIDUE)");
   } else if (result.outcome === "locally_clear" && !membershipOnly) {
     const open = unaddressedStaleSurfaceHits(staleSurfaceHits, { newFindings: findings ?? [], siteCoverage: validationCoverage });
     if (open.length > 0) errors.push(`PRE-PUSH-DELTA-RESULT: locally_clear leaves stale-surface hits unaddressed (a newFindings[] entry naming the file or a skipped siteCoverage[] site is required): ${open.map((h) => h.site).join(", ")}`);
