@@ -616,7 +616,7 @@ export { buildGateReviewsDir };
 // prompt names the PR body or PR description, when its entry declares `readsPrBody: true`, when its surface is `always`, or when it is a
 // verifiedItems angle (labels copied from the PR body checklists). An angle with no config entry fails closed to body-reading.
 // Local to this path: angleReviewSurface keeps serving carry-forward.
-const PR_BODY_PROMPT = /\bPR (?:body|description)\b/i;
+const PR_BODY_PROMPT = /\b(?:PR|pull[ -]?request)(?:['’]s)?[\s-]+(?:body|bodies|description|descriptions|text)\b/i;
 export function readsPrBody(angle, config) {
   const name = baseAngleName(String(angle).trim());
   if (angleReviewSurface(angle).kind === "always" || VERIFIED_ITEMS_ANGLES.has(name)) return true;

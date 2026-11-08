@@ -10181,3 +10181,11 @@ test("readsPrBody derives from the angle config and fails closed for an unknown 
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+test("readsPrBody recognises every PR-body phrasing in an angle prompt (issue 3080)", () => {
+  const reads = (prompt) => readsPrBody("docs", { gates: { draft: { angles: [{ name: "docs", prompt }] } } });
+  for (const prompt of ["Check the PR body.", "Check the PR-body.", "Check PR descriptions.", "Check the PR bodies.", "Read the pull request description.", "Read the PR's body.", "Read the PR’s body.", "Check the PR  body.", "Read the pull-request text."]) {
+    assert.equal(reads(prompt), true, prompt);
+  }
+  for (const prompt of ["Check the prior body.", "Check the PRs.", "Docs only."]) assert.equal(reads(prompt), false, prompt);
+});
