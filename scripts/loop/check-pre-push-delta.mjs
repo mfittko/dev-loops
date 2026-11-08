@@ -23,7 +23,7 @@
  * The reviewer-input run without --result (except --handback, which writes nothing and omits patchPath and evidenceRule) writes only the cumulative patch (PRE-PUSH-DELTA-PATCH-ARTIFACT) at
  * <tmp-root>/gate-delta/<baseline>-<candidate>-<runId>.patch: it reads the act list (or the
  * unresolved-threads file of the thread route), the result file, the
- * --findings-log file and `git rev-parse HEAD`, runs the stale-surface reads
+ * --findings-log file, `git rev-parse HEAD` and (with --reviewer-only) the PR baseRefName (`gh pr view`), runs the stale-surface reads
  * (`git cat-file`, `git diff`, `git grep`), and authenticates ACT coverage without further writes.
  * With --reviewer-only (ADR 0255) both runs apply to baseline..PR head with the act list derived from the cap-round ledger (--findings-log), no fixer plan or coverage record.
  * Pure result checks live in @dev-loops/core/loop/pre-push-delta-review.
@@ -92,8 +92,9 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
                           --repo and --pr bind the log to the PR: the log must carry the same repo and pr, and the cap-round log reaches a chain-end baseline through the sealed clearing chain of that PR.
                           Needs --baseline (an ancestor of the worktree HEAD), --pr-head (equal to the worktree HEAD), --spec-identity and --result-path (input run) or --result and --invocation (result run).
                           Refuses --act-list, --threads-file, --fixer-plan, --site-coverage and --handback. The invocation bound of 3 still applies and no sequence marker is written.
-                          Base-only merges of origin/<base> are excluded from the patch, the changed files and the stale-surface scan; a merge that is not base-only is reviewed through its PR-own commits and its resolution diff (git show --remerge-diff, appended to the patch under a "# Resolution diff of merge" heading); an octopus merge refuses (non_base_only_merge). A prior non-clearing record at the baseline with the same act refs, no extension and a candidate on the PR head history is taken over (its invocation count continues).
-                          The reviewer reports ALL findings; the record is locally_clear only when the result has no medium-or-higher finding and no open residueOf finding (no skipReason) at any severity (PRE-PUSH-DELTA-RESIDUE). Run git fetch origin <base> first.
+                          <base> is the PR's baseRefName read from GitHub with gh pr view; an unreadable PR base refuses, with no fallback to the configured branch.
+                          Base-only merges of origin/<base> are excluded from the patch, the changed files and the stale-surface scan; a merge that is not base-only is reviewed through its PR-own commits and its resolution diff (git show --remerge-diff, appended to the patch under a "# Resolution diff of merge" heading); an octopus merge refuses (non_base_only_merge), and a PR-own gitlink path that the patch does not name refuses (gitlink_not_in_patch). A prior non-clearing record at the baseline with the same act refs, no extension and a candidate on the PR head history is taken over (its invocation count continues).
+                          The reviewer reports ALL findings; the record is locally_clear only when the result has no medium-or-higher finding and no open residueOf finding (no skipReason) at any severity (PRE-PUSH-DELTA-RESIDUE). Run git fetch origin <PR baseRefName> first.
   --handback              The fixer handbackCheck run: waives the --findings-log requirement (it validates --site-coverage, no reviewer input is used)
   --result <path>         The reviewer's DeltaPrePushReviewResult JSON
   --result-path <path>    Required on the reviewer-input run: the absolute path briefed to the delta reviewer for its result; the run record binds it and seal-evidence refuses any other path (GATE-EXEC-EVIDENCE-SEALED)

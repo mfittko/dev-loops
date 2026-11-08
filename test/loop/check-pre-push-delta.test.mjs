@@ -931,7 +931,7 @@ test("a refused locally_clear result followed by a no-commit re-emission keeps t
 
 
 // ADR 0255: the PR 3087 state. The cap-round head P1, a fix commit P2, then a base refresh merged in; the sequence is closed (no marker, no plan) and the head moved.
-function reviewerOnlyRepo({ conflictOnly = false, nonBaseOnlyMerge = false, evilMerge = false, octopus = false, baseChanges = false, ownChanges = false, commitAfterMerge = false, netRevert = false } = {}) {
+function reviewerOnlyRepo({ conflictOnly = false, nonBaseOnlyMerge = false, evilMerge = false, octopus = false, baseChanges = false, ownChanges = false, commitAfterMerge = false, netRevert = false, resolutionGitlink = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-only-"));
   initGitFixture(dir, { branch: "main", commit: null });
   const git = (...args) => runGitFixture(dir, args);
@@ -959,7 +959,9 @@ function reviewerOnlyRepo({ conflictOnly = false, nonBaseOnlyMerge = false, evil
   if (conflictOnly) {
     assert.throws(() => git("merge", "-q", "--no-ff", "--no-commit", "main")); // add/add conflict on a.mjs
     fs.writeFileSync(path.join(dir, "a.mjs"), "export const a = 3;\n");
-    git("add", "."); git("commit", "-qm", "refresh base with a resolution");
+    git("add", ".");
+    if (resolutionGitlink) git("update-index", "--add", "--cacheinfo", `160000,${"b".repeat(40)},vendor/sub`);
+    git("commit", "-qm", "refresh base with a resolution");
   } else git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
   const mergeHead = git("rev-parse", "HEAD");
   if (commitAfterMerge) { fs.writeFileSync(path.join(dir, "a.mjs"), "// uses goneIdentifierName\nexport const a = 3;\n"); git("add", "."); git("commit", "-qm", "fix: a again"); }
@@ -1183,8 +1185,31 @@ test("AC3: under diff.ignoreSubmodules=all a gitlink change stays in the path se
     assert.match(patch, /Subproject commit a{40}/);
     assert.match(patch, /docs\.md/);
     await assert.rejects(runDeltaCli(args, { ...seam, diffPatch: () => "diff --git a/docs.md b/docs.md\n+docs\n" }), /gitlink_not_in_patch.*vendor\/sub/);
-    // The stale-surface diff pins the same flag: the removed gitlink line reaches the scan instead of failing or vanishing.
-    assert.doesNotThrow(() => gitStaleSurfaceHits(repo.dir, repo.baseline, moved.head, ["vendor/sub", "docs.md"]));
+  } finally { cleanup(repo); }
+});
+
+test("AC3: the stale-surface diff keeps a removed gitlink line under diff.ignoreSubmodules=all", () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    const git = (...args) => runGitFixture(repo.dir, args);
+    git("config", "diff.ignoreSubmodules", "all");
+    git("update-index", "--add", "--cacheinfo", `160000,${"a".repeat(40)},vendor/sub.md`);
+    fs.writeFileSync(path.join(repo.dir, "notes.txt"), `Subproject commit ${"a".repeat(40)}\n`);
+    git("add", "notes.txt"); git("commit", "-qm", "add a gitlink");
+    const added = git("rev-parse", "HEAD");
+    git("update-index", "--force-remove", "vendor/sub.md");
+    git("commit", "-qm", "drop the gitlink");
+    const { hits } = gitStaleSurfaceHits(repo.dir, added, git("rev-parse", "HEAD"), ["vendor/sub.md"]);
+    assert.deepEqual(hits.map((h) => h.site), ["notes.txt:1"], "the removed gitlink line reaches the scan");
+  } finally { cleanup(repo); }
+});
+
+test("AC3: under diff.ignoreSubmodules=all a gitlink changed by a conflict resolution reaches the PR-own paths and the reviewer patch", async () => {
+  const repo = reviewerOnlyRepo({ conflictOnly: true, resolutionGitlink: true });
+  try {
+    runGitFixture(repo.dir, ["config", "diff.ignoreSubmodules", "all"]);
+    const { input } = await reviewerOnlyRun(repo, {});
+    assert.match(fs.readFileSync(input.patchPath, "utf8"), /^diff --git a\/vendor\/sub b\/vendor\/sub$/m);
   } finally { cleanup(repo); }
 });
 
