@@ -7675,7 +7675,7 @@ for (const reason of ["thread_site_changed", "thread_site_unverifiable", "no_com
     const bytes = await readFile(path.resolve(repoRoot, read.path));
     assert.equal(read.sha256, createHash("sha256").update(bytes).digest("hex"));
     assert.deepEqual(JSON.parse(bytes), [{ threadId: "C19_OPEN", isResolved: false, comments: [{ author: "gate", body: `${reason}: reassess this exact open thread` }] }]);
-    assert.match(await readFile(path.resolve(repoRoot, read.path.replace(/\.known-findings\.json$/, ".briefing-volatile.txt")), "utf8"), /If any listed thread is unresolved, assess it in this full round/);
+    assert.match(await readFile(path.resolve(repoRoot, read.path.replace(/\.known-findings-[0-9a-f]{12}\.json$/, ".briefing-volatile.txt")), "utf8"), /If any listed thread is unresolved, assess it in this full round/);
     assert.equal(existsSync(path.join(repoRoot, "tmp", "gate-delta", `${headSha}.json`)), false);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
@@ -7703,7 +7703,7 @@ test("writeGateContext --known-findings: full thread bodies go to a hash-bound r
     const read = result.artifact.requiredReads.find((r) => r.kind === "known-findings");
     assert.equal(read.required, true);
     assert.equal(read.entries, 2);
-    assert.ok(read.path.endsWith(".known-findings.json"), read.path);
+    assert.ok(read.path.endsWith(`.known-findings-${read.sha256.slice(0, 12)}.json`), read.path);
     assert.ok(path.basename(read.path).startsWith("draft_gate-"), read.path);
     const bytes = await readFile(path.resolve(repoRoot, read.path));
     assert.equal(read.sha256, createHash("sha256").update(bytes).digest("hex"));
@@ -7716,10 +7716,13 @@ test("writeGateContext --known-findings: full thread bodies go to a hash-bound r
 
     await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-correctness-${"abc1234567890".padEnd(40, "0")}.json`), "{}\n", "utf8");
     await writeCapture([{ id: "T3", isResolved: false }], [{ threadId: "T3", author: { login: "gate-bot" }, body: "new" }]);
-    await assert.rejects(
-      writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot }),
-      /Refusing to rewrite required read\(s\) .*known-findings\.json with DIFFERENT bytes/,
-    );
+    // A capture that gained a thread lands in its own digest-keyed file, so live sentinels never block the rebuild.
+    const regrown = await writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot });
+    assert.equal(regrown.prefixHash, result.prefixHash);
+    const regrownRead = regrown.artifact.requiredReads.find((r) => r.kind === "known-findings");
+    assert.notEqual(regrownRead.path, read.path);
+    assert.equal(regrownRead.entries, 1);
+    assert.ok(existsSync(path.resolve(repoRoot, read.path)), "the pinned file stays untouched");
 
     await writeFile(capturePath, "{\"threads\":1}", "utf8");
     await assert.rejects(writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot }), /threads\[\] and comments\[\]/);
@@ -9851,6 +9854,64 @@ test("a PR-body spec edit under live sentinels refuses and moves nothing", async
     // The same edit passes when a linked issue carries the spec.
     const linked = await buildGateContext({ ...bodyRerunInput("Edited"), acceptanceCriteriaSource: "linked-issue" }, { repoRoot });
     assert.ok(linked.bodyOnlyRerun);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a body-only rebuild with a --known-findings capture that gained a thread is accepted with an identical prefix hash", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-known-findings-"));
+  const fullSha = "abc1234567890def".padEnd(40, "0");
+  try {
+    const capturePath = path.join(repoRoot, "threads.json");
+    const writeCapture = (threads, comments) => writeFile(capturePath, JSON.stringify({ ok: true, threads, comments }), "utf8");
+    const baseArgs = [
+      "--repo", "owner/repo", "--pr", "9", "--gate", "draft_gate", "--head-sha", "abc1234567890def",
+      "--angles", '["scope","correctness"]', "--acceptance-criteria", "#9", "--known-findings", capturePath,
+    ];
+    await writeCapture([{ id: "T1", isResolved: false }], [{ threadId: "T1", trusted: true, author: { login: "bot" }, body: "one" }]);
+    const first = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Original"]), { repoRoot });
+    const sentinel = path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-scope-${fullSha}.json`);
+    await writeFile(sentinel, "{}\n", "utf8");
+    await writeCapture(
+      [{ id: "T1", isResolved: false }, { id: "T2", isResolved: false }],
+      [{ threadId: "T1", trusted: true, author: { login: "bot" }, body: "one" }, { threadId: "T2", trusted: true, author: { login: "bot" }, body: "two" }],
+    );
+    const second = await writeGateContext(parseWriteGateContextCliArgs([...baseArgs, "--pr-body", "Edited"]), { repoRoot });
+    assert.equal(second.prefixHash, first.prefixHash);
+    assert.ok(existsSync(sentinel), "the live sentinel stays");
+    assert.equal(second.artifact.requiredReads.find((r) => r.kind === "known-findings").entries, 2);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("a body-only rebuild refuses while a non-body unit is in flight and moves nothing", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-nonbody-inflight-"));
+  try {
+    await buildGateContext(bodyRerunInput("Original"), { repoRoot });
+    const reviews = await seedCompleteBodyRound(repoRoot);
+    await rm(path.join(reviews, "correctness.json"));
+    const snapshot = async () => [...(await readdir(path.join(repoRoot, "tmp"))).sort(), ...(await readdir(reviews)).sort()];
+    const before = await snapshot();
+    await assert.rejects(buildGateContext(bodyRerunInput("Edited"), { repoRoot }), (err) => {
+      assert.match(err.message, /GATE-EXEC-BODY-ONLY-RERUN.*in flight/s);
+      assert.ok(err.message.includes(bodyRerunUnits.correctness), err.message);
+      return true;
+    });
+    assert.deepEqual(await snapshot(), before);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a PR-body spec edit refuses when the caller supplied an acceptance-criteria pointer but the PR closes no issue", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-spec-provided-"));
+  const input = (prBody) => ({ ...bodyRerunInput(prBody), acceptanceCriteriaSource: "provided", hasClosingIssue: false });
+  try {
+    await buildGateContext(input("Original"), { repoRoot });
+    await seedCompleteBodyRound(repoRoot);
+    await assert.rejects(buildGateContext(input("Edited"), { repoRoot }), /GATE-EXEC-BODY-ONLY-RERUN.*spec of record.*Retire the round/s);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

@@ -163,6 +163,8 @@ Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
   { "ok": false, "error": "..." }
   A failed pre-merge check also carries draftGate and preApprovalGate (headSha, verdict) so a follow-up reviewer can read the latest trusted verdict head.
+  { "ok": false, "error": "...", "status": "...", "message": "...", "staleRunner": {...}, "staleRunnerCheck": { "ok": false, "failures": [...] }, "preMergeGateCheck": { "ok": false, "failures": [...] } }
+  A stale or signalled runner claim (stale_runner, exit_signal_recorded) writes this shape. Its preMergeGateCheck carries failures only, with no draftGate or preApprovalGate.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success (gate evidence is valid)

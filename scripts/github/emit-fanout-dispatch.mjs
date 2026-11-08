@@ -444,8 +444,8 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // it does not pre-persist anything.
   // A --pending emission replaces the keyed plan with the pending units only. The prior plan is read first so
   // units that completed in an earlier wave of this round can stay in the persisted plan (see mergedUnits below).
-  // The rm below destroys the plan, so a --pending run keeps the prior plan bytes in a sidecar the rm leaves alone:
-  // a refused --pending run followed by a successful one still finds the prior units. fan-in never reads the sidecar.
+  // The rm below destroys the plan, so the latest persisted plan bytes live in a sidecar the rm leaves alone, refreshed after
+  // every successful emission: a refused run followed by a --pending run finds the latest prior units. fan-in never reads the sidecar.
   const priorPlanSidecar = `${buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot })}.prior`;
   let priorPlan = null;
   if (pendingOnly) {
@@ -869,7 +869,10 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const persistedPayload = persistedUnits.length > emitted.length ? { ...payload, units: persistedUnits, count: persistedUnits.length } : payload;
   try {
     await mkdir(path.dirname(planPath), { recursive: true });
-    await persistPlan(planPath, `${JSON.stringify(persistedPayload, null, 2)}\n`, "utf8");
+    const persistedText = `${JSON.stringify(persistedPayload, null, 2)}\n`;
+    await persistPlan(planPath, persistedText, "utf8");
+    // Every successful emission, pending or not, refreshes the sidecar so a later --pending run never falls back to an older plan.
+    await writeFile(priorPlanSidecar, persistedText, "utf8").catch(() => {});
   } catch (err) {
     try {
       await rm(planPath, { force: true });

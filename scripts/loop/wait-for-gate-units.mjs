@@ -32,7 +32,7 @@ const EXIT = { all_done: 0, timeout: 2, round_retired: 3 };
 const USAGE = `Usage: wait-for-gate-units.mjs (--emit-plan <path> [--unit <scope>]... | --judge-plan <path>) --tmp-root <worktree>/tmp [--timeout <seconds>]
        wait-for-gate-units.mjs --artifact <path> --after <path> [--timeout <seconds>]
 Block in one foreground process until the round's dispatched units are done.
-Outcomes (JSON on stdout): all_done (exit 0), timeout (exit 2), round_retired (exit 3). Invalid input: ok false, exit 1.
+Outcomes (JSON on stdout): all_done (exit 0), timeout (exit 2), round_retired (exit 3; a whole-round record, or a scoped body-only-rerun record naming any waited unit, ends the whole wait, so stop the round and re-emit). Invalid input: ok false, exit 1.
   --emit-plan <path>   the round's <gate>-<headSha>.emit-plan.json; waits on every unit unless --unit narrows it
   --unit <scope>       repeatable; restrict the wait to these unit scopes
   --judge-plan <path>  the round's judge-emit-plan.json; waits on the one judge unit

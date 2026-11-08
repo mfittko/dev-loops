@@ -1814,6 +1814,15 @@ test("judge-pass J5: a round retired after emission refuses at acceptance", asyn
   assert.equal(existsSync(path.join(root, "act.json")), false);
 });
 
+test("judge-pass J5: a scoped (body-only rerun) retirement after emission refuses at acceptance", async () => {
+  const { root, runPass } = await deliveryCase();
+  const retired = path.join(root, "tmp", "retired-gate-rounds", HEAD, "r1");
+  await mkdir(retired, { recursive: true });
+  await writeFile(path.join(retired, "retirement.json"), JSON.stringify({ gate: "draft_gate", scopes: ["draft-gate-group-process"], retiredAt: new Date().toISOString() }));
+  await assert.rejects(runPass(), /retired as r1/);
+  assert.equal(existsSync(path.join(root, "act.json")), false);
+});
+
 // Recurrence escalation: act items on one (file, symbol) surface in three counted rounds.
 const GUARD_FILE = "src/guard.mjs";
 const REC_REPO = "mfittko/dev-loops";

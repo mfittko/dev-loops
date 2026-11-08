@@ -179,6 +179,16 @@ test("J3: a superseded ref, a changed spec or ledger, and a retired round refuse
   });
 });
 
+test("J3: a scoped (body-only rerun) retirement after emission refuses the pull as stale_dispatch", async () => {
+  await withDir(async (root) => {
+    const second = await emitJudgeWorkOrder(await seed(root));
+    const retired = path.join(root, "tmp", "retired-gate-rounds", HEAD, "r1");
+    await mkdir(retired, { recursive: true });
+    await writeFile(path.join(retired, "retirement.json"), JSON.stringify({ gate: "pre_approval_gate", scopes: ["pre-approval-gate-group-process"], retiredAt: new Date().toISOString() }));
+    assert.equal(refusal(pull(second, root)), "stale_dispatch");
+  });
+});
+
 test("J3: after the head moves, a newer emission at the new head supersedes the old head's ref at pull", async () => {
   await withDir(async (root) => {
     const first = await emitJudgeWorkOrder({ ...(await seed(root)), roundId: "j1-000000aa" });

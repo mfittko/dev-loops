@@ -12,8 +12,10 @@ import path from "node:path";
  * The retired round id under `<tmpRoot>/retired-gate-rounds/<headSha>/`, or null. A malformed record throws.
  * A record without `scopes` retires the whole round. A record with `scopes` (a body-only rerun,
  * GATE-EXEC-BODY-ONLY-RERUN) retires only the named dispatch units: it matches when `scope` is given and listed,
- * and never matches a whole-round query.
+ * and never matches a whole-round query. `ANY_SCOPE` as `scope` matches any record for the gate and head, scoped or not
+ * (the judge round, which reads the body-bound results of every unit).
  */
+export const ANY_SCOPE = Symbol("any-scope");
 export function findRetirementAfter(tmpRoot, gate, headSha, emittedAtMs, scope = null) {
   const retiredRoot = path.join(tmpRoot, "retired-gate-rounds", headSha);
   let rounds = [];
@@ -30,7 +32,7 @@ export function findRetirementAfter(tmpRoot, gate, headSha, emittedAtMs, scope =
     }
     const record = JSON.parse(text);
     if (record?.gate !== gate || !(Date.parse(record.retiredAt) >= emittedAtMs)) continue;
-    if (!Array.isArray(record.scopes) || (scope !== null && record.scopes.includes(scope))) return round;
+    if (!Array.isArray(record.scopes) || scope === ANY_SCOPE || (scope !== null && record.scopes.includes(scope))) return round;
   }
   return null;
 }

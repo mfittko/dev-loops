@@ -23,6 +23,7 @@ import { PR_BODY_ABSENT_SENTINEL, isInRoundRewrite, listPriorActItems, renderPrB
 import { viewPr } from "../github/view-pr.mjs";
 import { copilotBodyJudgePath } from "../github/_copilot-body-disposition.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
+import { ANY_SCOPE } from "@dev-loops/core/loop/gate-round-retirement";
 import { OUT_OF_BAND_WRITE, readSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { SLICE_LINKAGE_SENTENCE, sliceLinkageIssues } from "./_slice-linkage.mjs";
@@ -299,7 +300,7 @@ export async function locateJudgeUnit({ ref, tmpRoots }) {
   const { plan } = own;
   // retire-gate-round writes under the checkout it ran in, so every checkout's record counts.
   let retired = null;
-  for (const tmpRoot of tmpRoots) retired ??= await findRetirementAfter(tmpRoot, gate, headSha, Number(emittedAtMs));
+  for (const tmpRoot of tmpRoots) retired ??= await findRetirementAfter(tmpRoot, gate, headSha, Number(emittedAtMs), ANY_SCOPE);
   const changed = [];
   for (const read of plan.workOrder?.requiredReads ?? []) {
     const bytes = await readFile(read.path).catch(() => null);

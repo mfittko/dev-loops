@@ -40,6 +40,7 @@ import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "../github/_gate-arti
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { codeTreeSkewNote, materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
+import { ANY_SCOPE } from "@dev-loops/core/loop/gate-round-retirement";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { rejectClosingRefRemoval } from "./_slice-linkage.mjs";
 import { shellQuote } from "../lib/checkout-delegation-refusal.mjs";
@@ -900,7 +901,7 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
   // The plan sits at <tmpRoot>/gate-judge/<slug>/pr-<N>/<gate>-<headSha>/; the main checkout's tmp is checked too.
   const planTmpRoot = path.resolve(path.dirname(resolve(options.judgePlan)), "../../../..");
   let retired = null;
-  for (const tmpRoot of new Set([planTmpRoot, path.resolve(receiptTmpRoot)])) retired ??= await findRetirementAfter(tmpRoot, order.roundIdentity.gate, order.headSha, emittedAtMs);
+  for (const tmpRoot of new Set([planTmpRoot, path.resolve(receiptTmpRoot)])) retired ??= await findRetirementAfter(tmpRoot, order.roundIdentity.gate, order.headSha, emittedAtMs, ANY_SCOPE);
   if (retired) throw new Error(`judge execution ${plan.executionIdentity} belongs to a ${options.gate} round retired as ${retired}; re-emit the judge work order and re-run the judge`);
   // A verdict counts only at this round's outputRefs, so a superseded round's late write never passes as this one's.
   const canonical = (p) => realpath(p).catch(() => path.resolve(p));

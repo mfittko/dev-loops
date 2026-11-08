@@ -2383,3 +2383,26 @@ test("a pending emit keeps the prior plan's unit order when only the tail of a s
     assert.deepEqual(plan.units.map((unit) => unit.resumed === true), [true, false]);
   });
 });
+
+test("every successful emission, pending or not, refreshes the .prior sidecar with the persisted plan bytes", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const gate = "draft_gate";
+    const angles = ["srp", "soc", "pr-description"];
+    await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: { fanout: { groups: [{ name: "design-solid", angles }], maxAnglesPerGroup: 6 } } }), "utf8");
+    const { config } = await loadDevLoopConfig({ repoRoot });
+    const id = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA };
+    const planPath = buildGateEmitPlanPath({ ...id, tmpRoot: path.join(repoRoot, "tmp") });
+    const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles), "--pr-body", "Body"]);
+    await writeGateContext({ ...options, config, fanoutDispatch: resolveFanoutDispatch(config, "draft", angles, { maxAnglesPerGroup: 6 }) }, { repoRoot });
+    const emitArgs = ["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA];
+    const full = runEmitCli(emitArgs, { cwd: repoRoot });
+    assert.equal(full.status, 0, full.stderr || full.stdout);
+    assert.equal(await readFile(`${planPath}.prior`, "utf8"), await readFile(planPath, "utf8"), "a non-pending emission refreshes the sidecar");
+    // A refused run removes the plan but leaves the latest sidecar for the next --pending run.
+    const latest = await readFile(`${planPath}.prior`, "utf8");
+    const refused = runEmitCli([...emitArgs, "--operator-focus-file", path.join(repoRoot, "missing-focus.json")], { cwd: repoRoot });
+    assert.notEqual(refused.status, 0);
+    assert.equal(existsSync(planPath), false);
+    assert.equal(await readFile(`${planPath}.prior`, "utf8"), latest);
+  });
+});
