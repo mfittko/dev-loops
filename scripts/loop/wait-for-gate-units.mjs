@@ -20,7 +20,7 @@ import { isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { verifyPullReceipt, verifyPulledResult } from "../github/_work-order-protocol.mjs";
 import { CHECKPOINT_SENTINEL_PREFIX } from "../github/verify-fresh-review-context.mjs";
-import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
+import { ANY_SCOPE, findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 
 export const DEFAULT_TIMEOUT_MS = 540000;
@@ -188,8 +188,8 @@ export async function waitForUnits({ artifact, after, emitPlan, judgePlan, units
   const { gate, headSha, role, units } = selectUnits({ plan: await readPlan(planPath), judge: judgePlan !== undefined, wanted });
   const receipts = receiptTmpRoot ?? resolveGateArtifactTmpRoot(path.dirname(path.resolve(tmpRoot)));
   const started = now();
-  // A whole-round record retires the round; a scoped (body-only rerun) record retires only the units it names.
-  const roundRetired = () => retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs) || units.some((unit) => retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs, unit.scope));
+  // A whole-round record retires the round; a scoped (body-only rerun) record retires only the units it names. The judge matches any scoped record, as the judge pull and judge-pass do.
+  const roundRetired = () => retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs) || units.some((unit) => retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs, role === "judge" ? ANY_SCOPE : unit.scope));
   for (;;) {
     const result = (outcome, missing = [], done = []) => ({ ok: true, outcome, gate, headSha, unitCount: units.length, done, missing, elapsedMs: now() - started });
     if (!await exists(planPath) || roundRetired()) return result("round_retired");

@@ -52,6 +52,7 @@ import {
   renderBriefingEvidence,
   renderBriefingPrefix,
   renderBriefingVolatile,
+  renderPrBodyRead,
   renderScopedBriefingVariant,
   resolveReviewGateAngles,
   writeGateContext,
@@ -9909,6 +9910,22 @@ test("a body-only rebuild refuses while a non-body unit is in flight and moves n
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
+});
+
+test("a PR-body spec edit refuses when hasClosingIssue is false on the fetch path with a provided acceptance-criteria pointer", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-spec-fetch-"));
+  const input = (prBody) => ({ ...bodyRerunInput(prBody), acceptanceCriteriaSource: "provided", hasClosingIssue: false });
+  try {
+    await buildGateContext(input("Original"), { repoRoot });
+    await seedCompleteBodyRound(repoRoot);
+    await assert.rejects(buildGateContext(input("Edited"), { repoRoot }), /GATE-EXEC-BODY-ONLY-RERUN.*spec of record.*Retire the round/s);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("renderPrBodyRead hashes a CRLF body and the same LF body identically", () => {
+  assert.equal(renderPrBodyRead("a\r\nb\rc\n"), renderPrBodyRead("a\nb\nc"));
 });
 
 test("a PR-body spec edit refuses when the caller supplied an acceptance-criteria pointer but the PR closes no issue", async () => {

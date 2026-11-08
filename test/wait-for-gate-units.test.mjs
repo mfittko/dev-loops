@@ -255,6 +255,19 @@ test("judge plan waits on the single judge unit with role judge", async () => {
   });
 });
 
+test("a scoped body-only retirement ends a judge-plan wait", async () => {
+  await withDir(async (root) => {
+    const verdict = path.join(root, "tmp", "judge", "judge-verdict.json");
+    const identity = { workOrderRef: `judge:o/r#7:${GATE}:${HEAD}:r1`, workOrderDigest: "sha256:j", executionIdentity: "r1" };
+    const planPath = path.join(root, "tmp", "judge", "judge-emit-plan.json");
+    await writeJson(planPath, { ...identity, workOrder: { roundIdentity: { gate: GATE, headSha: HEAD }, outputRefs: [verdict] } });
+    await setMtime(planPath, 100);
+    await writeJson(path.join(root, "tmp", "retired-gate-rounds", HEAD, "round-1", "retirement.json"), { gate: GATE, retiredAt: new Date(200000).toISOString(), scopes: ["h"] });
+    const opts = { judgePlan: planPath, tmpRoot: path.join(root, "tmp"), receiptTmpRoot: path.join(root, "tmp"), timeoutMs: 4000, ...fakeClock() };
+    assert.equal((await waitForUnits(opts)).outcome, "round_retired");
+  });
+});
+
 test("the command is read-only", async () => {
   await withDir(async (root) => {
     const { planPath, fixtures } = await seedPlan(root, [["g", ["a", "b"]]]);
