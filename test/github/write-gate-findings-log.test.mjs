@@ -359,11 +359,12 @@ test("writeGateFindingsLog retains every existing same-head ledger at a numbered
     // A judged live ledger is retained even when the new write is unjudged.
     const unjudged = await write("four", "findings_present");
     assert.equal(unjudged.retainedRound, first.path.replace(/\.json$/, ".round-3.json"));
-    // A completed unjudged standalone review (no shared round identity) is a finished round: retained by the next write (issue 3080 AC8).
-    const second2 = await write("five", "findings_present");
-    assert.equal(second2.retainedRound, first.path.replace(/\.json$/, ".round-4.json"));
-    assert.equal(JSON.parse(await readFile(second2.path, "utf8")).findings[0].summary, "five");
-    assert.deepEqual(JSON.parse(await readFile(second2.path, "utf8")).roundIdentity, { roundId: null, judgeExecution: null });
+    // A no-plan write carries no identity, so an unjudged live ledger (no judgeDisposition on any finding) stays an in-round rewrite: replaced, not retained.
+    const rewrite = await write("five", "findings_present");
+    assert.equal(rewrite.retainedRound, undefined, "an unjudged live ledger is not retained");
+    assert.equal(existsSync(first.path.replace(/\.json$/, ".round-4.json")), false);
+    assert.equal(JSON.parse(await readFile(rewrite.path, "utf8")).findings[0].summary, "five");
+    assert.deepEqual(JSON.parse(await readFile(rewrite.path, "utf8")).roundIdentity, { roundId: null, judgeExecution: null });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

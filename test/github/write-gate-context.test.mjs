@@ -10097,10 +10097,12 @@ test("resolveCapRound at the current head returns the retained round at H, never
 
 test("isInRoundRewrite: a stamped ledger is a rewrite only against an incoming write of the same round or judge execution (issue 3080 AC8)", () => {
   const unjudged = { findings: [{ severity: "low" }], roundIdentity: { roundId: "r1-aa", judgeExecution: null } };
-  assert.equal(isInRoundRewrite(unjudged), false, "a reader counts a stamped unjudged ledger as finished");
+  assert.equal(isInRoundRewrite(unjudged), true, "a reader keeps the earlier shape for an unjudged stamped ledger with no judge execution");
   assert.equal(isInRoundRewrite(unjudged, { roundId: "r1-aa", judgeExecution: "j1-bb" }), true, "an intermediate write of one round");
-  assert.equal(isInRoundRewrite(unjudged, { roundId: "r2-cc", judgeExecution: null }), false, "another round");
-  assert.equal(isInRoundRewrite(unjudged, { roundId: null, judgeExecution: null }), false, "no shared identity");
+  assert.equal(isInRoundRewrite(unjudged, { roundId: "r2-cc", judgeExecution: null }), false, "another round: two completed standalone rounds retain the first");
+  assert.equal(isInRoundRewrite(unjudged, { roundId: null, judgeExecution: null }), true, "a no-plan write keeps the earlier shape");
+  assert.equal(isInRoundRewrite({ findings: [{ severity: "low" }], roundIdentity: { roundId: "r1-aa", judgeExecution: "j1-bb" } }), false, "a stamped ledger with a judge execution is a finished round for a reader");
+  assert.equal(isInRoundRewrite({ findings: [], roundIdentity: { roundId: "r1-aa", judgeExecution: null } }), false, "a clean stamped ledger is a finished round");
   assert.equal(isInRoundRewrite({ findings: [{ severity: "low" }] }), true, "an unstamped ledger keeps the earlier shape");
 });
 
@@ -10188,4 +10190,16 @@ test("readsPrBody recognises every PR-body phrasing in an angle prompt (issue 30
     assert.equal(reads(prompt), true, prompt);
   }
   for (const prompt of ["Check the prior body.", "Check the PRs.", "Docs only."]) assert.equal(reads(prompt), false, prompt);
+});
+
+test("a body-only rebuild accepts an artifact whose angle differs only by case or whitespace (issue 3080)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-angle-norm-"));
+  try {
+    await buildGateContext(bodyRerunInput("Original"), { repoRoot });
+    const reviews = await seedCompleteBodyRound(repoRoot);
+    await writeFile(path.join(reviews, "holistic.json"), JSON.stringify({ angle: " Holistic ", verdict: "clean", headSha: BODY_RERUN_SHA, findings: [] }), "utf8");
+    await buildGateContext(bodyRerunInput("Edited"), { repoRoot });
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });

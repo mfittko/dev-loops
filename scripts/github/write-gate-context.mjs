@@ -1932,13 +1932,14 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
 /**
  * The shared finished-round predicate. The writer stamps `roundIdentity: { roundId, judgeExecution }` on each ledger (the emit-plan round id and the judge execution identity, `null` when absent).
  * A stamped live same-head ledger is an in-round rewrite (replaced, not retained, not counted) only against an `incoming` write that shares its non-null `roundId` or `judgeExecution`
- * (an intermediate write of one round, or a repeated write of one judged round). A reader with no incoming write sees every stamped ledger as a finished round,
- * so a completed standalone review with no judge counts and is retained. A ledger written before the stamp keeps the earlier shape:
+ * (an intermediate write of one round, or a repeated write of one judged round). When the incoming write carries no identity (or there is none, as for a reader) and the live stamp has no `judgeExecution`, the earlier shape below decides, so an aborted unjudged round is not counted. A stamped ledger with a `judgeExecution` is a finished round for such a reader,
+ * so a judged or identity-stamped round counts and is retained. A ledger written before the stamp keeps the earlier shape:
  * at least one finding and no `judgeDisposition`. Every other closed ledger, including a clean one with `findings: []`, is a finished round.
  */
 export function isInRoundRewrite(log, incoming) {
   const stamp = log?.roundIdentity;
-  if (stamp === undefined) return Array.isArray(log?.findings) && log.findings.length > 0 && !log.findings.some((f) => f?.judgeDisposition !== undefined);
+  const noIncomingIdentity = incoming?.roundId == null && incoming?.judgeExecution == null;
+  if (stamp === undefined || (noIncomingIdentity && stamp?.judgeExecution == null)) return Array.isArray(log?.findings) && log.findings.length > 0 && !log.findings.some((f) => f?.judgeDisposition !== undefined);
   const same = (a, b) => typeof a === "string" && a === b;
   return incoming !== undefined && (same(stamp?.roundId, incoming.roundId) || same(stamp?.judgeExecution, incoming.judgeExecution));
 }
@@ -3465,7 +3466,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           if ((await stat(file)).mtimeMs < (await stat(path.resolve(repoRoot, "tmp", sentinel))).mtimeMs) return false;
           const parsed = JSON.parse(await readFile(file, "utf8"));
           const head = String(parsed?.headSha ?? "").trim().toLowerCase();
-          return Array.isArray(parsed?.findings) && head.length > 0 && (head.startsWith(wantHead) || wantHead.startsWith(head)) && parsed.angle === angle;
+          return Array.isArray(parsed?.findings) && head.length > 0 && (head.startsWith(wantHead) || wantHead.startsWith(head)) && baseAngleName(String(parsed.angle).trim().toLowerCase()) === baseAngleName(String(angle).trim().toLowerCase());
         } catch {
           return false;
         }
