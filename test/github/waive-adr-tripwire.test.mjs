@@ -158,6 +158,27 @@ test("refuses two matrix-carrying Refs targets and names both", async () => {
   assert.match(result.detail, /#7, #8 carry/u);
 });
 
+for (const body of ["Refs #7, #8\n", "Refs #7 and #8\n", "Refs #7, #8 and #9\n"]) {
+  test(`a Refs list ${JSON.stringify(body)} feeds every number to the ambiguity check`, async () => {
+    const result = await assertRefusal({ fetchPr: refsPr(body) }, "ambiguous_refs_tracker_issue");
+    assert.match(result.detail, /#7, #8/u);
+  });
+}
+
+test("an unreadable Refs target is treated as non-matrix-carrying", async () => {
+  const { run } = harness({
+    fetchPr: refsPr("Refs #5\nRefs #6\nRefs #7\n"),
+    fetchIssueBody: async ({ issue }) => { if (issue === 6) throw new Error("gh issue view failed"); return issue === 7 ? ISSUE_BODY : "Epic, no matrix."; },
+  });
+  const result = await run();
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.issue, 7);
+});
+
+test("Refs forms outside the accepted shape are no link", async () => {
+  await assertRefusal({ fetchPr: refsPr("Refs 7\n") }, "lightweight_pr_body_path");
+});
+
 test("a Refs body whose GitHub closing reference differs refuses not_exactly_one_tracker_issue", async () => {
   await assertRefusal({
     fetchPr: async () => ({ body: "Refs #7\n", headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [{ number: 99 }] } }),
