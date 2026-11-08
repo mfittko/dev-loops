@@ -2276,3 +2276,36 @@ test("a PR-body-only edit re-runs only the body-reading unit and the round-1 led
     assert.ok((await readdir(path.dirname(written.path ?? buildGateFaninLedgerPath({ ...id, tmpRoot })))).some((name) => name === `${gate}-${HEAD_SHA}.round-1.json`));
   });
 });
+
+test("a pending emit keeps the prior plan's unit order when only the tail of a split group re-runs", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const gate = "draft_gate";
+    const angles = ["srp", "soc", "ocp", "lsp", "isp", "pr-description"];
+    await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: { fanout: { groups: [{ name: "design-solid", angles }], maxAnglesPerGroup: 6 } } }), "utf8");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    assert.deepEqual(errors, []);
+    const id = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA };
+    const build = async (prBody) => {
+      const completedAngles = await readCompletedAnglesForHead({ ...id, tmpRoot: "tmp", prBodySha256: createHash("sha256").update(renderPrBodyRead(prBody)).digest("hex") }, { repoRoot });
+      const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles), "--pr-body", prBody]);
+      return writeGateContext({ ...options, config, fanoutDispatch: resolveFanoutDispatch(config, "draft", angles, { completedAngles, maxAnglesPerGroup: 6 }) }, { repoRoot });
+    };
+    const emit = (pending) => {
+      const out = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, ...(pending ? ["--pending"] : [])], { cwd: repoRoot });
+      assert.equal(out.status, 0, out.stderr || out.stdout);
+      return JSON.parse(out.stdout);
+    };
+    await build("Original");
+    const full = emit(false);
+    assert.equal(full.units.length, 2, "5 + 1 split");
+    const findingsDir = buildGateReviewsDir({ ...id, tmpRoot: path.join(repoRoot, "tmp") });
+    await mkdir(findingsDir, { recursive: true });
+    for (const angle of angles) await writeFile(path.join(findingsDir, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: HEAD_SHA, findings: [] }), "utf8");
+    await build("Edited");
+    const pending = emit(true);
+    assert.deepEqual(pending.units.map((unit) => unit.angles), [["pr-description"]]);
+    const plan = JSON.parse(await readFile(buildGateEmitPlanPath({ ...id, tmpRoot: path.join(repoRoot, "tmp") }), "utf8"));
+    assert.deepEqual(plan.units.map((unit) => unit.scope), full.units.map((unit) => unit.scope), "the split siblings keep their order");
+    assert.deepEqual(plan.units.map((unit) => unit.resumed === true), [true, false]);
+  });
+});

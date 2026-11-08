@@ -1459,7 +1459,7 @@ async function main() {
           ? [`stale runner: ${error.staleRunner.staleRunner?.runId} claimed ${error.staleRunner.staleRunner?.claimedAgeMs}ms ago, last updated ${error.staleRunner.staleRunner?.updatedAgeMs}ms ago (max age ${error.staleRunner.staleRunner?.maxAgeMs}ms)`]
           : error.staleRunner.status === "exit_signal_recorded"
           ? [`exit signal recorded for run ${error.staleRunner.activeRun?.runId}: refuse to merge`]
-          : [],
+          : [`runner claim check failed (${error.staleRunner.status}): ${error.staleRunner.message}; release or clear the runner claim`],
       };
       process.stderr.write(`${JSON.stringify({
         ok: false,

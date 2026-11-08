@@ -59,7 +59,7 @@ Each emitted prompt is a bounded reviewer work order (reference seeding): the
 invariant prefix with its \`## Required reads\` manifest, the volatile tail, and
 a per-unit angle-suffix that carries each angle's persona and prompt, resolved
 here via resolveReviewerRole against the merged .devloops and shipped defaults.
-Bulk evidence (PR/issue bodies, diff, validation) stays in the referenced files;
+Bulk evidence (linked-issue bodies, diff, validation) stays in the referenced files, and the PR body is a separate pr-body read;
 the reviewer reads them in full itself.
 
 Run write-gate-context.mjs FIRST (it writes the briefing prefix, evidence file,
@@ -842,11 +842,15 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // provenance: they stay in the persisted plan, marked resumed, but never in the dispatch list printed above.
   const completedAngles = new Set(artifact.fanout?.preflight?.completedAngles ?? []);
   const emittedAngles = new Set(emitted.flatMap((unit) => unit.angles));
-  const resumedUnits = (Array.isArray(priorPlan?.units) ? priorPlan.units : [])
-    .filter((unit) => priorPlan.gate === gate && priorPlan.headSha === headSha && Array.isArray(unit.angles) && unit.angles.length > 0
-      && unit.angles.every((angle) => completedAngles.has(angle) && !emittedAngles.has(angle)))
-    .map((unit) => ({ ...unit, resumed: true }));
-  const persistedPayload = resumedUnits.length > 0 ? { ...payload, units: [...emitted, ...resumedUnits], count: emitted.length + resumedUnits.length } : payload;
+  const priorUnits = priorPlan?.gate === gate && priorPlan.headSha === headSha && Array.isArray(priorPlan.units) ? priorPlan.units : [];
+  const isResumed = (unit) => Array.isArray(unit.angles) && unit.angles.length > 0
+    && unit.angles.every((angle) => completedAngles.has(angle) && !emittedAngles.has(angle));
+  // The prior unit order stays: the findings-log sibling check needs split-group parts adjacent and in order.
+  const emittedByScope = new Map(emitted.map((unit) => [unit.scope, unit]));
+  const mergedUnits = priorUnits.flatMap((unit) => (isResumed(unit) ? [{ ...unit, resumed: true }] : emittedByScope.has(unit.scope) ? [emittedByScope.get(unit.scope)] : []));
+  const placed = new Set(mergedUnits.map((unit) => unit.scope));
+  const persistedUnits = [...mergedUnits, ...emitted.filter((unit) => !placed.has(unit.scope))];
+  const persistedPayload = persistedUnits.length > emitted.length ? { ...payload, units: persistedUnits, count: persistedUnits.length } : payload;
   try {
     await mkdir(path.dirname(planPath), { recursive: true });
     await persistPlan(planPath, `${JSON.stringify(persistedPayload, null, 2)}\n`, "utf8");

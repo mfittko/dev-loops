@@ -6,6 +6,8 @@ Accepted, 2026-11-08 ([issue 3080](https://github.com/mfittko/dev-loops/issues/3
 
 Amends the retirement requirement of `GATE-EXEC-ROUND-RETIREMENT`. Every other decision of the gate round contract stays in force.
 
+Amends [0228](0228-slice-pr-keeps-closing-ref.md) on one point: the judge work order reads the PR body from the pinned `pr-body` read, no longer from the gate-context evidence file. The rest of 0228 stands. Record 0228 stays unedited.
+
 ## Context
 
 The shared evidence file rendered the PR body, and the briefing prefix listed that file's sha256. A PR-body-only edit after a gate round therefore changed the prefix bytes. The rebuild guard refused different prefix bytes while a live reviewer sentinel existed, and its only remedy was `retire-gate-round`, which discards every reviewer's work. PR 3075 retired two rounds for body edits. The same edit also made a same-head rerun unsafe without ledger retention, which slice 1 of issue 3080 added.
