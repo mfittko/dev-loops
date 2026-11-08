@@ -460,7 +460,8 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       try {
         await writeFile(priorPlanSidecar, priorText, "utf8");
       } catch (err) {
-        // The rm below destroys the only readable copy, so refuse while no backup exists.
+        // The rm below destroys the only readable copy, so refuse while no backup exists. This refusal precedes the rm,
+        // so the previous keyed plan survives this failed run: the one exception to the start-of-flow removal above.
         process.stderr.write(`${formatCliError(err)}\n`);
         return 2;
       }

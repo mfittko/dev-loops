@@ -614,8 +614,9 @@ export { buildGateReviewsDir };
 
 // The body-only rerun set (GATE-EXEC-BODY-ONLY-RERUN): the always-surface angles plus the verifiedItems angles, whose
 // labels are copied from the PR body checklists. Local to this path: angleReviewSurface keeps serving carry-forward.
-// contradiction-lens also checks PR-body statements against the diff and contracts (its shipped prompt).
-const BODY_READING_ANGLES = new Set([...VERIFIED_ITEMS_ANGLES, "contradiction-lens"]);
+// The body-reading set is every angle whose shipped prompt reads the PR body: contradiction-lens checks body statements against
+// the diff and contracts, scope compares the body to the diff, and correctness checks the body claims.
+const BODY_READING_ANGLES = new Set([...VERIFIED_ITEMS_ANGLES, "contradiction-lens", "scope", "correctness"]);
 export function readsPrBody(angle) {
   return angleReviewSurface(angle).kind === "always" || BODY_READING_ANGLES.has(baseAngleName(String(angle).trim()));
 }
@@ -642,8 +643,9 @@ export function readsPrBody(angle) {
  *
  * When `prBodySha256` is given and differs from the pr-body read of the
  * previous context at this head (GATE-EXEC-BODY-ONLY-RERUN), the angles with
- * surface "always" and the verifiedItems angles are not complete: they read
- * the PR body, so they re-run (see readsPrBody).
+ * surface "always", the verifiedItems angles, contradiction-lens, scope and
+ * correctness are not complete: they read the PR body, so they re-run (see
+ * readsPrBody).
  *
  * @returns {Promise<string[]>} angle names with a clean artifact at this head
  */
@@ -3413,7 +3415,9 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       // A unit whose clean artifact is stamped for this head is absent from pendingGroups, yet a re-dispatch may be in flight
       // (live sentinel newer than the artifact). Refuse on it too.
       const pendingScopes = new Set(options.fanoutDispatch.pendingGroups.map((unit) => dispatchUnitScope(options.gate, unit)));
-      for (const unit of options.fanoutDispatch.groups ?? []) {
+      // Iterate the cap-split dispatch units: an oversized group runs as <name>-partN sub-units with their own sentinels.
+      const configuredGroupNames = new Set((options.config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
+      for (const unit of expandDispatchUnits(options.fanoutDispatch.groups ?? [], configuredGroupNames)) {
         const scope = dispatchUnitScope(options.gate, unit);
         if (pendingScopes.has(scope) || !Array.isArray(unit?.angles)) continue;
         const sentinel = liveSentinels.find((name) => name.startsWith(`${CHECKPOINT_SENTINEL_PREFIX}${scope}-`) && /^[0-9a-f]{40,64}$/.test(name.slice(CHECKPOINT_SENTINEL_PREFIX.length + scope.length + 1, -".json".length)));

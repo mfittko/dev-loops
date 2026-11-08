@@ -2227,10 +2227,10 @@ test("operator focus: an empty --operator-focus-file is a usage error (exit 2)",
 test("a PR-body-only edit re-runs only the body-reading unit and the round-1 ledger is kept as a retained round", async () => {
   await withTmpDir(async (repoRoot) => {
     const gate = "draft_gate";
-    const angles = ["scope", "correctness", "holistic", "pr-description"];
+    const angles = ["scope", "determinism", "holistic", "pr-description"];
     await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: { fanout: { groups: [
       { name: "process", angles: ["scope", "pr-description"] },
-      { name: "correctness-input", angles: ["correctness", "holistic"] },
+      { name: "design-input", angles: ["determinism", "holistic"] },
     ] } } }), "utf8");
     const { config, errors } = await loadDevLoopConfig({ repoRoot });
     assert.deepEqual(errors, []);
@@ -2404,5 +2404,45 @@ test("every successful emission, pending or not, refreshes the .prior sidecar wi
     assert.notEqual(refused.status, 0);
     assert.equal(existsSync(planPath), false);
     assert.equal(await readFile(`${planPath}.prior`, "utf8"), latest);
+  });
+});
+
+async function seedPendingEmitRound(repoRoot) {
+  const gate = "draft_gate";
+  const angles = ["srp", "soc", "pr-description"];
+  await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: { fanout: { groups: [{ name: "design-solid", angles }], maxAnglesPerGroup: 6 } } }), "utf8");
+  const { config } = await loadDevLoopConfig({ repoRoot });
+  const id = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA };
+  const planPath = buildGateEmitPlanPath({ ...id, tmpRoot: path.join(repoRoot, "tmp") });
+  const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles), "--pr-body", "Body"]);
+  await writeGateContext({ ...options, config, fanoutDispatch: resolveFanoutDispatch(config, "draft", angles, { maxAnglesPerGroup: 6 }) }, { repoRoot });
+  const emitArgs = ["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA];
+  const full = runEmitCli(emitArgs, { cwd: repoRoot });
+  assert.equal(full.status, 0, full.stderr || full.stdout);
+  return { planPath, emitArgs, gate };
+}
+
+test("a --pending emit refuses with exit 2 and keeps the prior keyed plan when the .prior sidecar cannot be written", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const { planPath, emitArgs } = await seedPendingEmitRound(repoRoot);
+    const before = await readFile(planPath, "utf8");
+    // A directory at the sidecar path makes the backup write fail; the refusal precedes the removal of the keyed plan.
+    await rm(`${planPath}.prior`, { force: true });
+    await mkdir(`${planPath}.prior`);
+    const refused = runEmitCli([...emitArgs, "--pending"], { cwd: repoRoot });
+    assert.equal(refused.status, 2, refused.stderr || refused.stdout);
+    assert.equal(await readFile(planPath, "utf8"), before, "the keyed plan survives the refused run");
+  });
+});
+
+test("a --pending emit tolerates a prior plan whose units hold non-objects and marks no unit resumed", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const { planPath, emitArgs, gate } = await seedPendingEmitRound(repoRoot);
+    await writeFile(planPath, JSON.stringify({ gate, headSha: HEAD_SHA, units: [null, 7, "x"] }), "utf8");
+    await rm(`${planPath}.prior`, { force: true });
+    const out = runEmitCli([...emitArgs, "--pending"], { cwd: repoRoot });
+    assert.equal(out.status, 0, out.stderr || out.stdout);
+    const plan = JSON.parse(await readFile(planPath, "utf8"));
+    assert.ok(plan.units.length > 0 && plan.units.every((unit) => unit !== null && typeof unit === "object" && unit.resumed !== true));
   });
 });
