@@ -3828,6 +3828,9 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
   const acProvided = options.acceptanceCriteria != null;
   const needsIssue = !acProvided;
   if (!needsBody && !needsIssue) {
+    // No gh call here: the supplied body's Closes/Fixes/Resolves keyword decides hasClosingIssue, so the
+    // body-only rebuild's PR-body-spec refusal never fails open on an unresolved closing issue.
+    options.hasClosingIssue = resolveLinkedIssuesFromPr({ body: options.prBody }).length > 0;
     options.acceptanceCriteriaSource = "provided";
     return options;
   }

@@ -321,7 +321,7 @@ test("work order: the worst case (maximal worktree path, every read kind, maxima
   const volatileBytes = Buffer.byteLength(renderBriefingVolatile({
     gate: GATE, headSha: HEAD_SHA, loggedAt: new Date().toISOString(), validationPosture: "中".repeat(VALIDATION_POSTURE_MAX_LENGTH),
     priorDispositionsRead: { ...read("prior-dispositions", ".prior-dispositions.json", true), entries: 99999999 },
-    knownFindingsRead: { ...read("known-findings", ".known-findings.json", true), entries: 99999999 }, worktreeRoot,
+    knownFindingsRead: { ...read("known-findings", `.known-findings-${"a".repeat(12)}.json`, true), entries: 99999999 }, worktreeRoot,
   }));
   const defaults = parseYaml(await readFile(path.resolve("packages/core/src/config/extension-defaults.yaml"), "utf8"));
   const longest = shippedPrompts(defaults).slice(0, 3);

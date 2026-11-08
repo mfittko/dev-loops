@@ -4564,6 +4564,10 @@ test("resolvePrSpecContext: all three spec flags provided short-circuits before 
   assert.equal(options.issueBody, "flag issue");
   assert.equal(options.acceptanceCriteria, "docs/plan.md");
   assert.equal(options.acceptanceCriteriaSource, "provided");
+  assert.equal(options.hasClosingIssue, false);
+  const closing = { repo: "owner/repo", pr: 7, prBody: "Closes #5", acceptanceCriteria: "docs/plan.md" };
+  await resolvePrSpecContext(closing, { run });
+  assert.equal(closing.hasClosingIssue, true);
 });
 
 test("main: whitespace-only spec flags resolve as if omitted — live body fetched, issue resolved, prefix rendered, never 'provided' (#1540)", async () => {
