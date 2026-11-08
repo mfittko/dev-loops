@@ -38,6 +38,7 @@ import {
   PR_BODY_ABSENT_SENTINEL,
   rationaleFromResolver,
   readClosedPriorRoundLogs,
+  dropBodyReadingCarriedAngles,
   readCompletedAnglesForHead,
   readsPrBody,
   resolveFanoutDispatch,
@@ -9829,6 +9830,21 @@ test("a body edit drops the verifiedItems angles acceptance-criteria and pr-chec
     assert.ok(!changed.includes("acceptance-criteria") && !changed.includes("pr-checklist"), changed.join(","));
     const same = await readCompletedAnglesForHead({ ...id, prBodySha256: prior }, { repoRoot });
     assert.ok(same.includes("acceptance-criteria") && same.includes("pr-checklist"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a same-head body edit drops the body-reading carried angles and keeps the others; no prior digest keeps all", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-carried-"));
+  try {
+    const id = { repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: BODY_RERUN_SHA };
+    const carried = ["correctness", "scope", "security-lens"];
+    assert.deepEqual(await dropBodyReadingCarriedAngles(carried, { ...id, prBodySha256: "f".repeat(64) }, { repoRoot }), carried);
+    const first = await buildGateContext(bodyRerunInput("Original"), { repoRoot });
+    const prior = first.artifact.requiredReads.find((r) => r.kind === "pr-body").sha256;
+    assert.deepEqual(await dropBodyReadingCarriedAngles(carried, { ...id, prBodySha256: "f".repeat(64) }, { repoRoot }), ["security-lens"]);
+    assert.deepEqual(await dropBodyReadingCarriedAngles(carried, { ...id, prBodySha256: prior }, { repoRoot }), carried);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

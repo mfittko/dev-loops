@@ -680,6 +680,20 @@ export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpR
 }
 
 /**
+ * A same-head body edit also invalidates carried body-reading angles
+ * (GATE-EXEC-BODY-ONLY-RERUN): a carried angle was proven on an earlier head's
+ * body, so once a previous context at this head records a different pr-body
+ * digest, the carried angles that read the body are dropped and re-run. No prior
+ * digest (first context at this head) keeps the carry-forward unchanged.
+ */
+export async function dropBodyReadingCarriedAngles(carriedAngles, { repo, pr, gate, headSha, tmpRoot = "tmp", prBodySha256: bodySha256 = null }, { repoRoot = process.cwd() } = {}) {
+  if (!Array.isArray(carriedAngles) || carriedAngles.length === 0 || typeof bodySha256 !== "string") return carriedAngles;
+  const prior = await readPriorPrBodySha256({ repo, pr, gate, headSha, tmpRoot }, { repoRoot });
+  if (prior === null || prior === bodySha256) return carriedAngles;
+  return carriedAngles.filter((angle) => !readsPrBody(angle));
+}
+
+/**
  * The sha256 of the `pr-body` read recorded by the previous context at this
  * head, or null when there is no previous context or it records no such read.
  */
@@ -3682,7 +3696,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // already stamped at this head are excluded from `preflight.requiredReviewers`
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
   const completedAngles = input.completedAngles ?? await readCompletedAnglesForHead({ repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, ...(input.prefixFile ? {} : { prBodySha256: prBodySha256(input.prBody) }) }, { repoRoot });
-  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: input.carriedAngles ?? null, singleWave: !isReviewGate });
+  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: await dropBodyReadingCarriedAngles(input.carriedAngles ?? null, { repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, ...(input.prefixFile ? {} : { prBodySha256: prBodySha256(input.prBody) }) }, { repoRoot }), singleWave: !isReviewGate });
 
   const writeResult = await writeGateContext(
     {
@@ -4299,6 +4313,7 @@ export async function main(
       // AC3: same-head skip-completed resume (angles with a clean artifact
       // at this head are excluded from the required count + pending plan).
       const completedAngles = await readCompletedAnglesForHead({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", ...(options.prefixFile ? {} : { prBodySha256: prBodySha256(options.prBody) }) }, { repoRoot });
+      options.carriedAngles = await dropBodyReadingCarriedAngles(options.carriedAngles, { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", ...(options.prefixFile ? {} : { prBodySha256: prBodySha256(options.prBody) }) }, { repoRoot });
       options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles, singleWave: options.gate !== "review" });
     }
     const result = await writeGateContext(options, { repoRoot });
