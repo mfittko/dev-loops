@@ -10096,13 +10096,17 @@ test("resolveCapRound at the current head returns the retained round at H, never
 });
 
 test("isInRoundRewrite: a stamped ledger is a rewrite only against an incoming write of the same round or judge execution (issue 3080 AC8)", () => {
-  const unjudged = { findings: [{ severity: "low" }], roundIdentity: { roundId: "r1-aa", judgeExecution: null } };
-  assert.equal(isInRoundRewrite(unjudged), true, "a reader keeps the earlier shape for an unjudged stamped ledger with no judge execution");
-  assert.equal(isInRoundRewrite(unjudged, { roundId: "r1-aa", judgeExecution: "j1-bb" }), true, "an intermediate write of one round");
-  assert.equal(isInRoundRewrite(unjudged, { roundId: "r2-cc", judgeExecution: null }), false, "another round: two completed standalone rounds retain the first");
-  assert.equal(isInRoundRewrite(unjudged, { roundId: null, judgeExecution: null }), true, "a no-plan write keeps the earlier shape");
-  assert.equal(isInRoundRewrite({ findings: [{ severity: "low" }], roundIdentity: { roundId: "r1-aa", judgeExecution: "j1-bb" } }), false, "a stamped ledger with a judge execution is a finished round for a reader");
-  assert.equal(isInRoundRewrite({ findings: [], roundIdentity: { roundId: "r1-aa", judgeExecution: null } }), false, "a clean stamped ledger is a finished round");
+  const completed = { findings: [{ severity: "low" }], roundIdentity: { roundId: "r1-aa", judgeExecution: null, completed: true } };
+  assert.equal(isInRoundRewrite(completed), false, "a reader counts a completed stamped ledger");
+  assert.equal(isInRoundRewrite(completed, { roundId: "r1-aa", judgeExecution: "j1-bb" }), true, "a repeated write of one round");
+  assert.equal(isInRoundRewrite(completed, { roundId: "r2-cc", judgeExecution: null }), false, "another round: two completed standalone rounds retain the first");
+  assert.equal(isInRoundRewrite(completed, { roundId: null, judgeExecution: null }), false, "a no-plan write retains a completed round");
+  const aborted = { findings: [{ severity: "low" }], roundIdentity: { roundId: "r1-aa", judgeExecution: null, completed: false } };
+  for (const incoming of [undefined, { roundId: "r2-cc", judgeExecution: null }, { roundId: "r1-aa", judgeExecution: null }]) {
+    assert.equal(isInRoundRewrite(aborted, incoming), true, "an aborted or intermediate unjudged round is replaced, never retained or counted");
+  }
+  assert.equal(isInRoundRewrite({ findings: [{ severity: "low" }], roundIdentity: { roundId: "r1-aa", judgeExecution: "j1-bb", completed: true } }), false, "a stamped ledger with a judge execution is a finished round for a reader");
+  assert.equal(isInRoundRewrite({ findings: [], roundIdentity: { roundId: "r1-aa", judgeExecution: null, completed: true } }), false, "a clean stamped ledger is a finished round");
   assert.equal(isInRoundRewrite({ findings: [{ severity: "low" }] }), true, "an unstamped ledger keeps the earlier shape");
 });
 
@@ -10186,10 +10190,14 @@ test("readsPrBody derives from the angle config and fails closed for an unknown 
 
 test("readsPrBody recognises every PR-body phrasing in an angle prompt (issue 3080)", () => {
   const reads = (prompt) => readsPrBody("docs", { gates: { draft: { angles: [{ name: "docs", prompt }] } } });
-  for (const prompt of ["Check the PR body.", "Check the PR-body.", "Check PR descriptions.", "Check the PR bodies.", "Read the pull request description.", "Read the PR's body.", "Read the PR’s body.", "Check the PR  body.", "Read the pull-request text."]) {
+  for (const prompt of ["Check the PR body.", "Check the PR-body.", "Check PR descriptions.", "Check the PR bodies.", "Read the pull request description.", "Read the PR's body.", "Read the PR’s body.", "Check the PR  body."]) {
     assert.equal(reads(prompt), true, prompt);
   }
-  for (const prompt of ["Check the prior body.", "Check the PRs.", "Docs only."]) assert.equal(reads(prompt), false, prompt);
+  for (const prompt of ["Check the prior body.", "Check the PRs.", "Docs only.", "Read the PR text."]) assert.equal(reads(prompt), false, prompt);
+  // The gate being built decides: preApproval's entry reads the body, draft's does not.
+  const split = { gates: { draft: { angles: [{ name: "docs", prompt: "Docs." }] }, preApproval: { angles: [{ name: "docs", prompt: "Check the PR body." }] } } };
+  assert.equal(readsPrBody("docs", split, "pre_approval_gate"), true);
+  assert.equal(readsPrBody("docs", split, "draft_gate"), false);
 });
 
 test("a body-only rebuild accepts an artifact whose angle differs only by case or whitespace (issue 3080)", async () => {

@@ -1236,9 +1236,10 @@ function normalizeAngleEntries(raw) {
  * @param {string} name
  * @returns {{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string}|null}
  */
-export function findAngleEntry(config, name) {
+export function findAngleEntry(config, name, firstGate) {
   let disabled = null;
-  for (const gate of ["draft", "preApproval", "spike"]) {
+  // `firstGate` (a config gate key) is searched before the fixed order, so a caller building one gate reads that gate's own entry.
+  for (const gate of [...new Set([firstGate, "draft", "preApproval", "spike"])].filter(Boolean)) {
     const entries = normalizeAngleEntries(config?.gates?.[gate]?.angles);
     for (const e of entries) {
       if (e.name !== name) continue;

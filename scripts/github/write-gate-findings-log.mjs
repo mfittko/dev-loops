@@ -1072,7 +1072,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     // Defaults to inline_single_agent (DEFAULT_EXECUTION_MODE) exactly like the
     // write-time provenance guard above, so the two can never disagree.
     executionMode,
-    roundIdentity,
+    // `completed`: a judged round, a clean round and the standalone review (one write per round) are finished; any other unjudged write is intermediate or aborted.
+    roundIdentity: { ...roundIdentity, completed: options.gate === "review" || findings.length === 0 || findings.some((f) => f?.judgeDisposition !== undefined) },
     findings,
   };
   // `overallVerdict` is optional and additive (absent on a bare-array input);

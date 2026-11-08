@@ -24,7 +24,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
@@ -253,7 +253,7 @@ Optional:
   Base freshness (every run, with or without --base): the PR's base branch (baseRefName) is fetched from origin (bounded, no prompt) and the PR head must contain it. A stale head refuses with base_stale_integrate_first, a failed fetch with base_fetch_failed, a --head-sha that is not a local commit with base_head_unresolved; each writes no artifact for draft_gate and pre_approval_gate. An unreadable PR base (base_unresolved) refuses on every gate, review included. The review gate records the non-current status in baseFreshness and continues. The artifact records baseFreshness {status, base} on every path.
   --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing evidence file. OPTIONAL: when omitted, every of the PR's closing issue references is resolved, comma-joined and cross-repo-qualified (e.g. #1496, #1511 or owner/other#12) — an umbrella PR resolves all of them. The linked issues' bodies are fetched only when --issue-body is also omitted (see below). An unreadable PR or linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering absence. A whitespace-only value is treated as absent (resolves exactly as if the flag were omitted, never recorded as caller-provided).
   --validation-posture <text>    Short description of the validation posture. Refused (fails closed, never truncated) past 500 chars; keep details in --validation-results.
-  --pr-body <text>               PR description text, written to the round-bound pr-body read. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content). A changed body digest at the same head re-runs every dispatch unit that holds a body-reading angle (an angle whose configured prompt names the PR body or PR description, that declares \`readsPrBody\`, or that has no config entry) and retires every finished pending unit with a live sentinel (GATE-EXEC-BODY-ONLY-RERUN), reported in the result field \`bodyOnlyRerun\` ({retired, retirementDir, scopes}). It refuses while a pending unit is in flight, when the PR closes no issue or, on the all-flags path, the body has no Closes, Fixes or Resolves keyword (the body is then treated as the spec of record and the rebuild fails closed) and live sentinels exist, and under an abbreviated --head-sha when retirement needs the full head.
+  --pr-body <text>               PR description text, written to the round-bound pr-body read. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content). A changed body digest at the same head re-runs every dispatch unit that holds a body-reading angle (an angle whose configured prompt names the PR body or PR description, that declares \`readsPrBody\`, whose surface is always, that is a verifiedItems angle (acceptance-criteria, pr-checklist), or that has no config entry) and retires every finished pending unit with a live sentinel (GATE-EXEC-BODY-ONLY-RERUN), reported in the result field \`bodyOnlyRerun\` ({retired, retirementDir, scopes}). It refuses while a pending unit is in flight, when the PR closes no issue or, on the all-flags path, the body has no Closes, Fixes or Resolves keyword (the body is then treated as the spec of record and the rebuild fails closed) and live sentinels exist, and under an abbreviated --head-sha when retirement needs the full head.
   --issue-body <text>            Linked-issue body text, inlined into the briefing evidence file under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from every of the PR's closing issue references (an umbrella PR closes several), but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the evidence file should still carry issue text. An unreadable linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering the section as absent; the bodies are omitted from the evidence file entirely when the PR closes no issue. A whitespace-only value is treated as absent (resolved/fetched exactly as if the flag were omitted).
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and skips the label read too; the only GitHub read left in this mode is the PR base branch for the base freshness check (which also runs the base freshness git fetch origin and records baseFreshness; see Base freshness). Omit for the default self-rendered prefix (prefixMode inline|pointer).
   --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-RESOLUTION) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing evidence file, bound by sha256 as an optional read (read field by field with jq; the sentinel still verifies its hash) (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
@@ -616,11 +616,11 @@ export { buildGateReviewsDir };
 // prompt names the PR body or PR description, when its entry declares `readsPrBody: true`, when its surface is `always`, or when it is a
 // verifiedItems angle (labels copied from the PR body checklists). An angle with no config entry fails closed to body-reading.
 // Local to this path: angleReviewSurface keeps serving carry-forward.
-const PR_BODY_PROMPT = /\b(?:PR|pull[ -]?request)(?:['’]s)?[\s-]+(?:body|bodies|description|descriptions|text)\b/i;
-export function readsPrBody(angle, config) {
+const PR_BODY_PROMPT = /\b(?:PR|pull[ -]?request)(?:['’]s)?[\s-]+(?:body|bodies|description|descriptions)\b/i;
+export function readsPrBody(angle, config, gate) {
   const name = baseAngleName(String(angle).trim());
   if (angleReviewSurface(angle).kind === "always" || VERIFIED_ITEMS_ANGLES.has(name)) return true;
-  const entry = findAngleEntry(config, name);
+  const entry = findAngleEntry(config, name, gate === "draft_gate" ? "draft" : gate === "pre_approval_gate" ? "preApproval" : undefined);
   return !entry || entry.readsPrBody === true || PR_BODY_PROMPT.test(entry.prompt ?? "");
 }
 
@@ -675,7 +675,7 @@ export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpR
     }
     if (parsed && parsed.verdict === "clean" && String(parsed.headSha ?? "").trim().toLowerCase() === want) {
       if (typeof parsed.angle !== "string" || parsed.angle.length === 0) continue;
-      if (bodyChanged && readsPrBody(parsed.angle, config)) continue;
+      if (bodyChanged && readsPrBody(parsed.angle, config, gate)) continue;
       completed.push(parsed.angle);
     }
   }
@@ -694,7 +694,7 @@ export async function dropBodyReadingCarriedAngles(carriedAngles, { repo, pr, ga
   if (!Array.isArray(carriedAngles) || carriedAngles.length === 0 || typeof bodySha256 !== "string") return carriedAngles;
   const baseline = await readPrBodyBaselineSha256({ repo, pr, gate, headSha, tmpRoot }, { repoRoot });
   if (baseline === bodySha256) return carriedAngles;
-  return carriedAngles.filter((angle) => !readsPrBody(angle, config));
+  return carriedAngles.filter((angle) => !readsPrBody(angle, config, gate));
 }
 
 /**
@@ -1938,8 +1938,9 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
  */
 export function isInRoundRewrite(log, incoming) {
   const stamp = log?.roundIdentity;
-  const noIncomingIdentity = incoming?.roundId == null && incoming?.judgeExecution == null;
-  if (stamp === undefined || (noIncomingIdentity && stamp?.judgeExecution == null)) return Array.isArray(log?.findings) && log.findings.length > 0 && !log.findings.some((f) => f?.judgeDisposition !== undefined);
+  if (stamp === undefined) return Array.isArray(log?.findings) && log.findings.length > 0 && !log.findings.some((f) => f?.judgeDisposition !== undefined);
+  // An unfinished stamp (an intermediate or aborted unjudged write) is always replaced; the writer stamps `completed` on a finished round.
+  if (stamp?.completed !== true) return true;
   const same = (a, b) => typeof a === "string" && a === b;
   return incoming !== undefined && (same(stamp?.roundId, incoming.roundId) || same(stamp?.judgeExecution, incoming.judgeExecution));
 }
@@ -3466,7 +3467,8 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           if ((await stat(file)).mtimeMs < (await stat(path.resolve(repoRoot, "tmp", sentinel))).mtimeMs) return false;
           const parsed = JSON.parse(await readFile(file, "utf8"));
           const head = String(parsed?.headSha ?? "").trim().toLowerCase();
-          return Array.isArray(parsed?.findings) && head.length > 0 && (head.startsWith(wantHead) || wantHead.startsWith(head)) && baseAngleName(String(parsed.angle).trim().toLowerCase()) === baseAngleName(String(angle).trim().toLowerCase());
+          const bothFull = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(head) && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(wantHead);
+          return Array.isArray(parsed?.findings) && head.length > 0 && (bothFull ? head === wantHead : head.startsWith(wantHead) || wantHead.startsWith(head)) && baseAngleName(String(parsed.angle).trim().toLowerCase()) === baseAngleName(String(angle).trim().toLowerCase());
         } catch {
           return false;
         }
@@ -3495,7 +3497,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         const sentinel = sentinelOf(scope);
         // A pending unit that holds no body-reading angle but finished with a live sentinel (a findings_present
         // artifact) is re-emitted too, so its sentinel must retire or the reviewer's fresh-context guard refuses it.
-        if (!sentinel && !angles.some((angle) => readsPrBody(angle, options.config))) continue;
+        if (!sentinel && !angles.some((angle) => readsPrBody(angle, options.config, options.gate))) continue;
         if (sentinel) {
           // Any unfinished unit refuses: a non-body unit left live would be re-dispatched by the next --pending emission under a new execution.
           if (!(await Promise.all(angles.map((angle) => finishedArtifact(angle, sentinel)))).every(Boolean)) refuseInFlight(scope);
@@ -3527,7 +3529,16 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     // First write wins ("wx"); a retry after a failed write finds the earlier baseline and keeps it.
     const baselinePath = path.resolve(repoRoot, buildPrBodyBaselinePath({ ...options, tmpRoot: options.tmpRoot || "tmp" }));
     await mkdir(path.dirname(baselinePath), { recursive: true });
-    await writeFile(baselinePath, `${prBodyBaselineSha256}\n`, { encoding: "utf8", flag: "wx" }).catch((error) => { if (error?.code !== "EEXIST") throw error; });
+    // Atomic: write a private temp file, then link it into place (link fails with EEXIST when a baseline exists), so a reader never sees a partial baseline.
+    const tempPath = `${baselinePath}.${process.pid}.tmp`;
+    await writeFile(tempPath, `${prBodyBaselineSha256}\n`, "utf8");
+    try {
+      await link(tempPath, baselinePath);
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    } finally {
+      await rm(tempPath, { force: true });
+    }
   }
   const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants, capRoundResidue }), ...(requiredReads ? { requiredReads } : {}), ...(prBodyBaselineSha256 ? { prBodyBaselineSha256 } : {}), loggedAt };
   // Keep the marker available only when prefix AND referenced stable files

@@ -364,7 +364,7 @@ test("writeGateFindingsLog retains every existing same-head ledger at a numbered
     assert.equal(rewrite.retainedRound, undefined, "an unjudged live ledger is not retained");
     assert.equal(existsSync(first.path.replace(/\.json$/, ".round-4.json")), false);
     assert.equal(JSON.parse(await readFile(rewrite.path, "utf8")).findings[0].summary, "five");
-    assert.deepEqual(JSON.parse(await readFile(rewrite.path, "utf8")).roundIdentity, { roundId: null, judgeExecution: null });
+    assert.deepEqual(JSON.parse(await readFile(rewrite.path, "utf8")).roundIdentity, { roundId: null, judgeExecution: null, completed: false });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -3403,7 +3403,7 @@ test("writeGateFindingsLog replaces a repeated write of one judged round and nev
       findings: JSON.stringify([{ severity: "medium", angle: "correctness", summary: "null deref" }]), judgeVerdict, tmpRoot: tmpDir,
     });
     const first = await write();
-    assert.deepEqual(JSON.parse(await readFile(first.path, "utf8")).roundIdentity, { roundId: null, judgeExecution: "j1730000000000-deadbeef" });
+    assert.deepEqual(JSON.parse(await readFile(first.path, "utf8")).roundIdentity, { roundId: null, judgeExecution: "j1730000000000-deadbeef", completed: true });
     const second = await write();
     assert.equal(second.retainedRound, undefined, "the same judged round is replaced, not retained");
   } finally {
@@ -3455,5 +3455,31 @@ test("writeGateFindingsLog refuses a judge-execution verdict whose emit plan is 
     await write();
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Issue 3080 AC8: the writer stamps the emit-plan roundId and a completion flag, and retention keys on them.
+test("writeGateFindingsLog replaces a repeated write of one roundId, retains a completed round on a new roundId and replaces an aborted unjudged one (issue 3080 AC8)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-round-id-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const contextDir = path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-44");
+    await mkdir(contextDir, { recursive: true });
+    const plan = (roundId) => writeFile(path.join(contextDir, `draft_gate-${headSha}.emit-plan.json`), JSON.stringify({ ok: true, repo: "owner/repo", pr: 44, gate: "draft_gate", headSha, roundId, count: 2, units: [{ angles: ["pr-description"], group: null }, { angles: ["holistic"], group: null }] }), "utf8");
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.fanin-ledger.json`), JSON.stringify({ overallVerdict: "findings_present", findings: [], provenance: { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "review-a" }, { angle: "holistic", reviewer: "review-b" }] } }), "utf8");
+    const write = (roundId, judged) => plan(roundId).then(() => writeGateFindingsLog({
+      repo: "owner/repo", pr: 44, gate: "draft_gate", headSha,
+      findings: JSON.stringify([{ severity: "low", angle: "scope", summary: `s ${roundId}`, ...(judged ? { judgeDisposition: "reject" } : {}) }]),
+    }, { repoRoot }));
+    const first = await write("r1-aa", true);
+    assert.equal(first.log.roundIdentity.roundId, "r1-aa");
+    assert.equal(first.log.roundIdentity.completed, true);
+    assert.equal((await write("r1-aa", true)).retainedRound, undefined, "a repeated write of one roundId is replaced");
+    const third = await write("r2-bb", false);
+    assert.ok(third.retainedRound, "a completed round is retained by a write of another roundId");
+    assert.equal(third.log.roundIdentity.completed, false, "an unjudged lifecycle write is not yet completed");
+    assert.equal((await write("r3-cc", false)).retainedRound, undefined, "an aborted unjudged round is replaced, not retained");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
   }
 });
