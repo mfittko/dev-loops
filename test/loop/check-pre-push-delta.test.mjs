@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { test } from "bun:test";
+import { setDefaultTimeout, test } from "bun:test";
 
 import { readSequenceMarker, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
@@ -18,6 +18,8 @@ import { sealDeltaFixture } from "./_seal-fixture.mjs";
 import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { decidePiToolCall } from "../../extension/readonly-role-gate.ts";
+
+setDefaultTimeout(30000); // most cases seed a real git repo and run the CLI; the 5 s default fails under load
 
 const ACT = { ref: "act-1", severity: "low", angle: "correctness", summary: "s", judgeDisposition: "act" };
 const FP = fingerprintFinding(ACT);
@@ -1314,7 +1316,7 @@ test("the reviewer-only run takes over a prior non-clearing record with another 
       assert.deepEqual({ o: record.outcome, i: record.invocation, same: record.actSetId !== "fixer-act-set" }, { o: "locally_clear", i: 2, same: true });
     } finally { cleanup(repo); }
   }
-}, 30000); // two cases, each seeds a repo and runs three reviewer-only invocations; over 5 s under load
+});
 
 test("the reviewer-only run keeps a locally_clear record, an extension, another ref set and a foreign candidate protected, and an unsealed one names its remedy", async () => {
   const cases = [
