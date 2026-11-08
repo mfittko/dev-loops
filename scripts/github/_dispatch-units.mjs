@@ -4,6 +4,7 @@
 // emitter imports both writers, so the writers cannot import the emitter.
 import { createHash } from "node:crypto";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { gateScopePrefix } from "./_gate-names.mjs";
 
 /**
  * Collapse any run of non-alphanumeric characters to a single hyphen and trim
@@ -205,4 +206,28 @@ export function packDispatchUnits(baseUnits, maxUnits) {
     const name = packedUnitName(sorted.map((member) => member.name));
     return { name, angles: sorted.flatMap((member) => member.angles) };
   });
+}
+
+/**
+ * Derive the reviewer-sentinel/prompt-layout scope for a resolved dispatch unit.
+ * An ordinary singleton unit dispatches under its angle name
+ * (`<gatePrefix><angle>`). A packed bin (even a one-angle bin) and every
+ * multi-angle unit dispatch under `<gatePrefix>group-<segment>`, where
+ * `<segment>` is unitScopeSegment(unit.name) — the leading `group:` auto-chunk
+ * marker (see resolveFanoutGroups' chunk naming) is stripped BEFORE
+ * sanitizing, whatever the unit's origin: a configured group's name is not
+ * guaranteed marker-free either (e.g. a split sub-unit's base name can itself
+ * be an auto-chunk name carrying the marker), so this never special-cases
+ * "came from config" vs "auto-chunked". The scope keys the sentinel/prompt
+ * layout only; the EXACT unit name is carried separately as the provenance
+ * `group`. Pure.
+ * @param {string} gate normalized gate id
+ * @param {{ name: string, angles: string[] }} unit
+ * @returns {string}
+ */
+export function dispatchUnitScope(gate, unit) {
+  const prefix = gateScopePrefix(gate);
+  const angles = Array.isArray(unit?.angles) ? unit.angles : [];
+  if (angles.length === 1 && !isPackedUnitName(unit?.name)) return `${prefix}${sanitizeScopeSegment(angles[0])}`;
+  return `${prefix}group-${unitScopeSegment(unit?.name)}`;
 }

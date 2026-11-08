@@ -8,20 +8,26 @@ import path from "node:path";
 import { computeContentDigest, computeSpecDigest, specCriterionIds } from "@dev-loops/core/loop/spec-authority";
 import { pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
 import { buildGateContextPath } from "../../scripts/github/_gate-artifact-paths.mjs";
-import { renderBriefingEvidence } from "../../scripts/github/write-gate-context.mjs";
+import { renderBriefingEvidence, renderPrBodyRead } from "../../scripts/github/write-gate-context.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 
 export const JUDGE_SPEC = { acceptanceCriteria: ["Fix the finding"], definitionOfDone: ["Verdicts are valid"], nonGoals: ["No new schema"] };
 
-// The judge emitter reads the PR body from the gate-context evidence read; write it from one body.
-export async function bindEvidenceToPrBody(root, { repo, pr, gate, headSha }, body, issueBody = null) {
-  // The real renderer picks the fence and renders an empty body as the unfenced absent sentinel.
-  const evidence = renderBriefingEvidence({ repo, pr, gate, headSha, prBody: body, issueRef: issueBody ? "#2883" : null, issueBody }).text;
+const readOf = (kind, file, text) => ({ kind, path: file, sha256: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text), required: true });
+
+// The judge emitter reads the PR body from the gate-context pr-body read and compares it with the live body.
+// Writes both reads from one body and points sources.fetchLivePrBody at that same body.
+export async function bindEvidenceToPrBody(root, sources, body, issueBody = null) {
+  const { repo, pr, gate, headSha } = sources;
+  const evidence = renderBriefingEvidence({ repo, pr, gate, headSha, issueRef: issueBody ? "#2883" : null, issueBody }).text;
+  const prBody = renderPrBodyRead(body);
   await mkdir(path.join(root, "judge-fixture"), { recursive: true });
   await writeFile(path.join(root, "judge-fixture", "evidence.md"), evidence);
+  await writeFile(path.join(root, "judge-fixture", "pr-body.md"), prBody);
   const contextPath = path.join(root, buildGateContextPath({ repo, pr, gate, headSha }));
   await mkdir(path.dirname(contextPath), { recursive: true });
-  await writeFile(contextPath, JSON.stringify({ requiredReads: [{ kind: "evidence", path: "judge-fixture/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex"), bytes: Buffer.byteLength(evidence), required: true }] }));
+  await writeFile(contextPath, JSON.stringify({ requiredReads: [readOf("evidence", "judge-fixture/evidence.md", evidence), readOf("pr-body", "judge-fixture/pr-body.md", prBody)] }));
+  sources.fetchLivePrBody = async () => body;
 }
 
 /**
@@ -47,8 +53,9 @@ export async function seedJudgeSources(root, { repo = "o/r", pr = 7, gate = "pre
   await mkdir(path.join(root, "judge-fixture"), { recursive: true });
   await writeFile(path.join(root, identityFile), JSON.stringify({ specDigest: computeSpecDigest(spec), headSha, contentDigest, checkedCriteria: specCriterionIds(spec) }));
   // The default body holds no closing reference, so it arms nothing.
-  await bindEvidenceToPrBody(root, { repo, pr, gate, headSha }, "Declared scope: fix the finding.\n");
-  return { repo, pr, gate, headSha, findingsFile, specFile, identityFile, cwd: root };
+  const sources = { repo, pr, gate, headSha, findingsFile, specFile, identityFile, cwd: root };
+  await bindEvidenceToPrBody(root, sources, "Declared scope: fix the finding.\n");
+  return sources;
 }
 
 /**

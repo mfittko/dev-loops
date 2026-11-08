@@ -406,7 +406,7 @@ Both gates run this same checkpoint review chain, owned end-to-end by [Gate Revi
    `dev-loops-run scripts/github/capture-review-threads.mjs --repo <owner/name> --pr <number>` output
    (the full-bodies read, not `list-review-threads.mjs`'s 200-char listing excerpt, never an
    ad-hoc GraphQL call) to a file and pass it as `--known-findings <path>` to every context
-   build of the round. The builder writes the round-bound `<gate>-<headSha>.known-findings.json`
+   build of the round. The builder writes the digest-keyed round-bound `<gate>-<headSha>.known-findings-<digest12>.json`
    and hash-binds it as a required read in every work order, outside the byte-identical prefix
    `GATE-EXEC-BRIEFING-PREFIX` hashes. The conductor never appends anything to the
    compact `dispatchPrompt`. The block's content, dedupe contract, and prefix-hash non-interference

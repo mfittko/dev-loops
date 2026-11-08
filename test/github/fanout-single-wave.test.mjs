@@ -13,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "bun:test";
 import { expandDispatchUnits, isPackedUnitName, packDispatchUnits } from "../../scripts/github/_dispatch-units.mjs";
-import { dispatchUnitScope } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { dispatchUnitScope } from "../../scripts/github/_dispatch-units.mjs";
 import { DISPATCH_POINTER_MAX_BYTES } from "../../scripts/github/_work-order-protocol.mjs";
 import { buildGateContextPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import {
