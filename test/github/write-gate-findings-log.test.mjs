@@ -3584,6 +3584,21 @@ test("writeGateFindingsLog raises a clean verdict to findings_present for an act
   }
 });
 
+test("writeGateFindingsLog refuses a findings ledger longer than the one the pinned Copilot cluster was emitted over (issue 3080 AC11)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-longer-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const judgeVerdict = path.join(tmpDir, "j1730000000000-deadbeef", "judge-verdict.json");
+    await copilotPinFixture(tmpDir, headSha, { judgeVerdictPath: judgeVerdict, planDir: tmpDir, pr: 49 });
+    await assert.rejects(writeGateFindingsLog({
+      repo: "owner/repo", pr: 49, gate: "pre_approval_gate", headSha, verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "medium", angle: "correctness", summary: "null deref", clusterId: 0 }]), judgeVerdict, tmpRoot: tmpDir,
+    }), /pinned the Copilot cluster at 0.*re-emit the judge work order/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("writeGateFindingsLog refuses a judge verdict outside a judge execution directory while a Copilot pin is active (issue 3080 AC11)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-unbound-"));
   try {

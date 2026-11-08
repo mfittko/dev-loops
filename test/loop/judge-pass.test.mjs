@@ -2453,13 +2453,15 @@ test("withPinnedCopilotBodyCluster refuses a changed pinned file and a plan with
     const bytes = JSON.stringify({ angle: "copilot-body", findings: [{ severity: "medium", summary: "s", recommendation: "r" }] });
     await writeFile(file, bytes);
     const order = { copilotBodyClusterId: 2, requiredReads: [{ kind: "copilot-body-feedback", path: file, sha256: createHash("sha256").update(bytes).digest("hex") }] };
-    assert.equal((await withPinnedCopilotBodyCluster([], order))[0].clusterId, 2);
-    await assert.rejects(withPinnedCopilotBodyCluster([], { ...order, copilotBodyClusterId: undefined }), /re-emit the judge work order/);
+    const two = [{ clusterId: 0 }, { clusterId: 1 }];
+    assert.equal((await withPinnedCopilotBodyCluster(two, order))[2].clusterId, 2);
+    await assert.rejects(withPinnedCopilotBodyCluster([...two, { clusterId: 2 }], order), /pinned the Copilot cluster at 2.*re-emit the judge work order/);
+    await assert.rejects(withPinnedCopilotBodyCluster(two, { ...order, copilotBodyClusterId: undefined }), /re-emit the judge work order/);
     await writeFile(file, bytes.replace("medium", "low"));
-    await assert.rejects(withPinnedCopilotBodyCluster([], order), /changed since the judge work order pinned it/);
+    await assert.rejects(withPinnedCopilotBodyCluster(two, order), /changed since the judge work order pinned it/);
     assert.deepEqual(await withPinnedCopilotBodyCluster([1], { requiredReads: [] }), [1], "no pinned read leaves the findings unchanged");
     await rm(file);
-    await assert.rejects(withPinnedCopilotBodyCluster([], order), /body\.json is gone; re-emit the judge work order/);
+    await assert.rejects(withPinnedCopilotBodyCluster(two, order), /body\.json is gone; re-emit the judge work order/);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

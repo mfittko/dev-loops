@@ -333,6 +333,7 @@ export async function withPinnedCopilotBodyCluster(findings, order) {
   const pinned = order?.requiredReads?.find((read) => read?.kind === "copilot-body-feedback");
   if (!pinned) return findings;
   if (!Number.isInteger(order.copilotBodyClusterId)) throw new Error("GATE-EXEC-COPILOT-BODY-TO-JUDGE: the judge work order pins a copilot-body-feedback read but no copilotBodyClusterId; re-emit the judge work order with emit-judge-work-order.mjs");
+  if (findings.length !== order.copilotBodyClusterId) throw new Error(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: the findings input has ${findings.length} findings but the judge work order pinned the Copilot cluster at ${order.copilotBodyClusterId}; the findings changed since the judge work order was emitted, re-emit the judge work order`);
   const bytes = await readFile(pinned.path).catch((error) => {
     if (error?.code === "ENOENT") throw new Error(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${pinned.path} is gone; re-emit the judge work order`);
     throw error;
