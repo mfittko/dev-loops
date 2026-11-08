@@ -10162,6 +10162,29 @@ test("a body-only rebuild retires a unit whose body-reading angle round 1 carrie
   }
 });
 
+test("a body-only rebuild treats a blocked reviewer artifact as a finished unit (issue 3080 AC12)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-blocked-"));
+  try {
+    const input = (prBody) => {
+      const config = draftConfig({ dynamicAngles: false, angles: ["scope", "srp", "ocp"], mandatoryAngles: [] });
+      config.gates.draft.angles = config.gates.draft.angles.map((entry) => ({ ...(typeof entry === "string" ? { name: entry } : entry), prompt: (entry.name ?? entry) === "scope" ? "The PR description is the contract." : "Review the diff." }));
+      config.gates.fanout = { groups: [{ name: "design", angles: ["scope", "srp", "ocp"] }] };
+      return { config, gate: "draft_gate", diff: null, repo: "owner/repo", pr: 90, headSha: BODY_RERUN_SHA, prBody };
+    };
+    await buildGateContext(input("Original"), { repoRoot });
+    const reviews = path.resolve(repoRoot, buildGateReviewsDir({ repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: BODY_RERUN_SHA }));
+    await mkdir(reviews, { recursive: true });
+    await writeFile(path.join(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-group-design-${BODY_RERUN_SHA}.json`), "{}\n", "utf8");
+    for (const angle of ["scope", "srp"]) await writeFile(path.join(reviews, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: BODY_RERUN_SHA, findings: [] }), "utf8");
+    // emit-reviewer-blocked.mjs writes verdict "blocked" with no findings.
+    await writeFile(path.join(reviews, "ocp.json"), JSON.stringify({ angle: "ocp", verdict: "blocked", headSha: BODY_RERUN_SHA, findings: [], unreviewedAngles: ["ocp"], reason: "budget" }), "utf8");
+    const edited = await buildGateContext(input("Edited"), { repoRoot });
+    assert.deepEqual(edited.bodyOnlyRerun.scopes, ["draft-gate-group-design"], "the finished blocked unit retires instead of refusing as in flight");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("a body-only rebuild derives the in-flight membership after the carry filter (issue 3080 AC13)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-carried-unit-"));
   try {

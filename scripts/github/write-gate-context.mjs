@@ -3482,7 +3482,9 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           const head = String(parsed?.headSha ?? "").trim().toLowerCase();
           // The artifact must stamp a full SHA; only an abbreviated --head-sha may match by prefix.
           const isFullSha = (sha) => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha);
-          return validateAngleResult(parsed) === null && isFullSha(head) && (isFullSha(wantHead) ? head === wantHead : wantHead.length > 0 && head.startsWith(wantHead)) && baseAngleName(String(parsed.angle).trim().toLowerCase()) === baseAngleName(String(angle).trim().toLowerCase());
+          // A reviewer that exited through emit-reviewer-blocked.mjs writes verdict "blocked" with no findings; it is a finished unit.
+          const wellFormed = validateAngleResult(parsed?.verdict === "blocked" && Array.isArray(parsed.findings) && parsed.findings.length === 0 ? { ...parsed, verdict: "clean" } : parsed) === null;
+          return wellFormed && isFullSha(head) && (isFullSha(wantHead) ? head === wantHead : wantHead.length > 0 && head.startsWith(wantHead)) && baseAngleName(String(parsed.angle).trim().toLowerCase()) === baseAngleName(String(angle).trim().toLowerCase());
         } catch {
           return false;
         }
