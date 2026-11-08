@@ -3596,6 +3596,26 @@ test("writeGateFindingsLog finds the judge plan in the checkout tmp when the led
   }
 });
 
+test("writeGateFindingsLog finds a pinned Copilot plan that sits only under options.contextTmpRoot and fails closed (issue 3080)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-ctxroot-"));
+  const checkout = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-ctxroot-checkout-"));
+  const contextRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-ctxroot-other-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const judgeVerdict = path.join(tmpDir, "verdict.json");
+    const planDir = path.join(contextRoot, "gate-judge", "owner-repo", "pr-56", `pre_approval_gate-${headSha}`);
+    await copilotPinFixture(tmpDir, headSha, { judgeVerdictPath: judgeVerdict, planDir, pr: 56 });
+    await assert.rejects(
+      writeGateFindingsLog({ repo: "owner/repo", pr: 56, gate: "pre_approval_gate", headSha, verdict: "clean", findings: JSON.stringify({ overallVerdict: "clean", findings: [] }), judgeVerdict, tmpRoot: tmpDir, contextTmpRoot: contextRoot }, { repoRoot: checkout }),
+      /judge execution directory/,
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+    await rm(checkout, { recursive: true, force: true });
+    await rm(contextRoot, { recursive: true, force: true });
+  }
+});
+
 test("writeGateFindingsLog reads every judge plan candidate outside a judge directory and refuses a pin or an unparseable plan in any of them (issue 3080 AC11)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-candidates-"));
   const checkout = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-candidates-checkout-"));

@@ -10227,6 +10227,30 @@ test("a body-only rebuild looks up the sentinel of the dispatched membership and
   }
 });
 
+test("a body-only rebuild refuses when one delta-suffixed angle's artifact is stamped for the sibling delta angle (issue 3080)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-delta-siblings-"));
+  try {
+    const angles = ["scope-delta-at-aaaaaaa", "scope-delta-at-bbbbbbb"];
+    const input = (prBody) => {
+      const config = draftConfig({ dynamicAngles: false, angles, mandatoryAngles: [] });
+      config.gates.draft.angles = config.gates.draft.angles.map((entry) => ({ ...(typeof entry === "string" ? { name: entry } : entry), prompt: "The PR description is the contract." }));
+      config.gates.fanout = { groups: [{ name: "design", angles }] };
+      return { config, gate: "draft_gate", diff: null, repo: "owner/repo", pr: 90, headSha: BODY_RERUN_SHA, prBody };
+    };
+    await buildGateContext(input("Original"), { repoRoot });
+    const sentinel = path.join(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-group-design-${BODY_RERUN_SHA}.json`);
+    await writeFile(sentinel, "{}\n", "utf8");
+    const reviews = path.resolve(repoRoot, buildGateReviewsDir({ repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: BODY_RERUN_SHA }));
+    await mkdir(reviews, { recursive: true });
+    // Both artifacts name the A angle: B's file must not count as finished on A's say-so (both collapse to base "scope").
+    for (const angle of angles) await writeFile(path.join(reviews, `${angle}.json`), JSON.stringify({ angle: angles[0], verdict: "clean", headSha: BODY_RERUN_SHA, findings: [] }), "utf8");
+    await assert.rejects(buildGateContext(input("Edited"), { repoRoot }), /GATE-EXEC-BODY-ONLY-RERUN.*in flight/s);
+    assert.ok(existsSync(sentinel), "the live sentinel stays");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("a body-only rebuild checks the dispatched group membership when the rebuild carries a different set (issue 3080 AC13)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-carried-changed-"));
   try {
