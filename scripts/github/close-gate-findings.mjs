@@ -228,7 +228,7 @@ function extractFindingSummary(body) {
 
 export function buildMeritRationale({ body, judgeReason, judgeRationale }) {
   // Collapse any embedded double quote to a single quote: the summary is
-  // wrapped in literal double quotes below and sanitizeInline does not escape
+  // wrapped in literal double quotes below and escapeProse does not escape
   // `"` (no injection risk — cosmetic only, avoids confusing nested quotes).
   const summary = escapeProse(extractFindingSummary(body)).replace(/"/g, "'");
   // The visible reason is the judge's own words, never a text derived from severity or round.
@@ -693,7 +693,7 @@ const NO_JUDGE_RATIONALE_TEXT = "the judge rejected this finding on its merits; 
 // citing a bare issue/PR reference would otherwise throw inside
 // replyAndMaybeResolve's own guardCommentBodyNoIssuePrIds call, leaving the
 // thread unresolved and re-deadlocking on every rerun (ADR 0088) —
-// neutralizeBareIssuePrIds runs on the raw text, before sanitizeInline, for
+// neutralizeBareIssuePrIds runs on the raw text, before escapeProse, for
 // the same reason formatDeferredFindingEntry orders them that way.
 function rejectCloseMessage({ fp, severity, angle, round, rationale, body }) {
   const rationaleText = escapeProse(neutralizeBareIssuePrIds(rationale ?? NO_JUDGE_RATIONALE_TEXT));

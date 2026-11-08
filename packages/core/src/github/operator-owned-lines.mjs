@@ -59,3 +59,25 @@ export function findOperatorOwnedLineRefusal(body, { standingAuthorization = fal
   }
   return null;
 }
+
+// Gate surfaces (verdict review, finding comments, findings comment, deferred
+// summary, close/reject replies) render reviewer, judge and Copilot free text.
+// Per the operator decision of 2026-11-08 (ADR 0258) those writers wrap every
+// bare operator-owned phrase in a code span instead of refusing the round. The
+// readers strip code spans, so a wrapped phrase asserts nothing, and a wrapped
+// line-start phrase no longer opens its line. The guard stays strict and every
+// non-gate writer keeps refusing. One pattern per registry entry; the marker
+// pattern also accepts the entity-encoded delimiters the renderers emit.
+const WRAP_RES = Object.freeze([
+  /approve\s+merge/gi,
+  /approve\s+release/gi,
+  /adr-tripwire:allow/gi,
+  /(?:<|&lt;)!--\s*dev-loops:copilot-body-disposition\s+review=\S+\s+head=[0-9a-f]{40}\s+operator\s*--(?:>|&gt;)/gi,
+]);
+
+/** `text` with every operator-owned phrase wrapped in a code span (whitespace inside it collapsed to one line). */
+export function wrapOperatorOwnedPhrases(text) {
+  let out = String(text);
+  for (const re of WRAP_RES) out = out.replace(re, (match) => `\`${match.replace(/\s+/g, " ")}\``);
+  return out;
+}

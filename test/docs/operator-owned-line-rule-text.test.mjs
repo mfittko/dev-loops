@@ -26,3 +26,13 @@ test("the Copilot operator-form actor policy names all three actors", () => {
   const merge = read("skills/docs/merge-preconditions.md");
   assert.match(merge, /subagents never post it, the orchestrator posts it\s+only through a comment wrapper with `--standing-authorization`, and the human may always post\s+it/);
 });
+
+test("OPERATOR-OWNED-LINE row records the gate-surface wrap and the ADR names it", () => {
+  const row = ruleRow(read("skills/docs/decision-record-contract.md"), "OPERATOR-OWNED-LINE");
+  for (const text of ["wrapOperatorOwnedPhrases", "code span", "2026-11-08", "ADR 0258", "post-gate-verdict-fallback.mjs"]) {
+    assert.ok(row.includes(text), text);
+  }
+  const adr = read("docs/decisions/0258-operator-owned-line-registry.md");
+  assert.match(adr, /wrapOperatorOwnedPhrases/);
+  assert.match(adr, /2026-11-08/);
+});

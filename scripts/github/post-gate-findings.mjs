@@ -10,6 +10,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
+import { wrapOperatorOwnedPhrases } from "@dev-loops/core/github/operator-owned-lines";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 
 const USAGE = `Usage: post-gate-findings.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> (--findings <json> | --findings-file <path>)
@@ -261,20 +262,21 @@ export function sanitizeCodeSpan(value) {
 // value's own literal character can never absorb the escape and turn live
 // again. upsert-checkpoint-verdict.mjs imports this exact function.
 export function sanitizeInline(value) {
-  return sanitizeCodeSpan(value)
+  return wrapOperatorOwnedPhrases(sanitizeCodeSpan(value)
     .replace(/</g, "&lt;")
     // Handle plain `[` (not part of `![`) before the image-form pass below,
     // so an image's `[` is told apart from a plain link's `[`.
     .replace(/(?<!!)\[/g, "&#91;")
-    .replace(/!\[/g, "!&#91;");
+    .replace(/!\[/g, "!&#91;"));
 }
 
-// Sanitize reviewer prose for a multi-line surface (the inline thread). A
-// balanced single-backtick code span survives with its content inert
-// (whitespace collapsed to one line, `<!--`/`-->` entity-encoded). Every other
-// backtick (stray, doubled, unbalanced) becomes a numeric character entity, never deleted, so the
-// reviewer's text stays complete. Text outside a span gets the same
-// neutralization as sanitizeInline. Single-line surfaces keep using
+// Sanitize reviewer prose for a gate surface. A balanced code span of any
+// backtick length survives with its content inert (whitespace collapsed to one
+// line, `<!--`/`-->` entity-encoded). Every other backtick (stray, unbalanced,
+// backslash-escaped opener) becomes a numeric character entity, never deleted,
+// so the reviewer's text stays complete. Text outside a span gets the same
+// neutralization as sanitizeInline, and every bare operator-owned phrase there is
+// wrapped in a code span (ADR 0258). Enum-like single-line values keep using
 // sanitizeInline, which deletes backticks.
 // A run of N backticks opens a span that the next run of exactly N closes. A
 // backslash-escaped opener is literal text in CommonMark, so it never opens one.
@@ -285,11 +287,11 @@ function neutralizeMarkerDelimiters(text) {
 }
 
 function escapeOutsideCodeSpan(segment) {
-  return neutralizeMarkerDelimiters(segment)
+  return wrapOperatorOwnedPhrases(neutralizeMarkerDelimiters(segment)
     .replace(/`/g, "&#96;")
     .replace(/</g, "&lt;")
     .replace(/(?<!!)\[/g, "&#91;")
-    .replace(/!\[/g, "!&#91;");
+    .replace(/!\[/g, "!&#91;"));
 }
 
 export function escapeProse(value) {

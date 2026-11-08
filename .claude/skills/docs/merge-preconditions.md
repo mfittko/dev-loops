@@ -114,7 +114,7 @@ draft_gate / current-head pre_approval_gate / threads / runner-lock / fan-out-pr
   record, in preference order: a genuine `APPROVED` review by `<login>` on the current
   head SHA (a Copilot/bot review never satisfies it), else a head-pinned operator comment
   marker `approve merge <headSha>` authored by `<login>`. No agent writes that marker:
-  every sanctioned comment writer refuses any body line that opens with `approve merge`
+  every sanctioned comment writer refuses any body line that opens with `approve merge`, and the gate writers wrap it in a code span in reviewer text
   (`OPERATOR-OWNED-LINE`, no override; the registry and its other lines are in
   [Decision Record Contract](decision-record-contract.md)). The approval check fails closed
   on a stale (earlier-commit), agent/bot-authored, or wrong-login approval, and re-gates on
