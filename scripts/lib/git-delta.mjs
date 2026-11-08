@@ -15,8 +15,10 @@ const GIT_ISOLATION = [
   "-c", "core.autocrlf=false",
   "-c", "core.quotePath=false",
 ];
-// Every diff here pins --ignore-submodules=none, so an ambient
-// diff.ignoreSubmodules or submodule.<name>.ignore never hides a gitlink change.
+// The isBaseOnlyMergeSince name diff and the captureMainRelativeChangedFilesSince
+// diffs pin --ignore-submodules=none, so an ambient diff.ignoreSubmodules or
+// submodule.<name>.ignore never hides a gitlink change from the base-only check.
+// captureChangedFilesBetween keeps the unpinned diff.
 const GIT_DIFF = [...GIT_ISOLATION, "diff", "--no-ext-diff", "--ignore-submodules=none"];
 
 /**
@@ -62,7 +64,7 @@ export async function captureChangedFilesBetween({ base, head = "HEAD", repoRoot
     throw new Error("captureChangedFilesBetween requires plausible git refs for base/head (no leading '-', no '..')");
   }
   const range = `${normalizedBase}..${normalizedHead}`;
-  const result = await runGit([...GIT_DIFF, "--name-status",range], { repoRoot });
+  const result = await runGit([...GIT_ISOLATION, "diff", "--no-ext-diff", "--name-status", range], { repoRoot });
   if (result.code !== 0) throw new Error(`git diff ${range} failed: ${result.stderr.trim() || `exit ${result.code}`}`);
   return { changedFiles: parseChangedFiles(result.stdout), hasRename: hasRenameEntry(result.stdout) };
 }
