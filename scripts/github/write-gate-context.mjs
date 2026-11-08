@@ -3489,7 +3489,8 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       }
     }
   }
-  const prBodyBaselineSha256 = prBodyRead ? (await readPrBodyBaselineSha256(options, { repoRoot })) ?? prBodyRead.sha256 : null;
+  // The full-diff-failure rebuild below runs after the context file is removed, so it carries the baseline read here.
+  const prBodyBaselineSha256 = prBodyRead ? options.carriedPrBodyBaselineSha256 ?? (await readPrBodyBaselineSha256(options, { repoRoot })) ?? prBodyRead.sha256 : null;
   const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants, capRoundResidue }), ...(requiredReads ? { requiredReads } : {}), ...(prBodyBaselineSha256 ? { prBodyBaselineSha256 } : {}), loggedAt };
   // Keep the marker available only when prefix AND referenced stable files
   // are unchanged on disk (the prefix hash-binds the evidence and full diff).
@@ -3515,7 +3516,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         // pointer/hash/plan without the failed path before publishing a marker.
         process.stderr.write(`[gate-context] full-diff capture failed (continuing without scope.diffPath): ${error.message}\n`);
         await rm(fullPath, { force: true });
-        return await writeGateContext({ ...options, diffPath: null, diffToWrite: null }, { repoRoot });
+        return await writeGateContext({ ...options, diffPath: null, diffToWrite: null, carriedPrBodyBaselineSha256: prBodyBaselineSha256 }, { repoRoot });
       }
     }
     if (pendingFilteredDiff) await writeFile(path.resolve(repoRoot, pendingFilteredDiff.path), pendingFilteredDiff.text, "utf8");

@@ -8079,6 +8079,20 @@ test("writeGateContext persists the evidence file and binds it, the diff, and va
   }
 });
 
+test("writeGateContext: a full-diff capture failure keeps the head's sticky pr-body baseline across the rebuild", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-sticky-baseline-"));
+  try {
+    const base = parseWriteGateContextCliArgs(["--repo", "o/r", "--pr", "3", "--gate", "draft_gate", "--head-sha", "abc1234", "--angles", '["scope"]']);
+    const first = await writeGateContext({ ...base, prBody: "BODY-A" }, { repoRoot });
+    await writeFile(path.resolve(repoRoot, "blocker"), "x", "utf8");
+    const second = await writeGateContext({ ...base, prBody: "BODY-B", diffOutput: "d\n", diffPath: "blocker/x.diff", diffToWrite: { path: "blocker/x.diff", text: "d\n" } }, { repoRoot });
+    assert.ok(first.artifact.prBodyBaselineSha256);
+    assert.equal(second.artifact.prBodyBaselineSha256, first.artifact.prBodyBaselineSha256);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("writeGateContext: a large lockfile hunk never enters the required diff read, in inline or pointer mode", async () => {
   const lockHunk = `diff --git a/package-lock.json b/package-lock.json\n${"+LOCKFILE-MARKER\n".repeat(Math.ceil(BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES / 16) * 3)}`;
   for (const [mode, sourceLines] of [["inline", 1], ["pointer", Math.ceil(BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES / 15) + 10]]) {
