@@ -47,6 +47,13 @@ test("every registry entry refuses its sample, names OPERATOR-OWNED-LINE and its
   }
 });
 
+test("the operator marker refusal names subagents and does not claim only the orchestrator posts it", () => {
+  const msg = findOperatorOwnedLineRefusal(operatorMarker());
+  assert.match(msg, /Subagents never post it/);
+  assert.ok(!msg.includes("Only the orchestrator"));
+  assert.match(msg, /human posts the line/);
+});
+
 test("--standing-authorization clears only the entries that accept it", () => {
   for (const entry of OPERATOR_OWNED_LINES) {
     const msg = findOperatorOwnedLineRefusal(SAMPLES[entry.id], { standingAuthorization: true });

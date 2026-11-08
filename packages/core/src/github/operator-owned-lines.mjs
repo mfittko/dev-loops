@@ -46,7 +46,7 @@ export const OPERATOR_OWNED_LINES = Object.freeze([
     label: "a Copilot body-disposition `operator` marker",
     matches: hasOperatorDispositionMarker,
     standingAuthorization: true,
-    refusal: refusal("a Copilot body-disposition `operator` marker", "Only the orchestrator posts it, through a comment wrapper with `--standing-authorization` that asserts a recorded standing operator authorization."),
+    refusal: refusal("a Copilot body-disposition `operator` marker", "Subagents never post it. The orchestrator posts it only through a comment wrapper with `--standing-authorization` that asserts a recorded standing operator authorization."),
   }),
 ]);
 
