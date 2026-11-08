@@ -28,7 +28,7 @@ import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
-import { listIssueComments, resolveAuthenticatedLogin, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
+import { escapeProse, listIssueComments, resolveAuthenticatedLogin, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { VALID_DISPOSITIONS } from "./write-gate-findings-log.mjs";
 import {
   buildCommentableLineSet,
@@ -1434,7 +1434,7 @@ function renderBodyOnlyFindingLine(finding, ctx) {
   // or no severity at all never renders a double space or a dangling " — ".
   const marker = [emoji, safeSeverity].filter(Boolean).join(" ");
   const markerPrefix = marker ? `${marker} — ` : "";
-  const summary = sanitizeStructuredInline(finding.summary);
+  const summary = escapeProse(finding.summary);
   const location = renderBodyOnlyFindingLocation(finding, ctx);
   const dispositionSuffix = finding.disposition
     ? ` — _\`${sanitizeStructuredCodeSpan(finding.disposition)}\`_`

@@ -251,7 +251,7 @@ export function collectFingerprints(text, set) {
 
 function formatDeferredFindingEntry({ fingerprint, severity, angle, summary, refUrl }) {
   const detail = typeof summary === "string" && summary.trim().length > 0
-    ? sanitizeInline(neutralizeBareIssuePrIds(summary.trim()))
+    ? escapeProse(neutralizeBareIssuePrIds(summary.trim()))
     : (typeof refUrl === "string" && refUrl.trim().length > 0
       ? neutralizeBareIssuePrIds(refUrl.trim())
       : "(no summary recorded)");
