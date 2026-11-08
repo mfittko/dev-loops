@@ -3442,8 +3442,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // all valid findings for this head and angle is in flight and refuses the rebuild. A body-reading unit
   // without a live sentinel still loses its stale artifacts. Other clean units keep their sentinels and artifacts.
   let bodyOnlyRerun = null;
+  // The full-diff-failure rebuild removes the context file, so it carries the prior body digest and the prior carried set read here.
+  let priorBodyState = null;
   if (prBodyRead && options.fanoutDispatch?.pendingGroups) {
-    const priorBodySha256 = await readPriorPrBodySha256(options, { repoRoot });
+    const priorBodySha256 = options.carriedPriorBodySha256 !== undefined ? options.carriedPriorBodySha256 : await readPriorPrBodySha256(options, { repoRoot });
+    const priorCarriedAngles = options.carriedPriorCarriedAngles ?? (await readGateContext(options, { repoRoot }).catch(() => null))?.fanout?.preflight?.carriedAngles ?? [];
+    priorBodyState = { priorBodySha256, priorCarriedAngles };
     if (priorBodySha256 !== prBodyRead.sha256) {
       const { names: liveSentinels, scanError } = await scanLiveSentinels();
       if (scanError !== null) {
@@ -3497,11 +3501,11 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       }
       // The pending membership regains a body-reading angle that the earlier round carried (never dispatched, so no artifact):
       // check in-flight state against the membership that round dispatched, excluding the angles its context recorded as carried.
-      const priorCarried = new Set(((await readGateContext(options, { repoRoot }).catch(() => null))?.fanout?.preflight?.carriedAngles ?? []).map((angle) => String(angle).trim().toLowerCase()));
+      const priorCarried = new Set(priorCarriedAngles.map((angle) => String(angle).trim().toLowerCase()));
       for (const unit of options.fanoutDispatch.pendingGroups) {
         const angles = Array.isArray(unit?.angles) ? unit.angles : [];
         const dispatched = angles.filter((angle) => !priorCarried.has(String(angle).trim().toLowerCase()));
-        const scope = dispatchUnitScope(options.gate, unit);
+        const scope = dispatchUnitScope(options.gate, { ...unit, angles: dispatched });
         const sentinel = sentinelOf(scope);
         // A pending unit that holds no body-reading angle but finished with a live sentinel (a findings_present
         // artifact) is re-emitted too, so its sentinel must retire or the reviewer's fresh-context guard refuses it.
@@ -3539,8 +3543,8 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     await mkdir(path.dirname(baselinePath), { recursive: true });
     // Atomic: write a private temp file, then link it into place (link fails with EEXIST when a baseline exists), so a reader never sees a partial baseline.
     const tempPath = `${baselinePath}.${process.pid}.${randomUUID()}.tmp`;
-    await writeFile(tempPath, `${prBodyBaselineSha256}\n`, "utf8");
     try {
+      await writeFile(tempPath, `${prBodyBaselineSha256}\n`, "utf8");
       await link(tempPath, baselinePath);
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
@@ -3573,7 +3577,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         // pointer/hash/plan without the failed path before publishing a marker.
         process.stderr.write(`[gate-context] full-diff capture failed (continuing without scope.diffPath): ${error.message}\n`);
         await rm(fullPath, { force: true });
-        return await writeGateContext({ ...options, diffPath: null, diffToWrite: null, carriedPrBodyBaselineSha256: prBodyBaselineSha256 }, { repoRoot });
+        return await writeGateContext({ ...options, diffPath: null, diffToWrite: null, carriedPrBodyBaselineSha256: prBodyBaselineSha256, ...(priorBodyState ? { carriedPriorBodySha256: priorBodyState.priorBodySha256, carriedPriorCarriedAngles: priorBodyState.priorCarriedAngles } : {}) }, { repoRoot });
       }
     }
     if (pendingFilteredDiff) await writeFile(path.resolve(repoRoot, pendingFilteredDiff.path), pendingFilteredDiff.text, "utf8");

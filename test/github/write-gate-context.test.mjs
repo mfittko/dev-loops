@@ -10183,6 +10183,55 @@ test("a body-only rebuild derives the in-flight membership after the carry filte
   }
 });
 
+test("a body-only rebuild looks up the sentinel of the dispatched membership and refuses while that one-angle unit is in flight (issue 3080 AC13)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-carried-scope-"));
+  try {
+    const input = (prBody) => {
+      const config = draftConfig({ dynamicAngles: false, angles: ["scope", "srp"], mandatoryAngles: [] });
+      config.gates.draft.angles = config.gates.draft.angles.map((entry) => ({ ...(typeof entry === "string" ? { name: entry } : entry), prompt: (entry.name ?? entry) === "scope" ? "The PR description is the contract." : "Review the diff." }));
+      config.gates.fanout = { groups: [{ name: "design", angles: ["scope", "srp"] }] };
+      return { config, gate: "draft_gate", diff: null, repo: "owner/repo", pr: 90, headSha: BODY_RERUN_SHA, prBody, carriedAngles: ["scope"] };
+    };
+    await buildGateContext(input("Original"), { repoRoot });
+    assert.deepEqual((await buildGateContext(input("Original"), { repoRoot })).artifact.fanout.preflight.carriedAngles, ["scope"]);
+    // Round 1 dispatched only srp, so its live sentinel is keyed by the angle, not by the group; no srp artifact exists yet.
+    const sentinel = path.join(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-srp-${BODY_RERUN_SHA}.json`);
+    await writeFile(sentinel, "{}\n", "utf8");
+    await assert.rejects(buildGateContext(input("Edited"), { repoRoot }), /GATE-EXEC-BODY-ONLY-RERUN.*unit draft-gate-srp is in flight/s);
+    assert.ok(existsSync(sentinel), "the live sentinel stays");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a full-diff capture failure on an unchanged-body rebuild keeps the prior body digest and carried set (issue 3080 AC14)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-fulldiff-fail-"));
+  try {
+    const config = draftConfig({ dynamicAngles: false, angles: ["scope", "srp", "ocp"], mandatoryAngles: [] });
+    config.gates.draft.angles = config.gates.draft.angles.map((entry) => ({ ...(typeof entry === "string" ? { name: entry } : entry), prompt: (entry.name ?? entry) === "scope" ? "The PR description is the contract." : "Review the diff." }));
+    const base = {
+      ...parseWriteGateContextCliArgs(["--repo", "owner/repo", "--pr", "90", "--gate", "draft_gate", "--head-sha", BODY_RERUN_SHA, "--angles", '["scope","srp","ocp"]']),
+      config, prBody: "Original",
+      fanoutDispatch: { groups: [{ name: "design", angles: ["scope", "srp", "ocp"] }], pendingGroups: [{ name: "design", angles: ["scope", "srp", "ocp"] }], preflight: { carriedAngles: [] } },
+    };
+    const withDiff = { ...base, diffOutput: "d\n", diffPath: "capture/x.diff", diffToWrite: { path: "capture/x.diff", text: "d\n" } };
+    await mkdir(path.join(repoRoot, "capture"), { recursive: true });
+    await writeGateContext(withDiff, { repoRoot });
+    const reviews = path.resolve(repoRoot, buildGateReviewsDir({ repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: BODY_RERUN_SHA }));
+    await mkdir(reviews, { recursive: true });
+    const artifact = path.join(reviews, "scope.json");
+    await writeFile(artifact, JSON.stringify({ angle: "scope", verdict: "clean", headSha: BODY_RERUN_SHA, findings: [] }), "utf8");
+    await rm(path.join(repoRoot, "capture"), { recursive: true });
+    await writeFile(path.join(repoRoot, "capture"), "x", "utf8");
+    // The full-diff write fails, so the rebuild runs again with the context file removed; the unchanged body retires nothing and refuses nothing.
+    const rebuilt = await writeGateContext(withDiff, { repoRoot });
+    assert.ok(!rebuilt.bodyOnlyRerun, "no body-only retirement");
+    assert.ok(existsSync(artifact), "the body-reading unit's artifact stays");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("the sticky pr-body baseline survives a failed context write (issue 3080 AC14)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-sticky-"));
   try {

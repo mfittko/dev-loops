@@ -76,7 +76,12 @@ Optional:
                                  (one disposition per cluster, keyed by clusterId; the 0-based ledger position only
                                  when the ledger carries no clusterId). Each disposition requires title, detail and
                                  fix, and defer and reject also require reason; a missing field FAILS CLOSED and
-                                 writes no ledger. Optional; when absent the ledger writes byte-identically to before.
+                                 writes no ledger. The ledger always records roundIdentity.
+                                 The judge plan beside the verdict pins the Copilot body cluster, which the writer appends and
+                                 re-checks by sha256; a verdict in a j<id> directory whose judge-emit-plan.json is missing,
+                                 unreadable or names another round, repo, PR, gate or head, and a verdict outside a judge
+                                 execution directory while the plan pins a copilot-body-feedback read, FAIL CLOSED. An acted
+                                 blocking Copilot finding raises a clean verdict to findings_present (GATE-EXEC-COPILOT-BODY-TO-JUDGE).
                                  With --spec-authority, a sibling spec-authority-verdict.json next to the judge
                                  verdict is validated against that identity, and each finding_conflicts finding is
                                  written as judgeDisposition reject (ADR 0089). An invalid or mismatched sibling
@@ -863,7 +868,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // applyJudgeDispositions fails closed on a malformed verdict, an
   // out-of-range index, or dispositions that do not cover every finding.
   let findings = rawFindings;
-  let copilotActed = [];
+  let copilotActedSeverities = [];
   let scopeDrift;
   const specAuthorityIdentity = await readSpecAuthorityIdentity(
     options.specAuthority !== undefined ? path.resolve(repoRoot, options.specAuthority) : undefined,
@@ -903,17 +908,30 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     const judgeRoundDir = path.basename(path.dirname(judgePath));
     const inJudgeDir = /^j\d+-[0-9a-f]+$/.test(judgeRoundDir);
     // A verdict outside a judge execution directory binds no plan of its own: read the gate and head judge directory's plan instead.
-    const judgePlanPath = inJudgeDir
-      ? path.join(path.dirname(path.dirname(judgePath)), "judge-emit-plan.json")
-      : path.join(path.resolve(repoRoot, buildGateArtifactPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot), dir: "gate-judge" })), "judge-emit-plan.json");
-    const judgePlan = await readFile(judgePlanPath, "utf8").then(JSON.parse).catch(() => null);
+    // emit-judge-work-order writes it under the checkout tmp; the main-anchored ledger tmp is the other candidate, and the first readable plan wins.
+    const judgePlanPaths = inJudgeDir
+      ? [path.join(path.dirname(path.dirname(judgePath)), "judge-emit-plan.json")]
+      : [...new Set([options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot), path.join(repoRoot, "tmp")])]
+        .map((root) => path.join(path.resolve(repoRoot, buildGateArtifactPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: root, dir: "gate-judge" })), "judge-emit-plan.json"));
+    let judgePlan = null;
+    let judgePlanPath = judgePlanPaths[0];
+    for (const candidate of judgePlanPaths) {
+      judgePlan = await readFile(candidate, "utf8").then(JSON.parse).catch(() => null);
+      if (judgePlan) { judgePlanPath = candidate; break; }
+    }
     if (inJudgeDir && judgePlan?.roundId !== judgeRoundDir) {
       throw parseError(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${judgePlanPath} is missing, unreadable or names another round than ${judgeRoundDir}; re-emit the judge work order`);
+    }
+    // The plan must belong to this repo, PR, gate and head, as judge-pass verifyJudgeDelivery requires.
+    const planOrder = judgePlan?.workOrder;
+    if (judgePlan && (planOrder?.target?.repo !== options.repo || planOrder.target.pr !== Number(options.pr) || planOrder.roundIdentity?.gate !== options.gate || String(planOrder.headSha).toLowerCase() !== String(options.headSha).trim().toLowerCase())) {
+      throw parseError(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${judgePlanPath} is not the judge plan for ${options.repo}#${options.pr} ${options.gate} at ${options.headSha}; re-emit the judge work order`);
     }
     if (!inJudgeDir && judgePlan?.workOrder?.requiredReads?.some((read) => read?.kind === "copilot-body-feedback")) {
       throw parseError(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${judgePlanPath} pins a copilot-body-feedback read, so the judge verdict must sit in its judge execution directory (<gate>-<head>/j<id>/judge-verdict.json), not ${options.judgeVerdict}`);
     }
-    const enriched = applyJudgeDispositions(await withPinnedCopilotBodyCluster(rawFindings, judgePlan?.workOrder), judgeVerdict, { pastCap: lowFixCapped, round });
+    const pinnedFindings = await withPinnedCopilotBodyCluster(rawFindings, judgePlan?.workOrder);
+    const enriched = applyJudgeDispositions(pinnedFindings, judgeVerdict, { pastCap: lowFixCapped, round });
     // Same cluster projection judge-pass applies: one judge decision per root cause, so the durable ledger
     // matches judge-pass's --ledger-out instead of dropping the cluster-normalized dispositions.
     const stamped = enriched.findings.every((f) => Number.isInteger(f?.clusterId));
@@ -921,7 +939,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       ? clustersFromStampedIds(enriched.findings)
       : clusterFindings(enriched.findings, { headSha: options.headSha }).clusters;
     findings = projectClusterDisposition(enriched.findings, clusters);
-    copilotActed = findings.slice(rawFindings.length).filter((f) => f?.judgeDisposition === "act");
+    // The verdict raise reads the INPUT severity, as judge-pass does: a failOpen act promotes a low to medium after the consolidator weighed it.
+    copilotActedSeverities = findings.slice(rawFindings.length).flatMap((f, i) => (f?.judgeDisposition === "act" ? [pinnedFindings[rawFindings.length + i]?.severity ?? f.severity] : []));
     assertNoProjectedForbiddenDefer(findings, clusters);
     scopeDrift = enriched.scopeDrift;
     if (specAuthorityIdentity !== undefined) {
@@ -995,10 +1014,10 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   persistedVerdict = callerVerdict ?? normalizedOverallVerdict;
   if (!persistedVerdict) throw parseError("the fan-in ledger carries no overallVerdict; pass --verdict");
   // An acted blocking Copilot body cluster raises a clean verdict, as judge-pass does for its --ledger-out (GATE-EXEC-COPILOT-BODY-TO-JUDGE).
-  if (copilotActed.length > 0) {
+  if (copilotActedSeverities.length > 0) {
     const { config } = await loadDevLoopConfigStrict({ repoRoot });
     const blocking = resolveGateConfig(config, GATE_CONFIG_KEY[options.gate] ?? "preApproval").blockCleanOnFindingSeverities;
-    const severities = copilotActed.map((f) => f.severity);
+    const severities = copilotActedSeverities;
     persistedVerdict = raiseVerdictForActedCopilotBlock(persistedVerdict, severities, blocking);
     if (normalizedOverallVerdict !== undefined) normalizedOverallVerdict = raiseVerdictForActedCopilotBlock(normalizedOverallVerdict, severities, blocking);
   }

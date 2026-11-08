@@ -2413,7 +2413,7 @@ test("judgePassCli refuses a verdict that leaves the pinned Copilot body cluster
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-copilot-body-"));
   try {
     await copilotBodyRound(tmpDir, { dispositions: [0, 1, 2] });
-    await assert.rejects(judgePassCli(copilotBodyArgs, { repoRoot: tmpDir }), /GATE-EXEC-COPILOT-BODY-TO-JUDGE|cluster 3|index 3|undisposed|not dispose/i);
+    await assert.rejects(judgePassCli(copilotBodyArgs, { repoRoot: tmpDir }), /does not dispose 1 cluster\(s\) \(clusterIds: 3\)/);
     assert.equal(existsSync(path.join(tmpDir, "enriched.json")), false);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
