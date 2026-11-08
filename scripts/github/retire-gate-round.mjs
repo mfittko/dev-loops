@@ -6,7 +6,7 @@ import { parsePrNumber } from "../_cli-primitives.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 import { GATE_NAMES, gateScopePrefix } from "./_gate-names.mjs";
-import { buildGateReviewsDir } from "./write-gate-context.mjs";
+import { buildGateReviewsDir } from "./_gate-artifact-paths.mjs";
 
 const USAGE = `Usage: retire-gate-round.mjs --gate <draft_gate|pre_approval_gate> --head-sha <sha> --reason <text> [--findings-dir <dir>] [--tmp-root <dir>]
 Retire ONE GATE's review round at one head: move every regular reviewer
@@ -160,7 +160,12 @@ export function parseRetireGateRoundArgs(argv) {
   };
 }
 
-export async function retireGateRound({ gate, headSha, reason, findingsDir = null, repo = null, pr = null, noFindingsArtifacts = false, tmpRoot = "tmp" }) {
+/**
+ * Programmatic narrowing (no CLI flag): `scopes` limits the sentinel and dispatch-record match to exactly
+ * those gate-prefixed scopes, and `findingsFiles` moves just those artifact files into
+ * `<retirementDir>/findings-artifacts/`. Both are used by the body-only rebuild to retire completed units only.
+ */
+export async function retireGateRound({ gate, headSha, reason, findingsDir = null, repo = null, pr = null, noFindingsArtifacts = false, tmpRoot = "tmp", scopes = null, findingsFiles = [] }) {
   // Function-boundary re-validation, same rule as the CLI parser: a direct
   // programmatic caller must not bypass the full-SHA and audited-reason
   // guardrails.
@@ -180,6 +185,8 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
   const namePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${scopePrefix}`;
   const dispatchNamePrefix = `checkpoint-dispatch-prompt-${scopePrefix}`;
   const suffix = `-${headSha}.json`;
+  const scopeNames = scopes === null ? null : new Set(scopes.flatMap((scope) => [`${CHECKPOINT_SENTINEL_PREFIX}${scope}${suffix}`, `checkpoint-dispatch-prompt-${scope}${suffix}`]));
+  const inScope = (name) => scopeNames === null || scopeNames.has(name);
   let entries = [];
   try {
     entries = await readdir(tmpRoot, { withFileTypes: true });
@@ -191,13 +198,13 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
     throw new Error(`tmp root ${JSON.stringify(tmpRoot)} is not an existing directory — refusing a retirement that would vacuously succeed`);
   }
   const sentinels = entries
-    .filter((e) => e.isFile() && e.name.startsWith(namePrefix) && e.name.endsWith(suffix))
+    .filter((e) => e.isFile() && e.name.startsWith(namePrefix) && e.name.endsWith(suffix) && inScope(e.name))
     .map((e) => e.name)
     .sort();
   // Dispatch-only records must retire even when no sentinel survives. Match
   // names independently; malformed JSON is still evidence to preserve unchanged.
   const dispatchPromptRecords = entries
-    .filter((e) => e.isFile() && e.name.startsWith(dispatchNamePrefix) && e.name.endsWith(suffix))
+    .filter((e) => e.isFile() && e.name.startsWith(dispatchNamePrefix) && e.name.endsWith(suffix) && inScope(e.name))
     .map((e) => e.name)
     .sort();
 
@@ -256,7 +263,7 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
     }
   }
 
-  if (sentinels.length === 0 && dispatchPromptRecords.length === 0 && !findingsDirPresent) {
+  if (sentinels.length === 0 && dispatchPromptRecords.length === 0 && !findingsDirPresent && findingsFiles.length === 0) {
     return { ok: true, gate, headSha, retired: 0, sentinels: [], dispatchPromptRecords: [], findingsDirRetired: false, retirementDir: null, noop: true };
   }
 
@@ -297,6 +304,7 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
       dispatchPromptRecords: movedDispatchPromptRecords,
       findingsDir: findingsDirPresent ? findingsDir : null,
       findingsDirRetired,
+      ...(findingsFiles.length > 0 ? { findingsFiles } : {}),
       partial,
     };
     await writeFile(path.join(retirementDir, "retirement.json"), JSON.stringify(record, null, 2) + "\n", "utf8");
@@ -313,6 +321,11 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
     if (findingsDirPresent) {
       await rename(findingsDir, path.join(retirementDir, "findings-artifacts"));
       findingsDirRetired = true;
+    }
+    if (findingsFiles.length > 0) {
+      const movedFilesDir = path.join(retirementDir, "findings-artifacts");
+      await mkdir(movedFilesDir, { recursive: true });
+      for (const file of findingsFiles) await rename(file, path.join(movedFilesDir, path.basename(file)));
     }
     await writeRecord(false);
     return { ok: true, gate, headSha, retired: moved.length, sentinels: moved, dispatchPromptRecords: movedDispatchPromptRecords, findingsDirRetired, retirementDir, noop: false };

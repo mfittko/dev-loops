@@ -546,3 +546,28 @@ test("CLI partial failure serializes both successful-move arrays and the durable
     assert.deepEqual(audit.dispatchPromptRecords, failure.partiallyRetiredDispatchPromptRecords);
   });
 });
+
+test("scopes and findingsFiles narrow the retirement to the named units and artifacts", async () => {
+  await withTmpRoot(async (tmpRoot) => {
+    const scope = "draft-gate-group-process";
+    const files = ["sentinel", "dispatch"].map((kind) => kind === "sentinel" ? sentinelName(scope, HEAD_A) : `checkpoint-dispatch-prompt-${scope}-${HEAD_A}.json`);
+    for (const name of [...files, sentinelName("draft-gate-correctness", HEAD_A), `checkpoint-dispatch-prompt-draft-gate-correctness-${HEAD_A}.json`]) {
+      await writeFile(path.join(tmpRoot, name), "{}\n", "utf8");
+    }
+    const reviews = path.join(tmpRoot, `reviews-${HEAD_A}`);
+    await mkdir(reviews);
+    await writeFile(path.join(reviews, "scope.json"), "{}\n", "utf8");
+    await writeFile(path.join(reviews, "correctness.json"), "{}\n", "utf8");
+    const result = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "body only", scopes: [scope], findingsFiles: [path.join(reviews, "scope.json")], noFindingsArtifacts: true, tmpRoot });
+    assert.equal(result.retired, 1);
+    const live = await readdir(tmpRoot);
+    assert.ok(live.includes(sentinelName("draft-gate-correctness", HEAD_A)), "the other unit stays live");
+    assert.ok(live.includes(`checkpoint-dispatch-prompt-draft-gate-correctness-${HEAD_A}.json`));
+    assert.ok(!live.includes(sentinelName(scope, HEAD_A)));
+    assert.deepEqual(await readdir(reviews), ["correctness.json"]);
+    assert.deepEqual(await readdir(path.join(result.retirementDir, "findings-artifacts")), ["scope.json"]);
+    const record = JSON.parse(await readFile(path.join(result.retirementDir, "retirement.json"), "utf8"));
+    assert.deepEqual(record.findingsFiles, [path.join(reviews, "scope.json")]);
+    assert.deepEqual(record.sentinels, [sentinelName(scope, HEAD_A)]);
+  });
+});
