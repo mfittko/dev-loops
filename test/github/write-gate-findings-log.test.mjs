@@ -3391,6 +3391,7 @@ test("writeGateFindingsLog replaces a repeated write of one judged round and nev
     const headSha = "abc1234567890abcdef000000000000000000000";
     const execDir = path.join(tmpDir, "j1730000000000-deadbeef");
     await mkdir(execDir, { recursive: true });
+    await writeFile(path.join(tmpDir, "judge-emit-plan.json"), JSON.stringify({ roundId: "j1730000000000-deadbeef" }));
     const judgeVerdict = path.join(execDir, "judge-verdict.json");
     await writeFile(judgeVerdict, JSON.stringify({
       headSha, scopeDrift: { verdict: "within_scope", rationale: "in scope", driftedAreas: [] },
@@ -3417,7 +3418,7 @@ test("writeGateFindingsLog appends the pinned Copilot body cluster and records i
     await writeFile(path.join(tmpDir, "body.json"), body);
     const { createHash } = await import("node:crypto");
     const workOrder = { copilotBodyClusterId: 1, requiredReads: [{ kind: "copilot-body-feedback", path: path.join(tmpDir, "body.json"), sha256: createHash("sha256").update(body).digest("hex") }] };
-    await writeFile(path.join(tmpDir, "judge-emit-plan.json"), JSON.stringify({ workOrder }));
+    await writeFile(path.join(tmpDir, "judge-emit-plan.json"), JSON.stringify({ roundId: "j1730000000000-deadbeef", workOrder }));
     await mkdir(path.join(tmpDir, "j1730000000000-deadbeef"), { recursive: true });
     const judgeVerdict = path.join(tmpDir, "j1730000000000-deadbeef", "judge-verdict.json");
     const act = (index) => ({ index, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "x", criterion: "AC-1" });
@@ -3428,6 +3429,29 @@ test("writeGateFindingsLog appends the pinned Copilot body cluster and records i
     });
     const written = JSON.parse(await readFile(result.path, "utf8")).findings.find((f) => f.angle === "copilot-body");
     assert.equal(written.judgeDisposition, "act");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog refuses a judge-execution verdict whose emit plan is missing or names another round (issue 3080)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-plan-identity-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    await mkdir(path.join(tmpDir, "j1730000000000-deadbeef"), { recursive: true });
+    const judgeVerdict = path.join(tmpDir, "j1730000000000-deadbeef", "judge-verdict.json");
+    await writeFile(judgeVerdict, JSON.stringify({ headSha, scopeDrift: { verdict: "within_scope", rationale: "ok", driftedAreas: [] }, dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "x", criterion: "AC-1" }] }));
+    const write = () => writeGateFindingsLog({
+      repo: "owner/repo", pr: 45, gate: "pre_approval_gate", headSha, verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "medium", angle: "correctness", summary: "null deref", clusterId: 0 }]), judgeVerdict, tmpRoot: tmpDir,
+    });
+    await assert.rejects(write(), /judge-emit-plan\.json/, "a missing plan is refused");
+    await writeFile(path.join(tmpDir, "judge-emit-plan.json"), "not json");
+    await assert.rejects(write(), /judge-emit-plan\.json/, "an unparseable plan is refused");
+    await writeFile(path.join(tmpDir, "judge-emit-plan.json"), JSON.stringify({ roundId: "j1730000000001-cafebabe" }));
+    await assert.rejects(write(), /judge-emit-plan\.json/, "a plan for another round is refused");
+    await writeFile(path.join(tmpDir, "judge-emit-plan.json"), JSON.stringify({ roundId: "j1730000000000-deadbeef" }));
+    await write();
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

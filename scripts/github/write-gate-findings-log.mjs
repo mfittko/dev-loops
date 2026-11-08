@@ -888,7 +888,13 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     }
     const { lowFixCapped, round } = await roundCapState();
     // The judge disposed the pinned Copilot body finding as one more cluster (GATE-EXEC-COPILOT-BODY-TO-JUDGE); the plan beside the verdict names it.
-    const judgePlan = await readFile(path.join(path.dirname(path.dirname(judgePath)), "judge-emit-plan.json"), "utf8").then(JSON.parse, () => null);
+    // A judge-execution verdict (`.../<j-id>/judge-verdict.json`) must find its own plan: a missing or foreign plan would silently drop the Copilot cluster.
+    const judgeRoundDir = path.basename(path.dirname(judgePath));
+    const judgePlanPath = path.join(path.dirname(path.dirname(judgePath)), "judge-emit-plan.json");
+    const judgePlan = await readFile(judgePlanPath, "utf8").then(JSON.parse).catch(() => null);
+    if (/^j\d+-[0-9a-f]+$/.test(judgeRoundDir) && judgePlan?.roundId !== judgeRoundDir) {
+      throw parseError(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${judgePlanPath} is missing, unreadable or names another round than ${judgeRoundDir}; re-emit the judge work order`);
+    }
     const enriched = applyJudgeDispositions(await withPinnedCopilotBodyCluster(rawFindings, judgePlan?.workOrder), judgeVerdict, { pastCap: lowFixCapped, round });
     // Same cluster projection judge-pass applies: one judge decision per root cause, so the durable ledger
     // matches judge-pass's --ledger-out instead of dropping the cluster-normalized dispositions.
