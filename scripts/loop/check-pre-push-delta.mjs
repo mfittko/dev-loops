@@ -269,7 +269,7 @@ function gitDiffPatch(worktree, baseline, head, ownPaths) {
 const gitRemergeShow = (repoRoot, merge, outputFlags, encoding) => spawnSync("git", ["-C", repoRoot, "-c", "core.quotePath=false", "-c", "merge.renames=true", "-c", "merge.directoryRenames=false", "-c", "merge.conflictStyle=merge", "-c", "merge.renameLimit=7000", "show", "--remerge-diff", "--format=", ...outputFlags, "--no-renames", "--ignore-submodules=none", "--submodule=short", merge], { encoding, env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
 function remergeSection(repoRoot, merge) {
   const out = gitRemergeShow(repoRoot, merge, ["--unified=3", "--diff-algorithm=myers", "-O/dev/null", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--no-relative"]);
-  if (out.status !== 0) throw new Error(`git show --remerge-diff ${merge} failed in ${repoRoot}: ${out.stderr.toString().trim()}`);
+  if (out.status !== 0) throw new Error(`git show --remerge-diff ${merge} failed in ${repoRoot}: ${out.error?.message ?? out.stderr?.toString().trim()}`);
   return Buffer.concat([Buffer.from(`\n# Resolution diff of merge ${merge} (git show --remerge-diff)\n`), out.stdout]);
 }
 
@@ -286,7 +286,7 @@ function patchNamesFile(patch, file) {
 // The paths in `ownPaths` whose entry is a gitlink (mode 160000) on either side of baseline..head.
 function gitlinkPaths(worktree, baseline, head, ownPaths) {
   const out = spawnSync("git", ["-C", worktree, ...rangeCommand(["--raw", "-z", "--no-renames", "--no-ext-diff", "--no-relative", "--ignore-submodules=none"], baseline, head, ownPaths)], { encoding: "utf8", env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
-  if (out.status !== 0) throw new Error(`git diff --raw ${baseline}..${head} failed in ${worktree}: ${out.stderr.trim()}`);
+  if (out.status !== 0) throw new Error(`git diff --raw ${baseline}..${head} failed in ${worktree}: ${out.error?.message ?? out.stderr?.toString().trim()}`);
   const fields = out.stdout.split("\0");
   return fields.flatMap((field, i) => (field.startsWith(":") && field.slice(1).split(" ").slice(0, 2).includes("160000") ? [fields[i + 1]] : []));
 }
