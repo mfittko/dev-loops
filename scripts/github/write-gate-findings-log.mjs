@@ -869,8 +869,13 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   );
   // `priorOptions` and the round-cap state are shared by the judge coercion and the cap-closed record below.
   const priorOptions = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot };
+  // The round and execution identity stamped on this ledger: the emit-plan round id and the judge execution directory (`.../<j-id>/judge-verdict.json`), `null` when absent.
+  const roundIdentity = {
+    roundId: hasEmitPlan ? JSON.parse(await readFile(emitPlanPath, "utf8").catch(() => "{}"))?.roundId ?? null : null,
+    judgeExecution: /^j\d+-[0-9a-f]+$/.exec(path.basename(path.dirname(options.judgeVerdict ?? "")))?.[0] ?? null,
+  };
   let roundCap;
-  const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot, includeLiveCurrentHead: true }));
+  const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, roundIdentity, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot, includeLiveCurrentHead: true }));
   // The writer resolves the round before it retains the live same-head ledger, so it counts that ledger itself, but only when retention will keep it (the shared isInRoundRewrite predicate): every later reader counts it as the retained round.
   if (options.judgeVerdict) {
     const judgePath = path.resolve(repoRoot, options.judgeVerdict);
@@ -1058,6 +1063,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     // Defaults to inline_single_agent (DEFAULT_EXECUTION_MODE) exactly like the
     // write-time provenance guard above, so the two can never disagree.
     executionMode,
+    roundIdentity,
     findings,
   };
   // `overallVerdict` is optional and additive (absent on a bare-array input);
@@ -1090,7 +1096,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // helper. Pure no-op (byte-identical log) when the flag is absent.
   const stampedLog = stampOptionalSpecAuthority(log, specAuthorityIdentity);
   await mkdir(path.dirname(fullPath), { recursive: true });
-  const retainedRound = await retainSameHeadLedger(fullPath, logPath);
+  const retainedRound = await retainSameHeadLedger(fullPath, logPath, roundIdentity);
   await writeSealed(fullPath, JSON.stringify(stampedLog, null, 2) + "\n");
   return {
     ok: true, path: logPath, log: stampedLog,
@@ -1102,12 +1108,12 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
 // to the next free `<gate>-<sha>.round-<n>.json` sibling before the rewrite. Returns the retained path, or null when there was no live ledger or it is an in-round rewrite.
 // A tampered live ledger refuses with OUT_OF_BAND_WRITE before anything is retained.
 // ponytail: retention runs outside the write lock; the exclusive copy makes a round-number collision fail instead of overwriting, but concurrent same-head writers are otherwise unsupported (move retention under the ledger lock if they ever are).
-async function retainSameHeadLedger(fullPath, logPath) {
+async function retainSameHeadLedger(fullPath, logPath, roundIdentity) {
   if (!(await access(fullPath).then(() => true, () => false))) return null;
   try {
     const live = JSON.parse(await readSealed(fullPath));
     // An in-round rewrite (at least one finding, none judged) is replaced, not retained; a finished round, including a clean one with no findings, is retained.
-    if (isInRoundRewrite(live)) return null;
+    if (isInRoundRewrite(live, roundIdentity)) return null;
   } catch (err) { if (err?.code === OUT_OF_BAND_WRITE) throw err; }
   const dir = path.dirname(fullPath);
   const stem = path.basename(fullPath, ".json");

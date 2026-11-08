@@ -359,11 +359,11 @@ test("writeGateFindingsLog retains every existing same-head ledger at a numbered
     // A judged live ledger is retained even when the new write is unjudged.
     const unjudged = await write("four", "findings_present");
     assert.equal(unjudged.retainedRound, first.path.replace(/\.json$/, ".round-3.json"));
-    // An unjudged live ledger (no judgeDisposition on any finding) is an in-round rewrite: replaced, not retained.
-    const rewrite = await write("five", "findings_present");
-    assert.equal(rewrite.retainedRound, undefined, "an unjudged live ledger is not retained");
-    assert.equal(existsSync(first.path.replace(/\.json$/, ".round-4.json")), false);
-    assert.equal(JSON.parse(await readFile(rewrite.path, "utf8")).findings[0].summary, "five");
+    // A completed unjudged standalone review (no shared round identity) is a finished round: retained by the next write (issue 3080 AC8).
+    const second2 = await write("five", "findings_present");
+    assert.equal(second2.retainedRound, first.path.replace(/\.json$/, ".round-4.json"));
+    assert.equal(JSON.parse(await readFile(second2.path, "utf8")).findings[0].summary, "five");
+    assert.deepEqual(JSON.parse(await readFile(second2.path, "utf8")).roundIdentity, { roundId: null, judgeExecution: null });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -3380,6 +3380,30 @@ test("writeGateFindingsLog run from a repo subdirectory reads the repo round cap
     const parsed = JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-2243", `draft_gate-${headSha}.json`), "utf8"));
     // Round 1 is the cap round only under the repo cap 1; the default cap 4 records no capClosed.
     assert.deepEqual(parsed.findings.map((f) => f.capClosed), [{ judgeDisposition: "reject", severity: "medium", round: 1, cap: 1 }]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog replaces a repeated write of one judged round and never counts it twice (issue 3080 AC8)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judged-twice-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const execDir = path.join(tmpDir, "j1730000000000-deadbeef");
+    await mkdir(execDir, { recursive: true });
+    const judgeVerdict = path.join(execDir, "judge-verdict.json");
+    await writeFile(judgeVerdict, JSON.stringify({
+      headSha, scopeDrift: { verdict: "within_scope", rationale: "in scope", driftedAreas: [] },
+      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "x", criterion: "AC-1" }],
+    }), "utf8");
+    const write = () => writeGateFindingsLog({
+      repo: "owner/repo", pr: 43, gate: "pre_approval_gate", headSha, verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "medium", angle: "correctness", summary: "null deref" }]), judgeVerdict, tmpRoot: tmpDir,
+    });
+    const first = await write();
+    assert.deepEqual(JSON.parse(await readFile(first.path, "utf8")).roundIdentity, { roundId: null, judgeExecution: "j1730000000000-deadbeef" });
+    const second = await write();
+    assert.equal(second.retainedRound, undefined, "the same judged round is replaced, not retained");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

@@ -47,6 +47,7 @@ import {
   countCompletedRounds,
   resolveClosureRound,
   resolveCapRound,
+  isInRoundRewrite,
   resolveCapRoundFixed,
   clearingChainLastCandidates,
   clearingChainWalk,
@@ -10072,4 +10073,29 @@ test("a PR-body spec edit refuses when the caller supplied an acceptance-criteri
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
+});
+
+test("resolveCapRound at the current head returns the retained round at H, never the ledger of an earlier head (issue 3080 AC7)", async () => {
+  const { repoRoot } = await makeBaseDiffRepo();
+  try {
+    const head = "8".repeat(40);
+    await seedClosedRounds(repoRoot, 71, ["1".repeat(40), "2".repeat(40), "3".repeat(40)]);
+    const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-71");
+    await writeFile(path.join(dir, `draft_gate-${head}.round-1.json`), JSON.stringify({
+      repo: "owner/repo", pr: 71, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: "2026-11-05T00:00:00.000Z", findings: [],
+    }), "utf8");
+    const round = await resolveCapRound({ repo: "owner/repo", pr: 71, headSha: head }, { repoRoot });
+    assert.equal(round.log.headSha, head);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("isInRoundRewrite: a stamped ledger is a rewrite only against an incoming write of the same round or judge execution (issue 3080 AC8)", () => {
+  const unjudged = { findings: [{ severity: "low" }], roundIdentity: { roundId: "r1-aa", judgeExecution: null } };
+  assert.equal(isInRoundRewrite(unjudged), false, "a reader counts a stamped unjudged ledger as finished");
+  assert.equal(isInRoundRewrite(unjudged, { roundId: "r1-aa", judgeExecution: "j1-bb" }), true, "an intermediate write of one round");
+  assert.equal(isInRoundRewrite(unjudged, { roundId: "r2-cc", judgeExecution: null }), false, "another round");
+  assert.equal(isInRoundRewrite(unjudged, { roundId: null, judgeExecution: null }), false, "no shared identity");
+  assert.equal(isInRoundRewrite({ findings: [{ severity: "low" }] }), true, "an unstamped ledger keeps the earlier shape");
 });

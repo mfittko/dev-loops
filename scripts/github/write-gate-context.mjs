@@ -1910,12 +1910,17 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
 }
 
 /**
- * The shared finished-round predicate. A live same-head ledger is an in-round rewrite (replaced, not retained, not counted)
- * only when it has at least one finding and no finding carries a `judgeDisposition`; every other closed ledger, including a clean one with
- * `findings: []`, is a finished round that the writer retains and the round count includes.
+ * The shared finished-round predicate. The writer stamps `roundIdentity: { roundId, judgeExecution }` on each ledger (the emit-plan round id and the judge execution identity, `null` when absent).
+ * A stamped live same-head ledger is an in-round rewrite (replaced, not retained, not counted) only against an `incoming` write that shares its non-null `roundId` or `judgeExecution`
+ * (an intermediate write of one round, or a repeated write of one judged round). A reader with no incoming write sees every stamped ledger as a finished round,
+ * so a completed standalone review with no judge counts and is retained. A ledger written before the stamp keeps the earlier shape:
+ * at least one finding and no `judgeDisposition`. Every other closed ledger, including a clean one with `findings: []`, is a finished round.
  */
-export function isInRoundRewrite(log) {
-  return Array.isArray(log?.findings) && log.findings.length > 0 && !log.findings.some((f) => f?.judgeDisposition !== undefined);
+export function isInRoundRewrite(log, incoming) {
+  const stamp = log?.roundIdentity;
+  if (stamp === undefined) return Array.isArray(log?.findings) && log.findings.length > 0 && !log.findings.some((f) => f?.judgeDisposition !== undefined);
+  const same = (a, b) => typeof a === "string" && a === b;
+  return incoming !== undefined && (same(stamp?.roundId, incoming.roundId) || same(stamp?.judgeExecution, incoming.judgeExecution));
 }
 
 /**
@@ -2000,7 +2005,7 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
       onUnreadable?.(name);
       continue;
     }
-    if (!retained && (sha.startsWith(head) || head.startsWith(sha)) && isInRoundRewrite(log)) continue;
+    if (!retained && (sha.startsWith(head) || head.startsWith(sha)) && isInRoundRewrite(log, options.roundIdentity)) continue;
     // The live ledger ranks above every retained round of its head; retained rounds order by their number.
     const retainedNumber = /\.round-(\d+)\.json$/.exec(name);
     rounds.push({ sha, loggedAt: typeof log.loggedAt === "string" ? log.loggedAt : "", round: retainedNumber ? Number(retainedNumber[1]) : Infinity, log });
@@ -2138,7 +2143,7 @@ export async function resolveCapRound(options, { repoRoot }) {
   if (!(cap > 0) || await countCompletedRounds(ledger, { repoRoot }) - 1 < cap) return null;
   // An unreadable ledger counts toward the cap but readClosedPriorRoundLogs drops it, so the cap-round authority could be an earlier round: fail closed.
   let unreadable = 0;
-  const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, onUnreadable: () => { unreadable += 1; } })).at(-1);
+  const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, includeRetainedCurrentHead: true, onUnreadable: () => { unreadable += 1; } })).at(-1);
   // The persisted severity verdict can read `clean` for judge-act mediums whose posted review composes findings_present: an open act item makes the round a cap round too.
   if (unreadable > 0 || !log || (log.verdict !== "findings_present" && log.verdict !== "clean" && listOpenActItems(log.findings).length === 0)) return null;
   // An act item the sealed cap-round delta record marks resolved is fixed, not residue; with no verifiable record every act item stays.
