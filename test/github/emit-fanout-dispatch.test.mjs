@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import { REVIEWER_VERIFIED_ITEMS_INSTRUCTION, REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, listPriorFindingsLogHeads, main, unitBudgetBasis } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
-import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, readCompletedAnglesForHead, renderPrBodyRead, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
@@ -2220,5 +2220,59 @@ test("operator focus: an empty --operator-focus-file is a usage error (exit 2)",
     const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--operator-focus-file", ""], { cwd: tmpDir });
     assert.equal(result.status, 2);
     assert.match(result.stderr, /--operator-focus-file must not be an empty value/);
+  });
+});
+
+test("a PR-body-only edit re-runs only the body-reading unit and the round-1 ledger is kept as a retained round", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const gate = "draft_gate";
+    const angles = ["scope", "correctness", "holistic", "pr-description"];
+    await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: { fanout: { groups: [
+      { name: "process", angles: ["scope", "pr-description"] },
+      { name: "correctness-input", angles: ["correctness", "holistic"] },
+    ] } } }), "utf8");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    assert.deepEqual(errors, []);
+    const tmpRoot = path.join(repoRoot, "tmp");
+    const id = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA };
+    const build = async (prBody) => {
+      const completedAngles = await readCompletedAnglesForHead({ ...id, tmpRoot: "tmp", prBodySha256: createHash("sha256").update(renderPrBodyRead(prBody)).digest("hex") }, { repoRoot });
+      const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles), "--pr-body", prBody]);
+      return writeGateContext({ ...options, config, fanoutDispatch: resolveFanoutDispatch(config, "draft", angles, { completedAngles }) }, { repoRoot });
+    };
+    const emit = (pending) => {
+      const out = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, ...(pending ? ["--pending"] : [])], { cwd: repoRoot });
+      assert.equal(out.status, 0, out.stderr || out.stdout);
+      return JSON.parse(out.stdout);
+    };
+    const findingsDir = buildGateReviewsDir({ ...id, tmpRoot });
+    const emitPlan = buildGateEmitPlanPath({ ...id, tmpRoot });
+    const review = async (units, prefixHash) => {
+      await mkdir(findingsDir, { recursive: true });
+      for (const unit of units) {
+        await writeFile(path.join(tmpRoot, `${CHECKPOINT_SENTINEL_PREFIX}${unit.scope}-${HEAD_SHA}.json`), JSON.stringify({ scope: unit.scope, prefixHash }), "utf8");
+        const pulled = runPullCli(unit, { cwd: repoRoot });
+        assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
+        for (const angle of unit.angles) await writeFile(path.join(findingsDir, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: HEAD_SHA, findings: [] }), "utf8");
+      }
+    };
+    const closeRound = async () => {
+      const fanin = await consolidateGateFanin({ findingsDir, repoRoot, tmpRoot, gate, headSha: HEAD_SHA, emitPlan, expectedDispatchUnits: JSON.parse(await readFile(emitPlan, "utf8")).units.length, resolvedAngles: angles });
+      assert.equal(fanin.overallVerdict, "clean", JSON.stringify(fanin));
+      return writeGateFindingsLog({ ...id, verdict: "clean", findings: "[]", executionMode: "fanout_fanin", emitPlan, tmpRoot }, { repoRoot });
+    };
+
+    const first = await build("Original");
+    await review(emit(false).units, first.prefixHash);
+    await closeRound();
+
+    const second = await build("Edited");
+    assert.equal(second.prefixHash, first.prefixHash);
+    const pending = emit(true);
+    assert.deepEqual(pending.units.map((unit) => unit.angles), [["scope", "pr-description"]]);
+    await review(pending.units, first.prefixHash);
+    const written = await closeRound();
+    assert.deepEqual(written.log.provenance.perAngle.map((entry) => entry.angle).sort(), [...angles].sort());
+    assert.ok((await readdir(path.dirname(written.path ?? buildGateFaninLedgerPath({ ...id, tmpRoot })))).some((name) => name === `${gate}-${HEAD_SHA}.round-1.json`));
   });
 });

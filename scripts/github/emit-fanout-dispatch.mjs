@@ -437,6 +437,11 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // path's freshness for. ENOENT on the rm is fine (no prior plan exists).
   // The success-only WRITE at the end of main is unchanged — this removes,
   // it does not pre-persist anything.
+  // A --pending emission replaces the keyed plan with the pending units only. The prior plan is read first so
+  // units that completed in an earlier wave of this round can stay in the persisted plan (see resumedUnits below).
+  const priorPlan = pendingOnly
+    ? await readFile(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), "utf8").then((text) => JSON.parse(text), () => null)
+    : null;
   try {
     await rm(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), { force: true });
   } catch (err) {
@@ -833,9 +838,18 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const payload = { ok: true, gate, headSha, repo, pr, pending: pendingOnly, roundId, count: emitted.length, maxConcurrent, units: emitted };
   if (carryProof !== undefined) payload.carried = carryProof;
   const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
+  // Units of the prior plan whose angles all completed in this round and are not re-emitted keep their fan-in
+  // provenance: they stay in the persisted plan, marked resumed, but never in the dispatch list printed above.
+  const completedAngles = new Set(artifact.fanout?.preflight?.completedAngles ?? []);
+  const emittedAngles = new Set(emitted.flatMap((unit) => unit.angles));
+  const resumedUnits = (Array.isArray(priorPlan?.units) ? priorPlan.units : [])
+    .filter((unit) => priorPlan.gate === gate && priorPlan.headSha === headSha && Array.isArray(unit.angles) && unit.angles.length > 0
+      && unit.angles.every((angle) => completedAngles.has(angle) && !emittedAngles.has(angle)))
+    .map((unit) => ({ ...unit, resumed: true }));
+  const persistedPayload = resumedUnits.length > 0 ? { ...payload, units: [...emitted, ...resumedUnits], count: emitted.length + resumedUnits.length } : payload;
   try {
     await mkdir(path.dirname(planPath), { recursive: true });
-    await persistPlan(planPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    await persistPlan(planPath, `${JSON.stringify(persistedPayload, null, 2)}\n`, "utf8");
   } catch (err) {
     try {
       await rm(planPath, { force: true });
