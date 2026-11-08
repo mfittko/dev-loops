@@ -11,7 +11,7 @@ import { test } from "bun:test";
 import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, codeTreeSkewNote, executionIndexPath, materializationHash, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { seedJudgeSources } from "../loop/_judge-delivery-fixture.mjs";
-import { withTempDir } from "../_helpers.mjs";
+import { withTempDir, writeGhStub } from "../_helpers.mjs";
 import { findRetirementAfter, main as pullMain, pullDelegationTarget, shouldRetryFixerPullLocally } from "../../scripts/github/pull-work-order.mjs";
 import { keyedFixerPlanPathForRef } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { shellQuote } from "../../scripts/lib/checkout-delegation-refusal.mjs";
@@ -494,7 +494,7 @@ test("historical judge pull delegates to the index-owning new renderer and its p
     const emit = async (root) => {
       const sources = await seedJudgeSources(root, { headSha: HEAD, pr: 800000 + parseInt(randomBytes(3).toString("hex"), 16) });
       const result = spawnSync("node", [path.join(root, "scripts/loop/emit-judge-work-order.mjs"), "--repo", sources.repo, "--pr", String(sources.pr), "--gate", sources.gate, "--head-sha", HEAD,
-        "--findings-file", sources.findingsFile, "--spec-file", sources.specFile, "--identity-file", sources.identityFile], { cwd: root, encoding: "utf8" });
+        "--findings-file", sources.findingsFile, "--spec-file", sources.specFile, "--identity-file", sources.identityFile], { cwd: root, encoding: "utf8", env: (await writeGhStub(root, [{ stdout: JSON.stringify({ body: "Declared scope: fix the finding.\n" }) }], { repeatLastOnOverflow: true })).env });
       assert.equal(result.status, 0, result.stdout + result.stderr);
       return JSON.parse(await readFile(JSON.parse(result.stdout).planPath, "utf8"));
     };
