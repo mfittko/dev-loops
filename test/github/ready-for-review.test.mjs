@@ -874,11 +874,11 @@ test("absolute and unapproved T1 size limits remain unwaivable", async () => {
   }
 });
 
-test("size waiver --reason carrying an operator-owned release approval is refused with no gh write", async () => {
-  const { result, calls } = await runWaiverCase({ config: DEFAULT_WAIVER, args: ["--reason", "approve release v1.2.3"] });
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /OPERATOR-OWNED-LINE/);
-  assert.ok(!calls.some((call) => call[0] === "pr" && ["ready", "comment"].includes(call[1])));
+test("size waiver --reason carrying an operator-owned release approval is neutralized in the record", async () => {
+  const { result, commentBody } = await runWaiverCase({ config: DEFAULT_WAIVER, args: ["--reason", "approve release v1.2.3"], allow: true });
+  assert.equal(result.code, 0, result.stderr);
+  assert.ok(!commentBody.split("\n").some((line) => /^approve release/i.test(line)));
+  assert.match(commentBody, /\*\*justification:\*\* `approve release`/);
 });
 
 test("approved T1 size waiver names its approver", async () => {
