@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, test } from "bun:test";
@@ -9,6 +9,8 @@ import { runGitFixture } from "../_helpers.mjs";
 
 let dir;
 let cwd;
+let savedGitDir;
+let savedGitWorkTree;
 const git = (...args) => runGitFixture(dir, ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args]);
 const run = (args) => {
   let out = "";
@@ -19,6 +21,10 @@ const run = (args) => {
 
 beforeAll(() => {
   cwd = process.cwd();
+  savedGitDir = process.env.GIT_DIR;
+  savedGitWorkTree = process.env.GIT_WORK_TREE;
+  delete process.env.GIT_DIR;
+  delete process.env.GIT_WORK_TREE;
   dir = mkdtempSync(path.join(tmpdir(), "prose-inv-"));
   git("init", "-q");
   git("config", "user.email", "t@example.com");
@@ -32,6 +38,8 @@ beforeAll(() => {
 
 afterAll(() => {
   process.chdir(cwd);
+  if (savedGitDir === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = savedGitDir;
+  if (savedGitWorkTree === undefined) delete process.env.GIT_WORK_TREE; else process.env.GIT_WORK_TREE = savedGitWorkTree;
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -118,7 +126,7 @@ test("a dash-leading revision exits 2 and writes no file", () => {
     assert.equal(code, 2);
     assert.equal(out, "");
   }
-  assert.equal(existsSync(`${target}:same.md`), false);
+  assert.deepEqual(readdirSync(dir).filter((name) => name.startsWith("inj")), []);
 });
 
 test("accepted revision forms exit 0", () => {
