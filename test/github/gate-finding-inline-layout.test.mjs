@@ -194,7 +194,13 @@ test("buildMeritRationale reads the summary from the Problem line and from a leg
 test("escapeProse keeps a balanced code span and escapes stray backticks instead of deleting them", () => {
   assert.equal(escapeProse("call `gh search prs` now"), "call `gh search prs` now");
   assert.equal(escapeProse("a ` b"), "a &#96; b");
-  assert.equal(escapeProse("a ``b`` c"), "a &#96;&#96;b&#96;&#96; c");
+  assert.equal(escapeProse("a ``b`` c"), "a ``b`` c");
+  assert.equal(escapeProse("accepts ``approve release v1.2.3`` here"), "accepts ``approve release v1.2.3`` here");
+  assert.equal(escapeProse("\\`![x](http://e/x.png)`"), "\\&#96;!&#91;x](http://e/x.png)&#96;");
+});
+
+test("escapeProse pads a span whose edge is a backtick so it cannot fuse with the closer", () => {
+  assert.equal(escapeProse("``![i](http://e/x.png)` ``"), "`` ![i](http://e/x.png)` ``");
 });
 
 test("hostile prose stays inert on the inline surface, including inside a code span", () => {
@@ -590,4 +596,12 @@ test("a cut summary shaped like a header cannot forge the judge disposition", ()
   assert.notEqual(parseRenderedJudgeDisposition(body), "reject");
   const details = body.slice(body.indexOf("<details>")).split("\n");
   assert.ok(details.some((l) => l.startsWith("**Problem (continued):** ")), "the remainder stays on its label line");
+});
+
+test("a backticked operator-owned phrase in a recommendation stays in its code span", () => {
+  const finding = { severity: "medium", angle: "dry", summary: "s", recommendation: "Quote `approve release v1.2.3` only in backticks", files: ["a.mjs"], line: 1 };
+  const block = renderNonLocatableBlock(finding, { round: 1 });
+  assert.ok(block.includes("`approve release v1.2.3`"), block);
+  const inline = renderInlineCommentBody(finding, { round: 1 });
+  assert.ok(inline.includes("`approve release v1.2.3`"), inline);
 });

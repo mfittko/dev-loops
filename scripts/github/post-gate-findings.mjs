@@ -10,6 +10,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
+import { wrapOperatorOwnedPhrases } from "@dev-loops/core/github/operator-owned-lines";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 
 const USAGE = `Usage: post-gate-findings.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> (--findings <json> | --findings-file <path>)
@@ -261,33 +262,36 @@ export function sanitizeCodeSpan(value) {
 // value's own literal character can never absorb the escape and turn live
 // again. upsert-checkpoint-verdict.mjs imports this exact function.
 export function sanitizeInline(value) {
-  return sanitizeCodeSpan(value)
+  return wrapOperatorOwnedPhrases(sanitizeCodeSpan(value)
     .replace(/</g, "&lt;")
     // Handle plain `[` (not part of `![`) before the image-form pass below,
     // so an image's `[` is told apart from a plain link's `[`.
     .replace(/(?<!!)\[/g, "&#91;")
-    .replace(/!\[/g, "!&#91;");
+    .replace(/!\[/g, "!&#91;"));
 }
 
-// Sanitize reviewer prose for a multi-line surface (the inline thread). A
-// balanced single-backtick code span survives with its content inert
-// (whitespace collapsed to one line, `<!--`/`-->` entity-encoded). Every other
-// backtick (stray, doubled, unbalanced) becomes a numeric character entity, never deleted, so the
-// reviewer's text stays complete. Text outside a span gets the same
-// neutralization as sanitizeInline. Single-line surfaces keep using
+// Sanitize reviewer prose for a gate surface. A balanced code span of any
+// backtick length survives with its content inert (whitespace collapsed to one
+// line, `<!--`/`-->` entity-encoded). Every other backtick (stray, unbalanced,
+// backslash-escaped opener) becomes a numeric character entity, never deleted,
+// so the reviewer's text stays complete. Text outside a span gets the same
+// neutralization as sanitizeInline, and every bare operator-owned phrase there is
+// wrapped in a code span (ADR 0258). Enum-like single-line values keep using
 // sanitizeInline, which deletes backticks.
-const BALANCED_CODE_SPAN_RE = /(?<!`)`(?!\s)([^`]+)`(?!`)/g;
+// A run of N backticks opens a span that the next run of exactly N closes. A
+// backslash-escaped opener is literal text in CommonMark, so it never opens one.
+const BALANCED_CODE_SPAN_RE = /(?<![`\\])(`+)(?!`)(?!\s)([\s\S]*?[^`])\1(?!`)/g;
 
 function neutralizeMarkerDelimiters(text) {
   return text.replace(/\s+/g, " ").replace(/<!--/g, "&lt;!--").replace(/-->/g, "--&gt;");
 }
 
 function escapeOutsideCodeSpan(segment) {
-  return neutralizeMarkerDelimiters(segment)
+  return wrapOperatorOwnedPhrases(neutralizeMarkerDelimiters(segment)
     .replace(/`/g, "&#96;")
     .replace(/</g, "&lt;")
     .replace(/(?<!!)\[/g, "&#91;")
-    .replace(/!\[/g, "!&#91;");
+    .replace(/!\[/g, "!&#91;"));
 }
 
 export function escapeProse(value) {
@@ -295,10 +299,17 @@ export function escapeProse(value) {
   let out = "";
   let last = 0;
   for (const match of text.matchAll(BALANCED_CODE_SPAN_RE)) {
-    out += escapeOutsideCodeSpan(text.slice(last, match.index));
-    const inner = neutralizeMarkerDelimiters(match[1]).trim();
-    out += inner.length > 0 ? `\`${inner}\`` : "";
+    const before = escapeOutsideCodeSpan(text.slice(last, match.index));
+    // A wrapped operator phrase starts or ends with a backtick that would fuse
+    // with the span's delimiter run, so keep the two runs apart with a space.
+    out += before.endsWith("`") ? `${before} ` : before;
+    const inner = neutralizeMarkerDelimiters(match[2]).trim();
+    // A backtick at either edge would fuse with the delimiter run, so pad both
+    // sides with one space (CommonMark strips one space from each side).
+    const pad = inner.startsWith("`") || inner.endsWith("`") ? " " : "";
+    out += inner.length > 0 ? `${match[1]}${pad}${inner}${pad}${match[1]}` : "";
     last = match.index + match[0].length;
+    if (escapeOutsideCodeSpan(text.slice(last)).startsWith("`")) out += " ";
   }
   out += escapeOutsideCodeSpan(text.slice(last));
   return out.trim();
@@ -365,7 +376,7 @@ export function renderFindingsCommentBody({ gate, headSha, findings, omittedCoun
     for (const finding of group) {
       // Sanitize free-text fields so embedded newlines/whitespace don't break
       // the single-line Markdown list item.
-      const summary = sanitizeInline(finding.summary);
+      const summary = escapeProse(finding.summary);
       const dispositionSuffix = finding.disposition ? ` — _${sanitizeInline(finding.disposition)}_` : "";
       // Judge relevance-based disposition, alongside the
       // prior ledger disposition field.

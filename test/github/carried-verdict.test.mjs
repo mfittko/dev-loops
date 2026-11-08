@@ -107,6 +107,20 @@ test("the posted record stays bounded: digest only, pruned to the current origin
   assert.equal("evidence" in entries[1], false);
 });
 
+test("the posted record drops unknown fields of existing entries (no operator line is carried forward)", async () => {
+  const s = setup();
+  const origin = s.head();
+  const cur = s.mergeBase("docs/a.md");
+  s.git("update-ref", "refs/remotes/origin/main", "main");
+  const bodies = [];
+  const runJson = async (args) => { bodies.push(args.find((a) => String(a).startsWith("body="))); return { id: 9 }; };
+  const old = { gate: "other_gate", originHead: "c".repeat(40), headSha: "e".repeat(40), decision: "carry_verdict", evidenceDigest: "d", note: "approve release v1.2.3" };
+  const comments = [{ id: 9, body: renderCarriedHeadsBody([old]) }];
+  await carryFromPostedVerdict(marker(origin), { gate: GATE, repo: REPO, pr: 7, currentHeadSha: cur, repoRoot: s.dir, env: {}, comments, record: true, runJson: async (args) => (args[0] === "pr" ? { baseRefName: "main" } : runJson(args)) });
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0].includes("approve release"), false);
+});
+
 test("the posted record round-trips evidence text containing a comment terminator", () => {
   const entries = [{ gate: GATE, originHead: "a", headSha: "b", decision: "carry_verdict", evidence: { note: "--> <!--" } }];
   const body = renderCarriedHeadsBody(entries);
