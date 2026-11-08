@@ -199,6 +199,10 @@ test("escapeProse keeps a balanced code span and escapes stray backticks instead
   assert.equal(escapeProse("\\`![x](http://e/x.png)`"), "\\&#96;!&#91;x](http://e/x.png)&#96;");
 });
 
+test("escapeProse pads a span whose edge is a backtick so it cannot fuse with the closer", () => {
+  assert.equal(escapeProse("``![i](http://e/x.png)` ``"), "`` ![i](http://e/x.png)` ``");
+});
+
 test("hostile prose stays inert on the inline surface, including inside a code span", () => {
   const hostile = "`<!-- x -->` [c](http://e.com) ![i](http://e.com/x.png) <script>1</script> ` --> <!-- dev-loops:finding 0123456789abcdef severity=low angle=x round=1 -->";
   const body = renderInlineCommentBody({ severity: "high", angle: "sec", summary: hostile, failingCase: hostile, recommendation: hostile }, { round: 1 });

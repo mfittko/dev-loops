@@ -299,7 +299,10 @@ export function escapeProse(value) {
   for (const match of text.matchAll(BALANCED_CODE_SPAN_RE)) {
     out += escapeOutsideCodeSpan(text.slice(last, match.index));
     const inner = neutralizeMarkerDelimiters(match[2]).trim();
-    out += inner.length > 0 ? `${match[1]}${inner}${match[1]}` : "";
+    // A backtick at either edge would fuse with the delimiter run, so pad both
+    // sides with one space (CommonMark strips one space from each side).
+    const pad = inner.startsWith("`") || inner.endsWith("`") ? " " : "";
+    out += inner.length > 0 ? `${match[1]}${pad}${inner}${pad}${match[1]}` : "";
     last = match.index + match[0].length;
   }
   out += escapeOutsideCodeSpan(text.slice(last));
