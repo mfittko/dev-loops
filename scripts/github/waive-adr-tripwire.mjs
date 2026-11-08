@@ -109,14 +109,14 @@ async function defaultReadRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate
   }
 }
 
-/** Every trigger path must appear, backticked, in some row of the issue's valid AC / DoD matrix. */
-// Same-repo `Refs #a, #b and #c` issue numbers outside code spans and fences, de-duplicated.
-const REFS_RE = /\brefs\s*:?\s+(?:([\w.-]+\/[\w.-]+))?#(\d+)\b((?:(?:\s*,\s*(?:and\s+)?|\s+and\s+)#\d+\b)*)/giu;
+// Same-repo issue numbers of `Refs a/b#1, #2 and c/d#3` lists outside code spans and fences; each entry carries its own optional qualifier. De-duplicated.
+const REF_ENTRY = String.raw`(?:[\w.-]+\/[\w.-]+)?#\d+\b`;
+const REFS_RE = new RegExp(String.raw`\brefs\s*:?\s+${REF_ENTRY}(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+)${REF_ENTRY})*`, "giu");
 function extractSameRepoRefsIssueNumbers(body, repo) {
   const numbers = new Set();
-  for (const [, slug, first, rest] of stripFencesAndCodeSpans(body).matchAll(REFS_RE)) {
-    if (slug && !repoSlugEquals(slug, repo)) continue;
-    for (const raw of [first, ...[...rest.matchAll(/#(\d+)/gu)].map((x) => x[1])]) {
+  for (const [list] of stripFencesAndCodeSpans(body).matchAll(REFS_RE)) {
+    for (const [, slug, raw] of list.matchAll(/(?:([\w.-]+\/[\w.-]+))?#(\d+)\b/gu)) {
+      if (slug && !repoSlugEquals(slug, repo)) continue;
       const n = Number(raw);
       if (Number.isSafeInteger(n) && n > 0) numbers.add(n);
     }
@@ -124,6 +124,7 @@ function extractSameRepoRefsIssueNumbers(body, repo) {
   return [...numbers];
 }
 
+/** Every trigger path must appear, backticked, in some row of the issue's valid AC / DoD matrix. */
 export function pathsMissingFromMatrix(paths, issueBody) {
   const matrix = detectAcDodMatrix(issueBody);
   if (!matrix.found || !matrix.valid) return { matrixInvalid: true, missing: paths };

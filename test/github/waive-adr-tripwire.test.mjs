@@ -494,3 +494,25 @@ test("the default reader fails closed on a source ledger modified after it was s
     rmSync(repoRoot, { recursive: true, force: true });
   }
 });
+
+for (const [body, issues] of [
+  ["Refs o/n#7, #8\n", [7, 8]],
+  ["Refs #7, o/n#8\n", [7, 8]],
+  ["Refs #7, o/n#8 and #9\n", [7, 8, 9]],
+]) {
+  test(`a mixed-qualifier Refs list ${JSON.stringify(body)} counts each same-repo entry`, async () => {
+    const result = await assertRefusal({ fetchPr: refsPr(body) }, "ambiguous_refs_tracker_issue");
+    assert.deepEqual(result.issues, issues);
+  });
+}
+
+test("a cross-repo entry inside a Refs list does not count as this repo's issue", async () => {
+  const fetched = [];
+  const { run } = harness({
+    fetchPr: refsPr("Refs x/y#5, #7\n"),
+    fetchIssueBody: async ({ issue }) => { fetched.push(issue); return ISSUE_BODY; },
+  });
+  const result = await run();
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(fetched, [7]);
+});

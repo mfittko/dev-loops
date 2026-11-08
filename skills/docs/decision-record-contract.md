@@ -41,7 +41,7 @@ The operator records a standing authorization in `.devloops` under `standingAuth
   - `Closes`/`Fixes` links the issue;
   - a body with no closing keyword may link with `Refs`;
   - the one `Refs` target that carries a valid AC / DoD matrix is the linked issue, while two or more such targets refuse `ambiguous_refs_tracker_issue`;
-  - a same-repo list such as `Refs #7, #8 and #9` counts every number;
+  - a list such as `Refs #7, #8 and #9` counts every same-repo number, and each entry carries its own optional `owner/repo` qualifier (`Refs x/y#5, #7` counts only #7);
   - an unreadable target counts as carrying no matrix;
 - the tripwire at `origin/<baseRefName>...<headRefOid>` blocks, and every trigger is a `skills/docs/*-contract.md` path;
 - every triggering path appears, as a backticked repo path, in a row of the linked issue's valid `## AC / DoD matrix`;
