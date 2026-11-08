@@ -1143,10 +1143,12 @@ test("AC1: roundAnglesOf measures an earlier-head log against the PR's base on t
     runGitFixture(repo.dir, ["update-ref", "refs/remotes/origin/release", runGitFixture(repo.dir, ["rev-parse", "refs/remotes/origin/main"])]);
     const logHead = "a".repeat(40);
     const mainRefs = new Set();
-    const release = { ...seam, fetchPr: async () => ({ baseRefName: "release" }), baseOnlyMerge: async ({ fromHead, mainRef }) => { mainRefs.add(mainRef); return fromHead === logHead; } };
+    const order = [];
+    const release = { ...seam, fetchPr: async () => ({ baseRefName: "release" }), fetchBase: () => order.push("fetch"), baseOnlyMerge: async ({ fromHead, mainRef }) => { order.push("merge"); mainRefs.add(mainRef); return fromHead === logHead; } };
     const args = [...reviewerOnlyArgs(repo).map((arg, i, all) => (all[i - 1] === "--findings-log" ? capLog(repo.dir, logHead, []) : arg)), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")];
     assert.ok((await runDeltaCli(args, release)).input);
     assert.deepEqual([...mainRefs], ["origin/release"], "no call measures against the configured branch");
+    assert.ok(order.includes("merge") && order.indexOf("fetch") === 0, "the fetch precedes the first base-only-merge call");
   } finally { cleanup(repo); }
 });
 
@@ -1203,6 +1205,13 @@ test("a deleted gitlink under diff.ignoreSubmodules=all is refused when the patc
     await assert.rejects(runDeltaCli(args, { ...seam, diffPatch: () => "diff --git a/docs.md b/docs.md\n+ diff --git a/vendor/sub b/vendor/sub\n" }), /gitlink_not_in_patch.*vendor\/sub/);
     const { input } = await runDeltaCli(args, { ...seam, diffPatch: () => 'diff --git a/docs.md b/docs.md\n+docs\ndiff --git "a/vendor/sub" "b/vendor/sub"\n' });
     assert.ok(input.patchPath);
+    // A name with a tab and a quote is C-quoted the way git writes it.
+    git("update-index", "--add", "--cacheinfo", `160000,${"b".repeat(40)},v/t\tq"x`);
+    git("commit", "-qm", "odd gitlink");
+    const odd = { ...repo, baseline: moved.head, head: git("rev-parse", "HEAD") };
+    const oddArgs = [...reviewerOnlyArgs(odd), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r2.json")];
+    await assert.rejects(runDeltaCli(oddArgs, { ...seam, staleSurface: () => [], diffPatch: () => "diff --git a/docs.md b/docs.md\n" }), /gitlink_not_in_patch/);
+    assert.ok((await runDeltaCli(oddArgs, { ...seam, staleSurface: () => [], diffPatch: () => 'diff --git "a/v/t\\tq\\"x" "b/v/t\\tq\\"x"\n' })).input.patchPath);
   } finally { cleanup(repo); }
 });
 

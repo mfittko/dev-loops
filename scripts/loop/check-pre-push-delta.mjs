@@ -277,8 +277,9 @@ function patchNamesFile(patch, file) {
   const text = patch.toString("utf8");
   const cut = text.indexOf("\n# Resolution diff of merge ");
   const lines = (cut === -1 ? text : text.slice(0, cut)).split("\n");
-  const quoted = JSON.stringify(file);
-  return lines.some((l) => l === `diff --git a/${file} b/${file}` || l === `diff --git "a/${quoted.slice(1, -1)}" "b/${quoted.slice(1, -1)}"`);
+  const named = { 7: "a", 8: "b", 9: "t", 10: "n", 11: "v", 12: "f", 13: "r", 34: '"', 92: "\\" };
+  const quoted = [...file].map((ch) => { const c = ch.charCodeAt(0); return named[c] ? `\\${named[c]}` : c < 32 || c === 127 ? `\\${c.toString(8).padStart(3, "0")}` : ch; }).join("");
+  return lines.some((l) => l === `diff --git a/${file} b/${file}` || l === `diff --git "a/${quoted}" "b/${quoted}"`);
 }
 
 // The paths in `ownPaths` whose entry is a gitlink (mode 160000) on either side of baseline..head.
