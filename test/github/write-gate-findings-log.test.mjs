@@ -3408,3 +3408,27 @@ test("writeGateFindingsLog replaces a repeated write of one judged round and nev
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("writeGateFindingsLog appends the pinned Copilot body cluster and records its judgeDisposition (issue 3080 AC11)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-body-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const body = JSON.stringify({ angle: "copilot-body", findings: [{ severity: "medium", summary: "Refs list drops entries", recommendation: "parse both forms" }] });
+    await writeFile(path.join(tmpDir, "body.json"), body);
+    const { createHash } = await import("node:crypto");
+    const workOrder = { copilotBodyClusterId: 1, requiredReads: [{ kind: "copilot-body-feedback", path: path.join(tmpDir, "body.json"), sha256: createHash("sha256").update(body).digest("hex") }] };
+    await writeFile(path.join(tmpDir, "judge-emit-plan.json"), JSON.stringify({ workOrder }));
+    await mkdir(path.join(tmpDir, "j1730000000000-deadbeef"), { recursive: true });
+    const judgeVerdict = path.join(tmpDir, "j1730000000000-deadbeef", "judge-verdict.json");
+    const act = (index) => ({ index, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "x", criterion: "AC-1" });
+    await writeFile(judgeVerdict, JSON.stringify({ headSha, scopeDrift: { verdict: "within_scope", rationale: "ok", driftedAreas: [] }, dispositions: [act(0), act(1)] }));
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 44, gate: "pre_approval_gate", headSha, verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "medium", angle: "correctness", summary: "null deref", clusterId: 0 }]), judgeVerdict, tmpRoot: tmpDir,
+    });
+    const written = JSON.parse(await readFile(result.path, "utf8")).findings.find((f) => f.angle === "copilot-body");
+    assert.equal(written.judgeDisposition, "act");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});

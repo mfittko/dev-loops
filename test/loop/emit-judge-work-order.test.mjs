@@ -695,3 +695,21 @@ test("2678: the Judgment section leaves the digest check to the pull", async () 
     assert.match(judgment, /the Codex after-pull setup above still governs Codex/);
   });
 });
+
+test("issue 3080 AC11: the work order stamps copilotBodyClusterId one above the highest clusterId, and the judgment text tells the judge to dispose it", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    await writeFile(path.join(root, sources.findingsFile), JSON.stringify({ overallVerdict: "findings_present", findings: [{ severity: "high", summary: "a", clusterId: 0 }, { severity: "low", summary: "b", clusterId: 4 }] }));
+    const derived = copilotBodyJudgePath({ tmpRoot: path.join(root, "tmp"), repo: sources.repo, pr: sources.pr, headSha: sources.headSha });
+    assert.equal("copilotBodyClusterId" in (await emitJudgeWorkOrder(sources)).workOrder, false, "no read, no cluster");
+    await mkdir(path.dirname(derived), { recursive: true });
+    await writeFile(derived, JSON.stringify({ angle: "copilot-body", findings: [{ severity: "medium", summary: "s", recommendation: "r" }] }));
+    const plan = await emitJudgeWorkOrder(sources);
+    assert.equal(plan.workOrder.copilotBodyClusterId, 5);
+    const text = await readFile(plan.promptPath, "utf8");
+    assert.match(text, /It is cluster 5 of this round: you MUST dispose it with a disposition whose `index` is 5/);
+    assert.ok(!text.includes("note it in the scopeDrift rationale"));
+    await writeFile(path.join(root, sources.findingsFile), JSON.stringify({ overallVerdict: "clean", findings: [] }));
+    assert.equal((await emitJudgeWorkOrder(sources)).workOrder.copilotBodyClusterId, 0, "an empty read gives cluster 0");
+  });
+});

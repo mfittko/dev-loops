@@ -20,6 +20,7 @@ const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { capClosedFor } from "@dev-loops/core/loop/gate-fanin";
 import { isInRoundRewrite, listPriorActItems, resolveDraftRoundCap } from "./write-gate-context.mjs";
+import { withPinnedCopilotBodyCluster } from "./_copilot-body-disposition.mjs";
 import { clusterFindings, clustersFromStampedIds, projectClusterDisposition } from "@dev-loops/core/loop/finding-cluster";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
@@ -886,7 +887,9 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       throw parseError(`--judge-verdict could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
     }
     const { lowFixCapped, round } = await roundCapState();
-    const enriched = applyJudgeDispositions(rawFindings, judgeVerdict, { pastCap: lowFixCapped, round });
+    // The judge disposed the pinned Copilot body finding as one more cluster (GATE-EXEC-COPILOT-BODY-TO-JUDGE); the plan beside the verdict names it.
+    const judgePlan = await readFile(path.join(path.dirname(path.dirname(judgePath)), "judge-emit-plan.json"), "utf8").then(JSON.parse, () => null);
+    const enriched = applyJudgeDispositions(await withPinnedCopilotBodyCluster(rawFindings, judgePlan?.workOrder), judgeVerdict, { pastCap: lowFixCapped, round });
     // Same cluster projection judge-pass applies: one judge decision per root cause, so the durable ledger
     // matches judge-pass's --ledger-out instead of dropping the cluster-normalized dispositions.
     const stamped = enriched.findings.every((f) => Number.isInteger(f?.clusterId));

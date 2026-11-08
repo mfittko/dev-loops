@@ -23,6 +23,8 @@ import {
   stripMarkdownCodeForScan,
 } from "@dev-loops/core/github/copilot-helpers";
 import { isSanctionedCopilotReviewerLogin, isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { isCommitContainedByHead } from "./_commit-containment.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
@@ -343,4 +345,19 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
       },
       judgeFinding: buildJudgeFinding(review),
     };
+}
+
+/**
+ * GATE-EXEC-COPILOT-BODY-TO-JUDGE: the findings the judge disposes, plus the pinned Copilot body finding as one cluster.
+ * A work order that pins no `copilot-body-feedback` read leaves `findings` unchanged. Otherwise the order must carry `copilotBodyClusterId`
+ * (a plan written before the cluster refuses with a re-emit message), and the pinned file must still hash to its pinned sha256.
+ */
+export async function withPinnedCopilotBodyCluster(findings, order) {
+  const pinned = order?.requiredReads?.find((read) => read?.kind === "copilot-body-feedback");
+  if (!pinned) return findings;
+  if (!Number.isInteger(order.copilotBodyClusterId)) throw new Error("GATE-EXEC-COPILOT-BODY-TO-JUDGE: the judge work order pins a copilot-body-feedback read but no copilotBodyClusterId; re-emit the judge work order with emit-judge-work-order.mjs");
+  const bytes = await readFile(pinned.path);
+  if (createHash("sha256").update(bytes).digest("hex") !== pinned.sha256) throw new Error(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${pinned.path} changed since the judge work order pinned it; re-emit the judge work order`);
+  const body = JSON.parse(bytes.toString("utf8"));
+  return [...findings, ...body.findings.map((finding) => ({ angle: body.angle, ...finding, clusterId: order.copilotBodyClusterId }))];
 }
