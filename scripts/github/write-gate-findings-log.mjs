@@ -911,7 +911,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     // emit-judge-work-order writes it under the checkout tmp; the main-anchored ledger tmp is the other candidate, and every readable plan counts, and any one that pins a Copilot read refuses.
     const judgePlanPaths = inJudgeDir
       ? [path.join(path.dirname(path.dirname(judgePath)), "judge-emit-plan.json")]
-      : [...new Set([options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot), path.join(repoRoot, "tmp")])]
+      : [...new Set([options.contextTmpRoot, options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot), path.join(repoRoot, "tmp")].filter(Boolean))]
         .map((root) => path.join(path.resolve(repoRoot, buildGateArtifactPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: root, dir: "gate-judge" })), "judge-emit-plan.json"));
     // Read every candidate: only ENOENT is absent, and a candidate that exists but fails to parse is refused, never skipped.
     const readablePlans = [];
