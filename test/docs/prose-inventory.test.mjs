@@ -61,6 +61,15 @@ test("a reworded MUST sentence is listed as review required", () => {
   assert.match(out, /review required\): The actor MUST act now\./);
 });
 
+test("an e.g. inside an obligation sentence does not split it", () => {
+  writeFileSync(path.join(dir, "eg.md"), "A transient failure (e.g. one 429) MUST NOT pin the provider. Other text.\n");
+  git("add", "eg.md");
+  git("commit", "-qm", "eg");
+  writeFileSync(path.join(dir, "eg.md"), "A permanent failure (e.g. one 429) MUST NOT pin the provider. Other text.\n");
+  const { out } = run(["--base", "HEAD", "eg.md"]);
+  assert.match(out, /review required\): A transient failure \(e\.g\. one 429\) MUST NOT pin the provider\./);
+});
+
 test("a missing base marker exits 1", () => {
   writeFileSync(path.join(dir, "a.md"), "The actor MUST act now.\n");
   const { code, out } = run(["--base", "HEAD", "a.md"]);

@@ -31,11 +31,11 @@ function readAt(rev, file) {
 
 const stats = (text) => ({ bytes: Buffer.byteLength(text), words: text.split(/\s+/).filter(Boolean).length });
 
-// ponytail: sentence split on terminal punctuation, so abbreviations like "e.g." split early; harmless for a presence check.
+// ponytail: sentence split on terminal punctuation, but not after "e.g."/"i.e." so a trigger clause stays with its MUST/SHALL; other abbreviations split early, harmless for a presence check.
 function obligations(text) {
   const withoutMarkers = text.replace(MARKER, "");
   return withoutMarkers
-    .split(/(?<=[.!?])\s+|\n\s*\n/)
+    .split(/(?<!\b(?:e\.g|i\.e)\.)(?<=[.!?])\s+|\n\s*\n/)
     .map(norm)
     .filter((s) => OBLIGATION.test(s));
 }
