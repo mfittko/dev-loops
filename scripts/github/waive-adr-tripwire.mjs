@@ -110,6 +110,20 @@ async function defaultReadRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate
 }
 
 /** Every trigger path must appear, backticked, in some row of the issue's valid AC / DoD matrix. */
+// Same-repo `Refs #a, #b and #c` issue numbers outside code spans and fences, de-duplicated.
+const REFS_RE = /\brefs\s*:?\s+(?:([\w.-]+\/[\w.-]+))?#(\d+)\b((?:(?:\s*,\s*(?:and\s+)?|\s+and\s+)#\d+\b)*)/giu;
+function extractSameRepoRefsIssueNumbers(body, repo) {
+  const numbers = new Set();
+  for (const [, slug, first, rest] of stripFencesAndCodeSpans(body).matchAll(REFS_RE)) {
+    if (slug && !repoSlugEquals(slug, repo)) continue;
+    for (const raw of [first, ...[...rest.matchAll(/#(\d+)/gu)].map((x) => x[1])]) {
+      const n = Number(raw);
+      if (Number.isSafeInteger(n) && n > 0) numbers.add(n);
+    }
+  }
+  return [...numbers];
+}
+
 export function pathsMissingFromMatrix(paths, issueBody) {
   const matrix = detectAcDodMatrix(issueBody);
   if (!matrix.found || !matrix.valid) return { matrixInvalid: true, missing: paths };
@@ -173,8 +187,7 @@ export async function waiveAdrTripwire(options, {
   const bodyIssues = extractClosingIssueNumbers(body);
   const linkedIssues = (prState.closingIssuesReferences?.nodes ?? prState.closingIssuesReferences ?? []).map((n) => n?.number).filter(Number.isInteger);
   // With no closing keyword, a same-repo Refs target is the link; the matrix step picks the issue.
-  const refsMatches = [...stripFencesAndCodeSpans(body).matchAll(/\brefs\s*:?\s+(?:([\w.-]+\/[\w.-]+))?#(\d+)\b((?:(?:\s*,\s*(?:and\s+)?|\s+and\s+)#\d+\b)*)/giu)];
-  const refsIssues = bodyIssues.length > 0 ? [] : [...new Set(refsMatches.filter((m) => !m[1] || repoSlugEquals(m[1], repo)).flatMap((m) => [m[2], ...[...m[3].matchAll(/#(\d+)/gu)].map((x) => x[1])]).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0))];
+  const refsIssues = bodyIssues.length > 0 ? [] : extractSameRepoRefsIssueNumbers(body, repo);
   if (bodyIssues.length === 0 && refsIssues.length === 0) {
     return refuse("lightweight_pr_body_path", `PR #${pr} links no tracker issue (a lightweight pr_body PR is not eligible)`);
   }
@@ -200,13 +213,12 @@ export async function waiveAdrTripwire(options, {
     issueBody = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
   } else {
     // The Refs target that carries a valid AC / DoD matrix is the issue; none carrying one falls to the first target and refuses below.
-    const fetched = [];
-    for (const n of refsIssues) {
-      // An unreadable target (deleted, transferred, a PR number) carries no matrix.
+    // An unreadable target (deleted, transferred, a PR number) carries no matrix.
+    const fetched = await Promise.all(refsIssues.map(async (n) => {
       let unreadable = false;
       const text = await fetchIssueBody({ repo, issue: n }, { env, ghCommand, runChild }).catch(() => { unreadable = true; return ""; });
-      fetched.push({ n, text, unreadable });
-    }
+      return { n, text, unreadable };
+    }));
     const carrying = fetched.filter(({ text }) => { const m = detectAcDodMatrix(text); return m.found && m.valid; });
     if (carrying.length > 1) {
       return refuse("ambiguous_refs_tracker_issue", `PR #${pr} Refs ${carrying.map(({ n }) => `#${n}`).join(", ")} carry an AC / DoD matrix; exactly one matrix-carrying tracker issue is required`, { issues: carrying.map(({ n }) => n) });

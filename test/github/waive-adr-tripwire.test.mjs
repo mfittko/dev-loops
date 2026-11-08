@@ -146,7 +146,7 @@ test("a Refs-linked tracker issue with a matrix passes the link check", async ()
   const result = await run();
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.issue, 7);
-  assert.deepEqual(fetched.sort(), [5, 7]);
+  assert.deepEqual(fetched.sort((a, b) => a - b), [5, 7]);
 });
 
 test("a Refs inside a code span or fence is no link", async () => {
