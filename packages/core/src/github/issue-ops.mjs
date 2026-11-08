@@ -236,7 +236,7 @@ export async function commentIssue(options, { env = process.env, ghCommand = "gh
   // issue/PR id (fail-closed unless explicitly allowlisted). `allowedRefs` is
   // the ONLY sanctioned escape for a deliberate cross-reference, threaded from
   // the generic CLI writers' --allowed-refs option.
-  guardCommentBodyNoIssuePrIds(body, { ref: "issue comment body", allowedRefs: options.allowedRefs });
+  guardCommentBodyNoIssuePrIds(body, { ref: "issue comment body", allowedRefs: options.allowedRefs, standingAuthorization: options.standingAuthorization === true });
   const result = await run(
     ghCommand,
     ["issue", "comment", String(options.issue), "--repo", options.repo, "--body", body],

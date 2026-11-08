@@ -35,6 +35,7 @@ import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
+import { wrapOperatorOwnedPhrases } from "@dev-loops/core/github/operator-owned-lines";
 import { GATE_NAMES, GATE_VERDICTS } from "./_gate-names.mjs";
 
 // The one predicate for "counts as a submitted review with content": every
@@ -251,7 +252,7 @@ export function collectFingerprints(text, set) {
 
 function formatDeferredFindingEntry({ fingerprint, severity, angle, summary, refUrl }) {
   const detail = typeof summary === "string" && summary.trim().length > 0
-    ? sanitizeInline(neutralizeBareIssuePrIds(summary.trim()))
+    ? escapeProse(neutralizeBareIssuePrIds(summary.trim()))
     : (typeof refUrl === "string" && refUrl.trim().length > 0
       ? neutralizeBareIssuePrIds(refUrl.trim())
       : "(no summary recorded)");
@@ -387,7 +388,7 @@ export async function commentDeferredFindings(
 export function renderJudgeDetail({ judgeReason, followUpIssueNumber }) {
   const target = Number.isInteger(followUpIssueNumber) && followUpIssueNumber > 0 ? ` (follow-up ${followUpIssueNumber})` : "";
   const reason = typeof judgeReason === "string" && judgeReason.trim().length > 0
-    ? ` - ${sanitizeInline(neutralizeBareIssuePrIds(judgeReason)).replace(/judge:/gi, "judge -")}`
+    ? ` - ${escapeProse(neutralizeBareIssuePrIds(judgeReason)).replace(/judge:/gi, "judge -")}`
     : "";
   return `${target}${reason}`;
 }
@@ -397,11 +398,11 @@ export function renderFindingLine({ severity, angle, summary, judgeDisposition, 
   const judgeSuffix = typeof judgeDisposition === "string" && judgeDisposition.trim().length > 0
     ? ` — judge: ${sanitizeInline(judgeDisposition)}${renderJudgeDetail({ judgeReason, followUpIssueNumber })}`
     : "";
-  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary).replace(/judge:/gi, "judge -")}${judgeSuffix}`;
+  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${escapeProse(summary).replace(/judge:/gi, "judge -")}${judgeSuffix}`;
 }
 
 function renderRecommendationLine(recommendation) {
-  return `Recommendation: ${sanitizeInline(recommendation)}`;
+  return `Recommendation: ${escapeProse(recommendation)}`;
 }
 
 function hasRecommendation(finding) {
@@ -565,7 +566,7 @@ export function renderInlineCommentBody(finding, { round }) {
   if (hiddenFields.length > 0) {
     lines.push("<details><summary>Details</summary>", "");
     for (const field of hiddenFields) {
-      const rendered = field.code ? encodeCommentDelimiters(field.text) : escapeProse(field.text);
+      const rendered = field.code ? wrapOperatorOwnedPhrases(encodeCommentDelimiters(field.text)) : escapeProse(field.text);
       const text = boundDetailsText(rendered, hiddenFields.length, { prose: !field.code });
       // Prose stays on the label line so untrusted text never starts at column 0
       // (it could otherwise forge the header parseRenderedJudgeDisposition reads).

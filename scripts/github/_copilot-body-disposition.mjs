@@ -20,8 +20,8 @@ import {
   classifyCopilotReviewBodyDisposition,
   COPILOT_DISPOSITION,
   isCopilotErrorReview,
-  stripMarkdownCodeForScan,
 } from "@dev-loops/core/github/copilot-helpers";
+import { bareMarkdown, parseCopilotBodyDispositionMarker } from "@dev-loops/core/github/copilot-body-disposition-marker";
 import { isSanctionedCopilotReviewerLogin, isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
 import path from "node:path";
 import { isCommitContainedByHead } from "./_commit-containment.mjs";
@@ -33,18 +33,6 @@ export const copilotBodyJudgePath = ({ tmpRoot, repo, pr, headSha }) => {
   if (typeof headSha !== "string" || !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Error(`copilotBodyJudgePath: headSha must be 40 or 64 lowercase hex chars, got ${headSha}`);
   return path.join(tmpRoot, "gate-judge", repoSlugFor(repo), `pr-${Number(pr)}`, `copilot-body-${headSha}.json`);
 };
-
-const MARKER_RE = /<!--\s*dev-loops:copilot-body-disposition\s+review=(\S+)\s+head=([0-9a-fA-F]{40})\s+(?:fix=([0-9a-fA-F]{40})|operator)\s*-->/;
-
-
-// Only bare markdown counts: fenced blocks, inline code spans, and `>` quote
-// lines are dropped before matching, so a quoted or code-formatted marker is
-// never a record. The review-body marker also drops 4-space and tab indented
-// lines (`dropIndented`); the Copilot record keeps them, as before.
-const bareMarkdown = (body, { dropIndented = false } = {}) => stripMarkdownCodeForScan(body)
-  .split("\n")
-  .filter((bodyLine) => !/^\s*>/.test(bodyLine) && !(dropIndented && /^(?: {4}|\t)/.test(bodyLine)))
-  .join("\n");
 
 // The fixer-verifier reply on a review body: separate from the Copilot record above and never a record for it.
 const REVIEW_BODY_MARKER_RE = /<!--\s*dev-loops:review-body-disposition\s+review=(\S+)\s+fix=([0-9a-fA-F]{40})\s*-->/g;
@@ -71,18 +59,7 @@ export async function readReviewMarkerCommits(reviewIds, ctx, runtime) {
   return reviewIds.map((reviewId) => ({ reviewId, markerCommits: markers.filter((m) => m.trusted && m.reviewId === reviewId).map((m) => m.fixSha) }));
 }
 
-export function parseCopilotBodyDispositionMarker(body) {
-  if (typeof body !== "string") return null;
-  const bare = bareMarkdown(body);
-  const match = MARKER_RE.exec(bare);
-  if (!match) return null;
-  return {
-    reviewId: match[1],
-    headSha: match[2].toLowerCase(),
-    fixSha: match[3] ? match[3].toLowerCase() : null,
-    operator: !match[3],
-  };
-}
+export { parseCopilotBodyDispositionMarker };
 
 // ADR 0238: the shared trust predicate lives in comment-trust.mjs; this stays as the REST alias.
 export function isTrustedDispositionAuthor(comment) {

@@ -3,7 +3,6 @@ import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { parsePositiveInteger, parseAllowedRefsCsv, requireTokenValue, resolveBodyOrFile, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { operatorOwnedCommentLineRefusal } from "../loop/adr-waiver-markers.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -25,9 +24,12 @@ Optional:
   --allowed-refs <csv>          Comma-separated numeric issue/PR ids to allow as
                                 deliberate cross-references in the body (the
                                 no-ids-in-comments guard refuses any other #<digits>)
-Refusal: a body with a line that opens with \`approve merge\` (operator-owned merge
-approval) or an \`adr-tripwire:allow\` line (ADR tripwire waiver) is refused with
-OPERATOR-OWNED-LINE, exit 1, no PATCH. There is no override flag.
+  --standing-authorization      Assert a recorded standing operator authorization. Clears
+                                only the Copilot body-disposition \`operator\` marker.
+                                Accepted forms: bare, =true, =1. Any other value keeps the refusal.
+Refusal: a body with an operator-owned line (\`approve merge\`, \`approve release v<version>\`,
+\`adr-tripwire:allow\`, or a Copilot \`operator\` marker without the flag) is refused with
+OPERATOR-OWNED-LINE, exit 1, no GitHub write. \`--allowed-refs\` never clears it. The human posts the line.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "commentId": 123, "commentUrl": "https://github.com/owner/repo/issues/17#issuecomment-123" }
 Error output (stderr, JSON):
@@ -49,6 +51,7 @@ export function parseEditCommentCliArgs(argv) {
       body: { type: "string" },
       "body-file": { type: "string" },
       "allowed-refs": { type: "string" },
+      "standing-authorization": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -62,6 +65,7 @@ export function parseEditCommentCliArgs(argv) {
     body: undefined,
     bodyFile: undefined,
     allowedRefs: [],
+    standingAuthorization: false,
     jq: undefined,
     silent: false,
   };
@@ -94,6 +98,10 @@ export function parseEditCommentCliArgs(argv) {
         throw parseError("--body-file must be a non-empty path");
       }
       options.bodyFile = rawPath;
+      continue;
+    }
+    if (token.name === "standing-authorization") {
+      options.standingAuthorization = token.value === undefined || /^(?:true|1)$/iu.test(String(token.value).trim());
       continue;
     }
     if (token.name === "allowed-refs") {
@@ -133,13 +141,12 @@ async function resolveBody(options) {
 // single call covers editing either kind without needing to know which one it is.
 export async function editComment(options, { env = process.env, ghCommand = "gh", run = runChild } = {}) {
   const body = await resolveBody(options);
-  const refusal = operatorOwnedCommentLineRefusal(body);
-  if (refusal !== null) throw new Error(refusal);
   // ISSUE/PR-ID GUARD (#1731): a modified comment body must never carry a raw
   // issue/PR id (fail-closed unless explicitly allowlisted), mirroring
   // commentIssue in issue-ops.mjs. `allowedRefs` is the ONLY sanctioned escape
   // for a deliberate cross-reference, threaded from the --allowed-refs option.
-  guardCommentBodyNoIssuePrIds(body, { ref: "edited comment body", allowedRefs: options.allowedRefs });
+  // The same guard refuses operator-owned lines (OPERATOR-OWNED-LINE).
+  guardCommentBodyNoIssuePrIds(body, { ref: "edited comment body", allowedRefs: options.allowedRefs, standingAuthorization: options.standingAuthorization === true });
   const result = await run(
     ghCommand,
     ["api", "-X", "PATCH", `repos/${options.repo}/issues/comments/${options.commentId}`, "-f", `body=${body}`],

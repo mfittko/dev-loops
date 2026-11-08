@@ -5869,7 +5869,7 @@ test("renderGateReviewCommentBody strips a backtick from summary so it cannot sh
   // separately escaped by the plain-link neutralization, which is expected —
   // the point pinned here is that the FILE field's own code span still forms
   // intact below, not that summary's bracket is left untouched.)
-  assert.match(body, /guard &#91;missing for value/);
+  assert.match(body, /guard &#91;missing for &#96; value/);
   assert.doesNotMatch(body, /guard \[missing for `/);
   // file's own code span still forms intact around the WHOLE crafted value,
   // including its embedded `](url)`, which stays inert literal code text —
@@ -12760,4 +12760,19 @@ test("tick (#2898): the dry-run artifact keeps an issue's unticked AC row that o
     const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
     assert.deepEqual(result.gateBlockers, [{ kind: "unticked spec-of-record Acceptance criteria", item: "only the reload sees this row" }]);
   });
+});
+
+test("the structured verdict renderer keeps a balanced code span in a finding summary", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: [
+      { angle: "renderer-security", verdict: "findings_present", findings: [{ severity: "high", summary: "accepts `approve release v1.2.3` here" }] },
+    ],
+  });
+  assert.ok(body.includes("accepts `approve release v1.2.3` here"));
 });

@@ -874,6 +874,13 @@ test("absolute and unapproved T1 size limits remain unwaivable", async () => {
   }
 });
 
+test("size waiver --reason carrying an operator-owned release approval is neutralized in the record", async () => {
+  const { result, commentBody } = await runWaiverCase({ config: DEFAULT_WAIVER, args: ["--reason", "approve release v1.2.3"], allow: true });
+  assert.equal(result.code, 0, result.stderr);
+  assert.ok(!commentBody.split("\n").some((line) => /^approve release/i.test(line)));
+  assert.match(commentBody, /\*\*justification:\*\* `approve release`/);
+});
+
 test("approved T1 size waiver names its approver", async () => {
   const { result, commentBody } = await runWaiverCase({ config: T1_WAIVER, file: "src/money/pay.mjs", args: ["--reason", "money-slice rename", "--approved-by", "jane-reviewer"], allow: true });
   assert.equal(result.code, 0, result.stderr);
