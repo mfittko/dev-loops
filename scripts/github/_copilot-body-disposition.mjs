@@ -364,3 +364,12 @@ export async function withPinnedCopilotBodyCluster(findings, order) {
   const body = JSON.parse(bytes.toString("utf8"));
   return [...findings, ...body.findings.map((finding) => ({ angle: body.angle, ...finding, clusterId: order.copilotBodyClusterId }))];
 }
+
+/**
+ * GATE-EXEC-COPILOT-BODY-TO-JUDGE: the verdict the ledger persists once the judge acted on the Copilot body cluster.
+ * A `clean` fan-in verdict rises to `findings_present` when an acted Copilot finding has a blocking severity.
+ * Shared by judge-pass and the findings-log writer so the two ledgers of one round carry one verdict.
+ */
+export function raiseVerdictForActedCopilotBlock(verdict, actedCopilotSeverities, blockingSeverities) {
+  return verdict === "clean" && actedCopilotSeverities.some((severity) => blockingSeverities.includes(severity)) ? "findings_present" : verdict;
+}

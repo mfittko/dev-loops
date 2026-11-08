@@ -38,7 +38,7 @@ import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
-import { withPinnedCopilotBodyCluster } from "../github/_copilot-body-disposition.mjs";
+import { raiseVerdictForActedCopilotBlock, withPinnedCopilotBodyCluster } from "../github/_copilot-body-disposition.mjs";
 import { codeTreeSkewNote, materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { ANY_SCOPE } from "@dev-loops/core/loop/gate-round-retirement";
@@ -1058,8 +1058,7 @@ export async function judgePassCli(
   const actAtInputSeverity = result.enriched.flatMap((f, i) => (isOpenActItem(f) ? [{ i, f: { ...f, severity: judged[i]?.severity ?? f.severity } }] : []));
   // Only ledger findings (below findings.length) were weighed by the consolidator; an acted Copilot body cluster at a blocking severity raises the verdict instead.
   assertCleanImpliesNoBlockingAct(ledgerVerdict, actAtInputSeverity.filter((a) => a.i < findings.length).map((a) => a.f), blockingSeverities);
-  const copilotBlocks = actAtInputSeverity.some((a) => a.i >= findings.length && blockingSeverities.includes(a.f.severity));
-  const overallVerdict = ledgerVerdict === "clean" && copilotBlocks ? "findings_present" : ledgerVerdict;
+  const overallVerdict = raiseVerdictForActedCopilotBlock(ledgerVerdict, actAtInputSeverity.filter((a) => a.i >= findings.length).map((a) => a.f.severity), blockingSeverities);
 
   // Persist the durable approval record AFTER the act list is finalized, so a
   // round with remaining act findings approves nothing (re-entry stays honest).

@@ -23,7 +23,7 @@
  *   <tmpRoot>/gate-context/<repo-slug>/pr-<N>/<gate>-<headSha>.json
  */
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { link, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -1930,11 +1930,12 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
 }
 
 /**
- * The shared finished-round predicate. The writer stamps `roundIdentity: { roundId, judgeExecution }` on each ledger (the emit-plan round id and the judge execution identity, `null` when absent).
- * A stamped live same-head ledger is an in-round rewrite (replaced, not retained, not counted) only against an `incoming` write that shares its non-null `roundId` or `judgeExecution`
- * (an intermediate write of one round, or a repeated write of one judged round). When the incoming write carries no identity (or there is none, as for a reader) and the live stamp has no `judgeExecution`, the earlier shape below decides, so an aborted unjudged round is not counted. A stamped ledger with a `judgeExecution` is a finished round for such a reader,
- * so a judged or identity-stamped round counts and is retained. A ledger written before the stamp keeps the earlier shape:
- * at least one finding and no `judgeDisposition`. Every other closed ledger, including a clean one with `findings: []`, is a finished round.
+ * The shared finished-round predicate. The writer stamps `roundIdentity: { roundId, judgeExecution, completed }` on each ledger (the emit-plan round id and the judge execution identity, `null` when absent; `completed: true` on a finished round).
+ * A stamp without `completed: true` (an intermediate or aborted write) is always an in-round rewrite: replaced, not retained, not counted.
+ * A completed stamp is a rewrite only against an `incoming` write that shares its non-null `roundId` or `judgeExecution` (a repeated write of one round);
+ * for a reader or an identity-less incoming write it is a finished round that counts and is retained.
+ * Only a ledger written before the stamp (no `roundIdentity`) uses the earlier shape: at least one finding and no `judgeDisposition`.
+ * Every other closed ledger, including a clean one with `findings: []`, is a finished round.
  */
 export function isInRoundRewrite(log, incoming) {
   const stamp = log?.roundIdentity;
@@ -1957,8 +1958,8 @@ export function isInRoundRewrite(log, incoming) {
  *
  * A retained same-head round (`<gate>-<sha>.round-<n>.json`, kept when a head is
  * re-written) is a closed round at any other head. At the current head it is read only
- * with `includeRetainedCurrentHead` (the round count), so the disposition, act-item and
- * cap-round readers keep their pre-retention view of the current head.
+ * with `includeRetainedCurrentHead` (the round count and {@link resolveCapRound}), so the disposition and act-item
+ * readers keep their pre-retention view of the current head.
  * `includeLiveCurrentHead` reads the live current-head ledger (`<gate>-<sha>.json`) only when the shared finished-round
  * predicate holds, so it counts exactly when the writer will retain it.
  *
@@ -2155,6 +2156,8 @@ export const isCleanCapRound = (capRound) => capRound?.log?.verdict === "clean" 
  * The cap round of a draft_gate (ADR 0208): the last closed ledger when the completed rounds (the head being posted excluded) reached the cap and
  * that ledger is `findings_present` or `clean` (ADR 0250: a clean cap round has no act ref; its `residue` holds only `capClosed` items). Returns `{ log, residue }` or null. `residue` is the cap round's act items and `capClosed` items as
  * `{ fingerprint, file, line, title, disposition }`, the input `pre_approval_gate` receives.
+ * The candidate set is the closed prior rounds plus the retained rounds of the current head. The live current-head ledger is the round being posted
+ * (the head excluded, as in the round count), so it is never the cap-round authority and the latest retained round at the head is.
  */
 export async function resolveCapRound(options, { repoRoot }) {
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
@@ -3467,8 +3470,9 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           if ((await stat(file)).mtimeMs < (await stat(path.resolve(repoRoot, "tmp", sentinel))).mtimeMs) return false;
           const parsed = JSON.parse(await readFile(file, "utf8"));
           const head = String(parsed?.headSha ?? "").trim().toLowerCase();
-          const bothFull = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(head) && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(wantHead);
-          return Array.isArray(parsed?.findings) && head.length > 0 && (bothFull ? head === wantHead : head.startsWith(wantHead) || wantHead.startsWith(head)) && baseAngleName(String(parsed.angle).trim().toLowerCase()) === baseAngleName(String(angle).trim().toLowerCase());
+          // The artifact must stamp a full SHA; only an abbreviated --head-sha may match by prefix.
+          const isFullSha = (sha) => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha);
+          return Array.isArray(parsed?.findings) && isFullSha(head) && (isFullSha(wantHead) ? head === wantHead : wantHead.length > 0 && head.startsWith(wantHead)) && baseAngleName(String(parsed.angle).trim().toLowerCase()) === baseAngleName(String(angle).trim().toLowerCase());
         } catch {
           return false;
         }
@@ -3491,8 +3495,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         if (unit.angles.length === 0 || pendingScopes.has(scope) || !sentinel) continue;
         if (!(await Promise.all(unit.angles.map((angle) => finishedArtifact(angle, sentinel)))).every(Boolean)) refuseInFlight(scope);
       }
+      // The pending membership regains a body-reading angle that the earlier round carried (never dispatched, so no artifact):
+      // check in-flight state against the membership that round dispatched, excluding the angles its context recorded as carried.
+      const priorCarried = new Set(((await readGateContext(options, { repoRoot }).catch(() => null))?.fanout?.preflight?.carriedAngles ?? []).map((angle) => String(angle).trim().toLowerCase()));
       for (const unit of options.fanoutDispatch.pendingGroups) {
         const angles = Array.isArray(unit?.angles) ? unit.angles : [];
+        const dispatched = angles.filter((angle) => !priorCarried.has(String(angle).trim().toLowerCase()));
         const scope = dispatchUnitScope(options.gate, unit);
         const sentinel = sentinelOf(scope);
         // A pending unit that holds no body-reading angle but finished with a live sentinel (a findings_present
@@ -3500,7 +3508,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         if (!sentinel && !angles.some((angle) => readsPrBody(angle, options.config, options.gate))) continue;
         if (sentinel) {
           // Any unfinished unit refuses: a non-body unit left live would be re-dispatched by the next --pending emission under a new execution.
-          if (!(await Promise.all(angles.map((angle) => finishedArtifact(angle, sentinel)))).every(Boolean)) refuseInFlight(scope);
+          if (!(await Promise.all(dispatched.map((angle) => finishedArtifact(angle, sentinel)))).every(Boolean)) refuseInFlight(scope);
           scopes.push(scope);
           retireHead = fullSha(sentinel);
         }
@@ -3530,7 +3538,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     const baselinePath = path.resolve(repoRoot, buildPrBodyBaselinePath({ ...options, tmpRoot: options.tmpRoot || "tmp" }));
     await mkdir(path.dirname(baselinePath), { recursive: true });
     // Atomic: write a private temp file, then link it into place (link fails with EEXIST when a baseline exists), so a reader never sees a partial baseline.
-    const tempPath = `${baselinePath}.${process.pid}.tmp`;
+    const tempPath = `${baselinePath}.${process.pid}.${randomUUID()}.tmp`;
     await writeFile(tempPath, `${prBodyBaselineSha256}\n`, "utf8");
     try {
       await link(tempPath, baselinePath);

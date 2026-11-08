@@ -10088,8 +10088,13 @@ test("resolveCapRound at the current head returns the retained round at H, never
     await writeFile(path.join(dir, `draft_gate-${head}.round-1.json`), JSON.stringify({
       repo: "owner/repo", pr: 71, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: "2026-11-05T00:00:00.000Z", findings: [],
     }), "utf8");
+    // A live ledger at H is the round being posted (the head excluded, as in the round count), so the retained round stays the cap-round authority.
+    await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
+      repo: "owner/repo", pr: 71, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: "2026-11-06T00:00:00.000Z", findings: [],
+    }), "utf8");
     const round = await resolveCapRound({ repo: "owner/repo", pr: 71, headSha: head }, { repoRoot });
     assert.equal(round.log.headSha, head);
+    assert.equal(round.log.loggedAt, "2026-11-05T00:00:00.000Z", "the retained round, not the live ledger");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -10110,23 +10115,50 @@ test("isInRoundRewrite: a stamped ledger is a rewrite only against an incoming w
   assert.equal(isInRoundRewrite({ findings: [{ severity: "low" }] }), true, "an unstamped ledger keeps the earlier shape");
 });
 
+// holistic is a completed unit after the edit (the non-pending loop); scope belongs to the body-reading process unit (the pending-unit loop).
 test("a body-only rebuild refuses a unit whose artifact is truncated or names another head or angle, and retires no sentinel (issue 3080 AC12)", async () => {
-  for (const [label, content] of [
-    ["truncated", '{"angle": "holistic", "verdict": "clean", "head'],
-    ["another head", JSON.stringify({ angle: "holistic", verdict: "clean", headSha: "cd".repeat(20), findings: [] })],
-    ["another angle", JSON.stringify({ angle: "scope", verdict: "clean", headSha: BODY_RERUN_SHA, findings: [] })],
-  ]) {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-invalid-artifact-"));
-    try {
-      await buildGateContext(bodyRerunInput("Original"), { repoRoot });
-      const reviews = await seedCompleteBodyRound(repoRoot);
-      await writeFile(path.join(reviews, "holistic.json"), content, "utf8");
-      const before = (await readdir(path.join(repoRoot, "tmp"))).sort();
-      await assert.rejects(buildGateContext(bodyRerunInput("Edited"), { repoRoot }), /GATE-EXEC-BODY-ONLY-RERUN.*unit draft-gate-holistic is in flight/s, label);
-      assert.deepEqual((await readdir(path.join(repoRoot, "tmp"))).sort(), before, `${label}: no sentinel retired`);
-    } finally {
-      await rm(repoRoot, { recursive: true, force: true });
+  for (const [angle, unit, other] of [["holistic", "draft-gate-holistic", "scope"], ["scope", "draft-gate-group-process", "holistic"]]) {
+    for (const [label, content] of [
+      ["truncated", `{"angle": "${angle}", "verdict": "clean", "head`],
+      ["another head", JSON.stringify({ angle, verdict: "clean", headSha: "cd".repeat(20), findings: [] })],
+      ["another angle", JSON.stringify({ angle: other, verdict: "clean", headSha: BODY_RERUN_SHA, findings: [] })],
+      ["a one-character head", JSON.stringify({ angle, verdict: "clean", headSha: BODY_RERUN_SHA.slice(0, 1), findings: [] })],
+    ]) {
+      const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-invalid-artifact-"));
+      try {
+        await buildGateContext(bodyRerunInput("Original"), { repoRoot });
+        const reviews = await seedCompleteBodyRound(repoRoot);
+        await writeFile(path.join(reviews, `${angle}.json`), content, "utf8");
+        const before = (await readdir(path.join(repoRoot, "tmp"))).sort();
+        await assert.rejects(buildGateContext(bodyRerunInput("Edited"), { repoRoot }), new RegExp(`GATE-EXEC-BODY-ONLY-RERUN.*unit ${unit} is in flight`, "s"), `${angle} ${label}`);
+        assert.deepEqual((await readdir(path.join(repoRoot, "tmp"))).sort(), before, `${angle} ${label}: no sentinel retired`);
+      } finally {
+        await rm(repoRoot, { recursive: true, force: true });
+      }
     }
+  }
+});
+
+test("a body-only rebuild retires a unit whose body-reading angle round 1 carried and never dispatched (issue 3080 AC13)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-carried-readsbody-"));
+  try {
+    const input = (prBody) => {
+      const config = draftConfig({ dynamicAngles: false, angles: ["scope", "srp", "ocp"], mandatoryAngles: [] });
+      config.gates.draft.angles = config.gates.draft.angles.map((entry) => ({ ...(typeof entry === "string" ? { name: entry } : entry), prompt: (entry.name ?? entry) === "scope" ? "The PR description is the contract." : "Review the diff." }));
+      config.gates.fanout = { groups: [{ name: "design", angles: ["scope", "srp", "ocp"] }] };
+      return { config, gate: "draft_gate", diff: null, repo: "owner/repo", pr: 90, headSha: BODY_RERUN_SHA, prBody, carriedAngles: ["scope"] };
+    };
+    // The first build records the sticky baseline; the second keeps the carried body-reading angle against it.
+    await buildGateContext(input("Original"), { repoRoot });
+    assert.deepEqual((await buildGateContext(input("Original"), { repoRoot })).artifact.fanout.preflight.carriedAngles, ["scope"]);
+    const reviews = path.resolve(repoRoot, buildGateReviewsDir({ repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: BODY_RERUN_SHA }));
+    await mkdir(reviews, { recursive: true });
+    await writeFile(path.join(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-group-design-${BODY_RERUN_SHA}.json`), "{}\n", "utf8");
+    for (const angle of ["srp", "ocp"]) await writeFile(path.join(reviews, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: BODY_RERUN_SHA, findings: [] }), "utf8");
+    const edited = await buildGateContext(input("Edited"), { repoRoot });
+    assert.deepEqual(edited.bodyOnlyRerun.scopes, ["draft-gate-group-design"], "the unit retires instead of refusing as in flight");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
   }
 });
 
