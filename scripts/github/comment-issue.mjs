@@ -102,7 +102,7 @@ export function parseCommentIssueCliArgs(argv) {
       continue;
     }
     if (token.name === "standing-authorization") {
-      options.standingAuthorization = true;
+      options.standingAuthorization = token.value === undefined || /^(?:true|1)$/iu.test(String(token.value).trim());
       continue;
     }
     if (token.name === "allowed-refs") {

@@ -36,6 +36,13 @@ test("both wrappers parse --standing-authorization, default false", () => {
   assert.equal(parseEditCommentCliArgs(["--repo", "o/n", "--comment-id", "9", "--body", "x", "--standing-authorization"]).standingAuthorization, true);
 });
 
+test("--standing-authorization inline values: true/1 assert, false/0/no do not", () => {
+  for (const [v, want] of [["true", true], ["1", true], ["false", false], ["0", false], ["no", false]]) {
+    assert.equal(parseCommentIssueCliArgs(["--repo", "o/n", "--issue", "7", "--body", "x", `--standing-authorization=${v}`]).standingAuthorization, want, v);
+    assert.equal(parseEditCommentCliArgs(["--repo", "o/n", "--comment-id", "9", "--body", "x", `--standing-authorization=${v}`]).standingAuthorization, want, v);
+  }
+});
+
 test("every entry is refused with --body and --body-file, no gh call, and --allowed-refs does not bypass", async () => {
   const dir = await mkdtemp(join(tmpdir(), "oowl-"));
   try {

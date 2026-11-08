@@ -110,13 +110,14 @@ test("approve-release: negated/instructional clauses are refused, a backticked m
 });
 
 test("approve-merge refuses every text verifyFreshHumanApproval accepts, quote and fence lines included", () => {
-  for (const body of [`approve merge ${SHA}`, `> approve merge ${SHA}`, `\`\`\`\napprove merge ${SHA}\n\`\`\``]) {
+  for (const body of [`approve merge ${SHA}`, `Approve Merge ${SHA}`, `- approve merge ${SHA}`, `  * approve   merge ${SHA}`, `> approve merge ${SHA}`, `\`\`\`\napprove merge ${SHA}\n\`\`\``]) {
     const result = verifyFreshHumanApproval({ approvedBy: "op", currentHeadSha: SHA, comments: [{ user: { login: "op" }, author_association: "OWNER", body }] });
     assert.equal(result.satisfied, true, body);
     assert.ok(findOperatorOwnedLineRefusal(body), body);
   }
   assert.ok(findOperatorOwnedLineRefusal(`> approve merge ${SHA}`));
   assert.equal(findOperatorOwnedLineRefusal("the operator must type approve merge <sha>"), null);
+  assert.equal(findOperatorOwnedLineRefusal("approve mergeable"), null);
 });
 
 test("operator marker: refused after a fix marker, refused for every match, fix form and non-bare forms pass", () => {
