@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, test } from "bun:test";
@@ -96,8 +96,29 @@ test("an unreadable working-tree path (committed at base, deleted at head) exits
   assert.match(err, /unreadable path/);
 });
 
-test("--head <rev> reads the revision and exits 0", () => {
-  assert.equal(run(["--base", "HEAD", "--head", "HEAD", "same.md"]).code, 0);
+test("--head <rev> reads the revision, not the working tree", () => {
+  const original = readFileSync(path.join(dir, "same.md"), "utf8");
+  writeFileSync(path.join(dir, "same.md"), "The marker is gone.\n");
+  try {
+    assert.equal(run(["--base", "HEAD", "--head", "HEAD", "same.md"]).code, 0);
+    assert.equal(run(["--base", "HEAD", "same.md"]).code, 1);
+  } finally {
+    writeFileSync(path.join(dir, "same.md"), original);
+  }
+});
+
+test("a directory path with --head exits 2 with empty stdout", () => {
+  mkdirSync(path.join(dir, "adir"), { recursive: true });
+  writeFileSync(path.join(dir, "adir", "x.md"), "x\n");
+  git("add", "adir");
+  git("commit", "-qm", "adir");
+  const { code, out } = run(["--base", "HEAD", "--head", "HEAD", "adir"]);
+  assert.equal(code, 2);
+  assert.equal(out, "");
+});
+
+test("an absolute path resolves the same on both sides", () => {
+  assert.equal(run(["--base", "HEAD", path.join(process.cwd(), "same.md")]).code, 0);
 });
 
 test("a cwd-relative path resolves the same on both sides from a subdirectory", () => {

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { isDirectCliRun } from "../lib/direct-run.mjs";
@@ -22,7 +23,7 @@ function readAt(rev, file) {
     }
   }
   try {
-    return execFileSync("git", ["show", `${rev}:./${file}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28 });
+    return execFileSync("git", ["cat-file", "blob", `${rev}:./${file}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28 });
   } catch {
     throw new UsageError(`unknown revision or unreadable path: ${rev}:${file}`);
   }
@@ -44,8 +45,9 @@ export function inventory({ base, head, paths }) {
   const sections = [];
   let missing = false;
   for (const file of paths) {
-    const baseText = readAt(base, file);
-    const headText = readAt(head, file);
+    const rel = path.relative(process.cwd(), path.resolve(file));
+    const baseText = readAt(base, rel);
+    const headText = readAt(head, rel);
     const b = stats(baseText);
     const h = stats(headText);
     rows.push(`| \`${file}\` | ${b.bytes} | ${b.words} | ${h.bytes} | ${h.words} | ${h.bytes - b.bytes} |`);
