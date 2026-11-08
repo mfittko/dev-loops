@@ -182,6 +182,15 @@ test("a readable matrix-less first target does not hide an unreadable later targ
   assert.match(result.detail, /unreadable Refs targets: #6/u);
 });
 
+test("an unreadable first target does not hide an unreadable later target", async () => {
+  const result = await assertRefusal({
+    fetchPr: refsPr("Refs #5\nRefs #6\n"),
+    fetchIssueBody: async () => { throw new Error("gh issue view failed"); },
+  }, "issue_matrix_invalid");
+  assert.match(result.detail, /#5 could not be read/u);
+  assert.match(result.detail, /unreadable Refs targets: #6/u);
+});
+
 test("an unreadable Refs target is treated as non-matrix-carrying", async () => {
   const { run } = harness({
     fetchPr: refsPr("Refs #5\nRefs #6\nRefs #7\n"),

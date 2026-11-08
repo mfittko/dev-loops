@@ -222,7 +222,7 @@ export async function waiveAdrTripwire(options, {
     }
   }
   const { matrixInvalid, missing } = pathsMissingFromMatrix(paths, issueBody);
-  if (matrixInvalid) return refuse("issue_matrix_invalid", issueUnreadable ? `linked issue #${issue} could not be read` : `linked issue #${issue} has no valid AC / DoD matrix${unreadableRefs.length > 0 ? ` (unreadable Refs targets: ${unreadableRefs.join(", ")})` : ""}`);
+  if (matrixInvalid) return refuse("issue_matrix_invalid", `${issueUnreadable ? `linked issue #${issue} could not be read` : `linked issue #${issue} has no valid AC / DoD matrix`}${unreadableRefs.length > 0 ? ` (unreadable Refs targets: ${unreadableRefs.join(", ")})` : ""}`);
   if (missing.length > 0) {
     return refuse("contract_doc_not_in_matrix", `contract doc(s) not named as a backticked path in a row of issue #${issue}'s AC / DoD matrix: ${missing.join(", ")}`, { missing });
   }
