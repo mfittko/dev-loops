@@ -288,7 +288,8 @@ function gitlinkPaths(worktree, baseline, head, ownPaths) {
   const out = spawnSync("git", ["-C", worktree, ...rangeCommand(["--raw", "-z", "--no-renames", "--no-ext-diff", "--no-relative", "--ignore-submodules=none"], baseline, head, ownPaths)], { encoding: "utf8", env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
   if (out.status !== 0) throw new Error(`git diff --raw ${baseline}..${head} failed in ${worktree}: ${out.error?.message ?? out.stderr?.toString().trim()}`);
   const fields = out.stdout.split("\0");
-  return fields.flatMap((field, i) => (field.startsWith(":") && field.slice(1).split(" ").slice(0, 2).includes("160000") ? [fields[i + 1]] : []));
+  // --raw -z with --no-renames is header\0path\0 pairs: read headers at even indices only, so a path that looks like a header is never matched.
+  return fields.flatMap((field, i) => (i % 2 === 0 && field.startsWith(":") && field.slice(1).split(" ").slice(0, 2).includes("160000") ? [fields[i + 1]] : []));
 }
 
 function gitIsAncestor(worktree, ancestor, descendant) {

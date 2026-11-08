@@ -1189,6 +1189,19 @@ test("AC3: under diff.ignoreSubmodules=all a gitlink change stays in the path se
   } finally { cleanup(repo); }
 });
 
+test("AC3: a path named like a gitlink raw header is not read as a gitlink", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    const git = (...args) => runGitFixture(repo.dir, args);
+    fs.writeFileSync(path.join(repo.dir, ":160000 notes"), "n\n");
+    fs.writeFileSync(path.join(repo.dir, "docs.md"), "docs\n");
+    git("add", "--", "./:160000 notes", "docs.md"); git("commit", "-qm", "colon-named file and docs");
+    const moved = { ...repo, head: git("rev-parse", "HEAD") };
+    const args = [...reviewerOnlyArgs(moved), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")];
+    assert.ok((await runDeltaCli(args, seam)).input.patchPath);
+  } finally { cleanup(repo); }
+});
+
 test("AC3: the stale-surface diff keeps a removed gitlink line under diff.ignoreSubmodules=all", () => {
   const repo = reviewerOnlyRepo();
   try {
