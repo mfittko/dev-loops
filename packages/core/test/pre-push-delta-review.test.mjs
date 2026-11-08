@@ -278,6 +278,14 @@ describe("result schema", () => {
     }
   });
 
+  test("a locally_clear claim with an open low residue finding names the residue rule, and the placeholder states it", () => {
+    const open = result({ newFindings: [{ severity: "low", summary: "s", evidence: ["e"], residueOf: "act-1" }] });
+    const errors = validateDeltaResult(open, { sequence: sequence() }).join("\n");
+    assert.match(errors, /locally_clear requires/);
+    assert.match(errors, /PRE-PUSH-DELTA-RESIDUE/);
+    assert.match(buildDeltaInput({ sequence: sequence(), candidateHead: B }).resultShape.newFindings[0].residueOf, /PRE-PUSH-DELTA-RESIDUE/);
+  });
+
   test("rejects a result bound to another baseline", () => {
     assert.match(validateDeltaResult(result({ reviewBaselineHead: B }), { sequence: sequence() }).join("\n"), /pinned baseline/);
   });
