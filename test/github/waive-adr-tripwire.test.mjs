@@ -155,7 +155,37 @@ test("a Refs inside a code span or fence is no link", async () => {
 
 test("refuses two matrix-carrying Refs targets and names both", async () => {
   const result = await assertRefusal({ fetchPr: refsPr("Refs #7\nRefs #8\n") }, "ambiguous_refs_tracker_issue");
-  assert.match(result.detail, /#7 and #8/u);
+  assert.match(result.detail, /#7, #8 carry/u);
+});
+
+test("a Refs body whose GitHub closing reference differs refuses not_exactly_one_tracker_issue", async () => {
+  await assertRefusal({
+    fetchPr: async () => ({ body: "Refs #7\n", headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [{ number: 99 }] } }),
+  }, "not_exactly_one_tracker_issue");
+});
+
+test("a closing keyword makes Refs lines inert", async () => {
+  const fetched = [];
+  const { run } = harness({
+    fetchPr: refsPr("Closes #7\nRefs #8\n"),
+    fetchIssueBody: async ({ issue }) => { fetched.push(issue); return ISSUE_BODY; },
+  });
+  const result = await run();
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.issue, 7);
+  assert.deepEqual(fetched, [7]);
+});
+
+test("a same-repo full-form Refs is a link and a cross-repo one is ignored", async () => {
+  const fetched = [];
+  const { run } = harness({
+    fetchPr: refsPr("Refs x/y#5\nRefs o/n#7\n"),
+    fetchIssueBody: async ({ issue }) => { fetched.push(issue); return ISSUE_BODY; },
+  });
+  const result = await run();
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.issue, 7);
+  assert.deepEqual(fetched, [7]);
 });
 
 test("Refs targets without any matrix refuse issue_matrix_invalid", async () => {
