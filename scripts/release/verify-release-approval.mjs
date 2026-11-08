@@ -28,7 +28,7 @@
 import { execFileSync } from "node:child_process";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { resolveNpmDistTag } from "./resolve-npm-dist-tag.mjs";
-import { stripNonAssertionMarkdown } from "../../packages/core/src/github/non-assertion-markdown.mjs";
+import { stripNonAssertionMarkdown } from "@dev-loops/core/github/non-assertion-markdown";
 import { isDirectCliRun } from "../lib/direct-run.mjs";
 
 export { stripNonAssertionMarkdown };
