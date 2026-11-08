@@ -2237,7 +2237,7 @@ test("a PR-body-only edit re-runs only the body-reading unit and the round-1 led
     const tmpRoot = path.join(repoRoot, "tmp");
     const id = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA };
     const build = async (prBody) => {
-      const completedAngles = await readCompletedAnglesForHead({ ...id, tmpRoot: "tmp", prBodySha256: createHash("sha256").update(renderPrBodyRead(prBody)).digest("hex") }, { repoRoot });
+      const completedAngles = await readCompletedAnglesForHead({ ...id, tmpRoot: "tmp", prBodySha256: createHash("sha256").update(renderPrBodyRead(prBody)).digest("hex") }, { repoRoot, config });
       const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles), "--pr-body", prBody]);
       return writeGateContext({ ...options, config, fanoutDispatch: resolveFanoutDispatch(config, "draft", angles, { completedAngles }) }, { repoRoot });
     };
@@ -2290,7 +2290,7 @@ test("a pending emit marks no unit resumed for another head or gate, a malformed
     const planPath = buildGateEmitPlanPath({ ...id, tmpRoot });
     const findingsDir = buildGateReviewsDir({ ...id, tmpRoot });
     const build = async (prBody) => {
-      const completedAngles = await readCompletedAnglesForHead({ ...id, tmpRoot: "tmp", prBodySha256: createHash("sha256").update(renderPrBodyRead(prBody)).digest("hex") }, { repoRoot });
+      const completedAngles = await readCompletedAnglesForHead({ ...id, tmpRoot: "tmp", prBodySha256: createHash("sha256").update(renderPrBodyRead(prBody)).digest("hex") }, { repoRoot, config });
       const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles), "--pr-body", prBody]);
       return writeGateContext({ ...options, config, fanoutDispatch: resolveFanoutDispatch(config, "draft", angles, { completedAngles, maxAnglesPerGroup: 6 }) }, { repoRoot });
     };
@@ -2360,7 +2360,7 @@ test("a pending emit keeps the prior plan's unit order when only the tail of a s
     assert.deepEqual(errors, []);
     const id = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA };
     const build = async (prBody) => {
-      const completedAngles = await readCompletedAnglesForHead({ ...id, tmpRoot: "tmp", prBodySha256: createHash("sha256").update(renderPrBodyRead(prBody)).digest("hex") }, { repoRoot });
+      const completedAngles = await readCompletedAnglesForHead({ ...id, tmpRoot: "tmp", prBodySha256: createHash("sha256").update(renderPrBodyRead(prBody)).digest("hex") }, { repoRoot, config });
       const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles), "--pr-body", prBody]);
       return writeGateContext({ ...options, config, fanoutDispatch: resolveFanoutDispatch(config, "draft", angles, { completedAngles, maxAnglesPerGroup: 6 }) }, { repoRoot });
     };
