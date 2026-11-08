@@ -29,7 +29,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, findAngleEntry, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { VERIFIED_ITEMS_ANGLES, baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
@@ -612,13 +612,16 @@ export { buildGateContextPath };
 // skip-completed resume scan.
 export { buildGateReviewsDir };
 
-// The body-only rerun set (GATE-EXEC-BODY-ONLY-RERUN) is every angle whose shipped prompt reads the PR body: the always-surface
-// angles, the verifiedItems angles (labels copied from the PR body checklists), contradiction-lens (checks body statements
-// against the diff and contracts), scope (compares the body to the diff) and correctness (checks the body claims).
+// The body-only rerun set (GATE-EXEC-BODY-ONLY-RERUN) derives from the angle config: an angle is body-reading when its configured
+// prompt names the PR body or PR description, when its entry declares `readsPrBody: true`, when its surface is `always`, or when it is a
+// verifiedItems angle (labels copied from the PR body checklists). An angle with no config entry fails closed to body-reading.
 // Local to this path: angleReviewSurface keeps serving carry-forward.
-const BODY_READING_ANGLES = new Set([...VERIFIED_ITEMS_ANGLES, "contradiction-lens", "scope", "correctness"]);
-export function readsPrBody(angle) {
-  return angleReviewSurface(angle).kind === "always" || BODY_READING_ANGLES.has(baseAngleName(String(angle).trim()));
+const PR_BODY_PROMPT = /\bPR (?:body|description)\b/i;
+export function readsPrBody(angle, config) {
+  const name = baseAngleName(String(angle).trim());
+  if (angleReviewSurface(angle).kind === "always" || VERIFIED_ITEMS_ANGLES.has(name)) return true;
+  const entry = findAngleEntry(config, name);
+  return !entry || entry.readsPrBody === true || PR_BODY_PROMPT.test(entry.prompt ?? "");
 }
 
 /**
@@ -649,7 +652,7 @@ export function readsPrBody(angle) {
  *
  * @returns {Promise<string[]>} angle names with a clean artifact at this head
  */
-export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot = "tmp", prBodySha256 = null }, { repoRoot = process.cwd() } = {}) {
+export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot = "tmp", prBodySha256 = null }, { repoRoot = process.cwd(), config } = {}) {
   const priorBodySha256 = typeof prBodySha256 === "string" ? await readPriorPrBodySha256({ repo, pr, gate, headSha, tmpRoot }, { repoRoot }) : null;
   // A missing prior digest counts as changed: an always-angle artifact cannot be shown to have read this body.
   const bodyChanged = typeof prBodySha256 === "string" && priorBodySha256 !== prBodySha256;
@@ -672,7 +675,7 @@ export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpR
     }
     if (parsed && parsed.verdict === "clean" && String(parsed.headSha ?? "").trim().toLowerCase() === want) {
       if (typeof parsed.angle !== "string" || parsed.angle.length === 0) continue;
-      if (bodyChanged && readsPrBody(parsed.angle)) continue;
+      if (bodyChanged && readsPrBody(parsed.angle, config)) continue;
       completed.push(parsed.angle);
     }
   }
@@ -687,18 +690,35 @@ export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpR
  * builds never overwrite). A missing baseline counts as changed, matching
  * readCompletedAnglesForHead.
  */
-export async function dropBodyReadingCarriedAngles(carriedAngles, { repo, pr, gate, headSha, tmpRoot = "tmp", prBodySha256: bodySha256 = null }, { repoRoot = process.cwd() } = {}) {
+export async function dropBodyReadingCarriedAngles(carriedAngles, { repo, pr, gate, headSha, tmpRoot = "tmp", prBodySha256: bodySha256 = null }, { repoRoot = process.cwd(), config } = {}) {
   if (!Array.isArray(carriedAngles) || carriedAngles.length === 0 || typeof bodySha256 !== "string") return carriedAngles;
   const baseline = await readPrBodyBaselineSha256({ repo, pr, gate, headSha, tmpRoot }, { repoRoot });
   if (baseline === bodySha256) return carriedAngles;
-  return carriedAngles.filter((angle) => !readsPrBody(angle));
+  return carriedAngles.filter((angle) => !readsPrBody(angle, config));
 }
 
 /**
- * The pr-body digest the head's first context recorded (`prBodyBaselineSha256`),
- * falling back to that context's pr-body read; null when no context exists.
+ * The body-aware angle state both context builders read (`buildGateContext` and `main`): the angles with a clean artifact at this head and the carried
+ * angles, each already adjusted for a changed PR body. A `--prefix-file` build carries no PR body, so it passes no digest.
+ */
+async function readBodyAwareAngleState({ repo, pr, gate, headSha, tmpRoot, prefixFile, prBody, carriedAngles, config }, { repoRoot }) {
+  const id = { repo, pr, gate, headSha, tmpRoot, ...(prefixFile ? {} : { prBodySha256: prBodySha256(prBody) }) };
+  return {
+    completedAngles: await readCompletedAnglesForHead(id, { repoRoot, config }),
+    carriedAngles: await dropBodyReadingCarriedAngles(carriedAngles, id, { repoRoot, config }),
+  };
+}
+
+// The sticky baseline lives in its own file beside the context, so the failure path that removes the context file keeps it.
+const buildPrBodyBaselinePath = (input) => buildGateArtifactPath({ ...input, suffix: ".pr-body-baseline" });
+
+/**
+ * The pr-body digest the head's first context recorded in its baseline file,
+ * falling back to that context's `prBodyBaselineSha256` and its pr-body read; null when neither exists.
  */
 export async function readPrBodyBaselineSha256(input, { repoRoot = process.cwd() } = {}) {
+  const stored = (await readFile(path.resolve(repoRoot, buildPrBodyBaselinePath({ ...input, tmpRoot: input.tmpRoot || "tmp" })), "utf8").catch(() => "")).trim();
+  if (/^[0-9a-f]{64}$/.test(stored)) return stored;
   const context = await readGateContext(input, { repoRoot }).catch(() => null);
   if (typeof context?.prBodyBaselineSha256 === "string") return context.prBodyBaselineSha256;
   return readPriorPrBodySha256(input, { repoRoot });
@@ -3434,48 +3454,54 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       const scopes = [];
       const findingsFiles = [];
       let retireHead = null;
-      // An artifact older than the sentinel belongs to an earlier round, so it does not prove the unit finished.
-      const wroteAfter = async (artifact, sentinel) => {
+      const sentinelOf = (scope) => liveSentinels.find((name) => name.startsWith(`${CHECKPOINT_SENTINEL_PREFIX}${scope}-`) && /^[0-9a-f]{40,64}$/.test(name.slice(CHECKPOINT_SENTINEL_PREFIX.length + scope.length + 1, -".json".length)));
+      const artifactOf = (angle) => path.join(reviewsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`);
+      const wantHead = String(options.headSha).trim().toLowerCase();
+      // An artifact proves its unit finished only when it is newer than the sentinel (an older one belongs to an earlier round)
+      // and parses as findings JSON that names this head and this angle; a truncated or foreign file is still in flight.
+      const finishedArtifact = async (angle, sentinel) => {
         try {
-          return (await stat(artifact)).mtimeMs >= (await stat(path.resolve(repoRoot, "tmp", sentinel))).mtimeMs;
+          const file = artifactOf(angle);
+          if ((await stat(file)).mtimeMs < (await stat(path.resolve(repoRoot, "tmp", sentinel))).mtimeMs) return false;
+          const parsed = JSON.parse(await readFile(file, "utf8"));
+          const head = String(parsed?.headSha ?? "").trim().toLowerCase();
+          return Array.isArray(parsed?.findings) && head.length > 0 && (head.startsWith(wantHead) || wantHead.startsWith(head)) && parsed.angle === angle;
         } catch {
           return false;
         }
+      };
+      const refuseInFlight = (scope) => {
+        throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}) while unit ${scope} is in flight; wait for it to write its findings, or retire the round: ${retireCommand}`);
       };
       // A unit whose clean artifact is stamped for this head is absent from pendingGroups, yet a re-dispatch may be in flight
       // (live sentinel newer than the artifact). Refuse on it too.
       const pendingScopes = new Set(options.fanoutDispatch.pendingGroups.map((unit) => dispatchUnitScope(options.gate, unit)));
       // Iterate the cap-split dispatch units: an oversized group runs as <name>-partN sub-units with their own sentinels.
+      // A carried angle is never dispatched (reviewerBudgetPreflight strips it), so the dispatched membership drops it before the scope and artifacts derive.
       const configuredGroupNames = new Set((options.config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
-      for (const unit of expandDispatchUnits(options.fanoutDispatch.groups ?? [], configuredGroupNames)) {
+      const carried = new Set((options.fanoutDispatch.preflight?.carriedAngles ?? []).map((angle) => String(angle).trim().toLowerCase()));
+      for (const group of expandDispatchUnits(options.fanoutDispatch.groups ?? [], configuredGroupNames)) {
+        if (!Array.isArray(group?.angles)) continue;
+        const unit = { ...group, angles: group.angles.filter((angle) => !carried.has(String(angle).trim().toLowerCase())) };
         const scope = dispatchUnitScope(options.gate, unit);
-        if (pendingScopes.has(scope) || !Array.isArray(unit?.angles)) continue;
-        const sentinel = liveSentinels.find((name) => name.startsWith(`${CHECKPOINT_SENTINEL_PREFIX}${scope}-`) && /^[0-9a-f]{40,64}$/.test(name.slice(CHECKPOINT_SENTINEL_PREFIX.length + scope.length + 1, -".json".length)));
-        if (!sentinel) continue;
-        const done = await Promise.all(unit.angles.map((angle) => wroteAfter(path.join(reviewsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`), sentinel)));
-        if (!done.every(Boolean)) {
-          throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}) while unit ${scope} is in flight; wait for it to write its findings, or retire the round: ${retireCommand}`);
-        }
+        const sentinel = sentinelOf(scope);
+        if (unit.angles.length === 0 || pendingScopes.has(scope) || !sentinel) continue;
+        if (!(await Promise.all(unit.angles.map((angle) => finishedArtifact(angle, sentinel)))).every(Boolean)) refuseInFlight(scope);
       }
       for (const unit of options.fanoutDispatch.pendingGroups) {
         const angles = Array.isArray(unit?.angles) ? unit.angles : [];
-        const readsBody = angles.some(readsPrBody);
         const scope = dispatchUnitScope(options.gate, unit);
-        const sentinel = liveSentinels.find((name) => name.startsWith(`${CHECKPOINT_SENTINEL_PREFIX}${scope}-`) && /^[0-9a-f]{40,64}$/.test(name.slice(CHECKPOINT_SENTINEL_PREFIX.length + scope.length + 1, -".json".length)));
-        const artifacts = angles.map((angle) => path.join(reviewsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`));
+        const sentinel = sentinelOf(scope);
         // A pending unit that holds no body-reading angle but finished with a live sentinel (a findings_present
         // artifact) is re-emitted too, so its sentinel must retire or the reviewer's fresh-context guard refuses it.
-        if (!sentinel && !readsBody) continue;
+        if (!sentinel && !angles.some((angle) => readsPrBody(angle, options.config))) continue;
         if (sentinel) {
-          const finished = artifacts.every((file) => existsSync(file)) && (await Promise.all(artifacts.map((file) => wroteAfter(file, sentinel)))).every(Boolean);
-          if (!finished) {
-            // Any unfinished unit refuses: a non-body unit left live would be re-dispatched by the next --pending emission under a new execution.
-            throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}) while unit ${scope} is in flight; wait for it to write its findings, or retire the round: ${retireCommand}`);
-          }
+          // Any unfinished unit refuses: a non-body unit left live would be re-dispatched by the next --pending emission under a new execution.
+          if (!(await Promise.all(angles.map((angle) => finishedArtifact(angle, sentinel)))).every(Boolean)) refuseInFlight(scope);
           scopes.push(scope);
           retireHead = fullSha(sentinel);
         }
-        findingsFiles.push(...artifacts.filter((file) => existsSync(file)));
+        findingsFiles.push(...angles.map(artifactOf).filter((file) => existsSync(file)));
       }
       if (scopes.length > 0 || findingsFiles.length > 0) {
         if (retireHead === null && !/^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(options.headSha)) {
@@ -3496,6 +3522,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   }
   // The full-diff-failure rebuild below runs after the context file is removed, so it carries the baseline read here.
   const prBodyBaselineSha256 = prBodyRead ? options.carriedPrBodyBaselineSha256 ?? (await readPrBodyBaselineSha256(options, { repoRoot })) ?? prBodyRead.sha256 : null;
+  if (prBodyBaselineSha256) {
+    // First write wins ("wx"); a retry after a failed write finds the earlier baseline and keeps it.
+    const baselinePath = path.resolve(repoRoot, buildPrBodyBaselinePath({ ...options, tmpRoot: options.tmpRoot || "tmp" }));
+    await mkdir(path.dirname(baselinePath), { recursive: true });
+    await writeFile(baselinePath, `${prBodyBaselineSha256}\n`, { encoding: "utf8", flag: "wx" }).catch((error) => { if (error?.code !== "EEXIST") throw error; });
+  }
   const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants, capRoundResidue }), ...(requiredReads ? { requiredReads } : {}), ...(prBodyBaselineSha256 ? { prBodyBaselineSha256 } : {}), loggedAt };
   // Keep the marker available only when prefix AND referenced stable files
   // are unchanged on disk (the prefix hash-binds the evidence and full diff).
@@ -3713,8 +3745,9 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // AC3: same-head skip-completed resume — angles with a clean artifact
   // already stamped at this head are excluded from `preflight.requiredReviewers`
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
-  const completedAngles = input.completedAngles ?? await readCompletedAnglesForHead({ repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, ...(input.prefixFile ? {} : { prBodySha256: prBodySha256(input.prBody) }) }, { repoRoot });
-  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: await dropBodyReadingCarriedAngles(input.carriedAngles ?? null, { repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, ...(input.prefixFile ? {} : { prBodySha256: prBodySha256(input.prBody) }) }, { repoRoot }), singleWave: !isReviewGate });
+  const angleState = await readBodyAwareAngleState({ ...input, tmpRoot, carriedAngles: input.carriedAngles ?? null }, { repoRoot });
+  const completedAngles = input.completedAngles ?? angleState.completedAngles;
+  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: angleState.carriedAngles, singleWave: !isReviewGate });
 
   const writeResult = await writeGateContext(
     {
@@ -4330,8 +4363,9 @@ export async function main(
       // --prefix-file (config is a local file read).
       // AC3: same-head skip-completed resume (angles with a clean artifact
       // at this head are excluded from the required count + pending plan).
-      const completedAngles = await readCompletedAnglesForHead({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", ...(options.prefixFile ? {} : { prBodySha256: prBodySha256(options.prBody) }) }, { repoRoot });
-      options.carriedAngles = await dropBodyReadingCarriedAngles(options.carriedAngles, { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", ...(options.prefixFile ? {} : { prBodySha256: prBodySha256(options.prBody) }) }, { repoRoot });
+      const angleState = await readBodyAwareAngleState({ ...options, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });
+      const { completedAngles } = angleState;
+      options.carriedAngles = angleState.carriedAngles;
       options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles, singleWave: options.gate !== "review" });
     }
     const result = await writeGateContext(options, { repoRoot });

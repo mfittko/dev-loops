@@ -222,6 +222,7 @@ const GateAngleEntry = z.preprocess(
     model: z.string().trim().min(1).optional().describe("Concrete model override for this angle (highest precedence)."),
     tier: z.string().trim().min(1).optional().describe("Model tier alias for this angle (used when `model` is absent)."),
     scope: z.enum(GATE_ANGLE_SCOPES).optional().describe("Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle or its changed-files/adjacent-file summary section), or docs-only (doc-file paths only; the diff stays the required diff read). Unknown/omitted resolves to full."),
+    readsPrBody: z.boolean().optional().describe("Declare that this angle reads the PR body, so a PR-body-only edit re-runs its dispatch unit (GATE-EXEC-BODY-ONLY-RERUN). An angle whose prompt names the PR body or PR description is body-reading without it."),
     categories: z.array(z.enum(CHANGE_CATEGORY_NAMES)).min(1).optional().describe("Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed."),
     kinds: z.array(z.enum(FILE_KIND_NAMES)).min(1).optional().describe("File kinds (code/config/test/ci/docs/asset/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed."),
   }),
@@ -1188,6 +1189,7 @@ function normalizeAngleEntry(a) {
     if (typeof a.prompt === "string" && a.prompt.length > 0) entry.prompt = a.prompt;
     if (typeof a.model === "string" && a.model.trim().length > 0) entry.model = a.model.trim();
     if (typeof a.tier === "string" && a.tier.trim().length > 0) entry.tier = a.tier.trim();
+    if (a.readsPrBody === true) entry.readsPrBody = true;
     if (typeof a.scope === "string" && GATE_ANGLE_SCOPES.includes(a.scope.trim())) entry.scope = a.scope.trim();
     // Category/file-kind bindings for consumer angles. Enum membership is
     // enforced by the schema; this hand-built path only keeps non-empty string
@@ -1234,7 +1236,7 @@ function normalizeAngleEntries(raw) {
  * @param {string} name
  * @returns {{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string}|null}
  */
-function findAngleEntry(config, name) {
+export function findAngleEntry(config, name) {
   let disabled = null;
   for (const gate of ["draft", "preApproval", "spike"]) {
     const entries = normalizeAngleEntries(config?.gates?.[gate]?.angles);

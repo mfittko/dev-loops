@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { GATE_ANGLE_SCOPES, loadDevLoopConfig, resolveGateAngles, resolveGateAnglesDynamic, resolveReviewerRole } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, loadDevLoopConfig, loadDevLoopConfigStrict, resolveGateAngles, resolveGateAnglesDynamic, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildAngleRequestGroups, composeReviewerPromptText, INHERIT_MODEL_KEY } from "@dev-loops/core/loop/review-dispatch-plan";
 import { initGitFixture, makeGhMock, runGitFixture, trustGhEntries } from "../_helpers.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
@@ -6594,6 +6594,8 @@ test("buildGateContext threads input.carriedAngles into the persisted artifact's
 test("main() threads --carried-angles to the written artifact's fanout.preflight (mutation pin: deleting the carriedAngles pass-through at the main->resolveFanoutDispatch seam must fail this test)", async () => {
   const { repoRoot, headSha } = await makeBaseDiffRepo();
   try {
+    // A configured angle whose prompt names no PR body keeps its carry; an unknown angle would fail closed to body-reading (issue 3080 AC15).
+    await writeFile(path.join(repoRoot, ".devloops"), ["version: 1", "gates:", "  draft:", "    angles:", ...["a", "b", "c", "d", "e", "f", "g"].flatMap((name) => [`      - name: ${name}`, "        prompt: Review the diff."])].join("\n") + "\n", "utf8");
     await main([
       "--repo", "owner/repo", "--pr", "52", "--gate", "draft_gate",
       "--head-sha", headSha,
@@ -9655,6 +9657,8 @@ const BODY_RERUN_SHA = "ab".repeat(20);
 const BODY_RERUN_ANGLES = ["scope", "pr-description", "gate-evidence", "holistic", "renderer-security"];
 const bodyRerunInput = (prBody) => {
   const config = draftConfig({ dynamicAngles: false, angles: BODY_RERUN_ANGLES, mandatoryAngles: ["gate-evidence"] });
+  // The body-reading set derives from the angle prompts: scope names the PR description, holistic does not.
+  config.gates.draft.angles = config.gates.draft.angles.map((entry) => ({ ...(typeof entry === "string" ? { name: entry } : entry), prompt: (entry.name ?? entry) === "scope" ? "The PR description is the contract." : "Review the diff." }));
   config.gates.fanout = { groups: [
     { name: "process", angles: ["scope", "pr-description", "gate-evidence"] },
     { name: "holistic-input", angles: ["holistic"] },
@@ -9685,7 +9689,7 @@ test("readCompletedAnglesForHead drops the always-surface angles only when the p
     await seedCompleteBodyRound(repoRoot, []);
     const prior = first.artifact.requiredReads.find((r) => r.kind === "pr-body").sha256;
     const id = { repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: BODY_RERUN_SHA };
-    const completed = async (prBodySha256) => (await readCompletedAnglesForHead({ ...id, ...(prBodySha256 ? { prBodySha256 } : {}) }, { repoRoot })).sort();
+    const completed = async (prBodySha256) => (await readCompletedAnglesForHead({ ...id, ...(prBodySha256 ? { prBodySha256 } : {}) }, { repoRoot, config: bodyRerunInput("").config })).sort();
     assert.deepEqual(await completed("f".repeat(64)), ["holistic"]);
     assert.deepEqual(await completed(prior), [...BODY_RERUN_ANGLES].sort());
     assert.deepEqual(await completed(null), [...BODY_RERUN_ANGLES].sort());
@@ -9780,7 +9784,7 @@ test("a missing prior context counts as a changed body for the always-angle arti
   try {
     const reviews = await seedCompleteBodyRound(repoRoot, []);
     const id = { repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: BODY_RERUN_SHA };
-    assert.deepEqual((await readCompletedAnglesForHead({ ...id, prBodySha256: "f".repeat(64) }, { repoRoot })).sort(), ["holistic"]);
+    assert.deepEqual((await readCompletedAnglesForHead({ ...id, prBodySha256: "f".repeat(64) }, { repoRoot, config: bodyRerunInput("").config })).sort(), ["holistic"]);
     const built = await buildGateContext(bodyRerunInput("Original"), { repoRoot });
     assert.deepEqual(built.artifact.fanout.pendingGroups.map((g) => g.name).sort(), ["process", "renderer-security"]);
     assert.ok(!existsSync(path.join(reviews, "renderer-security.json")));
@@ -9844,9 +9848,9 @@ test("a body edit drops the verifiedItems angles acceptance-criteria and pr-chec
     }
     const id = { repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: BODY_RERUN_SHA };
     const prior = first.artifact.requiredReads.find((r) => r.kind === "pr-body").sha256;
-    const changed = await readCompletedAnglesForHead({ ...id, prBodySha256: "f".repeat(64) }, { repoRoot });
+    const changed = await readCompletedAnglesForHead({ ...id, prBodySha256: "f".repeat(64) }, { repoRoot, config: bodyRerunInput("").config });
     assert.ok(!changed.includes("acceptance-criteria") && !changed.includes("pr-checklist"), changed.join(","));
-    const same = await readCompletedAnglesForHead({ ...id, prBodySha256: prior }, { repoRoot });
+    const same = await readCompletedAnglesForHead({ ...id, prBodySha256: prior }, { repoRoot, config: bodyRerunInput("").config });
     assert.ok(same.includes("acceptance-criteria") && same.includes("pr-checklist"));
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
@@ -9898,12 +9902,12 @@ test("dropBodyReadingCarriedAngles: no recorded baseline counts as changed, like
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-carried-"));
   try {
     const id = { repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: BODY_RERUN_SHA };
-    const carried = ["correctness", "scope", "security-lens"];
-    assert.deepEqual(await dropBodyReadingCarriedAngles(carried, { ...id, prBodySha256: "f".repeat(64) }, { repoRoot }), ["security-lens"]);
+    const carried = ["correctness", "scope", "holistic"];
+    assert.deepEqual(await dropBodyReadingCarriedAngles(carried, { ...id, prBodySha256: "f".repeat(64) }, { repoRoot, config: bodyRerunInput("").config }), ["holistic"]);
     const first = await buildGateContext(bodyRerunInput("Original"), { repoRoot });
     const prior = first.artifact.requiredReads.find((r) => r.kind === "pr-body").sha256;
-    assert.deepEqual(await dropBodyReadingCarriedAngles(carried, { ...id, prBodySha256: "f".repeat(64) }, { repoRoot }), ["security-lens"]);
-    assert.deepEqual(await dropBodyReadingCarriedAngles(carried, { ...id, prBodySha256: prior }, { repoRoot }), carried);
+    assert.deepEqual(await dropBodyReadingCarriedAngles(carried, { ...id, prBodySha256: "f".repeat(64) }, { repoRoot, config: bodyRerunInput("").config }), ["holistic"]);
+    assert.deepEqual(await dropBodyReadingCarriedAngles(carried, { ...id, prBodySha256: prior }, { repoRoot, config: bodyRerunInput("").config }), carried);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -9917,15 +9921,15 @@ test("every angle whose prompt reads the PR body is excluded from the completed 
     const bodyReading = ["contradiction-lens", "scope", "correctness"];
     for (const angle of bodyReading) {
       await writeFile(path.join(reviews, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: BODY_RERUN_SHA, findings: [] }), "utf8");
-      assert.equal(readsPrBody(angle), true, angle);
+      assert.equal(readsPrBody(angle, bodyRerunInput("").config), true, angle);
     }
-    assert.equal(readsPrBody("holistic"), false);
+    assert.equal(readsPrBody("holistic", bodyRerunInput("").config), false);
     const id = { repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: BODY_RERUN_SHA };
-    const changed = await readCompletedAnglesForHead({ ...id, prBodySha256: "f".repeat(64) }, { repoRoot });
+    const changed = await readCompletedAnglesForHead({ ...id, prBodySha256: "f".repeat(64) }, { repoRoot, config: bodyRerunInput("").config });
     for (const angle of bodyReading) assert.ok(!changed.includes(angle), `${angle} re-runs after a body change`);
     assert.ok(changed.includes("holistic"));
     const prior = first.artifact.requiredReads.find((r) => r.kind === "pr-body").sha256;
-    const same = await readCompletedAnglesForHead({ ...id, prBodySha256: prior }, { repoRoot });
+    const same = await readCompletedAnglesForHead({ ...id, prBodySha256: prior }, { repoRoot, config: bodyRerunInput("").config });
     for (const angle of bodyReading) assert.ok(same.includes(angle), `${angle} stays complete for an unchanged body`);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
@@ -10098,4 +10102,82 @@ test("isInRoundRewrite: a stamped ledger is a rewrite only against an incoming w
   assert.equal(isInRoundRewrite(unjudged, { roundId: "r2-cc", judgeExecution: null }), false, "another round");
   assert.equal(isInRoundRewrite(unjudged, { roundId: null, judgeExecution: null }), false, "no shared identity");
   assert.equal(isInRoundRewrite({ findings: [{ severity: "low" }] }), true, "an unstamped ledger keeps the earlier shape");
+});
+
+test("a body-only rebuild refuses a unit whose artifact is truncated or names another head or angle, and retires no sentinel (issue 3080 AC12)", async () => {
+  for (const [label, content] of [
+    ["truncated", '{"angle": "holistic", "verdict": "clean", "head'],
+    ["another head", JSON.stringify({ angle: "holistic", verdict: "clean", headSha: "cd".repeat(20), findings: [] })],
+    ["another angle", JSON.stringify({ angle: "scope", verdict: "clean", headSha: BODY_RERUN_SHA, findings: [] })],
+  ]) {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-invalid-artifact-"));
+    try {
+      await buildGateContext(bodyRerunInput("Original"), { repoRoot });
+      const reviews = await seedCompleteBodyRound(repoRoot);
+      await writeFile(path.join(reviews, "holistic.json"), content, "utf8");
+      const before = (await readdir(path.join(repoRoot, "tmp"))).sort();
+      await assert.rejects(buildGateContext(bodyRerunInput("Edited"), { repoRoot }), /GATE-EXEC-BODY-ONLY-RERUN.*unit draft-gate-holistic is in flight/s, label);
+      assert.deepEqual((await readdir(path.join(repoRoot, "tmp"))).sort(), before, `${label}: no sentinel retired`);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a body-only rebuild derives the in-flight membership after the carry filter (issue 3080 AC13)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-carried-unit-"));
+  try {
+    const solid = ["srp", "soc", "ocp"];
+    const input = (prBody) => {
+      const config = draftConfig({ dynamicAngles: false, angles: ["scope", ...solid], mandatoryAngles: [] });
+      config.gates.draft.angles = config.gates.draft.angles.map((entry) => ({ ...(typeof entry === "string" ? { name: entry } : entry), prompt: "Review the diff." }));
+      config.gates.fanout = { groups: [{ name: "design-solid", angles: solid }, { name: "scope-input", angles: ["scope"] }] };
+      return { config, gate: "draft_gate", diff: null, repo: "owner/repo", pr: 90, headSha: BODY_RERUN_SHA, prBody, carriedAngles: ["soc"] };
+    };
+    await buildGateContext(input("Original"), { repoRoot });
+    const reviews = path.resolve(repoRoot, buildGateReviewsDir({ repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: BODY_RERUN_SHA }));
+    await mkdir(reviews, { recursive: true });
+    await writeFile(path.join(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-group-design-solid-${BODY_RERUN_SHA}.json`), "{}\n", "utf8");
+    for (const angle of ["srp", "ocp"]) await writeFile(path.join(reviews, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: BODY_RERUN_SHA, findings: [] }), "utf8");
+    await buildGateContext(input("Edited"), { repoRoot });
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("the sticky pr-body baseline survives a failed context write (issue 3080 AC14)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-sticky-"));
+  try {
+    const id = { repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: BODY_RERUN_SHA };
+    const first = await buildGateContext(bodyRerunInput("Original"), { repoRoot });
+    const original = first.artifact.requiredReads.find((r) => r.kind === "pr-body").sha256;
+    // The failure path removes the context file before the retry runs.
+    await rm(path.join(repoRoot, buildGateContextPath(id)), { force: true });
+    const retry = await buildGateContext(bodyRerunInput("Edited"), { repoRoot });
+    const edited = retry.artifact.requiredReads.find((r) => r.kind === "pr-body").sha256;
+    assert.notEqual(edited, original);
+    const config = bodyRerunInput("").config;
+    assert.deepEqual(await dropBodyReadingCarriedAngles(["scope", "holistic"], { ...id, prBodySha256: edited }, { repoRoot, config }), ["holistic"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("readsPrBody derives from the angle config and fails closed for an unknown angle (issue 3080 AC15)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-reads-body-"));
+  try {
+    const { config } = await loadDevLoopConfigStrict({ repoRoot });
+    const entries = ["draft", "preApproval", "spike"].flatMap((gate) => config.gates?.[gate]?.angles ?? []).filter((entry) => typeof entry?.prompt === "string");
+    assert.ok(entries.length > 10);
+    for (const { name, prompt } of entries) {
+      if (/\bPR (?:body|description)\b/i.test(prompt)) assert.equal(readsPrBody(name, config), true, name);
+    }
+    assert.equal(readsPrBody("not-an-angle", config), true, "an unknown angle reads the body");
+    assert.equal(readsPrBody("docs", config), false);
+    const override = { gates: { draft: { angles: [{ name: "docs", prompt: "Compare the PR body to the docs." }] } } };
+    assert.equal(readsPrBody("docs", override), true, "a config override that names the PR body changes the class");
+    assert.equal(readsPrBody("docs", { gates: { draft: { angles: [{ name: "docs", prompt: "Docs.", readsPrBody: true }] } } }), true, "the declared attribute");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });
