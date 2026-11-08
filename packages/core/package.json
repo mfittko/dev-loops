@@ -24,7 +24,6 @@
     "./github/copilot-helpers": "./src/github/copilot-helpers.mjs",
     "./github/comment-id-guard": "./src/github/comment-id-guard.mjs",
     "./github/copilot-body-disposition-marker": "./src/github/copilot-body-disposition-marker.mjs",
-    "./github/non-assertion-markdown": "./src/github/non-assertion-markdown.mjs",
     "./github/operator-owned-lines": "./src/github/operator-owned-lines.mjs",
     "./github/closing-ref-guard": "./src/github/closing-ref-guard.mjs",
     "./github/gh": "./src/github/gh.mjs",

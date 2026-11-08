@@ -1,8 +1,9 @@
-// The one non-assertion markdown stripper. The release-approval reader
-// (scripts/release/verify-release-approval.mjs) and the operator-owned-line
-// registry (operator-owned-lines.mjs) both import it, so the guard strips
-// exactly what the reader strips. Pure, dependency-free: the release workflows
-// run before `npm ci`.
+// Verbatim twin of stripNonAssertionMarkdown in
+// scripts/release/verify-release-approval.mjs, used by the operator-owned-line
+// registry (operator-owned-lines.mjs). The release script cannot import this
+// file: release scripts must have no @dev-loops/core import at any depth (the
+// release workflows run before `npm ci`). A parity test in
+// packages/core/test/operator-owned-lines.test.mjs fails on drift.
 
 /**
  * Remove the markdown contexts where the approval phrase is being QUOTED or

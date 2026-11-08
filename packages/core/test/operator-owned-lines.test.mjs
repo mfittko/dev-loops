@@ -5,7 +5,8 @@ import { OPERATOR_OWNED_LINES, findOperatorOwnedLineRefusal } from "../src/githu
 import { guardCommentBodyNoIssuePrIds } from "../src/github/comment-id-guard.mjs";
 import { parseCopilotBodyDispositionMarker } from "../src/github/copilot-body-disposition-marker.mjs";
 import { verifyFreshHumanApproval } from "../src/loop/merge-approval.mjs";
-import { resolveApprovalState } from "../../../scripts/release/verify-release-approval.mjs";
+import { resolveApprovalState, stripNonAssertionMarkdown as releaseStrip } from "../../../scripts/release/verify-release-approval.mjs";
+import { stripNonAssertionMarkdown } from "../src/github/non-assertion-markdown.mjs";
 import { APPROVAL_CODE_SPAN_FIXTURES } from "../../../scripts/lib/code-span-fixtures.mjs";
 import { extractWaiverLines } from "../../../scripts/loop/adr-waiver-markers.mjs";
 
@@ -83,6 +84,12 @@ test("approve-release: genuine and adversarial bodies are reader approvals and t
     assert.equal(releaseState(body).approved, true, JSON.stringify(body));
     assert.ok(findOperatorOwnedLineRefusal(body), JSON.stringify(body));
   }
+});
+
+test("non-assertion-markdown: the core twin matches the release script's stripNonAssertionMarkdown", () => {
+  const genuine = ["approve release v1.2.3", "Approve release v1.2.3.", "Looks good.\n\napprove release v1.2.3\n"];
+  const bodies = [...APPROVAL_CODE_SPAN_FIXTURES.map((f) => f.body), ...genuine, ...ADVERSARIAL_RELEASE_BODIES];
+  for (const body of bodies) assert.equal(stripNonAssertionMarkdown(body), releaseStrip(body), JSON.stringify(body));
 });
 
 test("approve-release: reader approves implies guard refuses over every code-span fixture", () => {
