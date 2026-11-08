@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, test } from "bun:test";
 
 import { main } from "../../scripts/docs/prose-inventory.mjs";
+import { runGitFixture } from "../_helpers.mjs";
 
 let dir;
 let cwd;
-const git = (...args) => execFileSync("git", args, { cwd: dir, stdio: "ignore" });
+const git = (...args) => runGitFixture(dir, ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args]);
 const run = (args) => {
   let out = "";
   let err = "";
@@ -76,4 +76,52 @@ test("an unknown revision exits 2", () => {
 
 test("an unreadable path exits 2", () => {
   assert.equal(run(["--base", "HEAD", "missing.md"]).code, 2);
+});
+
+test("an unreadable working-tree path (committed at base, deleted at head) exits 2", () => {
+  writeFileSync(path.join(dir, "gone.md"), "x\n");
+  git("add", "gone.md");
+  git("commit", "-qm", "gone");
+  rmSync(path.join(dir, "gone.md"));
+  const { code, err } = run(["--base", "HEAD", "gone.md"]);
+  assert.equal(code, 2);
+  assert.match(err, /unreadable path/);
+});
+
+test("--head <rev> reads the revision and exits 0", () => {
+  assert.equal(run(["--base", "HEAD", "--head", "HEAD", "same.md"]).code, 0);
+});
+
+test("a cwd-relative path resolves the same on both sides from a subdirectory", () => {
+  mkdirSync(path.join(dir, "sub"));
+  writeFileSync(path.join(dir, "sub", "s.md"), "<!-- rule: SUB -->\nThe actor MUST sub.\n");
+  git("add", "sub");
+  git("commit", "-qm", "sub");
+  process.chdir(path.join(dir, "sub"));
+  try {
+    assert.equal(run(["--base", "HEAD", "s.md"]).code, 0);
+  } finally {
+    process.chdir(dir);
+  }
+});
+
+test("an empty --head exits 2 with empty stdout", () => {
+  const { code, out } = run(["--base", "HEAD", "--head", "", "same.md"]);
+  assert.equal(code, 2);
+  assert.equal(out, "");
+});
+
+test("a dash-leading revision exits 2 and writes no file", () => {
+  const target = path.join(dir, "inj");
+  for (const arg of [`--base=--output=${target}`, "--base=-p"]) {
+    const { code, out } = run([arg, "same.md"]);
+    assert.equal(code, 2);
+    assert.equal(out, "");
+  }
+  assert.equal(existsSync(`${target}:same.md`), false);
+});
+
+test("accepted revision forms exit 0", () => {
+  const short = runGitFixture(dir, ["rev-parse", "--short", "HEAD"]);
+  for (const rev of ["HEAD", short]) assert.equal(run(["--base", rev, "same.md"]).code, 0);
 });

@@ -22,7 +22,7 @@ function readAt(rev, file) {
     }
   }
   try {
-    return execFileSync("git", ["show", `${rev}:${file}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28 });
+    return execFileSync("git", ["show", `${rev}:./${file}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28 });
   } catch {
     throw new UsageError(`unknown revision or unreadable path: ${rev}:${file}`);
   }
@@ -81,6 +81,7 @@ export function main(argv, io = { out: (s) => process.stdout.write(s), err: (s) 
       allowPositionals: true,
     });
     if (!values.base || positionals.length === 0) throw new UsageError(USAGE);
+    for (const rev of [values.base, values.head]) if (rev !== undefined && (rev === "" || rev.startsWith("-"))) throw new UsageError(USAGE);
     const { output, missing } = inventory({ base: values.base, head: values.head, paths: positionals });
     io.out(output);
     return missing ? 1 : 0;
