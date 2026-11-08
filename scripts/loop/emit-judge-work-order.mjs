@@ -186,9 +186,9 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     try { parsedBody = JSON.parse(copilotBody.bytes.toString("utf8")); } catch { /* refused below */ }
     if (typeof parsedBody?.angle !== "string" || !Array.isArray(parsedBody?.findings)) throw new Refusal(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${bodyFile} is not JSON with an angle and a findings array`);
   }
-  // The judge pass appends the pinned finding as the cluster after the highest one in the findings read (0 for an empty read).
+  // The judge pass appends the pinned finding after the findings read, so its cluster id is the array index of the first appended finding (the read length; 0 for an empty read).
   const findingsRead = parseSource(findings);
-  const copilotBodyClusterId = Math.max(-1, ...(Array.isArray(findingsRead) ? findingsRead : findingsRead?.findings ?? []).map((f) => (Number.isInteger(f?.clusterId) ? f.clusterId : -1))) + 1;
+  const copilotBodyClusterId = (Array.isArray(findingsRead) ? findingsRead : findingsRead?.findings ?? []).length;
   const operatorFocus = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined);
   // Slice linkage arms from the sha-verified pr-body read. An empty body is the absence sentinel line and arms nothing.
   const prBodyText = prBody.bytes.toString("utf8").replace(/\n$/, "");

@@ -2394,8 +2394,8 @@ test("judgePassCli reports a null --spec-file as the typed parse error, not a ba
 });
 
 // Issue 3080 AC11: a pinned Copilot body finding is a ledger cluster the judge must dispose (the PR 3129 pre_approval_gate shape).
-async function copilotBodyRound(tmpDir, { dispositions }) {
-  const findings = [0, 1, 2].map((n) => finding({ severity: "medium", summary: `defect ${n}`, recommendation: `fix ${n}`, clusterId: n }));
+async function copilotBodyRound(tmpDir, { dispositions, clusterIds = [0, 1, 2] }) {
+  const findings = clusterIds.map((clusterId, n) => finding({ severity: "medium", summary: `defect ${n}`, recommendation: `fix ${n}`, clusterId }));
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
   const derived = copilotBodyJudgePath({ tmpRoot: path.join(tmpDir, "tmp"), repo: "mfittko/dev-loops", pr: 3129, headSha: HEAD });
   await mkdir(path.dirname(derived), { recursive: true });
@@ -2447,6 +2447,19 @@ test("withPinnedCopilotBodyCluster refuses a changed pinned file and a plan with
     await writeFile(file, bytes.replace("medium", "low"));
     await assert.rejects(withPinnedCopilotBodyCluster([], order), /changed since the judge work order pinned it/);
     assert.deepEqual(await withPinnedCopilotBodyCluster([1], { requiredReads: [] }), [1], "no pinned read leaves the findings unchanged");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("judgePassCli disposes the Copilot body cluster after a two-member cluster (issue 3080 representativeIndex shape)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-copilot-body-multi-"));
+  try {
+    await copilotBodyRound(tmpDir, { dispositions: [0, 2], clusterIds: [0, 0] });
+    const payload = await judgePassCli(copilotBodyArgs, { repoRoot: tmpDir });
+    assert.equal(payload.ok, true);
+    const body = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings.find((f) => f.angle === "copilot-body");
+    assert.equal(body.clusterId, 2);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
