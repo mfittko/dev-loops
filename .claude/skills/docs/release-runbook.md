@@ -230,10 +230,12 @@ manually. Local pre-flight (optional but recommended before pushing the tag):
 `RELEASE-POST-RELEASE-RECURRING-STEPS`: After every stable release, the orchestrator MUST file and drive these steps in this order before any other work in the next milestone, without waiting for the operator:
 
 1. Contract and codebase audit.
-2. Memory cleanup.
-3. Prose cleanup.
+2. Outdated and redundant files audit and cleanup.
+3. Tests audit and cleanup.
+4. Memory cleanup.
+5. Prose cleanup.
 
-Each of the three steps files its own issue in the next milestone. The orchestrator files and drives each issue. This rule is the standing explicit operator instruction for these three issues, so the AGENTS.md explicit-instruction requirement is met. The operator keeps only the tag, publish and approval decisions.
+Each of the five steps files its own issue in the next milestone. The orchestrator files and drives each issue. This rule is the standing explicit operator instruction for these five issues, so the AGENTS.md explicit-instruction requirement is met. The operator keeps only the tag, publish and approval decisions.
 
 <!-- rule: RELEASE-COMBINED-RETRO -->
 `RELEASE-COMBINED-RETRO`: A combined release retro runs once after a stable release, before the steps above. Its inputs are the per-merge retros, the round data and the findings logs of the release. It MUST report these metrics: active minutes, gate rounds, parks by cause and size-class approvals. Each per-merge retro checkpoint recorded as `skipped` for that release MUST name the combined retro (issue or PR link) in its `--reason`, so the skip links back to the retro that folded it.

@@ -1,0 +1,79 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, test } from "bun:test";
+
+import { main } from "../../scripts/docs/prose-inventory.mjs";
+
+let dir;
+let cwd;
+const git = (...args) => execFileSync("git", args, { cwd: dir, stdio: "ignore" });
+const run = (args) => {
+  let out = "";
+  let err = "";
+  const code = main(args, { out: (s) => (out += s), err: (s) => (err += s) });
+  return { code, out, err };
+};
+
+beforeAll(() => {
+  cwd = process.cwd();
+  dir = mkdtempSync(path.join(tmpdir(), "prose-inv-"));
+  git("init", "-q");
+  git("config", "user.email", "t@example.com");
+  git("config", "user.name", "t");
+  writeFileSync(path.join(dir, "a.md"), "<!-- rule: A-ONE -->\nThe actor MUST act now. Other text here.\n");
+  writeFileSync(path.join(dir, "same.md"), "<!-- rule: S-ONE -->\nThe actor MUST stay.\n");
+  git("add", ".");
+  git("commit", "-qm", "base");
+  process.chdir(dir);
+});
+
+afterAll(() => {
+  process.chdir(cwd);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("prints the byte table and exits 0 when markers survive", () => {
+  const { code, out } = run(["--base", "HEAD", "same.md"]);
+  assert.equal(code, 0);
+  assert.match(out, /\| path \| base bytes \| base words \| head bytes \| head words \| byte delta \|/);
+  assert.match(out, /\| `same\.md` \| \d+ \| \d+ \| \d+ \| \d+ \| 0 \|/);
+});
+
+test("an unchanged file has no review required line", () => {
+  assert.doesNotMatch(run(["--base", "HEAD", "same.md"]).out, /review required/);
+});
+
+test("a reworded MUST sentence is listed as review required", () => {
+  writeFileSync(path.join(dir, "a.md"), "<!-- rule: A-ONE -->\nThe actor MUST act soon.\n");
+  const { code, out } = run(["--base", "HEAD", "a.md"]);
+  assert.equal(code, 0);
+  assert.match(out, /review required\): The actor MUST act now\./);
+});
+
+test("a missing base marker exits 1", () => {
+  writeFileSync(path.join(dir, "a.md"), "The actor MUST act now.\n");
+  const { code, out } = run(["--base", "HEAD", "a.md"]);
+  assert.equal(code, 1);
+  assert.match(out, /error: rule marker A-ONE missing at head/);
+});
+
+test("a malformed argument exits 2 with a one-line stderr error and no table", () => {
+  const { code, out, err } = run(["a.md"]);
+  assert.equal(code, 2);
+  assert.equal(out, "");
+  assert.equal(err.trim().split("\n").length, 1);
+});
+
+test("an unknown revision exits 2", () => {
+  const { code, out, err } = run(["--base", "no-such-rev", "a.md"]);
+  assert.equal(code, 2);
+  assert.equal(out, "");
+  assert.match(err, /unknown revision/);
+});
+
+test("an unreadable path exits 2", () => {
+  assert.equal(run(["--base", "HEAD", "missing.md"]).code, 2);
+});

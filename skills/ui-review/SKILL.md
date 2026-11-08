@@ -5,7 +5,7 @@ description: >-
   "prove it in the running app" review sibling of reviewer/fixer. Drives the PR
   through five CLI stages (provision, drive, diagnose, report, teardown), each
   routed as a `loop ui-review-*` CLI subcommand.
-compatibility: Pi skill for git+GitHub repositories. Requires gh auth.
+compatibility: Skill for git+GitHub repositories. Requires gh auth.
 allowed-tools: read bash
 user-invocable: false
 ---

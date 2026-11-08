@@ -4,7 +4,7 @@ description: >-
   Single public dev-loop entrypoint. Resolve canonical current state first,
   then load only route-specific internal skills.
 user-invocable: true
-compatibility: Pi skill for git+GitHub repositories. Requires gh auth; async follow-up works best in Pi/TelePi sessions.
+compatibility: Skill for git+GitHub repositories. Requires gh auth.
 allowed-tools: read bash edit write subagent review_loop
 ---
 
