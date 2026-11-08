@@ -16,7 +16,7 @@ import { detectRepoSlug, parseRepoSlug, repoSlugEquals } from "@dev-loops/core/g
 import { ghJson } from "@dev-loops/core/github/gh";
 import { CAP_ROUND_REFUSAL } from "@dev-loops/core/loop/pr-gate-coordination";
 import { extractClosingIssueNumbers } from "@dev-loops/core/github/closing-ref-guard";
-import { detectAcDodMatrix } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { detectAcDodMatrix, stripFencesAndCodeSpans } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { computeSpecDigest, requireSpecFromBody } from "@dev-loops/core/loop/spec-authority";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { evaluateAdrTripwire as realEvaluateAdrTripwire } from "../loop/check-adr-tripwire.mjs";
@@ -41,8 +41,10 @@ create-pr.mjs refuse a hand-written one. It applies the waiver only when:
   - a standing authorization (.devloops standingAuthorizations.adrTripwireWaiver
     on origin/<defaultBranch>) is in force (present, well-formed, at most 90 days,
     not expired);
-  - the PR body links exactly one tracker issue (Closes/Fixes) and is not on the
-    lightweight pr_body path;
+  - the PR body links exactly one tracker issue (Closes/Fixes, or Refs when the
+    body has no closing keyword: the one Refs target with an AC / DoD matrix; two
+    or more refuse ambiguous_refs_tracker_issue) and is not on the lightweight
+    pr_body path;
   - the ADR tripwire blocks, and every trigger is a skills/docs/*-contract.md path;
   - every triggering path appears, backticked, in a row of the linked issue's AC / DoD matrix;
   - the current head has a clean draft_gate or pre_approval_gate verdict, or the
@@ -105,6 +107,21 @@ async function defaultReadRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate
   } catch {
     return null;
   }
+}
+
+// Same-repo issue numbers of `Refs a/b#1, #2 and c/d#3` lists outside code spans and fences; each entry carries its own optional qualifier. De-duplicated.
+const REF_ENTRY = String.raw`(?:[\w.-]+\/[\w.-]+)?#\d+\b`;
+const REFS_RE = new RegExp(String.raw`\brefs\s*:?\s+${REF_ENTRY}(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+)${REF_ENTRY})*`, "giu");
+function extractSameRepoRefsIssueNumbers(body, repo) {
+  const numbers = new Set();
+  for (const [list] of stripFencesAndCodeSpans(body).matchAll(REFS_RE)) {
+    for (const [, slug, raw] of list.matchAll(/(?:([\w.-]+\/[\w.-]+))?#(\d+)\b/gu)) {
+      if (slug && !repoSlugEquals(slug, repo)) continue;
+      const n = Number(raw);
+      if (Number.isSafeInteger(n) && n > 0) numbers.add(n);
+    }
+  }
+  return [...numbers];
 }
 
 /** Every trigger path must appear, backticked, in some row of the issue's valid AC / DoD matrix. */
@@ -170,13 +187,15 @@ export async function waiveAdrTripwire(options, {
   }
   const bodyIssues = extractClosingIssueNumbers(body);
   const linkedIssues = (prState.closingIssuesReferences?.nodes ?? prState.closingIssuesReferences ?? []).map((n) => n?.number).filter(Number.isInteger);
-  if (bodyIssues.length === 0) {
+  // With no closing keyword, a same-repo Refs target is the link; the matrix step picks the issue.
+  const refsIssues = bodyIssues.length > 0 ? [] : extractSameRepoRefsIssueNumbers(body, repo);
+  if (bodyIssues.length === 0 && refsIssues.length === 0) {
     return refuse("lightweight_pr_body_path", `PR #${pr} links no tracker issue (a lightweight pr_body PR is not eligible)`);
   }
-  if (bodyIssues.length !== 1 || (linkedIssues.length > 0 && (linkedIssues.length !== 1 || linkedIssues[0] !== bodyIssues[0]))) {
+  if (refsIssues.length === 0 && (bodyIssues.length !== 1 || (linkedIssues.length > 0 && (linkedIssues.length !== 1 || linkedIssues[0] !== bodyIssues[0])))) {
     return refuse("not_exactly_one_tracker_issue", `PR #${pr} must link exactly one canonical tracker issue via Closes/Fixes (body: ${bodyIssues.join(", ")}; GitHub: ${linkedIssues.join(", ") || "none"})`);
   }
-  const issue = bodyIssues[0];
+  let issue = bodyIssues[0];
 
   const tripwire = await evaluateAdrTripwire({ base: `origin/${prState.baseRefName}`, head: headSha, prBody: body, repoRoot, env, now });
   if (tripwire.outcome !== "block") {
@@ -188,9 +207,35 @@ export async function waiveAdrTripwire(options, {
   }
   const paths = [...new Set(tripwire.triggers.map((t) => t.path))].sort();
 
-  const issueBody = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
+  let issueBody;
+  let issueUnreadable = false;
+  let unreadableRefs = [];
+  if (refsIssues.length === 0) {
+    issueBody = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
+  } else {
+    // The Refs target that carries a valid AC / DoD matrix is the issue; none carrying one falls to the first target and refuses below.
+    // An unreadable target (deleted, transferred, a PR number) carries no matrix.
+    const fetched = await Promise.all(refsIssues.map(async (n) => {
+      let unreadable = false;
+      const text = await fetchIssueBody({ repo, issue: n }, { env, ghCommand, runChild }).catch(() => { unreadable = true; return ""; });
+      return { n, text, unreadable };
+    }));
+    const carrying = fetched.filter(({ text }) => { const m = detectAcDodMatrix(text); return m.found && m.valid; });
+    if (carrying.length > 1) {
+      return refuse("ambiguous_refs_tracker_issue", `PR #${pr} Refs ${carrying.map(({ n }) => `#${n}`).join(", ")} carry an AC / DoD matrix; exactly one matrix-carrying tracker issue is required`, { issues: carrying.map(({ n }) => n) });
+    }
+    const chosen = carrying[0] ?? fetched[0];
+    issue = chosen.n;
+    issueBody = chosen.text;
+    issueUnreadable = chosen.unreadable;
+    // With no matrix-carrying target, name every unreadable target so a read failure is not hidden behind the fallback.
+    if (!carrying[0]) unreadableRefs = fetched.filter((f) => f.unreadable && f.n !== issue).map((f) => `#${f.n}`);
+    if (linkedIssues.length > 0 && (linkedIssues.length !== 1 || linkedIssues[0] !== issue)) {
+      return refuse("not_exactly_one_tracker_issue", `PR #${pr} links #${issue} via Refs but GitHub closing references are ${linkedIssues.join(", ")}`);
+    }
+  }
   const { matrixInvalid, missing } = pathsMissingFromMatrix(paths, issueBody);
-  if (matrixInvalid) return refuse("issue_matrix_invalid", `linked issue #${issue} has no valid AC / DoD matrix`);
+  if (matrixInvalid) return refuse("issue_matrix_invalid", `${issueUnreadable ? `linked issue #${issue} could not be read` : `linked issue #${issue} has no valid AC / DoD matrix`}${unreadableRefs.length > 0 ? ` (unreadable Refs targets: ${unreadableRefs.join(", ")})` : ""}`);
   if (missing.length > 0) {
     return refuse("contract_doc_not_in_matrix", `contract doc(s) not named as a backticked path in a row of issue #${issue}'s AC / DoD matrix: ${missing.join(", ")}`, { missing });
   }
