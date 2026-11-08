@@ -1225,8 +1225,7 @@ function normalizeAngleEntries(raw) {
 
 /**
  * Find a named angle's configured entry, searching this config's own gates in
- * a fixed priority order (draft, preApproval, spike), preceded by `firstGate`
- * when given, and returning the first match. An ENABLED entry in any gate wins: returning a bare `enabled:false`
+ * a fixed priority order (draft, preApproval, spike) with no gate preferred, and returning the first match. An ENABLED entry in any gate wins: returning a bare `enabled:false`
  * placeholder first would shadow another gate's real override of the same
  * angle name. When no gate enables the name, the first DISABLED entry is the
  * fallback, so an angle the SECURITY_SENSITIVE_SEAM override adds past
@@ -1234,13 +1233,11 @@ function normalizeAngleEntries(raw) {
  * entry in any gate returns null.
  * @param {DevLoopConfig} config
  * @param {string} name
- * @param {string} [firstGate] a config gate key searched before the fixed order
  * @returns {{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string, scope?: string, categories?: string[], kinds?: string[], readsPrBody?: boolean}|null}
  */
-export function findAngleEntry(config, name, firstGate) {
+export function findAngleEntry(config, name) {
   let disabled = null;
-  // `firstGate` (a config gate key) is searched before the fixed order, so a caller building one gate reads that gate's own entry.
-  for (const gate of [...new Set([firstGate, "draft", "preApproval", "spike"])].filter(Boolean)) {
+  for (const gate of ["draft", "preApproval", "spike"]) {
     const entries = normalizeAngleEntries(config?.gates?.[gate]?.angles);
     for (const e of entries) {
       if (e.name !== name) continue;

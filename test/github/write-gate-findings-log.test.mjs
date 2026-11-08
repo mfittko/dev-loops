@@ -3497,6 +3497,27 @@ test("writeGateFindingsLog replaces a repeated write of one roundId, retains a c
   }
 });
 
+test("an unjudged write of a round whose live ledger is judged is refused and leaves the round count unchanged (issue 3080)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-unjudged-over-judged-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const contextDir = path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-48");
+    await mkdir(contextDir, { recursive: true });
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.emit-plan.json`), JSON.stringify({ ok: true, repo: "owner/repo", pr: 48, gate: "draft_gate", headSha, roundId: "r1-aa", count: 2, units: [{ angles: ["pr-description"], group: null }, { angles: ["holistic"], group: null }] }), "utf8");
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.fanin-ledger.json`), JSON.stringify({ overallVerdict: "findings_present", findings: [], provenance: { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "review-a" }, { angle: "holistic", reviewer: "review-b" }] } }), "utf8");
+    const id = { repo: "owner/repo", pr: 48, gate: "draft_gate", headSha };
+    const write = (judged) => writeGateFindingsLog({ ...id, findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "s", ...(judged ? { judgeDisposition: "reject" } : {}) }]) }, { repoRoot });
+    await write(true);
+    const before = await countCompletedRounds(id, { repoRoot, includeLiveCurrentHead: true });
+    await write(true);
+    assert.equal(await countCompletedRounds(id, { repoRoot, includeLiveCurrentHead: true }), before);
+    await assert.rejects(write(false), /completed-round-unjudged-rewrite/);
+    assert.equal(await countCompletedRounds(id, { repoRoot, includeLiveCurrentHead: true }), before);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("two unjudged standalone review writes at one head retain the first and raise the round count (issue 3080 AC8)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-review-twice-"));
   try {

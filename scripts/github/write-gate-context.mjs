@@ -1933,7 +1933,7 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
 /**
  * The shared finished-round predicate. The writer stamps `roundIdentity: { roundId, judgeExecution, completed }` on each ledger (the emit-plan round id and the judge execution identity, `null` when absent; `completed: true` on a finished round).
  * A stamp without `completed: true` (an intermediate or aborted write) is always an in-round rewrite: replaced, not retained, not counted.
- * A completed stamp is a rewrite only against an `incoming` write that shares its non-null `roundId` or `judgeExecution` (a repeated write of one round);
+ * A completed stamp is a rewrite only against a completed `incoming` write (`incoming.completed === true`) that shares its non-null `roundId` or `judgeExecution` (a repeated write of one round);
  * for a reader or an identity-less incoming write it is a finished round that counts and is retained.
  * Only a ledger written before the stamp (no `roundIdentity`) uses the earlier shape: at least one finding and no `judgeDisposition`.
  * Every other closed ledger, including a clean one with `findings: []`, is a finished round.
@@ -1944,7 +1944,7 @@ export function isInRoundRewrite(log, incoming) {
   // An unfinished stamp (an intermediate or aborted unjudged write) is always replaced; the writer stamps `completed` on a finished round.
   if (stamp?.completed !== true) return true;
   const same = (a, b) => typeof a === "string" && a === b;
-  return incoming !== undefined && (same(stamp?.roundId, incoming.roundId) || same(stamp?.judgeExecution, incoming.judgeExecution));
+  return incoming?.completed === true && (same(stamp?.roundId, incoming.roundId) || same(stamp?.judgeExecution, incoming.judgeExecution));
 }
 
 /**

@@ -10103,7 +10103,8 @@ test("resolveCapRound at the current head returns the retained round at H, never
 test("isInRoundRewrite: a stamped ledger is a rewrite only against an incoming write of the same round or judge execution (issue 3080 AC8)", () => {
   const completed = { findings: [{ severity: "low" }], roundIdentity: { roundId: "r1-aa", judgeExecution: null, completed: true } };
   assert.equal(isInRoundRewrite(completed), false, "a reader counts a completed stamped ledger");
-  assert.equal(isInRoundRewrite(completed, { roundId: "r1-aa", judgeExecution: "j1-bb" }), true, "a repeated write of one round");
+  assert.equal(isInRoundRewrite(completed, { roundId: "r1-aa", judgeExecution: "j1-bb", completed: true }), true, "a repeated completed write of one round");
+  assert.equal(isInRoundRewrite(completed, { roundId: "r1-aa", judgeExecution: null, completed: false }), false, "an unjudged write never rewrites a completed ledger");
   assert.equal(isInRoundRewrite(completed, { roundId: "r2-cc", judgeExecution: null }), false, "another round: two completed standalone rounds retain the first");
   assert.equal(isInRoundRewrite(completed, { roundId: null, judgeExecution: null }), false, "a no-plan write retains a completed round");
   const aborted = { findings: [{ severity: "low" }], roundIdentity: { roundId: "r1-aa", judgeExecution: null, completed: false } };

@@ -890,6 +890,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   const roundIdentity = {
     roundId: planRoundId,
     judgeExecution: /^j\d+-[0-9a-f]+$/.exec(path.basename(path.dirname(options.judgeVerdict ?? "")))?.[0] ?? null,
+    completed: options.gate === "review" || Boolean(options.judgeVerdict),
   };
   let roundCap;
   const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, roundIdentity, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot, includeLiveCurrentHead: true }));
@@ -1165,7 +1166,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // helper. Pure no-op (byte-identical log) when the flag is absent.
   const stampedLog = stampOptionalSpecAuthority(log, specAuthorityIdentity);
   await mkdir(path.dirname(fullPath), { recursive: true });
-  const retainedRound = await retainSameHeadLedger(fullPath, logPath, roundIdentity);
+  const retainedRound = await retainSameHeadLedger(fullPath, logPath, stampedLog.roundIdentity);
   await writeSealed(fullPath, JSON.stringify(stampedLog, null, 2) + "\n");
   return {
     ok: true, path: logPath, log: stampedLog,
@@ -1179,11 +1180,17 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
 // ponytail: retention runs outside the write lock; the exclusive copy makes a round-number collision fail instead of overwriting, but concurrent same-head writers are otherwise unsupported (move retention under the ledger lock if they ever are).
 async function retainSameHeadLedger(fullPath, logPath, roundIdentity) {
   if (!(await access(fullPath).then(() => true, () => false))) return null;
+  let live;
   try {
-    const live = JSON.parse(await readSealed(fullPath));
-    // An in-round rewrite (at least one finding, none judged) is replaced, not retained; a finished round, including a clean one with no findings, is retained.
-    if (isInRoundRewrite(live, roundIdentity)) return null;
+    live = JSON.parse(await readSealed(fullPath));
   } catch (err) { if (err?.code === OUT_OF_BAND_WRITE) throw err; }
+  // An in-round rewrite (at least one finding, none judged) is replaced, not retained; a finished round, including a clean one with no findings, is retained.
+  if (live && isInRoundRewrite(live, roundIdentity)) return null;
+  // An unjudged write of a round whose live ledger is already completed would retain the finished round and count it twice: refuse.
+  const same = (a, b) => typeof a === "string" && a === b;
+  if (live?.roundIdentity?.completed === true && roundIdentity.completed !== true && (same(live.roundIdentity.roundId, roundIdentity.roundId) || same(live.roundIdentity.judgeExecution, roundIdentity.judgeExecution))) {
+    throw parseError(`the live ledger ${logPath} is already a completed write of this round; an unjudged write of the same round is refused (completed-round-unjudged-rewrite)`);
+  }
   const dir = path.dirname(fullPath);
   const stem = path.basename(fullPath, ".json");
   const roundOf = (n) => (n.startsWith(`${stem}.round-`) ? /\.round-(\d+)\.json$/.exec(n)?.[1] : undefined);
