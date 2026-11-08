@@ -195,6 +195,7 @@ export async function waiveAdrTripwire(options, {
 
   let issueBody;
   let issueUnreadable = false;
+  let unreadableRefs = [];
   if (refsIssues.length === 0) {
     issueBody = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
   } else {
@@ -214,12 +215,14 @@ export async function waiveAdrTripwire(options, {
     issue = chosen.n;
     issueBody = chosen.text;
     issueUnreadable = chosen.unreadable;
+    // With no matrix-carrying target, name every unreadable target so a read failure is not hidden behind the fallback.
+    if (!carrying[0]) unreadableRefs = fetched.filter((f) => f.unreadable && f.n !== issue).map((f) => `#${f.n}`);
     if (linkedIssues.length > 0 && (linkedIssues.length !== 1 || linkedIssues[0] !== issue)) {
       return refuse("not_exactly_one_tracker_issue", `PR #${pr} links #${issue} via Refs but GitHub closing references are ${linkedIssues.join(", ")}`);
     }
   }
   const { matrixInvalid, missing } = pathsMissingFromMatrix(paths, issueBody);
-  if (matrixInvalid) return refuse("issue_matrix_invalid", issueUnreadable ? `linked issue #${issue} could not be read` : `linked issue #${issue} has no valid AC / DoD matrix`);
+  if (matrixInvalid) return refuse("issue_matrix_invalid", issueUnreadable ? `linked issue #${issue} could not be read` : `linked issue #${issue} has no valid AC / DoD matrix${unreadableRefs.length > 0 ? ` (unreadable Refs targets: ${unreadableRefs.join(", ")})` : ""}`);
   if (missing.length > 0) {
     return refuse("contract_doc_not_in_matrix", `contract doc(s) not named as a backticked path in a row of issue #${issue}'s AC / DoD matrix: ${missing.join(", ")}`, { missing });
   }

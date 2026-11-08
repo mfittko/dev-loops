@@ -173,6 +173,15 @@ test("an unreadable only Refs target refuses issue_matrix_invalid naming the rea
   assert.match(result.detail, /#7 could not be read/u);
 });
 
+test("a readable matrix-less first target does not hide an unreadable later target", async () => {
+  const result = await assertRefusal({
+    fetchPr: refsPr("Refs #5\nRefs #6\n"),
+    fetchIssueBody: async ({ issue }) => { if (issue === 6) throw new Error("gh issue view failed"); return "Epic, no matrix."; },
+  }, "issue_matrix_invalid");
+  assert.match(result.detail, /#5 has no valid AC \/ DoD matrix/u);
+  assert.match(result.detail, /unreadable Refs targets: #6/u);
+});
+
 test("an unreadable Refs target is treated as non-matrix-carrying", async () => {
   const { run } = harness({
     fetchPr: refsPr("Refs #5\nRefs #6\nRefs #7\n"),
