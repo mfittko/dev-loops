@@ -194,7 +194,9 @@ test("buildMeritRationale reads the summary from the Problem line and from a leg
 test("escapeProse keeps a balanced code span and escapes stray backticks instead of deleting them", () => {
   assert.equal(escapeProse("call `gh search prs` now"), "call `gh search prs` now");
   assert.equal(escapeProse("a ` b"), "a &#96; b");
-  assert.equal(escapeProse("a ``b`` c"), "a &#96;&#96;b&#96;&#96; c");
+  assert.equal(escapeProse("a ``b`` c"), "a ``b`` c");
+  assert.equal(escapeProse("accepts ``approve release v1.2.3`` here"), "accepts ``approve release v1.2.3`` here");
+  assert.equal(escapeProse("\\`![x](http://e/x.png)`"), "\\&#96;!&#91;x](http://e/x.png)&#96;");
 });
 
 test("hostile prose stays inert on the inline surface, including inside a code span", () => {

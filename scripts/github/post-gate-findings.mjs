@@ -276,7 +276,9 @@ export function sanitizeInline(value) {
 // reviewer's text stays complete. Text outside a span gets the same
 // neutralization as sanitizeInline. Single-line surfaces keep using
 // sanitizeInline, which deletes backticks.
-const BALANCED_CODE_SPAN_RE = /(?<!`)`(?!\s)([^`]+)`(?!`)/g;
+// A run of N backticks opens a span that the next run of exactly N closes. A
+// backslash-escaped opener is literal text in CommonMark, so it never opens one.
+const BALANCED_CODE_SPAN_RE = /(?<![`\\])(`+)(?!`)(?!\s)([\s\S]*?[^`])\1(?!`)/g;
 
 function neutralizeMarkerDelimiters(text) {
   return text.replace(/\s+/g, " ").replace(/<!--/g, "&lt;!--").replace(/-->/g, "--&gt;");
@@ -296,8 +298,8 @@ export function escapeProse(value) {
   let last = 0;
   for (const match of text.matchAll(BALANCED_CODE_SPAN_RE)) {
     out += escapeOutsideCodeSpan(text.slice(last, match.index));
-    const inner = neutralizeMarkerDelimiters(match[1]).trim();
-    out += inner.length > 0 ? `\`${inner}\`` : "";
+    const inner = neutralizeMarkerDelimiters(match[2]).trim();
+    out += inner.length > 0 ? `${match[1]}${inner}${match[1]}` : "";
     last = match.index + match[0].length;
   }
   out += escapeOutsideCodeSpan(text.slice(last));
