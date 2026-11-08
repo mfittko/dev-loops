@@ -612,10 +612,10 @@ export { buildGateContextPath };
 // skip-completed resume scan.
 export { buildGateReviewsDir };
 
-// The body-only rerun set (GATE-EXEC-BODY-ONLY-RERUN): the always-surface angles plus the verifiedItems angles, whose
-// labels are copied from the PR body checklists. Local to this path: angleReviewSurface keeps serving carry-forward.
-// The body-reading set is every angle whose shipped prompt reads the PR body: contradiction-lens checks body statements against
-// the diff and contracts, scope compares the body to the diff, and correctness checks the body claims.
+// The body-only rerun set (GATE-EXEC-BODY-ONLY-RERUN) is every angle whose shipped prompt reads the PR body: the always-surface
+// angles, the verifiedItems angles (labels copied from the PR body checklists), contradiction-lens (checks body statements
+// against the diff and contracts), scope (compares the body to the diff) and correctness (checks the body claims).
+// Local to this path: angleReviewSurface keeps serving carry-forward.
 const BODY_READING_ANGLES = new Set([...VERIFIED_ITEMS_ANGLES, "contradiction-lens", "scope", "correctness"]);
 export function readsPrBody(angle) {
   return angleReviewSurface(angle).kind === "always" || BODY_READING_ANGLES.has(baseAngleName(String(angle).trim()));
