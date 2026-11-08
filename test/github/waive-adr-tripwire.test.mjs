@@ -135,6 +135,33 @@ test("refuses a lightweight PR on the pr_body path (no closing issue)", async ()
   await assertRefusal({ fetchPr: async () => ({ body: "Summary only.", headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [] } }) }, "lightweight_pr_body_path");
 });
 
+const refsPr = (body) => async () => ({ body, headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [] } });
+
+test("a Refs-linked tracker issue with a matrix passes the link check", async () => {
+  const fetched = [];
+  const { run } = harness({
+    fetchPr: refsPr("Slice.\n\nRefs #5\nRefs #7\n"),
+    fetchIssueBody: async ({ issue }) => { fetched.push(issue); return issue === 7 ? ISSUE_BODY : "Epic, no matrix."; },
+  });
+  const result = await run();
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.issue, 7);
+  assert.deepEqual(fetched.sort(), [5, 7]);
+});
+
+test("a Refs inside a code span or fence is no link", async () => {
+  await assertRefusal({ fetchPr: refsPr("Summary `Refs #7`\n\n```\nRefs #8\n```\n") }, "lightweight_pr_body_path");
+});
+
+test("refuses two matrix-carrying Refs targets and names both", async () => {
+  const result = await assertRefusal({ fetchPr: refsPr("Refs #7\nRefs #8\n") }, "ambiguous_refs_tracker_issue");
+  assert.match(result.detail, /#7 and #8/u);
+});
+
+test("Refs targets without any matrix refuse issue_matrix_invalid", async () => {
+  await assertRefusal({ fetchPr: refsPr("Refs #7\n"), fetchIssueBody: async () => "no matrix" }, "issue_matrix_invalid");
+});
+
 test("refuses a PR that links more than one tracker issue, or whose GitHub link disagrees with the body", async () => {
   await assertRefusal({ fetchPr: async () => ({ body: "Closes #7\nFixes #8", headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [{ number: 7 }, { number: 8 }] } }) }, "not_exactly_one_tracker_issue");
   await assertRefusal({ fetchPr: async () => ({ body: PR_BODY, headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [{ number: 99 }] } }) }, "not_exactly_one_tracker_issue");
