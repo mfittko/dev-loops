@@ -1475,6 +1475,8 @@ async function main() {
           filePath: error.staleRunner.filePath,
         },
         staleRunnerCheck,
+        // The merge gate reads preMergeGateCheck.failures, so a stale claim names its run there instead of a bare error string.
+        preMergeGateCheck: { ok: false, failures: [...staleRunnerCheck.failures, "the posted gate verdicts were not read"] },
       })}\n`);
       process.exitCode = 1;
       return;

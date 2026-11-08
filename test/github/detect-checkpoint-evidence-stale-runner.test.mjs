@@ -100,6 +100,10 @@ test("detect-checkpoint-evidence fails closed when active runner is stale", asyn
     assert.equal(payload.error, "stale_runner");
     assert.equal(payload.status, "stale_runner");
     assert.ok(payload.staleRunnerCheck.failures[0].includes("stale"));
+    // The merge gate reads preMergeGateCheck.failures, so the reason names the run and says no verdict was read.
+    assert.equal(payload.preMergeGateCheck.ok, false);
+    assert.ok(payload.preMergeGateCheck.failures[0].startsWith("stale runner: run-stale"));
+    assert.ok(payload.preMergeGateCheck.failures.includes("the posted gate verdicts were not read"));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -138,6 +142,9 @@ test("detect-checkpoint-evidence fails closed when active runner has an exit sig
     assert.equal(payload.error, "exit_signal_recorded");
     assert.equal(payload.status, "exit_signal_recorded");
     assert.ok(payload.staleRunnerCheck.failures[0].includes("exit signal"));
+    assert.equal(payload.preMergeGateCheck.ok, false);
+    assert.ok(payload.preMergeGateCheck.failures[0].startsWith("exit signal recorded for run run-active"));
+    assert.ok(payload.preMergeGateCheck.failures.includes("the posted gate verdicts were not read"));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
