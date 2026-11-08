@@ -2394,12 +2394,12 @@ test("judgePassCli reports a null --spec-file as the typed parse error, not a ba
 });
 
 // Issue 3080 AC11: a pinned Copilot body finding is a ledger cluster the judge must dispose (the PR 3129 pre_approval_gate shape).
-async function copilotBodyRound(tmpDir, { dispositions, clusterIds = [0, 1, 2] }) {
+async function copilotBodyRound(tmpDir, { dispositions, clusterIds = [0, 1, 2], overallVerdict = "findings_present", bodySeverity = "medium" }) {
   const findings = clusterIds.map((clusterId, n) => finding({ severity: "medium", summary: `defect ${n}`, recommendation: `fix ${n}`, clusterId }));
-  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict, findings }));
   const derived = copilotBodyJudgePath({ tmpRoot: path.join(tmpDir, "tmp"), repo: "mfittko/dev-loops", pr: 3129, headSha: HEAD });
   await mkdir(path.dirname(derived), { recursive: true });
-  await writeFile(derived, JSON.stringify({ angle: "copilot-body", findings: [{ severity: "medium", summary: "Refs list that mixes owner/repo#N and #N drops entries", recommendation: "parse both forms" }] }));
+  await writeFile(derived, JSON.stringify({ angle: "copilot-body", findings: [{ severity: bodySeverity, summary: "Refs list that mixes owner/repo#N and #N drops entries", recommendation: "parse both forms" }] }));
   const disposed = (index) => ({ index, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" });
   await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({
     scopeDrift: { verdict: "within_scope", rationale: "The Copilot body defect is confirmed here, not in a cluster.", driftedAreas: [] },
@@ -2435,6 +2435,17 @@ test("judgePassCli puts an acted Copilot body cluster in the --ledger-out ledger
   }
 });
 
+test("judgePassCli raises a clean ledger verdict when an acted Copilot body cluster is blocking (issue 3080)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-copilot-body-clean-"));
+  try {
+    await copilotBodyRound(tmpDir, { dispositions: [0, 1, 2, 3], overallVerdict: "clean", bodySeverity: "high" });
+    await judgePassCli(copilotBodyArgs, { repoRoot: tmpDir });
+    assert.equal(JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).overallVerdict, "findings_present");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("withPinnedCopilotBodyCluster refuses a changed pinned file and a plan without copilotBodyClusterId (issue 3080 AC11)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-copilot-body-changed-"));
   try {
@@ -2447,6 +2458,8 @@ test("withPinnedCopilotBodyCluster refuses a changed pinned file and a plan with
     await writeFile(file, bytes.replace("medium", "low"));
     await assert.rejects(withPinnedCopilotBodyCluster([], order), /changed since the judge work order pinned it/);
     assert.deepEqual(await withPinnedCopilotBodyCluster([1], { requiredReads: [] }), [1], "no pinned read leaves the findings unchanged");
+    await rm(file);
+    await assert.rejects(withPinnedCopilotBodyCluster([], order), /body\.json is gone; re-emit the judge work order/);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

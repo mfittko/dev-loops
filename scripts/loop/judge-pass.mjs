@@ -985,7 +985,7 @@ export async function judgePassCli(
 ) {
   const resolvedRoot = options.repoRoot ? path.resolve(repoRoot, options.repoRoot) : repoRoot;
   const pinned = await verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot ?? resolveGateArtifactTmpRoot(resolvedRoot));
-  const { findings, overallVerdict } = await resolvePayload(options, resolvedRoot);
+  const { findings, overallVerdict: ledgerVerdict } = await resolvePayload(options, resolvedRoot);
   // The Copilot body finding is one more cluster for the judge to dispose; the spec-authority check below still covers the findings read only.
   const judged = await withPinnedCopilotBodyCluster(findings, pinned.order);
   const judgeVerdict = await readJsonArtifact(
@@ -1055,8 +1055,11 @@ export async function judgePassCli(
   // compute overallVerdict, so the two cannot disagree on what "blocking" means.
   const { blockingSeverities, trackerProvider } = await resolveGateSettings(options, resolvedRoot);
   // A failOpen promotion (ADR 0188) raised a low to medium after the consolidator computed overallVerdict, so check the ORIGINAL severities.
-  const actAtInputSeverity = result.enriched.flatMap((f, i) => (isOpenActItem(f) ? [{ ...f, severity: judged[i]?.severity ?? f.severity }] : []));
-  assertCleanImpliesNoBlockingAct(overallVerdict, actAtInputSeverity, blockingSeverities);
+  const actAtInputSeverity = result.enriched.flatMap((f, i) => (isOpenActItem(f) ? [{ i, f: { ...f, severity: judged[i]?.severity ?? f.severity } }] : []));
+  // Only ledger findings (below findings.length) were weighed by the consolidator; an acted Copilot body cluster at a blocking severity raises the verdict instead.
+  assertCleanImpliesNoBlockingAct(ledgerVerdict, actAtInputSeverity.filter((a) => a.i < findings.length).map((a) => a.f), blockingSeverities);
+  const copilotBlocks = actAtInputSeverity.some((a) => a.i >= findings.length && blockingSeverities.includes(a.f.severity));
+  const overallVerdict = ledgerVerdict === "clean" && copilotBlocks ? "findings_present" : ledgerVerdict;
 
   // Persist the durable approval record AFTER the act list is finalized, so a
   // round with remaining act findings approves nothing (re-entry stays honest).
