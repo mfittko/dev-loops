@@ -968,6 +968,9 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       if (f.resurfaces !== undefined && !(priorFiles.has(f.resurfaces) && priorFiles.get(f.resurfaces) === (resolveFindingFile(f) ?? null))) delete f.resurfaces;
     }
   }
+  // One completed rule for the cap count and the ledger stamp, so a repeated judged write is not counted as an extra round.
+  const roundCompleted = () => options.gate === "review" || findings.length === 0 || findings.some((f) => f?.judgeDisposition !== undefined);
+  roundIdentity.completed = roundCompleted();
   // Past the round cap, a judge defer or reject is recorded as cap-closed (GATE-EXEC-ROUND-CAP).
   if (options.gate === "draft_gate" && findings.some((f) => f.judgeDisposition === "defer" || f.judgeDisposition === "reject")) {
     const { pastCap, round, cap } = await roundCapState();
@@ -1133,7 +1136,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     // write-time provenance guard above, so the two can never disagree.
     executionMode,
     // `completed`: a judged round, a clean round and the standalone review (one write per round) are finished; any other unjudged write is intermediate or aborted.
-    roundIdentity: { ...roundIdentity, completed: options.gate === "review" || findings.length === 0 || findings.some((f) => f?.judgeDisposition !== undefined) },
+    roundIdentity: { ...roundIdentity, completed: roundCompleted() },
     findings,
   };
   // `overallVerdict` is optional and additive (absent on a bare-array input);

@@ -3507,9 +3507,11 @@ test("an unjudged write of a round whose live ledger is judged is refused and le
     await writeFile(path.join(contextDir, `draft_gate-${headSha}.fanin-ledger.json`), JSON.stringify({ overallVerdict: "findings_present", findings: [], provenance: { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "review-a" }, { angle: "holistic", reviewer: "review-b" }] } }), "utf8");
     const id = { repo: "owner/repo", pr: 48, gate: "draft_gate", headSha };
     const write = (judged) => writeGateFindingsLog({ ...id, findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "s", ...(judged ? { judgeDisposition: "reject" } : {}) }]) }, { repoRoot });
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  draft:\n    maxReviewRounds: 2\n", "utf8");
     await write(true);
     const before = await countCompletedRounds(id, { repoRoot, includeLiveCurrentHead: true });
-    await write(true);
+    const repeat = await write(true);
+    assert.equal(JSON.parse(await readFile(repeat.path, "utf8")).findings[0].capClosed, undefined, "a repeated judged write at round 1 of cap 2 is not past the cap");
     assert.equal(await countCompletedRounds(id, { repoRoot, includeLiveCurrentHead: true }), before);
     await assert.rejects(write(false), /completed-round-unjudged-rewrite/);
     assert.equal(await countCompletedRounds(id, { repoRoot, includeLiveCurrentHead: true }), before);
