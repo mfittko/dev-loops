@@ -6559,6 +6559,9 @@ test("buildGateContext threads input.carriedAngles into the persisted artifact's
     // by 1 without carriedAngles — now dispatches clean. This exercises the
     // multi-angle all-carried exclusion path (not just a singleton group).
     const config = draftConfig({ dynamicAngles: false });
+    // Phase 1 first: a carried body-reading angle needs a recorded body baseline to stay carried.
+    const phase1 = { config, gate: "draft_gate", diff: DOCS_ONLY_DIFF, repo: "owner/repo", pr: 52, headSha: "cafef00d5678" };
+    await buildGateContext(phase1, { repoRoot });
     const result = await buildGateContext(
       {
         config,
@@ -9835,12 +9838,53 @@ test("a body edit drops the verifiedItems angles acceptance-criteria and pr-chec
   }
 });
 
-test("a same-head body edit drops the body-reading carried angles and keeps the others; no prior digest keeps all", async () => {
+test("a carried body-reading angle survives a same-body Phase 2 rebuild but not one after a Phase 1 body edit (buildGateContext)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-carried-seq-"));
+  try {
+    const carriedAfter = async (bodies) => {
+      for (const body of bodies) await buildGateContext(bodyRerunInput(body), { repoRoot });
+      const { artifact } = await buildGateContext({ ...bodyRerunInput(bodies.at(-1)), carriedAngles: ["scope", "holistic"] }, { repoRoot });
+      return artifact.fanout.preflight.carriedAngles;
+    };
+    // Phase 1 on the edited body, then the carried rebuild: the Phase 1 build must not erase the edit.
+    assert.deepEqual(await carriedAfter(["Original", "Edited"]), ["holistic"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+  const sameBody = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-carried-same-"));
+  try {
+    await buildGateContext(bodyRerunInput("Original"), { repoRoot: sameBody });
+    const { artifact } = await buildGateContext({ ...bodyRerunInput("Original"), carriedAngles: ["scope", "holistic"] }, { repoRoot: sameBody });
+    assert.deepEqual([...artifact.fanout.preflight.carriedAngles].sort(), ["holistic", "scope"]);
+  } finally {
+    await rm(sameBody, { recursive: true, force: true });
+  }
+});
+
+test("CLI --carried-angles drops a body-reading carried angle after a Phase 1 body edit", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const runWith = (body) => async (command, args) => {
+      if (args[0] === "pr" && args[1] === "view") return { code: 0, stdout: JSON.stringify({ body, closingIssuesReferences: [], baseRefName: "main" }), stderr: "" };
+      return stubGhRun(command, args);
+    };
+    const argv = ["--repo", "owner/repo", "--pr", "41", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope","coverage"]', "--base", baseSha];
+    await main(argv, { repoRoot, run: runWith("Original") });
+    await main(argv, { repoRoot, run: runWith("Edited") });
+    await main([...argv, "--carried-angles", '["scope","coverage"]'], { repoRoot, run: runWith("Edited") });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 41, gate: "draft_gate", headSha }, { repoRoot });
+    assert.deepEqual(artifact.fanout.preflight.carriedAngles, ["coverage"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("dropBodyReadingCarriedAngles: no recorded baseline counts as changed, like readCompletedAnglesForHead", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-carried-"));
   try {
     const id = { repo: "owner/repo", pr: 90, gate: "draft_gate", headSha: BODY_RERUN_SHA };
     const carried = ["correctness", "scope", "security-lens"];
-    assert.deepEqual(await dropBodyReadingCarriedAngles(carried, { ...id, prBodySha256: "f".repeat(64) }, { repoRoot }), carried);
+    assert.deepEqual(await dropBodyReadingCarriedAngles(carried, { ...id, prBodySha256: "f".repeat(64) }, { repoRoot }), ["security-lens"]);
     const first = await buildGateContext(bodyRerunInput("Original"), { repoRoot });
     const prior = first.artifact.requiredReads.find((r) => r.kind === "pr-body").sha256;
     assert.deepEqual(await dropBodyReadingCarriedAngles(carried, { ...id, prBodySha256: "f".repeat(64) }, { repoRoot }), ["security-lens"]);

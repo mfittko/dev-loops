@@ -681,16 +681,27 @@ export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpR
 
 /**
  * A same-head body edit also invalidates carried body-reading angles
- * (GATE-EXEC-BODY-ONLY-RERUN): a carried angle was proven on an earlier head's
- * body, so once a previous context at this head records a different pr-body
- * digest, the carried angles that read the body are dropped and re-run. No prior
- * digest (first context at this head) keeps the carry-forward unchanged.
+ * (GATE-EXEC-BODY-ONLY-RERUN): a carried angle was proven on an earlier body, so
+ * it is kept only while the pr-body digest still equals the head's sticky
+ * baseline (the digest of the first context at this head, which later same-head
+ * builds never overwrite). A missing baseline counts as changed, matching
+ * readCompletedAnglesForHead.
  */
 export async function dropBodyReadingCarriedAngles(carriedAngles, { repo, pr, gate, headSha, tmpRoot = "tmp", prBodySha256: bodySha256 = null }, { repoRoot = process.cwd() } = {}) {
   if (!Array.isArray(carriedAngles) || carriedAngles.length === 0 || typeof bodySha256 !== "string") return carriedAngles;
-  const prior = await readPriorPrBodySha256({ repo, pr, gate, headSha, tmpRoot }, { repoRoot });
-  if (prior === null || prior === bodySha256) return carriedAngles;
+  const baseline = await readPrBodyBaselineSha256({ repo, pr, gate, headSha, tmpRoot }, { repoRoot });
+  if (baseline === bodySha256) return carriedAngles;
   return carriedAngles.filter((angle) => !readsPrBody(angle));
+}
+
+/**
+ * The pr-body digest the head's first context recorded (`prBodyBaselineSha256`),
+ * falling back to that context's pr-body read; null when no context exists.
+ */
+export async function readPrBodyBaselineSha256(input, { repoRoot = process.cwd() } = {}) {
+  const context = await readGateContext(input, { repoRoot }).catch(() => null);
+  if (typeof context?.prBodyBaselineSha256 === "string") return context.prBodyBaselineSha256;
+  return readPriorPrBodySha256(input, { repoRoot });
 }
 
 /**
@@ -3478,7 +3489,8 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       }
     }
   }
-  const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants, capRoundResidue }), ...(requiredReads ? { requiredReads } : {}), loggedAt };
+  const prBodyBaselineSha256 = prBodyRead ? (await readPrBodyBaselineSha256(options, { repoRoot })) ?? prBodyRead.sha256 : null;
+  const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants, capRoundResidue }), ...(requiredReads ? { requiredReads } : {}), ...(prBodyBaselineSha256 ? { prBodyBaselineSha256 } : {}), loggedAt };
   // Keep the marker available only when prefix AND referenced stable files
   // are unchanged on disk (the prefix hash-binds the evidence and full diff).
   let markerUnchanged = existingBytes !== null && existingBytes.equals(prefixBytes);
