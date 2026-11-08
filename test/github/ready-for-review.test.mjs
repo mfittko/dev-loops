@@ -874,6 +874,13 @@ test("absolute and unapproved T1 size limits remain unwaivable", async () => {
   }
 });
 
+test("size waiver --reason carrying an operator-owned release approval is refused with no gh write", async () => {
+  const { result, calls } = await runWaiverCase({ config: DEFAULT_WAIVER, args: ["--reason", "approve release v1.2.3"] });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /OPERATOR-OWNED-LINE/);
+  assert.ok(!calls.some((call) => call[0] === "pr" && ["ready", "comment"].includes(call[1])));
+});
+
 test("approved T1 size waiver names its approver", async () => {
   const { result, commentBody } = await runWaiverCase({ config: T1_WAIVER, file: "src/money/pay.mjs", args: ["--reason", "money-slice rename", "--approved-by", "jane-reviewer"], allow: true });
   assert.equal(result.code, 0, result.stderr);

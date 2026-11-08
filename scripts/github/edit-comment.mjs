@@ -26,6 +26,7 @@ Optional:
                                 no-ids-in-comments guard refuses any other #<digits>)
   --standing-authorization      Assert a recorded standing operator authorization. Clears
                                 only the Copilot body-disposition \`operator\` marker.
+                                Accepted forms: bare, =true, =1. Any other value keeps the refusal.
 Refusal: a body with an operator-owned line (\`approve merge\`, \`approve release v<version>\`,
 \`adr-tripwire:allow\`, or a Copilot \`operator\` marker without the flag) is refused with
 OPERATOR-OWNED-LINE, exit 1, no GitHub write. \`--allowed-refs\` never clears it. The human posts the line.

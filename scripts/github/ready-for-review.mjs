@@ -15,6 +15,7 @@ import { verifyPolicyChangeApproval, policyChangeApprovalRefusal } from "./_poli
 import { evaluateCommentDiscipline as realEvaluateCommentDiscipline } from "../loop/check-comment-discipline.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { sanitizeInline } from "./post-gate-findings.mjs";
+import { findOperatorOwnedLineRefusal } from "@dev-loops/core/github/operator-owned-lines";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: ready-for-review.mjs --repo <owner/name> --pr <number> [--waive-size-budget --reason <text> [--approved-by <human>]]
@@ -187,6 +188,8 @@ function renderSizeBudgetWaiverCommentBody({ headSha, sizeBudget, reason, approv
 
 async function postSizeBudgetWaiverComment({ repo, pr, headSha, sizeBudget, reason, approvedBy }, { env, ghCommand, runChild: runChildImpl }) {
   const body = renderSizeBudgetWaiverCommentBody({ headSha, sizeBudget, reason, approvedBy });
+  const refusal = findOperatorOwnedLineRefusal(body);
+  if (refusal) throw new Error(refusal);
   const result = await runChildImpl(ghCommand, ["pr", "comment", String(pr), "--repo", repo, "--body", body], env);
   if (result.code !== 0) throw new Error(`Failed to post size-budget waiver record: ${result.stderr.trim() || `exit code ${result.code}`}`);
 }
