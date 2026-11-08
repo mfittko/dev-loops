@@ -908,17 +908,29 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     const judgeRoundDir = path.basename(path.dirname(judgePath));
     const inJudgeDir = /^j\d+-[0-9a-f]+$/.test(judgeRoundDir);
     // A verdict outside a judge execution directory binds no plan of its own: read the gate and head judge directory's plan instead.
-    // emit-judge-work-order writes it under the checkout tmp; the main-anchored ledger tmp is the other candidate, and the first readable plan wins.
+    // emit-judge-work-order writes it under the checkout tmp; the main-anchored ledger tmp is the other candidate, and every readable plan counts, and any one that pins a Copilot read refuses.
     const judgePlanPaths = inJudgeDir
       ? [path.join(path.dirname(path.dirname(judgePath)), "judge-emit-plan.json")]
       : [...new Set([options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot), path.join(repoRoot, "tmp")])]
         .map((root) => path.join(path.resolve(repoRoot, buildGateArtifactPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: root, dir: "gate-judge" })), "judge-emit-plan.json"));
-    let judgePlan = null;
-    let judgePlanPath = judgePlanPaths[0];
+    // Read every candidate: only ENOENT is absent, and a candidate that exists but fails to parse is refused, never skipped.
+    const readablePlans = [];
     for (const candidate of judgePlanPaths) {
-      judgePlan = await readFile(candidate, "utf8").then(JSON.parse).catch(() => null);
-      if (judgePlan) { judgePlanPath = candidate; break; }
+      let text;
+      try {
+        text = await readFile(candidate, "utf8");
+      } catch (error) {
+        if (error?.code === "ENOENT") continue;
+        throw parseError(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${candidate} could not be read: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      try {
+        readablePlans.push({ path: candidate, plan: JSON.parse(text) });
+      } catch (error) {
+        throw parseError(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${candidate} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
+    const pinningPlan = readablePlans.find(({ plan }) => plan?.workOrder?.requiredReads?.some((read) => read?.kind === "copilot-body-feedback"));
+    const { path: judgePlanPath = judgePlanPaths[0], plan: judgePlan = null } = pinningPlan ?? readablePlans[0] ?? {};
     if (inJudgeDir && judgePlan?.roundId !== judgeRoundDir) {
       throw parseError(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${judgePlanPath} is missing, unreadable or names another round than ${judgeRoundDir}; re-emit the judge work order`);
     }
@@ -927,7 +939,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     if (judgePlan && (planOrder?.target?.repo !== options.repo || planOrder.target.pr !== Number(options.pr) || planOrder.roundIdentity?.gate !== options.gate || String(planOrder.headSha).toLowerCase() !== String(options.headSha).trim().toLowerCase())) {
       throw parseError(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${judgePlanPath} is not the judge plan for ${options.repo}#${options.pr} ${options.gate} at ${options.headSha}; re-emit the judge work order`);
     }
-    if (!inJudgeDir && judgePlan?.workOrder?.requiredReads?.some((read) => read?.kind === "copilot-body-feedback")) {
+    if (!inJudgeDir && pinningPlan) {
       throw parseError(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${judgePlanPath} pins a copilot-body-feedback read, so the judge verdict must sit in its judge execution directory (<gate>-<head>/j<id>/judge-verdict.json), not ${options.judgeVerdict}`);
     }
     const pinnedFindings = await withPinnedCopilotBodyCluster(rawFindings, judgePlan?.workOrder);
@@ -944,7 +956,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     assertNoProjectedForbiddenDefer(findings, clusters);
     scopeDrift = enriched.scopeDrift;
     if (specAuthorityIdentity !== undefined) {
-      findings = await applySiblingSpecAuthorityVerdict(findings, judgePath, specAuthorityIdentity);
+      // judge-pass validates the spec-authority verdict over the findings read only, so validate the same prefix and re-attach the appended Copilot cluster.
+      findings = [...(await applySiblingSpecAuthorityVerdict(findings.slice(0, rawFindings.length), judgePath, specAuthorityIdentity)), ...findings.slice(rawFindings.length)];
     }
   }
   // `resurfaces` stays only when it names a closed prior round's act item in the same file; every other act item is new.

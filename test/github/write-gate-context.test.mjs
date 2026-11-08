@@ -10204,6 +10204,27 @@ test("a body-only rebuild looks up the sentinel of the dispatched membership and
   }
 });
 
+test("a body-only rebuild checks the dispatched group membership when the rebuild carries a different set (issue 3080 AC13)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-carried-changed-"));
+  try {
+    const input = (prBody, carriedAngles) => {
+      const config = draftConfig({ dynamicAngles: false, angles: ["srp", "ocp"], mandatoryAngles: [] });
+      config.gates.draft.angles = config.gates.draft.angles.map((entry) => ({ ...(typeof entry === "string" ? { name: entry } : entry), prompt: "Review the diff." }));
+      config.gates.fanout = { groups: [{ name: "design", angles: ["srp", "ocp"] }] };
+      return { config, gate: "draft_gate", diff: null, repo: "owner/repo", pr: 90, headSha: BODY_RERUN_SHA, prBody, ...(carriedAngles ? { carriedAngles } : {}) };
+    };
+    // Round 1 carries nothing and dispatches the whole group, so its live sentinel is the group's.
+    await buildGateContext(input("Original"), { repoRoot });
+    const sentinel = path.join(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-group-design-${BODY_RERUN_SHA}.json`);
+    await writeFile(sentinel, "{}\n", "utf8");
+    // The rebuild carries ocp: the current set would look up draft-gate-srp and miss the live group sentinel.
+    await assert.rejects(buildGateContext(input("Edited", ["ocp"]), { repoRoot }), /GATE-EXEC-BODY-ONLY-RERUN.*unit draft-gate-group-design is in flight/s);
+    assert.ok(existsSync(sentinel), "the live sentinel stays");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("a full-diff capture failure on an unchanged-body rebuild keeps the prior body digest and carried set (issue 3080 AC14)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-fulldiff-fail-"));
   try {

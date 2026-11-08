@@ -3596,6 +3596,44 @@ test("writeGateFindingsLog finds the judge plan in the checkout tmp when the led
   }
 });
 
+test("writeGateFindingsLog reads every judge plan candidate outside a judge directory and refuses a pin or an unparseable plan in any of them (issue 3080 AC11)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-candidates-"));
+  const checkout = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-candidates-checkout-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const judgeVerdict = path.join(tmpDir, "verdict.json");
+    const planDirOf = (root, pr) => path.join(root, "gate-judge", "owner-repo", `pr-${pr}`, `pre_approval_gate-${headSha}`);
+    // The first candidate is the ledger tmp root, the second is <checkout>/tmp.
+    const firstPlan = (pr) => path.join(planDirOf(tmpDir, pr), "judge-emit-plan.json");
+    const secondPlanDir = (pr) => planDirOf(path.join(checkout, "tmp"), pr);
+    const write = (pr) => writeGateFindingsLog({
+      repo: "owner/repo", pr, gate: "pre_approval_gate", headSha, verdict: "clean",
+      findings: JSON.stringify({ overallVerdict: "clean", findings: [] }), judgeVerdict, tmpRoot: tmpDir,
+    }, { repoRoot: checkout });
+    await writeFile(judgeVerdict, JSON.stringify({ headSha, scopeDrift: { verdict: "within_scope", rationale: "ok", driftedAreas: [] }, dispositions: [] }));
+    // Accepted: no candidate plan exists.
+    await write(53);
+    // Accepted: every readable candidate pins no copilot-body-feedback read.
+    await mkdir(planDirOf(tmpDir, 53), { recursive: true });
+    await writeFile(firstPlan(53), JSON.stringify(judgePlanFor({ pr: 53, headSha })));
+    await mkdir(secondPlanDir(53), { recursive: true });
+    await writeFile(path.join(secondPlanDir(53), "judge-emit-plan.json"), JSON.stringify(judgePlanFor({ pr: 53, headSha })));
+    await write(53);
+    // Rejected: a later candidate pins a copilot-body-feedback read while the earlier candidate does not.
+    await copilotPinFixture(tmpDir, headSha, { judgeVerdictPath: judgeVerdict, planDir: secondPlanDir(54), pr: 54 });
+    await mkdir(planDirOf(tmpDir, 54), { recursive: true });
+    await writeFile(firstPlan(54), JSON.stringify(judgePlanFor({ pr: 54, headSha })));
+    await assert.rejects(write(54), /judge execution directory/);
+    // Rejected: a candidate exists but is not valid JSON.
+    await mkdir(planDirOf(tmpDir, 55), { recursive: true });
+    await writeFile(firstPlan(55), "not json");
+    await assert.rejects(write(55), /judge-emit-plan\.json is not valid JSON/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+    await rm(checkout, { recursive: true, force: true });
+  }
+});
+
 test("writeGateFindingsLog refuses a judge-execution verdict beside a plan for another gate or head whose roundId matches its directory (issue 3080 AC11)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-foreign-plan-"));
   try {

@@ -3490,10 +3490,11 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       // Iterate the cap-split dispatch units: an oversized group runs as <name>-partN sub-units with their own sentinels.
       // A carried angle is never dispatched (reviewerBudgetPreflight strips it), so the dispatched membership drops it before the scope and artifacts derive.
       const configuredGroupNames = new Set((options.config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
-      const carried = new Set((options.fanoutDispatch.preflight?.carriedAngles ?? []).map((angle) => String(angle).trim().toLowerCase()));
+      // The dispatched membership is the earlier round's, so both loops strip the prior context's carried set, never the current build's.
+      const priorCarried = new Set(priorCarriedAngles.map((angle) => String(angle).trim().toLowerCase()));
       for (const group of expandDispatchUnits(options.fanoutDispatch.groups ?? [], configuredGroupNames)) {
         if (!Array.isArray(group?.angles)) continue;
-        const unit = { ...group, angles: group.angles.filter((angle) => !carried.has(String(angle).trim().toLowerCase())) };
+        const unit = { ...group, angles: group.angles.filter((angle) => !priorCarried.has(String(angle).trim().toLowerCase())) };
         const scope = dispatchUnitScope(options.gate, unit);
         const sentinel = sentinelOf(scope);
         if (unit.angles.length === 0 || pendingScopes.has(scope) || !sentinel) continue;
@@ -3501,7 +3502,6 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       }
       // The pending membership regains a body-reading angle that the earlier round carried (never dispatched, so no artifact):
       // check in-flight state against the membership that round dispatched, excluding the angles its context recorded as carried.
-      const priorCarried = new Set(priorCarriedAngles.map((angle) => String(angle).trim().toLowerCase()));
       for (const unit of options.fanoutDispatch.pendingGroups) {
         const angles = Array.isArray(unit?.angles) ? unit.angles : [];
         const dispatched = angles.filter((angle) => !priorCarried.has(String(angle).trim().toLowerCase()));
