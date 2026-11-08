@@ -456,7 +456,15 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     } catch {
       priorPlan = null; // a truncated or malformed prior plan contributes no resumed unit
     }
-    if (priorPlan !== null) await writeFile(priorPlanSidecar, priorText, "utf8").catch(() => {});
+    if (priorPlan !== null) {
+      try {
+        await writeFile(priorPlanSidecar, priorText, "utf8");
+      } catch (err) {
+        // The rm below destroys the only readable copy, so refuse while no backup exists.
+        process.stderr.write(`${formatCliError(err)}\n`);
+        return 2;
+      }
+    }
   }
   try {
     await rm(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), { force: true });
@@ -858,7 +866,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // provenance: they stay in the persisted plan, marked resumed, but never in the dispatch list printed above.
   const completedAngles = new Set(artifact.fanout?.preflight?.completedAngles ?? []);
   const emittedAngles = new Set(emitted.flatMap((unit) => unit.angles));
-  const priorUnits = priorPlan?.gate === gate && priorPlan.headSha === headSha && Array.isArray(priorPlan.units) ? priorPlan.units : [];
+  const priorUnits = priorPlan?.gate === gate && priorPlan.headSha === headSha && Array.isArray(priorPlan.units) ? priorPlan.units.filter((unit) => unit !== null && typeof unit === "object") : [];
   const isResumed = (unit) => Array.isArray(unit.angles) && unit.angles.length > 0
     && unit.angles.every((angle) => completedAngles.has(angle) && !emittedAngles.has(angle));
   // The prior unit order stays: the findings-log sibling check needs split-group parts adjacent and in order.

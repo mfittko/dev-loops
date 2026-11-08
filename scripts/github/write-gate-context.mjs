@@ -614,8 +614,10 @@ export { buildGateReviewsDir };
 
 // The body-only rerun set (GATE-EXEC-BODY-ONLY-RERUN): the always-surface angles plus the verifiedItems angles, whose
 // labels are copied from the PR body checklists. Local to this path: angleReviewSurface keeps serving carry-forward.
+// contradiction-lens also checks PR-body statements against the diff and contracts (its shipped prompt).
+const BODY_READING_ANGLES = new Set([...VERIFIED_ITEMS_ANGLES, "contradiction-lens"]);
 export function readsPrBody(angle) {
-  return angleReviewSurface(angle).kind === "always" || VERIFIED_ITEMS_ANGLES.has(baseAngleName(String(angle).trim()));
+  return angleReviewSurface(angle).kind === "always" || BODY_READING_ANGLES.has(baseAngleName(String(angle).trim()));
 }
 
 /**
@@ -3408,6 +3410,19 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           return false;
         }
       };
+      // A unit whose clean artifact is stamped for this head is absent from pendingGroups, yet a re-dispatch may be in flight
+      // (live sentinel newer than the artifact). Refuse on it too.
+      const pendingScopes = new Set(options.fanoutDispatch.pendingGroups.map((unit) => dispatchUnitScope(options.gate, unit)));
+      for (const unit of options.fanoutDispatch.groups ?? []) {
+        const scope = dispatchUnitScope(options.gate, unit);
+        if (pendingScopes.has(scope) || !Array.isArray(unit?.angles)) continue;
+        const sentinel = liveSentinels.find((name) => name.startsWith(`${CHECKPOINT_SENTINEL_PREFIX}${scope}-`) && /^[0-9a-f]{40,64}$/.test(name.slice(CHECKPOINT_SENTINEL_PREFIX.length + scope.length + 1, -".json".length)));
+        if (!sentinel) continue;
+        const done = await Promise.all(unit.angles.map((angle) => wroteAfter(path.join(reviewsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`), sentinel)));
+        if (!done.every(Boolean)) {
+          throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}) while unit ${scope} is in flight; wait for it to write its findings, or retire the round: ${retireCommand}`);
+        }
+      }
       for (const unit of options.fanoutDispatch.pendingGroups) {
         const angles = Array.isArray(unit?.angles) ? unit.angles : [];
         const readsBody = angles.some(readsPrBody);
