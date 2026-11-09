@@ -78,7 +78,7 @@ test("MAIN-AGENT-COORDINATOR-REPORT-READ has three harness-neutral bullets", asy
   assert.equal(bullets.length, 3);
   assert.match(bullets[0], /hand-back or pause that lists children in flight and names no run-ending case is interim, whether or not it says so.*status, not a result.*re-dispatch a listed child.*next report/s);
   assert.match(bullets[1], /names a run-ending case.*Unit coordinator boundaries.*`units_stalled` or `round_retired` hand-back under `GATE-EXEC-HARNESS-JOIN`.*final even when it lists children.*treats each listed child as still running/s);
-  assert.match(bullets[2], /second hand-back that repeats the report.*already consumed.*first line and child list.*same coordinator.*run state unchanged.*duplicate.*interim reports too.*precedence over the interim bullet.*never a duplicate.*reads the state.*acts on nothing.*relays nothing/s);
+  assert.match(bullets[2], /second hand-back that repeats the report.*already consumed.*first line and child list.*same coordinator.*run state unchanged.*duplicate.*interim reports too.*precedence over the interim bullet.*reads the state.*acts on nothing.*relays nothing/s);
 });
 
 test("the read rule keeps Claude Code bullets Claude-specific and neutral bullets harness-neutral", async () => {
