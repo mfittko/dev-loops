@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 import { pullReceiptPath } from "../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../cli/index.mjs";
-import { ARTIFACT_TIMEOUT_REMEDY, main, parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
+import { ARTIFACT_STALE_REMEDY, ARTIFACT_TIMEOUT_REMEDY, main, parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
 import { captureStderr, withTempDir } from "./_helpers.mjs";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/loop/wait-for-gate-units.mjs", import.meta.url));
@@ -374,11 +374,21 @@ test("a --timeout above the cap is capped, returns pending (exit 2) and the re-i
   });
 });
 
-test("a --timeout at or under the cap, and a real timeout at the end of the split, stay timeout", async () => {
+test("a --timeout at or under the cap and --timeout 0 stay timeout", async () => {
   const stub = async () => ({ ok: true, outcome: "timeout", missing: [] });
   const argv = ["--emit-plan", "a", "--tmp-root", "t"];
   assert.equal((await runMain([...argv, "--timeout", "170"], stub)).result.outcome, "timeout");
   assert.equal((await runMain([...argv, "--timeout", "0"], stub)).result.outcome, "timeout");
+});
+
+test("a capped --artifact wait on a stale artifact keeps ARTIFACT_STALE_REMEDY and drops ARTIFACT_TIMEOUT_REMEDY", async () => {
+  const argv = ["--artifact", "/x/report.json", "--after", "/x/ref", "--timeout", "540"];
+  const stale = await runMain(argv, async () => ({ ok: true, outcome: "timeout", stale: true, remedy: ARTIFACT_STALE_REMEDY }));
+  assert.equal(stale.result.outcome, "pending");
+  assert.equal(stale.result.remedy, ARTIFACT_STALE_REMEDY);
+  const fresh = await runMain(argv, async () => ({ ok: true, outcome: "timeout", remedy: ARTIFACT_TIMEOUT_REMEDY }));
+  assert.equal(fresh.result.outcome, "pending");
+  assert.equal(fresh.result.remedy, undefined);
 });
 
 test("wait-for-gate-units warns on stderr for deprecated --timeout-ms", () => {

@@ -416,6 +416,13 @@ test("probe-copilot-review --help prints usage and exits 0", async () => {
   assert.equal(helpShort.stdout, helpLong.stdout);
 });
 
+test("probe-copilot-review --baseline-ids fails closed on {} and on non-JSON input", () => {
+  const base = ["--repo", "owner/repo", "--pr", "17"];
+  for (const bad of ["{}", "not json"]) {
+    assert.throws(() => parseWatchCliArgs([...base, "--baseline-ids", bad]), /--baseline-ids must be a JSON object of id arrays/, bad);
+  }
+});
+
 test("probe-copilot-review uses production-safe defaults (1-minute poll, 30-minute timeout)", () => {
   const options = parseWatchCliArgs(["--repo", "owner/repo", "--pr", "17"]);
   assert.equal(options.pollIntervalMs, 60_000);

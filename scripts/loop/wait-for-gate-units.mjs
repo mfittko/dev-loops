@@ -216,7 +216,7 @@ export async function main(argv = process.argv.slice(2), { wait = waitForUnits }
     result = await wait({ ...options, timeoutMs });
     if (result.outcome === "timeout" && remainingMs > 0) {
       const { remedy, ...rest } = result;
-      result = { ...rest, ...pendingFields({ remainingMs, command: "dev-loops-run scripts/loop/wait-for-gate-units.mjs", argv }) };
+      result = { ...rest, ...(remedy && remedy !== ARTIFACT_TIMEOUT_REMEDY ? { remedy } : {}), ...pendingFields({ remainingMs, command: "dev-loops-run scripts/loop/wait-for-gate-units.mjs", argv }) };
     }
   } catch (error) {
     result = { ok: false, error: error instanceof Error ? error.message : String(error) };

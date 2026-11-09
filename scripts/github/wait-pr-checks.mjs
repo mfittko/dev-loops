@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { capWait, pendingFields, resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { capWait, parseBaselineSha, pendingFields, resolveTimeoutMs } from "../lib/timeout-flag.mjs";
 import { parsePositiveInteger, parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -130,7 +130,7 @@ export function parseWaitPrChecksCliArgs(argv) {
     }
     // Internal: a re-issued capped wait carries the first call's baseline head and stall start.
     if (token.name === "baseline-sha") {
-      options.baselineSha = requireTokenValue(token, parseError).trim();
+      options.baselineSha = parseBaselineSha(requireTokenValue(token, parseError), parseError);
       continue;
     }
     if (token.name === "stall-started-at-ms") {

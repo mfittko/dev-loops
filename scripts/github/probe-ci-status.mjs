@@ -5,7 +5,7 @@ import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
-import { capWait, pendingFields, resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { capWait, parseBaselineSha, pendingFields, resolveTimeoutMs } from "../lib/timeout-flag.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import {
   normalizeHeadScopedCiContract,
@@ -149,7 +149,7 @@ export function parseCiWatchCliArgs(argv) {
     }
     // Internal: a re-issued capped wait carries the first call's baseline head and stall start.
     if (token.name === "baseline-sha") {
-      options.baselineSha = requireTokenValue(token, parseError).trim();
+      options.baselineSha = parseBaselineSha(requireTokenValue(token, parseError), parseError);
       continue;
     }
     if (token.name === "stall-started-at-ms") {

@@ -1208,6 +1208,15 @@ test("probe-ci-status warns on stderr for deprecated --timeout-ms", () => {
   assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
 });
 
+test("probe-ci-status --baseline-sha accepts a 40- or 64-hex SHA and rejects empty, blank, short and uppercase values", () => {
+  const base = ["--repo", "owner/repo", "--pr", "7"];
+  assert.equal(parseCiWatchCliArgs([...base, "--baseline-sha", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]).baselineSha, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  assert.equal(parseCiWatchCliArgs([...base, "--baseline-sha", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]).baselineSha, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+  for (const bad of ["", " ", "abc123", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".toUpperCase()]) {
+    assert.throws(() => parseCiWatchCliArgs([...base, "--baseline-sha", bad]), /--baseline-sha must be a full 40- or 64-character lowercase hex SHA|Missing value for --baseline-sha/, JSON.stringify(bad));
+  }
+});
+
 test("probe-ci-status capped call returns pending and the re-issue keeps the baseline head and the stall start (GATE-EXEC-BOUNDED-WAIT-CAP)", async () => {
   const queued = (sha) => [
     { match: ["pr", "view"], stdout: prView(sha, ["build"]) },
@@ -1224,16 +1233,16 @@ test("probe-ci-status capped call returns pending and the re-issue keeps the bas
     return JSON.parse(stdout.text());
   };
   const argv = ["--repo", "owner/repo", "--pr", "7", "--poll-interval-ms", "30000", "--timeout", "600"];
-  const first = await call(argv, queued("sha-a"), 1_000_000);
+  const first = await call(argv, queued("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), 1_000_000);
   assert.equal(first.status, "timeout");
   assert.equal(first.outcome, "pending");
   assert.equal(first.remainingTimeoutSeconds, 430);
-  assert.match(first.reissue, /^dev-loops-run scripts\/github\/probe-ci-status\.mjs --repo owner\/repo --pr 7 --poll-interval-ms 30000 --baseline-sha sha-a --stall-started-at-ms 1000000 --timeout 430$/);
+  assert.match(first.reissue, /^dev-loops-run scripts\/github\/probe-ci-status\.mjs --repo owner\/repo --pr 7 --poll-interval-ms 30000 --baseline-sha aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --stall-started-at-ms 1000000 --timeout 430$/);
   const resumed = first.reissue.split(" ").slice(2);
   // A push between the calls is not absorbed: the carried baseline sees the new head.
-  assert.equal((await call(resumed, queued("sha-b"), 1_175_000)).status, "changed");
+  assert.equal((await call(resumed, queued("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), 1_175_000)).status, "changed");
   // The carried stall start matures across calls: 300 s after the first call's stall began.
-  const stuck = await call(resumed, queued("sha-a"), 1_175_000);
+  const stuck = await call(resumed, queued("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), 1_175_000);
   assert.equal(stuck.status, "stuck");
-  assert.equal(parseCiWatchCliArgs(resumed).baselineSha, "sha-a");
+  assert.equal(parseCiWatchCliArgs(resumed).baselineSha, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 });

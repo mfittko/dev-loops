@@ -19,7 +19,7 @@ import { readBaseValidation, readCheckoutValidation, validationDifferenceRefusal
 import { buildValidationArtifact, classifyPackageSuites, readPackageScripts } from "./run-gate-validation.mjs";
 
 const DEFAULT_TIMEOUT_S = 540;
-// A 540 s foreground run is backgrounded at 180 s on Claude Code (GATE-EXEC-BOUNDED-WAIT-CAP).
+// 570 s keeps the suite deadline under the 600 s Bash ceiling. Outside the capped waits of GATE-EXEC-BOUNDED-WAIT-CAP: a run backgrounded at 180 s is joined through the harness exit notification.
 const MAX_TIMEOUT_S = 570;
 const GIT_TIMEOUT_MS = 30000;
 

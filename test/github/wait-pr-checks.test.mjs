@@ -116,7 +116,7 @@ test("wait-pr-checks exits 2 when CI stays pending past the wait budget (timeout
 
 test("wait-pr-checks caps one call at 170 s, returns pending (exit 2) with the re-issue command, and the re-issue resumes to success", async () => {
   const pendingRoutes = [
-    { match: ["pr", "view"], stdout: prView("sha-a", ["build"]) },
+    { match: ["pr", "view"], stdout: prView("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["build"]) },
     { match: ["check-runs"], stdout: checkRuns([{ status: "in_progress", conclusion: null, name: "build" }]) },
     { match: ["/status"], stdout: statuses([]) },
   ];
@@ -132,14 +132,14 @@ test("wait-pr-checks caps one call at 170 s, returns pending (exit 2) with the r
     assert.equal(result.status, "timeout");
     assert.equal(result.outcome, "pending");
     assert.equal(result.remainingTimeoutSeconds, 430);
-    assert.match(result.reissue, /^dev-loops-run scripts\/github\/wait-pr-checks\.mjs --repo owner\/repo --pr 7 --poll 10 --baseline-sha sha-a --timeout 430$/);
+    assert.match(result.reissue, /^dev-loops-run scripts\/github\/wait-pr-checks\.mjs --repo owner\/repo --pr 7 --poll 10 --baseline-sha aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --timeout 430$/);
     reissue = result.reissue;
   });
   const resumed = reissue.split(" ").slice(2);
   // A push between the calls is not absorbed: the carried baseline sees the new head.
   await withGhStub(
     [
-      { match: ["pr", "view"], stdout: prView("sha-b", ["build"]) },
+      { match: ["pr", "view"], stdout: prView("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", ["build"]) },
       { match: ["check-runs"], stdout: checkRuns([{ status: "completed", conclusion: "success", name: "build" }]) },
       { match: ["/status"], stdout: statuses([]) },
     ],
@@ -152,7 +152,7 @@ test("wait-pr-checks caps one call at 170 s, returns pending (exit 2) with the r
   );
   await withGhStub(
     [
-      { match: ["pr", "view"], stdout: prView("sha-a", ["build"]) },
+      { match: ["pr", "view"], stdout: prView("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["build"]) },
       { match: ["check-runs"], stdout: checkRuns([{ status: "completed", conclusion: "success", name: "build" }]) },
       { match: ["/status"], stdout: statuses([]) },
     ],
@@ -163,6 +163,34 @@ test("wait-pr-checks caps one call at 170 s, returns pending (exit 2) with the r
       assert.equal(JSON.parse(stdout.text()).outcome, undefined);
     },
   );
+});
+
+test("wait-pr-checks carries the stall start in the re-issue and the resumed call matures to stuck", async () => {
+  const queued = [
+    { match: ["pr", "view"], stdout: prView("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["build"]) },
+    { match: ["check-runs"], stdout: checkRuns([{ status: "queued", conclusion: null, name: "build" }]) },
+    { match: ["/status"], stdout: statuses([]) },
+  ];
+  const call = (argv, startMs) => withGhStub(queued, async (env) => {
+    let t = startMs;
+    const stdout = makeStream();
+    await runCli(argv, { stdout, stderr: makeStream(), env, ghCommand: "gh", now: () => t, delayImpl: async (ms) => { t += ms; } });
+    return JSON.parse(stdout.text());
+  });
+  const first = await call(["--repo", "owner/repo", "--pr", "7", "--poll", "10", "--timeout", "600"], 1_000_000);
+  assert.equal(first.outcome, "pending");
+  assert.match(first.reissue, /--stall-started-at-ms 1000000 /);
+  const stuck = await call(first.reissue.split(" ").slice(2), 1_175_000);
+  assert.equal(stuck.status, "stuck");
+});
+
+test("wait-pr-checks --baseline-sha accepts a 40- or 64-hex SHA and rejects empty, blank, short and uppercase values", () => {
+  const base = ["--repo", "owner/repo", "--pr", "7"];
+  assert.equal(parseWaitPrChecksCliArgs([...base, "--baseline-sha", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]).baselineSha, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  assert.equal(parseWaitPrChecksCliArgs([...base, "--baseline-sha", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]).baselineSha, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+  for (const bad of ["", " ", "abc123", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".toUpperCase()]) {
+    assert.throws(() => parseWaitPrChecksCliArgs([...base, "--baseline-sha", bad]), /--baseline-sha must be a full 40- or 64-character lowercase hex SHA|Missing value for --baseline-sha/, JSON.stringify(bad));
+  }
 });
 
 test("wait-pr-checks at or under the cap and --timeout 0 return no pending outcome", async () => {
