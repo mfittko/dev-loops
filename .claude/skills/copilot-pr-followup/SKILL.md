@@ -53,7 +53,7 @@ node <resolved-skill-scripts>/loop/run-watch-cycle.mjs --repo <owner/name> --pr 
 ```
 Persistent async watch/fix loop, not handoff-only behavior: `watch → detect → if threads found, fix + reply + resolve → re-request → watch again → … → pre_approval_gate → merge`. A single returned watch cycle is never completion by itself.
 
-> Under the Claude Code harness, run this loop **inline in a single agent**. The helper-owned wait tools (`dev-loops-run cli/index.mjs loop watch-cycle`, `gh run watch`, `dev-loops-run cli/index.mjs gate probe-copilot`) block inline and return. When `cycleDisposition` is `pending` and `terminal` is `false`, run the next watch cycle yourself. Do not exit on the wait boundary for a parent re-dispatch; drive the loop until a terminal state or the watch budget expires. A bounded fix may still go to the `fixer` agent (Step 6).
+> Under the Claude Code harness, the `dev-loops:dev-loop` coordinator runs this loop as one agent. The helper-owned wait tools (`dev-loops-run cli/index.mjs loop watch-cycle`, `gh run watch`, `dev-loops-run cli/index.mjs gate probe-copilot`) block and return. When `cycleDisposition` is `pending` and `terminal` is `false`, the coordinator runs the next watch cycle itself. The coordinator does not exit on the wait boundary for a parent re-dispatch; it drives the loop until a terminal state or the watch budget expires. A bounded fix may still go to the `fixer` agent (Step 6).
 
 Max watch timeout: **30 minutes** (from `policy-constants.mjs` COPILOT_REVIEW_WAIT_TIMEOUT_MS); expired budget + still `waiting_for_copilot_review` = hard stop. If the user explicitly asks for async handoff-only behavior, say that out loud and stop after the handoff boundary.
 
@@ -170,7 +170,7 @@ Apply this guard on every same-PR resume:
 
 | `outerAction` | Action |
 | --- | --- |
-| `continue_wait` | Resume from the checkpoint. Under Claude Code, run the next watch cycle inline. |
+| `continue_wait` | Resume from the checkpoint. Under Claude Code, the dev-loop coordinator runs the next watch cycle. |
 | `reenter_copilot_loop` | Run `copilot-pr-handoff.mjs` and follow its next step. |
 | `reenter_reviewer_loop` | Enter the reviewer-loop path. |
 | `stop` | Report `reason` and ask for direction. |

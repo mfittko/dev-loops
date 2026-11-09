@@ -113,16 +113,27 @@ export async function createIssue(options, { env = process.env, ghCommand = "gh"
 // ── edit-issue ──────────────────────────────────────────────────────────
 
 export async function resolveEditBody(options) {
-  if (options.bodyFile === undefined) return options.body;
+  if (options.bodyFile === undefined) {
+    if (options.body !== undefined) assertWritableBody(options.body, "--body", options.allowEmptyBody);
+    return options.body;
+  }
   // Stdin (fd 0): fs/promises readFile does NOT accept an integer fd, so read
   // it synchronously via the callback-style API (which does). A real path
   // stays on the async promise read.
   const body =
     options.bodyFile === "-" ? readFileSync(0, "utf8") : await readFile(options.bodyFile, "utf8");
-  if (body.trim().length === 0) {
-    throw new Error(`--body-file ${options.bodyFile} is empty`);
-  }
+  assertWritableBody(body, `--body-file ${options.bodyFile}`, options.allowEmptyBody);
   return body;
+}
+
+// A body that is empty or only `null` is the signature of a failed read written
+// back (an unextracted `--jq` result). Refuse it unless the caller opts in.
+export function assertWritableBody(body, source, allowEmptyBody = false) {
+  if (allowEmptyBody) return;
+  if (body.trim().length === 0) throw new Error(`${source} is empty`);
+  if (body.trim() === "null") {
+    throw new Error(`${source} is only \`null\`; a failed read written back would wipe the body. Pass --allow-empty-body to write it anyway.`);
+  }
 }
 
 // Build the `gh issue edit` args and the parallel `edited` list (which fields

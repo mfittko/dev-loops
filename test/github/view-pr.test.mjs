@@ -64,3 +64,16 @@ test("runCli: parser + viewPr wire through the shared shell (--jq extracts merge
   assert.equal(code, 0);
   assert.equal(stdout.get().trim(), "CLEAN");
 });
+
+test("runCli: --json body --jq .body resolves against the requested field; a missing path exits non-zero (AC1, AC2)", async () => {
+  const { run } = stubGh({ body: "pr body" });
+  const stdout = captureStream();
+  assert.equal(await runCli(["--repo", "o/n", "--pr", "7", "--json", "body", "--jq", ".body"], { run, stdout }), 0);
+  assert.equal(stdout.get().trim(), "pr body");
+
+  const { run: run2 } = stubGh({ title: "t" });
+  const stderr = captureStream();
+  const code = await runCli(["--repo", "o/n", "--pr", "7", "--json", "title", "--jq", ".body"], { run: run2, stdout: captureStream(), stderr });
+  assert.notEqual(code, 0);
+  assert.match(stderr.get(), /\.pr\.title/);
+});

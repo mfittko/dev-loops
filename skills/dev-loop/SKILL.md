@@ -46,7 +46,7 @@ overrides per [Codex coordinator dispatch](../docs/main-agent-contract.md#codex-
 Startup remains the child's first workflow action; configuration/native refusal
 stops dispatch without an inherited replacement.
 
-> Under the Claude Code harness the dev-loop runs as a single agent: run these steps directly — no separate async-subagent dispatch. The coordinator has an opt-in read-only boundary for tracked repo files and code-verification/build commands (`DEVLOOPS_COORDINATOR_READONLY=1`, enforced by the guard hooks). See [Main Agent Contract](../docs/main-agent-contract.md).
+> Under the Claude Code harness the main session dispatches the `dev-loops:dev-loop` coordinator (`dev-loop` inside the dev-loops repo itself). The coordinator is one agent: it runs these steps and drives its own children. The main session runs no gate, fixer or reviewer step. The coordinator has an opt-in read-only boundary for tracked repo files and code-verification/build commands (`DEVLOOPS_COORDINATOR_READONLY=1`, enforced by the guard hooks). See [Main Agent Contract](../docs/main-agent-contract.md).
 
 <!-- pi-only -->
 **CLI invocation (`<dev-loops-package-root>`):** dev-loop CLI commands below are invoked as `node <dev-loops-package-root>/cli/index.mjs <verb...>` using the package-local CLI rather than `npx`, so they resolve unambiguously from the installed package without a global install. Resolve `<dev-loops-package-root>` via the first of these **bounded** candidates whose `cli/index.mjs` exists — never assume a single fixed layout (under a Pi user-level install the package lives at `~/.pi/agent/npm/node_modules/dev-loops/`, so the old `../../..` package-relative guess from `skills/dev-loop/SKILL.md` overshoots the package root):
@@ -337,7 +337,7 @@ All PRs must pass the full gate pipeline before merge. No scope is exempt: docs-
 ## Authority boundary
 
 - Source code, tests, config, CI, and shared contract docs are authoritative.
-- Main-agent delegation contract: [Main Agent Contract](../docs/main-agent-contract.md) — how dev-loop work is structured per harness (Pi: read-only main agent + async-subagent dispatch; Claude: a single agent runs the steps directly).
+- Main-agent delegation contract: [Main Agent Contract](../docs/main-agent-contract.md) — how dev-loop work is structured per harness (Pi: read-only main agent + async-subagent dispatch; Claude: the main session dispatches the `dev-loops:dev-loop` coordinator, which runs the steps as one agent driving its own children).
 - Before any state-changing action, get explicit confirmation unless already authorized.
 - A question requires an answer, not an action.
 - Stop and ask rather than guessing when facts don't agree.

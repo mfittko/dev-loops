@@ -131,3 +131,21 @@ test("parse error: routes through formatCliError (carries the usage/retry hint),
   // distinction the shell must preserve.
   assert.deepEqual(envelope, { ok: false, error: "bad argument", hint: "run with --help for usage" });
 });
+
+test("jqRootKey merges the inner object under the envelope; a path matching no field exits 2", async () => {
+  const run = async (jq) => {
+    const stdout = captureStream();
+    const stderr = captureStream();
+    const code = await runReadCommandCli(
+      { parse: makeParse({ jq }), operate: async () => ({ ok: true, issue: { body: "hi" } }), usage: USAGE, jqRootKey: "issue" },
+      [],
+      { stdout, stderr },
+    );
+    return { code, out: stdout.get().trim(), err: stderr.get() };
+  };
+  assert.equal((await run(".body")).out, "hi");
+  assert.equal((await run(".issue.body")).out, "hi");
+  const miss = await run(".bdoy");
+  assert.equal(miss.code, 2);
+  assert.match(miss.err, /matches no field/);
+});
