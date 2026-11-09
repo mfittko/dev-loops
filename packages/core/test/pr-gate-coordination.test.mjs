@@ -4800,6 +4800,19 @@ test("a ready PR without clean draft evidence names reconcile_draft_gate alone w
   assert.deepEqual({ next: operator.nextAction, on: operator.blockedOn, remedy: operator.agentRemedy }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION, remedy: undefined });
 });
 
+test("a ready PR with clean pre_approval evidence but no clean draft evidence takes the cap-round failure handling (issue 3139)", () => {
+  const base = { pr: 9, repo: "o/r", currentHeadSha: "abc123456789", prDraft: false, lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, loopDisposition: DISPOSITION.CLEAN_CONVERGED, ciStatus: "success", sameHeadCleanConverged: true, draftGate: { visible: false }, preApprovalGate: gate({ visible: true, headSha: "abc123456789", verdict: "clean", currentHeadClean: true }) };
+  const none = evaluatePrGateCoordination(base);
+  assert.equal(none.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
+  assert.equal(none.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
+  const failed = evaluatePrGateCoordination({ ...base, draftCapRoundFailure: "no_clearing_record" });
+  assert.equal(failed.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
+  assert.equal(failed.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.equal(failed.capRoundFailure, "no_clearing_record");
+  assert.equal(failed.agentRemedy.command, "dev-loops gate extend-cap-round-chain --repo o/r --pr 9");
+  assert.ok(failed.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE));
+});
+
 test("unconfirmed-CI block carries the exact wait-pr-checks agentRemedy", () => {
   const result = evaluatePrGateCoordination({
     repo: "o/r",

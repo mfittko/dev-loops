@@ -9188,6 +9188,32 @@ test("an unreadable cap-round ledger fails closed: no earlier round becomes the 
   }
 });
 
+test("a draft_gate context on a ready cap-fixed PR with no clean draft verdict gets the already-satisfied refusal, not round_cap_reached (issue 3139)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  try {
+    await seedClosedRounds(repoRoot, 63, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    await writeDeltaRecord(repoRoot, baseSha, "9".repeat(40));
+    const coordination = async () => ({ currentHeadSha: headSha, unresolvedGateThreadCount: 0, prData: { isDraft: false, baseRefName: "main" }, gateEvidence: { draftGateSatisfied: false } });
+    const args = ["--repo", "owner/repo", "--pr", "63", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha];
+    const origErr = process.stderr.write;
+    let stderr = "";
+    process.stderr.write = (chunk) => { stderr += String(chunk); return true; };
+    try {
+      process.exitCode = undefined;
+      await main(args, { repoRoot, run: stubGhRun, loadCoordination: coordination });
+      assert.equal(process.exitCode, 1);
+      assert.match(stderr, /already out of draft/);
+      assert.doesNotMatch(stderr, /round_cap_reached/);
+    } finally {
+      process.stderr.write = origErr;
+    }
+  } finally {
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolveCapRoundFixed follows a chain of sealed clearing records to the current head and refuses a gap", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {

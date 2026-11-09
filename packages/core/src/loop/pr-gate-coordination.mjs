@@ -905,7 +905,9 @@ function applyDraftGateEvidenceGuard(result, { prDraft = false, input = {} } = {
   if (result.draftGate?.cleanEvidenceExists === true) {
     return result;
   }
-  if (!DRAFT_GATE_EVIDENCE_GUARDED_BOUNDARIES.includes(result.gateBoundary)) {
+  // A DRAFT_GATE_NEEDED result (clean pre_approval evidence, no clean draft evidence) takes the same failure handling when the cap round proof failed.
+  const neededWithCapFailure = result.gateBoundary === PR_CHECKPOINT.DRAFT_GATE_NEEDED && Boolean(input.draftCapRoundFailure);
+  if (!neededWithCapFailure && !DRAFT_GATE_EVIDENCE_GUARDED_BOUNDARIES.includes(result.gateBoundary)) {
     return result;
   }
 
