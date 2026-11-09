@@ -5,7 +5,8 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import { composeReviewVerdict, listOpenActItems } from "@dev-loops/core/loop/gate-fanin";
-import { computeContentDigest, computeSpecDigest, specCriterionIds } from "@dev-loops/core/loop/spec-authority";
+import { computeContentDigest, computeSpecDigest, specCriterionIds, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
+import { withoutCopilotBodyDecision } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 
 // The durable ledger carries the judge pass's spec-authority finding_conflicts
@@ -257,4 +258,19 @@ test("a sibling spec-authority verdict that also decides the pinned Copilot clus
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
+});
+
+test("withoutCopilotBodyDecision drops only the pinned cluster index, so any other out-of-range decision is still refused (issue 3148)", () => {
+  const read = { kind: "copilot-body-feedback", path: "body.json", sha256: "0".repeat(64) };
+  const valid = { authorizedRemediation: "fix it", defectClass: "c", siteQuery: "q" };
+  const verdictAt = (index) => ({ ...VERDICT, decisions: [decision(index, "valid_compliant", valid)] });
+  const validate = (verdict) => validateSpecAuthorityVerdict(verdict, { findingsCount: 1, criterionIds, clusterIds: [0] });
+  // No pinned read: the verdict is unchanged, so a decision at N (the findings count) is refused.
+  const unpinned = verdictAt(1);
+  assert.equal(withoutCopilotBodyDecision(unpinned, { copilotBodyClusterId: 1, requiredReads: [] }), unpinned);
+  assert.throws(() => validate(withoutCopilotBodyDecision(unpinned, { copilotBodyClusterId: 1, requiredReads: [] })), /out of range/);
+  // Pinned read at cluster 1: a decision at 1 is dropped, a decision at cluster + 1 is kept and refused.
+  const pinned = { copilotBodyClusterId: 1, requiredReads: [read] };
+  assert.deepEqual(withoutCopilotBodyDecision(verdictAt(1), pinned).decisions, []);
+  assert.throws(() => validate(withoutCopilotBodyDecision(verdictAt(2), pinned)), /out of range/);
 });
