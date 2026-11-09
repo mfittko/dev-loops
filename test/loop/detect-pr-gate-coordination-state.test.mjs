@@ -4580,6 +4580,18 @@ describe("GATE-EXEC-BASE-REFRESH coordination", () => {
     assert.equal(result.baseFreshness.status, "base_fetch_failed");
   });
 
+  it("base_head_unresolved keeps the action and records the status", async () => {
+    const result = await runBaseFreshnessFixture({ checkBaseFreshness: async () => ({ ok: false, error: "base_head_unresolved" }) });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+    assert.equal(result.baseFreshness.status, "base_head_unresolved");
+  });
+
+  it("a thrown check keeps the action and records base_fetch_failed", async () => {
+    const result = await runBaseFreshnessFixture({ checkBaseFreshness: async () => { throw new Error("boom"); } });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+    assert.equal(result.baseFreshness.status, "base_fetch_failed");
+  });
+
   it("a non-gate-run action never calls the check", async () => {
     let calls = 0;
     const result = await runBaseFreshnessFixture({ withCleanDraftGate: true, checkBaseFreshness: async () => { calls += 1; return STALE; } });

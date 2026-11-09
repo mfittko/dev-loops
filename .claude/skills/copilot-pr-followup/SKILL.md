@@ -466,7 +466,7 @@ The canonical checkpoint verdict comment contract is [Gate Review Comment Contra
 
 ### Conflict-resolution gate
 
-Before any merge-ready or final-approval claim, run `detect-pr-gate-coordination-state.mjs` for the current PR. If it reports `gateBoundary=conflict_resolution` or `mergeStateStatus` is conflicted, stop the normal gate path immediately and use this recovery flow:
+Before any merge-ready or final-approval claim, run `detect-pr-gate-coordination-state.mjs` for the current PR. If it reports `gateBoundary=conflict_resolution` or `mergeStateStatus` is conflicted, stop the normal gate path immediately and use this recovery flow. Exception: when the reason is `base_stale_integrate_first`, follow `GATE-EXEC-BASE-REFRESH` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md) (integrate through `resolve-pr-conflicts.mjs`, no authorization step) and skip step 2.
 
 1. fetch fresh `origin/main`, confirm the current PR head SHA, and summarize the conflict scope from `mergeStateStatus` plus any reported `conflictFiles`
 2. ask for explicit authorization before any merge commit or other branch-state-changing reconciliation command

@@ -83,8 +83,6 @@ export const PR_CHECKPOINT_ACTION = Object.freeze({
   COMPLETE_FIXER_DISPOSITION: COMPLETE_FIXER_DISPOSITION_ACTION,
 });
 
-// Issue 3105: closed enum naming who must decide when a gate result is report_blocked.
-// OPERATOR_DECISION is a slice 1 catch-all for results with no runnable remedy; slice 9 narrows it.
 // Actions forbidden while the head conflicts with, or is stale against, the base.
 export const CONFLICT_FORBIDDEN_ACTIONS = Object.freeze([
   PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
@@ -101,7 +99,9 @@ export const CONFLICT_FORBIDDEN_ACTIONS = Object.freeze([
   PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
 ]);
 
-export const BLOCKED_ON =Object.freeze({
+// Issue 3105: closed enum naming who must decide when a gate result is report_blocked.
+// OPERATOR_DECISION is a slice 1 catch-all for results with no runnable remedy; slice 9 narrows it.
+export const BLOCKED_ON = Object.freeze({
   OPERATOR_DECISION: "operator_decision",
   HIGH_FINDING_PAST_CAP: "high_finding_past_cap",
   FAIL_OPEN_FINDING: "fail_open_finding",

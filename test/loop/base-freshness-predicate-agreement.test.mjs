@@ -47,6 +47,7 @@ describe("base freshness predicate agreement", () => {
       const head = heads[key];
       const fresh = await checkBaseFreshness({ base: "main", head, cwd: clone, trusted: true });
       assert.equal(fresh.ok, expected);
+      if (!expected) assert.equal(fresh.error, "base_stale_integrate_first");
       assert.equal(defaultIsAncestor({ base: "origin/main", head, repoRoot: clone }), fresh.ok);
     });
   }
