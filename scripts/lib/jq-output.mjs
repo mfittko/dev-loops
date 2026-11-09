@@ -230,7 +230,9 @@ function describeOutputPaths(result) {
 }
 
 // Apply one pipe stage to a stream (array of values), returning a new stream.
-function applyStage(stream, rawStage, strict = false) {
+function applyStage(raw, rawStage, strict = false) {
+  // MISSING only matters to the two strict presence stages below, which read raw.
+  const stream = raw.map((v) => (v === MISSING ? undefined : v));
   const stage = rawStage.trim();
   if (stage === "") {
     throw new JqFilterError("Empty filter stage");
@@ -265,12 +267,12 @@ function applyStage(stream, rawStage, strict = false) {
   }
   if (stage.endsWith("[]")) {
     const base = stage.slice(0, -2);
-    if (strict) assertPathPresent(stream, base);
-    return stream.flatMap((v) => iterate(resolvePath(v, base)));
+    if (strict) assertPathPresent(raw, base);
+    return raw.flatMap((v) => iterate(resolvePath(v, base)));
   }
   // Plain path access (single value per input).
-  if (strict) assertPathPresent(stream, stage);
-  return stream.map((v) => (strict && !hasPath(v, stage) ? MISSING : resolvePath(v, stage)));
+  if (strict) assertPathPresent(raw, stage);
+  return raw.map((v) => (strict && !hasPath(v, stage) ? MISSING : resolvePath(v, stage)));
 }
 
 // Validate one pipe stage's syntax without touching data. Mirrors the

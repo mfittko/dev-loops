@@ -408,3 +408,12 @@ test("strict: a value an earlier pipe stage did not find is not evidence that a 
   assert.deepEqual(evaluateJqFilter({ a: null }, ".a | .b | .c", { strict: true }), [undefined]);
   assert.deepEqual(evaluateJqFilter({ items: [] }, ".items[5] | .a", { strict: true }), [undefined]);
 });
+
+test("strict: a value an earlier pipe stage did not find behaves as null in later predicates", () => {
+  const data = { items: [{ a: 1 }, {}] };
+  const opts = { strict: true };
+  assert.deepEqual(evaluateJqFilter(data, ".items[] | .a | select(. != null)", opts), [1]);
+  assert.deepEqual(evaluateJqFilter(data, ".items[] | .a | . == null", opts), [false, true]);
+  assert.deepEqual(evaluateJqFilter(data, ".items[] | .a | select(.)", opts), [1]);
+  assert.deepEqual(evaluateJqFilter(data, ".items[] | .a | . > 0", opts), [true, false]);
+});
