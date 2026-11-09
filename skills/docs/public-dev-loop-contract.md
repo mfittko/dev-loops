@@ -402,7 +402,7 @@ Bootstrap-only exception to the general blocked-escalation rule for `waiting_for
 
 | Rule ID | Condition | Outcome |
 |---|---|---|
-| <!-- rule: FACADE-BOOTSTRAP-WATCH-ROUTE --> `FACADE-BOOTSTRAP-WATCH-ROUTE` | durable-auto ownership of this seam | ownership MUST route to the dedicated `watch-initial-copilot-pr.mjs` watcher with its default 1-hour watch budget |
+| <!-- rule: FACADE-BOOTSTRAP-WATCH-ROUTE --> `FACADE-BOOTSTRAP-WATCH-ROUTE` | durable-auto ownership of this seam | ownership MUST route to the dedicated `watch-initial-copilot-pr.mjs` watcher with its default 1-hour watch budget; a `timed_out` result with `outcome: "pending"` means the budget is not exhausted, so the agent runs `reissue` unchanged per `GATE-EXEC-BOUNDED-WAIT-CAP` |
 | <!-- rule: FACADE-BOOTSTRAP-QUIET-NO-EJECT --> `FACADE-BOOTSTRAP-QUIET-NO-EJECT` | quiet/no-activity observation while refreshed state still resolves this seam | durable ownership MUST NOT be ejected; inspect/status intents MAY still summarize that state and exit normally |
 | <!-- rule: FACADE-BOOTSTRAP-ACTION-REQUIRED-NONBLOCKING --> `FACADE-BOOTSTRAP-ACTION-REQUIRED-NONBLOCKING` | bootstrap-only linked PR; approval-gated Actions/Copilot run reports `action_required` (a run conclusion, not a lifecycle state) | treated as a non-blocking observational signal (concluded session activity); MUST NOT by itself force stop/escalation |
 | <!-- rule: FACADE-BOOTSTRAP-CLOSED-UNMERGED-RECONCILE --> `FACADE-BOOTSTRAP-CLOSED-UNMERGED-RECONCILE` | refreshed bootstrap state resolves `prior_linked_pr_closed_unmerged` | MUST fail closed to reconcile so status/startup surfaces the prior closed-unmerged decision instead of normal watch continuity |

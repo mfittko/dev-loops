@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { capWait, parseBaselineSha, pendingFields, resolveTimeoutMs, scriptCommand } from "../lib/timeout-flag.mjs";
 import { parsePositiveInteger, parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -36,6 +36,9 @@ Optional:
   --timeout-ms <n>        Deprecated alias for --timeout (milliseconds); warns on
                           stderr. Passing both flags fails closed.
   --poll <seconds>        Delay between polls (default ${DEFAULT_POLL_SECONDS})
+One call waits at most 170 seconds (GATE-EXEC-BOUNDED-WAIT-CAP). A longer --timeout
+returns status "timeout" with outcome "pending" (exit 2) and a "reissue" command
+carrying the remaining --timeout; run it.
 Not-yet-registered-check race guard:
   A freshly pushed head with zero registered checks does NOT settle green on
   the first poll — a provider may post its first check a beat after the push.
@@ -61,7 +64,11 @@ The RATE_LIMITED envelope is written to stdout when output is unfiltered, and
 always to stderr.
 On GraphQL rate-limit exhaustion the tool waits for the reset inside the
 remaining --timeout budget (heartbeats continue) and retries once; otherwise
-it returns RATE_LIMITED at once.
+it returns RATE_LIMITED at once. When the reset falls past this call's ~170 s
+cap but inside the requested budget, it sleeps within the cap and returns
+status "timeout" with outcome "pending", ciStatus "pending", the baseline
+headSha (null when none was read yet), "rateLimitResetAt" (ISO 8601) and a
+"reissue" command; run that command unchanged.
 ${JQ_OUTPUT_USAGE}
 Exit codes (default output, no --jq/--silent):
   0  Green (status "success")
@@ -82,6 +89,8 @@ export function parseWaitPrChecksCliArgs(argv) {
       timeout: { type: "string" },
       "timeout-ms": { type: "string" },
       poll: { type: "string" },
+      "baseline-sha": { type: "string" },
+      "stall-started-at-ms": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -121,6 +130,15 @@ export function parseWaitPrChecksCliArgs(argv) {
     }
     if (token.name === "poll") {
       options.pollIntervalMs = parsePositiveInteger(requireTokenValue(token, parseError), "--poll", parseError) * 1000;
+      continue;
+    }
+    // Internal: a re-issued capped wait carries the first call's baseline head and stall start.
+    if (token.name === "baseline-sha") {
+      options.baselineSha = parseBaselineSha(requireTokenValue(token, parseError), parseError);
+      continue;
+    }
+    if (token.name === "stall-started-at-ms") {
+      options.stallStartedAtMs = parsePositiveInteger(requireTokenValue(token, parseError), "--stall-started-at-ms", parseError);
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -165,18 +183,30 @@ export async function runCli(
     ensureOwnershipImpl = ensureAsyncRunnerOwnership,
   } = {},
 ) {
-  const options = parseWaitPrChecksCliArgs(argv);
-  if (options.help) {
+  const requested = parseWaitPrChecksCliArgs(argv);
+  if (requested.help) {
     stdout.write(`${USAGE}\n`);
     return 0;
   }
+  // One call waits at most the cap (GATE-EXEC-BOUNDED-WAIT-CAP); a longer request returns a pending result.
+  const { timeoutMs: cappedMs, remainingMs: capRemainingMs } = capWait(requested.timeoutMs);
+  const options = { ...requested, timeoutMs: cappedMs };
   const startedAt = now();
   const remainingMs = () => options.timeoutMs - (now() - startedAt);
   let result;
   let isRetry = false;
   // The first watch's baseline head. The retry reuses it, so a push during the
   // reset wait returns "changed" instead of settling an un-baselined head.
-  let baselineSha;
+  let baselineSha = options.baselineSha;
+  let stallStartedAtMs = options.stallStartedAtMs;
+  let pendingRemainingMs; // set by the rate-limit path; otherwise derived from actual elapsed time below
+  // Refresh the runner lease during a reset wait, as the watch loop does between polls.
+  const waitResetWithHeartbeat = (ms) => waitWithHeartbeat(ms, {
+    attempt: 1, attemptBudget: 1, watchStartedAtMs: startedAt, timeoutMs: options.timeoutMs, now, delayImpl,
+    onHeartbeat: () => ensureOwnershipImpl({
+      repo: options.repo, pr: options.pr, env, cwd: resolveRepoRoot(process.cwd()), claimIfMissing: true, requireExisting: false,
+    }),
+  });
   try {
     result = await withGraphqlRateLimitWait(
       () => {
@@ -186,22 +216,17 @@ export async function runCli(
         const timeoutMs = isRetry ? Math.max(1, remainingMs()) : options.timeoutMs;
         isRetry = true;
         return watchCiStatus(
-          { repo: options.repo, pr: options.pr, timeoutMs, pollIntervalMs: options.pollIntervalMs, baselineSha },
+          { repo: options.repo, pr: options.pr, timeoutMs, pollIntervalMs: capRemainingMs > 0 ? Math.min(options.pollIntervalMs, options.timeoutMs) : options.pollIntervalMs, baselineSha, stallStartedAtMs },
           {
             env, ghCommand, delayImpl, now, ensureOwnershipImpl, ...(runChild ? { runChild } : {}),
             onBaseline: (sha) => { baselineSha = sha; },
+            onStall: (startedAtMs) => { stallStartedAtMs = startedAtMs; },
           },
         );
       },
       {
         maxWaitMs: remainingMs,
-        // Refresh the runner lease during the reset wait, as the watch loop does between polls.
-        sleep: (ms) => waitWithHeartbeat(ms, {
-          attempt: 1, attemptBudget: 1, watchStartedAtMs: startedAt, timeoutMs: options.timeoutMs, now, delayImpl,
-          onHeartbeat: () => ensureOwnershipImpl({
-            repo: options.repo, pr: options.pr, env, cwd: resolveRepoRoot(process.cwd()), claimIfMissing: true, requireExisting: false,
-          }),
-        }),
+        sleep: waitResetWithHeartbeat,
         now,
         env,
         ghCommand,
@@ -210,9 +235,24 @@ export async function runCli(
     );
   } catch (error) {
     if (error?.code !== "RATE_LIMITED") throw error;
-    result = rateLimitedResult(error);
-    // --jq/--silent would filter the envelope away; always keep code/resetAt on stderr.
-    stderr.write(`${JSON.stringify(result)}\n`);
+    const budgetLeftMs = requested.timeoutMs - (now() - startedAt);
+    const resetInMs = Date.parse(error.resetAt ?? "") - now();
+    if (capRemainingMs > 0 && resetInMs > 0 && resetInMs <= budgetLeftMs) {
+      // The reset is past this call's cap but inside the requested budget: the re-issue waits it out.
+      result = { ok: true, status: "timeout", settled: false, repo: options.repo, pr: options.pr, ciStatus: "pending", headSha: baselineSha ?? null, rateLimitResetAt: error.resetAt };
+      // Sleep inside this call's cap first: a re-issue that hits the same limit at once would loop hot.
+      await waitResetWithHeartbeat(Math.min(resetInMs, Math.max(0, options.timeoutMs - (now() - startedAt))));
+      pendingRemainingMs = requested.timeoutMs - (now() - startedAt);
+    } else {
+      result = rateLimitedResult(error);
+      // --jq/--silent would filter the envelope away; always keep code/resetAt on stderr.
+      stderr.write(`${JSON.stringify(result)}\n`);
+    }
+  }
+  pendingRemainingMs ??= capRemainingMs > 0 ? requested.timeoutMs - (now() - startedAt) : 0;
+  if (result.status === "timeout" && pendingRemainingMs > 0) {
+    const carry = { "--baseline-sha": baselineSha, "--stall-started-at-ms": stallStartedAtMs };
+    result = { ...result, ...pendingFields({ remainingMs: pendingRemainingMs, command: scriptCommand(import.meta.url), argv, carry }) };
   }
   if (options.jq !== undefined || options.silent) {
     return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: result.status === "success" });
