@@ -184,6 +184,8 @@ function evaluatePredicate(value, predicate) {
 // error, never a silent null a caller could write back. A null intermediate and
 // an out-of-range index are legitimate nulls and stay present.
 function hasPath(value, path) {
+  // undefined here is a path an earlier pipe stage did not find (a real null stays present).
+  if (value === undefined) return false;
   let cursor = value;
   for (const step of parsePathSteps(path)) {
     if (cursor === undefined || cursor === null) return true;

@@ -399,3 +399,9 @@ test("strict: the path[] iteration branch reports a missing base path", () => {
 test("strict: inherited properties such as .constructor are not fields", () => {
   assert.throws(() => evaluateJqFilter({ a: 1 }, ".constructor", { strict: true }), /matches no field/);
 });
+
+test("strict: a value an earlier pipe stage did not find is not evidence that a later path exists", () => {
+  const data = { items: [{ a: { body: "text" } }, {}] };
+  assert.throws(() => evaluateJqFilter(data, ".items[] | .a | .typo", { strict: true }), /matches no field/);
+  assert.deepEqual(evaluateJqFilter({ items: [{ a: { body: "text" } }] }, ".items[] | .a | .body", { strict: true }), ["text"]);
+});
