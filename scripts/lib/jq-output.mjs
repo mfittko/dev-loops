@@ -186,8 +186,8 @@ function evaluatePredicate(value, predicate) {
 const MISSING = Symbol("missing");
 
 function hasPath(value, path) {
-  // MISSING is a path an earlier strict pipe stage did not find (a real null stays present).
-  if (value === MISSING) return false;
+  // MISSING is a path an earlier strict pipe stage did not find; only the identity path counts as present.
+  if (value === MISSING) return parsePathSteps(path).length === 0;
   let cursor = value;
   for (const step of parsePathSteps(path)) {
     if (cursor === undefined || cursor === null) return true;
@@ -253,13 +253,13 @@ function applyStage(raw, rawStage, strict = false) {
   }
   const selectMatch = stage.match(/^select\((.*)\)$/);
   if (selectMatch) {
-    if (strict) assertPredicatePath(stream, selectMatch[1]);
+    if (strict) assertPredicatePath(raw, selectMatch[1]);
     // Keep the raw entry so a MISSING that passes the predicate stays MISSING downstream.
     return raw.filter((_, i) => evaluatePredicate(stream[i], selectMatch[1]));
   }
   // Top-level comparison expression yields a boolean per input (e.g. .x=="y").
   if (/(==|!=|<=|>=|<|>)/.test(stage)) {
-    if (strict) assertPredicatePath(stream, stage);
+    if (strict) assertPredicatePath(raw, stage);
     return stream.map((v) => evaluatePredicate(v, stage));
   }
   // Iteration: a path ending in [] (incl. bare .[]).

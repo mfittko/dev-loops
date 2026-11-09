@@ -418,6 +418,15 @@ test("strict: a value an earlier pipe stage did not find behaves as null in late
   assert.deepEqual(evaluateJqFilter(data, ".items[] | .a | . > 0", opts), [true, false]);
 });
 
+test("strict: a typo predicate path after a partial pipe miss is a missing-path error", () => {
+  const data = { items: [{ a: { body: "text" } }, {}] };
+  const opts = { strict: true };
+  assert.throws(() => evaluateJqFilter(data, ".items[] | .a | .typo == null", opts), /matches no field/);
+  assert.throws(() => evaluateJqFilter(data, ".items[] | .a | select(.typo == null)", opts), /matches no field/);
+  assert.throws(() => evaluateJqFilter(data, ".items[] | .a | select(.typo)", opts), /matches no field/);
+  assert.deepEqual(evaluateJqFilter(data, ".items[] | .a | select(.body == \"text\")", opts), [{ body: "text" }]);
+});
+
 test("strict: a missing value that passes select stays missing for later path stages", () => {
   const data = { items: [{ a: { body: "t" } }, {}] };
   const opts = { strict: true };
