@@ -1280,3 +1280,21 @@ test("probe-ci-status --timeout 30 with the default poll on pending CI performs 
   assert.equal(result.status, "timeout");
   assert.equal(result.attempts, 1);
 });
+
+test("probe-ci-status capped call whose slice overruns the requested budget returns no re-issue (GATE-EXEC-BOUNDED-WAIT-CAP)", async () => {
+  const sink = () => { let text = ""; return { write: (c) => { text += c; return true; }, text: () => text }; };
+  const routes = [
+    { match: ["pr", "view"], stdout: prView("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["build"]) },
+    { match: ["check-runs"], stdout: checkRuns([{ status: "queued", conclusion: null, name: "build" }]) },
+    { match: ["/status"], stdout: statuses([]) },
+  ];
+  let clock = 1_000_000;
+  const stdout = sink();
+  // The budget is just above the cap; slow reads (the delay overshoots) leave no budget to hand on.
+  await withGhStub({ routes }, (env) => runCli(["--repo", "owner/repo", "--pr", "7", "--timeout", "171"], {
+    stdout, stderr: sink(), env, ghCommand: "gh", runChild: env[RUN_CHILD], delayImpl: async (ms) => { clock += ms + 100_000; }, now: () => clock,
+  }));
+  const result = JSON.parse(stdout.text());
+  assert.equal(result.status, "timeout");
+  assert.equal(result.reissue, undefined);
+});

@@ -657,9 +657,9 @@ export async function runCli(
       onBaseline: (sha) => { carry["--baseline-sha"] = sha; },
       onStall: (startedAtMs) => { carry["--stall-started-at-ms"] = startedAtMs; },
     });
-  if (result.status === "timeout" && remainingMs > 0) {
+  const leftMs = remainingMs > 0 ? requested.timeoutMs - ((watchDeps.now ?? Date.now)() - startedAtMs) : 0;
+  if (result.status === "timeout" && leftMs > 0) {
     // The re-issue deducts actual elapsed time, not the cap: a default-poll slice ends before the cap.
-    const leftMs = requested.timeoutMs - ((watchDeps.now ?? Date.now)() - startedAtMs);
     result = { ...result, ...pendingFields({ remainingMs: leftMs, command: scriptCommand(import.meta.url), argv, carry: options.commit !== undefined ? {} : carry }) };
   }
   process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
