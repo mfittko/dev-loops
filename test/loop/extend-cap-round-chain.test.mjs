@@ -301,6 +301,7 @@ test("a non-clearing or unsealed record at the chain end refuses record_not_clea
     assert.equal(refused.reason, "record_not_clearing");
     assert.doesNotMatch(refused.detail, /extend-cap-round-chain|gate-coordination/);
     assert.match(refused.detail, /loop pre-push-delta --reviewer-only --repo \S+ --pr \d+ --baseline/);
+    assert.doesNotMatch(refused.detail, /rm -f/);
     assert.deepEqual(readSealedGateDeltaRecord(tmp, B), before);
     rmSync(path.join(tmp, "gate-delta", `${B}.json.seal`));
     assert.equal((await extend(root, D)).reason, "record_not_clearing");
