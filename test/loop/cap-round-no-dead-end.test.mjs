@@ -21,7 +21,7 @@ const ACT = { severity: "medium", summary: "guard missing", files: ["src/a.mjs"]
  * `sequence`: open (the fixer marker), closed (closed as head_moved, closed as no_commit or lost: all three leave no marker and no record, because a closure only removes the marker),
  * fixer_needs_fix (the fixer's non-clearing record at A, another actSetId, the same refs).
  */
-function scenario({ clean, sequence, merges, fix, docs, orphaned = false, unreadable = false }) {
+function scenario({ clean, sequence, merges, fix, docs, orphaned = false, unreadable = false, otherRefs = false }) {
   const root = mkdtempSync(path.join(os.tmpdir(), "cap-matrix-"));
   initGitFixture(root, { branch: "main", commit: null });
   const git = (...args) => String(runGitFixture(root, args)).trim();
@@ -55,7 +55,7 @@ function scenario({ clean, sequence, merges, fix, docs, orphaned = false, unread
   const tmpRoot = path.join(root, "tmp");
   if (sequence === "open") writeSequenceMarker({ tmpRoot, baselineHead: A, branch: "issue-1" });
   if (sequence === "fixer_needs_fix") {
-    const items = capRoundActList(findings, A).map((item) => ({ ref: item.ref, status: "not_resolved" }));
+    const items = [...capRoundActList(findings, A).map((item) => ({ ref: item.ref, status: "not_resolved" })), ...(otherRefs ? [{ ref: "extra-ref", status: "not_resolved" }] : [])];
     writeSealedGateDeltaRecord(tmpRoot, A, { reviewBaselineHead: A, candidateHead: F, actSetId: "fixer-act-set", invocation: 1, outcome: "needs_fix", nextStep: "fix_and_rereview", items });
   }
   return { root, A, head, ledgerPath: path.join(dir, `draft_gate-${A}.json`), hasPrOwnCommit: fix || docs };
@@ -223,7 +223,8 @@ test("the remaining clean-cap needs_fix dead ends clear with the remedy ADR 0255
 
 // Issue 3139 AC5: the PR 3138 sequence under one toolchain: a cap round with findings, the fixer's needs_fix record, a base-only merge and a half-stamped earlier ledger.
 test("PR 3138 sequence: each step runs the command the previous result named, the walk reaches run_pre_approval_gate, and the round numbers agree at every step", async () => {
-  const s = scenario({ clean: false, sequence: "fixer_needs_fix", merges: 1, fix: true, docs: false });
+  // otherRefs: the sealed needs_fix record holds another ref set, so only the AC3 takeover lets the walk through.
+  const s = scenario({ clean: false, sequence: "fixer_needs_fix", merges: 1, fix: true, docs: false, otherRefs: true });
   try {
     // The half-stamped earlier ledger: a roundIdentity without `completed`, which counts as no round for every reader.
     writeFileSync(path.join(path.dirname(s.ledgerPath), `draft_gate-${"4".repeat(40)}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "4".repeat(40), verdict: "findings_present", loggedAt: "2026-10-31T00:00:00.000Z", roundIdentity: { roundId: "r1", judgeExecution: null }, findings: [ACT] }));

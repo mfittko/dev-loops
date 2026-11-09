@@ -4179,13 +4179,13 @@ export async function main(
         coordination = null;
       }
       if (coordination) {
-        // draft_gate reads the raw draft state (unknown never refuses) and the
-        // UNFOLDED clean-draft-verdict fact, matching the verdict post's
-        // draftGateAlreadySatisfied no-op; pre_approval keeps the folded fact.
+        // draft_gate reads the raw draft state (unknown never refuses). Both gates read the
+        // UNFOLDED clean-draft-verdict fact, matching the detector and the verdict post's
+        // draftGateAlreadySatisfied (open gate threads never change it).
         const isDraftGate = options.gate === "draft_gate";
         const draftVerdict = coordination.gateEvidence?.draftGate;
         // A ready PR whose cap round is fixed holds no clean draft verdict: the sealed proof stands in for it, so pre_approval_gate can build its context.
-        const evidenceSatisfied = coordination.gateEvidence?.draftGateSatisfied === true;
+        const evidenceSatisfied = draftVerdict?.verdict === "clean" && typeof draftVerdict?.headSha === "string";
         const { capRoundFixed, failure: capRoundFailure } = !isDraftGate && coordination.prData?.isDraft === false && !evidenceSatisfied
           ? await resolveDraftCapRoundFact({ ...coordination, repo: options.repo, pr: options.pr }, { repoRoot, resolve: resolveCapRoundFixedSeam })
           : { capRoundFixed: false, failure: null };
@@ -4193,7 +4193,7 @@ export async function main(
           gate: options.gate,
           isDraft: isDraftGate ? coordination.prData?.isDraft : Boolean(coordination.prData?.isDraft),
           draftGateSatisfied: isDraftGate
-            ? draftVerdict?.verdict === "clean" && typeof draftVerdict?.headSha === "string"
+            ? evidenceSatisfied
             : foldDraftGateSatisfied({ isDraft: coordination.prData?.isDraft, evidenceSatisfied, capRoundFixed }),
           repo: options.repo,
           pr: options.pr,

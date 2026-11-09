@@ -4744,6 +4744,7 @@ const AC1_ACT = { severity: "medium", summary: "guard missing", files: ["src/a.m
 for (const { name, isDraft, seal, verdict, threads = 0, seed = true, satisfied, condition = null, fixture = {} } of [
   { name: "draft", isDraft: true, seal: true, verdict: "blocked", satisfied: false },
   { name: "ready with clean evidence", isDraft: false, seal: false, verdict: "clean", satisfied: true },
+  { name: "ready with clean evidence and open gate threads", isDraft: false, seal: false, verdict: "clean", threads: 1, satisfied: true },
   { name: "ready with the cap round fixed and 0 gate threads", isDraft: false, seal: true, verdict: "blocked", satisfied: true },
   { name: "ready with the cap round fixed and open gate threads", isDraft: false, seal: true, verdict: "blocked", threads: 2, satisfied: true },
   { name: "ready with an unsealed record (unsealed_record)", isDraft: false, seal: false, verdict: "blocked", satisfied: false, condition: "unsealed_record" },
@@ -4778,7 +4779,7 @@ for (const { name, isDraft, seal, verdict, threads = 0, seed = true, satisfied, 
       await writeGateContextMain(["--repo", "owner/repo", "--pr", "10", "--gate", "pre_approval_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", "main"], {
         repoRoot: tempDir,
         run: async () => { reachedRun = true; throw new Error("stop after the ordering check"); },
-        loadCoordination: async () => ({ currentHeadSha: headSha, prData: { isDraft, baseRefName: "main" }, gateEvidence: { draftGateSatisfied: verdict === "clean" } }),
+        loadCoordination: async () => ({ currentHeadSha: headSha, prData: { isDraft, baseRefName: "main" }, gateEvidence: { draftGate: verdict === "clean" ? { visible: true, verdict: "clean", headSha } : null, draftGateSatisfied: verdict === "clean" && threads === 0 } }),
       });
       process.stderr.write = origErr;
       const refusalText = chunks.join("");
