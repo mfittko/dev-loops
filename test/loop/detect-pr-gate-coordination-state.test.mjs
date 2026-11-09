@@ -4510,3 +4510,97 @@ test("detect-pr-gate-coordination-state (#3080): a live current-head draft ledge
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+// GATE-EXEC-BASE-REFRESH: a draft PR with no gate evidence sits at run_draft_gate; the injected check decides staleness.
+async function runBaseFreshnessFixture({ checkBaseFreshness, isDraft = true, withCleanDraftGate = false, capReached = false }) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-base-fresh-"));
+  try {
+    const headSha = "abc1234567";
+    const cleanBody = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "clean", findingsSummary: "no blocking issues found", nextAction: "mark ready for review" });
+    const env = await writeGhStub(tempDir, [
+      {
+        stdout: JSON.stringify({
+          number: 10, state: "OPEN", isDraft, baseRefName: "main", headRefOid: headSha, mergeStateStatus: "CLEAN",
+          body: "## Objective\n\nShip.\n\n## In scope\n\n- x\n\n## Explicit non-goals\n\n- y\n\n## Acceptance criteria\n\n- [ ] x\n\n## Definition of done\n\n- [ ] tests pass\n\n## Open questions/risks\n\n- none\n",
+          closingIssuesReferences: [],
+          reviews: capReached ? ["1", "2", "3", "4", "5"].map((n, i) => ({ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: n.repeat(40) }, submittedAt: `2026-05-31T20:${String(i * 5).padStart(2, "0")}:00Z` })) : [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: headSha }) },
+      { stdout: jsonLine(withCleanDraftGate ? [[{ id: 11, body: cleanBody, html_url: "https://example.test/comment/11", updated_at: "2026-05-31T20:00:00Z" }]] : [[]]) },
+      { stdout: "[]\n" },
+      { stdout: "\n" },
+    ]);
+    return await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { evaluateEarlySurface: PASS_EARLY_SURFACE, checkBaseFreshness }));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+const STALE = { ok: false, error: "base_stale_integrate_first", base: "main", newerCommits: ["abc1 newer"], remedy: "REMEDY-TEXT" };
+
+describe("GATE-EXEC-BASE-REFRESH coordination", () => {
+  it("stale head at run_draft_gate routes to resolve_merge_conflicts", async () => {
+    let args;
+    const result = await runBaseFreshnessFixture({ checkBaseFreshness: async (a) => { args = a; return STALE; } });
+    assert.equal(args.head, "abc1234567");
+    assert.equal(args.base, "main");
+    assert.equal(args.trusted, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS);
+    assert.match(result.reason, /base_stale_integrate_first/);
+    assert.match(result.reason, /REMEDY-TEXT/);
+    assert.deepEqual(result.allowedNextActions, [PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS]);
+    assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+    assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+    assert.deepEqual(result.baseFreshness, { status: "base_stale_integrate_first", base: "main", newerCommits: ["abc1 newer"] });
+    assert.equal(result.gateBoundary, PR_CHECKPOINT.CONFLICT_RESOLUTION);
+    assert.equal(result.loopDisposition, "action_required");
+  });
+
+  it("stale head at run_pre_approval_gate routes to resolve_merge_conflicts", async () => {
+    const result = await runBaseFreshnessFixture({ isDraft: false, withCleanDraftGate: true, capReached: true, checkBaseFreshness: async () => STALE });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS);
+    assert.match(result.reason, /REMEDY-TEXT/);
+    assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+    assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+    assert.equal(result.gateBoundary, PR_CHECKPOINT.CONFLICT_RESOLUTION);
+    assert.equal(result.loopDisposition, "action_required");
+    const baseline = await runBaseFreshnessFixture({ isDraft: false, withCleanDraftGate: true, capReached: true, checkBaseFreshness: async () => ({ ok: true, status: "base_current", base: "main" }) });
+    assert.equal(baseline.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  });
+
+  it("base_current leaves the action unchanged", async () => {
+    const result = await runBaseFreshnessFixture({ checkBaseFreshness: async () => ({ ok: true, status: "base_current", base: "main" }) });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+    assert.deepEqual(result.baseFreshness, { status: "base_current", base: "main" });
+  });
+
+  it("base_fetch_failed keeps the action and records the status", async () => {
+    const result = await runBaseFreshnessFixture({ checkBaseFreshness: async () => ({ ok: false, error: "base_fetch_failed" }) });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+    assert.equal(result.baseFreshness.status, "base_fetch_failed");
+  });
+
+  it("base_head_unresolved keeps the action and records the status", async () => {
+    const result = await runBaseFreshnessFixture({ checkBaseFreshness: async () => ({ ok: false, error: "base_head_unresolved" }) });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+    assert.equal(result.baseFreshness.status, "base_head_unresolved");
+  });
+
+  it("a thrown check keeps the action and records base_fetch_failed", async () => {
+    const result = await runBaseFreshnessFixture({ checkBaseFreshness: async () => { throw new Error("boom"); } });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+    assert.equal(result.baseFreshness.status, "base_fetch_failed");
+  });
+
+  it("a non-gate-run action never calls the check", async () => {
+    let calls = 0;
+    const result = await runBaseFreshnessFixture({ withCleanDraftGate: true, checkBaseFreshness: async () => { calls += 1; return STALE; } });
+    assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+    assert.equal(calls, 0);
+    assert.equal(result.baseFreshness, undefined);
+  });
+});

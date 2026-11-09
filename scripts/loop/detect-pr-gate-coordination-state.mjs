@@ -14,9 +14,10 @@ import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as def
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { isSanctionedCopilotReviewerLogin } from "@dev-loops/core/github/comment-trust";
-import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
+import { buildSnapshotFromPrFacts, DISPOSITION, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateEarlySurface } from "./early-surface-checks.mjs";
-import { buildAdrTripwireField, buildSizeBudgetField, evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
+import { checkBaseFreshness } from "./pre-write-remote-freshness-guard.mjs";
+import { CONFLICT_FORBIDDEN_ACTIONS, buildAdrTripwireField, buildSizeBudgetField, evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
 import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
@@ -1535,6 +1536,24 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     result.nextAction = PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE;
     result.reason = "No contract-complete pre_approval_gate marker exists for the current head SHA; run pre_approval_gate before proceeding.";
     result.allowedNextActions = [PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE];
+  }
+  // GATE-EXEC-BASE-REFRESH: a stale head must integrate the base before a gate-run action. A fetch failure or unresolved head keeps the action (write-gate-context still refuses at dispatch).
+  if (result.nextAction === PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE || result.nextAction === PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE) {
+    const checkFreshness = runtime.checkBaseFreshness ?? (runtime.runChild ? null : checkBaseFreshness);
+    if (checkFreshness && prBaseRefName.length > 0 && typeof context.currentHeadSha === "string" && context.currentHeadSha.length > 0) {
+      const freshness = await checkFreshness({ base: prBaseRefName, head: context.currentHeadSha, cwd: repoRoot, env: runtime.env ?? process.env, trusted: true })
+        .catch(() => ({ ok: false, error: "base_fetch_failed" }));
+      result.baseFreshness = { status: freshness.ok ? freshness.status : freshness.error, base: prBaseRefName };
+      if (freshness.error === "base_stale_integrate_first") {
+        result.baseFreshness.newerCommits = freshness.newerCommits;
+        result.gateBoundary = PR_CHECKPOINT.CONFLICT_RESOLUTION;
+        result.loopDisposition = DISPOSITION.ACTION_REQUIRED;
+        result.nextAction = PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS;
+        result.reason = `base_stale_integrate_first: head ${context.currentHeadSha} does not contain origin/${prBaseRefName} (GATE-EXEC-BASE-REFRESH). ${freshness.remedy}`;
+        result.allowedNextActions = [PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS];
+        result.forbiddenActions = [...new Set([...(result.forbiddenActions ?? []), ...CONFLICT_FORBIDDEN_ACTIONS])];
+      }
+    }
   }
   // Expose effective round count in output for testability
   result.copilotReviewRoundCount = context.snapshot?.copilotReviewRoundCount ?? 0;
