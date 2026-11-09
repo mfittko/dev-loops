@@ -4702,7 +4702,12 @@ test("detect-pr-gate-coordination-state (issue 3139 AC4): emits the toolchain fi
     ));
     const fromHead = await run(toolchainSeams(root, { rootHead: PR_HEAD }));
     assert.deepEqual(fromHead.toolchain, { root, headSha: PR_HEAD, selfHosting: true });
+    // A refused run writes and removes nothing: an existing Copilot body judge file for the head stays byte-identical.
+    const judgeFile = copilotBodyJudgePath({ tmpRoot: path.join(tempDir, "tmp"), repo: "owner/repo", pr: 10, headSha: PR_HEAD });
+    await mkdir(path.dirname(judgeFile), { recursive: true });
+    await writeFile(judgeFile, '{"sentinel":"judge finding"}\n');
     await assert.rejects(run(toolchainSeams(root)), /toolchain_head_mismatch: .*dev-loops-run --repo-root <worktree> scripts\/loop\/detect-pr-gate-coordination-state\.mjs --repo owner\/repo --pr 10/);
+    assert.equal(await readFile(judgeFile, "utf8"), '{"sentinel":"judge finding"}\n');
   } finally {
     await rm(root, { recursive: true, force: true });
     await rm(tempDir, { recursive: true, force: true });
@@ -4783,7 +4788,9 @@ for (const { name, isDraft, seal, verdict, threads = 0, seed = true, satisfied, 
       ).then((result) => result.draftGateAlreadySatisfied === true, (error) => { upsertError = error; return false; });
       // A not-satisfied post fails for the gate reason: a draft PR is refused by the draft_gate post path, and a ready PR takes the draft transition (its first gh call, which the stub has no entry for).
       // Any other error (a config load failure, a changed call order) fails the test.
-      if (!satisfied) assert.match(String(upsertError?.message), isDraft ? /draft_gate|cap round|round_cap/i : /^Failed to resolve PR node ID for #10: unexpected extra gh call/, `${upsertError?.stack}`);
+      // A ready PR with a failed cap-round condition refuses at gate entry with the detector's own reason, and never reaches the draft transition. Without a condition it takes the draft transition (its first gh call, which the stub has no entry for).
+      if (!satisfied && !isDraft && condition) assert.equal(upsertError?.message, `Cannot enter draft_gate on owner/repo#10: ${detectedResult.reason}`, `${upsertError?.stack}`);
+      else if (!satisfied) assert.match(String(upsertError?.message), isDraft ? /draft_gate|cap round|round_cap/i : /^Failed to resolve PR node ID for #10: unexpected extra gh call/, `${upsertError?.stack}`);
       else assert.equal(upsertError, null);
 
       assert.deepEqual({ detected, ordering, upserted }, { detected: satisfied, ordering: satisfied, upserted: satisfied });

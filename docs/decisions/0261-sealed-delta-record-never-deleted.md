@@ -4,7 +4,7 @@
 
 Accepted, 2026-11-09 ([issue 3139](https://github.com/mfittko/dev-loops/issues/3139)).
 
-Amends decisions 6, 7 and 9 of [ADR 0255](./0255-code-range-delta-without-fixer-plan.md). Every other decision of that record stays in force, and the record stays unedited.
+Amends decisions 6, 7 and 9 of [ADR 0255](./0255-code-range-delta-without-fixer-plan.md). Every other decision of that record stays in force.
 
 ## Context
 
@@ -16,7 +16,7 @@ PR 3138 stopped at the "Remaining" row of ADR 0255 that named `rm -f <record> <r
 - A sealed `locally_clear` record of another act set stays protected. Its refusal names the chain-end command when its refs equal the derived refs and its candidate is on the head's history, and otherwise the replacement-PR restart. A record that carries an extension stays protected as before.
 - No refusal for a sealed record names `rm` or any other record deletion.
 - An unsealed record keeps the rule of decisions 6 and 7: it is taken over only when it is non-clearing over the same refs with no extension and a candidate on the head's history. Any other unsealed record refuses `unsealed_record` with the remedy `rm -f <record> <record>.seal` and a rerun, which restarts the invocation count.
-- The "Remaining" table of ADR 0255 changes accordingly: the sealed non-clearing row is closed by the take-over, and a sealed `locally_clear` record of another act set with another ref set names the replacement-PR restart.
+- ADR 0261 replaces the sealed-record clause of the last "Remaining" row of ADR 0255: the sealed non-clearing case is closed by the take-over, and a sealed `locally_clear` record of another act set with another ref set names the replacement-PR restart.
 
 ## Consequences
 

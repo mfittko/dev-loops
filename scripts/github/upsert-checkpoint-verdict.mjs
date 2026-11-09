@@ -2037,6 +2037,7 @@ export function buildCoordinationEvaluatorInput({
   preApprovalGateConfig,
   reviewMode,
   draftCapRoundFixed = false,
+  draftCapRoundFailure = null,
 }) {
   return {
     repo: coordinationContext.repo,
@@ -2079,6 +2080,7 @@ export function buildCoordinationEvaluatorInput({
     preApprovalGateMarker: coordinationContext.gateEvidence.preApprovalGateMarker,
     ...(reviewMode ? { reviewMode } : {}),
     draftCapRoundFixed,
+    draftCapRoundFailure,
   };
 }
 
@@ -2824,9 +2826,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       // Proceed with the default (external Copilot review) mode.
     }
     // ADR 0208: the same cap-round-fixed proof the detector resolves, so a ready cap-fixed PR can enter pre_approval_gate; fail closed on error.
-    const { capRoundFixed: draftCapRoundFixed } = await resolveDraftCapRoundFact({ ...coordinationContext, repo: options.repo, pr: options.pr }, { repoRoot });
+    const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure } = await resolveDraftCapRoundFact({ ...coordinationContext, repo: options.repo, pr: options.pr }, { repoRoot });
     coordination = evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
       draftCapRoundFixed,
+      draftCapRoundFailure,
       coordinationContext,
       maxCopilotRounds,
       draftGateConfig,

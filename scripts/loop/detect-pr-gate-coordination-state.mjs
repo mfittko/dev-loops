@@ -1008,6 +1008,9 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   if (!currentHeadSha) {
     throw new Error("Invalid gh pr view payload: missing headRefOid");
   }
+  // ADR 0117 (issue 3139): a run the toolchain guard refuses must not write or remove the shared Copilot body judge file, so the guard runs before any such write.
+  const toolchain = runtime.guardToolchain ? evaluateToolchainAuthority({ repo: options.repo, pr: options.pr, prState: prData?.state, prHeadSha: currentHeadSha, changedFiles: extractChangedFiles(prData) }, runtime.toolchain) : null;
+  if (toolchain?.refusal) throw new Error(toolchain.refusal);
   // Fetch Copilot requested-reviewers at the original position (before threads/graphql)
   // to preserve the gh call order existing tests expect; the reconciliation (timeline
   // fetch) is deferred to after reviewSummary is computed.
@@ -1251,6 +1254,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     copilotBodyJudgeFile,
     copilotBodyJudgeFileError,
     fixerDisposition,
+    toolchain,
   };
 }
 
@@ -1369,10 +1373,9 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
   // The config loads first: a config load error refuses before any gh read.
   const config = (await loadDevLoopConfigStrict({ repoRoot })).config ?? {};
-  const context = await loadPrGateCoordinationContext(options, runtime);
-  // ADR 0117 (issue 3139): an open self-hosting PR is answered by its own head's toolchain; another checkout refuses.
-  const toolchain = evaluateToolchainAuthority({ repo: context.repo, pr: context.pr, prState: context.prData?.state, prHeadSha: context.currentHeadSha, changedFiles: extractChangedFiles(context.prData) }, runtime.toolchain);
-  if (toolchain.refusal) throw new Error(toolchain.refusal);
+  // ADR 0117 (issue 3139): an open self-hosting PR is answered by its own head's toolchain; another checkout refuses inside the loader, before any shared gate state is written.
+  const context = await loadPrGateCoordinationContext(options, { ...runtime, guardToolchain: true });
+  const { toolchain } = context;
   const draftGateConfig = resolveGateConfig(config, "draft");
   const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
   // Shared with interpreterRefinementConfig.maxCopilotRounds in
