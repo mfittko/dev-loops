@@ -251,7 +251,7 @@ test("2955: the replacement reason is read from the predecessor hand-back status
     assert.match(retro, /read from the predecessor's hand-back packet `status`, which names the run-ending case, reported as "unknown" when the status is absent/);
     assert.ok(!/dispatch\s+note/i.test(retro), `${base} retrospective must not cite an orchestrator note`);
     const main = squeeze(await readRepo(`${base}/main-agent-contract.md`));
-    assert.match(main, /The packet `status` names the run-ending case from the canonical list in Unit coordinator boundaries, so it is the replacement reason\./);
+    assert.match(main, /The packet `status` of a run-ending hand-back names the run-ending case from the canonical list in Unit coordinator boundaries, so it is the replacement reason\./);
   }
 });
 
