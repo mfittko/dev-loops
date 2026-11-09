@@ -4387,8 +4387,9 @@ async function seedCapFixedRepo(repoRoot, { headSha, seal = true, record: record
   return { headSha, capHead };
 }
 
+// threads: -1 seeds one gate thread whose login lookup fails, so the gate thread count is unreadable (-1).
 async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody, files, threads = 0 }) {
-  const threadNodes = Array.from({ length: threads }, (_, i) => ({ id: `PRRT_${i}`, isResolved: false, isOutdated: false, path: "src/scope.mjs", line: 4, comments: { nodes: [{ id: `PRRC_${i}`, databaseId: 9000 + i, body: `${buildFindingMarker({ fp: String(i).repeat(16), severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why?`, author: { login: "dev-loops-gate[bot]", __typename: "Bot" } }] } }));
+  const threadNodes = Array.from({ length: Math.abs(threads) }, (_, i) => ({ id: `PRRT_${i}`, isResolved: false, isOutdated: false, path: "src/scope.mjs", line: 4, comments: { nodes: [{ id: `PRRC_${i}`, databaseId: 9000 + i, body: `${buildFindingMarker({ fp: String(i).repeat(16), severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why?`, author: { login: "dev-loops-gate[bot]", __typename: "Bot" } }] } }));
   return writeGhStub(tempDir, [
     {
       stdout: JSON.stringify({
@@ -4399,7 +4400,7 @@ async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody, f
     },
     { stdout: "{\"users\":[]}\n" },
     { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: threadNodes, pageInfo: { hasNextPage: false } } } } } }) },
-    ...(threads ? [{ assertArgs: ["api", "user"], stdout: jsonLine({ login: "dev-loops-gate[bot]" }) }] : []),
+    ...(threads ? [threads < 0 ? { assertArgs: ["api", "user"], stdout: "", exitCode: 1, stderr: "HTTP 500" } : { assertArgs: ["api", "user"], stdout: jsonLine({ login: "dev-loops-gate[bot]" }) }] : []),
     { stdout: jsonLine({ headRefOid: headSha }) },
     { stdout: jsonLine([[{ id: 11, body: draftGateBody, html_url: "https://example.test/comment/11", updated_at: "2026-05-31T20:00:00Z" }]]) },
     { stdout: "[]\n" },
@@ -4745,6 +4746,7 @@ for (const { name, isDraft, seal, verdict, threads = 0, seed = true, satisfied, 
   { name: "draft", isDraft: true, seal: true, verdict: "blocked", satisfied: false },
   { name: "ready with clean evidence", isDraft: false, seal: false, verdict: "clean", satisfied: true },
   { name: "ready with clean evidence and open gate threads", isDraft: false, seal: false, verdict: "clean", threads: 1, satisfied: true },
+  { name: "ready with clean evidence and an unreadable thread count (-1)", isDraft: false, seal: false, verdict: "clean", threads: -1, satisfied: true },
   { name: "ready with the cap round fixed and 0 gate threads", isDraft: false, seal: true, verdict: "blocked", satisfied: true },
   { name: "ready with the cap round fixed and open gate threads", isDraft: false, seal: true, verdict: "blocked", threads: 2, satisfied: true },
   { name: "ready with an unsealed record (unsealed_record)", isDraft: false, seal: false, verdict: "blocked", satisfied: false, condition: "unsealed_record" },
