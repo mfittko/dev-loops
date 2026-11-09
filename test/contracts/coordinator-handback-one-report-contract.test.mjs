@@ -38,7 +38,7 @@ test("COORDINATOR-HANDBACK-ONE-REPORT carries one final report and the refusal p
 
 test("MAIN-AGENT-COORDINATOR-REPORT-READ defines the orchestrator read path", async () => {
   const text = await rule(READ);
-  assert.match(text, /^`MAIN-AGENT-COORDINATOR-REPORT-READ`: Claude Code only\./m);
+  assert.match(text, /^`MAIN-AGENT-COORDINATOR-REPORT-READ`: /m);
   assert.match(text, /"not repeated here".*idle without a delivered report.*last assistant message of the coordinator's output file before it resumes or re-asks/s);
   assert.match(text, /all decisions for one block in one message/);
   assert.match(text, /latest hand-back before it re-instructs/);
@@ -50,10 +50,34 @@ test("GATE-EXEC-HARNESS-JOIN names children in flight and cites the read rule", 
   const start = content.indexOf("<!-- rule: GATE-EXEC-HARNESS-JOIN -->");
   const text = content.slice(start, content.indexOf("**Re-run rule:**", start));
   assert.match(text, /report sent while a child is in flight.*`COORDINATOR-HANDBACK-ONE-REPORT`/s);
-  assert.match(text, /names every such child: agent id, expected artifact path or hand-back, and the next step/);
-  assert.match(text, /gate coordinator child the expected hand-back is its round result/);
+  assert.match(text, /agent id, `joinRef`, and the next step/);
   assert.match(text, /treats the reporter as still running\. On Claude Code the parent reads the reporter's output file on its next notification \(`MAIN-AGENT-COORDINATOR-REPORT-READ`.*terminal hand-back, not a pause.*keeps the child list\. The wait command cancels no child, so the parent treats each listed child as still running\./s);
   assert.ok(!/last assistant message/.test(text), "the read rule is cited, not restated");
+});
+
+test("GATE-EXEC-HARNESS-JOIN in-flight report names each joinRef and states a forced hand-back is interim", async () => {
+  const content = await readRepo(GATE);
+  const start = content.indexOf("<!-- rule: GATE-EXEC-HARNESS-JOIN -->");
+  const text = content.slice(start, content.indexOf("**Re-run rule:**", start));
+  assert.match(text, /report sent while a child is in flight.*carries its `joinRef` \(`COORDINATOR-SINGLE-CHILD-JOIN`: for a gate coordinator child its round-result path, for a developer child with no artifact its worktree path and branch\)/s);
+  assert.match(text, /hand-back the harness forces while a child runs carries the same list and states that it is interim/);
+});
+
+test("MAIN-AGENT-COORDINATOR-REPORT-READ has two harness-neutral bullets", async () => {
+  const text = await rule(READ);
+  const bullets = text.split("\n").filter((l) => l.startsWith("- Every harness:"));
+  assert.equal(bullets.length, 2);
+  assert.match(bullets[0], /lists children in flight is interim.*status, not a result.*re-dispatch a listed child.*next report/s);
+  assert.match(bullets[1], /second hand-back.*already consumed.*run state unchanged.*duplicate.*reads the state.*acts on nothing.*relays nothing/s);
+});
+
+test("the harness-neutral read bullets sit outside Claude Code only text (Pi and Claude Code parity)", async () => {
+  const lines = (await rule(READ)).split("\n");
+  const neutral = lines.filter((l) => l.startsWith("- Every harness:"));
+  assert.equal(neutral.length, 2);
+  for (const l of neutral) assert.ok(!/Claude Code only/.test(l));
+  assert.ok(!/Claude Code only/.test(lines[1] ?? ""), "the rule header is not Claude Code only");
+  assert.ok(lines.some((l) => l.startsWith("- Claude Code:")), "Claude bullets are prefixed");
 });
 
 test("both agent files cite the hand-back rule and embed no rule body", async () => {

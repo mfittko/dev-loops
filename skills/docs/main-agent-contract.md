@@ -238,11 +238,14 @@ The rule binds the coordinator on every harness, so it stays outside the section
 - Every hand-back names the last relayed message it consumed, by first line and arrival time, or states that it consumed none.
 
 <!-- rule: MAIN-AGENT-COORDINATOR-REPORT-READ -->
-`MAIN-AGENT-COORDINATOR-REPORT-READ`: Claude Code only. When a coordinator notification says the result is "not repeated here", or the coordinator went idle without a delivered report, the orchestrator reads the last assistant message of the coordinator's output file before it resumes or re-asks it.
+`MAIN-AGENT-COORDINATOR-REPORT-READ`: The orchestrator reads a coordinator's report before it acts on it.
 
-- The orchestrator sends all decisions for one block in one message.
-- The orchestrator reads the latest hand-back before it re-instructs.
-- On the next notification of a reporter that named children in flight, read its output file before acting.
+- Claude Code: When a coordinator notification says the result is "not repeated here", or the coordinator went idle without a delivered report, the orchestrator reads the last assistant message of the coordinator's output file before it resumes or re-asks it.
+- Claude Code: The orchestrator sends all decisions for one block in one message.
+- Claude Code: The orchestrator reads the latest hand-back before it re-instructs.
+- Claude Code: On the next notification of a reporter that named children in flight, read its output file before acting.
+- Every harness: A hand-back that lists children in flight is interim. The orchestrator relays it as a status, not a result, does not re-dispatch a listed child, and waits for the reporter's next report.
+- Every harness: A second hand-back from a coordinator whose report the orchestrator already consumed, with the run state unchanged, is a duplicate. The orchestrator reads the state, acts on nothing and relays nothing.
 
 <!-- pi-only -->
 > **Absolute read-only boundary (Pi).** The main agent must never mutate files tracked by the repository.
