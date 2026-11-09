@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.11-pre.1
+
+### Added
+
+- `scripts/docs/prose-inventory.mjs` (`prose:inventory`) prints a byte table and an obligation inventory between a base revision and the head for prose condense slices (#3074)
+- `RELEASE-POST-RELEASE-RECURRING-STEPS` lists the five post-release issues in order, and four skills carry a harness-neutral `compatibility` line (#3074)
+
+### Changed
+
+- In-flight reports name each `joinRef`; a hand-back that lists children in flight is interim and a repeat of a consumed one is a duplicate (#1963)
+- `RELEASE-POST-RELEASE-RECURRING-STEPS` now runs prose cleanup first (#3074)
+- `scripts/docs/prose-inventory.mjs` keeps a sentence together after `vs.` and ignores an inherited `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` (#3074)
+
+### Fixed
+
+- One operator-owned-line registry makes every comment writer refuse the approve, waiver and Copilot operator lines (#2410)
+- Gate writers wrap an operator-owned phrase in reviewer or judge free text in a code span instead of refusing the round; the no-core gate verdict fallback keeps the refusal (#2410)
+- Pre-push delta: lifecycle refusals become findings, one docs validator list, same-candidate re-emission and handback refusal (#2447)
+- `loop gate-coordination` returns `resolve_merge_conflicts` with `base_stale_integrate_first` instead of a gate-run action when the PR head lacks `origin/<base>` (#2885)
+- A PR-body-only edit keeps the gate briefing hash: the body is a separate pr-body read and a same-head rebuild re-runs only the body-reading angles (#3080)
+- The judge work order refuses a pinned PR body that differs from the live body and names both digests (#3080)
+- A stale runner claim names its run in the gate_evidence failure instead of a bare stale_runner (#3080)
+- A Copilot body finding that the judge receives is a ledger cluster the judge must dispose, so an undisposed verdict fails closed instead of composing clean (#3080)
+- The findings-log writer and judge-pass persist one verdict for an acted blocking Copilot body cluster, and the writer refuses a verdict whose judge plan is missing, foreign or unbound (#3080)
+- The cap-round ledger comes from retained rounds and the body-only rebuild validates artifacts and reads body-reading angles from the angle config (#3080)
+- Bounded waits cap one invocation at about 170 s and return `outcome: "pending"` with a runnable `reissue` command, so Claude Code no longer moves a wait to the background at 180 s (#3099)
+- The ADR tripwire waiver command accepts a slice PR that links its tracker issue with Refs (#3114)
+- Reviewer-only pre-push delta reads the PR base, covers gitlinks and remerge diffs, uses run-bound `<baseline>-<candidate>-<runId>.patch`, and cites `PRE-PUSH-DELTA-RESIDUE` on refusal (#3124)
+- After the draft_gate cap round, the gate readers share one draft-gate fact and one exit; a wrong-checkout run refuses `toolchain_head_mismatch`; a sealed `needs_fix` record is taken over (#3139)
+- `--jq` on view-issue, view-pr and list-issues: a path matching no field exits 2; view-issue and view-pr resolve against the requested fields. edit-issue refuses an empty or `null` body (#3146)
+- Skill and command text on Claude Code now says the main session dispatches the `dev-loops:dev-loop` coordinator, which runs the loop steps; a contract test fails on "run directly" wording (#3147)
+- A judge round with a pinned Copilot review body no longer fails with a spec-authority index out of range; both validators drop a decision at the pinned cluster (#3148)
+
 ## 1.0.10
 
 ### Added
