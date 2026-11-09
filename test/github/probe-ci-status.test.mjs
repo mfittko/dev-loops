@@ -1224,12 +1224,11 @@ test("probe-ci-status warns on stderr for deprecated --timeout-ms", () => {
   assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
 });
 
-test("probe-ci-status --baseline-sha accepts a 40- or 64-hex SHA and rejects empty, blank, short and uppercase values", () => {
+test("probe-ci-status --baseline-sha accepts a 40-hex SHA and rejects empty, blank, short, 64-hex and uppercase values", () => {
   const base = ["--repo", "owner/repo", "--pr", "7"];
   assert.equal(parseCiWatchCliArgs([...base, "--baseline-sha", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]).baselineSha, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-  assert.equal(parseCiWatchCliArgs([...base, "--baseline-sha", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]).baselineSha, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
-  for (const bad of ["", " ", "abc123", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".toUpperCase()]) {
-    assert.throws(() => parseCiWatchCliArgs([...base, "--baseline-sha", bad]), /--baseline-sha must be a full 40- or 64-character lowercase hex SHA|Missing value for --baseline-sha/, JSON.stringify(bad));
+  for (const bad of ["", " ", "abc123", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".toUpperCase()]) {
+    assert.throws(() => parseCiWatchCliArgs([...base, "--baseline-sha", bad]), /--baseline-sha must be a full 40-character lowercase hex SHA|Missing value for --baseline-sha/, JSON.stringify(bad));
   }
 });
 

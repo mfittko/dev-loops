@@ -184,12 +184,11 @@ test("wait-pr-checks carries the stall start in the re-issue and the resumed cal
   assert.equal(stuck.status, "stuck");
 });
 
-test("wait-pr-checks --baseline-sha accepts a 40- or 64-hex SHA and rejects empty, blank, short and uppercase values", () => {
+test("wait-pr-checks --baseline-sha accepts a 40-hex SHA and rejects empty, blank, short, 64-hex and uppercase values", () => {
   const base = ["--repo", "owner/repo", "--pr", "7"];
   assert.equal(parseWaitPrChecksCliArgs([...base, "--baseline-sha", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]).baselineSha, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-  assert.equal(parseWaitPrChecksCliArgs([...base, "--baseline-sha", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]).baselineSha, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
-  for (const bad of ["", " ", "abc123", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".toUpperCase()]) {
-    assert.throws(() => parseWaitPrChecksCliArgs([...base, "--baseline-sha", bad]), /--baseline-sha must be a full 40- or 64-character lowercase hex SHA|Missing value for --baseline-sha/, JSON.stringify(bad));
+  for (const bad of ["", " ", "abc123", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".toUpperCase()]) {
+    assert.throws(() => parseWaitPrChecksCliArgs([...base, "--baseline-sha", bad]), /--baseline-sha must be a full 40-character lowercase hex SHA|Missing value for --baseline-sha/, JSON.stringify(bad));
   }
 });
 

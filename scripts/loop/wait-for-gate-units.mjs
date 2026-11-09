@@ -146,6 +146,9 @@ export const ARTIFACT_TIMEOUT_REMEDY = "Delta reviewer and commit_only fixer: re
 
 export const ARTIFACT_STALE_REMEDY = "The artifact predates --after, so it is a leftover. Fixer: check that --after and the artifact path both come from the current emission (the latest emitted plan and its joinRef); if not, re-emit the work order and join the new joinRef. Delta reviewer: use a fresh --result path and pass the current input.patchPath as --after. Otherwise re-run the original command with its original --timeout, never the last reissue; after three consecutive timeout outcomes, stop and return the typed observation units_stalled. Full-phase fixer: follow COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK instead of re-running.";
 
+// A capped stale join is pending and runs reissue unchanged, so its remedy carries only the stale-detection checks.
+export const ARTIFACT_STALE_PENDING_REMEDY = "The artifact predates --after, so it is a leftover. Fixer: check that --after and the artifact path both come from the current emission (the latest emitted plan and its joinRef); if not, re-emit the work order and join the new joinRef. Delta reviewer: use a fresh --result path and pass the current input.patchPath as --after.";
+
 // Any hand-back type, with no writer obligation on the child: the artifact parses as JSON and carries its terminal field
 // (`outcome`, as a DeltaPrePushReviewResult does), or, with no terminal field, stays byte-identical for ARTIFACT_STABLE_MS.
 // A missing, empty or non-JSON file is pending (a partial write reads as not done on this tick); any other read failure propagates.
@@ -226,7 +229,7 @@ export async function main(argv = process.argv.slice(2), { wait = waitForUnits }
     result = await wait({ ...options, timeoutMs });
     if (result.outcome === "timeout" && remainingMs > 0) {
       const { remedy, ...rest } = result;
-      result = { ...rest, ...(remedy && remedy !== ARTIFACT_TIMEOUT_REMEDY ? { remedy } : {}), ...pendingFields({ remainingMs, command: scriptCommand(import.meta.url), argv: absolutePathArgs(argv) }) };
+      result = { ...rest, ...(remedy && remedy !== ARTIFACT_TIMEOUT_REMEDY ? { remedy: remedy === ARTIFACT_STALE_REMEDY ? ARTIFACT_STALE_PENDING_REMEDY : remedy } : {}), ...pendingFields({ remainingMs, command: scriptCommand(import.meta.url), argv: absolutePathArgs(argv) }) };
     }
   } catch (error) {
     result = { ok: false, error: error instanceof Error ? error.message : String(error) };

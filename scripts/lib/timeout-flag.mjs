@@ -35,10 +35,10 @@ export function resolveTimeoutMs({ timeout, timeoutMs }, { warn = (m) => process
 
 // Issue 3099: a subagent's foreground Bash call is moved to the background after 180 s,
 // so one invocation waits at most WAIT_CAP_MS and a longer request is split across re-issues.
-/** Validate the internal --baseline-sha value: a full 40- or 64-character lowercase hex SHA. */
+/** Validate the internal --baseline-sha value: a full 40-character lowercase hex SHA. */
 export function parseBaselineSha(value, parseError) {
   const sha = value.trim();
-  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(sha)) throw parseError("--baseline-sha must be a full 40- or 64-character lowercase hex SHA");
+  if (!/^[0-9a-f]{40}$/u.test(sha)) throw parseError("--baseline-sha must be a full 40-character lowercase hex SHA");
   return sha;
 }
 

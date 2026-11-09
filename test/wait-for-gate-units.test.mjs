@@ -8,7 +8,7 @@ import { test } from "bun:test";
 import { resolveRepoRoot } from "../scripts/loop/_repo-root-resolver.mjs";
 import { pullReceiptPath } from "../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../cli/index.mjs";
-import { ARTIFACT_STALE_REMEDY, ARTIFACT_TIMEOUT_REMEDY, main, parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
+import { ARTIFACT_STALE_PENDING_REMEDY, ARTIFACT_STALE_REMEDY, ARTIFACT_TIMEOUT_REMEDY, main, parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
 import { captureStderr, withTempDir } from "./_helpers.mjs";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/loop/wait-for-gate-units.mjs", import.meta.url));
@@ -394,11 +394,12 @@ test("a --timeout at or under the cap and --timeout 0 stay timeout", async () =>
   assert.equal((await runMain([...argv, "--timeout", "0"], stub)).result.outcome, "timeout");
 });
 
-test("a capped --artifact wait on a stale artifact keeps ARTIFACT_STALE_REMEDY and drops ARTIFACT_TIMEOUT_REMEDY", async () => {
+test("a capped --artifact wait on a stale artifact carries ARTIFACT_STALE_PENDING_REMEDY (no re-run sentence) and drops ARTIFACT_TIMEOUT_REMEDY", async () => {
   const argv = ["--artifact", "/x/report.json", "--after", "/x/ref", "--timeout", "540"];
   const stale = await runMain(argv, async () => ({ ok: true, outcome: "timeout", stale: true, remedy: ARTIFACT_STALE_REMEDY }));
   assert.equal(stale.result.outcome, "pending");
-  assert.equal(stale.result.remedy, ARTIFACT_STALE_REMEDY);
+  assert.equal(stale.result.remedy, ARTIFACT_STALE_PENDING_REMEDY);
+  assert.doesNotMatch(stale.result.remedy, /re-run|units_stalled/);
   const fresh = await runMain(argv, async () => ({ ok: true, outcome: "timeout", remedy: ARTIFACT_TIMEOUT_REMEDY }));
   assert.equal(fresh.result.outcome, "pending");
   assert.equal(fresh.result.remedy, undefined);
