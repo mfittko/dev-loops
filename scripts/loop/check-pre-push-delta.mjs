@@ -94,7 +94,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
                           Needs --baseline (an ancestor of the worktree HEAD), --pr-head (equal to the worktree HEAD), --spec-identity and --result-path (input run) or --result and --invocation (result run).
                           Refuses --act-list, --threads-file, --fixer-plan, --site-coverage and --handback. The invocation bound of 3 still applies and no sequence marker is written.
                           <base> is the PR's baseRefName read from GitHub with gh pr view; an unreadable PR base refuses, with no fallback to the configured branch.
-                          Base-only merges of origin/<base> are excluded from the patch, the changed files and the stale-surface scan; a merge that is not base-only is reviewed through its PR-own commits and its resolution diff (git show --remerge-diff, appended to the patch under a "# Resolution diff of merge" heading); an octopus merge refuses (non_base_only_merge), and a PR-own gitlink path that the patch does not name refuses (gitlink_not_in_patch). A prior non-clearing record at the baseline with the same act refs, no extension and a candidate on the PR head history is taken over (its invocation count continues).
+                          Base-only merges of origin/<base> are excluded from the patch, the changed files and the stale-surface scan; a merge that is not base-only is reviewed through its PR-own commits and its resolution diff (git show --remerge-diff, appended to the patch under a "# Resolution diff of merge" heading); an octopus merge refuses (non_base_only_merge), and a PR-own gitlink path that the patch does not name refuses (gitlink_not_in_patch). A sealed non-clearing record (needs_fix) at the baseline is taken over whatever its ref set or candidate, and its invocation count continues; a sealed locally_clear record of another act set, a record with an extension and any unsealed record are refused, none with a deletion remedy except an unsealed one (unsealed_record, ADR 0261).
                           The reviewer reports ALL findings; the record is locally_clear only when the result has no medium-or-higher finding and no open residueOf finding (no skipReason) at any severity (PRE-PUSH-DELTA-RESIDUE). Run git fetch origin <PR baseRefName> first.
   --handback              The fixer handbackCheck run: waives the --findings-log requirement (it validates --site-coverage, no reviewer input is used)
   --result <path>         The reviewer's DeltaPrePushReviewResult JSON
@@ -476,9 +476,9 @@ const FIXER_REMEDY = "The cap round's open act items need a fix commit: commit i
 const CHAIN_END_REMEDY = "The cap round's act items are already cleared: run dev-loops gate extend-cap-round-chain --repo <owner/name> --pr <n> (its refusal names the reviewer-only delta and the baseline to use)";
 const REPLACEMENT_REMEDY = "node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr <this PR number> while this PR is still open";
 
-// ADR 0255 (decision 6, amended by issue 3139): why a prior record at the baseline is protected from the reviewer-only run, or null. The same act set re-runs. A non-clearing record
+// ADR 0255 (decision 6, amended by ADR 0261): why a prior record at the baseline is protected from the reviewer-only run, or null. The same act set re-runs. A non-clearing record
 // (the fixer's needs_fix) is taken over whatever its ref set or candidate: it is never clearing evidence, and the takeover continues its invocation count. Only a locally_clear
-// record of another act set stays protected, and no protected sealed record names a deletion. An unsealed record follows the same rules.
+// record of another act set stays protected, and no protected sealed record names a deletion. An unsealed record is never taken over (its content, invocation count included, is untrusted): it refuses unsealed_record (ADR 0261).
 function priorRecordRefusal(prior, { sequence, currentHead, isAncestor }) {
   if (!prior) return null;
   const offHistory = typeof prior.candidateHead !== "string" || !isAncestor(prior.candidateHead, currentHead);
@@ -611,6 +611,7 @@ export async function runCli(
       let refusal;
       try { priorRecord = readRecord(root, baselineHead); } catch { refusal = { reason: "is unreadable or not JSON" }; }
       refusal ??= priorRecordRefusal(priorRecord, { sequence, currentHead, isAncestor: onHistory });
+      if (!refusal && priorRecord && !readSealedRecord(root, baselineHead)) refusal = { reason: "is unsealed" };
       if (refusal) {
         const unsealed = priorRecord === undefined || !readSealedRecord(root, baselineHead);
         throw new Error(`reviewer-only: ${unsealed ? "unsealed_record: " : ""}the delta record for baseline ${baselineHead} ${refusal.reason} and is never overwritten. ${unsealed || !refusal.remedy ? `${unsealed ? "Its seal does not match; if it is a leftover" : "If it is stale"}${refusal.reason.includes("history") ? " (run git fetch origin <candidate> first; if it is still absent)" : ""}, run \`rm -f ${shellQuote(gateDeltaRecordPath(root, baselineHead))} ${shellQuote(`${gateDeltaRecordPath(root, baselineHead)}.seal`)}\` and rerun (this restarts the invocation count), or restart on a replacement PR: ${REPLACEMENT_REMEDY}` : refusal.remedy}`);

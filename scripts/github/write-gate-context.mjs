@@ -107,8 +107,8 @@ export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied
     ? "the PR is still draft"
     : "no clean draft_gate verdict exists for this PR";
   const exit = capRoundFailure && isDraft !== true ? capRoundExit(capRoundFailure, { repo, pr }) : null;
-  const capRound = exit ? ` The cap-round proof failed with condition ${capRoundFailure}; its one exit: ${exit.agentRemedy ? `run \`${exit.agentRemedy.command}\`` : `blockedOn ${exit.blockedOn}`}. When the PR never reached the draft_gate cap round, the condition does not apply.` : "";
-  return `Refusing to build gate context for pre_approval_gate on ${repo}#${pr}: ${why}, so the draft gate is not satisfied.${capRound} Run the draft gate to clean and mark the PR ready for review before the pre_approval gate. Legal next action: run_draft_gate.`;
+  if (exit) return `Refusing to build gate context for pre_approval_gate on ${repo}#${pr}: the cap-round proof failed with condition ${capRoundFailure}; its one exit: ${exit.agentRemedy ? `run \`${exit.agentRemedy.command}\`` : `blockedOn ${exit.blockedOn}`}.`;
+  return `Refusing to build gate context for pre_approval_gate on ${repo}#${pr}: ${why}, so the draft gate is not satisfied. Run the draft gate to clean and mark the PR ready for review before the pre_approval gate. Legal next action: run_draft_gate.`;
 }
 
 /**

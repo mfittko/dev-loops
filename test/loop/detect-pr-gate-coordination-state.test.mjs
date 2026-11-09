@@ -16,9 +16,9 @@ import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copilot-convergence-carry.mjs";
 import { buildFindingMarker, countUnresolvedGateAuthoredThreadsFromRawNodes } from "../../scripts/github/_gate-finding-surface.mjs";
-import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
+import { parseUpsertCheckpointVerdictCliArgs, renderGateReviewCommentBody, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { foldDraftGateSatisfied, isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
-import { resolveDraftCapRoundFact } from "../../scripts/github/write-gate-context.mjs";
+import { main as writeGateContextMain, resolveDraftCapRoundFact } from "../../scripts/github/write-gate-context.mjs";
 import { evaluateToolchainAuthority, TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { evaluateMergePreconditions } from "@dev-loops/core/loop/merge-approval";
 import { emitResult } from "../../scripts/lib/jq-output.mjs";
@@ -1020,6 +1020,7 @@ test("detect-pr-gate-coordination-state output equals a direct evaluatePrGateCoo
       context,
       maxCopilotRounds,
       draftGateConfig,
+      draftCapRoundFailure: parsed.capRoundFailure ?? null,
       preApprovalGateConfig,
       postConvergenceSignificantChange,
       designerReviewExempt: deriveUiDesignerReviewExempt({
@@ -4376,7 +4377,8 @@ async function seedCapFixedRepo(repoRoot, { headSha, seal = true }) {
   if (seal) await writeFile(path.join(deltaDir, `${capHead}.json.seal`), `${createHash("sha256").update(record).digest("hex")}\n`, "utf8");
 }
 
-async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody, files }) {
+async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody, files, threads = 0 }) {
+  const threadNodes = Array.from({ length: threads }, (_, i) => ({ id: `PRRT_${i}`, isResolved: false, isOutdated: false, path: "src/scope.mjs", line: 4, comments: { nodes: [{ id: `PRRC_${i}`, databaseId: 9000 + i, body: `${buildFindingMarker({ fp: String(i).repeat(16), severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why?`, author: { login: "dev-loops-gate[bot]", __typename: "Bot" } }] } }));
   return writeGhStub(tempDir, [
     {
       stdout: JSON.stringify({
@@ -4386,7 +4388,8 @@ async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody, f
       }) + "\n",
     },
     { stdout: "{\"users\":[]}\n" },
-    { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+    { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: threadNodes, pageInfo: { hasNextPage: false } } } } } }) },
+    ...(threads ? [{ assertArgs: ["api", "user"], stdout: jsonLine({ login: "dev-loops-gate[bot]" }) }] : []),
     { stdout: jsonLine({ headRefOid: headSha }) },
     { stdout: jsonLine([[{ id: 11, body: draftGateBody, html_url: "https://example.test/comment/11", updated_at: "2026-05-31T20:00:00Z" }]]) },
     { stdout: "[]\n" },
@@ -4643,7 +4646,7 @@ const PR_HEAD = "abc1234567".repeat(4);
 const toolchainSeams = (root, { rootHead = "d".repeat(40), contains = false, worktrees = [] } = {}) => ({
   toolchainRoot: root,
   originSlug: () => "owner/repo",
-  git: (_cwd, args) => { if (args[0] === "rev-parse") return rootHead; if (contains) return ""; throw new Error("not an ancestor"); },
+  git: (_cwd, args) => { if (args[1] === "--show-toplevel") return root; if (args[0] === "rev-parse") return rootHead; if (contains) return ""; throw new Error("not an ancestor"); },
   worktrees: () => [{ path: root, head: rootHead }, ...worktrees],
 });
 
@@ -4693,3 +4696,69 @@ test("detect-pr-gate-coordination-state (issue 3139 AC4): emits the toolchain fi
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("evaluateToolchainAuthority (issue 3139 AC4): a dev-loops package nested in a consumer git repository whose origin matches the PR repository never refuses", async () => {
+  const consumer = await mkdtemp(path.join(os.tmpdir(), "dev-loops-nested-"));
+  try {
+    initGitFixture(consumer, { remote: "https://github.com/owner/repo.git" });
+    const nested = path.join(consumer, "node_modules", "dev-loops");
+    await mkdir(path.join(nested, "scripts"), { recursive: true });
+    await writeFile(path.join(nested, "package.json"), JSON.stringify({ name: "dev-loops" }), "utf8");
+    const result = evaluateToolchainAuthority(
+      { repo: "owner/repo", pr: 10, prState: "OPEN", prHeadSha: PR_HEAD, changedFiles: ["scripts/x.mjs"] },
+      { toolchainRoot: nested, originSlug: () => "owner/repo" },
+    );
+    assert.equal(result.selfHosting, false);
+    assert.equal(result.refusal, null);
+  } finally {
+    await rm(consumer, { recursive: true, force: true });
+  }
+});
+
+// Issue 3139 AC1: the three draft-gate satisfaction readers agree on one seeded fixture per state.
+for (const { name, isDraft, seal, verdict, threads = 0, seed = true, satisfied } of [
+  { name: "draft", isDraft: true, seal: true, verdict: "blocked", satisfied: false },
+  { name: "ready with clean evidence", isDraft: false, seal: false, verdict: "clean", satisfied: true },
+  { name: "ready with the cap round fixed and 0 gate threads", isDraft: false, seal: true, verdict: "blocked", satisfied: true },
+  { name: "ready with the cap round fixed and open gate threads", isDraft: false, seal: true, verdict: "blocked", threads: 2, satisfied: true },
+  { name: "ready with an unsealed record (no_clearing_record)", isDraft: false, seal: false, verdict: "blocked", satisfied: false },
+  { name: "ready with no cap-round ledger (cap_round_unresolved)", isDraft: false, seal: true, verdict: "blocked", seed: false, satisfied: false },
+]) {
+  test(`issue 3139 AC1: detector, write-gate-context and upsert-checkpoint-verdict agree on draftGateSatisfied for ${name}`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-ac1-"));
+    const priorExitCode = process.exitCode;
+    const origErr = process.stderr.write;
+    try {
+      const headSha = "abc1234567".repeat(4);
+      if (seed) await seedCapFixedRepo(tempDir, { headSha, seal });
+      else initGitFixture(tempDir, { branch: "main" });
+      const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict, findingsSummary: verdict === "clean" ? "no blocking issues found" : "round_cap_reached", nextAction: verdict === "clean" ? "mark ready for review" : "stop" });
+      const runtime = async () => buildMockRuntime(await capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody: body, threads }), { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE });
+
+      const detected = (await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, await runtime())).draftGateAlreadySatisfied;
+
+      const chunks = [];
+      process.exitCode = undefined;
+      process.stderr.write = (chunk) => { chunks.push(String(chunk)); return true; };
+      await writeGateContextMain(["--repo", "owner/repo", "--pr", "10", "--gate", "pre_approval_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", "main"], {
+        repoRoot: tempDir,
+        run: async () => { throw new Error("stop after the ordering check"); },
+        loadCoordination: async () => ({ currentHeadSha: headSha, prData: { isDraft, baseRefName: "main" }, gateEvidence: { draftGateSatisfied: verdict === "clean" } }),
+      });
+      process.stderr.write = origErr;
+      const ordering = !/Refusing to build gate context for pre_approval_gate/.test(chunks.join(""));
+
+      const rt = await runtime();
+      const upserted = await upsertCheckpointVerdict(
+        parseUpsertCheckpointVerdictCliArgs(["--repo", "owner/repo", "--pr", "10", "--gate", "draft_gate", "--head-sha", headSha, "--verdict", "clean", "--findings-summary", "no issues found", "--next-action", "mark ready for review", "--inline-reason", "ac1 fixture", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}']),
+        { env: {}, repoRoot: tempDir, runChild: rt.runChild },
+      ).then((result) => result.draftGateAlreadySatisfied === true, () => false);
+
+      assert.deepEqual({ detected, ordering, upserted }, { detected: satisfied, ordering: satisfied, upserted: satisfied });
+    } finally {
+      process.stderr.write = origErr;
+      process.exitCode = priorExitCode;
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}

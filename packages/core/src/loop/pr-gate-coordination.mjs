@@ -887,7 +887,7 @@ const DRAFT_GATE_EVIDENCE_GUARDED_BOUNDARIES = Object.freeze([
   PR_CHECKPOINT.FINAL_APPROVAL_READY,
 ]);
 
-function applyDraftGateEvidenceGuard(result, { prDraft = false } = {}) {
+function applyDraftGateEvidenceGuard(result, { prDraft = false, input = {} } = {}) {
   if (!result || typeof result !== "object") {
     return result;
   }
@@ -932,6 +932,8 @@ function applyDraftGateEvidenceGuard(result, { prDraft = false } = {}) {
       ? "Clean draft_gate evidence is required before merge (no gate exemptions, #579). A draft_gate comment exists but is not clean; convert the PR back to draft before re-running draft_gate, or clear the existing evidence before running reconcile_draft_gate."
       : "Clean draft_gate evidence is required before merge (no gate exemptions, #579). No visible clean draft_gate comment exists for this PR; run reconcile_draft_gate before proceeding.",
     gateEvidenceNote: null,
+    // Issue 3139: a failed cap-round proof on a ready PR carries the same typed condition and exit the write-gate-context refusal names.
+    ...(input.draftCapRoundFailure ? { capRoundFailure: input.draftCapRoundFailure, ...capRoundExit(input.draftCapRoundFailure, input) } : {}),
   };
 }
 
@@ -1094,21 +1096,21 @@ function evaluateWithTitleGuard(input = {}) {
 
   const unsettledReviewResult = applyUnsettledCopilotReviewEntryGuard(input, result);
   if (unsettledReviewResult) {
-    return applyDraftGateEvidenceGuard(unsettledReviewResult, { prDraft });
+    return applyDraftGateEvidenceGuard(unsettledReviewResult, { prDraft, input });
   }
 
   const prTitle = typeof input.prTitle === "string" ? input.prTitle : "";
   // Draft PRs may legitimately carry a WIP title; the marker only blocks once
   // the PR has left draft and is at a pre-approval/final-approval boundary.
   if (prDraft || !result || typeof result !== "object") {
-    return applyDraftGateEvidenceGuard(result, { prDraft });
+    return applyDraftGateEvidenceGuard(result, { prDraft, input });
   }
   if (!TITLE_MARKER_GUARDED_BOUNDARIES.includes(result.gateBoundary)) {
-    return applyDraftGateEvidenceGuard(result, { prDraft });
+    return applyDraftGateEvidenceGuard(result, { prDraft, input });
   }
   const markers = findBlockingTitleMarkers(prTitle);
   if (markers.length === 0) {
-    return applyDraftGateEvidenceGuard(result, { prDraft });
+    return applyDraftGateEvidenceGuard(result, { prDraft, input });
   }
 
   return applyDraftGateEvidenceGuard(buildTitleMarkerBlockedResult({
@@ -1121,7 +1123,7 @@ function evaluateWithTitleGuard(input = {}) {
     conflictFiles: result.conflictFiles ?? [],
     markers,
     refinementArtifact: result.refinementArtifact ?? null,
-  }), { prDraft });
+  }), { prDraft, input });
 }
 
 /**

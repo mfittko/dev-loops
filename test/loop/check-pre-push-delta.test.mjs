@@ -1387,13 +1387,17 @@ function seedFixerRecord(repo, { sameActSet, ...patch } = {}) {
   return recordPath;
 }
 
-test("the reviewer-only run takes over a prior non-clearing record with another actSetId but the same refs and continues its invocation count", async () => {
+test("the reviewer-only run takes over a sealed non-clearing record with another actSetId and continues its invocation count, and refuses the same record unsealed (its invocation is never trusted)", async () => {
   for (const unsealed of [false, true]) {
     const repo = reviewerOnlyRepo();
     try {
       await reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], status: "not_resolved" });
       const recordPath = seedFixerRecord(repo, { candidateHead: repo.baseline });
-      if (unsealed) fs.rmSync(`${recordPath}.seal`);
+      if (unsealed) {
+        fs.rmSync(`${recordPath}.seal`);
+        await assert.rejects(reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], invocation: 2 }), /unsealed_record: .*is unsealed and is never overwritten/);
+        continue;
+      }
       await assert.rejects(reviewerOnlyRun(repo, {}, { findings: [CAP_ACT] }), /--invocation 1 is not the next invocation 2/);
       const { record } = await reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], invocation: 2 });
       assert.deepEqual({ o: record.outcome, i: record.invocation, same: record.actSetId !== "fixer-act-set" }, { o: "locally_clear", i: 2, same: true });

@@ -10365,7 +10365,7 @@ test("a body-only rebuild accepts an artifact whose angle differs only by case o
 // Issue 3139 AC2: a pre_approval_gate refusal on a ready PR names the typed cap-round condition and the one exit the coordination result prints for it.
 test("pre_approval_gate refusal on a ready PR names each cap-round failure condition and its coordination exit (issue 3139 AC2)", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
-  const base = { pr: 9, repo: "owner/repo", currentHeadSha: headSha, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftRoundRefused: true };
+  const base = { pr: 9, repo: "owner/repo", currentHeadSha: headSha, prDraft: false, lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success" };
   const priorExitCode = process.exitCode;
   const origErr = process.stderr.write;
   try {
@@ -10385,43 +10385,6 @@ test("pre_approval_gate refusal on a ready PR names each cap-round failure condi
       assert.equal(process.exitCode, 1, condition);
       assert.ok(text.includes(`condition ${condition};`), `${condition}: ${text}`);
       assert.ok(text.includes(`its one exit: ${exit}.`), `${condition}: ${text}`);
-    }
-  } finally {
-    process.stderr.write = origErr;
-    process.exitCode = priorExitCode;
-    await rm(repoRoot, { recursive: true, force: true });
-  }
-});
-
-// Issue 3139 AC1: the ordering check folds draft-gate satisfaction with the evaluator's fold, so a ready cap-fixed PR with open gate threads passes the ordering check too.
-test("the pre_approval_gate ordering check and evaluatePrGateCoordination agree on draft-gate satisfaction across states (issue 3139 AC1)", async () => {
-  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
-  const priorExitCode = process.exitCode;
-  const origErr = process.stderr.write;
-  try {
-    for (const { isDraft, evidence, fixed, threads } of [
-      { isDraft: true, evidence: false, fixed: false, threads: 0 },
-      { isDraft: false, evidence: true, fixed: false, threads: 0 },
-      { isDraft: false, evidence: false, fixed: true, threads: 0 },
-      { isDraft: false, evidence: false, fixed: true, threads: 2 },
-      { isDraft: false, evidence: false, fixed: false, threads: 0 },
-    ]) {
-      const marker = { visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true };
-      const coordinated = evaluatePrGateCoordination({
-        pr: 9, repo: "owner/repo", currentHeadSha: "abc123456789", prDraft: isDraft, lifecycleState: isDraft ? STATE.PR_DRAFT : STATE.READY_TO_REREQUEST_REVIEW, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success",
-        draftGate: evidence ? marker : undefined, draftGateMarker: evidence ? marker : undefined, draftCapRoundFixed: fixed, unresolvedGateThreadCount: threads,
-      });
-      const chunks = [];
-      process.exitCode = undefined;
-      process.stderr.write = (chunk) => { chunks.push(String(chunk)); return true; };
-      await main(["--repo", "owner/repo", "--pr", "9", "--gate", "pre_approval_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha], {
-        repoRoot,
-        run: stubGhRun,
-        loadCoordination: async () => ({ currentHeadSha: headSha, unresolvedGateThreadCount: threads, prData: { isDraft, baseRefName: "main" }, gateEvidence: { draftGateSatisfied: evidence && threads === 0 } }),
-        resolveCapRoundFixed: async (_options, { onFailure }) => { if (!fixed) onFailure("no_clearing_record"); return fixed ? { log: {} } : null; },
-      });
-      const refused = /draft gate is not satisfied/.test(chunks.join(""));
-      assert.equal(!refused, coordinated.draftGateAlreadySatisfied, JSON.stringify({ isDraft, evidence, fixed, threads }));
     }
   } finally {
     process.stderr.write = origErr;

@@ -221,7 +221,12 @@ export function evaluateToolchainAuthority({ repo, pr, prState, prHeadSha, chang
   if (!isDevLoopsCheckout(toolchainRoot) || String(prState ?? "").toUpperCase() !== "OPEN" || !repoSlugEquals(originSlug(toolchainRoot), repo)) return none;
   if (!(changedFiles ?? []).some((file) => TOOLCHAIN_PATH_RE.test(file))) return none;
   let headSha = null;
-  try { headSha = git(toolchainRoot, ["rev-parse", "HEAD"]); } catch { return none; }
+  try {
+    // An installed package nested in a consumer repository resolves git to that repository: only a root that is its own git top level is a checkout.
+    const real = (p) => { try { return realpathSync(p); } catch { return path.resolve(p); } };
+    if (real(git(toolchainRoot, ["rev-parse", "--show-toplevel"])) !== real(toolchainRoot)) return none;
+    headSha = git(toolchainRoot, ["rev-parse", "HEAD"]);
+  } catch { return none; }
   const result = { root: toolchainRoot, headSha, selfHosting: true, refusal: null };
   const onHistory = () => { try { git(toolchainRoot, ["merge-base", "--is-ancestor", prHeadSha, "HEAD"]); return true; } catch { return false; } };
   if (typeof prHeadSha !== "string" || prHeadSha === headSha || onHistory()) return result;
