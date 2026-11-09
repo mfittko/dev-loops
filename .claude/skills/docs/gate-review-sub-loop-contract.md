@@ -144,7 +144,7 @@ subject. It auto-resolves only additive CHANGELOG conflicts and otherwise fails 
 fail-closed result the coordinator stops and reports, and it dispatches no round. The
 coordinator MUST push the merge before it dispatches the round, so the round reviews the pushed
 head. On a ready PR, the `pre_approval_gate` re-runs on the new head per
-`GATE-EXEC-REGATE-MANDATORY`. An integrate-only base move keeps carry-forward eligibility per `GATE-EXEC-ANGLE-CARRY-FORWARD` (`deltaComplete`). ADR 0096 records this rule.
+`GATE-EXEC-REGATE-MANDATORY`. An integrate-only base move keeps carry-forward eligibility per `GATE-EXEC-ANGLE-CARRY-FORWARD` (`deltaComplete`). ADR 0096 records this rule. `loop gate-coordination` returns `resolve_merge_conflicts` with `base_stale_integrate_first` before a gate-run action at a stale head.
 
 <!-- rule: GATE-EXEC-BASE-MERGE-VERDICT-CARRY -->
 `GATE-EXEC-BASE-MERGE-VERDICT-CARRY`: A head advance that only integrated the base branch keeps
