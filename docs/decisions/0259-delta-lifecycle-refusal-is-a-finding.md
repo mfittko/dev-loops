@@ -13,10 +13,10 @@ In the pre-push delta `--result` run, a lifecycle or docs-validator refusal exit
 ## Decision
 
 1. In the `--result` run, a lifecycle or docs-validator refusal becomes a `lifecycle: true` medium finding in the sealed record. The record seals `needs_fix` and the loop stays in the fixer route.
-2. Infrastructure errors and a dirty tracked tree keep exit 2.
+2. Infrastructure errors and a dirty tree (a tracked edit or an untracked non-ignored file) keep exit 2.
 3. A same-candidate `commit_only` re-emission lists the open tasks and requires a new commit on top of HEAD before the next emission.
 4. A hand-back at the reviewed candidate with open lifecycle or residue work is refused.
 
 ## Consequences
 
-A refusal that a fixer can clear no longer stops the loop. The sealed record names each open task, so the next fixer pass has a concrete list. Exit 2 keeps its meaning of an infrastructure fault. A later slice of issue 2447 amends ADR 0094 in the contract docs with a separate record.
+A refusal that a fixer can clear no longer stops the loop. The sealed record names each open task, so the next fixer pass has a concrete list. Exit 2 keeps its meaning of an infrastructure fault. The contract paragraphs in `skills/docs/pr-lifecycle-contract.md` and `skills/docs/pre-pr-review-contract.md` state this route and link here. The reviewer-only route stays under ADR 0255.

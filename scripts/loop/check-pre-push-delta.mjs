@@ -513,10 +513,10 @@ async function lifecycleRefusals({ options, ownPaths, changedPaths, changelog, d
   let optedIn = false;
   try { optedIn = pkg.status === 0 && String(JSON.parse(pkg.stdout).scripts?.["test:docs"] ?? "").includes(DOCS_VALIDATOR_MODULE); } catch { /* not JSON: no opt-in */ }
   if (optedIn) {
-    // The validators read the working tree: a tracked edit not in HEAD could hide a committed refusal, so the reviewed commit must be the tree.
-    const dirty = spawnSync("git", ["-C", root, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+    // The validators read the working tree: a tracked edit or an untracked non-ignored file not in HEAD could change the verdict, so the reviewed commit must be the tree.
+    const dirty = spawnSync("git", ["-C", root, "status", "--porcelain"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
     if (dirty.status !== 0) throw new Error(`docs_validators_worktree_unreadable: git status failed in ${root}: ${dirty.stderr.trim()}`);
-    if (dirty.stdout.trim()) throw new Error(`docs_validators_dirty_worktree: the docs validators judge the working tree, and tracked files differ from HEAD (${dirty.stdout.trim().split("\n").slice(0, 5).join("; ")}); commit or revert them, then rerun the --result run`);
+    if (dirty.stdout.trim()) throw new Error(`docs_validators_dirty_worktree: the docs validators judge the working tree, and files differ from HEAD (${dirty.stdout.trim().split("\n").slice(0, 5).join("; ")}); commit or revert them, then rerun the --result run`);
     for (const { id, code, output, crashed } of await docsValidators({ root, git, ids: ["links", "rule-ownership", "decision-records"] })) {
       if (crashed) throw new Error(`docs validator ${id} crashed: ${output.trim()}`);
       if (code === 0) continue;
@@ -646,6 +646,13 @@ export async function runCli(
     const reportBytes = readFileSync(options.siteCoverage);
     const raw = JSON.parse(reportBytes);
     const record = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
+    if (!options.result) {
+      const recordRoot = tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree);
+      const sealed = readSealedRecord(recordRoot, sequence.reviewBaselineHead);
+      // Only the record that assertNoOpenWorkAtCandidate would act on is refused: an unsealed fix_and_rereview record at the handback head.
+      const unsealed = sealed ? null : readRecord(recordRoot, sequence.reviewBaselineHead);
+      if (unsealed?.nextStep === "fix_and_rereview" && unsealed.candidateHead === record.headSha) throw new Error(`delta_record_unsealed: a delta record exists for ${sequence.reviewBaselineHead} but carries no matching seal (a --result write may have crashed), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record`);
+    }
     if (!options.result) assertNoOpenWorkAtCandidate(readSealedRecord(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), sequence.reviewBaselineHead), { handbackHead: record.headSha, siteCoverage: record.siteCoverage ?? [], actItems: sequence.actItems });
     if (options.fixerPlan && !options.result && !options.handback && (!fixCommitted || record.headSha !== currentHead)) {
       if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(raw.headSha)) throw new Error("sequence closure requires a canonical full commit SHA in the handback");

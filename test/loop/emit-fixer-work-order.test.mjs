@@ -3230,6 +3230,18 @@ test("issue 2787 C12: a thread-route fix_and_rereview record with findings re-em
     assert.equal((await fx.emit({ ...threadsOnlyFull(fx) })).workOrder.phase, "full");
   });
 });
+test("issue 2447: the lifecycle flag survives the deltaFindings projection and renders as a marker; the thread-route prompt keeps the base-commit and lifecycle sentence", async () => {
+  await withFixture(async (fx) => {
+    const lifecycle = { lifecycle: true, severity: "medium", summary: "docs validator links refused this delta range", evidence: "docs/a.md: broken" };
+    await fx.writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix", items: [{ ref: "T1", status: "resolved" }], findings: [lifecycle, FINDING] }, { seal: true });
+    const unit = await threadsCommitOnly(fx);
+    assert.deepEqual(unit.workOrder.deltaFindings, [lifecycle, FINDING]);
+    const text = await readFile(unit.promptPath, "utf8");
+    assert.match(text, /1\. medium \[lifecycle\]: "docs validator links refused this delta range"/);
+    assert.match(text, /2\. high: "new null deref/);
+    assert.match(text, /fix every lifecycle task/);
+  });
+});
 const threadsOnlyFull = (fx) => ({ actListFile: undefined, gate: undefined, deltaResult: undefined, threadsFile: fx.files.threads, phase: "full" });
 
 test("issue 2787 C12: malformed delta findings refuse", async () => {

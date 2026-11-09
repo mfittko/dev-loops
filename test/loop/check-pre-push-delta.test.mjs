@@ -1568,7 +1568,7 @@ function openRecordFixture(findings) {
     return coverage;
   };
   const run = (coverage, extra = [], over = headAt(B)) => runDeltaCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--site-coverage", coverage, ...extra], { ...over, tmpRoot: seam.tmpRoot });
-  return { run, handback, headAt: (head) => headAt(head, seam.tmpRoot) };
+  return { run, handback, tmpRoot: seam.tmpRoot, headAt: (head) => headAt(head, seam.tmpRoot) };
 }
 const RESIDUE_FINDING = { severity: "low", summary: "same-class site left", evidence: "a.mjs:1", residueOf: "act-1", site: "s1" };
 const LIFECYCLE_FINDING = { lifecycle: true, severity: "medium", summary: "LIFECYCLE-CHANGELOG-COMPLETENESS: too long", evidence: "changes/x.md" };
@@ -1610,6 +1610,8 @@ async function docsFixture(optIn) {
   const { dir, threadsFile } = threadsFixture();
   initGitFixture(dir, { branch: "main", commit: null });
   runGitFixture(dir, ["config", "commit.gpgsign", "false"]);
+  // The gate artifacts (tmp/) and the fixture's own result files are ignored, as in a real worktree; an ignored file never refuses.
+  fs.writeFileSync(path.join(dir, ".gitignore"), "tmp/\nreview.json\ninput-result.json\n");
   fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ scripts: { "test:docs": optIn ? "bun scripts/docs/docs-validators.mjs" : "bun scripts/docs/validate-links.mjs" } }));
   runGitFixture(dir, ["add", "."]);
   runGitFixture(dir, ["commit", "-qm", "base"]);
@@ -1657,6 +1659,17 @@ test("issue 2447: the docs validators refuse (exit 2, no record) while a tracked
     assert.equal(called, false);
     assert.equal(fx.recordOf(), null);
     runGitFixture(fx.dir, ["checkout", "--", "package.json"]);
+    // An untracked non-ignored file feeds the validators too: it refuses for every form (a link target, a markdown file with a broken link, a file under docs/); an ignored tmp/ file does not.
+    for (const rel of ["docs/new.md", "notes.md"]) {
+      const file = path.join(fx.dir, rel);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, rel === "notes.md" ? "[broken](./missing.md)\n" : "target\n");
+      await assert.rejects(fx.run({ docsValidators: async () => { called = true; return []; } }), /docs_validators_dirty_worktree[^]*(docs\/|notes\.md)/);
+      assert.equal(called, false);
+      assert.equal(fx.recordOf(), null);
+      fs.rmSync(file);
+    }
+    fs.rmSync(path.join(fx.dir, "docs"), { recursive: true, force: true });
     assert.equal((await fx.run({ docsValidators: REFUSING_VALIDATOR })).nextStep, "fix_and_rereview");
   } finally { fs.rmSync(fx.dir, { recursive: true, force: true }); }
 });
@@ -1704,5 +1717,26 @@ test("issue 2447: the contract docs state the finding route and the fixer contra
     assert.match(text, /earlier candidate is at HEAD[^\n]*new commit on top of HEAD/);
     assert.match(text, /fix every lifecycle task/);
     assert.match(text, /run `handbackCheck`/);
+    assert.match(text, /skip does not apply when the order lists `deltaFindings`/);
   }
+  for (const file of ["skills/docs/pr-lifecycle-contract.md", "skills/docs/pre-pr-review-contract.md"]) assert.match(read(file), /0259-delta-lifecycle-refusal-is-a-finding\.md/);
+});
+
+test("issue 2447: a handback is refused with delta_record_unsealed when a record exists at the baseline with no matching seal", async () => {
+  const fx = openRecordFixture([LIFECYCLE_FINDING]);
+  fs.rmSync(`${gateDeltaRecordPath(fx.tmpRoot, A)}.seal`);
+  await assert.rejects(fx.run(fx.handback(B), ["--handback"]), /delta_record_unsealed[^]*re-run the --result/);
+});
+
+test("issue 2447: the writer refuses when lifecycle findings plus open act items exceed the 20-task intake, and keeps the lifecycle finding below it", () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "delta-budget-"));
+  try {
+    const sequence = { reviewBaselineHead: A, actSetId: "x" };
+    const items = (n) => Array.from({ length: n }, (_, i) => ({ ref: `r${i}`, status: "not_resolved", evidence: ["e"] }));
+    const write = (n) => writeGateDeltaRecord({ tmpRoot, sequence, candidateHead: B, invocation: 1, decision: { outcome: "needs_fix", nextStep: "fix_and_rereview", locallyClear: false }, result: { actionableItems: items(n), newFindings: [] }, lifecycleFindings: [LIFECYCLE_FINDING] });
+    assert.throws(() => write(20), /delta_record_over_budget/);
+    assert.equal(readGateDeltaRecord(tmpRoot, A), null);
+    write(19);
+    assert.equal(readGateDeltaRecord(tmpRoot, A).findings.filter(isLifecycleFinding).length, 1);
+  } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
 });
