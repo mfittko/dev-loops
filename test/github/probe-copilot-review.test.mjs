@@ -7,6 +7,7 @@ import { test } from "bun:test";
 import { captureStderr } from "../_helpers.mjs";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
+import { DEFAULT_POLL_INTERVAL_MS } from "@dev-loops/core/loop/policy-constants";
 import { buildAttemptBudget, buildPollDelayMs, findFreshCopilotActivity, formatProbeConcise, parseWatchCliArgs, runCli, watchCopilotReview } from "../../scripts/github/probe-copilot-review.mjs";
 
 const scriptPath = path.resolve("scripts/github/probe-copilot-review.mjs");
@@ -298,7 +299,10 @@ test("probe-copilot-review capped call returns pending, the re-issue keeps the b
   try {
     const env = await writeGhStub(tempDir, [{ stdout: JSON.stringify(quiet) + "\n" }]);
     const stdout = sink();
-    await runCli(["--repo", "owner/repo", "--pr", "17", "--timeout", "600"], { stdout, ...deps(env) });
+    const firstDeps = deps(env);
+    await runCli(["--repo", "owner/repo", "--pr", "17", "--timeout", "600"], { stdout, ...firstDeps });
+    // The first call stops at the per-call cap, not at the requested 600 s.
+    assert.ok(firstDeps.now() <= 170_000 + DEFAULT_POLL_INTERVAL_MS, `elapsed ${firstDeps.now()} ms`);
     const first = JSON.parse(stdout.text());
     assert.equal(first.status, "timeout");
     assert.equal(first.outcome, "pending");
