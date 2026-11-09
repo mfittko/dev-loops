@@ -48,8 +48,8 @@ export const WAIT_CAP_MS = 170_000;
  * @param {number} requestedMs requested budget (0 stays 0: one immediate check)
  * @returns {{ timeoutMs: number, remainingMs: number }} this invocation's budget and what is left for the re-issue
  */
-export function capWait(requestedMs, capMs = WAIT_CAP_MS) {
-  return requestedMs > capMs ? { timeoutMs: capMs, remainingMs: requestedMs - capMs } : { timeoutMs: requestedMs, remainingMs: 0 };
+export function capWait(requestedMs) {
+  return requestedMs > WAIT_CAP_MS ? { timeoutMs: WAIT_CAP_MS, remainingMs: requestedMs - WAIT_CAP_MS } : { timeoutMs: requestedMs, remainingMs: 0 };
 }
 
 export const shellWord = (word) => (/^[\w@%+=:,./-]+$/u.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`);

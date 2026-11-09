@@ -444,7 +444,7 @@ test("--artifact requires an absolute --after with exit 1 and a remedy", () => {
 
 test("the artifact timeout remedy is split by hand-back type and a stale artifact gets its own branch", async () => {
   const result = await waitForUnits({ artifact: "/nonexistent/x.json", after: process.execPath, timeoutMs: 0, ...fakeClock() });
-  assert.match(result.remedy, /Delta reviewer and commit_only fixer: re-run the same command; after three consecutive timeout outcomes.*units_stalled.*Full-phase fixer: after one timeout, end your turn once.*COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK.*--timeout 0.*published report.*do not repeat the wait/);
+  assert.match(result.remedy, /Delta reviewer and commit_only fixer: re-run the original command with its original --timeout, never the last reissue; after three consecutive timeout outcomes.*units_stalled.*Full-phase fixer: after one timeout, end your turn once.*COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK.*--timeout 0.*published report.*do not repeat the wait/);
   assert.doesNotMatch(result.remedy.split("Full-phase fixer:")[1], /re-run the same command/i, "the full-phase branch carries no re-run instruction");
   await withDir(async (root) => {
     const file = path.join(root, "report.json");
@@ -497,7 +497,7 @@ test("--artifact: a JSON write with the terminal field gives all_done at once; a
     const wait = (timeoutMs = 0) => waitForUnits({ artifact: file, after, timeoutMs, ...fakeClock() });
     const absent = await wait();
     assert.equal(absent.outcome, "timeout");
-    assert.match(absent.remedy, /commit_only fixer: re-run the same command; after three consecutive timeout.*units_stalled/);
+    assert.match(absent.remedy, /commit_only fixer: re-run the original command with its original --timeout, never the last reissue; after three consecutive timeout.*units_stalled/);
     await writeFile(file, "");
     assert.equal((await wait()).outcome, "timeout", "an empty file is pending");
     await writeFile(file, "{not json");
