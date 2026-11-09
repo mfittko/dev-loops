@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { parseIssueNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { editIssue as coreEditIssue } from "@dev-loops/core/github/issue-ops";
+import { assertWritableBody, editIssue as coreEditIssue } from "@dev-loops/core/github/issue-ops";
 import { detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
 import { booleanFlagValue, untickedRows } from "./edit-pr.mjs";
@@ -45,6 +45,8 @@ At least one edit:
                                 --state closed
   --allow-untick                Allow a body that unticks or removes a checked
                                 row (CHECKLIST-SCOPE-ONE-MODEL, #2898)
+  --allow-empty-body            Allow a body that is empty or only "null" (refused by
+                                default: it is a failed read written back)
   --enforce-grill               Opt-in GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628):
                                 refuse a body that embeds grill
                                 transcript/synthesis/Q&A headings.
@@ -78,6 +80,7 @@ export function parseEditIssueCliArgs(argv) {
       reason: { type: "string" },
       "enforce-grill": { type: "boolean" },
       "allow-untick": { type: "boolean" },
+      "allow-empty-body": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -98,6 +101,7 @@ export function parseEditIssueCliArgs(argv) {
     reason: undefined,
     enforceGrill: false,
     allowUntick: false,
+    allowEmptyBody: false,
     jq: undefined,
     silent: false,
   };
@@ -130,9 +134,6 @@ export function parseEditIssueCliArgs(argv) {
     }
     if (token.name === "body") {
       const body = requireTokenValue(token, parseError);
-      if (body.trim().length === 0) {
-        throw parseError("--body must not be empty or whitespace-only");
-      }
       options.body = body;
       continue;
     }
@@ -192,6 +193,10 @@ export function parseEditIssueCliArgs(argv) {
       options.enforceGrill = true;
       continue;
     }
+    if (token.name === "allow-empty-body") {
+      options.allowEmptyBody = booleanFlagValue(token.value);
+      continue;
+    }
     if (token.name === "allow-untick") {
       options.allowUntick = booleanFlagValue(token.value);
       continue;
@@ -201,6 +206,13 @@ export function parseEditIssueCliArgs(argv) {
   }
   if (options.repo === undefined || options.issue === undefined) {
     throw parseError("Editing an issue requires both --repo <owner/name> and --issue <number>");
+  }
+  if (options.body !== undefined) {
+    try {
+      assertWritableBody(options.body, "--body", options.allowEmptyBody);
+    } catch (error) {
+      throw parseError(error instanceof Error ? error.message.replace("is empty", "must not be empty or whitespace-only") : String(error));
+    }
   }
   if (options.body !== undefined && options.bodyFile !== undefined) {
     throw parseError("--body and --body-file are mutually exclusive; pass only one");
@@ -238,9 +250,9 @@ export async function editIssue(options, { env = process.env, ghCommand = "gh", 
     let body = options.body;
     if (body === undefined) {
       body = options.bodyFile === "-" ? readFileSync(0, "utf8") : await readFile(options.bodyFile, "utf8");
-      if (body.trim().length === 0) {
-        throw new Error(`--body-file ${options.bodyFile} is empty`);
-      }
+      assertWritableBody(body, `--body-file ${options.bodyFile}`, options.allowEmptyBody);
+    } else {
+      assertWritableBody(body, "--body", options.allowEmptyBody);
     }
     let baseline;
     try {
@@ -291,9 +303,7 @@ async function editWithGrillCheck(options, { env, ghCommand, run }) {
       } else {
         body = await readFile(options.bodyFile, "utf8");
       }
-      if (body.trim().length === 0) {
-        throw new Error(`--body-file ${options.bodyFile} is empty`);
-      }
+      assertWritableBody(body, `--body-file ${options.bodyFile}`, options.allowEmptyBody);
     }
     const heading = detectGrillEmbedHeading(body);
     if (heading !== null) {
