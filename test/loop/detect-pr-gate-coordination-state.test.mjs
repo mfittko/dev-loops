@@ -4544,7 +4544,11 @@ const STALE = { ok: false, error: "base_stale_integrate_first", base: "main", ne
 
 describe("GATE-EXEC-BASE-REFRESH coordination", () => {
   it("stale head at run_draft_gate routes to resolve_merge_conflicts", async () => {
-    const result = await runBaseFreshnessFixture({ checkBaseFreshness: async () => STALE });
+    let args;
+    const result = await runBaseFreshnessFixture({ checkBaseFreshness: async (a) => { args = a; return STALE; } });
+    assert.equal(args.head, "abc1234567");
+    assert.equal(args.base, "main");
+    assert.equal(args.trusted, true);
     assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS);
     assert.match(result.reason, /base_stale_integrate_first/);
     assert.match(result.reason, /REMEDY-TEXT/);
