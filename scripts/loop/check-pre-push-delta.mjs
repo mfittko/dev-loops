@@ -521,7 +521,7 @@ async function lifecycleRefusals({ options, ownPaths, changedPaths, changelog, d
   if (optedIn) {
     // The validators read the working tree: a tracked edit or an untracked non-ignored file not in HEAD could change the verdict, so the reviewed commit must be the tree.
     const assertCleanTree = () => {
-      const dirty = spawnSync("git", ["-C", root, "status", "--porcelain"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+      const dirty = spawnSync("git", ["-C", root, "status", "--porcelain", "--untracked-files=all"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
       if (dirty.status !== 0) throw new Error(`docs_validators_worktree_unreadable: git status failed in ${root}: ${dirty.stderr.trim()}`);
       if (dirty.stdout.trim()) throw new Error(`docs_validators_dirty_worktree: the docs validators judge the working tree, and files differ from HEAD (${dirty.stdout.trim().split("\n").slice(0, 5).join("; ")}); commit or revert them, then rerun the --result run`);
     };
@@ -669,7 +669,11 @@ export async function runCli(
         // One snapshot of the sealed record feeds both checks: a concurrent --result rewrite between two reads would skip both.
         const sealed = readSealedRecord(recordRoot, sequence.reviewBaselineHead);
         // Only the record that assertNoOpenWorkAtCandidate would act on is refused: an unsealed fix_and_rereview record of this act set at the guarded head.
-        const unsealed = sealed ? null : readRecord(recordRoot, sequence.reviewBaselineHead);
+        let unsealed = null;
+        // A record that exists but cannot be parsed fails closed: its open work cannot be ruled out.
+        if (!sealed) {
+          try { unsealed = readRecord(recordRoot, sequence.reviewBaselineHead); } catch (error) { throw new Error(`delta_record_unsealed: the delta record for ${sequence.reviewBaselineHead} cannot be parsed (${error.message}), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record`); }
+        }
         if (unsealed?.nextStep === "fix_and_rereview" && unsealed.candidateHead === guardedHead && unsealed.actSetId === sequence.actSetId) throw new Error(`delta_record_unsealed: a delta record exists for ${sequence.reviewBaselineHead} but carries no matching seal (a --result write may have crashed), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record`);
         assertNoOpenWorkAtCandidate(sealed, { handbackHead: guardedHead, siteCoverage: record.siteCoverage ?? [], actItems: sequence.actItems, actSetId: sequence.actSetId });
       }

@@ -656,7 +656,7 @@ export async function emitFixerWorkOrder({
   }
   // A record of another act set (a closed sequence or a replaced act list) is not open work of this one, as in the full-phase path and the handback guard.
   const sealedAtHead = actRecord?.nextStep === "fix_and_rereview" && actRecord.candidateHead === worktreeHead && actRecord.actSetId === delta.parsed.actSetId;
-  const hasOpenWork = sealedAtHead && ((Array.isArray(actRecord.findings) && actRecord.findings.length > 0) || (delta.parsed.actionableItems ?? []).some((item) => ["not_resolved", "cannot_verify"].includes(item?.status)));
+  const hasOpenWork = sealedAtHead && ((Array.isArray(actRecord.findings) && actRecord.findings.length > 0) || [...(delta.parsed.actionableItems ?? []), ...(Array.isArray(actRecord.items) ? actRecord.items : [])].some((item) => ["not_resolved", "cannot_verify"].includes(item?.status)));
   // A locally_clear result that validation refused (a coverage gap, a stale-surface hit) seals no finding and no open act ref: it keeps the issue 3111 route below.
   const openAtHead = sealedAtHead && (hasOpenWork || delta.parsed.outcome !== "locally_clear");
   if (openAtHead) {
