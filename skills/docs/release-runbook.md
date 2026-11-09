@@ -229,11 +229,11 @@ manually. Local pre-flight (optional but recommended before pushing the tag):
 <!-- rule: RELEASE-POST-RELEASE-RECURRING-STEPS -->
 `RELEASE-POST-RELEASE-RECURRING-STEPS`: After every stable release, the orchestrator MUST file and drive these steps in this order before any other work in the next milestone, without waiting for the operator:
 
-1. Contract and codebase audit.
-2. Outdated and redundant files audit and cleanup.
-3. Tests audit and cleanup.
-4. Memory cleanup.
-5. Prose cleanup.
+1. Prose cleanup.
+2. Contract and codebase audit.
+3. Outdated and redundant files audit and cleanup.
+4. Tests audit and cleanup.
+5. Memory cleanup.
 
 Each of the five steps files its own issue in the next milestone. The orchestrator files and drives each issue. This rule is the standing explicit operator instruction for these five issues, so the AGENTS.md explicit-instruction requirement is met. The operator keeps only the tag, publish and approval decisions.
 

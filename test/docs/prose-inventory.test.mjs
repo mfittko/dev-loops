@@ -11,6 +11,7 @@ let dir;
 let cwd;
 let savedGitDir;
 let savedGitWorkTree;
+let savedGitCommonDir;
 const git = (...args) => runGitFixture(dir, ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args]);
 const run = (args) => {
   let out = "";
@@ -23,8 +24,10 @@ beforeAll(() => {
   cwd = process.cwd();
   savedGitDir = process.env.GIT_DIR;
   savedGitWorkTree = process.env.GIT_WORK_TREE;
+  savedGitCommonDir = process.env.GIT_COMMON_DIR;
   delete process.env.GIT_DIR;
   delete process.env.GIT_WORK_TREE;
+  delete process.env.GIT_COMMON_DIR;
   dir = mkdtempSync(path.join(tmpdir(), "prose-inv-"));
   git("init", "-q");
   git("config", "user.email", "t@example.com");
@@ -40,6 +43,7 @@ afterAll(() => {
   process.chdir(cwd);
   if (savedGitDir === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = savedGitDir;
   if (savedGitWorkTree === undefined) delete process.env.GIT_WORK_TREE; else process.env.GIT_WORK_TREE = savedGitWorkTree;
+  if (savedGitCommonDir === undefined) delete process.env.GIT_COMMON_DIR; else process.env.GIT_COMMON_DIR = savedGitCommonDir;
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -163,3 +167,23 @@ test("accepted revision forms exit 0", () => {
   const short = runGitFixture(dir, ["rev-parse", "--short", "HEAD"]);
   for (const rev of ["HEAD", short]) assert.equal(run(["--base", rev, "same.md"]).code, 0);
 });
+
+test("a vs. inside an obligation sentence does not split it", () => {
+  writeFileSync(path.join(dir, "vs.md"), "A fast path vs. a slow path MUST NOT diverge. Other text.\n");
+  git("add", "vs.md");
+  git("commit", "-qm", "vs");
+  writeFileSync(path.join(dir, "vs.md"), "A fast path vs. a slow path MAY diverge. Other text.\n");
+  const { out } = run(["--base", "HEAD", "vs.md"]);
+  assert.match(out, /review required\): A fast path vs\. a slow path MUST NOT diverge\./);
+});
+
+for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"]) {
+  test(`an inherited ${name} does not redirect the revision read`, () => {
+    process.env[name] = path.join(dir, "no-such-path");
+    try {
+      assert.equal(run(["--base", "HEAD", "--head", "HEAD", "same.md"]).code, 0);
+    } finally {
+      delete process.env[name];
+    }
+  });
+}

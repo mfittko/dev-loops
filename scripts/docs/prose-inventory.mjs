@@ -22,8 +22,9 @@ function readAt(rev, file) {
       throw new UsageError(`unreadable path: ${file}`);
     }
   }
+  const { GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR, ...env } = process.env;
   try {
-    return execFileSync("git", ["cat-file", "blob", `${rev}:./${file}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28 });
+    return execFileSync("git", ["cat-file", "blob", `${rev}:./${file}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28, env });
   } catch {
     throw new UsageError(`unknown revision or unreadable path: ${rev}:${file}`);
   }
@@ -31,11 +32,11 @@ function readAt(rev, file) {
 
 const stats = (text) => ({ bytes: Buffer.byteLength(text), words: text.split(/\s+/).filter(Boolean).length });
 
-// ponytail: sentence split on terminal punctuation, but not after "e.g."/"i.e." so a trigger clause stays with its MUST/SHALL; other abbreviations split early, harmless for a presence check.
+// ponytail: sentence split on terminal punctuation, but not after "e.g."/"i.e."/"vs." so a trigger clause stays with its MUST/SHALL; other abbreviations split early, harmless for a presence check.
 function obligations(text) {
   const withoutMarkers = text.replace(MARKER, "");
   return withoutMarkers
-    .split(/(?<!\b(?:e\.g|i\.e)\.)(?<=[.!?])\s+|\n\s*\n/)
+    .split(/(?<!\b(?:e\.g|i\.e|vs)\.)(?<=[.!?])\s+|\n\s*\n/)
     .map(norm)
     .filter((s) => OBLIGATION.test(s));
 }

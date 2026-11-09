@@ -22,12 +22,12 @@ test("release runbook owns the recurring post-release rules by ID", () => {
   }
 });
 
-test("post-release steps run the five steps in order, prose cleanup last", () => {
+test("post-release steps run the five steps in order, prose cleanup first", () => {
   const body = doc.slice(doc.indexOf("`RELEASE-POST-RELEASE-RECURRING-STEPS`:"));
-  const order = ["1. Contract and codebase audit.", "2. Outdated and redundant files audit and cleanup.", "3. Tests audit and cleanup.", "4. Memory cleanup.", "5. Prose cleanup."].map((s) => body.indexOf(s));
+  const order = ["1. Prose cleanup.", "2. Contract and codebase audit.", "3. Outdated and redundant files audit and cleanup.", "4. Tests audit and cleanup.", "5. Memory cleanup."].map((s) => body.indexOf(s));
   assert.ok(order.every((i) => i > 0), "all five steps present");
   assert.deepEqual([...order].sort((a, b) => a - b), order, "steps in order");
-  const lastStep = body.indexOf("5. Prose cleanup.");
+  const lastStep = body.indexOf("5. Memory cleanup.");
   const sentence = body.indexOf("Each of the five steps files its own issue in the next milestone.");
   assert.ok(lastStep > 0 && sentence > lastStep, "the issue-filing sentence follows all five steps and covers each");
   assert.ok(doc.indexOf("`RELEASE-COMBINED-RETRO`: A combined release retro runs once after a stable release, before the steps above.") > 0, "combined retro runs before the steps");
