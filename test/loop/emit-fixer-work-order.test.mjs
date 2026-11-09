@@ -21,6 +21,7 @@ import { classifyValidationCommand } from "@dev-loops/core/loop/validation-class
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, materializationHash, pullReceiptPath, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
+import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
@@ -2573,6 +2574,9 @@ for (const route of ["Historical main", "OLD authority", "complete"]) test(`${ro
     const oldRoot = oldAuthority ? wt : root;
     assert.equal(spawnSync("tar", ["-xf", "-", "-C", oldRoot], { input: archive }).status, 0);
     for (const relative of ["scripts", "packages", "lib", "cli", "package.json", "skills", "agents"]) await cp(path.join(checkout, relative), path.join(emitting, relative), { recursive: true });
+    // The copied package.json would opt this fixture into the docs validators (issue 2447); the fixture holds no docs to validate.
+    const copiedPackage = path.join(emitting, "package.json");
+    await writeFile(copiedPackage, (await readFile(copiedPackage, "utf8")).replace("scripts/docs/docs-validators.mjs", "true"));
     if (oldAuthority) {
       git(emitting, "init", "-q", "-b", "emitting");
       git(emitting, "config", "user.name", "T");
@@ -3227,6 +3231,18 @@ test("issue 2787 C12: a thread-route fix_and_rereview record with findings re-em
     assert.equal((await fx.emit({ ...threadsOnlyFull(fx) })).workOrder.phase, "full");
   });
 });
+test("issue 2447: the lifecycle flag survives the deltaFindings projection and renders as a marker; the thread-route prompt keeps the base-commit and lifecycle sentence", async () => {
+  await withFixture(async (fx) => {
+    const lifecycle = { lifecycle: true, severity: "medium", summary: "docs validator links refused this delta range", evidence: "docs/a.md: broken" };
+    await fx.writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix", items: [{ ref: "T1", status: "resolved" }], findings: [lifecycle, FINDING] }, { seal: true });
+    const unit = await threadsCommitOnly(fx);
+    assert.deepEqual(unit.workOrder.deltaFindings, [lifecycle, FINDING]);
+    const text = await readFile(unit.promptPath, "utf8");
+    assert.match(text, /1\. medium \[lifecycle\]: "docs validator links refused this delta range"/);
+    assert.match(text, /2\. high: "new null deref/);
+    assert.match(text, /fix every lifecycle task/);
+  });
+});
 const threadsOnlyFull = (fx) => ({ actListFile: undefined, gate: undefined, deltaResult: undefined, threadsFile: fx.files.threads, phase: "full" });
 
 test("issue 2787 C12: malformed delta findings refuse", async () => {
@@ -3835,5 +3851,174 @@ test("issue 3111: a keyed fixer that commits exits through a canonical re-emissi
     const canonical = await fx.emit({ phase: "commit_only", deltaResult: undefined });
     assert.equal(canonical.planPath, prior.planPath, "the canonical plan names the new execution");
     assert.match((await locateFixerUnit({ ref: keyed.workOrderRef, cwd: fx.wt, tmpRoots })).stale, /orphaned/);
+  });
+});
+
+// Issue 2447 slice 1: the act-list re-emission reads the sealed record, never the reviewer's stated outcome.
+const openRecord = (fx, findings, items = [{ ref: ACT_REF, status: "resolved" }]) => fx.writeRecord({ candidateHead: git(fx.wt, "rev-parse", "HEAD"), outcome: "needs_fix", nextStep: "fix_and_rereview", items, ...(findings ? { findings } : {}) }, { seal: true });
+// The reviewer's result for the open record: the act ref at `status`, resealed.
+const writeResult = async (fx, status, evidence = ["still open"]) => {
+  const result = JSON.parse(await readFile(fx.files.delta, "utf8"));
+  await writeFile(fx.files.delta, JSON.stringify({ ...result, outcome: "needs_fix", actionableItems: [{ ref: ACT_REF, status, evidence }] }));
+  sealDeltaFixture(resolveGateArtifactTmpRoot(fx.wt), fx.files.delta);
+};
+const RESIDUE = { severity: "medium", summary: "test-only residue at site s", evidence: "e", residueOf: ACT_REF, site: "s" };
+const LIFECYCLE = { lifecycle: true, severity: "medium", summary: "LIFECYCLE-CHANGELOG-COMPLETENESS: entry is 317 characters", evidence: "changes/x.md" };
+
+test("issue 2447: a needs_fix record at the candidate that is HEAD lists its findings as tasks and tells the fixer to commit on top of HEAD", async () => {
+  await withFixture(async (fx) => {
+    await refusedDeltaFixture(fx, "needs_fix");
+    await openRecord(fx, [RESIDUE]);
+    const again = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.deepEqual(again.workOrder.deltaFindings.map((f) => f.summary), [RESIDUE.summary]);
+    const prompt = await readFile(again.promptPath, "utf8");
+    assert.match(prompt, /commit[^.]*on top of/);
+    assert.doesNotMatch(prompt, /skip it when you made no commit/);
+  });
+});
+
+test("issue 2447: a locally_clear reviewer result with a lifecycle finding in the record is a committing order, not the append-only plan", async () => {
+  await withFixture(async (fx) => {
+    const { prior, markerPath } = await refusedDeltaFixture(fx, "locally_clear");
+    await openRecord(fx, [LIFECYCLE]);
+    const marker = await readFile(markerPath);
+    const again = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.equal(again.planPath, prior.planPath, "the canonical plan is superseded, no keyed plan");
+    assert.notDeepEqual(await readFile(markerPath), marker, "the marker names the new execution");
+    assert.deepEqual(again.workOrder.deltaFindings.map((f) => f.summary), [LIFECYCLE.summary]);
+    assert.equal(again.workOrder.deltaFindings[0].lifecycle, true);
+    assert.match(await readFile(again.promptPath, "utf8"), /\[lifecycle\]/);
+  });
+});
+
+test("issue 2447: a fix_and_rereview record with no open task refuses with a named error and writes no plan", async () => {
+  await withFixture(async (fx) => {
+    const { prior } = await refusedDeltaFixture(fx, "needs_fix");
+    await openRecord(fx);
+    const planBytes = await readFile(prior.planPath);
+    await assert.rejects(fx.emit({ phase: "commit_only", keepRecord: true }), /delta_record_no_open_task:[^]*no open task/);
+    assert.deepEqual(await readFile(prior.planPath), planBytes);
+  });
+});
+
+test("issue 2447: a record with no findings and a not_resolved or cannot_verify result item emits a synthetic task with that evidence", async () => {
+  for (const status of ["not_resolved", "cannot_verify"]) {
+    await withFixture(async (fx) => {
+      await refusedDeltaFixture(fx, "needs_fix");
+      await writeResult(fx, status, ["deref still unguarded"]);
+      await openRecord(fx, undefined, [{ ref: ACT_REF, status }]);
+      const again = await fx.emit({ phase: "commit_only", keepRecord: true });
+      assert.deepEqual(again.workOrder.deltaFindings.map((f) => [f.severity, f.summary, f.evidence]),
+        [["medium", `act item ${ACT_REF} is ${status} at the reviewed candidate`, "deref still unguarded"]]);
+    });
+  }
+});
+
+test("issue 2447: a --delta-result that is not the one the sealed record decided on refuses, and nothing is written", async () => {
+  await withFixture(async (fx) => {
+    const { prior } = await refusedDeltaFixture(fx, "needs_fix");
+    await writeResult(fx, "not_resolved");
+    await openRecord(fx, [RESIDUE], [{ ref: ACT_REF, status: "cannot_verify" }]);
+    const planBytes = await readFile(prior.planPath);
+    await assert.rejects(fx.emit({ phase: "commit_only", keepRecord: true }), /item statuses differ from the delta record[^]*not the result that decision used/);
+    assert.deepEqual(await readFile(prior.planPath), planBytes);
+  });
+});
+
+test("issue 2447: a record of 21 findings refuses naming the gate-delta record path, never null", async () => {
+  await withFixture(async (fx) => {
+    await refusedDeltaFixture(fx, "needs_fix");
+    await writeResult(fx, "not_resolved");
+    const findings = Array.from({ length: 21 }, (_, i) => ({ severity: "medium", summary: `finding ${i}`, evidence: "e" }));
+    await openRecord(fx, findings, [{ ref: ACT_REF, status: "not_resolved" }]);
+    await assert.rejects(fx.emit({ phase: "commit_only", keepRecord: true }), (error) => /gate-delta[\\/][0-9a-f]{40}\.json/.test(error.message) && !/null/.test(error.message) && /at most 20 entries/.test(error.message));
+  });
+});
+
+test("issue 2447: an unsealed fix_and_rereview record at HEAD refuses the act-list re-emission with delta_record_unsealed and writes no plan", async () => {
+  await withFixture(async (fx) => {
+    const { prior } = await refusedDeltaFixture(fx, "locally_clear");
+    await fx.writeRecord({ candidateHead: git(fx.wt, "rev-parse", "HEAD"), outcome: "needs_fix", nextStep: "fix_and_rereview", items: [{ ref: ACT_REF, status: "resolved" }], findings: [LIFECYCLE] });
+    const planBytes = await readFile(prior.planPath);
+    await assert.rejects(fx.emit({ phase: "commit_only", keepRecord: true }), /delta_record_unsealed/);
+    assert.deepEqual(await readFile(prior.planPath), planBytes);
+  });
+});
+
+// A delta result and record over `n` act items, all `status`, resealed after the fixture's own act list is widened.
+const widenTo = async (fx, n, status) => {
+  const act = Array.from({ length: n }, (_, i) => withFp({ ...ACT[0], summary: `item ${i}`, line: 10 + i }));
+  const actSetId = startDeltaSequence({ reviewBaselineHead: fx.head, actList: act }).actSetId;
+  await writeFile(fx.files.actList, JSON.stringify(act));
+  const result = JSON.parse(await readFile(fx.files.delta, "utf8"));
+  await writeFile(fx.files.delta, JSON.stringify({ ...result, actSetId, outcome: "needs_fix", actionableItems: act.map(({ fingerprint }) => ({ ref: fingerprint, status, evidence: ["still open"] })) }));
+  sealDeltaFixture(resolveGateArtifactTmpRoot(fx.wt), fx.files.delta);
+  return { act, actSetId };
+};
+
+test("issue 2447: a sealed record with more than 20 open act refs and no finding emits an order with one task per ref", async () => {
+  await withFixture(async (fx) => {
+    await refusedDeltaFixture(fx, "needs_fix");
+    const { act, actSetId } = await widenTo(fx, 21, "not_resolved");
+    await openRecord(fx, undefined, act.map(({ fingerprint }) => ({ ref: fingerprint, status: "not_resolved" })));
+    await fx.writeRecord({ actSetId, candidateHead: git(fx.wt, "rev-parse", "HEAD"), outcome: "needs_fix", nextStep: "fix_and_rereview", items: act.map(({ fingerprint }) => ({ ref: fingerprint, status: "not_resolved" })) }, { seal: true });
+    const again = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.equal(again.workOrder.deltaFindings.length, 21);
+  });
+});
+
+test("issue 2447: a sealed or unsealed fix_and_rereview record of another act set is not open work at HEAD", async () => {
+  for (const seal of [true, false]) {
+    await withFixture(async (fx) => {
+      await refusedDeltaFixture(fx, "locally_clear");
+      await fx.writeRecord({ actSetId: "0".repeat(16), candidateHead: git(fx.wt, "rev-parse", "HEAD"), outcome: "needs_fix", nextStep: "fix_and_rereview", items: [{ ref: ACT_REF, status: "resolved" }], findings: [LIFECYCLE] }, { seal });
+      const again = await fx.emit({ phase: "commit_only", keepRecord: true });
+      assert.equal(again.workOrder.deltaFindings, undefined, `seal ${seal}: no task from another act set's record`);
+    });
+  }
+});
+
+test("issue 2447: a truncated delta record at the baseline refuses the act-list re-emission with delta_record_unsealed and writes no plan", async () => {
+  await withFixture(async (fx) => {
+    const { prior } = await refusedDeltaFixture(fx, "locally_clear");
+    await mkdir(path.dirname(fx.recordPath), { recursive: true });
+    await writeFile(fx.recordPath, "{ truncated");
+    const planBytes = await readFile(prior.planPath);
+    await assert.rejects(fx.emit({ phase: "commit_only", keepRecord: true }), /delta_record_unsealed[^]*cannot be parsed/);
+    assert.deepEqual(await readFile(prior.planPath), planBytes);
+  });
+});
+
+// Issue 2447 slice 1: the keyed-plan route against the record the real writer seals for a refused locally_clear result.
+const sealRefusedRecord = async (fx, lifecycleFindings = []) => {
+  const result = JSON.parse(await readFile(fx.files.delta, "utf8"));
+  writeGateDeltaRecord({
+    tmpRoot: path.join(fx.root, "tmp"), sequence: { reviewBaselineHead: fx.head, actSetId: startDeltaSequence({ reviewBaselineHead: fx.head, actList: ACT }).actSetId },
+    candidateHead: git(fx.wt, "rev-parse", "HEAD"), invocation: 1, decision: { outcome: "needs_fix", nextStep: "fix_and_rereview", locallyClear: false, errors: ["siteCoverageGaps"] }, result, lifecycleFindings,
+  });
+};
+
+test("issue 2447: a refused locally_clear result sealed by the writer with no finding and no open act ref keeps the issue 3111 keyed plan", async () => {
+  await withFixture(async (fx) => {
+    const { prior, markerPath } = await refusedDeltaFixture(fx, "locally_clear");
+    await sealRefusedRecord(fx);
+    const marker = await readFile(markerPath);
+    const planBytes = await readFile(prior.planPath);
+    const keyed = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.notEqual(keyed.planPath, prior.planPath, "a keyed plan beside the canonical one");
+    assert.deepEqual(await readFile(prior.planPath), planBytes, "the canonical plan is untouched");
+    assert.deepEqual(await readFile(markerPath), marker, "the marker is untouched");
+  });
+});
+
+test("issue 2447: a refused locally_clear result sealed by the writer with a lifecycle finding supersedes the plan with a committing order", async () => {
+  await withFixture(async (fx) => {
+    const { prior, markerPath } = await refusedDeltaFixture(fx, "locally_clear");
+    await sealRefusedRecord(fx, [LIFECYCLE]);
+    const marker = await readFile(markerPath);
+    const again = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.equal(again.planPath, prior.planPath);
+    assert.notDeepEqual(await readFile(markerPath), marker);
+    assert.deepEqual(again.workOrder.deltaFindings.map((f) => f.summary), [LIFECYCLE.summary]);
   });
 });

@@ -65,10 +65,14 @@ export function listGateDeltaRecords(tmpRoot) {
   return records;
 }
 
+/** A lifecycle refusal recorded as a finding (issue 2447): only the writer sets `lifecycle: true`; a reviewer finding cannot. */
+export const isLifecycleFinding = (finding) => finding?.lifecycle === true;
+
 /** Write the decision of one `--result` run. Returns the record path. */
-export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocation, decision, result }) {
+export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocation, decision, result, lifecycleFindings = [] }) {
   const items = Array.isArray(result?.actionableItems) ? result.actionableItems.map((item) => ({ ref: item?.ref, status: item?.status })) : [];
-  const findings = deltaFixerFindings(result);
+  // The 20-entry cap bounds the record findings, lifecycle findings first; the emitter's act-ref tasks are not counted against it.
+  const findings = [...lifecycleFindings, ...deltaFixerFindings(result)].slice(0, 20);
   const record = {
     ...deltaCoverageBinding(decision),
     reviewBaselineHead: sequence.reviewBaselineHead,
