@@ -33,11 +33,16 @@ describe("base freshness predicate agreement", () => {
     runGitFixture(clone, ["checkout", "-q", "main"]);
     heads.newBase = await commit(clone, "b.txt", "newer base");
     runGitFixture(clone, ["push", "-q", "origin", "main"]);
+    runGitFixture(clone, ["checkout", "-q", "feature"]);
+    runGitFixture(clone, ["merge", "-q", "--no-edit", heads.newBase]);
+    heads.merged = runGitFixture(clone, ["rev-parse", "HEAD"]);
+    heads.mergedAhead = await commit(clone, "g.txt", "more feature work");
+    runGitFixture(clone, ["checkout", "-q", "main"]);
     runGitFixture(clone, ["reset", "-q", "--hard", heads.base]);
   });
   afterAll(async () => { await rm(root, { recursive: true, force: true }); });
 
-  for (const [name, key, expected] of [["current", "newBase", true], ["stale", "base", false], ["diverged", "diverged", false]]) {
+  for (const [name, key, expected] of [["current", "newBase", true], ["stale", "base", false], ["diverged", "diverged", false], ["merged origin/main", "merged", true], ["ahead of merged base", "mergedAhead", true]]) {
     it(`${name} head: both predicates agree`, async () => {
       const head = heads[key];
       const fresh = await checkBaseFreshness({ base: "main", head, cwd: clone, trusted: true });

@@ -85,7 +85,23 @@ export const PR_CHECKPOINT_ACTION = Object.freeze({
 
 // Issue 3105: closed enum naming who must decide when a gate result is report_blocked.
 // OPERATOR_DECISION is a slice 1 catch-all for results with no runnable remedy; slice 9 narrows it.
-export const BLOCKED_ON = Object.freeze({
+// Actions forbidden while the head conflicts with, or is stale against, the base.
+export const CONFLICT_FORBIDDEN_ACTIONS = Object.freeze([
+  PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+  PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE,
+  PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+  PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
+  PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW,
+  PR_CHECKPOINT_ACTION.WAIT_FOR_CI,
+  PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK,
+  PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
+  PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW,
+  PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
+  PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
+  PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+]);
+
+export const BLOCKED_ON =Object.freeze({
   OPERATOR_DECISION: "operator_decision",
   HIGH_FINDING_PAST_CAP: "high_finding_past_cap",
   FAIL_OPEN_FINDING: "fail_open_finding",
@@ -1287,20 +1303,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
 
   if (hasBlockedMergeStatus(mergeStateStatus) || mergeable === "CONFLICTING" || conflictFiles.length > 0) {
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS]);
-    pushUnique(forbiddenActions, [
-      PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
-      PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE,
-      PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
-      PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
-      PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW,
-      PR_CHECKPOINT_ACTION.WAIT_FOR_CI,
-      PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK,
-      PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
-      PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW,
-      PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
-      PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
-      PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
-    ]);
+    pushUnique(forbiddenActions, CONFLICT_FORBIDDEN_ACTIONS);
     return buildResult({
       repo: input.repo ?? null,
       pr: Number.isInteger(input.pr) ? input.pr : null,

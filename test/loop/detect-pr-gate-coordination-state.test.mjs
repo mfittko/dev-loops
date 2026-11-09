@@ -4552,6 +4552,8 @@ describe("GATE-EXEC-BASE-REFRESH coordination", () => {
     assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
     assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
     assert.deepEqual(result.baseFreshness, { status: "base_stale_integrate_first", base: "main", newerCommits: ["abc1 newer"] });
+    assert.equal(result.gateBoundary, PR_CHECKPOINT.CONFLICT_RESOLUTION);
+    assert.equal(result.loopDisposition, "action_required");
   });
 
   it("stale head at run_pre_approval_gate routes to resolve_merge_conflicts", async () => {
@@ -4560,6 +4562,10 @@ describe("GATE-EXEC-BASE-REFRESH coordination", () => {
     assert.match(result.reason, /REMEDY-TEXT/);
     assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
     assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+    assert.equal(result.gateBoundary, PR_CHECKPOINT.CONFLICT_RESOLUTION);
+    assert.equal(result.loopDisposition, "action_required");
+    const baseline = await runBaseFreshnessFixture({ isDraft: false, withCleanDraftGate: true, capReached: true, checkBaseFreshness: async () => ({ ok: true, status: "base_current", base: "main" }) });
+    assert.equal(baseline.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
   });
 
   it("base_current leaves the action unchanged", async () => {
