@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { evaluatePrGateCoordination } from "@dev-loops/core/loop/pr-gate-coordination";
 import { DISPOSITION, STATE } from "@dev-loops/core/loop/copilot-loop-state";
-import { resolveCapRoundFixed } from "../../scripts/github/write-gate-context.mjs";
+import { resolveDraftCapRoundFact } from "../../scripts/github/write-gate-context.mjs";
 import { readGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { extendCapRoundChain } from "../../scripts/loop/extend-cap-round-chain.mjs";
 import { runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
@@ -38,15 +38,16 @@ export async function reviewerOnlyRoute(root, { baseline, head, ledgerPath, stat
 }
 
 /** The coordinator's view of a draft PR at `head`: the proof as detect-pr-gate-coordination-state computes it, then the real evaluator. */
-export async function coordinationAt(root, { repo, pr, head }) {
-  let failure = null;
-  const fixed = Boolean(await resolveCapRoundFixed({ repo, pr, headSha: head, baseRefName: "main", anyHead: false }, { repoRoot: root, onFailure: (c) => { failure = c; } }).catch(() => { failure = "cap_round_unresolved"; return null; }));
+export async function coordinationAt(root, { repo, pr, head, ready = false }) {
+  const { capRoundFixed: fixed, failure } = await resolveDraftCapRoundFact({ repo, pr, currentHeadSha: head, prData: { isDraft: !ready, baseRefName: "main" } }, { repoRoot: root });
+  const marker = { visible: true, headSha: "abc1234", verdict: "blocked", contractComplete: true };
   const result = evaluatePrGateCoordination({
-    pr, repo, currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT_NO_FEEDBACK, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success",
+    pr, repo, currentHeadSha: head, prDraft: !ready, lifecycleState: ready ? STATE.READY_TO_REREQUEST_REVIEW : STATE.PR_DRAFT_NO_FEEDBACK, loopDisposition: ready ? DISPOSITION.CLEAN_CONVERGED : DISPOSITION.ACTION_REQUIRED, ciStatus: "success",
     maxCopilotRounds: 0, copilotReviewRoundCount: 0, unresolvedThreadCount: 0, unresolvedGateThreadCount: 0, prTitle: "feat: x",
-    draftCapRoundFixed: fixed, draftRoundRefused: !fixed, draftCapRoundFailure: failure,
+    ...(ready ? { sameHeadCleanConverged: true, draftGate: marker, draftGateMarker: marker, preApprovalGate: { visible: false }, preApprovalGateMarker: { visible: false } } : {}),
+    draftCapRoundFixed: fixed, draftRoundRefused: !ready && !fixed, draftCapRoundFailure: failure,
   });
-  return { fixed, failure, nextAction: result.nextAction, remedy: result.agentRemedy?.command ?? null, reason: result.reason };
+  return { fixed, failure, nextAction: result.nextAction, remedy: result.agentRemedy?.command ?? null, blockedOn: result.blockedOn ?? null, reason: result.reason };
 }
 
 /**

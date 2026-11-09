@@ -10,6 +10,7 @@ import {
   ADR_TRIPWIRE_REMEDIES,
   buildAdrTripwireField,
   buildSizeBudgetField,
+  isCleanDraftVerdict,
 } from "../src/loop/pr-gate-coordination.mjs";
 import { DISPOSITION, interpretLoopState, STATE } from "../src/loop/copilot-loop-state.mjs";
 
@@ -4781,6 +4782,38 @@ test("draft round-cap refusal for a chain-extendable condition carries the exten
   assert.equal(evaluatePrGateCoordination({ ...base, repo: undefined, draftCapRoundFailure: "no_clearing_record" }).blockedOn, BLOCKED_ON.OPERATOR_DECISION);
 });
 
+// Issue 3139: one next step on a ready PR without clean draft_gate evidence.
+test("a ready PR without clean draft evidence names reconcile_draft_gate alone when no cap round failed, and the cap-round exit alone when one did", () => {
+  const base = { pr: 9, repo: "o/r", currentHeadSha: "abc123456789", prDraft: false, lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", sameHeadCleanConverged: true, draftGate: { visible: false } };
+  for (const draftCapRoundFailure of [undefined, null]) {
+    const result = evaluatePrGateCoordination({ ...base, draftCapRoundFailure });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
+    assert.deepEqual(result.allowedNextActions, [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE]);
+    assert.deepEqual({ on: result.blockedOn, remedy: result.agentRemedy, failure: result.capRoundFailure }, { on: undefined, remedy: undefined, failure: undefined });
+  }
+  const command = evaluatePrGateCoordination({ ...base, draftCapRoundFailure: "no_clearing_record" });
+  assert.equal(command.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.deepEqual(command.allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
+  assert.ok(command.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE));
+  assert.equal(command.agentRemedy.command, "dev-loops gate extend-cap-round-chain --repo o/r --pr 9");
+  assert.equal(command.blockedOn, undefined);
+  const operator = evaluatePrGateCoordination({ ...base, draftCapRoundFailure: "baseline_orphaned" });
+  assert.deepEqual({ next: operator.nextAction, on: operator.blockedOn, remedy: operator.agentRemedy }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION, remedy: undefined });
+});
+
+test("a ready PR with clean pre_approval evidence but no clean draft evidence takes the cap-round failure handling (issue 3139)", () => {
+  const base = { pr: 9, repo: "o/r", currentHeadSha: "abc123456789", prDraft: false, lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, loopDisposition: DISPOSITION.CLEAN_CONVERGED, ciStatus: "success", sameHeadCleanConverged: true, draftGate: { visible: false }, preApprovalGate: gate({ visible: true, headSha: "abc123456789", verdict: "clean", currentHeadClean: true }) };
+  const none = evaluatePrGateCoordination(base);
+  assert.equal(none.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
+  assert.equal(none.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
+  const failed = evaluatePrGateCoordination({ ...base, draftCapRoundFailure: "no_clearing_record" });
+  assert.equal(failed.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
+  assert.equal(failed.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.equal(failed.capRoundFailure, "no_clearing_record");
+  assert.equal(failed.agentRemedy.command, "dev-loops gate extend-cap-round-chain --repo o/r --pr 9");
+  assert.ok(failed.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE));
+});
+
 test("unconfirmed-CI block carries the exact wait-pr-checks agentRemedy", () => {
   const result = evaluatePrGateCoordination({
     repo: "o/r",
@@ -4813,3 +4846,24 @@ test("a draft PR with a missing refinement artifact is blocked on the operator d
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
   assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
 });
+
+// Issue 3139 AC1: one clean draft-verdict predicate; the detector's cleanEvidenceExists and the ordering check agree on blank-headSha and invisible evidence.
+for (const { name, evidence, clean } of [
+  { name: "visible clean with a headSha", evidence: { visible: true, headSha: "abc1234", verdict: "clean" }, clean: true },
+  { name: "clean with a blank headSha", evidence: { visible: true, headSha: "  ", verdict: "clean" }, clean: false },
+  { name: "clean with visible false", evidence: { visible: false, headSha: "abc1234", verdict: "clean" }, clean: false },
+  { name: "blocked verdict", evidence: { visible: true, headSha: "abc1234", verdict: "blocked" }, clean: false },
+]) {
+  test(`isCleanDraftVerdict agrees with draftGate.cleanEvidenceExists: ${name}`, () => {
+    const result = evaluatePrGateCoordination({
+      pr: 10,
+      currentHeadSha: "abc123456789",
+      prDraft: true,
+      lifecycleState: STATE.PR_DRAFT,
+      loopDisposition: DISPOSITION.ACTION_REQUIRED,
+      draftGate: gate(evidence),
+    });
+    assert.equal(isCleanDraftVerdict(evidence), clean);
+    assert.equal(result.draftGate.cleanEvidenceExists, clean);
+  });
+}

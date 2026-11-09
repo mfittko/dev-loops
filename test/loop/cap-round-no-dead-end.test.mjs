@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
-import { capRoundActList } from "../../scripts/github/write-gate-context.mjs";
+import { capRoundActList, countCompletedRounds, readClosedPriorRoundLogs, resolveCapRound } from "../../scripts/github/write-gate-context.mjs";
 import { writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 import { coordinationAt, extendRoute, followRemedy, reviewerOnlyRoute } from "./_cap-round-route.mjs";
@@ -21,7 +21,7 @@ const ACT = { severity: "medium", summary: "guard missing", files: ["src/a.mjs"]
  * `sequence`: open (the fixer marker), closed (closed as head_moved, closed as no_commit or lost: all three leave no marker and no record, because a closure only removes the marker),
  * fixer_needs_fix (the fixer's non-clearing record at A, another actSetId, the same refs).
  */
-function scenario({ clean, sequence, merges, fix, docs, orphaned = false, unreadable = false }) {
+function scenario({ clean, sequence, merges, fix, docs, orphaned = false, unreadable = false, otherRefs = false }) {
   const root = mkdtempSync(path.join(os.tmpdir(), "cap-matrix-"));
   initGitFixture(root, { branch: "main", commit: null });
   const git = (...args) => String(runGitFixture(root, args)).trim();
@@ -55,7 +55,7 @@ function scenario({ clean, sequence, merges, fix, docs, orphaned = false, unread
   const tmpRoot = path.join(root, "tmp");
   if (sequence === "open") writeSequenceMarker({ tmpRoot, baselineHead: A, branch: "issue-1" });
   if (sequence === "fixer_needs_fix") {
-    const items = capRoundActList(findings, A).map((item) => ({ ref: item.ref, status: "not_resolved" }));
+    const items = [...capRoundActList(findings, A).map((item) => ({ ref: item.ref, status: "not_resolved" })), ...(otherRefs ? [{ ref: "extra-ref", status: "not_resolved" }] : [])];
     writeSealedGateDeltaRecord(tmpRoot, A, { reviewBaselineHead: A, candidateHead: F, actSetId: "fixer-act-set", invocation: 1, outcome: "needs_fix", nextStep: "fix_and_rereview", items });
   }
   return { root, A, head, ledgerPath: path.join(dir, `draft_gate-${A}.json`), hasPrOwnCommit: fix || docs };
@@ -64,7 +64,7 @@ function scenario({ clean, sequence, merges, fix, docs, orphaned = false, unread
 
 // The end state of every combination. null: non-blocked (mark_ready_for_review or run_pre_approval_gate). Otherwise the expected block, with the proof failure and a trace pattern naming why.
 const BLOCKS = {
-  head_equals_baseline: { failure: "cap_round_unresolved", trace: /equals the baseline|no_cap_round_chain/ },
+  head_equals_baseline: { failure: null, trace: /equals the baseline|no_cap_round_chain/ },
   active_sequence_marker: { failure: "no_clearing_record", trace: /active sequence marker/ },
   act_items_open: { failure: "no_clearing_record", trace: /needs_fix|no PR-own commit/ },
   chain_reaches_head: { failure: "items_do_not_cover", trace: /chain_reaches_head/ },
@@ -124,7 +124,11 @@ test("cap_round_unresolved: an unreadable ledger blocks every route and names th
   const s = scenario({ clean: false, sequence: "lost", merges: 0, fix: true, docs: false, unreadable: true });
   try {
     const { end } = await followRemedy(s.root, { repo: REPO, pr: PR, head: s.head, baseline: s.A, ledgerPath: s.ledgerPath });
-    assert.deepEqual({ next: end.nextAction, failure: end.failure }, { next: "report_blocked", failure: "cap_round_unresolved" });
+    assert.deepEqual({ next: end.nextAction, failure: end.failure, on: end.blockedOn }, { next: "report_blocked", failure: "cap_round_unresolved", on: "operator_decision" });
+    assert.match(end.reason, /Condition cap_round_unresolved:/);
+    // A ready PR at the cap with the same unreadable ledger keeps the typed failure and the operator exit: no draft_gate round runs past the cap.
+    const ready = await coordinationAt(s.root, { repo: REPO, pr: PR, head: s.head, ready: true });
+    assert.deepEqual({ failure: ready.failure, on: ready.blockedOn }, { failure: "cap_round_unresolved", on: "operator_decision" });
   } finally { rmSync(s.root, { recursive: true, force: true }); }
 });
 
@@ -215,4 +219,52 @@ test("the remaining clean-cap needs_fix dead ends clear with the remedy ADR 0255
       assert.ok(READY.includes(end.nextAction), `docs ${docs}: ${end.failure}: ${end.reason}`);
     } finally { rmSync(s.root, { recursive: true, force: true }); }
   }
+});
+
+// Issue 3139 AC5: the PR 3138 sequence under one toolchain: a cap round with findings, the fixer's needs_fix record, a base-only merge and a half-stamped earlier ledger.
+test("PR 3138 sequence: each step runs the command the previous result named, the walk reaches run_pre_approval_gate, and the round numbers agree at every step", async () => {
+  // otherRefs: the sealed needs_fix record holds another ref set, so only the AC3 takeover lets the walk through.
+  const s = scenario({ clean: false, sequence: "fixer_needs_fix", merges: 1, fix: true, docs: false, otherRefs: true });
+  try {
+    // The half-stamped earlier ledger: a roundIdentity without `completed`, which counts as no round for every reader.
+    writeFileSync(path.join(path.dirname(s.ledgerPath), `draft_gate-${"4".repeat(40)}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "4".repeat(40), verdict: "findings_present", loggedAt: "2026-10-31T00:00:00.000Z", roundIdentity: { roundId: "r1", judgeExecution: null }, findings: [ACT] }));
+    const ctx = { repo: REPO, pr: PR, head: s.head };
+    const roundNumbers = async () => {
+      // The round the verdict writer posts (the ledger tmp root, as upsert-checkpoint-verdict passes it) against the cap round resolveCapRound reads: the closed ledgers it picks the last of, plus the round being posted.
+      const writer = await countCompletedRounds({ repo: REPO, pr: PR, gate: "draft_gate", headSha: s.head, tmpRoot: path.join(s.root, "tmp") }, { repoRoot: s.root });
+      const ledger = { repo: REPO, pr: PR, gate: "draft_gate", headSha: s.head };
+      const closed = await readClosedPriorRoundLogs(ledger, { repoRoot: s.root, includeRetainedCurrentHead: true });
+      assert.ok(await resolveCapRound(ledger, { repoRoot: s.root }), "resolveCapRound reads a cap round");
+      assert.equal(writer, closed.length + 1, "the round the verdict writer posts is the round after the last closed round resolveCapRound reads");
+      assert.equal(writer, 5, "four completed rounds plus the round being posted; the half-stamped ledger counts as none");
+    };
+    const texts = [];
+    let state = await coordinationAt(s.root, ctx);
+    for (let guard = 0; state.nextAction !== "run_pre_approval_gate" && guard < 6; guard += 1) {
+      await roundNumbers();
+      texts.push(state.reason ?? "");
+      if (state.nextAction === "report_blocked") {
+        assert.ok(state.remedy || state.blockedOn, `a typed block: ${state.reason}`);
+        assert.match(String(state.remedy), /gate extend-cap-round-chain/, "the coordinator names the extension command");
+        const extended = await extendRoute(s.root, ctx);
+        texts.push(String(extended.detail ?? ""), String(extended.reason ?? ""));
+        if (extended.ok === false) {
+          assert.match(String(extended.detail), /loop pre-push-delta --reviewer-only/, "the extension refusal names the reviewer-only delta");
+          texts.push(JSON.stringify((await reviewerOnlyRoute(s.root, { baseline: s.A, head: s.head, ledgerPath: s.ledgerPath })).decision));
+        }
+      } else {
+        assert.equal(state.nextAction, "mark_ready_for_review");
+        state = await coordinationAt(s.root, { ...ctx, ready: true });
+        continue;
+      }
+      state = await coordinationAt(s.root, ctx);
+    }
+    await roundNumbers();
+    assert.equal(state.nextAction, "run_pre_approval_gate", `${state.failure}: ${state.reason}`);
+    // The ready PR at the same head keeps the proof and the same answer.
+    const ready = await coordinationAt(s.root, { ...ctx, ready: true });
+    texts.push(ready.reason ?? "");
+    assert.equal(ready.nextAction, "run_pre_approval_gate", `${ready.failure}: ${ready.reason}`);
+    for (const text of texts) assert.doesNotMatch(text, /\brm\b/, "no step names a record deletion");
+  } finally { rmSync(s.root, { recursive: true, force: true }); }
 });

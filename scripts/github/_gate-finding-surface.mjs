@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { isCleanDraftVerdict } from "@dev-loops/core/loop/pr-gate-coordination";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
 import { isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
@@ -1197,7 +1198,7 @@ export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
     && draftGateMarker.verdict === "clean" && draftGateMarker.contractComplete,
   );
   // Legacy (non-marker) draft_gate verdict.
-  const cleanEvidenceExists = Boolean(draftGate.visible && draftGate.verdict === "clean" && draftGate.headSha);
+  const cleanEvidenceExists = isCleanDraftVerdict(draftGate);
   const legacyHeadMatch = Boolean(!currentHeadClean && cleanEvidenceExists && headSha && headSha.startsWith(draftGate.headSha));
   return {
     draftGate,

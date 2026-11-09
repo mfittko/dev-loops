@@ -54,6 +54,7 @@ import { viewIssue } from "./view-issue.mjs";
 import { buildAdjacentBundle, decodeGitDiffPathToken, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
 import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
+import { capRoundExit, foldDraftGateSatisfied, isCleanDraftVerdict } from "@dev-loops/core/loop/pr-gate-coordination";
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
@@ -90,10 +91,12 @@ import { existsSync } from "node:fs";
  * unambiguous cases before any reviewer fork, diff capture, or gate-context tmp
  * artifact is spent. `review` carries no ordering obligation and returns null.
  *
- * @param {{ gate: string, isDraft: boolean|undefined, draftGateSatisfied: boolean, repo: string, pr: number }} input
+ * `capRoundFailure` (issue 3139) is the typed cap-round-fixed condition of `resolveDraftCapRoundFact`; a pre_approval_gate refusal names it with its one exit (`capRoundExit`, the exit the coordination result prints).
+ *
+ * @param {{ gate: string, isDraft: boolean|undefined, draftGateSatisfied: boolean, repo: string, pr: number, capRoundFailure?: string|null }} input
  * @returns {string|null}
  */
-export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied, repo, pr }) {
+export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied, repo, pr, capRoundFailure = null }) {
   if (gate === "draft_gate") {
     if (isDraft !== false || draftGateSatisfied !== true) return null;
     return `Refusing to build gate context for draft_gate on ${repo}#${pr}: the PR is already out of draft and its draft gate is satisfied (a historical boundary receipt), so draft_gate does not apply. For a new ready head, re-request Copilot review when the head answers Copilot findings, then run pre_approval_gate at the current head. Legal next actions: rerequest_copilot_review, run_pre_approval_gate.`;
@@ -103,7 +106,26 @@ export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied
   const why = isDraft === true
     ? "the PR is still draft"
     : "no clean draft_gate verdict exists for this PR";
+  const exit = capRoundFailure && isDraft !== true ? capRoundExit(capRoundFailure, { repo, pr }) : null;
+  if (exit) return `Refusing to build gate context for pre_approval_gate on ${repo}#${pr}: the cap-round proof failed with condition ${capRoundFailure}; its one exit: ${exit.agentRemedy ? `run \`${exit.agentRemedy.command}\`` : `blockedOn ${exit.blockedOn}`}.`;
   return `Refusing to build gate context for pre_approval_gate on ${repo}#${pr}: ${why}, so the draft gate is not satisfied. Run the draft gate to clean and mark the PR ready for review before the pre_approval gate. Legal next action: run_draft_gate.`;
+}
+
+/**
+ * The one cap-round-fixed fact of a PR coordination context (issue 3139): `{ capRoundFixed, failure }`, `failure` the typed `resolveCapRoundFixed` `onFailure` condition
+ * (`cap_round_unresolved` on a throw or a cap reached with an unreadable ledger; a PR below the cap reports `failure: null`). The detector, the ordering check above and the verdict post's gate check all read it, so none keeps its own expression.
+ * A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
+ * @param {{ repo: string, pr: number, currentHeadSha: string, prData?: { isDraft?: boolean, baseRefName?: string } }} context
+ */
+export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = resolveCapRoundFixed }) {
+  let failure = null;
+  const baseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
+  const capRoundFixed = await resolve(
+    { repo: context.repo, pr: context.pr, headSha: context.currentHeadSha, baseRefName, anyHead: context.prData?.isDraft !== true },
+    // `resolveCapRoundFixed` reports no_cap_round below the round cap, the normal state: that is no failure. A cap reached with an unresolvable ledger (cap_round_unresolved) or a thrown resolver error is.
+    { repoRoot, onFailure: (condition) => { if (condition !== "no_cap_round") failure = condition; } },
+  ).then(Boolean, () => { failure = "cap_round_unresolved"; return false; });
+  return { capRoundFixed, failure };
 }
 
 // Map the artifact gate name (draft_gate | pre_approval_gate) to the config
@@ -2162,7 +2184,7 @@ export const isCleanCapRound = (capRound) => capRound?.log?.verdict === "clean" 
  * The candidate set is the closed prior rounds plus the retained rounds of the current head. The live current-head ledger is the round being posted
  * (the head excluded, as in the round count), so it is never the cap-round authority and the latest retained round at the head is.
  */
-export async function resolveCapRound(options, { repoRoot }) {
+export async function resolveCapRound(options, { repoRoot, onFailClosed = () => {} }) {
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
   const cap = resolveGateConfig(config, "draft").maxReviewRounds ?? 0;
   const draft = { ...options, gate: "draft_gate" };
@@ -2173,7 +2195,7 @@ export async function resolveCapRound(options, { repoRoot }) {
   let unreadable = 0;
   const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, includeRetainedCurrentHead: true, onUnreadable: () => { unreadable += 1; } })).at(-1);
   // The persisted severity verdict can read `clean` for judge-act mediums whose posted review composes findings_present: an open act item makes the round a cap round too.
-  if (unreadable > 0 || !log || (log.verdict !== "findings_present" && log.verdict !== "clean" && listOpenActItems(log.findings).length === 0)) return null;
+  if (unreadable > 0 || !log || (log.verdict !== "findings_present" && log.verdict !== "clean" && listOpenActItems(log.findings).length === 0)) { onFailClosed(); return null; }
   // An act item the sealed cap-round delta record marks resolved is fixed, not residue; with no verifiable record every act item stays.
   let items = [];
   try { items = readSealedGateDeltaRecord(resolveGateArtifactTmpRoot(repoRoot), log.headSha)?.items ?? []; } catch { /* unverifiable: keep every item */ }
@@ -2311,8 +2333,10 @@ export const capRoundCovers = (capRound, tmpRoot) => (record) => {
  * `options.anyHead` (a ready PR, where later commits belong to pre_approval_gate) accepts the first record whatever its candidate head.
  */
 export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, onFailure = () => {} }) {
-  const capRound = await resolveCapRound(options, { repoRoot });
-  if (!capRound) { onFailure("cap_round_unresolved"); return null; }
+  let failClosed = false;
+  const capRound = await resolveCapRound(options, { repoRoot, onFailClosed: () => { failClosed = true; } });
+  // no_cap_round: the cap is not reached, the normal state of a PR. cap_round_unresolved: the cap is reached but the ledger cannot prove the cap round.
+  if (!capRound) { onFailure(failClosed ? "cap_round_unresolved" : "no_cap_round"); return null; }
   // The delta record is main-anchored like the findings ledger: never read it from a relocated --tmp-root.
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
   const clearing = (headSha) => clearingDeltaRecord(tmpRoot, headSha);
@@ -4114,6 +4138,7 @@ export async function main(
     // impossible-to-false-block.
     loadCoordination = (opts) => loadPrGateCoordinationContext(opts, { runChild: run, repoRoot, cwd: repoRoot }),
     checkBaseFreshness = checkBaseFreshnessDefault,
+    resolveCapRoundFixed: resolveCapRoundFixedSeam = resolveCapRoundFixed,
   } = {},
 ) {
   let options;
@@ -4154,22 +4179,23 @@ export async function main(
         coordination = null;
       }
       if (coordination) {
-        // draft_gate reads the raw draft state (unknown never refuses) and the
-        // UNFOLDED clean-draft-verdict fact, matching the verdict post's
-        // draftGateAlreadySatisfied no-op; pre_approval keeps the folded fact.
+        // draft_gate reads the raw draft state (unknown never refuses). Both gates read the
+        // UNFOLDED clean-draft-verdict fact, matching the detector and the verdict post's
+        // draftGateAlreadySatisfied (open gate threads never change it).
         const isDraftGate = options.gate === "draft_gate";
         const draftVerdict = coordination.gateEvidence?.draftGate;
         // A ready PR whose cap round is fixed holds no clean draft verdict: the sealed proof stands in for it, so pre_approval_gate can build its context.
-        const capFixedPreApproval = !isDraftGate && coordination.prData?.isDraft === false && coordination.gateEvidence?.draftGateSatisfied !== true && coordination.unresolvedGateThreadCount === 0
-          && Boolean(await resolveCapRoundFixed({ repo: options.repo, pr: options.pr, headSha: coordination.currentHeadSha, baseRefName: typeof coordination.prData?.baseRefName === "string" ? coordination.prData.baseRefName.trim() : "", anyHead: true }, { repoRoot }).catch(() => null));
+        const evidenceSatisfied = isCleanDraftVerdict(draftVerdict);
+        const { capRoundFixed, failure: capRoundFailure } = coordination.prData?.isDraft === false && !evidenceSatisfied
+          ? await resolveDraftCapRoundFact({ ...coordination, repo: options.repo, pr: options.pr }, { repoRoot, resolve: resolveCapRoundFixedSeam })
+          : { capRoundFixed: false, failure: null };
         const refusal = prematureGateOrderingRefusal({
           gate: options.gate,
           isDraft: isDraftGate ? coordination.prData?.isDraft : Boolean(coordination.prData?.isDraft),
-          draftGateSatisfied: isDraftGate
-            ? draftVerdict?.verdict === "clean" && typeof draftVerdict?.headSha === "string"
-            : capFixedPreApproval || coordination.gateEvidence?.draftGateSatisfied === true,
+          draftGateSatisfied: foldDraftGateSatisfied({ isDraft: coordination.prData?.isDraft, evidenceSatisfied, capRoundFixed }),
           repo: options.repo,
           pr: options.pr,
+          capRoundFailure,
         });
         if (refusal) throw new Error(refusal);
       }

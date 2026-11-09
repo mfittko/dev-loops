@@ -57,6 +57,7 @@ import {
   renderBriefingVolatile,
   renderPrBodyRead,
   renderScopedBriefingVariant,
+  resolveDraftCapRoundFact,
   resolveReviewGateAngles,
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
@@ -2234,7 +2235,7 @@ test("CLI tripwire: a pre_approval_gate with a satisfied draft gate builds its c
       run: stubGhRun,
       loadCoordination: async () => {
         coordinationCalls++;
-        return { prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true } };
+        return { prData: { isDraft: false }, gateEvidence: { draftGate: { visible: true, verdict: "clean", headSha: "0ld1234" } } };
       },
     });
 
@@ -7683,7 +7684,7 @@ for (const reason of ["thread_site_changed", "thread_site_unverifiable", "no_com
     let admitted = false;
     await main(["--repo", id.repo, "--pr", String(id.pr), "--gate", id.gate, "--head-sha", headSha, "--base", baseSha,
       "--angles", '["correctness"]', "--known-findings", capturePath, "--silent"], { repoRoot, run: stubGhRun,
-      loadCoordination: async () => { admitted = true; return { prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true, draftGate: { verdict: "clean", headSha: baseSha } } }; } });
+      loadCoordination: async () => { admitted = true; return { prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true, draftGate: { visible: true, verdict: "clean", headSha: baseSha } } }; } });
     assert.equal(admitted, true, "the actual CLI admission path observes the historical draft boundary");
     const context = await readGateContext(id, { repoRoot });
     const read = context.requiredReads.find((entry) => entry.kind === "known-findings");
@@ -8652,7 +8653,7 @@ test("main() passes seamFirstRoundFor to the resolver: a pre_approval seam round
       await main(["--repo", id.repo, "--pr", String(id.pr), "--gate", "pre_approval_gate", "--head-sha", headSha, "--base", baseSha], {
         repoRoot,
         run: stubGhRun,
-        loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true } }),
+        loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGate: { visible: true, verdict: "clean", headSha: "0ld1234" } } }),
       });
       return (await readGateContext({ ...id, gate: "pre_approval_gate" }, { repoRoot })).resolvedAngles;
     };
@@ -9010,7 +9011,8 @@ test("a pre_approval_gate context builds for a ready cap-fixed PR with no clean 
     try {
       process.exitCode = undefined;
       await main(args, { repoRoot, run: stubGhRun, loadCoordination: coordination(1) });
-      assert.equal(process.exitCode, 1, "an unresolved gate thread keeps the refusal");
+      // Issue 3139: the ordering check folds satisfaction as the coordination evaluator does; open gate threads are the verdict post's and the coordinator's concern.
+      assert.notEqual(process.exitCode, 1, "the shared fold does not add the gate-thread count to the ordering check");
       process.exitCode = undefined;
       await main(args, { repoRoot, run: stubGhRun, loadCoordination: coordination(0) });
       assert.notEqual(process.exitCode, 1, "the sealed proof stands in for the clean draft verdict");
@@ -9182,6 +9184,32 @@ test("an unreadable cap-round ledger fails closed: no earlier round becomes the 
     assert.equal(await resolveCapRound(opts, { repoRoot }), null);
     assert.equal(await resolveCapRoundFixed({ ...opts, anyHead: true }, { repoRoot }), null);
   } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a draft_gate context on a ready cap-fixed PR with no clean draft verdict gets the already-satisfied refusal, not round_cap_reached (issue 3139)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  try {
+    await seedClosedRounds(repoRoot, 63, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    await writeDeltaRecord(repoRoot, baseSha, "9".repeat(40));
+    const coordination = async () => ({ currentHeadSha: headSha, unresolvedGateThreadCount: 0, prData: { isDraft: false, baseRefName: "main" }, gateEvidence: { draftGateSatisfied: false } });
+    const args = ["--repo", "owner/repo", "--pr", "63", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha];
+    const origErr = process.stderr.write;
+    let stderr = "";
+    process.stderr.write = (chunk) => { stderr += String(chunk); return true; };
+    try {
+      process.exitCode = undefined;
+      await main(args, { repoRoot, run: stubGhRun, loadCoordination: coordination });
+      assert.equal(process.exitCode, 1);
+      assert.match(stderr, /already out of draft/);
+      assert.doesNotMatch(stderr, /round_cap_reached/);
+    } finally {
+      process.stderr.write = origErr;
+    }
+  } finally {
+    process.exitCode = priorExitCode;
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
@@ -9550,13 +9578,13 @@ test("resolveCapRoundFixed reports unsealed_record for a sealed record of non-JS
   }
 });
 
-test("resolveCapRoundFixed reports cap_round_unresolved when the cap round cannot be resolved", async () => {
+test("resolveCapRoundFixed reports no_cap_round below the cap", async () => {
   const { repoRoot } = await makeBaseDiffRepo();
   try {
     let condition = null;
     const result = await resolveCapRoundFixed({ repo: "owner/repo", pr: 62, gate: "draft_gate", headSha: "7".repeat(40) }, { repoRoot, onFailure: (c) => { condition = c; } });
     assert.equal(result, null);
-    assert.equal(condition, "cap_round_unresolved");
+    assert.equal(condition, "no_cap_round");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -10357,6 +10385,64 @@ test("a body-only rebuild accepts an artifact whose angle differs only by case o
     await writeFile(path.join(reviews, "holistic.json"), JSON.stringify({ angle: " Holistic ", verdict: "clean", headSha: BODY_RERUN_SHA, findings: [] }), "utf8");
     await buildGateContext(bodyRerunInput("Edited"), { repoRoot });
   } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3139 AC2: a pre_approval_gate refusal on a ready PR names the typed cap-round condition and the one exit the coordination result prints for it.
+test("pre_approval_gate refusal on a ready PR names each cap-round failure condition and its coordination exit (issue 3139 AC2)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const base = { pr: 9, repo: "owner/repo", currentHeadSha: headSha, prDraft: false, lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success" };
+  const priorExitCode = process.exitCode;
+  const origErr = process.stderr.write;
+  try {
+    for (const condition of Object.keys(CAP_ROUND_REFUSAL)) {
+      const coordinated = evaluatePrGateCoordination({ ...base, draftCapRoundFailure: condition });
+      const exit = coordinated.agentRemedy ? `run \`${coordinated.agentRemedy.command}\`` : `blockedOn ${coordinated.blockedOn}`;
+      const chunks = [];
+      process.exitCode = undefined;
+      process.stderr.write = (chunk) => { chunks.push(String(chunk)); return true; };
+      await main(["--repo", "owner/repo", "--pr", "9", "--gate", "pre_approval_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha], {
+        repoRoot,
+        run: stubGhRun,
+        loadCoordination: async () => ({ currentHeadSha: headSha, prData: { isDraft: false, baseRefName: "main" }, gateEvidence: { draftGateSatisfied: false } }),
+        resolveCapRoundFixed: async (_options, { onFailure }) => { onFailure(condition); return null; },
+      });
+      const text = chunks.join("");
+      assert.equal(process.exitCode, 1, condition);
+      assert.ok(text.includes(`condition ${condition};`), `${condition}: ${text}`);
+      assert.ok(text.includes(`its one exit: ${exit}.`), `${condition}: ${text}`);
+    }
+  } finally {
+    process.stderr.write = origErr;
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3139 AC2: a ready PR that never reached the cap has no cap round, so its refusal keeps the run_draft_gate text and names no operator exit.
+test("pre_approval_gate refusal on a ready PR with no cap round (the real resolveCapRoundFixed, an empty ledger dir) names run_draft_gate and no operator exit (issue 3139 AC2)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  const origErr = process.stderr.write;
+  const chunks = [];
+  try {
+    process.exitCode = undefined;
+    process.stderr.write = (chunk) => { chunks.push(String(chunk)); return true; };
+    await main(["--repo", "owner/repo", "--pr", "9", "--gate", "pre_approval_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha], {
+      repoRoot,
+      run: stubGhRun,
+      loadCoordination: async () => ({ currentHeadSha: headSha, prData: { isDraft: false, baseRefName: "main" }, gateEvidence: { draftGateSatisfied: false } }),
+    });
+    const text = chunks.join("");
+    assert.equal(process.exitCode, 1);
+    assert.match(text, /Legal next action: run_draft_gate/);
+    assert.doesNotMatch(text, /blockedOn|operator_decision|cap-round proof failed/);
+    assert.deepEqual(await resolveDraftCapRoundFact({ repo: "owner/repo", pr: 9, currentHeadSha: headSha, prData: { isDraft: false, baseRefName: "main" } }, { repoRoot }), { capRoundFixed: false, failure: null });
+    assert.equal((await resolveDraftCapRoundFact({ repo: "owner/repo", pr: 9, currentHeadSha: headSha }, { repoRoot, resolve: async () => { throw new Error("unreadable"); } })).failure, "cap_round_unresolved", "a thrown resolver error stays the typed failure");
+  } finally {
+    process.stderr.write = origErr;
+    process.exitCode = priorExitCode;
     await rm(repoRoot, { recursive: true, force: true });
   }
 });

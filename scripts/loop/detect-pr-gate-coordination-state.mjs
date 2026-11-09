@@ -29,7 +29,7 @@ import {
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
-import { countCompletedRounds, resolveCapRoundFixed } from "../github/write-gate-context.mjs";
+import { countCompletedRounds, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
 import { workOrderDigest } from "../github/_work-order-protocol.mjs";
@@ -42,7 +42,7 @@ import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.m
 import { evaluateCopilotConvergence } from "@dev-loops/core/loop/merge-approval";
 import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "./_copilot-convergence-carry.mjs";
 import { copilotBodyJudgePath, readReviewMarkerCommits, resolveCurrentHeadBodyFeedback } from "../github/_copilot-body-disposition.mjs";
-import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { evaluateToolchainAuthority, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
 import { existsSync } from "node:fs";
@@ -1008,6 +1008,9 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   if (!currentHeadSha) {
     throw new Error("Invalid gh pr view payload: missing headRefOid");
   }
+  // ADR 0117 (issue 3139): a run the toolchain guard refuses must not write or remove the shared Copilot body judge file, so the guard runs before any such write.
+  const toolchain = runtime.guardToolchain ? evaluateToolchainAuthority({ repo: options.repo, pr: options.pr, prState: prData?.state, prHeadSha: currentHeadSha, changedFiles: extractChangedFiles(prData) }, runtime.toolchain) : null;
+  if (toolchain?.refusal) throw new Error(toolchain.refusal);
   // Fetch Copilot requested-reviewers at the original position (before threads/graphql)
   // to preserve the gh call order existing tests expect; the reconciliation (timeline
   // fetch) is deferred to after reviewSummary is computed.
@@ -1251,6 +1254,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     copilotBodyJudgeFile,
     copilotBodyJudgeFileError,
     fixerDisposition,
+    toolchain,
   };
 }
 
@@ -1369,7 +1373,9 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
   // The config loads first: a config load error refuses before any gh read.
   const config = (await loadDevLoopConfigStrict({ repoRoot })).config ?? {};
-  const context = await loadPrGateCoordinationContext(options, runtime);
+  // ADR 0117 (issue 3139): an open self-hosting PR is answered by its own head's toolchain; another checkout refuses inside the loader, before any shared gate state is written.
+  const context = await loadPrGateCoordinationContext(options, { ...runtime, guardToolchain: true });
+  const { toolchain } = context;
   const draftGateConfig = resolveGateConfig(config, "draft");
   const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
   // Shared with interpreterRefinementConfig.maxCopilotRounds in
@@ -1437,8 +1443,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
       });
   // ADR 0208: a PR whose cap round is fixed never runs draft_gate again; fail closed when the evidence is unreadable.
   // A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
-  let draftCapRoundFailure = null;
-  const draftCapRoundFixed = await (runtime.resolveCapRoundFixed ?? resolveCapRoundFixed)({ repo: context.repo, pr: context.pr, headSha: context.currentHeadSha, baseRefName: prBaseRefName, anyHead: context.prData?.isDraft !== true }, { repoRoot, onFailure: (condition) => { draftCapRoundFailure = condition; } }).then(Boolean, () => { draftCapRoundFailure = "cap_round_unresolved"; return false; });
+  const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure } = await resolveDraftCapRoundFact(context, { repoRoot, resolve: runtime.resolveCapRoundFixed ?? resolveCapRoundFixed });
   const draftRoundRefused = context.prData?.isDraft === true && !draftCapRoundFixed
     && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot, includeLiveCurrentHead: true }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), () => false);
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
@@ -1573,6 +1578,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   result.copilotBodyJudgeFinding = context.copilotBodyJudgeFinding ?? null;
   result.copilotBodyJudgeFile = context.copilotBodyJudgeFile ?? null;
   result.copilotBodyJudgeFileError = context.copilotBodyJudgeFileError ?? null;
+  result.toolchain = { root: toolchain.root, headSha: toolchain.headSha, selfHosting: toolchain.selfHosting };
   // Auto-release the runner-coordination lock at gate-coordination terminal stop
   // boundaries — see TERMINAL_RUNNER_RELEASE_ACTIONS above for the rationale
   // (success-or-stop release vs 30-min TTL; env-aware, best-effort,

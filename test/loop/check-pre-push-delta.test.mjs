@@ -1387,7 +1387,7 @@ function seedFixerRecord(repo, { sameActSet, ...patch } = {}) {
   return recordPath;
 }
 
-test("the reviewer-only run takes over a prior non-clearing record with another actSetId but the same refs and continues its invocation count", async () => {
+test("the reviewer-only run takes over a sealed or unsealed non-clearing record over the same refs with another actSetId and continues its invocation count", async () => {
   for (const unsealed of [false, true]) {
     const repo = reviewerOnlyRepo();
     try {
@@ -1401,20 +1401,47 @@ test("the reviewer-only run takes over a prior non-clearing record with another 
   }
 });
 
+// Issue 3139 AC3 (ADR 0255 decision 6 amended): a sealed non-clearing record is taken over whatever its ref set or candidate; the count continues, so the bound of 3 holds.
+test("the reviewer-only run takes over a sealed needs_fix record with another ref set or an off-history candidate, continuing its invocation count", async () => {
+  for (const patch of [{ items: [{ ref: "other", status: "not_resolved" }] }, { candidateHead: "ORPHAN" }]) {
+    const repo = reviewerOnlyRepo();
+    try {
+      await reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], status: "not_resolved" });
+      const orphan = runGitFixture(repo.dir, ["commit-tree", "-m", "orphan", "HEAD^{tree}"]);
+      seedFixerRecord(repo, { candidateHead: repo.baseline, invocation: 1, ...patch, ...(patch.candidateHead === "ORPHAN" ? { candidateHead: orphan } : {}) });
+      const { record } = await reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], invocation: 2 });
+      assert.deepEqual({ o: record.outcome, i: record.invocation }, { o: "locally_clear", i: 2 });
+    } finally { cleanup(repo); }
+  }
+}, 30000);
+
+test("the reviewer-only run refuses a sealed needs_fix record at invocation 3 with bounded_out and no record deletion", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    await reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], status: "not_resolved" });
+    seedFixerRecord(repo, { candidateHead: repo.baseline, invocation: 3, items: [{ ref: "other", status: "not_resolved" }] });
+    await assert.rejects(reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], invocation: 4 }), (error) => {
+      assert.match(error.message, /bounded_out, restart_on_replacement_pr/);
+      assert.doesNotMatch(error.message, /\brm\b/);
+      return true;
+    });
+  } finally { cleanup(repo); }
+});
+
 test("the reviewer-only run keeps a locally_clear record, an extension, another ref set and a foreign candidate protected, and an unsealed one names its remedy", async () => {
   const cases = [
     ["is locally_clear for another act set", { outcome: "locally_clear" }, false, /gate extend-cap-round-chain/],
     ["carries an extension", { outcome: "locally_clear", extension: "delta_covered", sameActSet: true }, false, /gate extend-cap-round-chain/],
     ["is locally_clear for another act set", { outcome: "locally_clear", candidateHead: "ORPHAN" }, false, /pr create .*--allow-replacement-pr/],
     ["carries an extension", { outcome: "locally_clear", extension: "delta_covered", sameActSet: true, candidateHead: "ORPHAN" }, false, /pr create .*--allow-replacement-pr/],
-    ["covers another set of act refs", { items: [{ ref: "other", status: "resolved" }] }, false, /rm -f \S+\.json \S+\.seal/],
-    ["is locally_clear for another act set and covers another set of act refs", { outcome: "locally_clear", items: [{ ref: "other", status: "resolved" }] }, false, /rm -f \S+\.json \S+\.seal/],
+    // Issue 3139 AC3: a locally_clear record of another act set and ref set stays protected and names the replacement-PR restart, on or off the PR head's history.
+    ["is locally_clear for another act set and covers another set of act refs", { outcome: "locally_clear", items: [{ ref: "other", status: "resolved" }] }, false, /pr create .*--allow-replacement-pr/],
     ["is locally_clear for another act set and covers another set of act refs", { outcome: "locally_clear", items: [{ ref: "other", status: "resolved" }], candidateHead: "ORPHAN" }, false, /pr create .*--allow-replacement-pr/],
-    ["not on the PR head's history", { candidateHead: "ORPHAN" }, false, /rm -f \S+\.json \S+\.seal/],
-    ["not on the PR head's history", { candidateHead: "HEAD" }, false, /rm -f \S+\.json \S+\.seal/], // a symbolic ref is no commit SHA
     ["bounded_out", { sameActSet: true, outcome: "locally_clear", invocation: 3, candidateHead: "ORPHAN" }, false, /pr create .*--allow-replacement-pr/],
     ["bounded_out", { sameActSet: true, outcome: "locally_clear", invocation: 3, candidateHead: "HEAD" }, false, /pr create .*--allow-replacement-pr/], // a symbolic candidate at the bound
     ["unsealed_record: .*is locally_clear for another act set.*rm -f \\S+\\.json \\S+\\.seal", { outcome: "locally_clear" }, true],
+    // ADR 0255 decision 7: an unsealed non-clearing record over another ref set is not taken over.
+    ["unsealed_record: .*covers another set of act refs.*rm -f \\S+\\.json \\S+\\.seal", { outcome: "needs_fix", items: [{ ref: "other", status: "not_resolved" }] }, true],
   ];
   for (const [message, patch, unsealed, remedy] of cases) {
     const repo = reviewerOnlyRepo();
@@ -1427,6 +1454,7 @@ test("the reviewer-only run keeps a locally_clear record, an extension, another 
       await assert.rejects(reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], invocation: (patch.invocation ?? 1) + 1 }), (error) => {
         assert.match(error.message, new RegExp(message));
         if (!unsealed) assert.match(error.message, remedy, "a sealed refusal names the runnable remedy");
+        if (!unsealed) assert.doesNotMatch(error.message, /\brm\b/, "no sealed refusal names a record deletion (issue 3139 AC3)");
         assert.doesNotMatch(error.message, /loop gate-coordination/, "no remedy routes back to the coordinator");
         if (!/extend-cap-round-chain/.test(String(remedy))) assert.doesNotMatch(error.message, /extend-cap-round-chain/, "a record that does not cover the derived refs never routes to the extension");
         assert.doesNotMatch(error.message, /\$\{/, "no uninterpolated placeholder");
@@ -1477,7 +1505,7 @@ test("the reviewer-only result run refuses when origin/<base> moved the PR-own p
   } finally { cleanup(repo); }
 });
 
-test("a prior record that is not JSON refuses unsealed_record, and a sealed one whose candidate is missing from the clone names the rm remedy", async () => {
+test("a prior record that is not JSON refuses unsealed_record, and a sealed non-clearing one whose candidate is missing from the clone is taken over", async () => {
   const repo = reviewerOnlyRepo();
   try {
     const recordPath = path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.json`);
@@ -1486,7 +1514,8 @@ test("a prior record that is not JSON refuses unsealed_record, and a sealed one 
     const args = [...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")];
     await assert.rejects(runDeltaCli(args, seam), /unsealed_record: .*unreadable.*rm -f .*\.seal/);
     writeSealedGateDeltaRecord(repo.tmpRoot, repo.baseline, { reviewBaselineHead: repo.baseline, candidateHead: "f".repeat(40), actSetId: "fixer-act-set", invocation: 1, outcome: "needs_fix", nextStep: "fix_and_rereview", items: [] });
-    await assert.rejects(runDeltaCli(args, seam), /not on the PR head's history.*rm -f \S+\.json \S+\.seal/);
+    const input = await runDeltaCli(args, seam);
+    assert.equal(input.input.actItems.length, 0, "the takeover proceeds to the reviewer input");
   } finally { cleanup(repo); }
 });
 
