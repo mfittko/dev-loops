@@ -134,7 +134,11 @@ export function parseEditIssueCliArgs(argv) {
       continue;
     }
     if (token.name === "body") {
-      const body = requireTokenValue(token, parseError);
+      // An empty value is left to the post-loop empty-body policy (--allow-empty-body).
+      const body = token.value;
+      if (typeof body !== "string" || body.startsWith("--")) {
+        throw parseError(`Missing value for ${token.rawName}`);
+      }
       options.body = body;
       continue;
     }

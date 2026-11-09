@@ -460,6 +460,8 @@ test("parseEditIssueCliArgs: --allow-empty-body lets an empty or `null` body thr
   assert.throws(() => parseEditIssueCliArgs([...base, "--body", "  "]), /must not be empty/);
   assert.equal(parseEditIssueCliArgs([...base, "--body", "null", "--allow-empty-body"]).body, "null");
   assert.equal(parseEditIssueCliArgs([...base, "--allow-empty-body", "--body", "  "]).allowEmptyBody, true);
+  assert.equal(parseEditIssueCliArgs([...base, "--allow-empty-body", "--body", ""]).body, "");
+  assert.throws(() => parseEditIssueCliArgs([...base, "--body", ""]), /must not be empty/);
 });
 
 test("editIssue: --allow-empty-body writes a `null` body-file", async () => {

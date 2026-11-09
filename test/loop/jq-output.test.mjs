@@ -387,6 +387,8 @@ test("strict: a typo in a select/comparison predicate path is a missing-path err
   assert.deepEqual(evaluateJqFilter(data, ".a == null", { strict: true }), [true]);
   assert.deepEqual(evaluateJqFilter(data, "select(.a == null)", { strict: true }), [data]);
   assert.deepEqual(evaluateJqFilter(data, ".typo == 1"), [false]);
+  // a path through a present null is not a missing path (view-pr --jq .pr.mergeCommit.oid)
+  assert.deepEqual(evaluateJqFilter({ a: null }, ".a.b", { strict: true }), evaluateJqFilter({ a: null }, ".a.b"));
 });
 
 test("strict: the path[] iteration branch reports a missing base path", () => {
