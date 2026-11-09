@@ -3931,3 +3931,13 @@ test("issue 2447: a record of 20 findings plus an unresolved act ref refuses nam
     await assert.rejects(fx.emit({ phase: "commit_only", keepRecord: true }), (error) => /gate-delta[\\/][0-9a-f]{40}\.json/.test(error.message) && !/null/.test(error.message) && /at most 20 entries/.test(error.message));
   });
 });
+
+test("issue 2447: an unsealed fix_and_rereview record at HEAD refuses the act-list re-emission with delta_record_unsealed and writes no plan", async () => {
+  await withFixture(async (fx) => {
+    const { prior } = await refusedDeltaFixture(fx, "locally_clear");
+    await fx.writeRecord({ candidateHead: git(fx.wt, "rev-parse", "HEAD"), outcome: "needs_fix", nextStep: "fix_and_rereview", items: [{ ref: ACT_REF, status: "resolved" }], findings: [LIFECYCLE] });
+    const planBytes = await readFile(prior.planPath);
+    await assert.rejects(fx.emit({ phase: "commit_only", keepRecord: true }), /delta_record_unsealed/);
+    assert.deepEqual(await readFile(prior.planPath), planBytes);
+  });
+});

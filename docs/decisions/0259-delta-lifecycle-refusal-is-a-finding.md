@@ -12,9 +12,9 @@ In the pre-push delta `--result` run, a lifecycle or docs-validator refusal exit
 
 ## Decision
 
-1. In the `--result` run, a lifecycle or docs-validator refusal becomes a `lifecycle: true` medium finding in the sealed record. The record seals `needs_fix` and the loop stays in the fixer route.
+1. In the `--result` run, a lifecycle or docs-validator refusal becomes a `lifecycle: true` medium finding in the sealed record. An otherwise clear decision becomes `needs_fix` (`bounded_out` at invocation 3), and the loop stays in the fixer route. A decision that is already not clear keeps its outcome.
 2. Infrastructure errors and a dirty tree (a tracked edit or an untracked non-ignored file) keep exit 2.
-3. A same-candidate `commit_only` re-emission lists the open tasks and requires a new commit on top of HEAD before the next emission.
+3. A same-candidate `commit_only` re-emission lists the open tasks and tells the fixer to commit on top of HEAD. The handback at the reviewed candidate is refused until a new commit on top of HEAD exists.
 4. A hand-back at the reviewed candidate with open lifecycle or residue work is refused.
 
 ## Consequences

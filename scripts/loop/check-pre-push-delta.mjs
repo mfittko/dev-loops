@@ -497,9 +497,12 @@ const clip = (text) => String(text).slice(0, 2000);
 
 // The lifecycle refusals of the delta range as record findings (`severity`, `summary`, `evidence`): the changelog check (the range touches `changes/`)
 // and, when the repo's committed test:docs script calls the one docs validator module, its other validators.
-async function lifecycleRefusals({ options, ownPaths, changedPaths, changelog, docsValidators, baselineHead, currentHead }) {
+async function lifecycleRefusals({ options, ownPaths, changedPaths, changelog, docsValidators, baselineHead, currentHead, revParse }) {
   const findings = [];
   const root = resolveRepoRoot(options.worktree);
+  // The record binds the verdict to currentHead: a commit that landed during the run would make the validators judge another commit.
+  const liveHead = revParse(options.worktree, "HEAD");
+  if (liveHead !== currentHead) throw new Error(`head_moved_during_run: the worktree HEAD is ${liveHead}, not the reviewed candidate ${currentHead}; rerun the --result step`);
   const exec = promisify(execFile);
   const git = createGitClient(root, (command, args, execOptions) => exec(command, args, { ...execOptions, env: gitEnvNoDirOverrides() }));
   if ((ownPaths ?? changedPaths(options.worktree, baselineHead, currentHead)).some((file) => file.startsWith("changes/"))) {
@@ -509,7 +512,7 @@ async function lifecycleRefusals({ options, ownPaths, changedPaths, changelog, d
     const code = await changelog({ root, git, log, requireHeadInputs: true });
     if (code !== 0) findings.push({ lifecycle: true, severity: "medium", summary: "LIFECYCLE-CHANGELOG-COMPLETENESS: the changelog check refused this delta range", evidence: clip(diagnostics.join("; ")) });
   }
-  const pkg = spawnSync("git", ["-C", root, "show", "HEAD:package.json"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+  const pkg = spawnSync("git", ["-C", root, "show", `${currentHead}:package.json`], { encoding: "utf8", env: gitEnvNoDirOverrides() });
   let optedIn = false;
   try { optedIn = pkg.status === 0 && String(JSON.parse(pkg.stdout).scripts?.["test:docs"] ?? "").includes(DOCS_VALIDATOR_MODULE); } catch { /* not JSON: no opt-in */ }
   if (optedIn) {
@@ -528,8 +531,9 @@ async function lifecycleRefusals({ options, ownPaths, changedPaths, changelog, d
 }
 
 // Issue 2447: a handback at the candidate that a fix_and_rereview record reviewed is refused while must-fix work is open there: a lifecycle finding, or a residue finding with no skip reason recorded for its site.
-function assertNoOpenWorkAtCandidate(prior, { handbackHead, siteCoverage, actItems }) {
-  if (prior?.nextStep !== "fix_and_rereview" || prior.candidateHead !== handbackHead) return;
+// A record of another act set (a closed sequence or a replaced act list) names residue refs this sequence lacks, so no skip reason could clear it: it does not apply.
+function assertNoOpenWorkAtCandidate(prior, { handbackHead, siteCoverage, actItems, actSetId }) {
+  if (prior?.nextStep !== "fix_and_rereview" || prior.candidateHead !== handbackHead || prior.actSetId !== actSetId) return;
   const skipped = (f) => {
     const item = actItems.find((a) => a.ref === f.residueOf);
     return Boolean(item) && Boolean(recordedSkipReason(siteCoverage, item.fingerprint ?? item.ref, typeof f.site === "string" ? f.site : null));
@@ -648,12 +652,13 @@ export async function runCli(
     const record = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
     if (!options.result) {
       const recordRoot = tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree);
+      // One snapshot of the sealed record feeds both checks: a concurrent --result rewrite between two reads would skip both.
       const sealed = readSealedRecord(recordRoot, sequence.reviewBaselineHead);
-      // Only the record that assertNoOpenWorkAtCandidate would act on is refused: an unsealed fix_and_rereview record at the handback head.
+      // Only the record that assertNoOpenWorkAtCandidate would act on is refused: an unsealed fix_and_rereview record of this act set at the handback head.
       const unsealed = sealed ? null : readRecord(recordRoot, sequence.reviewBaselineHead);
-      if (unsealed?.nextStep === "fix_and_rereview" && unsealed.candidateHead === record.headSha) throw new Error(`delta_record_unsealed: a delta record exists for ${sequence.reviewBaselineHead} but carries no matching seal (a --result write may have crashed), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record`);
+      if (unsealed?.nextStep === "fix_and_rereview" && unsealed.candidateHead === record.headSha && unsealed.actSetId === sequence.actSetId) throw new Error(`delta_record_unsealed: a delta record exists for ${sequence.reviewBaselineHead} but carries no matching seal (a --result write may have crashed), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record`);
+      assertNoOpenWorkAtCandidate(sealed, { handbackHead: record.headSha, siteCoverage: record.siteCoverage ?? [], actItems: sequence.actItems, actSetId: sequence.actSetId });
     }
-    if (!options.result) assertNoOpenWorkAtCandidate(readSealedRecord(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), sequence.reviewBaselineHead), { handbackHead: record.headSha, siteCoverage: record.siteCoverage ?? [], actItems: sequence.actItems });
     if (options.fixerPlan && !options.result && !options.handback && (!fixCommitted || record.headSha !== currentHead)) {
       if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(raw.headSha)) throw new Error("sequence closure requires a canonical full commit SHA in the handback");
       const planBytes = readFileSync(options.fixerPlan);
@@ -701,7 +706,7 @@ export async function runCli(
       staleSurfaceHits: staleSurfaceTruncated ? [...staleSurfaceHits, staleSurfaceTruncatedHit()] : staleSurfaceHits,
     });
     // Issue 2447: a lifecycle refusal is a medium finding in the sealed record, so the fixer has a task; it makes a clear result needs_fix (bounded_out at the last invocation).
-    const lifecycleFindings = await lifecycleRefusals({ options, ownPaths, changedPaths, changelog, docsValidators, baselineHead: sequence.reviewBaselineHead, currentHead });
+    const lifecycleFindings = await lifecycleRefusals({ options, ownPaths, changedPaths, changelog, docsValidators, baselineHead: sequence.reviewBaselineHead, currentHead, revParse });
     if (lifecycleFindings.length && decision.locallyClear) {
       const bounded = options.invocation >= DELTA_MAX_INVOCATIONS;
       decision = { ...decision, outcome: bounded ? "bounded_out" : "needs_fix", nextStep: bounded ? "push_to_gate" : "fix_and_rereview", locallyClear: false };
@@ -718,7 +723,7 @@ export async function runCli(
     // Local evidence for the emitter and the fixed-reply guard; never a gate verdict.
     const write = () => writeGateDeltaRecord({
       tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree),
-      sequence, candidateHead: currentHead, invocation: options.invocation, decision, result, lifecycleFindings,
+      sequence, candidateHead: currentHead, invocation: options.invocation, decision, result, lifecycleFindings, reserveOpenTasks: !options.threadsFile,
     });
     // The reviewer-only route read its prior record before the fetch, the scans and the changelog check: write only when the record is still the snapshot every check above judged.
     if (options.reviewerOnly) {

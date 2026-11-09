@@ -646,7 +646,14 @@ export async function emitFixerWorkOrder({
   // Issue 2447: the act-list route reads the sealed record the same way and decides from its nextStep, never from the reviewer's stated outcome.
   // The open work is each record finding and each not_resolved or cannot_verify act ref of the reviewer's result.
   const actRecord = actListFile && phase === "commit_only" && delta ? readSealedGateDeltaRecord(tmpRoot, headSha) : null;
-  const openAtHead = actRecord?.nextStep === "fix_and_rereview" && actRecord.candidateHead === execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim();
+  const worktreeHead = actListFile && phase === "commit_only" && delta ? execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim() : null;
+  // An unsealed fix_and_rereview record at HEAD is not "no record": a locally_clear reviewer result must not take the append-only path past its open lifecycle work.
+  if (actListFile && phase === "commit_only" && delta && !actRecord) {
+    let unsealed = null;
+    try { unsealed = readGateDeltaRecord(tmpRoot, headSha); } catch { /* unreadable: no record */ }
+    if (unsealed?.nextStep === "fix_and_rereview" && unsealed.candidateHead === worktreeHead) throw new Refusal(`delta_record_unsealed: delta record ${gateDeltaRecordPath(tmpRoot, headSha)} holds fix_and_rereview at the worktree HEAD but carries no matching seal (a --result write may have crashed), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record; nothing was written`);
+  }
+  const openAtHead = actRecord?.nextStep === "fix_and_rereview" && actRecord.candidateHead === worktreeHead;
   if (openAtHead) {
     // The result must be the one the decision used: an earlier result of the same sequence shares the act set but not the record's statuses.
     if (itemPairs(delta.parsed.actionableItems) !== itemPairs(actRecord.items)) throw new Refusal(`--delta-result's item statuses differ from the delta record ${gateDeltaRecordPath(tmpRoot, headSha)}, so it is not the result that decision used; pass that decision's result, or re-run the delta review (dev-loops loop pre-push-delta); nothing was written`);

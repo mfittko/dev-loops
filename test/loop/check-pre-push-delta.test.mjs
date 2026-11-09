@@ -15,6 +15,7 @@ import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { A, B, C, M, boundArgs, coverageRepo } from "./_delta-coverage-fixture.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 import { sealDeltaFixture } from "./_seal-fixture.mjs";
+import { runDocsValidators } from "../../scripts/docs/docs-validators.mjs";
 import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { gateDeltaRecordPath, isLifecycleFinding, readGateDeltaRecord, readSealedGateDeltaRecord, writeGateDeltaRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { decidePiToolCall } from "../../extension/readonly-role-gate.ts";
@@ -1558,10 +1559,10 @@ test("the reviewer-only route accepts only the canonical draft_gate cap-round le
 });
 
 // Issue 2447 slice 1: no handback at the reviewed candidate while must-fix work is open.
-function openRecordFixture(findings) {
+function openRecordFixture(findings, actSetId = startDeltaSequence({ reviewBaselineHead: A, actList: ACT_LIST }).actSetId) {
   const { dir, actList } = fixture();
   const seam = headAt(B);
-  writeSealedGateDeltaRecord(seam.tmpRoot, A, { reviewBaselineHead: A, candidateHead: B, actSetId: "x", invocation: 1, outcome: "needs_fix", nextStep: "fix_and_rereview", items: [], findings });
+  writeSealedGateDeltaRecord(seam.tmpRoot, A, { reviewBaselineHead: A, candidateHead: B, actSetId, invocation: 1, outcome: "needs_fix", nextStep: "fix_and_rereview", items: [], findings });
   const handback = (headSha, siteCoverage = []) => {
     const coverage = path.join(dir, `coverage-${headSha}-${Math.random()}.json`);
     fs.writeFileSync(coverage, JSON.stringify({ headSha, siteCoverage }));
@@ -1606,17 +1607,27 @@ test("issue 2447: package.json test:docs calls the one docs validator module, wh
 });
 
 // A git fixture whose test:docs calls the docs validator module (or not), a threads-route input run and a clearing reviewer result.
-async function docsFixture(optIn) {
+// `adr`: the baseline commits an accepted ADR, origin/main names it, and the fix commit edits its Decision line (the real ADR-SUPERSEDE-NOT-REWRITE input).
+async function docsFixture(optIn, { adr = false } = {}) {
   const { dir, threadsFile } = threadsFixture();
   initGitFixture(dir, { branch: "main", commit: null });
   runGitFixture(dir, ["config", "commit.gpgsign", "false"]);
   // The gate artifacts (tmp/) and the fixture's own result files are ignored, as in a real worktree; an ignored file never refuses.
   fs.writeFileSync(path.join(dir, ".gitignore"), "tmp/\nreview.json\ninput-result.json\n");
   fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ scripts: { "test:docs": optIn ? "bun scripts/docs/docs-validators.mjs" : "bun scripts/docs/validate-links.mjs" } }));
+  const adrFile = path.join(dir, "docs", "decisions", "0001-x.md");
+  if (adr) {
+    fs.mkdirSync(path.dirname(adrFile), { recursive: true });
+    fs.writeFileSync(adrFile, "# 0001. X\n\n## Status\n\nAccepted, 2026-11-09.\n\n## Decision\n\nUse A.\n");
+  }
   runGitFixture(dir, ["add", "."]);
   runGitFixture(dir, ["commit", "-qm", "base"]);
   const baseline = runGitFixture(dir, ["rev-parse", "HEAD"]);
-  runGitFixture(dir, ["commit", "-q", "--allow-empty", "-m", "fix: edit adr"]);
+  if (adr) {
+    runGitFixture(dir, ["update-ref", "refs/remotes/origin/main", baseline]);
+    fs.writeFileSync(adrFile, fs.readFileSync(adrFile, "utf8").replace("Use A.", "Use B."));
+    runGitFixture(dir, ["commit", "-qam", "fix: edit adr"]);
+  } else runGitFixture(dir, ["commit", "-q", "--allow-empty", "-m", "fix: edit adr"]);
   const args = ["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", baseline, "--worktree", dir];
   const input = (await runDeltaCli([...args, "--spec-identity", "spec@1", "--result-path", path.join(dir, "input-result.json")], quiet)).input;
   const resultPath = path.join(dir, "review.json");
@@ -1739,4 +1750,64 @@ test("issue 2447: the writer refuses when lifecycle findings plus open act items
     write(19);
     assert.equal(readGateDeltaRecord(tmpRoot, A).findings.filter(isLifecycleFinding).length, 1);
   } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
+});
+
+test("issue 2447: the writer reserves no task slots on the thread route and throws over budget only with a lifecycle finding", () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "delta-route-"));
+  try {
+    const sequence = { reviewBaselineHead: A, actSetId: "x" };
+    const decision = { outcome: "needs_fix", nextStep: "fix_and_rereview", locallyClear: false };
+    const items = (n) => Array.from({ length: n }, (_, i) => ({ ref: `r${i}`, status: "not_resolved", evidence: ["e"] }));
+    const newFindings = Array.from({ length: 10 }, (_, i) => ({ severity: "medium", summary: `residue ${i}`, evidence: "e", residueOf: `r${i}`, site: `s${i}` }));
+    // Thread route: 12 open threads plus 10 findings keep every finding.
+    writeGateDeltaRecord({ tmpRoot, sequence, candidateHead: B, invocation: 1, decision, result: { actionableItems: items(12), newFindings }, reserveOpenTasks: false });
+    assert.equal(readGateDeltaRecord(tmpRoot, A).findings.length, 10);
+    // Thread route with a lifecycle finding: 12 open threads do not count against the 20 entries.
+    writeGateDeltaRecord({ tmpRoot, sequence, candidateHead: B, invocation: 1, decision, result: { actionableItems: items(21), newFindings: [] }, lifecycleFindings: [LIFECYCLE_FINDING], reserveOpenTasks: false });
+    assert.equal(readGateDeltaRecord(tmpRoot, A).findings.length, 1);
+    // Act-list route, no lifecycle finding, 21 open items: the record is written (bounded_out at invocation 3), no throw.
+    writeGateDeltaRecord({ tmpRoot, sequence, candidateHead: B, invocation: 3, decision: { outcome: "bounded_out", nextStep: "push_to_gate", locallyClear: false }, result: { actionableItems: items(21), newFindings: [] } });
+    assert.equal(readGateDeltaRecord(tmpRoot, A).outcome, "bounded_out");
+  } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
+});
+
+test("issue 2447: the handback guard reads the sealed record once, so a concurrent rewrite cannot fail it open", async () => {
+  const fx = openRecordFixture([LIFECYCLE_FINDING]);
+  let reads = 0;
+  const real = readSealedGateDeltaRecord;
+  const over = { ...fx.headAt(B), readSealedRecord: (...args) => (reads++ === 0 ? real(...args) : null) };
+  await assert.rejects(fx.run(fx.handback(B), ["--handback"], over), /open task/);
+  assert.equal(reads, 1);
+});
+
+test("issue 2447: a fix_and_rereview record of another act set at the handback candidate does not refuse the handback, sealed or not", async () => {
+  const sealed = openRecordFixture([RESIDUE_FINDING], "other-act-set");
+  assert.ok((await sealed.run(sealed.handback(B), ["--handback"])).ok);
+  const unsealed = openRecordFixture([LIFECYCLE_FINDING], "other-act-set");
+  fs.rmSync(`${gateDeltaRecordPath(unsealed.tmpRoot, A)}.seal`);
+  assert.ok((await unsealed.run(unsealed.handback(B), ["--handback"])).ok);
+});
+
+test("issue 2447: the --result run judges the recorded candidate and refuses when HEAD moved during the run", async () => {
+  const fx = await docsFixture(true);
+  try {
+    let heads = 0;
+    const revParse = (_worktree, rev) => (rev === "HEAD" && heads++ > 0 ? "f".repeat(40) : runGitFixture(fx.dir, ["rev-parse", rev]));
+    await assert.rejects(fx.run({ revParse, docsValidators: async () => [] }), /head_moved_during_run/);
+    assert.equal(fx.recordOf(), null);
+  } finally { fs.rmSync(fx.dir, { recursive: true, force: true }); }
+});
+
+test("issue 2447: an edit of an accepted ADR's Decision line runs through the real decision-records validator into one medium lifecycle finding", async () => {
+  const fx = await docsFixture(true, { adr: true });
+  try {
+    // Only the validator list is narrowed (the fixture repo holds no rule registry); the validator, the git client and the message format are real.
+    const decision = await fx.run({ docsValidators: (opts) => runDocsValidators({ ...opts, ids: ["decision-records"] }) });
+    assert.equal(decision.nextStep, "fix_and_rereview");
+    const { findings } = fx.recordOf();
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].severity, "medium");
+    assert.equal(findings[0].lifecycle, true);
+    assert.match(findings[0].summary, /decision-records[^]*\(ADR-SUPERSEDE-NOT-REWRITE\)/);
+  } finally { fs.rmSync(fx.dir, { recursive: true, force: true }); }
 });
