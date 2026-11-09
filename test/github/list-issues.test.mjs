@@ -84,7 +84,7 @@ test("runCli: parser + listIssues wire through the shared shell (--jq extracts a
   assert.equal(stdout.get().trim(), "10");
 });
 
-test("runCli: a --jq path matching no field exits 2; a real null still prints null", async () => {
+test("runCli: a --jq path matching no field exits 2; an out-of-range index stays present and prints null", async () => {
   const stderr = captureStream();
   const missCode = await runCli(["--repo", "o/n", "--jq", ".issuez"], { run: stubGh(ISSUES).run, stdout: captureStream(), stderr });
   assert.equal(missCode, 2);
