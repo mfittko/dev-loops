@@ -9552,13 +9552,13 @@ test("resolveCapRoundFixed reports unsealed_record for a sealed record of non-JS
   }
 });
 
-test("resolveCapRoundFixed reports cap_round_unresolved when the cap round cannot be resolved", async () => {
+test("resolveCapRoundFixed reports no_cap_round below the cap", async () => {
   const { repoRoot } = await makeBaseDiffRepo();
   try {
     let condition = null;
     const result = await resolveCapRoundFixed({ repo: "owner/repo", pr: 62, gate: "draft_gate", headSha: "7".repeat(40) }, { repoRoot, onFailure: (c) => { condition = c; } });
     assert.equal(result, null);
-    assert.equal(condition, "cap_round_unresolved");
+    assert.equal(condition, "no_cap_round");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -10380,8 +10380,7 @@ test("pre_approval_gate refusal on a ready PR names each cap-round failure condi
         repoRoot,
         run: stubGhRun,
         loadCoordination: async () => ({ currentHeadSha: headSha, prData: { isDraft: false, baseRefName: "main" }, gateEvidence: { draftGateSatisfied: false } }),
-        // cap_round_unresolved is the typed condition of a thrown resolver error; a null result with no throw is a PR below the cap.
-        resolveCapRoundFixed: async (_options, { onFailure }) => { if (condition === "cap_round_unresolved") throw new Error("unreadable ledger"); onFailure(condition); return null; },
+        resolveCapRoundFixed: async (_options, { onFailure }) => { onFailure(condition); return null; },
       });
       const text = chunks.join("");
       assert.equal(process.exitCode, 1, condition);

@@ -124,9 +124,11 @@ test("cap_round_unresolved: an unreadable ledger blocks every route and names th
   const s = scenario({ clean: false, sequence: "lost", merges: 0, fix: true, docs: false, unreadable: true });
   try {
     const { end } = await followRemedy(s.root, { repo: REPO, pr: PR, head: s.head, baseline: s.A, ledgerPath: s.ledgerPath });
-    // No cap round resolves from an unreadable ledger: the fact reports no failure, and the draft refusal names cap_round_unresolved by its fallback.
-    assert.deepEqual({ next: end.nextAction, failure: end.failure, on: end.blockedOn }, { next: "report_blocked", failure: null, on: "operator_decision" });
+    assert.deepEqual({ next: end.nextAction, failure: end.failure, on: end.blockedOn }, { next: "report_blocked", failure: "cap_round_unresolved", on: "operator_decision" });
     assert.match(end.reason, /Condition cap_round_unresolved:/);
+    // A ready PR at the cap with the same unreadable ledger keeps the typed failure and the operator exit: no draft_gate round runs past the cap.
+    const ready = await coordinationAt(s.root, { repo: REPO, pr: PR, head: s.head, ready: true });
+    assert.deepEqual({ failure: ready.failure, on: ready.blockedOn }, { failure: "cap_round_unresolved", on: "operator_decision" });
   } finally { rmSync(s.root, { recursive: true, force: true }); }
 });
 

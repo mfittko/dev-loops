@@ -113,7 +113,7 @@ export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied
 
 /**
  * The one cap-round-fixed fact of a PR coordination context (issue 3139): `{ capRoundFixed, failure }`, `failure` the typed `resolveCapRoundFixed` `onFailure` condition
- * (`cap_round_unresolved` on a throw only; a PR with no cap round reports `failure: null`). The detector, the ordering check above and the verdict post's gate check all read it, so none keeps its own expression.
+ * (`cap_round_unresolved` on a throw or a cap reached with an unreadable ledger; a PR below the cap reports `failure: null`). The detector, the ordering check above and the verdict post's gate check all read it, so none keeps its own expression.
  * A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
  * @param {{ repo: string, pr: number, currentHeadSha: string, prData?: { isDraft?: boolean, baseRefName?: string } }} context
  */
@@ -122,8 +122,8 @@ export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = re
   const baseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
   const capRoundFixed = await resolve(
     { repo: context.repo, pr: context.pr, headSha: context.currentHeadSha, baseRefName, anyHead: context.prData?.isDraft !== true },
-    // `resolveCapRoundFixed` reports cap_round_unresolved for a PR with no cap round, the normal state below the round cap: that is no failure. Only a thrown resolver error is.
-    { repoRoot, onFailure: (condition) => { if (condition !== "cap_round_unresolved") failure = condition; } },
+    // `resolveCapRoundFixed` reports no_cap_round below the round cap, the normal state: that is no failure. A cap reached with an unresolvable ledger (cap_round_unresolved) or a thrown resolver error is.
+    { repoRoot, onFailure: (condition) => { if (condition !== "no_cap_round") failure = condition; } },
   ).then(Boolean, () => { failure = "cap_round_unresolved"; return false; });
   return { capRoundFixed, failure };
 }
@@ -2184,7 +2184,7 @@ export const isCleanCapRound = (capRound) => capRound?.log?.verdict === "clean" 
  * The candidate set is the closed prior rounds plus the retained rounds of the current head. The live current-head ledger is the round being posted
  * (the head excluded, as in the round count), so it is never the cap-round authority and the latest retained round at the head is.
  */
-export async function resolveCapRound(options, { repoRoot }) {
+export async function resolveCapRound(options, { repoRoot, onFailClosed = () => {} }) {
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
   const cap = resolveGateConfig(config, "draft").maxReviewRounds ?? 0;
   const draft = { ...options, gate: "draft_gate" };
@@ -2195,7 +2195,7 @@ export async function resolveCapRound(options, { repoRoot }) {
   let unreadable = 0;
   const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, includeRetainedCurrentHead: true, onUnreadable: () => { unreadable += 1; } })).at(-1);
   // The persisted severity verdict can read `clean` for judge-act mediums whose posted review composes findings_present: an open act item makes the round a cap round too.
-  if (unreadable > 0 || !log || (log.verdict !== "findings_present" && log.verdict !== "clean" && listOpenActItems(log.findings).length === 0)) return null;
+  if (unreadable > 0 || !log || (log.verdict !== "findings_present" && log.verdict !== "clean" && listOpenActItems(log.findings).length === 0)) { onFailClosed(); return null; }
   // An act item the sealed cap-round delta record marks resolved is fixed, not residue; with no verifiable record every act item stays.
   let items = [];
   try { items = readSealedGateDeltaRecord(resolveGateArtifactTmpRoot(repoRoot), log.headSha)?.items ?? []; } catch { /* unverifiable: keep every item */ }
@@ -2333,8 +2333,10 @@ export const capRoundCovers = (capRound, tmpRoot) => (record) => {
  * `options.anyHead` (a ready PR, where later commits belong to pre_approval_gate) accepts the first record whatever its candidate head.
  */
 export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, onFailure = () => {} }) {
-  const capRound = await resolveCapRound(options, { repoRoot });
-  if (!capRound) { onFailure("cap_round_unresolved"); return null; }
+  let failClosed = false;
+  const capRound = await resolveCapRound(options, { repoRoot, onFailClosed: () => { failClosed = true; } });
+  // no_cap_round: the cap is not reached, the normal state of a PR. cap_round_unresolved: the cap is reached but the ledger cannot prove the cap round.
+  if (!capRound) { onFailure(failClosed ? "cap_round_unresolved" : "no_cap_round"); return null; }
   // The delta record is main-anchored like the findings ledger: never read it from a relocated --tmp-root.
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
   const clearing = (headSha) => clearingDeltaRecord(tmpRoot, headSha);
