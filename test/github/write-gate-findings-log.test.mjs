@@ -15,6 +15,7 @@ import {
   writeGateFindingsLog,
 } from "../../scripts/github/write-gate-findings-log.mjs";
 import { readSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
+import { countCompletedRounds } from "../../scripts/github/write-gate-context.mjs";
 import { buildGateArtifactPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { existsSync } from "node:fs";
 import { isFindingsLogName, readGateFindingsLedger } from "../../scripts/github/_gate-finding-surface.mjs";
@@ -359,11 +360,12 @@ test("writeGateFindingsLog retains every existing same-head ledger at a numbered
     // A judged live ledger is retained even when the new write is unjudged.
     const unjudged = await write("four", "findings_present");
     assert.equal(unjudged.retainedRound, first.path.replace(/\.json$/, ".round-3.json"));
-    // An unjudged live ledger (no judgeDisposition on any finding) is an in-round rewrite: replaced, not retained.
+    // A no-plan write carries no identity, so an unjudged live ledger (no judgeDisposition on any finding) stays an in-round rewrite: replaced, not retained.
     const rewrite = await write("five", "findings_present");
     assert.equal(rewrite.retainedRound, undefined, "an unjudged live ledger is not retained");
     assert.equal(existsSync(first.path.replace(/\.json$/, ".round-4.json")), false);
     assert.equal(JSON.parse(await readFile(rewrite.path, "utf8")).findings[0].summary, "five");
+    assert.deepEqual(JSON.parse(await readFile(rewrite.path, "utf8")).roundIdentity, { roundId: null, judgeExecution: null, completed: false });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -3380,6 +3382,351 @@ test("writeGateFindingsLog run from a repo subdirectory reads the repo round cap
     const parsed = JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-2243", `draft_gate-${headSha}.json`), "utf8"));
     // Round 1 is the cap round only under the repo cap 1; the default cap 4 records no capClosed.
     assert.deepEqual(parsed.findings.map((f) => f.capClosed), [{ judgeDisposition: "reject", severity: "medium", round: 1, cap: 1 }]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// A judge-emit-plan.json as emit-judge-work-order writes it: the plan names its round and the work order's repo, PR, gate and head.
+const judgePlanFor = ({ pr, headSha, gate = "pre_approval_gate", roundId = "j1730000000000-deadbeef", ...workOrder }) => ({
+  roundId, workOrder: { target: { repo: "owner/repo", pr }, roundIdentity: { gate, headSha }, headSha, ...workOrder },
+});
+
+test("writeGateFindingsLog replaces a repeated write of one judged round and never counts it twice (issue 3080 AC8)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judged-twice-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const execDir = path.join(tmpDir, "j1730000000000-deadbeef");
+    await mkdir(execDir, { recursive: true });
+    await writeFile(path.join(tmpDir, "judge-emit-plan.json"), JSON.stringify(judgePlanFor({ pr: 43, headSha })));
+    const judgeVerdict = path.join(execDir, "judge-verdict.json");
+    await writeFile(judgeVerdict, JSON.stringify({
+      headSha, scopeDrift: { verdict: "within_scope", rationale: "in scope", driftedAreas: [] },
+      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "x", criterion: "AC-1" }],
+    }), "utf8");
+    const write = () => writeGateFindingsLog({
+      repo: "owner/repo", pr: 43, gate: "pre_approval_gate", headSha, verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "medium", angle: "correctness", summary: "null deref" }]), judgeVerdict, tmpRoot: tmpDir,
+    });
+    const first = await write();
+    assert.deepEqual(JSON.parse(await readFile(first.path, "utf8")).roundIdentity, { roundId: null, judgeExecution: "j1730000000000-deadbeef", completed: true });
+    const second = await write();
+    assert.equal(second.retainedRound, undefined, "the same judged round is replaced, not retained");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog appends the pinned Copilot body cluster and records its judgeDisposition (issue 3080 AC11)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-body-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const body = JSON.stringify({ angle: "copilot-body", findings: [{ severity: "medium", summary: "Refs list drops entries", recommendation: "parse both forms" }] });
+    await writeFile(path.join(tmpDir, "body.json"), body);
+    const { createHash } = await import("node:crypto");
+    const workOrder = { copilotBodyClusterId: 1, requiredReads: [{ kind: "copilot-body-feedback", path: path.join(tmpDir, "body.json"), sha256: createHash("sha256").update(body).digest("hex") }] };
+    await writeFile(path.join(tmpDir, "judge-emit-plan.json"), JSON.stringify(judgePlanFor({ pr: 44, headSha, ...workOrder })));
+    await mkdir(path.join(tmpDir, "j1730000000000-deadbeef"), { recursive: true });
+    const judgeVerdict = path.join(tmpDir, "j1730000000000-deadbeef", "judge-verdict.json");
+    const act = (index) => ({ index, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "x", criterion: "AC-1" });
+    await writeFile(judgeVerdict, JSON.stringify({ headSha, scopeDrift: { verdict: "within_scope", rationale: "ok", driftedAreas: [] }, dispositions: [act(0), act(1)] }));
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 44, gate: "pre_approval_gate", headSha, verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "medium", angle: "correctness", summary: "null deref", clusterId: 0 }]), judgeVerdict, tmpRoot: tmpDir,
+    });
+    const written = JSON.parse(await readFile(result.path, "utf8")).findings.find((f) => f.angle === "copilot-body");
+    assert.equal(written.judgeDisposition, "act");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog refuses a judge-execution verdict whose emit plan is missing or names another round (issue 3080)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-plan-identity-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    await mkdir(path.join(tmpDir, "j1730000000000-deadbeef"), { recursive: true });
+    const judgeVerdict = path.join(tmpDir, "j1730000000000-deadbeef", "judge-verdict.json");
+    await writeFile(judgeVerdict, JSON.stringify({ headSha, scopeDrift: { verdict: "within_scope", rationale: "ok", driftedAreas: [] }, dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "x", criterion: "AC-1" }] }));
+    const write = () => writeGateFindingsLog({
+      repo: "owner/repo", pr: 45, gate: "pre_approval_gate", headSha, verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "medium", angle: "correctness", summary: "null deref", clusterId: 0 }]), judgeVerdict, tmpRoot: tmpDir,
+    });
+    await assert.rejects(write(), /judge-emit-plan\.json/, "a missing plan is refused");
+    await writeFile(path.join(tmpDir, "judge-emit-plan.json"), "not json");
+    await assert.rejects(write(), /judge-emit-plan\.json/, "an unparseable plan is refused");
+    await writeFile(path.join(tmpDir, "judge-emit-plan.json"), JSON.stringify(judgePlanFor({ pr: 45, headSha, roundId: "j1730000000001-cafebabe" })));
+    await assert.rejects(write(), /judge-emit-plan\.json/, "a plan for another round is refused");
+    const planPath = path.join(tmpDir, "judge-emit-plan.json");
+    await writeFile(planPath, JSON.stringify(judgePlanFor({ pr: 46, headSha })));
+    await assert.rejects(write(), /not the judge plan for owner\/repo#45/, "a plan for another PR is refused");
+    await writeFile(planPath, JSON.stringify(judgePlanFor({ pr: 45, headSha: "f".repeat(40) })));
+    await assert.rejects(write(), /not the judge plan for owner\/repo#45/, "a plan for another head is refused");
+    await writeFile(planPath, JSON.stringify(judgePlanFor({ pr: 45, headSha, gate: "draft_gate" })));
+    await assert.rejects(write(), /not the judge plan for owner\/repo#45/, "a plan for another gate is refused");
+    await writeFile(planPath, JSON.stringify(judgePlanFor({ pr: 45, headSha })));
+    await write();
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Issue 3080 AC8: the writer stamps the emit-plan roundId and a completion flag, and retention keys on them.
+test("writeGateFindingsLog replaces a repeated write of one roundId, retains a completed round on a new roundId and replaces an aborted unjudged one (issue 3080 AC8)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-round-id-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const contextDir = path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-44");
+    await mkdir(contextDir, { recursive: true });
+    const plan = (roundId) => writeFile(path.join(contextDir, `draft_gate-${headSha}.emit-plan.json`), JSON.stringify({ ok: true, repo: "owner/repo", pr: 44, gate: "draft_gate", headSha, roundId, count: 2, units: [{ angles: ["pr-description"], group: null }, { angles: ["holistic"], group: null }] }), "utf8");
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.fanin-ledger.json`), JSON.stringify({ overallVerdict: "findings_present", findings: [], provenance: { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "review-a" }, { angle: "holistic", reviewer: "review-b" }] } }), "utf8");
+    const write = (roundId, judged) => plan(roundId).then(() => writeGateFindingsLog({
+      repo: "owner/repo", pr: 44, gate: "draft_gate", headSha,
+      findings: JSON.stringify([{ severity: "low", angle: "scope", summary: `s ${roundId}`, ...(judged ? { judgeDisposition: "reject" } : {}) }]),
+    }, { repoRoot }));
+    const first = await write("r1-aa", true);
+    assert.equal(first.log.roundIdentity.roundId, "r1-aa");
+    assert.equal(first.log.roundIdentity.completed, true);
+    assert.equal((await write("r1-aa", true)).retainedRound, undefined, "a repeated write of one roundId is replaced");
+    const third = await write("r2-bb", false);
+    assert.ok(third.retainedRound, "a completed round is retained by a write of another roundId");
+    assert.equal(third.log.roundIdentity.completed, false, "an unjudged lifecycle write is not yet completed");
+    assert.equal((await write("r3-cc", false)).retainedRound, undefined, "an aborted unjudged round is replaced, not retained");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("an unjudged write of a round whose live ledger is judged is refused and leaves the round count unchanged (issue 3080)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-unjudged-over-judged-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const contextDir = path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-48");
+    await mkdir(contextDir, { recursive: true });
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.emit-plan.json`), JSON.stringify({ ok: true, repo: "owner/repo", pr: 48, gate: "draft_gate", headSha, roundId: "r1-aa", count: 2, units: [{ angles: ["pr-description"], group: null }, { angles: ["holistic"], group: null }] }), "utf8");
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.fanin-ledger.json`), JSON.stringify({ overallVerdict: "findings_present", findings: [], provenance: { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "review-a" }, { angle: "holistic", reviewer: "review-b" }] } }), "utf8");
+    const id = { repo: "owner/repo", pr: 48, gate: "draft_gate", headSha };
+    const write = (judged) => writeGateFindingsLog({ ...id, findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "s", ...(judged ? { judgeDisposition: "reject" } : {}) }]) }, { repoRoot });
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  draft:\n    maxReviewRounds: 2\n", "utf8");
+    await write(true);
+    const before = await countCompletedRounds(id, { repoRoot, includeLiveCurrentHead: true });
+    const repeat = await write(true);
+    assert.equal(JSON.parse(await readFile(repeat.path, "utf8")).findings[0].capClosed, undefined, "a repeated judged write at round 1 of cap 2 is not past the cap");
+    assert.equal(await countCompletedRounds(id, { repoRoot, includeLiveCurrentHead: true }), before);
+    await assert.rejects(write(false), /completed-round-unjudged-rewrite/);
+    assert.equal(await countCompletedRounds(id, { repoRoot, includeLiveCurrentHead: true }), before);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("two unjudged standalone review writes at one head retain the first and raise the round count (issue 3080 AC8)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-review-twice-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const id = { repo: "owner/repo", pr: 46, gate: "review", headSha };
+    const write = (summary) => writeGateFindingsLog({ ...id, verdict: "findings_present", findings: JSON.stringify([{ severity: "low", angle: "scope", summary }]) }, { repoRoot });
+    const first = await write("one");
+    assert.equal(first.retainedRound, undefined);
+    assert.equal(await countCompletedRounds(id, { repoRoot }), 1);
+    const second = await write("two");
+    assert.ok(second.retainedRound, "the second write retains the first review round");
+    assert.equal(await countCompletedRounds(id, { repoRoot }), 2);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog names an unparseable emit plan instead of throwing a raw SyntaxError (issue 3080 AC8)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-bad-plan-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const contextDir = path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-47");
+    await mkdir(contextDir, { recursive: true });
+    const planPath = path.join(contextDir, `draft_gate-${headSha}.emit-plan.json`);
+    await writeFile(planPath, "not json", "utf8");
+    await assert.rejects(
+      writeGateFindingsLog({ repo: "owner/repo", pr: 47, gate: "draft_gate", headSha, verdict: "findings_present", findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "s" }]) }, { repoRoot }),
+      (error) => !(error instanceof SyntaxError) && error.message.includes("emit-plan.json"),
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3080 AC11: a judge pass over a pinned Copilot body cluster persists one verdict in both writers.
+async function copilotPinFixture(tmpDir, headSha, { judgeVerdictPath, planDir, pr, bodySeverity = "high", failOpen = false }) {
+  const body = JSON.stringify({ angle: "copilot-body", findings: [{ severity: bodySeverity, summary: "Refs list drops entries", recommendation: "parse both forms" }] });
+  await writeFile(path.join(tmpDir, "body.json"), body);
+  const { createHash } = await import("node:crypto");
+  const workOrder = { copilotBodyClusterId: 0, requiredReads: [{ kind: "copilot-body-feedback", path: path.join(tmpDir, "body.json"), sha256: createHash("sha256").update(body).digest("hex") }] };
+  await mkdir(planDir, { recursive: true });
+  await writeFile(path.join(planDir, "judge-emit-plan.json"), JSON.stringify(judgePlanFor({ pr, headSha, ...workOrder })));
+  await mkdir(path.dirname(judgeVerdictPath), { recursive: true });
+  await writeFile(judgeVerdictPath, JSON.stringify({ headSha, scopeDrift: { verdict: "within_scope", rationale: "ok", driftedAreas: [] }, dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "x", criterion: "AC-1", ...(failOpen ? { failOpen: true } : {}) }] }));
+}
+
+test("writeGateFindingsLog raises a clean verdict to findings_present for an acted blocking Copilot cluster (issue 3080 AC11)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-raise-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const judgeVerdict = path.join(tmpDir, "j1730000000000-deadbeef", "judge-verdict.json");
+    await copilotPinFixture(tmpDir, headSha, { judgeVerdictPath: judgeVerdict, planDir: tmpDir, pr: 48 });
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 48, gate: "pre_approval_gate", headSha, verdict: "clean",
+      findings: JSON.stringify({ overallVerdict: "clean", findings: [] }), judgeVerdict, tmpRoot: tmpDir,
+    });
+    const written = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(written.verdict, "findings_present");
+    assert.equal(written.overallVerdict, "findings_present");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog refuses a findings ledger longer than the one the pinned Copilot cluster was emitted over (issue 3080 AC11)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-longer-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const judgeVerdict = path.join(tmpDir, "j1730000000000-deadbeef", "judge-verdict.json");
+    await copilotPinFixture(tmpDir, headSha, { judgeVerdictPath: judgeVerdict, planDir: tmpDir, pr: 49 });
+    await assert.rejects(writeGateFindingsLog({
+      repo: "owner/repo", pr: 49, gate: "pre_approval_gate", headSha, verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "medium", angle: "correctness", summary: "null deref", clusterId: 0 }]), judgeVerdict, tmpRoot: tmpDir,
+    }), /pinned the Copilot cluster at 0.*re-emit the judge work order/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog refuses a judge verdict outside a judge execution directory while a Copilot pin is active (issue 3080 AC11)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-unbound-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const judgeVerdict = path.join(tmpDir, "verdict.json");
+    const planDir = path.join(tmpDir, "gate-judge", "owner-repo", "pr-49", `pre_approval_gate-${headSha}`);
+    await copilotPinFixture(tmpDir, headSha, { judgeVerdictPath: judgeVerdict, planDir, pr: 49 });
+    await assert.rejects(
+      writeGateFindingsLog({ repo: "owner/repo", pr: 49, gate: "pre_approval_gate", headSha, findings: JSON.stringify({ overallVerdict: "clean", findings: [] }), judgeVerdict, tmpRoot: tmpDir }),
+      /judge execution directory/,
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog finds the judge plan in the checkout tmp when the ledger tmp root differs and refuses an active Copilot pin there (issue 3080 AC11)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-roots-"));
+  const checkout = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-checkout-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const judgeVerdict = path.join(tmpDir, "verdict.json");
+    // emit-judge-work-order writes the plan under <checkout>/tmp, while the ledger root (--tmp-root) is another directory.
+    const planDir = path.join(checkout, "tmp", "gate-judge", "owner-repo", "pr-50", `pre_approval_gate-${headSha}`);
+    await copilotPinFixture(tmpDir, headSha, { judgeVerdictPath: judgeVerdict, planDir, pr: 50 });
+    await assert.rejects(
+      writeGateFindingsLog({ repo: "owner/repo", pr: 50, gate: "pre_approval_gate", headSha, findings: JSON.stringify({ overallVerdict: "clean", findings: [] }), judgeVerdict, tmpRoot: tmpDir }, { repoRoot: checkout }),
+      /judge execution directory/,
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+    await rm(checkout, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog finds a pinned Copilot plan that sits only under options.contextTmpRoot and fails closed (issue 3080)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-ctxroot-"));
+  const checkout = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-ctxroot-checkout-"));
+  const contextRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-ctxroot-other-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const judgeVerdict = path.join(tmpDir, "verdict.json");
+    const planDir = path.join(contextRoot, "gate-judge", "owner-repo", "pr-56", `pre_approval_gate-${headSha}`);
+    await copilotPinFixture(tmpDir, headSha, { judgeVerdictPath: judgeVerdict, planDir, pr: 56 });
+    await assert.rejects(
+      writeGateFindingsLog({ repo: "owner/repo", pr: 56, gate: "pre_approval_gate", headSha, verdict: "clean", findings: JSON.stringify({ overallVerdict: "clean", findings: [] }), judgeVerdict, tmpRoot: tmpDir, contextTmpRoot: contextRoot }, { repoRoot: checkout }),
+      /judge execution directory/,
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+    await rm(checkout, { recursive: true, force: true });
+    await rm(contextRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog reads every judge plan candidate outside a judge directory and refuses a pin or an unparseable plan in any of them (issue 3080 AC11)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-candidates-"));
+  const checkout = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-candidates-checkout-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const judgeVerdict = path.join(tmpDir, "verdict.json");
+    const planDirOf = (root, pr) => path.join(root, "gate-judge", "owner-repo", `pr-${pr}`, `pre_approval_gate-${headSha}`);
+    // The first candidate is the ledger tmp root, the second is <checkout>/tmp.
+    const firstPlan = (pr) => path.join(planDirOf(tmpDir, pr), "judge-emit-plan.json");
+    const secondPlanDir = (pr) => planDirOf(path.join(checkout, "tmp"), pr);
+    const write = (pr) => writeGateFindingsLog({
+      repo: "owner/repo", pr, gate: "pre_approval_gate", headSha, verdict: "clean",
+      findings: JSON.stringify({ overallVerdict: "clean", findings: [] }), judgeVerdict, tmpRoot: tmpDir,
+    }, { repoRoot: checkout });
+    await writeFile(judgeVerdict, JSON.stringify({ headSha, scopeDrift: { verdict: "within_scope", rationale: "ok", driftedAreas: [] }, dispositions: [] }));
+    // Accepted: no candidate plan exists.
+    await write(53);
+    // Accepted: every readable candidate pins no copilot-body-feedback read.
+    await mkdir(planDirOf(tmpDir, 53), { recursive: true });
+    await writeFile(firstPlan(53), JSON.stringify(judgePlanFor({ pr: 53, headSha })));
+    await mkdir(secondPlanDir(53), { recursive: true });
+    await writeFile(path.join(secondPlanDir(53), "judge-emit-plan.json"), JSON.stringify(judgePlanFor({ pr: 53, headSha })));
+    await write(53);
+    // Rejected: a later candidate pins a copilot-body-feedback read while the earlier candidate does not.
+    await copilotPinFixture(tmpDir, headSha, { judgeVerdictPath: judgeVerdict, planDir: secondPlanDir(54), pr: 54 });
+    await mkdir(planDirOf(tmpDir, 54), { recursive: true });
+    await writeFile(firstPlan(54), JSON.stringify(judgePlanFor({ pr: 54, headSha })));
+    await assert.rejects(write(54), /judge execution directory/);
+    // Rejected: a candidate exists but is not valid JSON.
+    await mkdir(planDirOf(tmpDir, 55), { recursive: true });
+    await writeFile(firstPlan(55), "not json");
+    await assert.rejects(write(55), /judge-emit-plan\.json is not valid JSON/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+    await rm(checkout, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog refuses a judge-execution verdict beside a plan for another gate or head whose roundId matches its directory (issue 3080 AC11)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-foreign-plan-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    for (const [label, foreign] of [["another gate", { gate: "draft_gate", headSha }], ["another head", { gate: "pre_approval_gate", headSha: "f".repeat(40) }]]) {
+      const judgeVerdict = path.join(tmpDir, "j1730000000000-deadbeef", "judge-verdict.json");
+      await copilotPinFixture(tmpDir, headSha, { judgeVerdictPath: judgeVerdict, planDir: tmpDir, pr: 51 });
+      await writeFile(path.join(tmpDir, "judge-emit-plan.json"), JSON.stringify(judgePlanFor({ pr: 51, ...foreign })));
+      await assert.rejects(
+        writeGateFindingsLog({ repo: "owner/repo", pr: 51, gate: "pre_approval_gate", headSha, findings: JSON.stringify({ overallVerdict: "clean", findings: [] }), judgeVerdict, tmpRoot: tmpDir }),
+        /not the judge plan for owner\/repo#51 pre_approval_gate/,
+        label,
+      );
+    }
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog raises the verdict from the input severity of an acted Copilot cluster, as judge-pass does (issue 3080 AC11)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-failopen-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    await writeFile(path.join(tmpDir, ".devloops"), "version: 1\ngates:\n  preApproval:\n    blockCleanOnFindingSeverities: [high, medium]\n", "utf8");
+    const judgeVerdict = path.join(tmpDir, "j1730000000000-deadbeef", "judge-verdict.json");
+    // A failOpen act promotes the low Copilot finding to medium after the consolidator weighed it; judge-pass keeps clean from the input severity, so the writer must too.
+    await copilotPinFixture(tmpDir, headSha, { judgeVerdictPath: judgeVerdict, planDir: tmpDir, pr: 52, bodySeverity: "low", failOpen: true });
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 52, gate: "pre_approval_gate", headSha, verdict: "clean",
+      findings: JSON.stringify({ overallVerdict: "clean", findings: [] }), judgeVerdict, tmpRoot: tmpDir,
+    }, { repoRoot: tmpDir });
+    const written = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(written.findings.find((f) => f.angle === "copilot-body").severity, "medium", "the act was promoted");
+    assert.equal(written.verdict, "clean");
+    assert.equal(written.overallVerdict, "clean");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

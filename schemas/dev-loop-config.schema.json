@@ -365,6 +365,10 @@
                           "docs-only"
                         ]
                       },
+                      "readsPrBody": {
+                        "description": "Declare that this angle reads the PR body, so a PR-body-only edit re-runs its dispatch unit (GATE-EXEC-BODY-ONLY-RERUN). An angle whose prompt names the PR body or PR description is body-reading without it.",
+                        "type": "boolean"
+                      },
                       "categories": {
                         "description": "Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed.",
                         "minItems": 1,
@@ -605,6 +609,10 @@
                           "docs-only"
                         ]
                       },
+                      "readsPrBody": {
+                        "description": "Declare that this angle reads the PR body, so a PR-body-only edit re-runs its dispatch unit (GATE-EXEC-BODY-ONLY-RERUN). An angle whose prompt names the PR body or PR description is body-reading without it.",
+                        "type": "boolean"
+                      },
                       "categories": {
                         "description": "Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed.",
                         "minItems": 1,
@@ -839,6 +847,10 @@
                           "changed-files",
                           "docs-only"
                         ]
+                      },
+                      "readsPrBody": {
+                        "description": "Declare that this angle reads the PR body, so a PR-body-only edit re-runs its dispatch unit (GATE-EXEC-BODY-ONLY-RERUN). An angle whose prompt names the PR body or PR description is body-reading without it.",
+                        "type": "boolean"
                       },
                       "categories": {
                         "description": "Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed.",

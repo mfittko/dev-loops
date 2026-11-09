@@ -1517,6 +1517,20 @@ describe("applyJudgeDispositions (#1525)", () => {
     assert.equal(scopeDrift.verdict, "within_scope");
   });
 
+  test("appended stamped findings share one cluster on an unstamped ledger", () => {
+    const findings = [
+      { severity: "high", angle: "correctness", summary: "unstamped" },
+      { severity: "low", angle: "copilot", summary: "body one", clusterId: 1 },
+      { severity: "low", angle: "copilot", summary: "body two", clusterId: 1 },
+    ];
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "x" },
+      { index: 1, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "y" },
+    ]);
+    const { findings: out } = applyJudgeDispositions(findings, verdict, { pastCap: false, round: 1 });
+    assert.deepEqual(out.map((f) => f.judgeRationale), ["x", "y", "y"]);
+  });
+
   // GATE-EXEC-THREAD-DISPOSITION: a high, a question and an all-nit cluster are never deferred.
   for (const [severity, others] of [["high", ["low"]], ["question", ["low"]], ["nit", ["nit", "nit"]]]) {
     test(`a defer on a cluster whose findings are ${severity} fails closed`, () => {

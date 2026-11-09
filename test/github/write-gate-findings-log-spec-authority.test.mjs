@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -192,5 +192,37 @@ test("check-judge-decision and the ledger writer agree on matcher rejectedForms"
       if (ok) await run();
       else await assert.rejects(run(), /failed validation/);
     });
+  }
+});
+
+test("a sibling spec-authority verdict over the findings read only writes the ledger with an active Copilot pin (issue 3080 AC11)", async () => {
+  const { createHash } = await import("node:crypto");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-spec-copilot-"));
+  try {
+    const body = JSON.stringify({ angle: "copilot-body", findings: [{ severity: "medium", summary: "Refs list drops entries", recommendation: "parse both forms" }] });
+    await writeFile(path.join(tmpDir, "body.json"), body);
+    const workOrder = {
+      target: { repo: "owner/repo", pr: 42 }, roundIdentity: { gate: "draft_gate", headSha: HEAD }, headSha: HEAD, copilotBodyClusterId: 1,
+      requiredReads: [{ kind: "copilot-body-feedback", path: path.join(tmpDir, "body.json"), sha256: createHash("sha256").update(body).digest("hex") }],
+    };
+    await writeFile(path.join(tmpDir, "judge-emit-plan.json"), JSON.stringify({ roundId: "j1730000000000-deadbeef", workOrder }));
+    const execDir = path.join(tmpDir, "j1730000000000-deadbeef");
+    await mkdir(execDir, { recursive: true });
+    const act = (index) => ({ index, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "relevant" });
+    await writeFile(path.join(execDir, "judge-verdict.json"), JSON.stringify({ headSha: HEAD, scopeDrift: { verdict: "within_scope", rationale: "ok", driftedAreas: [] }, dispositions: [act(0), act(1)] }));
+    // judge-pass accepts a spec-authority verdict that covers the findings read only (index 0), so the writer must too.
+    await writeFile(path.join(execDir, "spec-authority-verdict.json"), JSON.stringify({ ...VERDICT, decisions: [decision(0, "valid_compliant", { authorizedRemediation: "fix it", defectClass: "c", siteQuery: "q" })] }));
+    const specAuthority = path.join(tmpDir, "identity.json");
+    await writeFile(specAuthority, JSON.stringify({ specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds }));
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: HEAD, verdict: "clean",
+      findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "gap", clusterId: 0 }]),
+      judgeVerdict: path.join(execDir, "judge-verdict.json"), specAuthority, tmpRoot: tmpDir,
+    });
+    const { findings } = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(findings.find((f) => f.angle === "copilot-body").judgeDisposition, "act");
+    assert.equal(findings.find((f) => f.angle === "scope").judgeDisposition, "act");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });

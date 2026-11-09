@@ -23,6 +23,8 @@ import {
 } from "@dev-loops/core/github/copilot-helpers";
 import { bareMarkdown, parseCopilotBodyDispositionMarker } from "@dev-loops/core/github/copilot-body-disposition-marker";
 import { isSanctionedCopilotReviewerLogin, isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { isCommitContainedByHead } from "./_commit-containment.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
@@ -320,4 +322,32 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
       },
       judgeFinding: buildJudgeFinding(review),
     };
+}
+
+/**
+ * GATE-EXEC-COPILOT-BODY-TO-JUDGE: the findings the judge disposes, plus the pinned Copilot body finding as one cluster.
+ * A work order that pins no `copilot-body-feedback` read leaves `findings` unchanged. Otherwise the order must carry `copilotBodyClusterId`
+ * (a plan written before the cluster refuses with a re-emit message), and the pinned file must still hash to its pinned sha256.
+ */
+export async function withPinnedCopilotBodyCluster(findings, order) {
+  const pinned = order?.requiredReads?.find((read) => read?.kind === "copilot-body-feedback");
+  if (!pinned) return findings;
+  if (!Number.isInteger(order.copilotBodyClusterId)) throw new Error("GATE-EXEC-COPILOT-BODY-TO-JUDGE: the judge work order pins a copilot-body-feedback read but no copilotBodyClusterId; re-emit the judge work order with emit-judge-work-order.mjs");
+  if (findings.length !== order.copilotBodyClusterId) throw new Error(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: the findings input has ${findings.length} findings but the judge work order pinned the Copilot cluster at ${order.copilotBodyClusterId}; the findings changed since the judge work order was emitted, re-emit the judge work order`);
+  const bytes = await readFile(pinned.path).catch((error) => {
+    if (error?.code === "ENOENT") throw new Error(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${pinned.path} is gone; re-emit the judge work order`);
+    throw error;
+  });
+  if (createHash("sha256").update(bytes).digest("hex") !== pinned.sha256) throw new Error(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${pinned.path} changed since the judge work order pinned it; re-emit the judge work order`);
+  const body = JSON.parse(bytes.toString("utf8"));
+  return [...findings, ...body.findings.map((finding) => ({ angle: body.angle, ...finding, clusterId: order.copilotBodyClusterId }))];
+}
+
+/**
+ * GATE-EXEC-COPILOT-BODY-TO-JUDGE: the verdict the ledger persists once the judge acted on the Copilot body cluster.
+ * A `clean` fan-in verdict rises to `findings_present` when an acted Copilot finding has a blocking severity.
+ * Shared by judge-pass and the findings-log writer so the two ledgers of one round carry one verdict.
+ */
+export function raiseVerdictForActedCopilotBlock(verdict, actedCopilotSeverities, blockingSeverities) {
+  return verdict === "clean" && actedCopilotSeverities.some((severity) => blockingSeverities.includes(severity)) ? "findings_present" : verdict;
 }
