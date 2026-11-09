@@ -372,7 +372,7 @@
     {
       "id": "GATE-EXEC-COPILOT-BODY-TO-JUDGE",
       "enforcement": "runtime",
-      "enforcementNote": "Enforced by detect-pr-gate-coordination-state.mjs (copilotBodyJudgeFinding, no gate-entry block) and emit-judge-work-order.mjs (derived copilotBodyJudgeFile pinned read, copilotBodyClusterId stamp); judge-pass.mjs (judgePassCli) and write-gate-findings-log.mjs (writeGateFindingsLog) append the pinned cluster through withPinnedCopilotBodyCluster in _copilot-body-disposition.mjs with a sha256 re-check, and the findings-log writer refuses a judge plan that is missing, foreign or unbound to the repo, PR, gate and head"
+      "enforcementNote": "Enforced by detect-pr-gate-coordination-state.mjs (copilotBodyJudgeFinding, no gate-entry block) and emit-judge-work-order.mjs (derived copilotBodyJudgeFile pinned read, copilotBodyClusterId stamp); judge-pass.mjs (judgePassCli) and write-gate-findings-log.mjs (writeGateFindingsLog) append the pinned cluster through withPinnedCopilotBodyCluster in _copilot-body-disposition.mjs with a sha256 re-check and drop a spec-authority decision keyed at the cluster id through withoutCopilotBodyDecision before validation, and the findings-log writer refuses a judge plan that is missing, foreign or unbound to the repo, PR, gate and head"
     },
     {
       "id": "GATE-EXEC-DEFERRAL-RECORD",
