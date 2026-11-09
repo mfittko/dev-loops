@@ -456,7 +456,7 @@ test("the artifact timeout remedy is split by hand-back type and a stale artifac
     const stale = await waitForUnits({ artifact: file, after, timeoutMs: 0, ...fakeClock() });
     assert.equal(stale.stale, true);
     assert.match(stale.remedy, /predates --after.*Fixer:.*current emission.*re-emit.*new joinRef.*Delta reviewer: use a fresh --result path.*input\.patchPath as --after/);
-    assert.match(stale.remedy, /Otherwise re-run the same command; after three consecutive timeout outcomes.*units_stalled.*Full-phase fixer: follow COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK/);
+    assert.match(stale.remedy, /Otherwise re-run the original command with its original --timeout, never the last reissue; after three consecutive timeout outcomes.*units_stalled.*Full-phase fixer: follow COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK/);
   });
 });
 
