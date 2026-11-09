@@ -11,6 +11,7 @@ let dir;
 let cwd;
 let savedGitDir;
 let savedGitWorkTree;
+let savedGitCommonDir;
 const git = (...args) => runGitFixture(dir, ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args]);
 const run = (args) => {
   let out = "";
@@ -23,8 +24,10 @@ beforeAll(() => {
   cwd = process.cwd();
   savedGitDir = process.env.GIT_DIR;
   savedGitWorkTree = process.env.GIT_WORK_TREE;
+  savedGitCommonDir = process.env.GIT_COMMON_DIR;
   delete process.env.GIT_DIR;
   delete process.env.GIT_WORK_TREE;
+  delete process.env.GIT_COMMON_DIR;
   dir = mkdtempSync(path.join(tmpdir(), "prose-inv-"));
   git("init", "-q");
   git("config", "user.email", "t@example.com");
@@ -40,6 +43,7 @@ afterAll(() => {
   process.chdir(cwd);
   if (savedGitDir === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = savedGitDir;
   if (savedGitWorkTree === undefined) delete process.env.GIT_WORK_TREE; else process.env.GIT_WORK_TREE = savedGitWorkTree;
+  if (savedGitCommonDir === undefined) delete process.env.GIT_COMMON_DIR; else process.env.GIT_COMMON_DIR = savedGitCommonDir;
   rmSync(dir, { recursive: true, force: true });
 });
 
