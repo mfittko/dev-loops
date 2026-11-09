@@ -6,7 +6,7 @@ description: >-
   `local_implementation` strategy so the child agent can own phase planning,
   artifact discipline, test-first implementation, and local validation in fresh
   context.
-compatibility: Pi skill for git-based repositories with Node.js/npm and optional subagent support.
+compatibility: Skill for git-based repositories with Node.js/npm and optional subagent support.
 allowed-tools: read bash edit write subagent review_loop
 user-invocable: false
 ---

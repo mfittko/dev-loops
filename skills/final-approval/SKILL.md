@@ -3,7 +3,7 @@ name: final-approval
 description: >-
   Internal routed strategy behind `dev-loop` for the final human approval and
   merge gate. The canonical procedure now lives in copilot-pr-followup.
-compatibility: Pi skill for git+GitHub repositories. Requires gh auth.
+compatibility: Skill for git+GitHub repositories. Requires gh auth.
 allowed-tools: read bash edit write subagent review_loop
 user-invocable: false
 ---
