@@ -20,6 +20,10 @@ describe("capWait / pendingFields (GATE-EXEC-BOUNDED-WAIT-CAP)", () => {
     assert.equal(out.reissue, "dev-loops gate x --repo o/r --jq '.a b' --timeout 431");
     assert.equal(pendingFields({ ...base, argv: ["--timeout=600", "--a"] }).reissue, "dev-loops gate x --a --timeout 431");
     assert.equal(pendingFields({ ...base, argv: ["--timeout-ms", "600000", "--a"] }).reissue, "dev-loops gate x --a --timeout 431");
+    const carried = pendingFields({ ...base, argv: ["--a", "--baseline-sha", "old", "--timeout", "9"], carry: { "--baseline-sha": "abc", "--stall": null } });
+    assert.equal(carried.reissue, "dev-loops gate x --a --baseline-sha abc --timeout 431");
+    const bare = pendingFields({ ...base, argv: ["--resumed", "--a", "--timeout", "9"], carry: { "--resumed": true } });
+    assert.equal(bare.reissue, "dev-loops gate x --a --resumed --timeout 431");
   });
 });
 

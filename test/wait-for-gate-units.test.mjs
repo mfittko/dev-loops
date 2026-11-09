@@ -353,20 +353,24 @@ test("a --timeout above the cap is capped, returns pending (exit 2) and the re-i
   await withDir(async (root) => {
     const { planPath } = await seedPlan(root, [["g", ["a"]]]);
     const argv = ["--emit-plan", planPath, "--tmp-root", path.join(root, "tmp"), "--timeout", "500"];
-    let seen;
-    const first = await runMain(argv, async (options) => { seen = options.timeoutMs; return { ok: true, outcome: "timeout", remedy: "x", missing: [] }; });
-    assert.equal(seen, 170000);
+    // The real waitForUnits runs under an injected clock, so the cap (not the stub) bounds each call.
+    const clock = fakeClock();
+    const real = (options) => waitForUnits({ ...options, receiptTmpRoot: path.join(root, "tmp"), ...clock });
+    const first = await runMain(argv, real);
+    assert.equal(clock.now(), 170000);
     assert.equal(first.code, 2);
     assert.equal(first.result.outcome, "pending");
     assert.equal(first.result.remedy, undefined);
-    assert.equal(first.result.reissue, `dev-loops gate wait-for-units --emit-plan ${planPath} --tmp-root ${path.join(root, "tmp")} --timeout 330`);
-    // Resume: the re-issued args carry the remaining budget and finish the same wait.
-    const resumed = first.result.reissue.split(" ").slice(3);
-    let resumedMs;
-    const second = await runMain(resumed, async (options) => { resumedMs = options.timeoutMs; return { ok: true, outcome: "all_done" }; });
-    assert.equal(resumedMs, 170000);
-    assert.equal(second.result.outcome, "all_done");
-    assert.equal(second.code, 0);
+    assert.equal(first.result.reissue, `dev-loops-run scripts/loop/wait-for-gate-units.mjs --emit-plan ${planPath} --tmp-root ${path.join(root, "tmp")} --timeout 330`);
+    // Resume: the re-issued args carry the remaining budget; it is capped again, then the last call times out for real.
+    const second = await runMain(first.result.reissue.split(" ").slice(2), real);
+    assert.equal(clock.now(), 340000);
+    assert.equal(second.result.outcome, "pending");
+    assert.equal(second.result.remainingTimeoutSeconds, 160);
+    const third = await runMain(second.result.reissue.split(" ").slice(2), real);
+    assert.equal(clock.now(), 500000);
+    assert.equal(third.result.outcome, "timeout");
+    assert.equal(third.code, 2);
   });
 });
 

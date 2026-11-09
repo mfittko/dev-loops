@@ -33,7 +33,7 @@ const USAGE = `Usage: wait-for-gate-units.mjs (--emit-plan <path> [--unit <scope
        wait-for-gate-units.mjs --artifact <path> --after <path> [--timeout <seconds>]
 Block in one foreground process until the round's dispatched units are done.
 One call waits at most ${WAIT_CAP_MS / 1000} seconds (GATE-EXEC-BOUNDED-WAIT-CAP): a longer --timeout returns pending (exit 2) with a \`reissue\` command carrying the remaining --timeout; run it.
-Outcomes (JSON on stdout): all_done (exit 0), timeout (exit 2), pending (exit 2),round_retired (exit 3; a whole-round record, or a scoped body-only-rerun record naming any waited unit, ends the whole wait, so stop the round and re-emit). Invalid input: ok false, exit 1.
+Outcomes (JSON on stdout): all_done (exit 0), timeout (exit 2), pending (exit 2), round_retired (exit 3; a whole-round record, or a scoped body-only-rerun record naming any waited unit, ends the whole wait, so stop the round and re-emit). Invalid input: ok false, exit 1.
   --emit-plan <path>   the round's <gate>-<headSha>.emit-plan.json; waits on every unit unless --unit narrows it
   --unit <scope>       repeatable; restrict the wait to these unit scopes
   --judge-plan <path>  the round's judge-emit-plan.json; waits on the one judge unit
@@ -216,7 +216,7 @@ export async function main(argv = process.argv.slice(2), { wait = waitForUnits }
     result = await wait({ ...options, timeoutMs });
     if (result.outcome === "timeout" && remainingMs > 0) {
       const { remedy, ...rest } = result;
-      result = { ...rest, ...pendingFields({ remainingMs, command: "dev-loops gate wait-for-units", argv }) };
+      result = { ...rest, ...pendingFields({ remainingMs, command: "dev-loops-run scripts/loop/wait-for-gate-units.mjs", argv }) };
     }
   } catch (error) {
     result = { ok: false, error: error instanceof Error ? error.message : String(error) };

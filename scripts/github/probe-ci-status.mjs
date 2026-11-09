@@ -34,6 +34,9 @@ Optional:
   --timeout-ms <n>              Deprecated alias for --timeout (milliseconds); warns on stderr.
                                 Passing both flags fails closed.
   --poll-interval-ms <n>        Delay between polls (default 60000)
+One call waits at most 170 seconds (GATE-EXEC-BOUNDED-WAIT-CAP); a longer --timeout returns
+"timeout" with outcome "pending" and a "reissue" command (carrying the internal
+--baseline-sha and --stall-started-at-ms plus the remaining --timeout); run it.
 Output (stdout, JSON):
   PR-scoped (--pr):
   { "ok": true, "status": "success"|"failure"|"pending"|"timeout"|"changed"|"stuck",
@@ -92,6 +95,8 @@ export function parseCiWatchCliArgs(argv) {
       timeout: { type: "string" },
       "timeout-ms": { type: "string" },
       "poll-interval-ms": { type: "string" },
+      "baseline-sha": { type: "string" },
+      "stall-started-at-ms": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -140,6 +145,15 @@ export function parseCiWatchCliArgs(argv) {
     }
     if (token.name === "poll-interval-ms") {
       options.pollIntervalMs = parsePositiveMs(requireTokenValue(token, parseError), "--poll-interval-ms");
+      continue;
+    }
+    // Internal: a re-issued capped wait carries the first call's baseline head and stall start.
+    if (token.name === "baseline-sha") {
+      options.baselineSha = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (token.name === "stall-started-at-ms") {
+      options.stallStartedAtMs = parsePositiveMs(requireTokenValue(token, parseError), "--stall-started-at-ms");
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -365,6 +379,7 @@ export async function watchCiStatus(
     ensureOwnershipImpl = ensureAsyncRunnerOwnership,
     runChild = defaultRunChild,
     onBaseline = undefined,
+    onStall = undefined,
   } = {},
 ) {
   const leaseCwd = resolveRepoRoot(process.cwd());
@@ -388,7 +403,8 @@ export async function watchCiStatus(
   // bails once the stall has persisted for stallBailMs instead of
   // burning the full watch budget on a stuck GitHub Actions queue.
   const stallBailMs = options.stallBailMs ?? ZERO_ALLOCATION_STALL_BAIL_MS;
-  let stallStartedAtMs = null;
+  // options.stallStartedAtMs resumes the stall clock of a capped call (the cap is under the bail budget).
+  let stallStartedAtMs = options.stallStartedAtMs ?? null;
   for (let attempt = 1; attempt <= attemptBudget; attempt += 1) {
     // Attempt 1 polls at t=0 (CI may already be terminal); sleep only between
     // subsequent polls so the watcher never burns a full interval before its
@@ -467,6 +483,7 @@ export async function watchCiStatus(
     } else {
       stallStartedAtMs = null;
     }
+    onStall?.(stallStartedAtMs);
   }
   // Budget exhausted while still pending. Re-resolve the head before the final
   // fetch: the head may have advanced during the last delay (short-circuit to
@@ -614,6 +631,7 @@ export async function runCli(
     stderr = process.stderr,
     env = process.env,
     ghCommand = "gh",
+    ...watchDeps
   } = {},
 ) {
   const requested = parseCiWatchCliArgs(argv);
@@ -624,11 +642,18 @@ export async function runCli(
   // GATE-EXEC-BOUNDED-WAIT-CAP: one call waits at most the cap; a longer request returns a pending result.
   const { timeoutMs, remainingMs } = capWait(requested.timeoutMs);
   const options = { ...requested, timeoutMs };
+  const carry = { "--baseline-sha": options.baselineSha, "--stall-started-at-ms": options.stallStartedAtMs };
   let result = options.commit !== undefined
-    ? await watchCommitCiStatus(options, { env, ghCommand })
-    : await watchCiStatus(options, { env, ghCommand });
+    ? await watchCommitCiStatus(options, { env, ghCommand, ...watchDeps })
+    : await watchCiStatus(options, {
+      env,
+      ghCommand,
+      ...watchDeps,
+      onBaseline: (sha) => { carry["--baseline-sha"] = sha; },
+      onStall: (startedAtMs) => { carry["--stall-started-at-ms"] = startedAtMs; },
+    });
   if (result.status === "timeout" && remainingMs > 0) {
-    result = { ...result, ...pendingFields({ remainingMs, command: "dev-loops loop watch-ci", argv }) };
+    result = { ...result, ...pendingFields({ remainingMs, command: "dev-loops-run scripts/github/probe-ci-status.mjs", argv, carry: options.commit !== undefined ? {} : carry }) };
   }
   process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }

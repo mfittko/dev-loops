@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { capWait, pendingFields, resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { capWait, pendingFields, resolveTimeoutMs, shellWord } from "../lib/timeout-flag.mjs";
 import { fileURLToPath } from "node:url";
 import { parsePositiveInteger, parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -86,6 +86,8 @@ export function parseWaitPrChecksCliArgs(argv) {
       timeout: { type: "string" },
       "timeout-ms": { type: "string" },
       poll: { type: "string" },
+      "baseline-sha": { type: "string" },
+      "stall-started-at-ms": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -125,6 +127,15 @@ export function parseWaitPrChecksCliArgs(argv) {
     }
     if (token.name === "poll") {
       options.pollIntervalMs = parsePositiveInteger(requireTokenValue(token, parseError), "--poll", parseError) * 1000;
+      continue;
+    }
+    // Internal: a re-issued capped wait carries the first call's baseline head and stall start.
+    if (token.name === "baseline-sha") {
+      options.baselineSha = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (token.name === "stall-started-at-ms") {
+      options.stallStartedAtMs = parsePositiveInteger(requireTokenValue(token, parseError), "--stall-started-at-ms", parseError);
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -183,7 +194,9 @@ export async function runCli(
   let isRetry = false;
   // The first watch's baseline head. The retry reuses it, so a push during the
   // reset wait returns "changed" instead of settling an un-baselined head.
-  let baselineSha;
+  let baselineSha = options.baselineSha;
+  let stallStartedAtMs = options.stallStartedAtMs;
+  let pendingRemainingMs = capRemainingMs;
   try {
     result = await withGraphqlRateLimitWait(
       () => {
@@ -193,10 +206,11 @@ export async function runCli(
         const timeoutMs = isRetry ? Math.max(1, remainingMs()) : options.timeoutMs;
         isRetry = true;
         return watchCiStatus(
-          { repo: options.repo, pr: options.pr, timeoutMs, pollIntervalMs: options.pollIntervalMs, baselineSha },
+          { repo: options.repo, pr: options.pr, timeoutMs, pollIntervalMs: options.pollIntervalMs, baselineSha, stallStartedAtMs },
           {
             env, ghCommand, delayImpl, now, ensureOwnershipImpl, ...(runChild ? { runChild } : {}),
             onBaseline: (sha) => { baselineSha = sha; },
+            onStall: (startedAtMs) => { stallStartedAtMs = startedAtMs; },
           },
         );
       },
@@ -217,12 +231,21 @@ export async function runCli(
     );
   } catch (error) {
     if (error?.code !== "RATE_LIMITED") throw error;
-    result = rateLimitedResult(error);
-    // --jq/--silent would filter the envelope away; always keep code/resetAt on stderr.
-    stderr.write(`${JSON.stringify(result)}\n`);
+    const budgetLeftMs = requested.timeoutMs - (now() - startedAt);
+    const resetInMs = Date.parse(error.resetAt ?? "") - now();
+    if (capRemainingMs > 0 && resetInMs > 0 && resetInMs <= budgetLeftMs) {
+      // The reset is past this call's cap but inside the requested budget: the re-issue waits it out.
+      result = { ok: true, status: "timeout", settled: false, repo: options.repo, pr: options.pr, rateLimitResetAt: error.resetAt };
+      pendingRemainingMs = budgetLeftMs;
+    } else {
+      result = rateLimitedResult(error);
+      // --jq/--silent would filter the envelope away; always keep code/resetAt on stderr.
+      stderr.write(`${JSON.stringify(result)}\n`);
+    }
   }
-  if (result.status === "timeout" && capRemainingMs > 0) {
-    result = { ...result, ...pendingFields({ remainingMs: capRemainingMs, command: `node ${fileURLToPath(import.meta.url)}`, argv }) };
+  if (result.status === "timeout" && pendingRemainingMs > 0) {
+    const carry = { "--baseline-sha": baselineSha, "--stall-started-at-ms": stallStartedAtMs };
+    result = { ...result, ...pendingFields({ remainingMs: pendingRemainingMs, command: `node ${shellWord(fileURLToPath(import.meta.url))}`, argv, carry }) };
   }
   if (options.jq !== undefined || options.silent) {
     return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: result.status === "success" });

@@ -43,18 +43,23 @@ export function capWait(requestedMs, capMs = WAIT_CAP_MS) {
   return requestedMs > capMs ? { timeoutMs: capMs, remainingMs: requestedMs - capMs } : { timeoutMs: requestedMs, remainingMs: 0 };
 }
 
-const shellWord = (word) => (/^[\w@%+=:,./-]+$/u.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`);
+export const shellWord = (word) => (/^[\w@%+=:,./-]+$/u.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`);
 
 /**
  * The fields a capped wait adds to its non-terminal result: `outcome: "pending"` and the exact
  * command to re-issue, with the original args minus the timeout flags and `--timeout <remaining>`.
+ * `carry` maps flag name to value: the first call's wait state (baseline, stall start) rides the
+ * re-issue so a resumed call keeps it; a flag already in `argv` is replaced, a null value is skipped,
+ * `true` carries a bare flag.
  */
-export function pendingFields({ remainingMs, command, argv }) {
+export function pendingFields({ remainingMs, command, argv, carry = {} }) {
+  const skipWithValue = new Set(["--timeout", "--timeout-ms", ...Object.keys(carry).filter((flag) => carry[flag] !== true)]);
   const kept = [];
   for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === "--timeout" || argv[i] === "--timeout-ms") i += 1;
-    else if (!/^--timeout(?:-ms)?=/u.test(argv[i])) kept.push(argv[i]);
+    if (skipWithValue.has(argv[i])) i += 1;
+    else if (carry[argv[i]] !== true && !/^--timeout(?:-ms)?=/u.test(argv[i])) kept.push(argv[i]);
   }
+  const carried = Object.entries(carry).filter(([, value]) => value != null).flatMap(([flag, value]) => (value === true ? [flag] : [flag, String(value)]));
   const remainingTimeoutSeconds = Math.ceil(remainingMs / 1000);
-  return { outcome: "pending", remainingTimeoutSeconds, reissue: [command, ...kept.map(shellWord), "--timeout", String(remainingTimeoutSeconds)].join(" ") };
+  return { outcome: "pending", remainingTimeoutSeconds, reissue: [command, ...[...kept, ...carried, "--timeout", String(remainingTimeoutSeconds)].map(shellWord)].join(" ") };
 }

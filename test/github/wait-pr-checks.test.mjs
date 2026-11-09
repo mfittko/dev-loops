@@ -132,10 +132,24 @@ test("wait-pr-checks caps one call at 170 s, returns pending (exit 2) with the r
     assert.equal(result.status, "timeout");
     assert.equal(result.outcome, "pending");
     assert.equal(result.remainingTimeoutSeconds, 430);
-    assert.match(result.reissue, /wait-pr-checks\.mjs --repo owner\/repo --pr 7 --poll 10 --timeout 430$/);
+    assert.match(result.reissue, /^node \S*wait-pr-checks\.mjs --repo owner\/repo --pr 7 --poll 10 --baseline-sha sha-a --timeout 430$/);
     reissue = result.reissue;
   });
   const resumed = reissue.split(" ").slice(2);
+  // A push between the calls is not absorbed: the carried baseline sees the new head.
+  await withGhStub(
+    [
+      { match: ["pr", "view"], stdout: prView("sha-b", ["build"]) },
+      { match: ["check-runs"], stdout: checkRuns([{ status: "completed", conclusion: "success", name: "build" }]) },
+      { match: ["/status"], stdout: statuses([]) },
+    ],
+    async (env) => {
+      const stdout = makeStream();
+      const code = await runCli(resumed, { stdout, stderr: makeStream(), ...fastDeps(env) });
+      assert.equal(code, 2);
+      assert.equal(JSON.parse(stdout.text()).status, "changed");
+    },
+  );
   await withGhStub(
     [
       { match: ["pr", "view"], stdout: prView("sha-a", ["build"]) },
@@ -392,6 +406,54 @@ test("wait-pr-checks keeps the no-checks grace floor when the reset consumes the
   assert.notEqual(result.status, "success");
   assert.equal(result.settled, false);
   assert.equal(code, 2);
+});
+
+test("wait-pr-checks keeps the no-checks grace floor when a 300 s reset consumes the whole 300 s budget", async () => {
+  let clock = 1_000_000_000_000;
+  const { runChild } = rateLimitedRunChild(clock / 1000 + 300, { noChecks: true });
+  const originalWrite = process.stderr.write;
+  process.stderr.write = () => true;
+  const stdout = makeStream();
+  let code;
+  try {
+    code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "300"], {
+      stdout, stderr: makeStream(), env: {}, runChild,
+      delayImpl: async (ms) => { clock += ms; },
+      now: () => clock,
+      ensureOwnershipImpl: async () => ({ ok: true }),
+    });
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  const result = JSON.parse(stdout.text());
+  assert.notEqual(result.status, "success");
+  assert.equal(result.settled, false);
+  assert.equal(code, 2);
+});
+
+test("wait-pr-checks returns pending with a re-issue, not RATE_LIMITED, when the reset is past the cap but inside the requested budget", async () => {
+  const clock = 1_000_000_000_000;
+  const { runChild } = rateLimitedRunChild(clock / 1000 + 250);
+  const stdout = makeStream();
+  const stderr = makeStream();
+  const code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "600"], {
+    stdout, stderr, env: {}, runChild, delayImpl: async () => {}, now: () => clock,
+  });
+  const result = JSON.parse(stdout.text());
+  assert.equal(code, 2);
+  assert.equal(result.status, "timeout");
+  assert.equal(result.outcome, "pending");
+  assert.equal(result.remainingTimeoutSeconds, 600);
+  assert.match(result.reissue, /--timeout 600$/);
+  assert.equal(stderr.text(), "");
+  // A reset beyond the requested budget stays terminal.
+  const far = rateLimitedRunChild(clock / 1000 + 900);
+  const farOut = makeStream();
+  const farCode = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "600"], {
+    stdout: farOut, stderr: makeStream(), env: {}, runChild: far.runChild, delayImpl: async () => {}, now: () => clock,
+  });
+  assert.equal(farCode, 1);
+  assert.equal(JSON.parse(farOut.text()).code, "RATE_LIMITED");
 });
 
 test("wait-pr-checks returns changed (exit 2) when the head advances during the rate-limit wait", async () => {

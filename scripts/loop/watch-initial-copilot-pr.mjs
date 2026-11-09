@@ -34,6 +34,9 @@ Optional:
                                 must be at least 3600 (persistent-wait floor).
   --timeout-ms <n>              Deprecated alias for --timeout (milliseconds); warns on
                                 stderr. Passing both flags fails closed.
+One call waits at most 170 seconds (GATE-EXEC-BOUNDED-WAIT-CAP); a longer --timeout
+returns "timed_out" with outcome "pending" and a "reissue" command (it carries the
+internal --resumed flag and the remaining --timeout); run it.
 Output (stdout, JSON):
   { "ok": true, "status": "ready_for_followup"|"timed_out"|"prior_linked_pr_closed_unmerged",
     "repo": "...", "issue": N, "prNumber": N|null, "prUrl": "..."|null,
@@ -118,6 +121,7 @@ export function parseWatchInitialCopilotPrCliArgs(argv) {
       issue: { type: "string" },
       timeout: { type: "string" },
       "timeout-ms": { type: "string" },
+      resumed: { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -151,6 +155,11 @@ export function parseWatchInitialCopilotPrCliArgs(argv) {
       rawTimeout[token.name === "timeout" ? "timeout" : "timeoutMs"] = requireTokenValue(token, parseError);
       continue;
     }
+    if (token.name === "resumed") {
+      // Internal: a re-issued capped wait carries the remaining budget, which the floor applies to only on the first call.
+      options.resumed = true;
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -164,6 +173,7 @@ export function parseWatchInitialCopilotPrCliArgs(argv) {
   }
   try {
     options.timeoutMs = resolveTimeoutMs(rawTimeout) ?? options.timeoutMs;
+    if (options.resumed) return options;
     if (options.timeoutMs !== 0 && options.timeoutMs < PERSISTENT_INTERNAL_WAIT_TIMEOUT_POLICY.minimumTimeoutMs) {
       throw new Error(`--timeout must be 0 or at least ${PERSISTENT_INTERNAL_WAIT_TIMEOUT_POLICY.minimumTimeoutMs / 1000} seconds for persistent waits`);
     }
@@ -192,7 +202,7 @@ export async function watchInitialCopilotPr(
 ) {
   const effectiveTimeoutMs = options.timeoutMs === 0
     ? 0
-    : Math.min(capMs, enforcePersistentInternalWaitTimeout({
+    : Math.min(capMs, options.resumed ? options.timeoutMs : enforcePersistentInternalWaitTimeout({
       timeoutMs: options.timeoutMs,
       contextLabel: "watch-initial-copilot-pr persistent wait",
     }));
@@ -273,18 +283,18 @@ export async function watchInitialCopilotPr(
 }
 export async function runCli(
   argv = process.argv.slice(2),
-  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh" } = {},
+  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh", ...watchDeps } = {},
 ) {
   const options = parseWatchInitialCopilotPrCliArgs(argv);
   if (options.help) {
     stdout.write(`${USAGE}\n`);
     return;
   }
-  // GATE-EXEC-BOUNDED-WAIT-CAP: the persistent-wait policy floor applies to the request; one call waits at most the cap.
+  // GATE-EXEC-BOUNDED-WAIT-CAP: the persistent-wait policy floor applies to the first call's request; one call waits at most the cap.
   const { timeoutMs, remainingMs } = capWait(options.timeoutMs);
-  let result = await watchInitialCopilotPr(options, { env, ghCommand, capMs: timeoutMs });
+  let result = await watchInitialCopilotPr(options, { env, ghCommand, capMs: timeoutMs, ...watchDeps });
   if (result.status === "timed_out" && remainingMs > 0) {
-    result = { ...result, ...pendingFields({ remainingMs, command: "dev-loops loop watch-initial", argv }) };
+    result = { ...result, ...pendingFields({ remainingMs, command: "dev-loops-run scripts/loop/watch-initial-copilot-pr.mjs", argv, carry: { "--resumed": true } }) };
   }
   process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
