@@ -708,6 +708,7 @@ test("issue 3080 AC11: the work order stamps copilotBodyClusterId as the finding
     assert.equal(plan.workOrder.copilotBodyClusterId, 2);
     const text = await readFile(plan.promptPath, "utf8");
     assert.match(text, /It is cluster 2 of this round: you MUST dispose it with a disposition whose `index` is 2/);
+    assert.match(text, /Leave it out of the spec-authority verdict: that verdict covers the findings you read only, and a decision at that index is dropped/);
     assert.ok(!text.includes("note it in the scopeDrift rationale"));
     await writeFile(path.join(root, sources.findingsFile), JSON.stringify({ overallVerdict: "clean", findings: [] }));
     assert.equal((await emitJudgeWorkOrder(sources)).workOrder.copilotBodyClusterId, 0, "an empty read gives cluster 0");
