@@ -254,7 +254,8 @@ function applyStage(raw, rawStage, strict = false) {
   const selectMatch = stage.match(/^select\((.*)\)$/);
   if (selectMatch) {
     if (strict) assertPredicatePath(stream, selectMatch[1]);
-    return stream.filter((v) => evaluatePredicate(v, selectMatch[1]));
+    // Keep the raw entry so a MISSING that passes the predicate stays MISSING downstream.
+    return raw.filter((_, i) => evaluatePredicate(stream[i], selectMatch[1]));
   }
   // Top-level comparison expression yields a boolean per input (e.g. .x=="y").
   if (/(==|!=|<=|>=|<|>)/.test(stage)) {

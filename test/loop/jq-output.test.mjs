@@ -417,3 +417,11 @@ test("strict: a value an earlier pipe stage did not find behaves as null in late
   assert.deepEqual(evaluateJqFilter(data, ".items[] | .a | select(.)", opts), [1]);
   assert.deepEqual(evaluateJqFilter(data, ".items[] | .a | . > 0", opts), [true, false]);
 });
+
+test("strict: a missing value that passes select stays missing for later path stages", () => {
+  const data = { items: [{ a: { body: "t" } }, {}] };
+  const opts = { strict: true };
+  assert.throws(() => evaluateJqFilter(data, ".items[] | .a | select(. == null) | .typo", opts), /matches no field/);
+  assert.throws(() => evaluateJqFilter(data, ".items[] | .a | select(. == null) | .body", opts), /matches no field/);
+  assert.deepEqual(evaluateJqFilter(data, ".items[] | .a | select(. != null) | .body", opts), ["t"]);
+});
