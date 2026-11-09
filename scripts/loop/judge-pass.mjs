@@ -38,6 +38,7 @@ import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
+import { raiseVerdictForActedCopilotBlock, withPinnedCopilotBodyCluster } from "../github/_copilot-body-disposition.mjs";
 import { codeTreeSkewNote, materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { ANY_SCOPE } from "@dev-loops/core/loop/gate-round-retirement";
@@ -932,7 +933,7 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
   if (!current || current.stale || current.workOrderDigest !== plan.workOrderDigest || current.executionIdentity !== plan.executionIdentity) {
     throw new Error(`judge execution ${plan.executionIdentity} is not the current emission for ${options.gate} at ${options.headSha} (${current?.stale ?? "no checkout holds its plan"}); re-emit the judge work order and re-run the judge`);
   }
-  return { ...order.authority, sliceLinkageIssues: Array.isArray(order.sliceLinkageIssues) ? order.sliceLinkageIssues : [] };
+  return { ...order.authority, sliceLinkageIssues: Array.isArray(order.sliceLinkageIssues) ? order.sliceLinkageIssues : [], order };
 }
 
 /**
@@ -984,14 +985,16 @@ export async function judgePassCli(
 ) {
   const resolvedRoot = options.repoRoot ? path.resolve(repoRoot, options.repoRoot) : repoRoot;
   const pinned = await verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot ?? resolveGateArtifactTmpRoot(resolvedRoot));
-  const { findings, overallVerdict } = await resolvePayload(options, resolvedRoot);
+  const { findings, overallVerdict: ledgerVerdict } = await resolvePayload(options, resolvedRoot);
+  // The Copilot body finding is one more cluster for the judge to dispose; the spec-authority check below still covers the findings read only.
+  const judged = await withPinnedCopilotBodyCluster(findings, pinned.order);
   const judgeVerdict = await readJsonArtifact(
     path.resolve(resolvedRoot, options.judgeVerdict),
     "--judge-verdict",
     parseError,
   );
   const { lowFixCapped, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot });
-  const result = runJudgePass(findings, judgeVerdict, options.headSha, { pastCap: lowFixCapped, round });
+  const result = runJudgePass(judged, judgeVerdict, options.headSha, { pastCap: lowFixCapped, round });
 
   // Only the pinned work order's sliceLinkageIssues arm the coercion; the emitter already read the spec and PR body Non-goals.
   if (rejectClosingRefRemoval(result.enriched, pinned.sliceLinkageIssues) > 0) {
@@ -1052,8 +1055,10 @@ export async function judgePassCli(
   // compute overallVerdict, so the two cannot disagree on what "blocking" means.
   const { blockingSeverities, trackerProvider } = await resolveGateSettings(options, resolvedRoot);
   // A failOpen promotion (ADR 0188) raised a low to medium after the consolidator computed overallVerdict, so check the ORIGINAL severities.
-  const actAtInputSeverity = result.enriched.flatMap((f, i) => (isOpenActItem(f) ? [{ ...f, severity: findings[i]?.severity ?? f.severity }] : []));
-  assertCleanImpliesNoBlockingAct(overallVerdict, actAtInputSeverity, blockingSeverities);
+  const actAtInputSeverity = result.enriched.flatMap((f, i) => (isOpenActItem(f) ? [{ i, f: { ...f, severity: judged[i]?.severity ?? f.severity } }] : []));
+  // Only ledger findings (below findings.length) were weighed by the consolidator; an acted Copilot body cluster at a blocking severity raises the verdict instead.
+  assertCleanImpliesNoBlockingAct(ledgerVerdict, actAtInputSeverity.filter((a) => a.i < findings.length).map((a) => a.f), blockingSeverities);
+  const overallVerdict = raiseVerdictForActedCopilotBlock(ledgerVerdict, actAtInputSeverity.filter((a) => a.i >= findings.length).map((a) => a.f.severity), blockingSeverities);
 
   // Persist the durable approval record AFTER the act list is finalized, so a
   // round with remaining act findings approves nothing (re-entry stays honest).
