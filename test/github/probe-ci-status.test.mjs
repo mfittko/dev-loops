@@ -1088,6 +1088,22 @@ test("watch-commit-ci returns timeout while a run is still in_progress past the 
   );
 });
 
+test("watch-commit-ci stops polling once slow reads push elapsed time past the budget", async () => {
+  await withGhRunListStub(
+    [{ stdout: runList([{ name: "verify", status: "in_progress", conclusion: null }]) }],
+    async (env) => {
+      let clock = 0;
+      const result = await watchCommitCiStatus(
+        { repo: "owner/repo", commit: "sha-main-5", pollIntervalMs: 10, timeoutMs: 100 },
+        { ...fastDeps(env), now: () => { const t = clock; clock += 500; return t; } },
+      );
+      assert.equal(result.status, "timeout");
+      assert.equal(result.attempts, 11);
+    },
+    { expectedCommit: "sha-main-5" },
+  );
+});
+
 test("watch-commit-ci single check (timeout-ms 0) reports live pending without waiting", async () => {
   await withGhRunListStub(
     [{ stdout: runList([{ name: "verify", status: "queued", conclusion: null }]) }],

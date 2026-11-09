@@ -410,6 +410,8 @@ export async function watchCiStatus(
     // subsequent polls so the watcher never burns a full interval before its
     // first observation.
     if (attempt > 1) {
+      // Slow API reads can overrun the deadline: stop polling once elapsed time exceeds the budget (GATE-EXEC-BOUNDED-WAIT-CAP).
+      if (options.timeoutMs > 0 && now() - watchStartedAtMs > options.timeoutMs) { break; }
       const pollDelayMs = buildPollDelayMs(
         watchStartedAtMs,
         options.timeoutMs,
@@ -592,6 +594,7 @@ export async function watchCommitCiStatus(
   let lastState = null;
   for (let attempt = 1; attempt <= attemptBudget; attempt += 1) {
     if (attempt > 1) {
+      if (options.timeoutMs > 0 && now() - watchStartedAtMs > options.timeoutMs) { break; }
       const pollDelayMs = buildPollDelayMs(
         watchStartedAtMs,
         options.timeoutMs,
