@@ -5,7 +5,8 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import { composeReviewVerdict, listOpenActItems } from "@dev-loops/core/loop/gate-fanin";
-import { computeContentDigest, computeSpecDigest, specCriterionIds } from "@dev-loops/core/loop/spec-authority";
+import { computeContentDigest, computeSpecDigest, specCriterionIds, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
+import { withoutCopilotBodyDecision } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 
 // The durable ledger carries the judge pass's spec-authority finding_conflicts
@@ -225,4 +226,51 @@ test("a sibling spec-authority verdict over the findings read only writes the le
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
+});
+
+test("a sibling spec-authority verdict that also decides the pinned Copilot cluster is accepted and the decision dropped (issue 3148)", async () => {
+  const { createHash } = await import("node:crypto");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-spec-copilot-"));
+  try {
+    const body = JSON.stringify({ angle: "copilot-body", findings: [{ severity: "medium", summary: "Refs list drops entries", recommendation: "parse both forms" }] });
+    await writeFile(path.join(tmpDir, "body.json"), body);
+    const workOrder = {
+      target: { repo: "owner/repo", pr: 42 }, roundIdentity: { gate: "draft_gate", headSha: HEAD }, headSha: HEAD, copilotBodyClusterId: 1,
+      requiredReads: [{ kind: "copilot-body-feedback", path: path.join(tmpDir, "body.json"), sha256: createHash("sha256").update(body).digest("hex") }],
+    };
+    await writeFile(path.join(tmpDir, "judge-emit-plan.json"), JSON.stringify({ roundId: "j1730000000000-deadbeef", workOrder }));
+    const execDir = path.join(tmpDir, "j1730000000000-deadbeef");
+    await mkdir(execDir, { recursive: true });
+    const act = (index) => ({ index, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "relevant" });
+    await writeFile(path.join(execDir, "judge-verdict.json"), JSON.stringify({ headSha: HEAD, scopeDrift: { verdict: "within_scope", rationale: "ok", driftedAreas: [] }, dispositions: [act(0), act(1)] }));
+    // judge-pass accepts a spec-authority verdict that covers the findings read only (index 0), so the writer must too.
+    await writeFile(path.join(execDir, "spec-authority-verdict.json"), JSON.stringify({ ...VERDICT, decisions: [decision(0, "valid_compliant", { authorizedRemediation: "fix it", defectClass: "c", siteQuery: "q" }), decision(1, "valid_compliant", { authorizedRemediation: "fix it", defectClass: "c", siteQuery: "q" })] }));
+    const specAuthority = path.join(tmpDir, "identity.json");
+    await writeFile(specAuthority, JSON.stringify({ specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds }));
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: HEAD, verdict: "clean",
+      findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "gap", clusterId: 0 }]),
+      judgeVerdict: path.join(execDir, "judge-verdict.json"), specAuthority, tmpRoot: tmpDir,
+    });
+    const { findings } = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(findings.find((f) => f.angle === "copilot-body").judgeDisposition, "act");
+    assert.equal(findings.find((f) => f.angle === "scope").judgeDisposition, "act");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("withoutCopilotBodyDecision drops only the pinned cluster index, so any other out-of-range decision is still refused (issue 3148)", () => {
+  const read = { kind: "copilot-body-feedback", path: "body.json", sha256: "0".repeat(64) };
+  const valid = { authorizedRemediation: "fix it", defectClass: "c", siteQuery: "q" };
+  const verdictAt = (index) => ({ ...VERDICT, decisions: [decision(index, "valid_compliant", valid)] });
+  const validate = (verdict) => validateSpecAuthorityVerdict(verdict, { findingsCount: 1, criterionIds, clusterIds: [0] });
+  // No pinned read: the verdict is unchanged, so a decision at N (the findings count) is refused.
+  const unpinned = verdictAt(1);
+  assert.equal(withoutCopilotBodyDecision(unpinned, { copilotBodyClusterId: 1, requiredReads: [] }), unpinned);
+  assert.throws(() => validate(withoutCopilotBodyDecision(unpinned, { copilotBodyClusterId: 1, requiredReads: [] })), /out of range/);
+  // Pinned read at cluster 1: a decision at 1 is dropped, a decision at cluster + 1 is kept and refused.
+  const pinned = { copilotBodyClusterId: 1, requiredReads: [read] };
+  assert.deepEqual(withoutCopilotBodyDecision(verdictAt(1), pinned).decisions, []);
+  assert.throws(() => validate(withoutCopilotBodyDecision(verdictAt(2), pinned)), /out of range/);
 });

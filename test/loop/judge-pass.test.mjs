@@ -2479,3 +2479,22 @@ test("judgePassCli disposes the Copilot body cluster after a two-member cluster 
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("judgePassCli accepts a spec-authority verdict that also decides the pinned Copilot body cluster (issue 3148)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-copilot-body-spec-"));
+  try {
+    await copilotBodyRound(tmpDir, { dispositions: [0, 1], clusterIds: [0] });
+    const { specDigest, contentDigest, criterionIds } = await specDigests();
+    await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+    const decide = (index) => ({ index, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "valid and compliant", authorizedRemediation: "fix it", defectClass: "c", siteQuery: "q" });
+    // Spec-authority covers the findings read only (index 0); the judge also keyed index 1, the pinned Copilot cluster.
+    await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [decide(0), decide(1)] }));
+    const payload = await judgePassCli({ ...copilotBodyArgs, specFile: "./spec.json", contentDigest, specAuthorityVerdict: "./spec-authority.json" }, { repoRoot: tmpDir });
+    assert.equal(payload.ok, true);
+    assert.equal(payload.specAuthority.outcomeCounts.valid_compliant, 1);
+    const written = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings;
+    assert.equal(written.find((f) => f.angle === "copilot-body").judgeDisposition, "act");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});

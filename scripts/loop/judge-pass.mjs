@@ -38,7 +38,7 @@ import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
-import { raiseVerdictForActedCopilotBlock, withPinnedCopilotBodyCluster } from "../github/_copilot-body-disposition.mjs";
+import { raiseVerdictForActedCopilotBlock, withPinnedCopilotBodyCluster, withoutCopilotBodyDecision } from "../github/_copilot-body-disposition.mjs";
 import { codeTreeSkewNote, materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { ANY_SCOPE } from "@dev-loops/core/loop/gate-round-retirement";
@@ -654,7 +654,7 @@ async function readJsonArtifact(artifactPath, label, parseErr) {
  *   humanDecisionIndices: number[], findingConflictIndices: number[],
  *   approvedCriteria: string[], invalidation: object|null } | null}
  */
-async function enforceSpecAuthority(options, findings, resolvedRoot) {
+async function enforceSpecAuthority(options, findings, resolvedRoot, order) {
   if (options.specFile === undefined) return null;
   const spec = await readJsonArtifact(path.resolve(resolvedRoot, options.specFile), "--spec-file", parseError);
   if (spec?.specKind === PR_SCOPE_SPEC_KIND && options.gate !== "review") {
@@ -683,7 +683,7 @@ async function enforceSpecAuthority(options, findings, resolvedRoot) {
   );
   let validated;
   try {
-    validated = validateSpecAuthorityVerdict(verdict, { findingsCount: findings.length, criterionIds, clusterIds: findings.map((f) => f?.clusterId) });
+    validated = validateSpecAuthorityVerdict(withoutCopilotBodyDecision(verdict, order), { findingsCount: findings.length, criterionIds, clusterIds: findings.map((f) => f?.clusterId) });
   } catch (error) {
     const code = error?.code;
     throw Object.assign(new Error(`spec-authority verdict failed validation${code ? ` [${code}]` : ""}: ${error instanceof Error ? error.message : String(error)}`), code ? { code } : {});
@@ -1005,7 +1005,7 @@ export async function judgePassCli(
   // Immutable spec-authority gate (opt-in via --spec-file). A spec_cannot_decide
   // outcome fails closed here so the loop stops at the human-spec-decision state
   // and never writes an act list from an undecidable spec.
-  const specAuthority = await enforceSpecAuthority(options, findings, resolvedRoot);
+  const specAuthority = await enforceSpecAuthority(options, findings, resolvedRoot, pinned.order);
   if (specAuthority && (specAuthority.specDigest !== pinned.specDigest || specAuthority.contentDigest !== pinned.contentDigest)) {
     throw new Error(`--spec-file/--content-digest (${specAuthority.specDigest}, ${specAuthority.contentDigest}) differ from the judge work order's pinned authority (${pinned.specDigest}, ${pinned.contentDigest}); re-emit the judge work order and re-run the judge`);
   }
