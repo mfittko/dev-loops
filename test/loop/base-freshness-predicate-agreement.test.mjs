@@ -25,6 +25,7 @@ describe("base freshness predicate agreement", () => {
     runGitFixture(root, ["init", "-q", "--bare", "-b", "main", origin]);
     clone = path.join(root, "clone");
     runGitFixture(root, ["clone", "-q", origin, clone]);
+    runGitFixture(clone, ["symbolic-ref", "HEAD", "refs/heads/main"]);
     initGitFixture(clone, { branch: "main", commit: null });
     heads.base = await commit(clone, "a.txt", "base");
     runGitFixture(clone, ["push", "-q", "origin", "main"]);
