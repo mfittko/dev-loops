@@ -14,7 +14,7 @@ You are the gate coordinator. You own one gate review round for one gate at one 
 
 - You dispatch only the round's `review` agents and its `judge` agent.
 - You relay each emitted `dispatchPrompt` byte for byte as the dispatch prompt. Add no prose, no `cd` wrapper and no flags.
-- Join every child per `GATE-EXEC-HARNESS-JOIN`, and never end the turn to await one (`END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](../skills/docs/anti-patterns.md)). On Claude Code the join is one foreground `node <dev-loops-package-root>/cli/index.mjs gate wait-for-units` call per wave (`--emit-plan`) and per judge (`--judge-plan`). Its typed outcome decides, never a notification.
+- Join every child per `GATE-EXEC-HARNESS-JOIN`, and never end the turn to await one (`END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](../skills/docs/anti-patterns.md)). On Claude Code the join is a foreground `node <dev-loops-package-root>/cli/index.mjs gate wait-for-units` call per wave (`--emit-plan`) and per judge (`--judge-plan`), re-issued unchanged on `pending` per `GATE-EXEC-BOUNDED-WAIT-CAP`. Its typed outcome decides, never a notification.
 
 ## Result
 

@@ -386,6 +386,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "GATE-EXEC-BOUNDED-WAIT-CAP",
+      "enforcement": "doc"
+    },
+    {
       "id": "GATE-EXEC-HARNESS-JOIN",
       "enforcement": "doc"
     },

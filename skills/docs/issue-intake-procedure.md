@@ -127,6 +127,7 @@ Preflight verdicts:
   - durable-auto ownership of this seam (the dedicated watcher + its default 1-hour watch budget) is owned by [FACADE-BOOTSTRAP-WATCH-ROUTE](public-dev-loop-contract.md); this procedure does not restate that rule
   - quiet/no-activity watch observations alone are non-terminal
   - `ready_for_followup`: linked PR has become substantive; resume from that PR
+  - `timed_out` with `outcome: "pending"`: the per-call cap was reached and the watch budget is not exhausted; run the returned `reissue` unchanged per `GATE-EXEC-BOUNDED-WAIT-CAP`, and never re-run `watch-initial` with a fresh budget
   - `timed_out`: observational first; refresh authoritative state
   - if refreshed state is still `waiting_for_initial_copilot_implementation`, remain attached to the same durable wait seam and continue waiting
   - <!-- rule: INTAKE-TIMEOUT-ROUTE-ON-SEAM-EXIT --> `INTAKE-TIMEOUT-ROUTE-ON-SEAM-EXIT`: if the refreshed state exits this seam, route based on that refreshed state instead of surfacing timeout attention
