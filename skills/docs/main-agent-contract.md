@@ -244,9 +244,9 @@ The rule binds the coordinator on every harness, so it stays outside the section
 - Claude Code: The orchestrator sends all decisions for one block in one message.
 - Claude Code: The orchestrator reads the latest hand-back before it re-instructs.
 - Claude Code: On the next notification of a reporter that named children in flight, read its output file before acting.
-- Every harness: A hand-back or pause that states it is interim is a status, not a result. The orchestrator relays it as a status, does not re-dispatch a listed child, and waits for the reporter's next report.
+- Every harness: A hand-back or pause that lists children in flight and names no run-ending case is interim, whether or not it says so. It is a status, not a result. The orchestrator relays it as a status, does not re-dispatch a listed child, and waits for the reporter's next report.
 - Every harness: A report that names a run-ending case (the Unit coordinator boundaries section, which includes the gate coordinator's terminal `units_stalled` or `round_retired` hand-back) is final even when it lists children. The orchestrator treats each listed child as still running.
-- Every harness: A second hand-back from a coordinator whose report the orchestrator already consumed, with the run state unchanged, is a duplicate. The orchestrator reads the state, acts on nothing and relays nothing.
+- Every harness: A second hand-back from a coordinator whose report the orchestrator already consumed, with the run state unchanged, is a duplicate. This holds for interim reports too and takes precedence over the interim bullet. The orchestrator reads the state, acts on nothing and relays nothing.
 
 <!-- pi-only -->
 > **Absolute read-only boundary (Pi).** The main agent must never mutate files tracked by the repository.

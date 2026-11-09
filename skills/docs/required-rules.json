@@ -741,7 +741,7 @@
     {
       "id": "MAIN-AGENT-COORDINATOR-REPORT-READ",
       "enforcement": "agent",
-      "enforcementNote": "Reading the coordinator output file is an orchestrator step; no script observes it."
+      "enforcementNote": "Reading a coordinator report and classifying it as interim, final or duplicate is an orchestrator step; no script observes it."
     },
     {
       "id": "MAIN-AGENT-FILING-BLOCKER-ONLY",
