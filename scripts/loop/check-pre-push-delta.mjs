@@ -665,15 +665,15 @@ export async function runCli(
     if (!options.result) {
       const recordRoot = tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree);
       // The closure branch pushes the worktree HEAD, so the same open-work guard runs for it too: a baseline handback must not clear the marker past the candidate's open record work.
+      // One snapshot of the sealed record feeds every guarded head: a concurrent --result rewrite between two reads would skip the later check.
+      const sealed = readSealedRecord(recordRoot, sequence.reviewBaselineHead);
+      // Only the record that assertNoOpenWorkAtCandidate would act on is refused: an unsealed fix_and_rereview record of this act set at the guarded head.
+      let unsealed = null;
+      // A record that exists but cannot be parsed fails closed: its open work cannot be ruled out.
+      if (!sealed) {
+        try { unsealed = readRecord(recordRoot, sequence.reviewBaselineHead); } catch (error) { throw new Error(`delta_record_unsealed: the delta record for ${sequence.reviewBaselineHead} cannot be parsed (${error.message}), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record`); }
+      }
       for (const guardedHead of new Set(closure ? [record.headSha, currentHead] : [record.headSha])) {
-        // One snapshot of the sealed record feeds both checks: a concurrent --result rewrite between two reads would skip both.
-        const sealed = readSealedRecord(recordRoot, sequence.reviewBaselineHead);
-        // Only the record that assertNoOpenWorkAtCandidate would act on is refused: an unsealed fix_and_rereview record of this act set at the guarded head.
-        let unsealed = null;
-        // A record that exists but cannot be parsed fails closed: its open work cannot be ruled out.
-        if (!sealed) {
-          try { unsealed = readRecord(recordRoot, sequence.reviewBaselineHead); } catch (error) { throw new Error(`delta_record_unsealed: the delta record for ${sequence.reviewBaselineHead} cannot be parsed (${error.message}), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record`); }
-        }
         if (unsealed?.nextStep === "fix_and_rereview" && unsealed.candidateHead === guardedHead && unsealed.actSetId === sequence.actSetId) throw new Error(`delta_record_unsealed: a delta record exists for ${sequence.reviewBaselineHead} but carries no matching seal (a --result write may have crashed), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record`);
         assertNoOpenWorkAtCandidate(sealed, { handbackHead: guardedHead, siteCoverage: record.siteCoverage ?? [], actItems: sequence.actItems, actSetId: sequence.actSetId });
       }

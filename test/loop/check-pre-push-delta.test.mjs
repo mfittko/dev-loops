@@ -1784,6 +1784,15 @@ test("issue 2447: the handback guard reads the sealed record once, so a concurre
   assert.equal(reads, 1);
 });
 
+test("issue 2447: the closure guard reads the sealed record once for both the handback head and HEAD", async () => {
+  const fx = openRecordFixture([LIFECYCLE_FINDING]);
+  let reads = 0;
+  const real = readSealedGateDeltaRecord;
+  const over = { ...fx.headAt(B), readSealedRecord: (...args) => (reads++ === 0 ? real(...args) : null) };
+  await assert.rejects(fx.run(fx.handback(A), ["--fixer-plan", "plan.json", "--findings-log", logFor(A)], over), /open task/);
+  assert.equal(reads, 1);
+});
+
 test("issue 2447: a fix_and_rereview record of another act set at the handback candidate does not refuse the handback, sealed or not", async () => {
   const sealed = openRecordFixture([RESIDUE_FINDING], "other-act-set");
   assert.ok((await sealed.run(sealed.handback(B), ["--handback"])).ok);
