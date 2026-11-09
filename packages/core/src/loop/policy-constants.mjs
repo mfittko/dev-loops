@@ -16,8 +16,8 @@ export const COPILOT_REVIEW_WAIT_TIMEOUT_MS = 1_800_000;
 
 /**
  * Longest wait for a GraphQL rate-limit reset before a tool returns RATE_LIMITED.
- * Kept at 9 minutes so a foreground call stays under the 600 s
- * DEV-LOOP-PROBE-TIMEOUT-CEILING.
+ * A 540 s foreground run is backgrounded at 180 s on Claude Code, so a bounded
+ * wait splits across calls per GATE-EXEC-BOUNDED-WAIT-CAP.
  */
 export const GRAPHQL_RATE_LIMIT_MAX_WAIT_MS = 540_000;
 

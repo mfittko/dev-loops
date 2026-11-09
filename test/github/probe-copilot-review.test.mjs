@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { test } from "bun:test";
 import { captureStderr } from "../_helpers.mjs";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
@@ -309,7 +309,11 @@ test("probe-copilot-review capped call returns pending, the re-issue keeps the b
     assert.match(concise.text(), /outcome:\s+pending \(430 s left\)/);
     assert.match(concise.text(), /reissue:\s+dev-loops-run scripts\/github\/probe-copilot-review\.mjs/);
     // Activity between the calls is reported, not absorbed into a fresh baseline.
-    const resumed = first.reissue.split(" ").slice(2).map((token) => token.replace(/^'|'$/gu, ""));
+    // A real POSIX word split of the reissue tail: the quoted --baseline-ids JSON must survive as one argument.
+    const tail = first.reissue.split(" ").slice(2).join(" ");
+    const split = spawnSync("sh", ["-c", 'eval "set -- $1"; printf "%s\\0" "$@"', "_", tail], { encoding: "utf8" });
+    const resumed = split.stdout.split("\0").slice(0, -1);
+    assert.equal(resumed.length, 8);
     const env2 = await writeGhStub(await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-resume-")), [{ stdout: JSON.stringify(later) + "\n" }]);
     const second = sink();
     await runCli(resumed, { stdout: second, ...deps(env2) });

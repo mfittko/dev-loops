@@ -54,10 +54,11 @@ export const shellWord = (word) => (/^[\w@%+=:,./-]+$/u.test(word) ? word : `'${
  */
 export function pendingFields({ remainingMs, command, argv, carry = {} }) {
   const skipWithValue = new Set(["--timeout", "--timeout-ms", ...Object.keys(carry).filter((flag) => carry[flag] !== true)]);
+  const carriedWithValue = (token) => Object.keys(carry).some((flag) => carry[flag] !== true && token.startsWith(`${flag}=`));
   const kept = [];
   for (let i = 0; i < argv.length; i += 1) {
     if (skipWithValue.has(argv[i])) i += 1;
-    else if (carry[argv[i]] !== true && !/^--timeout(?:-ms)?=/u.test(argv[i])) kept.push(argv[i]);
+    else if (carry[argv[i]] !== true && !/^--timeout(?:-ms)?=/u.test(argv[i]) && !carriedWithValue(argv[i])) kept.push(argv[i]);
   }
   const carried = Object.entries(carry).filter(([, value]) => value != null).flatMap(([flag, value]) => (value === true ? [flag] : [flag, String(value)]));
   const remainingTimeoutSeconds = Math.ceil(remainingMs / 1000);

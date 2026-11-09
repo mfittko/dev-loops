@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { capWait, pendingFields, resolveTimeoutMs, shellWord } from "../lib/timeout-flag.mjs";
-import { fileURLToPath } from "node:url";
+import { capWait, pendingFields, resolveTimeoutMs } from "../lib/timeout-flag.mjs";
 import { parsePositiveInteger, parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -197,6 +196,13 @@ export async function runCli(
   let baselineSha = options.baselineSha;
   let stallStartedAtMs = options.stallStartedAtMs;
   let pendingRemainingMs = capRemainingMs;
+  // Refresh the runner lease during a reset wait, as the watch loop does between polls.
+  const waitResetWithHeartbeat = (ms) => waitWithHeartbeat(ms, {
+    attempt: 1, attemptBudget: 1, watchStartedAtMs: startedAt, timeoutMs: options.timeoutMs, now, delayImpl,
+    onHeartbeat: () => ensureOwnershipImpl({
+      repo: options.repo, pr: options.pr, env, cwd: resolveRepoRoot(process.cwd()), claimIfMissing: true, requireExisting: false,
+    }),
+  });
   try {
     result = await withGraphqlRateLimitWait(
       () => {
@@ -216,13 +222,7 @@ export async function runCli(
       },
       {
         maxWaitMs: remainingMs,
-        // Refresh the runner lease during the reset wait, as the watch loop does between polls.
-        sleep: (ms) => waitWithHeartbeat(ms, {
-          attempt: 1, attemptBudget: 1, watchStartedAtMs: startedAt, timeoutMs: options.timeoutMs, now, delayImpl,
-          onHeartbeat: () => ensureOwnershipImpl({
-            repo: options.repo, pr: options.pr, env, cwd: resolveRepoRoot(process.cwd()), claimIfMissing: true, requireExisting: false,
-          }),
-        }),
+        sleep: waitResetWithHeartbeat,
         now,
         env,
         ghCommand,
@@ -236,7 +236,9 @@ export async function runCli(
     if (capRemainingMs > 0 && resetInMs > 0 && resetInMs <= budgetLeftMs) {
       // The reset is past this call's cap but inside the requested budget: the re-issue waits it out.
       result = { ok: true, status: "timeout", settled: false, repo: options.repo, pr: options.pr, rateLimitResetAt: error.resetAt };
-      pendingRemainingMs = budgetLeftMs;
+      // Sleep inside this call's cap first: a re-issue that hits the same limit at once would loop hot.
+      await waitResetWithHeartbeat(Math.min(resetInMs, Math.max(0, options.timeoutMs - (now() - startedAt))));
+      pendingRemainingMs = requested.timeoutMs - (now() - startedAt);
     } else {
       result = rateLimitedResult(error);
       // --jq/--silent would filter the envelope away; always keep code/resetAt on stderr.
@@ -245,7 +247,7 @@ export async function runCli(
   }
   if (result.status === "timeout" && pendingRemainingMs > 0) {
     const carry = { "--baseline-sha": baselineSha, "--stall-started-at-ms": stallStartedAtMs };
-    result = { ...result, ...pendingFields({ remainingMs: pendingRemainingMs, command: `node ${shellWord(fileURLToPath(import.meta.url))}`, argv, carry }) };
+    result = { ...result, ...pendingFields({ remainingMs: pendingRemainingMs, command: "dev-loops-run scripts/github/wait-pr-checks.mjs", argv, carry }) };
   }
   if (options.jq !== undefined || options.silent) {
     return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: result.status === "success" });

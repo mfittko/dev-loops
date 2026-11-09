@@ -132,7 +132,7 @@ test("wait-pr-checks caps one call at 170 s, returns pending (exit 2) with the r
     assert.equal(result.status, "timeout");
     assert.equal(result.outcome, "pending");
     assert.equal(result.remainingTimeoutSeconds, 430);
-    assert.match(result.reissue, /^node \S*wait-pr-checks\.mjs --repo owner\/repo --pr 7 --poll 10 --baseline-sha sha-a --timeout 430$/);
+    assert.match(result.reissue, /^dev-loops-run scripts\/github\/wait-pr-checks\.mjs --repo owner\/repo --pr 7 --poll 10 --baseline-sha sha-a --timeout 430$/);
     reissue = result.reissue;
   });
   const resumed = reissue.split(" ").slice(2);
@@ -432,20 +432,24 @@ test("wait-pr-checks keeps the no-checks grace floor when a 300 s reset consumes
 });
 
 test("wait-pr-checks returns pending with a re-issue, not RATE_LIMITED, when the reset is past the cap but inside the requested budget", async () => {
-  const clock = 1_000_000_000_000;
+  let clock = 1_000_000_000_000;
+  const start = clock;
   const { runChild } = rateLimitedRunChild(clock / 1000 + 250);
   const stdout = makeStream();
   const stderr = makeStream();
   const code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "600"], {
-    stdout, stderr, env: {}, runChild, delayImpl: async () => {}, now: () => clock,
+    stdout, stderr, env: {}, runChild, delayImpl: async (ms) => { clock += ms; }, now: () => clock,
   });
   const result = JSON.parse(stdout.text());
   assert.equal(code, 2);
   assert.equal(result.status, "timeout");
   assert.equal(result.outcome, "pending");
-  assert.equal(result.remainingTimeoutSeconds, 600);
-  assert.match(result.reissue, /--timeout 600$/);
+  // The call slept to its cap before returning, and the re-issue budget shrank by that sleep.
+  assert.ok(clock - start >= 170_000, `slept ${clock - start} ms`);
+  assert.ok(result.remainingTimeoutSeconds <= 430, `remaining ${result.remainingTimeoutSeconds}`);
+  assert.match(result.reissue, /--timeout 4[23]\d$/);
   assert.equal(stderr.text(), "");
+  clock = start;
   // A reset beyond the requested budget stays terminal.
   const far = rateLimitedRunChild(clock / 1000 + 900);
   const farOut = makeStream();
