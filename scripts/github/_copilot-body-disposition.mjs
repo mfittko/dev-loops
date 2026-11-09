@@ -351,3 +351,12 @@ export async function withPinnedCopilotBodyCluster(findings, order) {
 export function raiseVerdictForActedCopilotBlock(verdict, actedCopilotSeverities, blockingSeverities) {
   return verdict === "clean" && actedCopilotSeverities.some((severity) => blockingSeverities.includes(severity)) ? "findings_present" : verdict;
 }
+
+/**
+ * Spec-authority covers the findings read only: drop a decision the judge keyed at the pinned Copilot body cluster
+ * (the Copilot cluster keeps its relevance disposition). A work order with no pinned read leaves the verdict unchanged.
+ */
+export function withoutCopilotBodyDecision(verdict, order) {
+  if (!order?.requiredReads?.some((read) => read?.kind === "copilot-body-feedback") || !Array.isArray(verdict?.decisions)) return verdict;
+  return { ...verdict, decisions: verdict.decisions.filter((d) => d?.index !== order.copilotBodyClusterId) };
+}
