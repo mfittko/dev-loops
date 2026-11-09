@@ -3,7 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, parseReviewThreads } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
 import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
-import { capWait, pendingFields, resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { capWait, pendingFields, resolveTimeoutMs, scriptCommand } from "../lib/timeout-flag.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { isSanctionedCopilotReviewerLogin, isTrustedGraphqlComment } from "@dev-loops/core/github/comment-trust";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -179,7 +179,10 @@ export function parseWatchCliArgs(argv) {
       // Internal: a re-issued capped wait carries the first call's baseline activity ids.
       try {
         const ids = JSON.parse(requireTokenValue(token, parseError));
-        options.baseline = Object.fromEntries(BASELINE_KINDS.map((kind) => [kind, ids[kind].map((id) => ({ id: String(id) }))]));
+        options.baseline = Object.fromEntries(BASELINE_KINDS.map((kind) => [kind, ids[kind].map((id) => {
+          if (typeof id !== "string" || id === "") throw new TypeError("baseline id must be a non-empty string");
+          return { id };
+        })]));
       } catch {
         throw parseError(`--baseline-ids must be a JSON object of id arrays (${BASELINE_KINDS.join(", ")})`);
       }
@@ -439,7 +442,7 @@ export async function runCli(
   let result = await watchCopilotReview(options, { env, ghCommand, ...watchDeps, onBaseline: (b) => { baseline = b; } });
   if (result.status === "timeout" && remainingMs > 0) {
     const ids = Object.fromEntries(BASELINE_KINDS.map((kind) => [kind, baseline[kind].map((item) => item.id)]));
-    result = { ...result, ...pendingFields({ remainingMs, command: "dev-loops-run scripts/github/probe-copilot-review.mjs", argv, carry: { "--baseline-ids": JSON.stringify(ids) } }) };
+    result = { ...result, ...pendingFields({ remainingMs, command: scriptCommand(import.meta.url), argv, carry: { "--baseline-ids": JSON.stringify(ids) } }) };
   }
   if (options.concise && options.jq === undefined && !options.silent) {
     stdout.write(`${formatProbeConcise(result)}\n`);

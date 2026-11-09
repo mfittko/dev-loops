@@ -303,11 +303,11 @@ test("probe-copilot-review capped call returns pending, the re-issue keeps the b
     assert.equal(first.status, "timeout");
     assert.equal(first.outcome, "pending");
     assert.equal(first.remainingTimeoutSeconds, 430);
-    assert.match(first.reissue, /^dev-loops-run scripts\/github\/probe-copilot-review\.mjs --repo owner\/repo --pr 17 --baseline-ids '\{.*"r-1".*\}' --timeout 430$/);
+    assert.match(first.reissue, /^node \S+\/scripts\/github\/probe-copilot-review\.mjs --repo owner\/repo --pr 17 --baseline-ids '\{.*"r-1".*\}' --timeout 430$/);
     const concise = sink();
     await runCli(["--repo", "owner/repo", "--pr", "17", "--timeout", "600", "--concise"], { stdout: concise, ...deps(env) });
     assert.match(concise.text(), /outcome:\s+pending \(430 s left\)/);
-    assert.match(concise.text(), /reissue:\s+dev-loops-run scripts\/github\/probe-copilot-review\.mjs/);
+    assert.match(concise.text(), /reissue:\s+node \S+\/scripts\/github\/probe-copilot-review\.mjs/);
     // Activity between the calls is reported, not absorbed into a fresh baseline.
     // A real POSIX word split of the reissue tail: the quoted --baseline-ids JSON must survive as one argument.
     const tail = first.reissue.split(" ").slice(2).join(" ");
@@ -418,7 +418,12 @@ test("probe-copilot-review --help prints usage and exits 0", async () => {
 
 test("probe-copilot-review --baseline-ids fails closed on {} and on non-JSON input", () => {
   const base = ["--repo", "owner/repo", "--pr", "17"];
-  for (const bad of ["{}", "not json"]) {
+  const bads = ["{}", "not json",
+    '{"reviewThreadComments":[],"reviews":[{"id":"r-1"}],"issueComments":[]}',
+    '{"reviewThreadComments":[null],"reviews":[],"issueComments":[]}',
+    '{"reviewThreadComments":[""],"reviews":[],"issueComments":[]}'];
+  assert.deepEqual(parseWatchCliArgs([...base, "--baseline-ids", '{"reviewThreadComments":[],"reviews":["r-1"],"issueComments":[]}']).baseline.reviews, [{ id: "r-1" }]);
+  for (const bad of bads) {
     assert.throws(() => parseWatchCliArgs([...base, "--baseline-ids", bad]), /--baseline-ids must be a JSON object of id arrays/, bad);
   }
 });

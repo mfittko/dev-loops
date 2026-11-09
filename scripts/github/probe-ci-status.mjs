@@ -5,7 +5,7 @@ import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
-import { capWait, parseBaselineSha, pendingFields, resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { capWait, parseBaselineSha, pendingFields, resolveTimeoutMs, scriptCommand } from "../lib/timeout-flag.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import {
   normalizeHeadScopedCiContract,
@@ -653,7 +653,7 @@ export async function runCli(
       onStall: (startedAtMs) => { carry["--stall-started-at-ms"] = startedAtMs; },
     });
   if (result.status === "timeout" && remainingMs > 0) {
-    result = { ...result, ...pendingFields({ remainingMs, command: "dev-loops-run scripts/github/probe-ci-status.mjs", argv, carry: options.commit !== undefined ? {} : carry }) };
+    result = { ...result, ...pendingFields({ remainingMs, command: scriptCommand(import.meta.url), argv, carry: options.commit !== undefined ? {} : carry }) };
   }
   process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { capWait, parseBaselineSha, pendingFields, resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { capWait, parseBaselineSha, pendingFields, resolveTimeoutMs, scriptCommand } from "../lib/timeout-flag.mjs";
 import { parsePositiveInteger, parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -64,7 +64,11 @@ The RATE_LIMITED envelope is written to stdout when output is unfiltered, and
 always to stderr.
 On GraphQL rate-limit exhaustion the tool waits for the reset inside the
 remaining --timeout budget (heartbeats continue) and retries once; otherwise
-it returns RATE_LIMITED at once.
+it returns RATE_LIMITED at once. When the reset falls past this call's ~170 s
+cap but inside the requested budget, it sleeps within the cap and returns
+status "timeout" with outcome "pending", ciStatus "pending", the baseline
+headSha (null when none was read yet), "rateLimitResetAt" (ISO 8601) and a
+"reissue" command; run that command unchanged.
 ${JQ_OUTPUT_USAGE}
 Exit codes (default output, no --jq/--silent):
   0  Green (status "success")
@@ -235,7 +239,7 @@ export async function runCli(
     const resetInMs = Date.parse(error.resetAt ?? "") - now();
     if (capRemainingMs > 0 && resetInMs > 0 && resetInMs <= budgetLeftMs) {
       // The reset is past this call's cap but inside the requested budget: the re-issue waits it out.
-      result = { ok: true, status: "timeout", settled: false, repo: options.repo, pr: options.pr, rateLimitResetAt: error.resetAt };
+      result = { ok: true, status: "timeout", settled: false, repo: options.repo, pr: options.pr, ciStatus: "pending", headSha: baselineSha ?? null, rateLimitResetAt: error.resetAt };
       // Sleep inside this call's cap first: a re-issue that hits the same limit at once would loop hot.
       await waitResetWithHeartbeat(Math.min(resetInMs, Math.max(0, options.timeoutMs - (now() - startedAt))));
       pendingRemainingMs = requested.timeoutMs - (now() - startedAt);
@@ -247,7 +251,7 @@ export async function runCli(
   }
   if (result.status === "timeout" && pendingRemainingMs > 0) {
     const carry = { "--baseline-sha": baselineSha, "--stall-started-at-ms": stallStartedAtMs };
-    result = { ...result, ...pendingFields({ remainingMs: pendingRemainingMs, command: "dev-loops-run scripts/github/wait-pr-checks.mjs", argv, carry }) };
+    result = { ...result, ...pendingFields({ remainingMs: pendingRemainingMs, command: scriptCommand(import.meta.url), argv, carry }) };
   }
   if (options.jq !== undefined || options.silent) {
     return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: result.status === "success" });

@@ -7,7 +7,7 @@ import { parseIssueNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { detectInitialCopilotPrState, LINKED_PR_STATE } from "./detect-initial-copilot-pr-state.mjs";
-import { capWait, pendingFields, resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { capWait, pendingFields, resolveTimeoutMs, scriptCommand } from "../lib/timeout-flag.mjs";
 import { enforcePersistentInternalWaitTimeout, PERSISTENT_INTERNAL_WAIT_TIMEOUT_POLICY } from "@dev-loops/core/loop/timeout-policy";
 import {
   DEFAULT_POLL_INTERVAL_MS,
@@ -294,7 +294,7 @@ export async function runCli(
   const { timeoutMs, remainingMs } = capWait(options.timeoutMs);
   let result = await watchInitialCopilotPr(options, { env, ghCommand, capMs: timeoutMs, ...watchDeps });
   if (result.status === "timed_out" && remainingMs > 0) {
-    result = { ...result, ...pendingFields({ remainingMs, command: "dev-loops-run scripts/loop/watch-initial-copilot-pr.mjs", argv, carry: { "--resumed": true } }) };
+    result = { ...result, ...pendingFields({ remainingMs, command: scriptCommand(import.meta.url), argv, carry: { "--resumed": true } }) };
   }
   process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }

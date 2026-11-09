@@ -361,7 +361,7 @@ test("a --timeout above the cap is capped, returns pending (exit 2) and the re-i
     assert.equal(first.code, 2);
     assert.equal(first.result.outcome, "pending");
     assert.equal(first.result.remedy, undefined);
-    assert.equal(first.result.reissue, `dev-loops-run scripts/loop/wait-for-gate-units.mjs --emit-plan ${planPath} --tmp-root ${path.join(root, "tmp")} --timeout 330`);
+    assert.equal(first.result.reissue, `node ${fileURLToPath(new URL("../scripts/loop/wait-for-gate-units.mjs", import.meta.url))} --emit-plan ${planPath} --tmp-root ${path.join(root, "tmp")} --timeout 330`);
     // Resume: the re-issued args carry the remaining budget; it is capped again, then the last call times out for real.
     const second = await runMain(first.result.reissue.split(" ").slice(2), real);
     assert.equal(clock.now(), 340000);

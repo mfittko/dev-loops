@@ -1,7 +1,8 @@
 // Shared `--timeout <seconds>` parse for the wait/probe scripts (issue 2755).
 // `--timeout-ms` stays one release as a deprecated alias: it warns on stderr
 // and converts to seconds. Passing both flags fails closed.
-// Node-pure on purpose: no workspace imports.
+// Node-pure on purpose: no workspace imports (node: builtins only).
+import { fileURLToPath } from "node:url";
 
 const NON_NEGATIVE_NUMBER = /^\d+(?:\.\d+)?$/u;
 
@@ -51,6 +52,9 @@ export function capWait(requestedMs, capMs = WAIT_CAP_MS) {
 }
 
 export const shellWord = (word) => (/^[\w@%+=:,./-]+$/u.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`);
+
+/** The reissue launcher: the running script by absolute path, so the re-issue runs this same script from any cwd (WORKTREE-SCRIPT-LAUNCHER-CWD). */
+export const scriptCommand = (importMetaUrl) => `node ${shellWord(fileURLToPath(importMetaUrl))}`;
 
 /**
  * The fields a capped wait adds to its non-terminal result: `outcome: "pending"` and the exact

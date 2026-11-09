@@ -15,7 +15,7 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { WAIT_CAP_MS, capWait, pendingFields, resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { WAIT_CAP_MS, capWait, pendingFields, resolveTimeoutMs, scriptCommand } from "../lib/timeout-flag.mjs";
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { verifyPullReceipt, verifyPulledResult } from "../github/_work-order-protocol.mjs";
@@ -216,7 +216,7 @@ export async function main(argv = process.argv.slice(2), { wait = waitForUnits }
     result = await wait({ ...options, timeoutMs });
     if (result.outcome === "timeout" && remainingMs > 0) {
       const { remedy, ...rest } = result;
-      result = { ...rest, ...(remedy && remedy !== ARTIFACT_TIMEOUT_REMEDY ? { remedy } : {}), ...pendingFields({ remainingMs, command: "dev-loops-run scripts/loop/wait-for-gate-units.mjs", argv }) };
+      result = { ...rest, ...(remedy && remedy !== ARTIFACT_TIMEOUT_REMEDY ? { remedy } : {}), ...pendingFields({ remainingMs, command: scriptCommand(import.meta.url), argv }) };
     }
   } catch (error) {
     result = { ok: false, error: error instanceof Error ? error.message : String(error) };

@@ -132,7 +132,7 @@ test("wait-pr-checks caps one call at 170 s, returns pending (exit 2) with the r
     assert.equal(result.status, "timeout");
     assert.equal(result.outcome, "pending");
     assert.equal(result.remainingTimeoutSeconds, 430);
-    assert.match(result.reissue, /^dev-loops-run scripts\/github\/wait-pr-checks\.mjs --repo owner\/repo --pr 7 --poll 10 --baseline-sha aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --timeout 430$/);
+    assert.match(result.reissue, /^node \S+\/scripts\/github\/wait-pr-checks\.mjs --repo owner\/repo --pr 7 --poll 10 --baseline-sha aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --timeout 430$/);
     reissue = result.reissue;
   });
   const resumed = reissue.split(" ").slice(2);
@@ -436,7 +436,7 @@ test("wait-pr-checks keeps the no-checks grace floor when the reset consumes the
   assert.equal(code, 2);
 });
 
-test("wait-pr-checks keeps the no-checks grace floor when a 300 s reset consumes the whole 300 s budget", async () => {
+test("wait-pr-checks returns pending when a 300 s reset is past the 170 s cap of a 300 s budget", async () => {
   let clock = 1_000_000_000_000;
   const { runChild } = rateLimitedRunChild(clock / 1000 + 300, { noChecks: true });
   const originalWrite = process.stderr.write;
@@ -456,6 +456,8 @@ test("wait-pr-checks keeps the no-checks grace floor when a 300 s reset consumes
   const result = JSON.parse(stdout.text());
   assert.notEqual(result.status, "success");
   assert.equal(result.settled, false);
+  assert.equal(result.outcome, "pending");
+  assert.match(result.reissue, /^node \S+\/scripts\/github\/wait-pr-checks\.mjs --repo owner\/repo --pr 7 .*--timeout \d+$/);
   assert.equal(code, 2);
 });
 
@@ -472,6 +474,9 @@ test("wait-pr-checks returns pending with a re-issue, not RATE_LIMITED, when the
   assert.equal(code, 2);
   assert.equal(result.status, "timeout");
   assert.equal(result.outcome, "pending");
+  assert.equal(result.ciStatus, "pending");
+  assert.ok("headSha" in result);
+  assert.ok(result.rateLimitResetAt);
   // The call slept to its cap before returning, and the re-issue budget shrank by that sleep.
   assert.ok(clock - start >= 170_000, `slept ${clock - start} ms`);
   assert.ok(result.remainingTimeoutSeconds <= 430, `remaining ${result.remainingTimeoutSeconds}`);
