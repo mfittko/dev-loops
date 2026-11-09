@@ -21,6 +21,7 @@ import { classifyValidationCommand } from "@dev-loops/core/loop/validation-class
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, materializationHash, pullReceiptPath, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
+import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
@@ -3892,7 +3893,7 @@ test("issue 2447: a locally_clear reviewer result with a lifecycle finding in th
 
 test("issue 2447: a fix_and_rereview record with no open task refuses with a named error and writes no plan", async () => {
   await withFixture(async (fx) => {
-    const { prior } = await refusedDeltaFixture(fx, "locally_clear");
+    const { prior } = await refusedDeltaFixture(fx, "needs_fix");
     await openRecord(fx);
     const planBytes = await readFile(prior.planPath);
     await assert.rejects(fx.emit({ phase: "commit_only", keepRecord: true }), /delta_record_no_open_task:[^]*no open task/);
@@ -3985,5 +3986,39 @@ test("issue 2447: a truncated delta record at the baseline refuses the act-list 
     const planBytes = await readFile(prior.planPath);
     await assert.rejects(fx.emit({ phase: "commit_only", keepRecord: true }), /delta_record_unsealed[^]*cannot be parsed/);
     assert.deepEqual(await readFile(prior.planPath), planBytes);
+  });
+});
+
+// Issue 2447 slice 1: the keyed-plan route against the record the real writer seals for a refused locally_clear result.
+const sealRefusedRecord = async (fx, lifecycleFindings = []) => {
+  const result = JSON.parse(await readFile(fx.files.delta, "utf8"));
+  writeGateDeltaRecord({
+    tmpRoot: path.join(fx.root, "tmp"), sequence: { reviewBaselineHead: fx.head, actSetId: startDeltaSequence({ reviewBaselineHead: fx.head, actList: ACT }).actSetId },
+    candidateHead: git(fx.wt, "rev-parse", "HEAD"), invocation: 1, decision: { outcome: "needs_fix", nextStep: "fix_and_rereview", locallyClear: false, errors: ["siteCoverageGaps"] }, result, lifecycleFindings,
+  });
+};
+
+test("issue 2447: a refused locally_clear result sealed by the writer with no finding and no open act ref keeps the issue 3111 keyed plan", async () => {
+  await withFixture(async (fx) => {
+    const { prior, markerPath } = await refusedDeltaFixture(fx, "locally_clear");
+    await sealRefusedRecord(fx);
+    const marker = await readFile(markerPath);
+    const planBytes = await readFile(prior.planPath);
+    const keyed = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.notEqual(keyed.planPath, prior.planPath, "a keyed plan beside the canonical one");
+    assert.deepEqual(await readFile(prior.planPath), planBytes, "the canonical plan is untouched");
+    assert.deepEqual(await readFile(markerPath), marker, "the marker is untouched");
+  });
+});
+
+test("issue 2447: a refused locally_clear result sealed by the writer with a lifecycle finding supersedes the plan with a committing order", async () => {
+  await withFixture(async (fx) => {
+    const { prior, markerPath } = await refusedDeltaFixture(fx, "locally_clear");
+    await sealRefusedRecord(fx, [LIFECYCLE]);
+    const marker = await readFile(markerPath);
+    const again = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.equal(again.planPath, prior.planPath);
+    assert.notDeepEqual(await readFile(markerPath), marker);
+    assert.deepEqual(again.workOrder.deltaFindings.map((f) => f.summary), [LIFECYCLE.summary]);
   });
 });

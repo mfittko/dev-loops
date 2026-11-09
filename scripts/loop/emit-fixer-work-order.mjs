@@ -655,7 +655,10 @@ export async function emitFixerWorkOrder({
     if (unsealed?.nextStep === "fix_and_rereview" && unsealed.candidateHead === worktreeHead && unsealed.actSetId === delta.parsed.actSetId) throw new Refusal(`delta_record_unsealed: delta record ${gateDeltaRecordPath(tmpRoot, headSha)} holds fix_and_rereview at the worktree HEAD but carries no matching seal (a --result write may have crashed), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record; nothing was written`);
   }
   // A record of another act set (a closed sequence or a replaced act list) is not open work of this one, as in the full-phase path and the handback guard.
-  const openAtHead = actRecord?.nextStep === "fix_and_rereview" && actRecord.candidateHead === worktreeHead && actRecord.actSetId === delta.parsed.actSetId;
+  const sealedAtHead = actRecord?.nextStep === "fix_and_rereview" && actRecord.candidateHead === worktreeHead && actRecord.actSetId === delta.parsed.actSetId;
+  const hasOpenWork = sealedAtHead && ((Array.isArray(actRecord.findings) && actRecord.findings.length > 0) || (delta.parsed.actionableItems ?? []).some((item) => ["not_resolved", "cannot_verify"].includes(item?.status)));
+  // A locally_clear result that validation refused (a coverage gap, a stale-surface hit) seals no finding and no open act ref: it keeps the issue 3111 route below.
+  const openAtHead = sealedAtHead && (hasOpenWork || delta.parsed.outcome !== "locally_clear");
   if (openAtHead) {
     // The result must be the one the decision used: an earlier result of the same sequence shares the act set but not the record's statuses.
     if (itemPairs(delta.parsed.actionableItems) !== itemPairs(actRecord.items)) throw new Refusal(`--delta-result's item statuses differ from the delta record ${gateDeltaRecordPath(tmpRoot, headSha)}, so it is not the result that decision used; pass that decision's result, or re-run the delta review (dev-loops loop pre-push-delta); nothing was written`);
@@ -671,7 +674,7 @@ export async function emitFixerWorkOrder({
       throw new Refusal(`delta record ${recordPath} is not sealed for ${headSha} or differs from the pinned read, so its findings are not evidence; re-run check-pre-push-delta --result to write it`);
     }
     const text = (value) => typeof value === "string" && value.length <= 2000;
-    // The 20-entry cap bounds the record's own findings; the synthetic act-ref tasks are bounded by the act list (the writer reserves room for them only when a lifecycle finding exists).
+    // The 20-entry cap bounds the record's own findings; the synthetic act-ref tasks are bounded by the act list.
     const recordFindings = openAtHead ? actRecord.findings ?? [] : deltaFindings;
     if (!Array.isArray(deltaFindings) || !Array.isArray(recordFindings) || recordFindings.length > 20 || !deltaFindings.every((f) => text(f?.severity) && VALID_SEVERITIES.has(normalizeSeverity(f.severity)) && text(f.summary) && text(f.evidence) && ["residueOf", "site"].every((key) => f[key] === undefined || text(f[key])))) {
       throw new Refusal(`delta record findings at ${recordPath} are malformed (an array of at most 20 entries of strings of at most 2000 characters: severity, summary, evidence, optional residueOf and site); re-run the delta review (dev-loops loop pre-push-delta) to rewrite the record`);
@@ -803,7 +806,7 @@ export async function emitFixerWorkOrder({
   // beside the plan, never over it, so the delta coverage the original execution bound stays authentic; it writes no sequence marker.
   const prior = phase === "commit_only" && actListFile && delta && originalBytes ? JSON.parse(originalBytes).workOrder : null;
   // The delta sequence is in flight when the delta result reviewed the unpushed fixing commit (its candidate is the worktree HEAD, not the baseline) and the first fixer delivered its handback.
-  // Only the refused PRE-PUSH-DELTA-RESULT case (a locally_clear result) is append-only; a needs_fix / fix_and_rereview re-dispatch is a committing second fixer and supersedes the plan.
+  // Only the refused PRE-PUSH-DELTA-RESULT case (a locally_clear result whose record holds no finding and no open act ref) is append-only; a re-dispatch with open record work is a committing second fixer and supersedes the plan.
   const appendOnly = prior?.phase === "commit_only" && prior.source === "act-list" && prior.headSha === headSha && prior.gate === gate
     && delta.parsed.outcome === "locally_clear" && !openAtHead
     && delta.parsed.origin?.executionIdentity === JSON.parse(originalBytes).executionIdentity

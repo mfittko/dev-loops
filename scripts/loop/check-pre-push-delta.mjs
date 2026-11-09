@@ -661,16 +661,20 @@ export async function runCli(
     const reportBytes = readFileSync(options.siteCoverage);
     const raw = JSON.parse(reportBytes);
     const record = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
+    const closure = options.fixerPlan && !options.result && !options.handback && (!fixCommitted || record.headSha !== currentHead);
     if (!options.result) {
       const recordRoot = tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree);
-      // One snapshot of the sealed record feeds both checks: a concurrent --result rewrite between two reads would skip both.
-      const sealed = readSealedRecord(recordRoot, sequence.reviewBaselineHead);
-      // Only the record that assertNoOpenWorkAtCandidate would act on is refused: an unsealed fix_and_rereview record of this act set at the handback head.
-      const unsealed = sealed ? null : readRecord(recordRoot, sequence.reviewBaselineHead);
-      if (unsealed?.nextStep === "fix_and_rereview" && unsealed.candidateHead === record.headSha && unsealed.actSetId === sequence.actSetId) throw new Error(`delta_record_unsealed: a delta record exists for ${sequence.reviewBaselineHead} but carries no matching seal (a --result write may have crashed), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record`);
-      assertNoOpenWorkAtCandidate(sealed, { handbackHead: record.headSha, siteCoverage: record.siteCoverage ?? [], actItems: sequence.actItems, actSetId: sequence.actSetId });
+      // The closure branch pushes the worktree HEAD, so the same open-work guard runs for it too: a baseline handback must not clear the marker past the candidate's open record work.
+      for (const guardedHead of new Set(closure ? [record.headSha, currentHead] : [record.headSha])) {
+        // One snapshot of the sealed record feeds both checks: a concurrent --result rewrite between two reads would skip both.
+        const sealed = readSealedRecord(recordRoot, sequence.reviewBaselineHead);
+        // Only the record that assertNoOpenWorkAtCandidate would act on is refused: an unsealed fix_and_rereview record of this act set at the guarded head.
+        const unsealed = sealed ? null : readRecord(recordRoot, sequence.reviewBaselineHead);
+        if (unsealed?.nextStep === "fix_and_rereview" && unsealed.candidateHead === guardedHead && unsealed.actSetId === sequence.actSetId) throw new Error(`delta_record_unsealed: a delta record exists for ${sequence.reviewBaselineHead} but carries no matching seal (a --result write may have crashed), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record`);
+        assertNoOpenWorkAtCandidate(sealed, { handbackHead: guardedHead, siteCoverage: record.siteCoverage ?? [], actItems: sequence.actItems, actSetId: sequence.actSetId });
+      }
     }
-    if (options.fixerPlan && !options.result && !options.handback && (!fixCommitted || record.headSha !== currentHead)) {
+    if (closure) {
       if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(raw.headSha)) throw new Error("sequence closure requires a canonical full commit SHA in the handback");
       const planBytes = readFileSync(options.fixerPlan);
       await authenticateCoverage(options, sequence, raw.headSha, raw, reportBytes, { candidateHead: raw.headSha }, isAncestor, { closureOnly: true });
@@ -731,12 +735,10 @@ export async function runCli(
       if (decision.outcome === "bounded_out") decision = { ...decision, nextStep: "restart_on_replacement_pr" };
       if (priorRecord?.outcome === "locally_clear" && !decision.locallyClear) throw new Error(`reviewer-only: the locally_clear record for baseline ${baselineHead} is not replaced by a non-clearing result and is never overwritten. ${CHAIN_END_REMEDY}`);
     }
-    // A locally_clear result that validation refused (a coverage gap, a skipReason mismatch, an unaddressed stale-surface hit) gets one medium finding per error, so the fixer re-emission lists a task instead of sealing a record with no open work.
-    const refusalFindings = result?.outcome === "locally_clear" && decision.nextStep === "fix_and_rereview" ? (decision.errors ?? []).map((error) => ({ severity: "medium", summary: "validateDeltaResult refused the locally_clear delta result", evidence: clip(error) })) : [];
     // Local evidence for the emitter and the fixed-reply guard; never a gate verdict.
     const write = () => writeGateDeltaRecord({
       tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree),
-      sequence, candidateHead: currentHead, invocation: options.invocation, decision, result, lifecycleFindings, refusalFindings, reserveOpenTasks: !options.threadsFile,
+      sequence, candidateHead: currentHead, invocation: options.invocation, decision, result, lifecycleFindings,
     });
     // The reviewer-only route read its prior record before the fetch, the scans and the changelog check: write only when the record is still the snapshot every check above judged.
     if (options.reviewerOnly) {

@@ -1702,7 +1702,7 @@ test("issue 2447: a thrown infrastructure error (a validator crash, a changelog 
   } finally { fs.rmSync(own.dir, { recursive: true, force: true }); }
 });
 
-test("issue 2447: the writer caps findings so the emitter's 20 entries hold the unresolved act-ref tasks too, and only a writer-set flag marks a lifecycle finding", () => {
+test("issue 2447: the writer caps findings at 20 whatever the open act refs, and only a writer-set flag marks a lifecycle finding", () => {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "delta-cap-"));
   try {
     const sequence = { reviewBaselineHead: A, actSetId: "x" };
@@ -1710,7 +1710,7 @@ test("issue 2447: the writer caps findings so the emitter's 20 entries hold the 
     const result = { actionableItems: [{ ref: "r1", status: "not_resolved", evidence: ["e"] }, { ref: "r2", status: "cannot_verify", evidence: ["e"] }], newFindings };
     writeGateDeltaRecord({ tmpRoot, sequence, candidateHead: B, invocation: 1, decision: { outcome: "needs_fix", nextStep: "fix_and_rereview", locallyClear: false }, result, lifecycleFindings: [{ lifecycle: true, severity: "medium", summary: "docs validator links refused this delta range", evidence: "e" }] });
     const { findings } = readGateDeltaRecord(tmpRoot, A);
-    assert.equal(findings.length + 2, 20);
+    assert.equal(findings.length, 20);
     assert.equal(isLifecycleFinding(findings[0]), true);
     assert.equal(findings.filter(isLifecycleFinding).length, 1);
     assert.equal(isLifecycleFinding({ severity: "medium", summary: "LIFECYCLE-CHANGELOG-COMPLETENESS: reviewer wording", evidence: "e" }), false);
@@ -1739,36 +1739,39 @@ test("issue 2447: a handback is refused with delta_record_unsealed when a record
   await assert.rejects(fx.run(fx.handback(B), ["--handback"]), /delta_record_unsealed[^]*re-run the --result/);
 });
 
-test("issue 2447: the writer refuses when lifecycle findings plus open act items exceed the 20-task intake, and keeps the lifecycle finding below it", () => {
+test("issue 2447: the writer caps the record at 20 findings, lifecycle first, and refuses by name only when lifecycle findings alone exceed 20", () => {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "delta-budget-"));
-  try {
-    const sequence = { reviewBaselineHead: A, actSetId: "x" };
-    const items = (n) => Array.from({ length: n }, (_, i) => ({ ref: `r${i}`, status: "not_resolved", evidence: ["e"] }));
-    const write = (n) => writeGateDeltaRecord({ tmpRoot, sequence, candidateHead: B, invocation: 1, decision: { outcome: "needs_fix", nextStep: "fix_and_rereview", locallyClear: false }, result: { actionableItems: items(n), newFindings: [] }, lifecycleFindings: [LIFECYCLE_FINDING] });
-    assert.throws(() => write(20), /delta_record_over_budget/);
-    assert.equal(readGateDeltaRecord(tmpRoot, A), null);
-    write(19);
-    assert.equal(readGateDeltaRecord(tmpRoot, A).findings.filter(isLifecycleFinding).length, 1);
-  } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
-});
-
-test("issue 2447: the writer reserves no task slots on the thread route and throws over budget only with a lifecycle finding", () => {
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "delta-route-"));
   try {
     const sequence = { reviewBaselineHead: A, actSetId: "x" };
     const decision = { outcome: "needs_fix", nextStep: "fix_and_rereview", locallyClear: false };
     const items = (n) => Array.from({ length: n }, (_, i) => ({ ref: `r${i}`, status: "not_resolved", evidence: ["e"] }));
-    const newFindings = Array.from({ length: 10 }, (_, i) => ({ severity: "medium", summary: `residue ${i}`, evidence: "e", residueOf: `r${i}`, site: `s${i}` }));
-    // Thread route: 12 open threads plus 10 findings keep every finding.
-    writeGateDeltaRecord({ tmpRoot, sequence, candidateHead: B, invocation: 1, decision, result: { actionableItems: items(12), newFindings }, reserveOpenTasks: false });
-    assert.equal(readGateDeltaRecord(tmpRoot, A).findings.length, 10);
-    // Thread route with a lifecycle finding: 12 open threads do not count against the 20 entries.
-    writeGateDeltaRecord({ tmpRoot, sequence, candidateHead: B, invocation: 1, decision, result: { actionableItems: items(21), newFindings: [] }, lifecycleFindings: [LIFECYCLE_FINDING], reserveOpenTasks: false });
-    assert.equal(readGateDeltaRecord(tmpRoot, A).findings.length, 1);
-    // Act-list route, no lifecycle finding, 21 open items: the record is written (bounded_out at invocation 3), no throw.
-    writeGateDeltaRecord({ tmpRoot, sequence, candidateHead: B, invocation: 3, decision: { outcome: "bounded_out", nextStep: "push_to_gate", locallyClear: false }, result: { actionableItems: items(21), newFindings: [] } });
-    assert.equal(readGateDeltaRecord(tmpRoot, A).outcome, "bounded_out");
+    const residue = (n) => Array.from({ length: n }, (_, i) => ({ severity: "medium", summary: `residue ${i}`, evidence: "e", residueOf: `r${i}`, site: `s${i}` }));
+    const lifecycle = (n) => Array.from({ length: n }, (_, i) => ({ ...LIFECYCLE_FINDING, summary: `lifecycle ${i}` }));
+    const write = (over) => writeGateDeltaRecord({ tmpRoot, sequence, candidateHead: B, invocation: 1, decision, ...over });
+    // 21 open items and two residue findings: both findings are sealed.
+    write({ result: { actionableItems: items(21), newFindings: residue(2) } });
+    assert.deepEqual(readGateDeltaRecord(tmpRoot, A).findings.map((f) => f.summary), ["residue 0", "residue 1"]);
+    // One lifecycle finding with 20 open items: no throw, the act-ref tasks are not counted.
+    write({ result: { actionableItems: items(20), newFindings: [] }, lifecycleFindings: [LIFECYCLE_FINDING] });
+    assert.equal(readGateDeltaRecord(tmpRoot, A).findings.filter(isLifecycleFinding).length, 1);
+    // Lifecycle findings lead the cap.
+    write({ result: { actionableItems: [], newFindings: residue(25) }, lifecycleFindings: lifecycle(2) });
+    const capped = readGateDeltaRecord(tmpRoot, A).findings;
+    assert.equal(capped.length, 20);
+    assert.equal(capped.filter(isLifecycleFinding).length, 2);
+    // More than 20 lifecycle findings refuse and write nothing new.
+    fs.rmSync(gateDeltaRecordPath(tmpRoot, A));
+    assert.throws(() => write({ result: { actionableItems: [], newFindings: [] }, lifecycleFindings: lifecycle(21) }), /delta_record_over_budget/);
+    assert.equal(readGateDeltaRecord(tmpRoot, A), null);
   } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
+});
+
+test("issue 2447: a baseline handback with HEAD at the reviewed candidate is refused on the closure path while the record holds a lifecycle finding", async () => {
+  const fx = openRecordFixture([LIFECYCLE_FINDING]);
+  await assert.rejects(fx.run(fx.handback(A), ["--fixer-plan", "plan.json", "--findings-log", logFor(A)]), /open task[^]*new commit/);
+  const unsealed = openRecordFixture([LIFECYCLE_FINDING]);
+  fs.rmSync(`${gateDeltaRecordPath(unsealed.tmpRoot, A)}.seal`);
+  await assert.rejects(unsealed.run(unsealed.handback(A), ["--fixer-plan", "plan.json", "--findings-log", logFor(A)]), /delta_record_unsealed/);
 });
 
 test("issue 2447: the handback guard reads the sealed record once, so a concurrent rewrite cannot fail it open", async () => {
@@ -1824,13 +1827,11 @@ test("issue 2447: a docs validator that moves HEAD or edits the working tree dur
   } finally { fs.rmSync(fx.dir, { recursive: true, force: true }); }
 });
 
-test("issue 2447: a locally_clear result that validation refuses seals one medium finding per error, so the fixer has a task", async () => {
+test("issue 2447: a locally_clear result that validation refuses seals no finding, so the issue 3111 keyed-plan route stays open", async () => {
   const { actList, result } = fixture();
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"));
   const out = await runCli(["--act-list", actList, "--baseline", A, "--result", result, "--invocation", "1"], { ...withStale(B), tmpRoot });
   assert.equal(out.nextStep, "fix_and_rereview");
   const record = readGateDeltaRecord(tmpRoot, A);
-  assert.equal(record.findings.length, out.errors.length);
-  assert.ok(record.findings.every((f) => f.severity === "medium" && f.lifecycle === undefined));
-  assert.match(record.findings.map((f) => f.evidence).join("\n"), /stale-surface/);
+  assert.equal(record.findings, undefined);
 });

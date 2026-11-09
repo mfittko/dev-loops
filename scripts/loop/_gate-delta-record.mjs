@@ -69,13 +69,12 @@ export function listGateDeltaRecords(tmpRoot) {
 export const isLifecycleFinding = (finding) => finding?.lifecycle === true;
 
 /** Write the decision of one `--result` run. Returns the record path. */
-export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocation, decision, result, lifecycleFindings = [], refusalFindings = [], reserveOpenTasks = true }) {
+export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocation, decision, result, lifecycleFindings = [] }) {
   const items = Array.isArray(result?.actionableItems) ? result.actionableItems.map((item) => ({ ref: item?.ref, status: item?.status })) : [];
-  // Lifecycle refusals lead. The act-list emitter's intake takes 20 entries and appends one task per open act ref, so that route leaves room for them; the thread route adds no such task.
-  const open = reserveOpenTasks ? items.filter((item) => ["not_resolved", "cannot_verify"].includes(item.status)).length : 0;
+  // The 20-entry cap bounds the record findings, lifecycle findings first; the emitter's act-ref tasks are not counted against it.
   // A lifecycle finding is never dropped by the budget: refuse by name instead of sealing a record that hides open lifecycle work.
-  if (lifecycleFindings.length > 0 && lifecycleFindings.length + open > 20) throw new Error(`delta_record_over_budget: ${lifecycleFindings.length} lifecycle finding(s) plus ${open} open act item(s) exceed the 20-task intake; resolve or defer some act items, then rerun the --result step`);
-  const findings = [...lifecycleFindings, ...refusalFindings, ...deltaFixerFindings(result)].slice(0, Math.max(0, 20 - open));
+  if (lifecycleFindings.length > 20) throw new Error(`delta_record_over_budget: ${lifecycleFindings.length} lifecycle finding(s) exceed the 20-entry record; resolve some, then rerun the --result step`);
+  const findings = [...lifecycleFindings, ...deltaFixerFindings(result)].slice(0, 20);
   const record = {
     ...deltaCoverageBinding(decision),
     reviewBaselineHead: sequence.reviewBaselineHead,
