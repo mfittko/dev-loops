@@ -658,7 +658,7 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
         "--angles", '["correctness"]', "--known-findings", capture, "--silent"], { repoRoot: root,
         run: async () => ({ code: 0, stdout: JSON.stringify({ body: "review recovery", closingIssuesReferences: [], baseRefName: "main" }) }),
         checkBaseFreshness: async () => ({ ok: true, status: "base_current", base: "main" }),
-        loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true, draftGate: { verdict: "clean", headSha: candidate } } }) });
+        loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true, draftGate: { visible: true, verdict: "clean", headSha: candidate } } }) });
       const context = await readGateContext({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: head }, { repoRoot: root });
       const read = context.requiredReads.find((entry) => entry.kind === "known-findings"), bytes = await readFile(path.resolve(root, read.path));
       assert.equal(read.sha256, createHash("sha256").update(bytes).digest("hex"));

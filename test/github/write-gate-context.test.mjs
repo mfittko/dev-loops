@@ -2235,7 +2235,7 @@ test("CLI tripwire: a pre_approval_gate with a satisfied draft gate builds its c
       run: stubGhRun,
       loadCoordination: async () => {
         coordinationCalls++;
-        return { prData: { isDraft: false }, gateEvidence: { draftGate: { verdict: "clean", headSha: "0ld1234" } } };
+        return { prData: { isDraft: false }, gateEvidence: { draftGate: { visible: true, verdict: "clean", headSha: "0ld1234" } } };
       },
     });
 
@@ -7684,7 +7684,7 @@ for (const reason of ["thread_site_changed", "thread_site_unverifiable", "no_com
     let admitted = false;
     await main(["--repo", id.repo, "--pr", String(id.pr), "--gate", id.gate, "--head-sha", headSha, "--base", baseSha,
       "--angles", '["correctness"]', "--known-findings", capturePath, "--silent"], { repoRoot, run: stubGhRun,
-      loadCoordination: async () => { admitted = true; return { prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true, draftGate: { verdict: "clean", headSha: baseSha } } }; } });
+      loadCoordination: async () => { admitted = true; return { prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true, draftGate: { visible: true, verdict: "clean", headSha: baseSha } } }; } });
     assert.equal(admitted, true, "the actual CLI admission path observes the historical draft boundary");
     const context = await readGateContext(id, { repoRoot });
     const read = context.requiredReads.find((entry) => entry.kind === "known-findings");
@@ -8653,7 +8653,7 @@ test("main() passes seamFirstRoundFor to the resolver: a pre_approval seam round
       await main(["--repo", id.repo, "--pr", String(id.pr), "--gate", "pre_approval_gate", "--head-sha", headSha, "--base", baseSha], {
         repoRoot,
         run: stubGhRun,
-        loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGate: { verdict: "clean", headSha: "0ld1234" } } }),
+        loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGate: { visible: true, verdict: "clean", headSha: "0ld1234" } } }),
       });
       return (await readGateContext({ ...id, gate: "pre_approval_gate" }, { repoRoot })).resolvedAngles;
     };
