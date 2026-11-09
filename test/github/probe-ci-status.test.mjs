@@ -1246,3 +1246,20 @@ test("probe-ci-status capped call returns pending and the re-issue keeps the bas
   assert.equal(stuck.status, "stuck");
   assert.equal(parseCiWatchCliArgs(resumed).baselineSha, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 });
+
+test("probe-ci-status --timeout 30 with the default poll on pending CI performs one poll (GATE-EXEC-BOUNDED-WAIT-CAP)", async () => {
+  const sink = () => { let text = ""; return { write: (c) => { text += c; return true; }, text: () => text }; };
+  const routes = [
+    { match: ["pr", "view"], stdout: prView("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["build"]) },
+    { match: ["check-runs"], stdout: checkRuns([{ status: "queued", conclusion: null, name: "build" }]) },
+    { match: ["/status"], stdout: statuses([]) },
+  ];
+  let clock = 1_000_000;
+  const stdout = sink();
+  await withGhStub({ routes }, (env) => runCli(["--repo", "owner/repo", "--pr", "7", "--timeout", "30"], {
+    stdout, stderr: sink(), env, ghCommand: "gh", runChild: env[RUN_CHILD], delayImpl: async (ms) => { clock += ms; }, now: () => clock,
+  }));
+  const result = JSON.parse(stdout.text());
+  assert.equal(result.status, "timeout");
+  assert.equal(result.attempts, 1);
+});

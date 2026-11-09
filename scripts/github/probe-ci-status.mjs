@@ -641,8 +641,8 @@ export async function runCli(
   }
   // GATE-EXEC-BOUNDED-WAIT-CAP: one call waits at most the cap; a longer request returns a pending result.
   const { timeoutMs, remainingMs } = capWait(requested.timeoutMs);
-  // A poll interval above the cap would leave one poll per call, so the no-checks grace never accrues.
-  const options = { ...requested, timeoutMs, pollIntervalMs: timeoutMs > 0 ? Math.min(requested.pollIntervalMs, timeoutMs) : requested.pollIntervalMs };
+  // Only a capped call clamps: a poll interval above the cap would leave one poll per call, so the no-checks grace never accrues.
+  const options = { ...requested, timeoutMs, pollIntervalMs: remainingMs > 0 ? Math.min(requested.pollIntervalMs, timeoutMs) : requested.pollIntervalMs };
   const carry = { "--baseline-sha": options.baselineSha, "--stall-started-at-ms": options.stallStartedAtMs };
   let result = options.commit !== undefined
     ? await watchCommitCiStatus(options, { env, ghCommand, ...watchDeps })
