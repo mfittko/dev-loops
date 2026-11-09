@@ -163,3 +163,23 @@ test("accepted revision forms exit 0", () => {
   const short = runGitFixture(dir, ["rev-parse", "--short", "HEAD"]);
   for (const rev of ["HEAD", short]) assert.equal(run(["--base", rev, "same.md"]).code, 0);
 });
+
+test("a vs. inside an obligation sentence does not split it", () => {
+  writeFileSync(path.join(dir, "vs.md"), "A fast path vs. a slow path MUST NOT diverge. Other text.\n");
+  git("add", "vs.md");
+  git("commit", "-qm", "vs");
+  writeFileSync(path.join(dir, "vs.md"), "A fast path vs. a slow path MAY diverge. Other text.\n");
+  const { out } = run(["--base", "HEAD", "vs.md"]);
+  assert.match(out, /review required\): A fast path vs\. a slow path MUST NOT diverge\./);
+});
+
+test("an inherited GIT_DIR and GIT_WORK_TREE do not redirect the revision read", () => {
+  process.env.GIT_DIR = path.join(dir, "no-such-git-dir");
+  process.env.GIT_WORK_TREE = path.join(dir, "no-such-tree");
+  try {
+    assert.equal(run(["--base", "HEAD", "--head", "HEAD", "same.md"]).code, 0);
+  } finally {
+    delete process.env.GIT_DIR;
+    delete process.env.GIT_WORK_TREE;
+  }
+});
