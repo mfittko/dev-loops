@@ -20,7 +20,7 @@ const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateConfig, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { capClosedFor } from "@dev-loops/core/loop/gate-fanin";
 import { isInRoundRewrite, listPriorActItems, resolveDraftRoundCap } from "./write-gate-context.mjs";
-import { raiseVerdictForActedCopilotBlock, withPinnedCopilotBodyCluster } from "./_copilot-body-disposition.mjs";
+import { raiseVerdictForActedCopilotBlock, withPinnedCopilotBodyCluster, withoutCopilotBodyDecision } from "./_copilot-body-disposition.mjs";
 import { clusterFindings, clustersFromStampedIds, projectClusterDisposition } from "@dev-loops/core/loop/finding-cluster";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
@@ -716,7 +716,7 @@ export { buildLogPath };
  * `spec-authority-verdict.json` of the judge verdict. An absent sibling is a
  * no-op. An unreadable, invalid, or identity-mismatched one fails closed.
  */
-async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
+async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity, order) {
   const verdictPath = path.join(path.dirname(judgePath), "spec-authority-verdict.json");
   let raw;
   try {
@@ -727,7 +727,7 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
   }
   let validated;
   try {
-    validated = validateSpecAuthorityVerdict(JSON.parse(raw), {
+    validated = validateSpecAuthorityVerdict(withoutCopilotBodyDecision(JSON.parse(raw), order), {
       findingsCount: findings.length,
       clusterIds: findings.map((f) => f?.clusterId),
       criterionIds: identity?.checkedCriteria,
@@ -958,7 +958,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     scopeDrift = enriched.scopeDrift;
     if (specAuthorityIdentity !== undefined) {
       // judge-pass validates the spec-authority verdict over the findings read only, so validate the same prefix and re-attach the appended Copilot cluster.
-      findings = [...(await applySiblingSpecAuthorityVerdict(findings.slice(0, rawFindings.length), judgePath, specAuthorityIdentity)), ...findings.slice(rawFindings.length)];
+      findings = [...(await applySiblingSpecAuthorityVerdict(findings.slice(0, rawFindings.length), judgePath, specAuthorityIdentity, judgePlan?.workOrder)), ...findings.slice(rawFindings.length)];
     }
   }
   // `resurfaces` stays only when it names a closed prior round's act item in the same file; every other act item is new.
