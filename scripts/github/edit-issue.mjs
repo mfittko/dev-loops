@@ -34,8 +34,9 @@ At least one edit:
   --add-assignee <u>            Assignee to add (repeatable)
   --remove-assignee <u>         Assignee to remove (repeatable)
   --milestone <m>               Milestone to set (empty string clears it)
-                                (--title/--body/--body-file reject empty or
-                                whitespace-only values; use --milestone "" only
+                                (--title rejects empty or whitespace-only values;
+                                --body/--body-file accept them only with
+                                --allow-empty-body; use --milestone "" only
                                 to clear the milestone)
   --state <open|closed>         Close or reopen the issue (a separate \`gh issue
                                 close\`/\`gh issue reopen\` call, run after any

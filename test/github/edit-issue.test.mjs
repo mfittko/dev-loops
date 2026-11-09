@@ -442,6 +442,18 @@ test("editIssue: refuses a body that is only `null` unless --allow-empty-body (A
   assert.equal(calls.some((c) => c[1] === "edit"), false);
 });
 
+test("editIssue: --enforce-grill refuses a `null` body-file and makes no edit call (AC3)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "edit-issue-grill-null-"));
+  const nullPath = join(dir, "null.md");
+  writeFileSync(nullPath, "null\n");
+  const { run, calls } = stubGh();
+  await assert.rejects(
+    () => editIssue({ repo: "o/n", issue: 5, bodyFile: nullPath, enforceGrill: true, addAssignees: [], removeAssignees: [] }, { run }),
+    /only `null`/,
+  );
+  assert.equal(calls.some((c) => c[1] === "edit"), false);
+});
+
 test("parseEditIssueCliArgs: --allow-empty-body lets an empty or `null` body through the parser (AC3)", () => {
   const base = ["--repo", "o/n", "--issue", "1"];
   assert.throws(() => parseEditIssueCliArgs([...base, "--body", "null"]), /only `null`/);

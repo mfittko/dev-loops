@@ -389,6 +389,11 @@ test("strict: a typo in a select/comparison predicate path is a missing-path err
   assert.deepEqual(evaluateJqFilter(data, ".typo == 1"), [false]);
 });
 
+test("strict: the path[] iteration branch reports a missing base path", () => {
+  assert.throws(() => evaluateJqFilter({ a: [] }, ".typo[]", { strict: true }), /matches no field/);
+  assert.deepEqual(evaluateJqFilter({ a: [] }, ".a[]", { strict: true }), []);
+});
+
 test("strict: inherited properties such as .constructor are not fields", () => {
   assert.throws(() => evaluateJqFilter({ a: 1 }, ".constructor", { strict: true }), /matches no field/);
 });
