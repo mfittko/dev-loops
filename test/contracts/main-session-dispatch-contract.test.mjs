@@ -31,7 +31,7 @@ function listMarkdown(dir) {
 
 test("no skill, command or agent text tells the main session to run loop steps directly", () => {
   for (const file of ["skills", "commands", "agents"].flatMap(listMarkdown)) {
-    const text = read(file);
+    const text = readNorm(file);
     for (const re of OLD_PHRASES) assert.doesNotMatch(text, re, `${file} contains ${re}`);
   }
 });
@@ -58,4 +58,9 @@ test("Pi wording stays: read-only main agent and async dispatch (#1086)", () => 
   assert.match(text, /All tracked-file mutations flow through the `dev-loop` async subagent\./);
   assert.match(text, /## Async dispatch posture \(Pi\)/);
   assert.match(text, /Delegate to the `dev-loop` agent \(async, with worktree cwd\)/);
+});
+
+test("old-phrase guard catches a phrase split by a line break", () => {
+  const wrapped = "the dev-loop runs as a single\nagent".replace(/\s+/g, " ");
+  assert.ok(OLD_PHRASES.some((re) => re.test(wrapped)));
 });
