@@ -4781,6 +4781,25 @@ test("draft round-cap refusal for a chain-extendable condition carries the exten
   assert.equal(evaluatePrGateCoordination({ ...base, repo: undefined, draftCapRoundFailure: "no_clearing_record" }).blockedOn, BLOCKED_ON.OPERATOR_DECISION);
 });
 
+// Issue 3139: one next step on a ready PR without clean draft_gate evidence.
+test("a ready PR without clean draft evidence names reconcile_draft_gate alone when no cap round failed, and the cap-round exit alone when one did", () => {
+  const base = { pr: 9, repo: "o/r", currentHeadSha: "abc123456789", prDraft: false, lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", sameHeadCleanConverged: true, draftGate: { visible: false } };
+  for (const draftCapRoundFailure of [undefined, null]) {
+    const result = evaluatePrGateCoordination({ ...base, draftCapRoundFailure });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
+    assert.deepEqual(result.allowedNextActions, [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE]);
+    assert.deepEqual({ on: result.blockedOn, remedy: result.agentRemedy, failure: result.capRoundFailure }, { on: undefined, remedy: undefined, failure: undefined });
+  }
+  const command = evaluatePrGateCoordination({ ...base, draftCapRoundFailure: "no_clearing_record" });
+  assert.equal(command.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.deepEqual(command.allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
+  assert.ok(command.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE));
+  assert.equal(command.agentRemedy.command, "dev-loops gate extend-cap-round-chain --repo o/r --pr 9");
+  assert.equal(command.blockedOn, undefined);
+  const operator = evaluatePrGateCoordination({ ...base, draftCapRoundFailure: "baseline_orphaned" });
+  assert.deepEqual({ next: operator.nextAction, on: operator.blockedOn, remedy: operator.agentRemedy }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION, remedy: undefined });
+});
+
 test("unconfirmed-CI block carries the exact wait-pr-checks agentRemedy", () => {
   const result = evaluatePrGateCoordination({
     repo: "o/r",

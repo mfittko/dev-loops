@@ -57,6 +57,7 @@ import {
   renderBriefingVolatile,
   renderPrBodyRead,
   renderScopedBriefingVariant,
+  resolveDraftCapRoundFact,
   resolveReviewGateAngles,
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
@@ -10379,13 +10380,41 @@ test("pre_approval_gate refusal on a ready PR names each cap-round failure condi
         repoRoot,
         run: stubGhRun,
         loadCoordination: async () => ({ currentHeadSha: headSha, prData: { isDraft: false, baseRefName: "main" }, gateEvidence: { draftGateSatisfied: false } }),
-        resolveCapRoundFixed: async (_options, { onFailure }) => { onFailure(condition); return null; },
+        // cap_round_unresolved is the typed condition of a thrown resolver error; a null result with no throw is a PR below the cap.
+        resolveCapRoundFixed: async (_options, { onFailure }) => { if (condition === "cap_round_unresolved") throw new Error("unreadable ledger"); onFailure(condition); return null; },
       });
       const text = chunks.join("");
       assert.equal(process.exitCode, 1, condition);
       assert.ok(text.includes(`condition ${condition};`), `${condition}: ${text}`);
       assert.ok(text.includes(`its one exit: ${exit}.`), `${condition}: ${text}`);
     }
+  } finally {
+    process.stderr.write = origErr;
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Issue 3139 AC2: a ready PR that never reached the cap has no cap round, so its refusal keeps the run_draft_gate text and names no operator exit.
+test("pre_approval_gate refusal on a ready PR with no cap round (the real resolveCapRoundFixed, an empty ledger dir) names run_draft_gate and no operator exit (issue 3139 AC2)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  const origErr = process.stderr.write;
+  const chunks = [];
+  try {
+    process.exitCode = undefined;
+    process.stderr.write = (chunk) => { chunks.push(String(chunk)); return true; };
+    await main(["--repo", "owner/repo", "--pr", "9", "--gate", "pre_approval_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha], {
+      repoRoot,
+      run: stubGhRun,
+      loadCoordination: async () => ({ currentHeadSha: headSha, prData: { isDraft: false, baseRefName: "main" }, gateEvidence: { draftGateSatisfied: false } }),
+    });
+    const text = chunks.join("");
+    assert.equal(process.exitCode, 1);
+    assert.match(text, /Legal next action: run_draft_gate/);
+    assert.doesNotMatch(text, /blockedOn|operator_decision|cap-round proof failed/);
+    assert.deepEqual(await resolveDraftCapRoundFact({ repo: "owner/repo", pr: 9, currentHeadSha: headSha, prData: { isDraft: false, baseRefName: "main" } }, { repoRoot }), { capRoundFixed: false, failure: null });
+    assert.equal((await resolveDraftCapRoundFact({ repo: "owner/repo", pr: 9, currentHeadSha: headSha }, { repoRoot, resolve: async () => { throw new Error("unreadable"); } })).failure, "cap_round_unresolved", "a thrown resolver error stays the typed failure");
   } finally {
     process.stderr.write = origErr;
     process.exitCode = priorExitCode;

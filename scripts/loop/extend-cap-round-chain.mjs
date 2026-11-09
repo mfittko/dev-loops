@@ -198,7 +198,7 @@ export async function extendCapRoundChain(options, {
     let clearing = false;
     try { clearing = DELTA_CLEARING_NEXT_STEPS.includes(readSealedGateDeltaRecord(tmpRoot, chainEnd)?.nextStep); } catch { /* unreadable: not a clearing record */ }
     if (clearing) return recordExists();
-    return refuse("record_not_clearing", `the delta record for ${chainEnd.slice(0, 7)} exists but is not a sealed clearing record and is never overwritten; run ${CLI} loop pre-push-delta --reviewer-only --repo ${repo} --pr ${pr} --baseline ${chainEnd} --pr-head ${head} --findings-log ${capLog} --spec-identity <id> --result-path <result-file> (then --result <result-file> --invocation <1-3>) until it is locally_clear (it takes over a non-clearing or unsealed record with the same act refs), then rerun this command`);
+    return refuse("record_not_clearing", `the delta record for ${chainEnd.slice(0, 7)} exists but is not a sealed clearing record and is never overwritten; run ${CLI} loop pre-push-delta --reviewer-only --repo ${repo} --pr ${pr} --baseline ${chainEnd} --pr-head ${head} --findings-log ${capLog} --spec-identity <id> --result-path <result-file> (then --result <result-file> --invocation <1-3>) until it is locally_clear (it takes over a sealed non-clearing record whatever its act refs and an unsealed non-clearing record over the same act refs; any other unsealed record refuses unsealed_record with its rm -f remedy), then rerun this command`);
   }
 
   // One sequence lock (the one the reviewer-only run takes) spans the exclusive create, the proof and the rollback. The proof takes no sequence lock.

@@ -21,6 +21,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
+import { shellQuote } from "../lib/checkout-delegation-refusal.mjs";
 import { parseAllWorktreePaths, parseMainWorktreePath, realpathNearestExisting, resolveContainingWorktreeRoot } from "@dev-loops/core/loop/worktree-guard";
 
 // Scrub GIT_DIR/GIT_WORK_TREE for every git call in this module: an inherited
@@ -234,7 +235,7 @@ export function evaluateToolchainAuthority({ repo, pr, prState, prHeadSha, chang
   try { held = worktrees(toolchainRoot).slice(1).filter((entry) => entry.head === prHeadSha); } catch { /* no listing: name the fetch step */ }
   const command = `scripts/loop/detect-pr-gate-coordination-state.mjs --repo ${repo} --pr ${pr}`;
   const exit = held.length === 1
-    ? `run \`dev-loops-run --repo-root ${held[0].path} ${command}\``
+    ? `run \`dev-loops-run --repo-root ${shellQuote(held[0].path)} ${command}\``
     : `run \`git fetch origin\`, then run \`dev-loops-run --repo-root <worktree> ${command}\` from the worktree that holds the PR head (path rule: skills/docs/worktree-guidance.md)`;
   result.refusal = `toolchain_head_mismatch: this PR changes the gate toolchain, and the toolchain at ${toolchainRoot} (HEAD ${headSha}) does not contain the PR head ${prHeadSha}; ADR 0117 makes the PR head's toolchain authoritative. Remedy: ${exit}.`;
   return result;

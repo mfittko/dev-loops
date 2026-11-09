@@ -1387,17 +1387,13 @@ function seedFixerRecord(repo, { sameActSet, ...patch } = {}) {
   return recordPath;
 }
 
-test("the reviewer-only run takes over a sealed non-clearing record with another actSetId and continues its invocation count, and refuses the same record unsealed (its invocation is never trusted)", async () => {
+test("the reviewer-only run takes over a sealed or unsealed non-clearing record over the same refs with another actSetId and continues its invocation count", async () => {
   for (const unsealed of [false, true]) {
     const repo = reviewerOnlyRepo();
     try {
       await reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], status: "not_resolved" });
       const recordPath = seedFixerRecord(repo, { candidateHead: repo.baseline });
-      if (unsealed) {
-        fs.rmSync(`${recordPath}.seal`);
-        await assert.rejects(reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], invocation: 2 }), /unsealed_record: .*is unsealed and is never overwritten/);
-        continue;
-      }
+      if (unsealed) fs.rmSync(`${recordPath}.seal`);
       await assert.rejects(reviewerOnlyRun(repo, {}, { findings: [CAP_ACT] }), /--invocation 1 is not the next invocation 2/);
       const { record } = await reviewerOnlyRun(repo, {}, { findings: [CAP_ACT], invocation: 2 });
       assert.deepEqual({ o: record.outcome, i: record.invocation, same: record.actSetId !== "fixer-act-set" }, { o: "locally_clear", i: 2, same: true });
@@ -1444,6 +1440,8 @@ test("the reviewer-only run keeps a locally_clear record, an extension, another 
     ["bounded_out", { sameActSet: true, outcome: "locally_clear", invocation: 3, candidateHead: "ORPHAN" }, false, /pr create .*--allow-replacement-pr/],
     ["bounded_out", { sameActSet: true, outcome: "locally_clear", invocation: 3, candidateHead: "HEAD" }, false, /pr create .*--allow-replacement-pr/], // a symbolic candidate at the bound
     ["unsealed_record: .*is locally_clear for another act set.*rm -f \\S+\\.json \\S+\\.seal", { outcome: "locally_clear" }, true],
+    // ADR 0255 decision 7: an unsealed non-clearing record over another ref set is not taken over.
+    ["unsealed_record: .*covers another set of act refs.*rm -f \\S+\\.json \\S+\\.seal", { outcome: "needs_fix", items: [{ ref: "other", status: "not_resolved" }] }, true],
   ];
   for (const [message, patch, unsealed, remedy] of cases) {
     const repo = reviewerOnlyRepo();

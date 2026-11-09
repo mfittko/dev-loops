@@ -909,10 +909,15 @@ function applyDraftGateEvidenceGuard(result, { prDraft = false, input = {} } = {
     return result;
   }
 
+  // Issue 3139: one next step. The failure is set only when a cap round exists and its proof failed: that exit is then the next action, and reconcile_draft_gate never runs beside it.
+  // Without a cap round the result is reconcile_draft_gate alone, with no blockedOn and no agentRemedy.
+  const capRoundFailed = Boolean(input.draftCapRoundFailure);
+  const nextAction = capRoundFailed ? PR_CHECKPOINT_ACTION.REPORT_BLOCKED : PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE;
   const allowedNextActions = [];
   const forbiddenActions = [];
-  pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE]);
+  pushUnique(allowedNextActions, [nextAction]);
   pushUnique(forbiddenActions, [
+    ...(capRoundFailed ? [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE] : []),
     PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
     PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
     PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
@@ -921,19 +926,22 @@ function applyDraftGateEvidenceGuard(result, { prDraft = false, input = {} } = {
     PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
     PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
   ]);
+  const evidenceReason = result.draftGate?.anyVisible
+    ? "Clean draft_gate evidence is required before merge (no gate exemptions, #579). A draft_gate comment exists but is not clean; convert the PR back to draft before re-running draft_gate, or clear the existing evidence before running reconcile_draft_gate."
+    : "Clean draft_gate evidence is required before merge (no gate exemptions, #579). No visible clean draft_gate comment exists for this PR; run reconcile_draft_gate before proceeding.";
 
   return {
     ...result,
     gateBoundary: PR_CHECKPOINT.DRAFT_GATE_NEEDED,
-    nextAction: PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE,
+    nextAction,
     allowedNextActions,
     forbiddenActions,
-    reason: result.draftGate?.anyVisible
-      ? "Clean draft_gate evidence is required before merge (no gate exemptions, #579). A draft_gate comment exists but is not clean; convert the PR back to draft before re-running draft_gate, or clear the existing evidence before running reconcile_draft_gate."
-      : "Clean draft_gate evidence is required before merge (no gate exemptions, #579). No visible clean draft_gate comment exists for this PR; run reconcile_draft_gate before proceeding.",
+    reason: capRoundFailed
+      ? `Clean draft_gate evidence is required before merge (no gate exemptions, #579), and the cap round's proof failed, so no draft_gate round can supply it. ${Object.hasOwn(CAP_ROUND_REFUSAL, input.draftCapRoundFailure) ? CAP_ROUND_REFUSAL[input.draftCapRoundFailure] : CAP_ROUND_REFUSAL.cap_round_unresolved}`
+      : evidenceReason,
     gateEvidenceNote: null,
-    // Issue 3139: a failed cap-round proof on a ready PR carries the same typed condition and exit the write-gate-context refusal names.
-    ...(input.draftCapRoundFailure ? { capRoundFailure: input.draftCapRoundFailure, ...capRoundExit(input.draftCapRoundFailure, input) } : {}),
+    // The failed cap-round proof carries the same typed condition and exit the write-gate-context refusal names.
+    ...(capRoundFailed ? { capRoundFailure: input.draftCapRoundFailure, ...capRoundExit(input.draftCapRoundFailure, input) } : {}),
   };
 }
 
@@ -952,7 +960,7 @@ const REVIEWER_ONLY_FLAGS = " The reviewer-only command takes `--repo <owner/nam
 export const CAP_ROUND_REFUSAL = Object.freeze({
   baseline_orphaned: "Condition baseline_orphaned: the cap-round baseline is not an ancestor of the current head (a rebase rewrote it), so no clearing record can bind to this head. Remedy: push the head to a new branch that keeps the issue slug (`git push origin HEAD:<new-branch>`), record a pre-PR review on the new branch head (`node <dev-loops-package-root>/cli/index.mjs loop pre-pr-review ...`) before `pr create`, run `node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr <this PR number>` while this PR is still open, then close this PR (gate history restarts at round 1); do not rebase a PR that reached the cap round, merge the base instead.",
   no_clearing_record: "Condition no_clearing_record: no sealed clearing delta record exists for the cap-round baseline. Remedy: run `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` for that baseline. A clean cap round has no fixer pass: when every commit since the cap-round head is docs and tests only, run `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo <owner/name> --pr <number>` directly with no fixer pass. Otherwise, after the cap-round clearing record exists, when the later commits are docs and tests only, run `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo <owner/name> --pr <number>` to extend the chain. When the later commits touch code, run the pre-push delta for them (`node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` with the start of the logic range as baseline: the cap-round head for a clean cap round whose cap-head record is absent or carries no extension, the end of the extended chain when it carries one, and otherwise the chain end) until it is `locally_clear` for exactly that start..head, then run the same `gate extend-cap-round-chain` command; it seals the `delta_covered` extension (ADR 0254)." + REVIEWER_ONLY_FLAGS,
-  unsealed_record: "Condition unsealed_record: the delta record for the cap-round baseline carries no valid seal. Remedy: rerun `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` for that baseline so the writer seals it; never edit the record." + REVIEWER_ONLY_FLAGS,
+  unsealed_record: "Condition unsealed_record: the delta record for the cap-round baseline carries no valid seal. Remedy: rerun `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` for that baseline. It takes over an unsealed non-clearing record over the same act refs and seals the new record; any other unsealed record refuses `unsealed_record` with an `rm -f <record> <record>.seal` remedy to run before the rerun; never edit the record." + REVIEWER_ONLY_FLAGS,
   items_do_not_cover: "Condition items_do_not_cover: the clearing record's items do not cover the cap round's act refs (it may belong to another route). Remedy: run `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` so every act ref of the cap round is resolved. A clean cap round has no act list: when every commit since the cap-round head is docs and tests only, run `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo <owner/name> --pr <number>` to seal an extension record at the end of that chain. When the later commits touch code, run the pre-push delta for them (`node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` with the start of the logic range as baseline: the cap-round head for a clean cap round whose cap-head record is absent or carries no extension, the end of the extended chain when it carries one, and otherwise the chain end) until it is `locally_clear` for exactly that start..head, then run the same `gate extend-cap-round-chain` command; it seals the `delta_covered` extension (ADR 0254)." + REVIEWER_ONLY_FLAGS,
   cap_round_unresolved: "Condition cap_round_unresolved: the cap round could not be resolved (an unreadable findings ledger or config, or no cap round with a verdict). Remedy: repair or quarantine the unreadable ledger or config under the gate tmp root, then rerun the coordination check.",
   chain_does_not_reach_head: "Condition chain_does_not_reach_head: the sealed clearing chain ends before the current head and the head is not a base-only merge of its last candidate. Remedy: run `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` for the current head, or fetch origin/<base> so a base-only merge is verifiable. When the later commits are docs and tests only, run `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo <owner/name> --pr <number>`. When the later commits touch code, run the pre-push delta for them (`node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` with the start of the logic range as baseline: the cap-round head for a clean cap round whose cap-head record is absent or carries no extension, the end of the extended chain when it carries one, and otherwise the chain end) until it is `locally_clear` for exactly that start..head, then run the same `gate extend-cap-round-chain` command; it seals the `delta_covered` extension (ADR 0254)." + REVIEWER_ONLY_FLAGS,

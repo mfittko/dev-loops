@@ -113,7 +113,7 @@ export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied
 
 /**
  * The one cap-round-fixed fact of a PR coordination context (issue 3139): `{ capRoundFixed, failure }`, `failure` the typed `resolveCapRoundFixed` `onFailure` condition
- * (`cap_round_unresolved` on a throw). The detector, the ordering check above and the verdict post's gate check all read it, so none keeps its own expression.
+ * (`cap_round_unresolved` on a throw only; a PR with no cap round reports `failure: null`). The detector, the ordering check above and the verdict post's gate check all read it, so none keeps its own expression.
  * A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
  * @param {{ repo: string, pr: number, currentHeadSha: string, prData?: { isDraft?: boolean, baseRefName?: string } }} context
  */
@@ -122,7 +122,8 @@ export async function resolveDraftCapRoundFact(context, { repoRoot, resolve = re
   const baseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
   const capRoundFixed = await resolve(
     { repo: context.repo, pr: context.pr, headSha: context.currentHeadSha, baseRefName, anyHead: context.prData?.isDraft !== true },
-    { repoRoot, onFailure: (condition) => { failure = condition; } },
+    // `resolveCapRoundFixed` reports cap_round_unresolved for a PR with no cap round, the normal state below the round cap: that is no failure. Only a thrown resolver error is.
+    { repoRoot, onFailure: (condition) => { if (condition !== "cap_round_unresolved") failure = condition; } },
   ).then(Boolean, () => { failure = "cap_round_unresolved"; return false; });
   return { capRoundFixed, failure };
 }

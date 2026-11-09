@@ -64,7 +64,7 @@ function scenario({ clean, sequence, merges, fix, docs, orphaned = false, unread
 
 // The end state of every combination. null: non-blocked (mark_ready_for_review or run_pre_approval_gate). Otherwise the expected block, with the proof failure and a trace pattern naming why.
 const BLOCKS = {
-  head_equals_baseline: { failure: "cap_round_unresolved", trace: /equals the baseline|no_cap_round_chain/ },
+  head_equals_baseline: { failure: null, trace: /equals the baseline|no_cap_round_chain/ },
   active_sequence_marker: { failure: "no_clearing_record", trace: /active sequence marker/ },
   act_items_open: { failure: "no_clearing_record", trace: /needs_fix|no PR-own commit/ },
   chain_reaches_head: { failure: "items_do_not_cover", trace: /chain_reaches_head/ },
@@ -124,7 +124,9 @@ test("cap_round_unresolved: an unreadable ledger blocks every route and names th
   const s = scenario({ clean: false, sequence: "lost", merges: 0, fix: true, docs: false, unreadable: true });
   try {
     const { end } = await followRemedy(s.root, { repo: REPO, pr: PR, head: s.head, baseline: s.A, ledgerPath: s.ledgerPath });
-    assert.deepEqual({ next: end.nextAction, failure: end.failure }, { next: "report_blocked", failure: "cap_round_unresolved" });
+    // No cap round resolves from an unreadable ledger: the fact reports no failure, and the draft refusal names cap_round_unresolved by its fallback.
+    assert.deepEqual({ next: end.nextAction, failure: end.failure, on: end.blockedOn }, { next: "report_blocked", failure: null, on: "operator_decision" });
+    assert.match(end.reason, /Condition cap_round_unresolved:/);
   } finally { rmSync(s.root, { recursive: true, force: true }); }
 });
 
@@ -148,15 +150,14 @@ test("synthetic twin of PR 3087: a non-clean cap round whose fixer needs_fix rec
   } finally { rmSync(s.root, { recursive: true, force: true }); }
 });
 
-test("unsealed_record: an unsealed record, non-clearing or locally_clear, refuses with a runnable rm remedy that clears it (a sealed needs_fix record is taken over)", async () => {
+test("unsealed_record: an unsealed non-clearing record is taken over, an unsealed locally_clear one refuses with a runnable rm remedy that clears it", async () => {
   const sealPath = (s) => path.join(s.root, "tmp", "gate-delta", `${s.A}.json.seal`);
   const takeOver = scenario({ clean: false, sequence: "fixer_needs_fix", merges: 1, fix: true, docs: false });
   const protectedRecord = scenario({ clean: false, sequence: "fixer_needs_fix", merges: 1, fix: true, docs: false });
   try {
     rmSync(sealPath(takeOver));
-    const unsealed = await followRemedy(takeOver.root, { repo: REPO, pr: PR, head: takeOver.head, baseline: takeOver.A, ledgerPath: takeOver.ledgerPath });
-    assert.equal(unsealed.end.nextAction, "report_blocked");
-    assert.match(unsealed.trace.join("\n"), /unsealed_record: .*rm -f .*\.seal/);
+    const { end } = await followRemedy(takeOver.root, { repo: REPO, pr: PR, head: takeOver.head, baseline: takeOver.A, ledgerPath: takeOver.ledgerPath });
+    assert.ok(READY.includes(end.nextAction), `${end.failure}`);
 
     const recordPath = path.join(protectedRecord.root, "tmp", "gate-delta", `${protectedRecord.A}.json`);
     const items = capRoundActList([ACT], protectedRecord.A).map((item) => ({ ref: item.ref, status: "resolved" }));
