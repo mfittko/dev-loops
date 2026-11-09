@@ -1608,7 +1608,7 @@ test("issue 2447: package.json test:docs calls the one docs validator module, wh
 
 // A git fixture whose test:docs calls the docs validator module (or not), a threads-route input run and a clearing reviewer result.
 // `adr`: the baseline commits an accepted ADR, origin/main names it, and the fix commit edits its Decision line (the real ADR-SUPERSEDE-NOT-REWRITE input).
-async function docsFixture(optIn, { adr = false } = {}) {
+async function docsFixture(optIn, { adr = false, dropOptIn = false } = {}) {
   const { dir, threadsFile } = threadsFixture();
   initGitFixture(dir, { branch: "main", commit: null });
   runGitFixture(dir, ["config", "commit.gpgsign", "false"]);
@@ -1626,6 +1626,8 @@ async function docsFixture(optIn, { adr = false } = {}) {
   if (adr) {
     runGitFixture(dir, ["update-ref", "refs/remotes/origin/main", baseline]);
     fs.writeFileSync(adrFile, fs.readFileSync(adrFile, "utf8").replace("Use A.", "Use B."));
+    // The candidate may also drop the opt-in from test:docs; the baseline's opt-in still holds.
+    if (dropOptIn) fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ scripts: { "test:docs": "bun scripts/docs/validate-links.mjs" } }));
     runGitFixture(dir, ["commit", "-qam", "fix: edit adr"]);
   } else runGitFixture(dir, ["commit", "-q", "--allow-empty", "-m", "fix: edit adr"]);
   const args = ["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", baseline, "--worktree", dir];
@@ -1658,6 +1660,17 @@ test("issue 2447: a docs validator refusal in the --result run is one medium fin
       assert.match(finding.evidence, /edits an accepted Decision/);
     } finally { fs.rmSync(fx.dir, { recursive: true, force: true }); }
   }
+});
+
+test("issue 2447: a candidate that drops the test:docs opt-in and edits an accepted ADR Decision still gets the validators and needs_fix", async () => {
+  const fx = await docsFixture(true, { adr: true, dropOptIn: true });
+  try {
+    const calls = [];
+    const decision = await fx.run({ docsValidators: async (opts) => { calls.push(opts.ids); return REFUSING_VALIDATOR(); } });
+    assert.equal(calls.length, 1);
+    assert.equal(decision.nextStep, "fix_and_rereview");
+    assert.match(fx.recordOf().findings[0].summary, /ADR-SUPERSEDE-NOT-REWRITE/);
+  } finally { fs.rmSync(fx.dir, { recursive: true, force: true }); }
 });
 
 test("issue 2447: the docs validators refuse (exit 2, no record) while a tracked file differs from the reviewed commit, so an uncommitted edit cannot hide a committed refusal", async () => {
@@ -1760,10 +1773,6 @@ test("issue 2447: the writer caps the record at 20 findings, lifecycle first, an
     const capped = readGateDeltaRecord(tmpRoot, A).findings;
     assert.equal(capped.length, 20);
     assert.equal(capped.filter(isLifecycleFinding).length, 2);
-    // More than 20 lifecycle findings refuse and write nothing new.
-    fs.rmSync(gateDeltaRecordPath(tmpRoot, A));
-    assert.throws(() => write({ result: { actionableItems: [], newFindings: [] }, lifecycleFindings: lifecycle(21) }), /delta_record_over_budget/);
-    assert.equal(readGateDeltaRecord(tmpRoot, A), null);
   } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
 });
 

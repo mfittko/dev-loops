@@ -515,9 +515,12 @@ async function lifecycleRefusals({ options, ownPaths, changedPaths, changelog, d
     const code = await changelog({ root, git, log, requireHeadInputs: true });
     if (code !== 0) findings.push({ lifecycle: true, severity: "medium", summary: "LIFECYCLE-CHANGELOG-COMPLETENESS: the changelog check refused this delta range", evidence: clip(diagnostics.join("; ")) });
   }
-  const pkg = spawnSync("git", ["-C", root, "show", `${currentHead}:package.json`], { encoding: "utf8", env: gitEnvNoDirOverrides() });
-  let optedIn = false;
-  try { optedIn = pkg.status === 0 && String(JSON.parse(pkg.stdout).scripts?.["test:docs"] ?? "").includes(DOCS_VALIDATOR_MODULE); } catch { /* not JSON: no opt-in */ }
+  // Opt in when the baseline or the candidate calls the module: the commit under review controls its own package.json and cannot switch off its own validators.
+  const callsModule = (head) => {
+    const pkg = spawnSync("git", ["-C", root, "show", `${head}:package.json`], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+    try { return pkg.status === 0 && String(JSON.parse(pkg.stdout).scripts?.["test:docs"] ?? "").includes(DOCS_VALIDATOR_MODULE); } catch { return false; /* not JSON: no opt-in */ }
+  };
+  const optedIn = callsModule(baselineHead) || callsModule(currentHead);
   if (optedIn) {
     // The validators read the working tree: a tracked edit or an untracked non-ignored file not in HEAD could change the verdict, so the reviewed commit must be the tree.
     const assertCleanTree = () => {

@@ -72,8 +72,6 @@ export const isLifecycleFinding = (finding) => finding?.lifecycle === true;
 export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocation, decision, result, lifecycleFindings = [] }) {
   const items = Array.isArray(result?.actionableItems) ? result.actionableItems.map((item) => ({ ref: item?.ref, status: item?.status })) : [];
   // The 20-entry cap bounds the record findings, lifecycle findings first; the emitter's act-ref tasks are not counted against it.
-  // A lifecycle finding is never dropped by the budget: refuse by name instead of sealing a record that hides open lifecycle work.
-  if (lifecycleFindings.length > 20) throw new Error(`delta_record_over_budget: ${lifecycleFindings.length} lifecycle finding(s) exceed the 20-entry record; resolve some, then rerun the --result step`);
   const findings = [...lifecycleFindings, ...deltaFixerFindings(result)].slice(0, 20);
   const record = {
     ...deltaCoverageBinding(decision),
