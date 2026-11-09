@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { capWait, pendingFields, resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { fileURLToPath } from "node:url";
 import { parsePositiveInteger, parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -36,6 +37,9 @@ Optional:
   --timeout-ms <n>        Deprecated alias for --timeout (milliseconds); warns on
                           stderr. Passing both flags fails closed.
   --poll <seconds>        Delay between polls (default ${DEFAULT_POLL_SECONDS})
+One call waits at most 170 seconds (GATE-EXEC-BOUNDED-WAIT-CAP). A longer --timeout
+returns status "timeout" with outcome "pending" (exit 2) and a "reissue" command
+carrying the remaining --timeout; run it.
 Not-yet-registered-check race guard:
   A freshly pushed head with zero registered checks does NOT settle green on
   the first poll — a provider may post its first check a beat after the push.
@@ -165,11 +169,14 @@ export async function runCli(
     ensureOwnershipImpl = ensureAsyncRunnerOwnership,
   } = {},
 ) {
-  const options = parseWaitPrChecksCliArgs(argv);
-  if (options.help) {
+  const requested = parseWaitPrChecksCliArgs(argv);
+  if (requested.help) {
     stdout.write(`${USAGE}\n`);
     return 0;
   }
+  // One call waits at most the cap (GATE-EXEC-BOUNDED-WAIT-CAP); a longer request returns a pending result.
+  const { timeoutMs: cappedMs, remainingMs: capRemainingMs } = capWait(requested.timeoutMs);
+  const options = { ...requested, timeoutMs: cappedMs };
   const startedAt = now();
   const remainingMs = () => options.timeoutMs - (now() - startedAt);
   let result;
@@ -213,6 +220,9 @@ export async function runCli(
     result = rateLimitedResult(error);
     // --jq/--silent would filter the envelope away; always keep code/resetAt on stderr.
     stderr.write(`${JSON.stringify(result)}\n`);
+  }
+  if (result.status === "timeout" && capRemainingMs > 0) {
+    result = { ...result, ...pendingFields({ remainingMs: capRemainingMs, command: `node ${fileURLToPath(import.meta.url)}`, argv }) };
   }
   if (options.jq !== undefined || options.silent) {
     return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: result.status === "success" });

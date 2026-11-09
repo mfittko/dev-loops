@@ -5,7 +5,7 @@ import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
-import { resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { capWait, pendingFields, resolveTimeoutMs } from "../lib/timeout-flag.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import {
   normalizeHeadScopedCiContract,
@@ -616,14 +616,20 @@ export async function runCli(
     ghCommand = "gh",
   } = {},
 ) {
-  const options = parseCiWatchCliArgs(argv);
-  if (options.help) {
+  const requested = parseCiWatchCliArgs(argv);
+  if (requested.help) {
     stdout.write(`${USAGE}\n`);
     return;
   }
-  const result = options.commit !== undefined
+  // GATE-EXEC-BOUNDED-WAIT-CAP: one call waits at most the cap; a longer request returns a pending result.
+  const { timeoutMs, remainingMs } = capWait(requested.timeoutMs);
+  const options = { ...requested, timeoutMs };
+  let result = options.commit !== undefined
     ? await watchCommitCiStatus(options, { env, ghCommand })
     : await watchCiStatus(options, { env, ghCommand });
+  if (result.status === "timeout" && remainingMs > 0) {
+    result = { ...result, ...pendingFields({ remainingMs, command: "dev-loops loop watch-ci", argv }) };
+  }
   process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 import { pullReceiptPath } from "../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../cli/index.mjs";
-import { ARTIFACT_TIMEOUT_REMEDY, parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
+import { ARTIFACT_TIMEOUT_REMEDY, main, parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
 import { captureStderr, withTempDir } from "./_helpers.mjs";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/loop/wait-for-gate-units.mjs", import.meta.url));
@@ -336,6 +336,45 @@ test("a round retired while the unit checks are in flight is round_retired, not 
     await writer.close();
     assert.equal((await pending).outcome, "round_retired");
   });
+});
+
+// GATE-EXEC-BOUNDED-WAIT-CAP: one call waits at most 170 s; a longer request returns pending with the re-issue command.
+async function runMain(argv, wait) {
+  const write = process.stdout.write;
+  let out = "";
+  process.stdout.write = (chunk) => { out += String(chunk); return true; };
+  try { await main(argv, { wait }); } finally { process.stdout.write = write; }
+  const code = process.exitCode;
+  process.exitCode = undefined;
+  return { result: JSON.parse(out), code };
+}
+
+test("a --timeout above the cap is capped, returns pending (exit 2) and the re-issued command resumes the wait", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    const argv = ["--emit-plan", planPath, "--tmp-root", path.join(root, "tmp"), "--timeout", "500"];
+    let seen;
+    const first = await runMain(argv, async (options) => { seen = options.timeoutMs; return { ok: true, outcome: "timeout", remedy: "x", missing: [] }; });
+    assert.equal(seen, 170000);
+    assert.equal(first.code, 2);
+    assert.equal(first.result.outcome, "pending");
+    assert.equal(first.result.remedy, undefined);
+    assert.equal(first.result.reissue, `dev-loops gate wait-for-units --emit-plan ${planPath} --tmp-root ${path.join(root, "tmp")} --timeout 330`);
+    // Resume: the re-issued args carry the remaining budget and finish the same wait.
+    const resumed = first.result.reissue.split(" ").slice(3);
+    let resumedMs;
+    const second = await runMain(resumed, async (options) => { resumedMs = options.timeoutMs; return { ok: true, outcome: "all_done" }; });
+    assert.equal(resumedMs, 170000);
+    assert.equal(second.result.outcome, "all_done");
+    assert.equal(second.code, 0);
+  });
+});
+
+test("a --timeout at or under the cap, and a real timeout at the end of the split, stay timeout", async () => {
+  const stub = async () => ({ ok: true, outcome: "timeout", missing: [] });
+  const argv = ["--emit-plan", "a", "--tmp-root", "t"];
+  assert.equal((await runMain([...argv, "--timeout", "170"], stub)).result.outcome, "timeout");
+  assert.equal((await runMain([...argv, "--timeout", "0"], stub)).result.outcome, "timeout");
 });
 
 test("wait-for-gate-units warns on stderr for deprecated --timeout-ms", () => {

@@ -114,6 +114,60 @@ test("wait-pr-checks exits 2 when CI stays pending past the wait budget (timeout
   );
 });
 
+test("wait-pr-checks caps one call at 170 s, returns pending (exit 2) with the re-issue command, and the re-issue resumes to success", async () => {
+  const pendingRoutes = [
+    { match: ["pr", "view"], stdout: prView("sha-a", ["build"]) },
+    { match: ["check-runs"], stdout: checkRuns([{ status: "in_progress", conclusion: null, name: "build" }]) },
+    { match: ["/status"], stdout: statuses([]) },
+  ];
+  const argv = ["--repo", "owner/repo", "--pr", "7", "--poll", "10", "--timeout", "600"];
+  let reissue;
+  await withGhStub(pendingRoutes, async (env) => {
+    let t = 0;
+    const stdout = makeStream();
+    const code = await runCli(argv, { stdout, stderr: makeStream(), env, ghCommand: "gh", now: () => t, delayImpl: async (ms) => { t += ms; } });
+    const result = JSON.parse(stdout.text());
+    assert.equal(code, 2);
+    assert.ok(t <= 170_000 + 10_000, `waited ${t} ms`);
+    assert.equal(result.status, "timeout");
+    assert.equal(result.outcome, "pending");
+    assert.equal(result.remainingTimeoutSeconds, 430);
+    assert.match(result.reissue, /wait-pr-checks\.mjs --repo owner\/repo --pr 7 --poll 10 --timeout 430$/);
+    reissue = result.reissue;
+  });
+  const resumed = reissue.split(" ").slice(2);
+  await withGhStub(
+    [
+      { match: ["pr", "view"], stdout: prView("sha-a", ["build"]) },
+      { match: ["check-runs"], stdout: checkRuns([{ status: "completed", conclusion: "success", name: "build" }]) },
+      { match: ["/status"], stdout: statuses([]) },
+    ],
+    async (env) => {
+      const stdout = makeStream();
+      const code = await runCli(resumed, { stdout, stderr: makeStream(), ...fastDeps(env) });
+      assert.equal(code, 0);
+      assert.equal(JSON.parse(stdout.text()).outcome, undefined);
+    },
+  );
+});
+
+test("wait-pr-checks at or under the cap and --timeout 0 return no pending outcome", async () => {
+  await withGhStub(
+    [
+      { match: ["pr", "view"], stdout: prView("sha-a", ["build"]) },
+      { match: ["check-runs"], stdout: checkRuns([{ status: "in_progress", conclusion: null, name: "build" }]) },
+      { match: ["/status"], stdout: statuses([]) },
+    ],
+    async (env) => {
+      for (const timeout of ["0", "2"]) {
+        const stdout = makeStream();
+        await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", timeout], { stdout, stderr: makeStream(), ...fastDeps(env) });
+        assert.equal(JSON.parse(stdout.text()).outcome, undefined);
+      }
+    },
+  );
+});
+
 test("wait-pr-checks does not fabricate green on a lone zero-registered-checks poll (grace race guard)", async () => {
   // Genuinely check-less head (empty rollup, zero check-runs/statuses): must NOT
   // settle green on the first poll, only after the inherited grace window.
@@ -319,13 +373,13 @@ test("wait-pr-checks refreshes the runner lease while it waits for the GraphQL r
 
 test("wait-pr-checks keeps the no-checks grace floor when the reset consumes the whole budget", async () => {
   let clock = 1_000_000_000_000;
-  const { runChild } = rateLimitedRunChild(clock / 1000 + 300, { noChecks: true });
+  const { runChild } = rateLimitedRunChild(clock / 1000 + 170, { noChecks: true });
   const originalWrite = process.stderr.write;
   process.stderr.write = () => true;
   const stdout = makeStream();
   let code;
   try {
-    code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "300"], {
+    code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "170"], {
       stdout, stderr: makeStream(), env: {}, runChild,
       delayImpl: async (ms) => { clock += ms; },
       now: () => clock,

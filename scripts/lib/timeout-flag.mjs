@@ -30,3 +30,31 @@ export function resolveTimeoutMs({ timeout, timeoutMs }, { warn = (m) => process
   }
   return undefined;
 }
+
+// Issue 3099: a subagent's foreground Bash call is moved to the background after 180 s,
+// so one invocation waits at most WAIT_CAP_MS and a longer request is split across re-issues.
+export const WAIT_CAP_MS = 170_000;
+
+/**
+ * @param {number} requestedMs requested budget (0 stays 0: one immediate check)
+ * @returns {{ timeoutMs: number, remainingMs: number }} this invocation's budget and what is left for the re-issue
+ */
+export function capWait(requestedMs, capMs = WAIT_CAP_MS) {
+  return requestedMs > capMs ? { timeoutMs: capMs, remainingMs: requestedMs - capMs } : { timeoutMs: requestedMs, remainingMs: 0 };
+}
+
+const shellWord = (word) => (/^[\w@%+=:,./-]+$/u.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`);
+
+/**
+ * The fields a capped wait adds to its non-terminal result: `outcome: "pending"` and the exact
+ * command to re-issue, with the original args minus the timeout flags and `--timeout <remaining>`.
+ */
+export function pendingFields({ remainingMs, command, argv }) {
+  const kept = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === "--timeout" || argv[i] === "--timeout-ms") i += 1;
+    else if (!/^--timeout(?:-ms)?=/u.test(argv[i])) kept.push(argv[i]);
+  }
+  const remainingTimeoutSeconds = Math.ceil(remainingMs / 1000);
+  return { outcome: "pending", remainingTimeoutSeconds, reissue: [command, ...kept.map(shellWord), "--timeout", String(remainingTimeoutSeconds)].join(" ") };
+}

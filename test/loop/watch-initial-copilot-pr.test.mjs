@@ -275,6 +275,17 @@ test("watchInitialCopilotPr bootstrap-only draft PR is a healthy wait state (not
   assert.equal(result.attempts, 1);
 });
 
+test("watchInitialCopilotPr stops at capMs (GATE-EXEC-BOUNDED-WAIT-CAP) instead of the 3600 s policy budget", async () => {
+  let t = 0;
+  const detect = async () => ({ ok: true, state: "no_linked_pr", prNumber: null, prUrl: null });
+  const result = await watchInitialCopilotPr(
+    { repo: "owner/repo", issue: 59, pollIntervalMs: 60_000, timeoutMs: 3_600_000 },
+    { detectInitialCopilotPrStateImpl: detect, delayImpl: async (ms) => { t += ms; }, nowMs: () => t, capMs: 170_000 },
+  );
+  assert.equal(result.status, "timed_out");
+  assert.ok(t <= 170_000);
+});
+
 test("watchInitialCopilotPr no_linked_pr is a healthy wait state (not a failure)", async () => {
   // no_linked_pr is transient and must not surface as an error
   const detect = makeDetectMock([

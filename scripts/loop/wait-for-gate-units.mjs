@@ -15,7 +15,7 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { WAIT_CAP_MS, capWait, pendingFields, resolveTimeoutMs } from "../lib/timeout-flag.mjs";
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { verifyPullReceipt, verifyPulledResult } from "../github/_work-order-protocol.mjs";
@@ -27,12 +27,13 @@ export const DEFAULT_TIMEOUT_MS = 540000;
 export const MAX_TIMEOUT_MS = 570000;
 export const RECHECK_INTERVAL_MS = 2000;
 export const ARTIFACT_STABLE_MS = 10000;
-const EXIT = { all_done: 0, timeout: 2, round_retired: 3 };
+const EXIT = { all_done: 0, timeout: 2, pending: 2, round_retired: 3 };
 
 const USAGE = `Usage: wait-for-gate-units.mjs (--emit-plan <path> [--unit <scope>]... | --judge-plan <path>) --tmp-root <worktree>/tmp [--timeout <seconds>]
        wait-for-gate-units.mjs --artifact <path> --after <path> [--timeout <seconds>]
 Block in one foreground process until the round's dispatched units are done.
-Outcomes (JSON on stdout): all_done (exit 0), timeout (exit 2), round_retired (exit 3; a whole-round record, or a scoped body-only-rerun record naming any waited unit, ends the whole wait, so stop the round and re-emit). Invalid input: ok false, exit 1.
+One call waits at most ${WAIT_CAP_MS / 1000} seconds (GATE-EXEC-BOUNDED-WAIT-CAP): a longer --timeout returns pending (exit 2) with a \`reissue\` command carrying the remaining --timeout; run it.
+Outcomes (JSON on stdout): all_done (exit 0), timeout (exit 2), pending (exit 2),round_retired (exit 3; a whole-round record, or a scoped body-only-rerun record naming any waited unit, ends the whole wait, so stop the round and re-emit). Invalid input: ok false, exit 1.
   --emit-plan <path>   the round's <gate>-<headSha>.emit-plan.json; waits on every unit unless --unit narrows it
   --unit <scope>       repeatable; restrict the wait to these unit scopes
   --judge-plan <path>  the round's judge-emit-plan.json; waits on the one judge unit
@@ -205,13 +206,18 @@ export async function waitForUnits({ artifact, after, emitPlan, judgePlan, units
   }
 }
 
-export async function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2), { wait = waitForUnits } = {}) {
   let result;
   let options;
   try {
     options = parseWaitArgs(argv);
     if (options.help) { process.stdout.write(`${USAGE}\n${JQ_OUTPUT_USAGE}\n`); return; }
-    result = await waitForUnits(options);
+    const { timeoutMs, remainingMs } = capWait(options.timeoutMs);
+    result = await wait({ ...options, timeoutMs });
+    if (result.outcome === "timeout" && remainingMs > 0) {
+      const { remedy, ...rest } = result;
+      result = { ...rest, ...pendingFields({ remainingMs, command: "dev-loops gate wait-for-units", argv }) };
+    }
   } catch (error) {
     result = { ok: false, error: error instanceof Error ? error.message : String(error) };
   }

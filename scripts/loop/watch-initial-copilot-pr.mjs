@@ -7,7 +7,7 @@ import { parseIssueNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { detectInitialCopilotPrState, LINKED_PR_STATE } from "./detect-initial-copilot-pr-state.mjs";
-import { resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { capWait, pendingFields, resolveTimeoutMs } from "../lib/timeout-flag.mjs";
 import { enforcePersistentInternalWaitTimeout, PERSISTENT_INTERNAL_WAIT_TIMEOUT_POLICY } from "@dev-loops/core/loop/timeout-policy";
 import {
   DEFAULT_POLL_INTERVAL_MS,
@@ -187,14 +187,15 @@ export async function watchInitialCopilotPr(
     nowMs = () => Date.now(),
     detectInitialCopilotPrStateImpl = detectInitialCopilotPrState,
     watchCopilotRunUntilCompleteImpl = watchCopilotRunUntilComplete,
+    capMs = Infinity,
   } = {},
 ) {
   const effectiveTimeoutMs = options.timeoutMs === 0
     ? 0
-    : enforcePersistentInternalWaitTimeout({
+    : Math.min(capMs, enforcePersistentInternalWaitTimeout({
       timeoutMs: options.timeoutMs,
       contextLabel: "watch-initial-copilot-pr persistent wait",
-    });
+    }));
   const { repo, issue, pollIntervalMs } = options;
   const startMs = nowMs();
   let attempts = 0;
@@ -279,7 +280,12 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return;
   }
-  const result = await watchInitialCopilotPr(options, { env, ghCommand });
+  // GATE-EXEC-BOUNDED-WAIT-CAP: the persistent-wait policy floor applies to the request; one call waits at most the cap.
+  const { timeoutMs, remainingMs } = capWait(options.timeoutMs);
+  let result = await watchInitialCopilotPr(options, { env, ghCommand, capMs: timeoutMs });
+  if (result.status === "timed_out" && remainingMs > 0) {
+    result = { ...result, ...pendingFields({ remainingMs, command: "dev-loops loop watch-initial", argv }) };
+  }
   process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {

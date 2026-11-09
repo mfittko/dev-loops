@@ -3,7 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, parseReviewThreads } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
 import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
-import { resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { capWait, pendingFields, resolveTimeoutMs } from "../lib/timeout-flag.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { isSanctionedCopilotReviewerLogin, isTrustedGraphqlComment } from "@dev-loops/core/github/comment-trust";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -407,12 +407,18 @@ export async function runCli(
     ghCommand = "gh",
   } = {},
 ) {
-  const options = parseWatchCliArgs(argv);
-  if (options.help) {
+  const requested = parseWatchCliArgs(argv);
+  if (requested.help) {
     stdout.write(`${USAGE}\n`);
     return;
   }
-  const result = await watchCopilotReview(options, { env, ghCommand });
+  // GATE-EXEC-BOUNDED-WAIT-CAP: one call waits at most the cap; a longer request returns a pending result.
+  const { timeoutMs, remainingMs } = capWait(requested.timeoutMs);
+  const options = { ...requested, timeoutMs };
+  let result = await watchCopilotReview(options, { env, ghCommand });
+  if (result.status === "timeout" && remainingMs > 0) {
+    result = { ...result, ...pendingFields({ remainingMs, command: "dev-loops gate probe-copilot", argv }) };
+  }
   if (options.concise && options.jq === undefined && !options.silent) {
     stdout.write(`${formatProbeConcise(result)}\n`);
     return result.ok === false ? 1 : 0;
