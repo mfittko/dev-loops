@@ -277,7 +277,7 @@ ${JSON.stringify(workOrder, null, 2)}
   const completion = workOrder.phase === "full" && workOrder.requiredReads.some((read) => read.kind === "completion-input");
   const verifier = workOrder.phase === "full" ? `node ${shellQuote(path.join(path.dirname(path.dirname(workOrder.executionRules.contract)), "scripts/github/verify-fixer-disposition.mjs"))} --repo ${shellQuote(workOrder.target.repo)} --pr ${workOrder.target.pr} --head-sha ${completion ? workOrder.headSha : "<pushed-head-sha>"} --fixer-plan ${shellQuote(path.join(path.dirname(path.dirname(dispositionPath)), PLAN_FILE))}` : null;
   const task = workOrder.phase === "commit_only"
-    ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery.${workOrder.siteCoverage ? " Start from the \`siteCoverage\` skeleton in the work order JSON below:" : ""} Set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site. Run each siteQuery and set \`returnedSites\` to exactly the sites it returns (empty when it returns none), add each returned site missing from \`sites\`, then delete the \`FILL:\` \`noSitesReason\` when the query returned sites, else replace it with the query outcome. Keep fingerprints and \`input_form\` texts unchanged.${workOrder.handbackCheck ? " Before you hand back, run the work order's \`handbackCheck\` command from your worktree and correct the record until it exits 0 (skip it when you made no commit)." : ""}`
+    ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery.${workOrder.siteCoverage ? " Start from the \`siteCoverage\` skeleton in the work order JSON below:" : ""} Set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site. Run each siteQuery and set \`returnedSites\` to exactly the sites it returns (empty when it returns none), add each returned site missing from \`sites\`, then delete the \`FILL:\` \`noSitesReason\` when the query returned sites, else replace it with the query outcome. Keep fingerprints and \`input_form\` texts unchanged.${workOrder.handbackCheck ? ` Before you hand back, run the work order's \`handbackCheck\` command from your worktree and correct the record until it exits 0${workOrder.deltaFindings ? "" : " (skip it when you made no commit)"}.` : ""}${workOrder.deltaFindings ? " The earlier candidate commit at HEAD is your base: fix each listed task in a new commit on top of HEAD, and fix every lifecycle task." : ""}`
     : completion ? `Do not re-fix source or reclassify coverage. Keep every command's cwd at the mutation authority worktree. The authenticated completion-input preserves the original fixing commit and raw site coverage. Construction alone does not complete delivery.\n${fullPhaseSteps(workOrder, verifier, { push: `Push only the reviewed committed candidate \`${workOrder.headSha}\` to branch ${JSON.stringify(workOrder.mutationAuthority.branch)}.` })}`
     : workOrder.source === "review-body" ? reviewBodyFullTask(workOrder, verifier, dispositionPath)
     : workOrder.source === "ci-failure" ? ciFailureFullTask(workOrder, dispositionPath)
@@ -285,7 +285,7 @@ ${JSON.stringify(workOrder, null, 2)}
   return `# Fixer work order (ADR 0106)
 
 Source: the \`${workOrder.source}\` read${workOrder.gate ? ` (${workOrder.gate} act list)` : ""}. Phase: \`${workOrder.phase}\`. PR ${workOrder.target.repo}#${workOrder.target.pr} at head \`${workOrder.headSha}\`.
-${task}${workOrder.deltaFindings ? `\nDelta review findings to fix as act items:\n${workOrder.deltaFindings.map((f, i) => `${i + 1}. ${normalizeSeverity(f.severity)}: ${JSON.stringify(f.summary)} (evidence: ${JSON.stringify(f.evidence)})`).join("\n")}` : ""}
+${task}${workOrder.deltaFindings ? `\nDelta review findings to fix as act items:\n${workOrder.deltaFindings.map((f, i) => `${i + 1}. ${normalizeSeverity(f.severity)}${f.lifecycle === true ? " [lifecycle]" : ""}: ${JSON.stringify(f.summary)} (evidence: ${JSON.stringify(f.evidence)})`).join("\n")}` : ""}
 When a \`delta-result\` read is listed, follow agents/fixer.agent.md step 7 for its act-item statuses.
 Read every \`required\` entry below IN FULL before any change. If one is missing, unreadable, or its sha256 differs, stop and report which read failed.
 Mutation authority: branch ${JSON.stringify(branch)}, paths ${allowedPaths.map((p) => JSON.stringify(p)).join(", ")}. ${workOrder.executionRules.mutation}.
@@ -302,6 +302,8 @@ ${JSON.stringify(workOrder, null, 2)}
 \`\`\`
 `;
 }
+
+const itemPairs = (items) => [...new Set((Array.isArray(items) ? items : []).map((item) => `${JSON.stringify(item?.ref)}:${JSON.stringify(item?.status)}`))].sort().join("\n");
 
 // The commit_only phase commits unpushed; the delta review then decides whether `full` may push.
 // `delta` is the parsed --delta-result (act-list route); `threads` the unresolved threads (thread route).
@@ -320,8 +322,7 @@ function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidat
     if (!clears) throw new Refusal(`--phase full refused: no delta record at ${recordPath} holds a clearing nextStep for the --delta-result's act set; ${next}`);
     // The result must be the one the decision used: an earlier non-clearing result of the same sequence shares the act set
     // but not the record's item statuses, and the fixer reads those statuses (step 7 bounded_out rule).
-    const pairs = (items) => [...new Set((Array.isArray(items) ? items : []).map((item) => `${JSON.stringify(item?.ref)}:${JSON.stringify(item?.status)}`))].sort().join("\n");
-    if (pairs(delta.actionableItems) !== pairs(record.items)) {
+    if (itemPairs(delta.actionableItems) !== itemPairs(record.items)) {
       throw new Refusal(`--phase full refused: the --delta-result's item statuses differ from the delta record ${recordPath}, so it is not the result that decision used; pass the clearing result (${next})`);
     }
     if (candidateHead) {
@@ -641,15 +642,42 @@ export async function emitFixerWorkOrder({
   await capture.read(gateDeltaRecordPath(tmpRoot, headSha));
   // ADR 0235: a commit_only thread-route re-dispatch carries the delta record's findings as act items.
   // Only a record of this sequence counts: fix_and_rereview on a candidate that is the worktree HEAD. A record of a closed sequence is stale.
-  const deltaFindings = threadsFile && phase === "commit_only" && delta?.parsed?.nextStep === "fix_and_rereview" && delta.parsed.candidateHead === execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim() ? delta.parsed.findings : undefined;
+  let deltaFindings = threadsFile && phase === "commit_only" && delta?.parsed?.nextStep === "fix_and_rereview" && delta.parsed.candidateHead === execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim() ? delta.parsed.findings : undefined;
+  // Issue 2447: the act-list route reads the sealed record the same way and decides from its nextStep, never from the reviewer's stated outcome.
+  // The open work is each record finding and each not_resolved or cannot_verify act ref of the reviewer's result.
+  const actRecord = actListFile && phase === "commit_only" && delta ? readSealedGateDeltaRecord(tmpRoot, headSha) : null;
+  const worktreeHead = actListFile && phase === "commit_only" && delta ? execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim() : null;
+  // An unsealed fix_and_rereview record at HEAD is not "no record": a locally_clear reviewer result must not take the append-only path past its open lifecycle work.
+  if (actListFile && phase === "commit_only" && delta && !actRecord) {
+    let unsealed = null;
+    // A record file that exists but cannot be parsed fails closed like the handback route: its open work cannot be ruled out.
+    try { unsealed = readGateDeltaRecord(tmpRoot, headSha); } catch (error) { throw new Refusal(`delta_record_unsealed: delta record ${gateDeltaRecordPath(tmpRoot, headSha)} cannot be parsed (${error.message}); re-run the --result step to rewrite and seal the record; nothing was written`); }
+    if (unsealed?.nextStep === "fix_and_rereview" && unsealed.candidateHead === worktreeHead && unsealed.actSetId === delta.parsed.actSetId) throw new Refusal(`delta_record_unsealed: delta record ${gateDeltaRecordPath(tmpRoot, headSha)} holds fix_and_rereview at the worktree HEAD but carries no matching seal (a --result write may have crashed), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record; nothing was written`);
+  }
+  // A record of another act set (a closed sequence or a replaced act list) is not open work of this one, as in the full-phase path and the handback guard.
+  const sealedAtHead = actRecord?.nextStep === "fix_and_rereview" && actRecord.candidateHead === worktreeHead && actRecord.actSetId === delta.parsed.actSetId;
+  const hasOpenWork = sealedAtHead && ((Array.isArray(actRecord.findings) && actRecord.findings.length > 0) || [...(delta.parsed.actionableItems ?? []), ...(Array.isArray(actRecord.items) ? actRecord.items : [])].some((item) => ["not_resolved", "cannot_verify"].includes(item?.status)));
+  // A locally_clear result that validation refused (a coverage gap, a stale-surface hit) seals no finding and no open act ref: it keeps the issue 3111 route below.
+  const openAtHead = sealedAtHead && (hasOpenWork || delta.parsed.outcome !== "locally_clear");
+  if (openAtHead) {
+    // The result must be the one the decision used: an earlier result of the same sequence shares the act set but not the record's statuses.
+    if (itemPairs(delta.parsed.actionableItems) !== itemPairs(actRecord.items)) throw new Refusal(`--delta-result's item statuses differ from the delta record ${gateDeltaRecordPath(tmpRoot, headSha)}, so it is not the result that decision used; pass that decision's result, or re-run the delta review (dev-loops loop pre-push-delta); nothing was written`);
+    const unresolved = (delta.parsed.actionableItems ?? []).filter((item) => ["not_resolved", "cannot_verify"].includes(item?.status))
+      .map((item) => ({ severity: "medium", summary: `act item ${item.ref} is ${item.status} at the reviewed candidate`, evidence: [].concat(item.evidence ?? []).join("; ").slice(0, 2000) || item.status }));
+    deltaFindings = [...(Array.isArray(actRecord.findings) ? actRecord.findings : []), ...unresolved];
+    if (deltaFindings.length === 0) throw new Refusal(`delta_record_no_open_task: delta record ${gateDeltaRecordPath(tmpRoot, headSha)} holds fix_and_rereview at the worktree HEAD but no open task: it lists no finding and the --delta-result has no not_resolved or cannot_verify act item; re-run the delta review (dev-loops loop pre-push-delta); nothing was written`);
+  }
   if (deltaFindings !== undefined) {
-    const sealed = readSealedGateDeltaRecord(tmpRoot, headSha);
-    if (!sealed || sha256(readFileSync(threadRecordPath)) !== delta.read.sha256) {
-      throw new Refusal(`delta record ${threadRecordPath} is not sealed for ${headSha} or differs from the pinned read, so its findings are not evidence; re-run check-pre-push-delta --result to write it`);
+    const sealed = threadsFile ? readSealedGateDeltaRecord(tmpRoot, headSha) : actRecord;
+    const recordPath = gateDeltaRecordPath(tmpRoot, headSha);
+    if (!sealed || (threadsFile && sha256(readFileSync(threadRecordPath)) !== delta.read.sha256)) {
+      throw new Refusal(`delta record ${recordPath} is not sealed for ${headSha} or differs from the pinned read, so its findings are not evidence; re-run check-pre-push-delta --result to write it`);
     }
     const text = (value) => typeof value === "string" && value.length <= 2000;
-    if (!Array.isArray(deltaFindings) || deltaFindings.length > 20 || !deltaFindings.every((f) => text(f?.severity) && VALID_SEVERITIES.has(normalizeSeverity(f.severity)) && text(f.summary) && text(f.evidence) && ["residueOf", "site"].every((key) => f[key] === undefined || text(f[key])))) {
-      throw new Refusal(`delta record findings at ${threadRecordPath} are malformed (an array of at most 20 entries of strings of at most 2000 characters: severity, summary, evidence, optional residueOf and site); re-run the thread-route delta review (dev-loops loop pre-push-delta) to rewrite the record`);
+    // The 20-entry cap bounds the record's own findings; the synthetic act-ref tasks are bounded by the act list.
+    const recordFindings = openAtHead ? actRecord.findings ?? [] : deltaFindings;
+    if (!Array.isArray(deltaFindings) || !Array.isArray(recordFindings) || recordFindings.length > 20 || !deltaFindings.every((f) => text(f?.severity) && VALID_SEVERITIES.has(normalizeSeverity(f.severity)) && text(f.summary) && text(f.evidence) && ["residueOf", "site"].every((key) => f[key] === undefined || text(f[key])))) {
+      throw new Refusal(`delta record findings at ${recordPath} are malformed (an array of at most 20 entries of strings of at most 2000 characters: severity, summary, evidence, optional residueOf and site); re-run the delta review (dev-loops loop pre-push-delta) to rewrite the record`);
     }
   }
   // A review body has no delta review route, so --phase full needs no delta record for it.
@@ -740,7 +768,7 @@ export async function emitFixerWorkOrder({
     source: source.read.kind,
     gate: actListFile ? gate : undefined,
     ...(ciFile ? { failedChecks: source.parsed.failedChecks.slice(0, 50).map((check) => check.name.slice(0, 200)), ...(source.parsed.failedChecks.length > 50 ? { failedChecksOmitted: source.parsed.failedChecks.length - 50 } : {}) } : {}),
-    ...(deltaFindings?.length ? { deltaFindings: deltaFindings.map(({ severity, summary, evidence, residueOf, site }) => ({ severity, summary, evidence, ...(residueOf === undefined ? {} : { residueOf }), ...(site === undefined ? {} : { site }) })) } : {}),
+    ...(deltaFindings?.length ? { deltaFindings: deltaFindings.map(({ severity, summary, evidence, residueOf, site, lifecycle }) => ({ severity, summary, evidence, ...(lifecycle === true ? { lifecycle: true } : {}),...(residueOf === undefined ? {} : { residueOf }), ...(site === undefined ? {} : { site }) })) } : {}),
     ...(operatorFocus ? { operatorFocus, ...operatorFocusDigestEntry(operatorFocus) } : {}),
     configSha256: sha256(JSON.stringify(config ?? {})),
     authority: { sourceDigest: jsonContentDigest(source.parsed), ...(reviewId ? { reviewId } : {}), deltaResultDigest: delta ? jsonContentDigest(delta.parsed) : undefined,
@@ -778,9 +806,9 @@ export async function emitFixerWorkOrder({
   // beside the plan, never over it, so the delta coverage the original execution bound stays authentic; it writes no sequence marker.
   const prior = phase === "commit_only" && actListFile && delta && originalBytes ? JSON.parse(originalBytes).workOrder : null;
   // The delta sequence is in flight when the delta result reviewed the unpushed fixing commit (its candidate is the worktree HEAD, not the baseline) and the first fixer delivered its handback.
-  // Only the refused PRE-PUSH-DELTA-RESULT case (a locally_clear result) is append-only; a needs_fix / fix_and_rereview re-dispatch is a committing second fixer and supersedes the plan.
+  // Only the refused PRE-PUSH-DELTA-RESULT case (a locally_clear result whose record holds no finding and no open act ref) is append-only; a re-dispatch with open record work is a committing second fixer and supersedes the plan.
   const appendOnly = prior?.phase === "commit_only" && prior.source === "act-list" && prior.headSha === headSha && prior.gate === gate
-    && delta.parsed.outcome === "locally_clear"
+    && delta.parsed.outcome === "locally_clear" && !openAtHead
     && delta.parsed.origin?.executionIdentity === JSON.parse(originalBytes).executionIdentity
     && delta.parsed.candidateHead !== headSha && delta.parsed.candidateHead === gitIn(cwd, "rev-parse", "HEAD").trim()
     && Boolean(await capture.read(prior.outputRefs?.[0]));

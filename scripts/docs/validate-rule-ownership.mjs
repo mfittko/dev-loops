@@ -757,14 +757,19 @@ async function main(argv = process.argv.slice(2)) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
   }
-  const result = await validateRuleOwnership(REPO_ROOT);
+  return run({ root: REPO_ROOT });
+}
+
+/** Run the validator against `root`, write the CLI report to `out`, return the exit code. */
+export async function run({ root = REPO_ROOT, out = process.stdout } = {}) {
+  const result = await validateRuleOwnership(root);
   if (result.ok) {
     const e = result.enforcement;
-    process.stdout.write(`Rule ownership validation passed: ${result.rules} rules, ${result.references} references, ${result.terms} terms, ${result.filesScanned} files scanned. Runtime rules: ${e.runtimeTotal} total, ${e.runtimeEnforced} enforced, ${e.runtimeUnenforced} unenforced.\n`);
+    out.write(`Rule ownership validation passed: ${result.rules} rules, ${result.references} references, ${result.terms} terms, ${result.filesScanned} files scanned. Runtime rules: ${e.runtimeTotal} total, ${e.runtimeEnforced} enforced, ${e.runtimeUnenforced} unenforced.\n`);
     return 0;
   }
-  process.stdout.write(`Rule ownership validation failed:\n`);
-  for (const error of result.errors) process.stdout.write(`- ${error.kind}: ${error.id || error.key || error.token} ${error.location || (error.locations || []).join(", ")}\n`);
+  out.write(`Rule ownership validation failed:\n`);
+  for (const error of result.errors) out.write(`- ${error.kind}: ${error.id || error.key || error.token} ${error.location || (error.locations || []).join(", ")}\n`);
   return 1;
 }
 
