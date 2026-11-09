@@ -61,7 +61,7 @@ Persistent async watch/fix loop, not handoff-only behavior: `watch â†’ detect â†
 **PERSISTENCE MODEL: Subagents do bounded implementation tasks and exit on external wait. The main session drives the loop and re-dispatches when continuation is feasible.** If `cycleDisposition` is `pending` and `terminal` is `false`, the subagent exits on the wait boundary; the main session re-dispatches another watch boundary.
 <!-- /pi-only -->
 
-> Under the Claude Code harness, run this loop **inline in a single agent**. The helper-owned wait tools (`node <dev-loops-package-root>/cli/index.mjs loop watch-cycle`, `gh run watch`, `node <dev-loops-package-root>/cli/index.mjs gate probe-copilot`) block inline and return. When `cycleDisposition` is `pending` and `terminal` is `false`, run the next watch cycle yourself. Do not exit on the wait boundary for a parent re-dispatch; drive the loop until a terminal state or the watch budget expires. A bounded fix may still go to the `fixer` agent (Step 6).
+> Under the Claude Code harness, the `dev-loops:dev-loop` coordinator runs this loop as one agent. The helper-owned wait tools (`node <dev-loops-package-root>/cli/index.mjs loop watch-cycle`, `gh run watch`, `node <dev-loops-package-root>/cli/index.mjs gate probe-copilot`) block and return. When `cycleDisposition` is `pending` and `terminal` is `false`, the coordinator runs the next watch cycle itself. The coordinator does not exit on the wait boundary for a parent re-dispatch; it drives the loop until a terminal state or the watch budget expires. A bounded fix may still go to the `fixer` agent (Step 6).
 
 Max watch timeout: **30 minutes** (from `policy-constants.mjs` COPILOT_REVIEW_WAIT_TIMEOUT_MS); expired budget + still `waiting_for_copilot_review` = hard stop. If the user explicitly asks for async handoff-only behavior, say that out loud and stop after the handoff boundary.
 
@@ -178,7 +178,7 @@ Apply this guard on every same-PR resume<!-- pi-only -->, including between Pi a
 
 | `outerAction` | Action |
 | --- | --- |
-| `continue_wait` | Resume from the checkpoint. Under Claude Code, run the next watch cycle inline. |
+| `continue_wait` | Resume from the checkpoint. Under Claude Code, the dev-loop coordinator runs the next watch cycle. |
 | `reenter_copilot_loop` | Run `copilot-pr-handoff.mjs` and follow its next step. |
 | `reenter_reviewer_loop` | Enter the reviewer-loop path. |
 | `stop` | Report `reason` and ask for direction. |

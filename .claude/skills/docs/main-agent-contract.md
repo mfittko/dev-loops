@@ -2,11 +2,11 @@
 
 How dev-loop work is structured depends on the harness.
 
-**Under the Claude Code harness, the dev-loop runs as a single agent that acts as a delegating
-COORDINATOR.** The agent invoked for dev-loop work runs git and PR lifecycle operations, runs the
+**Under the Claude Code harness, the main session dispatches the `dev-loops:dev-loop` coordinator
+(`dev-loop` inside the dev-loops repo itself), and the coordinator is one agent that acts as a delegating
+COORDINATOR.** The main session runs no gate, fixer or reviewer step. The coordinator runs git and PR lifecycle operations, runs the
 `dev-loops` CLI (including state-changing `gate` / `pr` / `loop` subcommands), and posts gate
-verdicts under the operating session's identity. There is no separate read-only "main agent" and
-no Pi-style main-agent→dev-loop async hop. As COORDINATOR, the dev-loop agent is read-only for
+verdicts under the operating session's identity. The main session is the main agent. It dispatches the coordinator. The opt-in `DEVLOOPS_MAIN_AGENT_READONLY` hook covers it (`agent_type: null`). As COORDINATOR, the dev-loop agent is read-only for
 TRACKED repo files (source, tests, docs) and MUST delegate every tracked-file implementation edit
 and targeted verification run to a fresh WORKER subagent (`developer`/`fixer`/`quality`/`docs`).
 The coordinator MAY still write EPHEMERAL gitignored/non-repo artifacts directly: `tmp/`, the
@@ -16,7 +16,7 @@ this boundary: opt-in via `DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open),
 enforced, it denies a tracked-file Write/Edit whose `agent_type` is `dev-loop` or `gate-coordinator`; a worker
 subagent's `agent_type` is unaffected. It is a targeted denylist, not an airtight sandbox:
 Bash-driven tracked mutations (`git commit`, `sed -i`, `> file`) stay convention-enforced, and
-the top-level/inline agent (`agent_type: null`) falls under the main-agent boundary below. On Pi, see
+the top-level/inline agent (`agent_type: null`) falls under the opt-in `DEVLOOPS_MAIN_AGENT_READONLY` hook described at the end of this section. On Pi, see
 "Guarded surface and deliberate ceilings" below for what it does and does not cover. **The coordinator also
 delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verify`/`bun test`/
 `vitest`/`npm test`/`npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/

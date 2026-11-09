@@ -95,7 +95,7 @@ when feasible. Carry the checkpoint and watch outcome, and report the pending
 boundary accurately rather than declaring completion.
 <!-- /pi-only -->
 
-Under Claude Code, continue pending non-terminal waits inline in the same agent,
+Under Claude Code, the dev-loop coordinator continues pending non-terminal waits in the same agent,
 using the fresh envelope on each re-entry, until the requested stop boundary or
 budget is reached. Do not exit just to have a parent re-dispatch the watch loop.
 
