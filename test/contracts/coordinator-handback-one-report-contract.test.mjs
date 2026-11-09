@@ -59,7 +59,7 @@ test("GATE-EXEC-HARNESS-JOIN in-flight report names each joinRef and states a fo
   const content = await readRepo(GATE);
   const start = content.indexOf("<!-- rule: GATE-EXEC-HARNESS-JOIN -->");
   const text = content.slice(start, content.indexOf("**Re-run rule:**", start));
-  assert.match(text, /report sent while a child is in flight.*carries its `joinRef`: for a fixer or delta reviewer the hand-back path that `COORDINATOR-SINGLE-CHILD-JOIN` names, for a gate coordinator child its round-result path, for a developer child, which writes no artifact, its worktree path and branch\./s);
+  assert.match(text, /report sent while a child is in flight.*carries its `joinRef`: for a fixer or delta reviewer the hand-back path that `COORDINATOR-SINGLE-CHILD-JOIN` names, for a gate coordinator child its agent id and the round-result hand-back it returns through the completion notification, for a gate review unit or judge child the `--emit-plan` or `--judge-plan` path that its `wait-for-units` join reads, for a developer child, which writes no artifact, its worktree path and branch\./s);
   const own = text.slice(0, text.indexOf("- Claude Code: before dispatch"));
   assert.ok(!/emitter prints|<outputRef>\.report|input\.patchPath/.test(own),"the join rule owns its own phrases");
   assert.match(text, /never hands back an interim completion while a dispatched unit is pending, except a hand-back the harness forces, which states that it is interim/);
@@ -77,8 +77,8 @@ test("MAIN-AGENT-COORDINATOR-REPORT-READ has three harness-neutral bullets", asy
   const bullets = text.split("\n").filter((l) => l.startsWith("- Every harness:"));
   assert.equal(bullets.length, 3);
   assert.match(bullets[0], /hand-back or pause that lists children in flight and names no run-ending case is interim, whether or not it says so.*status, not a result.*re-dispatch a listed child.*next report/s);
-  assert.match(bullets[1], /names a run-ending case.*Unit coordinator boundaries.*`units_stalled` or `round_retired`.*final even when it lists children.*treats each listed child as still running/s);
-  assert.match(bullets[2], /second hand-back.*already consumed.*run state unchanged.*duplicate.*interim reports too.*precedence over the interim bullet.*reads the state.*acts on nothing.*relays nothing/s);
+  assert.match(bullets[1], /names a run-ending case.*Unit coordinator boundaries.*`units_stalled` or `round_retired` hand-back under `GATE-EXEC-HARNESS-JOIN`.*final even when it lists children.*treats each listed child as still running/s);
+  assert.match(bullets[2], /second hand-back that repeats the report.*already consumed.*first line and child list.*same coordinator.*run state unchanged.*duplicate.*interim reports too.*precedence over the interim bullet.*never a duplicate.*reads the state.*acts on nothing.*relays nothing/s);
 });
 
 test("the read rule keeps Claude Code bullets Claude-specific and neutral bullets harness-neutral", async () => {
