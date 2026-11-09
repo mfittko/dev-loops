@@ -1671,6 +1671,7 @@ test("issue 2447: the docs validators refuse (exit 2, no record) while a tracked
     assert.equal(fx.recordOf(), null);
     runGitFixture(fx.dir, ["checkout", "--", "package.json"]);
     // An untracked non-ignored file feeds the validators too: it refuses for every form (a link target, a markdown file with a broken link, a file under docs/); an ignored tmp/ file does not.
+    runGitFixture(fx.dir, ["config", "status.showUntrackedFiles", "no"]); // the guard must pass --untracked-files=all over a disabled config
     for (const rel of ["docs/new.md", "notes.md"]) {
       const file = path.join(fx.dir, rel);
       fs.mkdirSync(path.dirname(file), { recursive: true });
