@@ -500,28 +500,28 @@ const clip = (text) => String(text).slice(0, 2000);
 async function lifecycleRefusals({ options, ownPaths, changedPaths, changelog, docsValidators, baselineHead, currentHead }) {
   const findings = [];
   const root = resolveRepoRoot(options.worktree);
+  const exec = promisify(execFile);
+  const git = createGitClient(root, (command, args, execOptions) => exec(command, args, { ...execOptions, env: gitEnvNoDirOverrides() }));
   if ((ownPaths ?? changedPaths(options.worktree, baselineHead, currentHead)).some((file) => file.startsWith("changes/"))) {
     const diagnostics = [];
     const log = { log: (...args) => diagnostics.push(args.join(" ")), error: (...args) => diagnostics.push(args.join(" ")) };
-    let code;
-    try {
-      const exec = promisify(execFile);
-      const git = createGitClient(root, (command, args, execOptions) => exec(command, args, { ...execOptions, env: gitEnvNoDirOverrides() }));
-      code = await changelog({ root, git, log, requireHeadInputs: true });
-    } catch (error) {
-      diagnostics.push(error.message);
-      code = 1;
-    }
-    if (code !== 0) findings.push({ severity: "medium", summary: "LIFECYCLE-CHANGELOG-COMPLETENESS: the changelog check refused this delta range", evidence: clip(diagnostics.join("; ")) });
+    // A thrown error (config, git, missing base) is infrastructure, not a refusal: it propagates (exit 2) and records no finding.
+    const code = await changelog({ root, git, log, requireHeadInputs: true });
+    if (code !== 0) findings.push({ lifecycle: true, severity: "medium", summary: "LIFECYCLE-CHANGELOG-COMPLETENESS: the changelog check refused this delta range", evidence: clip(diagnostics.join("; ")) });
   }
   const pkg = spawnSync("git", ["-C", root, "show", "HEAD:package.json"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
   let optedIn = false;
   try { optedIn = pkg.status === 0 && String(JSON.parse(pkg.stdout).scripts?.["test:docs"] ?? "").includes(DOCS_VALIDATOR_MODULE); } catch { /* not JSON: no opt-in */ }
   if (optedIn) {
-    for (const { id, code, output } of await docsValidators({ root, ids: ["links", "rule-ownership", "decision-records"] })) {
+    // The validators read the working tree: a tracked edit not in HEAD could hide a committed refusal, so the reviewed commit must be the tree.
+    const dirty = spawnSync("git", ["-C", root, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+    if (dirty.status !== 0) throw new Error(`docs_validators_worktree_unreadable: git status failed in ${root}: ${dirty.stderr.trim()}`);
+    if (dirty.stdout.trim()) throw new Error(`docs_validators_dirty_worktree: the docs validators judge the working tree, and tracked files differ from HEAD (${dirty.stdout.trim().split("\n").slice(0, 5).join("; ")}); commit or revert them, then rerun the --result run`);
+    for (const { id, code, output, crashed } of await docsValidators({ root, git, ids: ["links", "rule-ownership", "decision-records"] })) {
+      if (crashed) throw new Error(`docs validator ${id} crashed: ${output.trim()}`);
       if (code === 0) continue;
       const rule = /\b(?:ADR|LIFECYCLE)(?:-[A-Z0-9]+){2,}\b/.exec(output)?.[0];
-      findings.push({ severity: "medium", summary: `docs validator ${id} refused this delta range${rule ? ` (${rule})` : ""}`, evidence: clip(output.trim()) });
+      findings.push({ lifecycle: true, severity: "medium", summary: `docs validator ${id} refused this delta range${rule ? ` (${rule})` : ""}`, evidence: clip(output.trim()) });
     }
   }
   return findings;

@@ -30,7 +30,7 @@ export const DOCS_VALIDATORS = Object.freeze([
       return 1;
     },
   },
-  { id: "decision-records", run: ({ root, out }) => decisionRecordsRun({ root, out }) },
+  { id: "decision-records", run: ({ root, out, git }) => decisionRecordsRun({ root, out, ...(git ? { git } : {}) }) },
   {
     id: "changelog",
     run: ({ root, out }) => changelogMain({ root, log: { log: (...args) => out.write(`${args.join(" ")}\n`), error: (...args) => out.write(`${args.join(" ")}\n`) } }),
@@ -39,17 +39,17 @@ export const DOCS_VALIDATORS = Object.freeze([
 
 /**
  * Run the validators named in `ids` (default: all, in list order).
- * @returns {Promise<Array<{ id: string, code: number, output: string }>>}
+ * @returns {Promise<Array<{ id: string, code: number, output: string, crashed: boolean }>>} `crashed`: the validator threw instead of returning a code
  */
-export async function runDocsValidators({ root, ids = DOCS_VALIDATORS.map((v) => v.id), out } = {}) {
+export async function runDocsValidators({ root, ids = DOCS_VALIDATORS.map((v) => v.id), out, git } = {}) {
   const results = [];
   for (const validator of DOCS_VALIDATORS.filter((v) => ids.includes(v.id))) {
     let output = "";
     const sink = { write: (text) => { output += text; } };
-    let code;
-    try { code = await validator.run({ root, out: sink }); } catch (error) { output += `${error.message}\n`; code = 1; }
+    let code, crashed = false;
+    try { code = await validator.run({ root, out: sink, git }); } catch (error) { output += `${error.message}\n`; code = 1; crashed = true; }
     out?.write(output);
-    results.push({ id: validator.id, code, output });
+    results.push({ id: validator.id, code, output, crashed });
   }
   return results;
 }

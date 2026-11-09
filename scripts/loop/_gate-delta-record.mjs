@@ -65,14 +65,15 @@ export function listGateDeltaRecords(tmpRoot) {
   return records;
 }
 
-/** A lifecycle refusal recorded as a finding (issue 2447): the summary starts with the changelog rule ID or "docs validator". */
-export const isLifecycleFinding = (finding) => /^(?:LIFECYCLE-CHANGELOG-COMPLETENESS|docs validator )/.test(finding?.summary ?? "");
+/** A lifecycle refusal recorded as a finding (issue 2447): only the writer sets `lifecycle: true`; a reviewer finding cannot. */
+export const isLifecycleFinding = (finding) => finding?.lifecycle === true;
 
 /** Write the decision of one `--result` run. Returns the record path. */
 export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocation, decision, result, lifecycleFindings = [] }) {
   const items = Array.isArray(result?.actionableItems) ? result.actionableItems.map((item) => ({ ref: item?.ref, status: item?.status })) : [];
-  // Lifecycle refusals lead; the 20-entry bound of the emitter's intake still holds.
-  const findings = [...lifecycleFindings, ...deltaFixerFindings(result)].slice(0, 20);
+  // Lifecycle refusals lead. The emitter's intake takes 20 entries and appends one task per open act ref, so the list leaves room for them.
+  const open = items.filter((item) => ["not_resolved", "cannot_verify"].includes(item.status)).length;
+  const findings = [...lifecycleFindings, ...deltaFixerFindings(result)].slice(0, Math.max(0, 20 - open));
   const record = {
     ...deltaCoverageBinding(decision),
     reviewBaselineHead: sequence.reviewBaselineHead,

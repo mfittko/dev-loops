@@ -3842,7 +3842,13 @@ test("issue 3111: a keyed fixer that commits exits through a canonical re-emissi
 });
 
 // Issue 2447 slice 1: the act-list re-emission reads the sealed record, never the reviewer's stated outcome.
-const openRecord = (fx, findings) => fx.writeRecord({ candidateHead: git(fx.wt, "rev-parse", "HEAD"), outcome: "needs_fix", nextStep: "fix_and_rereview", ...(findings ? { findings } : {}) }, { seal: true });
+const openRecord = (fx, findings, items = [{ ref: ACT_REF, status: "resolved" }]) => fx.writeRecord({ candidateHead: git(fx.wt, "rev-parse", "HEAD"), outcome: "needs_fix", nextStep: "fix_and_rereview", items, ...(findings ? { findings } : {}) }, { seal: true });
+// The reviewer's result for the open record: the act ref at `status`, resealed.
+const writeResult = async (fx, status, evidence = ["still open"]) => {
+  const result = JSON.parse(await readFile(fx.files.delta, "utf8"));
+  await writeFile(fx.files.delta, JSON.stringify({ ...result, outcome: "needs_fix", actionableItems: [{ ref: ACT_REF, status, evidence }] }));
+  sealDeltaFixture(resolveGateArtifactTmpRoot(fx.wt), fx.files.delta);
+};
 const RESIDUE = { severity: "medium", summary: "test-only residue at site s", evidence: "e", residueOf: ACT_REF, site: "s" };
 const LIFECYCLE = { severity: "medium", summary: "LIFECYCLE-CHANGELOG-COMPLETENESS: entry is 317 characters", evidence: "changes/x.md" };
 
@@ -3877,5 +3883,39 @@ test("issue 2447: a fix_and_rereview record with no open task refuses with a nam
     const planBytes = await readFile(prior.planPath);
     await assert.rejects(fx.emit({ phase: "commit_only", keepRecord: true }), /no open task/);
     assert.deepEqual(await readFile(prior.planPath), planBytes);
+  });
+});
+
+test("issue 2447: a record with no findings and a not_resolved or cannot_verify result item emits a synthetic task with that evidence", async () => {
+  for (const status of ["not_resolved", "cannot_verify"]) {
+    await withFixture(async (fx) => {
+      await refusedDeltaFixture(fx, "needs_fix");
+      await writeResult(fx, status, ["deref still unguarded"]);
+      await openRecord(fx, undefined, [{ ref: ACT_REF, status }]);
+      const again = await fx.emit({ phase: "commit_only", keepRecord: true });
+      assert.deepEqual(again.workOrder.deltaFindings.map((f) => [f.severity, f.summary, f.evidence]),
+        [["medium", `act item ${ACT_REF} is ${status} at the reviewed candidate`, "deref still unguarded"]]);
+    });
+  }
+});
+
+test("issue 2447: a --delta-result that is not the one the sealed record decided on refuses, and nothing is written", async () => {
+  await withFixture(async (fx) => {
+    const { prior } = await refusedDeltaFixture(fx, "needs_fix");
+    await writeResult(fx, "not_resolved");
+    await openRecord(fx, [RESIDUE], [{ ref: ACT_REF, status: "cannot_verify" }]);
+    const planBytes = await readFile(prior.planPath);
+    await assert.rejects(fx.emit({ phase: "commit_only", keepRecord: true }), /item statuses differ from the delta record[^]*not the result that decision used/);
+    assert.deepEqual(await readFile(prior.planPath), planBytes);
+  });
+});
+
+test("issue 2447: a record of 20 findings plus an unresolved act ref refuses naming the gate-delta record path, never null", async () => {
+  await withFixture(async (fx) => {
+    await refusedDeltaFixture(fx, "needs_fix");
+    await writeResult(fx, "not_resolved");
+    const findings = Array.from({ length: 20 }, (_, i) => ({ severity: "medium", summary: `finding ${i}`, evidence: "e" }));
+    await openRecord(fx, findings, [{ ref: ACT_REF, status: "not_resolved" }]);
+    await assert.rejects(fx.emit({ phase: "commit_only", keepRecord: true }), (error) => /gate-delta[\\/][0-9a-f]{40}\.json/.test(error.message) && !/null/.test(error.message) && /at most 20 entries/.test(error.message));
   });
 });

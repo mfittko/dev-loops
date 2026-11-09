@@ -303,6 +303,8 @@ ${JSON.stringify(workOrder, null, 2)}
 `;
 }
 
+const itemPairs = (items) => [...new Set((Array.isArray(items) ? items : []).map((item) => `${JSON.stringify(item?.ref)}:${JSON.stringify(item?.status)}`))].sort().join("\n");
+
 // The commit_only phase commits unpushed; the delta review then decides whether `full` may push.
 // `delta` is the parsed --delta-result (act-list route); `threads` the unresolved threads (thread route).
 function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidateHead, coverageBinding }) {
@@ -320,8 +322,7 @@ function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidat
     if (!clears) throw new Refusal(`--phase full refused: no delta record at ${recordPath} holds a clearing nextStep for the --delta-result's act set; ${next}`);
     // The result must be the one the decision used: an earlier non-clearing result of the same sequence shares the act set
     // but not the record's item statuses, and the fixer reads those statuses (step 7 bounded_out rule).
-    const pairs = (items) => [...new Set((Array.isArray(items) ? items : []).map((item) => `${JSON.stringify(item?.ref)}:${JSON.stringify(item?.status)}`))].sort().join("\n");
-    if (pairs(delta.actionableItems) !== pairs(record.items)) {
+    if (itemPairs(delta.actionableItems) !== itemPairs(record.items)) {
       throw new Refusal(`--phase full refused: the --delta-result's item statuses differ from the delta record ${recordPath}, so it is not the result that decision used; pass the clearing result (${next})`);
     }
     if (candidateHead) {
@@ -647,6 +648,8 @@ export async function emitFixerWorkOrder({
   const actRecord = actListFile && phase === "commit_only" && delta ? readSealedGateDeltaRecord(tmpRoot, headSha) : null;
   const openAtHead = actRecord?.nextStep === "fix_and_rereview" && actRecord.candidateHead === execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim();
   if (openAtHead) {
+    // The result must be the one the decision used: an earlier result of the same sequence shares the act set but not the record's statuses.
+    if (itemPairs(delta.parsed.actionableItems) !== itemPairs(actRecord.items)) throw new Refusal(`--delta-result's item statuses differ from the delta record ${gateDeltaRecordPath(tmpRoot, headSha)}, so it is not the result that decision used; pass that decision's result, or re-run the delta review (dev-loops loop pre-push-delta); nothing was written`);
     const unresolved = (delta.parsed.actionableItems ?? []).filter((item) => ["not_resolved", "cannot_verify"].includes(item?.status))
       .map((item) => ({ severity: "medium", summary: `act item ${item.ref} is ${item.status} at the reviewed candidate`, evidence: [].concat(item.evidence ?? []).join("; ").slice(0, 2000) || item.status }));
     deltaFindings = [...(Array.isArray(actRecord.findings) ? actRecord.findings : []), ...unresolved];
@@ -654,12 +657,13 @@ export async function emitFixerWorkOrder({
   }
   if (deltaFindings !== undefined) {
     const sealed = threadsFile ? readSealedGateDeltaRecord(tmpRoot, headSha) : actRecord;
+    const recordPath = gateDeltaRecordPath(tmpRoot, headSha);
     if (!sealed || (threadsFile && sha256(readFileSync(threadRecordPath)) !== delta.read.sha256)) {
-      throw new Refusal(`delta record ${threadRecordPath} is not sealed for ${headSha} or differs from the pinned read, so its findings are not evidence; re-run check-pre-push-delta --result to write it`);
+      throw new Refusal(`delta record ${recordPath} is not sealed for ${headSha} or differs from the pinned read, so its findings are not evidence; re-run check-pre-push-delta --result to write it`);
     }
     const text = (value) => typeof value === "string" && value.length <= 2000;
     if (!Array.isArray(deltaFindings) || deltaFindings.length > 20 || !deltaFindings.every((f) => text(f?.severity) && VALID_SEVERITIES.has(normalizeSeverity(f.severity)) && text(f.summary) && text(f.evidence) && ["residueOf", "site"].every((key) => f[key] === undefined || text(f[key])))) {
-      throw new Refusal(`delta record findings at ${threadRecordPath} are malformed (an array of at most 20 entries of strings of at most 2000 characters: severity, summary, evidence, optional residueOf and site); re-run the thread-route delta review (dev-loops loop pre-push-delta) to rewrite the record`);
+      throw new Refusal(`delta record findings at ${recordPath} (plus one task per not_resolved or cannot_verify act ref) are malformed (an array of at most 20 entries of strings of at most 2000 characters: severity, summary, evidence, optional residueOf and site); re-run the delta review (dev-loops loop pre-push-delta) to rewrite the record`);
     }
   }
   // A review body has no delta review route, so --phase full needs no delta record for it.
