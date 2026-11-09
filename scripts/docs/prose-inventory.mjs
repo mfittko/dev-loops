@@ -22,7 +22,7 @@ function readAt(rev, file) {
       throw new UsageError(`unreadable path: ${file}`);
     }
   }
-  const { GIT_DIR, GIT_WORK_TREE, ...env } = process.env;
+  const { GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR, ...env } = process.env;
   try {
     return execFileSync("git", ["cat-file", "blob", `${rev}:./${file}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28, env });
   } catch {

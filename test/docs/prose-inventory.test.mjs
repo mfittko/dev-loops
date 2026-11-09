@@ -173,13 +173,13 @@ test("a vs. inside an obligation sentence does not split it", () => {
   assert.match(out, /review required\): A fast path vs\. a slow path MUST NOT diverge\./);
 });
 
-test("an inherited GIT_DIR and GIT_WORK_TREE do not redirect the revision read", () => {
-  process.env.GIT_DIR = path.join(dir, "no-such-git-dir");
-  process.env.GIT_WORK_TREE = path.join(dir, "no-such-tree");
-  try {
-    assert.equal(run(["--base", "HEAD", "--head", "HEAD", "same.md"]).code, 0);
-  } finally {
-    delete process.env.GIT_DIR;
-    delete process.env.GIT_WORK_TREE;
-  }
-});
+for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"]) {
+  test(`an inherited ${name} does not redirect the revision read`, () => {
+    process.env[name] = path.join(dir, "no-such-path");
+    try {
+      assert.equal(run(["--base", "HEAD", "--head", "HEAD", "same.md"]).code, 0);
+    } finally {
+      delete process.env[name];
+    }
+  });
+}
