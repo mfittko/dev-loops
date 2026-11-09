@@ -1081,7 +1081,8 @@ test("the chain-end remedy is named only for a locally_clear record whose refs t
     const refusal = () => reviewerOnlyDelta(root, A, head).then(() => null, (error) => error.message);
     seal([{ ref: "unrelated", status: "resolved" }]);
     const unrelated = await refusal();
-    assert.match(unrelated, /rm -f/);
+    assert.match(unrelated, /allow-replacement-pr/);
+    assert.doesNotMatch(unrelated, /rm -f/);
     assert.doesNotMatch(unrelated, /extend-cap-round-chain/);
     assert.equal((await extend(root, head)).reason, "no_cap_round_chain", "the route the old remedy named would have refused");
     seal([{ ref: fingerprintFinding(act), status: "resolved" }]);

@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
-import { capRoundActList } from "../../scripts/github/write-gate-context.mjs";
+import { capRoundActList, countCompletedRounds } from "../../scripts/github/write-gate-context.mjs";
 import { writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 import { coordinationAt, extendRoute, followRemedy, reviewerOnlyRoute } from "./_cap-round-route.mjs";
@@ -215,4 +215,44 @@ test("the remaining clean-cap needs_fix dead ends clear with the remedy ADR 0255
       assert.ok(READY.includes(end.nextAction), `docs ${docs}: ${end.failure}: ${end.reason}`);
     } finally { rmSync(s.root, { recursive: true, force: true }); }
   }
+});
+
+// Issue 3139 AC5: the PR 3138 sequence under one toolchain: a cap round with findings, the fixer's needs_fix record, a base-only merge and a half-stamped earlier ledger.
+test("PR 3138 sequence: each step runs the command the previous result named, the walk reaches run_pre_approval_gate, and the round numbers agree at every step", async () => {
+  const s = scenario({ clean: false, sequence: "fixer_needs_fix", merges: 1, fix: true, docs: false });
+  try {
+    // The half-stamped earlier ledger: a roundIdentity without `completed`, which counts as no round for every reader.
+    writeFileSync(path.join(path.dirname(s.ledgerPath), `draft_gate-${"4".repeat(40)}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "4".repeat(40), verdict: "findings_present", loggedAt: "2026-10-31T00:00:00.000Z", roundIdentity: { roundId: "r1", judgeExecution: null }, findings: [ACT] }));
+    const ctx = { repo: REPO, pr: PR, head: s.head };
+    const roundNumbers = async () => {
+      const writer = await countCompletedRounds({ repo: REPO, pr: PR, gate: "draft_gate", headSha: s.head, tmpRoot: path.join(s.root, "tmp") }, { repoRoot: s.root });
+      const capRound = await countCompletedRounds({ repo: REPO, pr: PR, gate: "draft_gate", headSha: s.head }, { repoRoot: s.root });
+      assert.equal(writer, capRound, "the number the verdict writer posts equals the count resolveCapRound reads");
+      assert.equal(capRound, 5, "four completed rounds; the half-stamped ledger counts as none");
+    };
+    const texts = [];
+    let state = await coordinationAt(s.root, ctx);
+    for (let guard = 0; state.nextAction !== "run_pre_approval_gate" && guard < 6; guard += 1) {
+      await roundNumbers();
+      texts.push(state.reason ?? "");
+      if (state.nextAction === "report_blocked") {
+        assert.ok(state.remedy || state.blockedOn, `a typed block: ${state.reason}`);
+        assert.match(String(state.remedy), /gate extend-cap-round-chain/, "the coordinator names the extension command");
+        const extended = await extendRoute(s.root, ctx);
+        texts.push(String(extended.detail ?? ""));
+        if (extended.ok === false) {
+          assert.match(String(extended.detail), /loop pre-push-delta --reviewer-only/, "the extension refusal names the reviewer-only delta");
+          await reviewerOnlyRoute(s.root, { baseline: s.A, head: s.head, ledgerPath: s.ledgerPath });
+        }
+      } else {
+        assert.equal(state.nextAction, "mark_ready_for_review");
+        state = await coordinationAt(s.root, { ...ctx, ready: true });
+        continue;
+      }
+      state = await coordinationAt(s.root, ctx);
+    }
+    await roundNumbers();
+    assert.equal(state.nextAction, "run_pre_approval_gate", `${state.failure}: ${state.reason}`);
+    for (const text of texts) assert.doesNotMatch(text, /\brm\b/, "no step names a record deletion");
+  } finally { rmSync(s.root, { recursive: true, force: true }); }
 });

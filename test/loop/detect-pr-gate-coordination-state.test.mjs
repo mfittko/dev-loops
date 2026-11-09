@@ -17,7 +17,9 @@ import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-rev
 import { resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copilot-convergence-carry.mjs";
 import { buildFindingMarker, countUnresolvedGateAuthoredThreadsFromRawNodes } from "../../scripts/github/_gate-finding-surface.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
-import { isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
+import { foldDraftGateSatisfied, isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
+import { resolveDraftCapRoundFact } from "../../scripts/github/write-gate-context.mjs";
+import { evaluateToolchainAuthority, TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { evaluateMergePreconditions } from "@dev-loops/core/loop/merge-approval";
 import { emitResult } from "../../scripts/lib/jq-output.mjs";
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
@@ -328,6 +330,7 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
       copilotBodyJudgeFinding: null,
       copilotBodyJudgeFile: null,
       copilotBodyJudgeFileError: null,
+      toolchain: { root: TOOLCHAIN_ROOT, headSha: null, selfHosting: false },
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1057,7 +1060,7 @@ test("detect-pr-gate-coordination-state output equals a direct evaluatePrGateCoo
     assert.equal(parsed.carriedConvergence, null);
     assert.equal(parsed.copilotBodyDisposition, null);
     assert.equal(parsed.copilotBodyDispositionRequired, null);
-    const { carriedConvergence: _carried, copilotBodyDisposition: _bodyDisposition, copilotBodyDispositionRequired: _dispositionRequired, copilotBodyJudgeFinding: _judgeFinding, copilotBodyJudgeFile: _judgeFile, copilotBodyJudgeFileError: _judgeFileError, ...evaluatorOwned } = parsed;
+    const { carriedConvergence: _carried, copilotBodyDisposition: _bodyDisposition, copilotBodyDispositionRequired: _dispositionRequired, copilotBodyJudgeFinding: _judgeFinding, copilotBodyJudgeFile: _judgeFile, copilotBodyJudgeFileError: _judgeFileError, toolchain: _toolchain, ...evaluatorOwned } = parsed;
     assert.deepEqual({ ...evaluatorOwned, copilotReviewRoundCount: directResult.copilotReviewRoundCount }, directResult);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -4373,11 +4376,11 @@ async function seedCapFixedRepo(repoRoot, { headSha, seal = true }) {
   if (seal) await writeFile(path.join(deltaDir, `${capHead}.json.seal`), `${createHash("sha256").update(record).digest("hex")}\n`, "utf8");
 }
 
-async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody }) {
+async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody, files }) {
   return writeGhStub(tempDir, [
     {
       stdout: JSON.stringify({
-        number: 10, state: "OPEN", isDraft, headRefOid: headSha, baseRefName: "main", mergeStateStatus: "CLEAN",
+        number: 10, state: "OPEN", isDraft, headRefOid: headSha, baseRefName: "main", mergeStateStatus: "CLEAN", ...(files ? { files: files.map((p) => ({ path: p })) } : {}),
         body: "## Objective\n\nShip.\n\n## In scope\n\n- x\n\n## Explicit non-goals\n\n- y\n\n## Acceptance criteria\n\n- [ ] x\n\n## Definition of done\n\n- [ ] tests pass\n\n## Open questions/risks\n\n- none\n",
         closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
       }) + "\n",
@@ -4603,4 +4606,90 @@ describe("GATE-EXEC-BASE-REFRESH coordination", () => {
     assert.equal(calls, 0);
     assert.equal(result.baseFreshness, undefined);
   });
+});
+
+// Issue 3139 AC1: the detector's draft-gate satisfaction is the shared fold of the gate evidence and the shared cap-round fact.
+for (const { name, isDraft, seal, verdict, satisfied } of [
+  { name: "a draft PR", isDraft: true, seal: true, verdict: "blocked", satisfied: false },
+  { name: "a ready PR with clean evidence", isDraft: false, seal: false, verdict: "clean", satisfied: true },
+  { name: "a ready PR with the cap round fixed", isDraft: false, seal: true, verdict: "blocked", satisfied: true },
+  { name: "a ready PR whose cap-round record is unsealed", isDraft: false, seal: false, verdict: "blocked", satisfied: false },
+]) {
+  test(`detect-pr-gate-coordination-state (issue 3139 AC1): ${name} derives draftGateAlreadySatisfied from the shared fold`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-shared-fold-"));
+    try {
+      const headSha = "abc1234567".repeat(4);
+      await seedCapFixedRepo(tempDir, { headSha, seal });
+      const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict, findingsSummary: verdict === "clean" ? "no blocking issues found" : "round_cap_reached", nextAction: "stop" });
+      const env = await capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody: body });
+      const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+      assert.equal(result.draftGateAlreadySatisfied, satisfied);
+      const fact = await resolveDraftCapRoundFact({ repo: "owner/repo", pr: 10, currentHeadSha: headSha, prData: { isDraft, baseRefName: "main" } }, { repoRoot: tempDir });
+      assert.equal(foldDraftGateSatisfied({ isDraft, evidenceSatisfied: verdict === "clean", capRoundFixed: fact.capRoundFixed }), satisfied);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
+
+// Issue 3139 AC4: a self-hosting PR is answered by its own head's toolchain.
+async function toolchainFixture() {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-toolchain-"));
+  await mkdir(path.join(root, "scripts"), { recursive: true });
+  await writeFile(path.join(root, "package.json"), JSON.stringify({ name: "dev-loops" }), "utf8");
+  return root;
+}
+const PR_HEAD = "abc1234567".repeat(4);
+const toolchainSeams = (root, { rootHead = "d".repeat(40), contains = false, worktrees = [] } = {}) => ({
+  toolchainRoot: root,
+  originSlug: () => "owner/repo",
+  git: (_cwd, args) => { if (args[0] === "rev-parse") return rootHead; if (contains) return ""; throw new Error("not an ancestor"); },
+  worktrees: () => [{ path: root, head: rootHead }, ...worktrees],
+});
+
+test("evaluateToolchainAuthority (issue 3139 AC4): refuses from another checkout, names the worktree, and never refuses the negative cases", async () => {
+  const root = await toolchainFixture();
+  const consumer = await mkdtemp(path.join(os.tmpdir(), "dev-loops-consumer-"));
+  try {
+    const input = { repo: "owner/repo", pr: 10, prState: "OPEN", prHeadSha: PR_HEAD, changedFiles: ["scripts/x.mjs"] };
+    const named = evaluateToolchainAuthority(input, toolchainSeams(root, { worktrees: [{ path: "/w/issue-1", head: PR_HEAD }] }));
+    assert.equal(named.selfHosting, true);
+    assert.ok(named.refusal.startsWith("toolchain_head_mismatch:"));
+    assert.ok(named.refusal.includes("dev-loops-run --repo-root /w/issue-1 scripts/loop/detect-pr-gate-coordination-state.mjs --repo owner/repo --pr 10"), named.refusal);
+    const unnamed = evaluateToolchainAuthority(input, toolchainSeams(root));
+    assert.match(unnamed.refusal, /git fetch origin.*dev-loops-run --repo-root <worktree>.*worktree-guidance\.md/);
+    for (const [label, change, seams] of [
+      ["a consumer install", {}, { ...toolchainSeams(root), toolchainRoot: consumer }],
+      ["a docs-only PR", { changedFiles: ["docs/x.md", "skills/y.md"] }, toolchainSeams(root)],
+      ["a closed PR", { prState: "CLOSED" }, toolchainSeams(root)],
+      ["another repository", { repo: "other/repo" }, toolchainSeams(root)],
+      ["a run from the PR head's worktree", {}, toolchainSeams(root, { rootHead: PR_HEAD })],
+      ["a toolchain that contains the PR head", {}, toolchainSeams(root, { contains: true })],
+    ]) {
+      const result = evaluateToolchainAuthority({ ...input, ...change }, seams);
+      assert.equal(result.refusal, null, label);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(consumer, { recursive: true, force: true });
+  }
+});
+
+test("detect-pr-gate-coordination-state (issue 3139 AC4): emits the toolchain field, and refuses toolchain_head_mismatch from the wrong checkout", async () => {
+  const root = await toolchainFixture();
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-toolchain-"));
+  try {
+    await seedCapFixedRepo(tempDir, { headSha: PR_HEAD, seal: true });
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha: PR_HEAD, verdict: "clean", findingsSummary: "no blocking issues found", nextAction: "mark ready for review" });
+    const run = async (toolchain) => detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(
+      await capFixedDetectorEnv(tempDir, { isDraft: true, headSha: PR_HEAD, draftGateBody: body, files: ["scripts/x.mjs"] }),
+      { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, toolchain },
+    ));
+    const fromHead = await run(toolchainSeams(root, { rootHead: PR_HEAD }));
+    assert.deepEqual(fromHead.toolchain, { root, headSha: PR_HEAD, selfHosting: true });
+    await assert.rejects(run(toolchainSeams(root)), /toolchain_head_mismatch: .*dev-loops-run --repo-root <worktree> scripts\/loop\/detect-pr-gate-coordination-state\.mjs --repo owner\/repo --pr 10/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });

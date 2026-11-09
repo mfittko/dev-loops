@@ -476,20 +476,19 @@ const FIXER_REMEDY = "The cap round's open act items need a fix commit: commit i
 const CHAIN_END_REMEDY = "The cap round's act items are already cleared: run dev-loops gate extend-cap-round-chain --repo <owner/name> --pr <n> (its refusal names the reviewer-only delta and the baseline to use)";
 const REPLACEMENT_REMEDY = "node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr <this PR number> while this PR is still open";
 
-// ADR 0255: why a prior record at the baseline is protected from the reviewer-only run, or null. The same act set re-runs; another act set is taken over only when the record is
-// non-clearing over the same refs (the fixer's needs_fix) with no extension and a candidate on the PR head's history. An unsealed record follows the same rules.
+// ADR 0255 (decision 6, amended by issue 3139): why a prior record at the baseline is protected from the reviewer-only run, or null. The same act set re-runs. A non-clearing record
+// (the fixer's needs_fix) is taken over whatever its ref set or candidate: it is never clearing evidence, and the takeover continues its invocation count. Only a locally_clear
+// record of another act set stays protected, and no protected sealed record names a deletion. An unsealed record follows the same rules.
 function priorRecordRefusal(prior, { sequence, currentHead, isAncestor }) {
   if (!prior) return null;
   const offHistory = typeof prior.candidateHead !== "string" || !isAncestor(prior.candidateHead, currentHead);
   // No chain end remains when the cleared record's candidate is off the PR head's history (decision 6). A refusal without a remedy names the rm step (the caller adds it).
   const cleared = (reason) => ({ reason, remedy: offHistory ? REPLACEMENT_REMEDY : CHAIN_END_REMEDY });
   if (prior.extension) return cleared("carries an extension");
-  if (prior.actSetId === sequence.actSetId) return null;
+  if (prior.actSetId === sequence.actSetId || prior.outcome !== "locally_clear") return null;
   const refs = (list) => [...new Set((list ?? []).map((item) => item?.ref))].sort().join("\n");
   // The chain-end remedy fits only a record whose items cover the derived refs (both empty at a chain end): another ref set leaves the cap round uncovered, so extend-cap-round-chain would refuse it.
-  if (prior.outcome === "locally_clear") return refs(prior.items) === refs(sequence.actItems) ? cleared("is locally_clear for another act set") : { reason: "is locally_clear for another act set and covers another set of act refs", remedy: offHistory ? REPLACEMENT_REMEDY : undefined };
-  if (refs(prior.items) !== refs(sequence.actItems) || offHistory) return { reason: offHistory ? "names a candidate that is not on the PR head's history" : "covers another set of act refs" };
-  return null;
+  return refs(prior.items) === refs(sequence.actItems) ? cleared("is locally_clear for another act set") : { reason: "is locally_clear for another act set and covers another set of act refs", remedy: REPLACEMENT_REMEDY };
 }
 
 const DOCS_VALIDATOR_MODULE = "scripts/docs/docs-validators.mjs";

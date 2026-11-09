@@ -956,6 +956,29 @@ export const CAP_ROUND_REFUSAL = Object.freeze({
   chain_does_not_reach_head: "Condition chain_does_not_reach_head: the sealed clearing chain ends before the current head and the head is not a base-only merge of its last candidate. Remedy: run `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` for the current head, or fetch origin/<base> so a base-only merge is verifiable. When the later commits are docs and tests only, run `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo <owner/name> --pr <number>`. When the later commits touch code, run the pre-push delta for them (`node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` with the start of the logic range as baseline: the cap-round head for a clean cap round whose cap-head record is absent or carries no extension, the end of the extended chain when it carries one, and otherwise the chain end) until it is `locally_clear` for exactly that start..head, then run the same `gate extend-cap-round-chain` command; it seals the `delta_covered` extension (ADR 0254)." + REVIEWER_ONLY_FLAGS,
 });
 
+const CAP_ROUND_COMMAND_CONDITIONS = Object.freeze(["no_clearing_record", "items_do_not_cover", "chain_does_not_reach_head", "unsealed_record"]);
+
+/**
+ * The one exit of a failed cap-round-fixed condition (issue 3139). ADR 0254: these conditions end at the chain-extension command, which seals docs and tests commits or code commits a locally_clear delta covers.
+ * ADR 0255: baseline_orphaned (replacement PR) and cap_round_unresolved (ledger repair) have no command that clears them: the operator decides.
+ * @returns {{ agentRemedy: { command: string, summary: string } } | { blockedOn: string }}
+ */
+export function capRoundExit(condition, { repo, pr }) {
+  if (!CAP_ROUND_COMMAND_CONDITIONS.includes(condition)) return { blockedOn: BLOCKED_ON.OPERATOR_DECISION };
+  return remedyOrOperator({ repo, pr }, (r, n) => ({
+    command: `dev-loops gate extend-cap-round-chain --repo ${r} --pr ${n}`,
+    summary: "Extend the sealed cap-round clearing chain over the later commits; the command refuses with a typed reason that names the next step.",
+  }));
+}
+
+/**
+ * The one draft-gate satisfaction fold (issue 3139): clean draft_gate evidence, or (on a PR out of draft) the ADR 0208 cap-round-fixed proof standing in for it.
+ * `evaluatePrGateCoordination`, the `write-gate-context` ordering check and the `upsert-checkpoint-verdict` gate check all call it.
+ */
+export function foldDraftGateSatisfied({ isDraft, evidenceSatisfied, capRoundFixed }) {
+  return evidenceSatisfied === true || (!isDraft && capRoundFixed === true);
+}
+
 /** Typed `adrTripwire` field from an `evaluateAdrTripwire` result (null = evaluation failed). */
 export function buildAdrTripwireField(evaluation) {
   if (!evaluation || typeof evaluation.outcome !== "string") {
@@ -1190,7 +1213,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
 
   const baseDraftGate = toGateStatus(input.draftGate, input.draftGateMarker, currentHeadSha, input.unresolvedGateThreadCount);
   // ADR 0208: on a ready PR the cap-round-fixed proof stands in for clean draft_gate evidence, so the evidence guard never reconciles it.
-  const draftGate = !prDraft && input.draftCapRoundFixed === true && !baseDraftGate.cleanEvidenceExists ? { ...baseDraftGate, cleanEvidenceExists: true } : baseDraftGate;
+  const draftGate = !baseDraftGate.cleanEvidenceExists && foldDraftGateSatisfied({ isDraft: prDraft, evidenceSatisfied: false, capRoundFixed: input.draftCapRoundFixed === true }) ? { ...baseDraftGate, cleanEvidenceExists: true } : baseDraftGate;
   const preApprovalGate = toGateStatus(input.preApprovalGate, input.preApprovalGateMarker, currentHeadSha);
   // A base-merge carried verdict (ADR 0186) proves the review, not the new head's CI.
   const draftGateCarried = draftGate.currentHeadClean && trimmedOrNull(input.draftGateMarker?.carriedFrom) !== null;
@@ -1603,12 +1626,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-        // ADR 0254: these failures end at the chain-extension command, which seals docs and tests commits or code commits a locally_clear delta covers.
-        // ADR 0255: baseline_orphaned (replacement PR) and cap_round_unresolved (ledger repair) have no command that clears them: the operator decides.
-        ...(["no_clearing_record", "items_do_not_cover", "chain_does_not_reach_head", "unsealed_record"].includes(input.draftCapRoundFailure) ? remedyOrOperator(input, (repo, pr) => ({
-          command: `dev-loops gate extend-cap-round-chain --repo ${repo} --pr ${pr}`,
-          summary: "Extend the sealed cap-round clearing chain over the later commits; the command refuses with a typed reason that names the next step.",
-        })) : { blockedOn: BLOCKED_ON.OPERATOR_DECISION }),
+        ...capRoundExit(input.draftCapRoundFailure, input),
         reason: `The PR is still draft and the next \`draft_gate\` round is past the round cap (\`round_cap_reached\`, ADR 0208), but the cap round's fixer pass is not proven landed with a cleared pre-push delta. ${Object.hasOwn(CAP_ROUND_REFUSAL, input.draftCapRoundFailure) ? CAP_ROUND_REFUSAL[input.draftCapRoundFailure] : CAP_ROUND_REFUSAL.cap_round_unresolved} Round N+1 never runs.`,
         mergeStateStatus,
         conflictFiles,
