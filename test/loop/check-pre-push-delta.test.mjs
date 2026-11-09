@@ -1811,3 +1811,26 @@ test("issue 2447: an edit of an accepted ADR's Decision line runs through the re
     assert.match(findings[0].summary, /decision-records[^]*\(ADR-SUPERSEDE-NOT-REWRITE\)/);
   } finally { fs.rmSync(fx.dir, { recursive: true, force: true }); }
 });
+
+test("issue 2447: a docs validator that moves HEAD or edits the working tree during its run refuses before the record is written", async () => {
+  const fx = await docsFixture(true);
+  try {
+    let moved = false;
+    const revParse = (_worktree, rev) => (rev === "HEAD" && moved ? "f".repeat(40) : runGitFixture(fx.dir, ["rev-parse", rev]));
+    await assert.rejects(fx.run({ revParse, docsValidators: async () => { moved = true; return []; } }), /head_moved_during_run/);
+    assert.equal(fx.recordOf(), null);
+    await assert.rejects(fx.run({ docsValidators: async () => { fs.writeFileSync(path.join(fx.dir, "notes.md"), "late edit\n"); return []; } }), /docs_validators_dirty_worktree[^]*notes\.md/);
+    assert.equal(fx.recordOf(), null);
+  } finally { fs.rmSync(fx.dir, { recursive: true, force: true }); }
+});
+
+test("issue 2447: a locally_clear result that validation refuses seals one medium finding per error, so the fixer has a task", async () => {
+  const { actList, result } = fixture();
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"));
+  const out = await runCli(["--act-list", actList, "--baseline", A, "--result", result, "--invocation", "1"], { ...withStale(B), tmpRoot });
+  assert.equal(out.nextStep, "fix_and_rereview");
+  const record = readGateDeltaRecord(tmpRoot, A);
+  assert.equal(record.findings.length, out.errors.length);
+  assert.ok(record.findings.every((f) => f.severity === "medium" && f.lifecycle === undefined));
+  assert.match(record.findings.map((f) => f.evidence).join("\n"), /stale-surface/);
+});

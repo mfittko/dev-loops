@@ -501,8 +501,11 @@ async function lifecycleRefusals({ options, ownPaths, changedPaths, changelog, d
   const findings = [];
   const root = resolveRepoRoot(options.worktree);
   // The record binds the verdict to currentHead: a commit that landed during the run would make the validators judge another commit.
-  const liveHead = revParse(options.worktree, "HEAD");
-  if (liveHead !== currentHead) throw new Error(`head_moved_during_run: the worktree HEAD is ${liveHead}, not the reviewed candidate ${currentHead}; rerun the --result step`);
+  const assertStable = () => {
+    const liveHead = revParse(options.worktree, "HEAD");
+    if (liveHead !== currentHead) throw new Error(`head_moved_during_run: the worktree HEAD is ${liveHead}, not the reviewed candidate ${currentHead}; rerun the --result step`);
+  };
+  assertStable();
   const exec = promisify(execFile);
   const git = createGitClient(root, (command, args, execOptions) => exec(command, args, { ...execOptions, env: gitEnvNoDirOverrides() }));
   if ((ownPaths ?? changedPaths(options.worktree, baselineHead, currentHead)).some((file) => file.startsWith("changes/"))) {
@@ -517,16 +520,24 @@ async function lifecycleRefusals({ options, ownPaths, changedPaths, changelog, d
   try { optedIn = pkg.status === 0 && String(JSON.parse(pkg.stdout).scripts?.["test:docs"] ?? "").includes(DOCS_VALIDATOR_MODULE); } catch { /* not JSON: no opt-in */ }
   if (optedIn) {
     // The validators read the working tree: a tracked edit or an untracked non-ignored file not in HEAD could change the verdict, so the reviewed commit must be the tree.
-    const dirty = spawnSync("git", ["-C", root, "status", "--porcelain"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
-    if (dirty.status !== 0) throw new Error(`docs_validators_worktree_unreadable: git status failed in ${root}: ${dirty.stderr.trim()}`);
-    if (dirty.stdout.trim()) throw new Error(`docs_validators_dirty_worktree: the docs validators judge the working tree, and files differ from HEAD (${dirty.stdout.trim().split("\n").slice(0, 5).join("; ")}); commit or revert them, then rerun the --result run`);
-    for (const { id, code, output, crashed } of await docsValidators({ root, git, ids: ["links", "rule-ownership", "decision-records"] })) {
+    const assertCleanTree = () => {
+      const dirty = spawnSync("git", ["-C", root, "status", "--porcelain"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+      if (dirty.status !== 0) throw new Error(`docs_validators_worktree_unreadable: git status failed in ${root}: ${dirty.stderr.trim()}`);
+      if (dirty.stdout.trim()) throw new Error(`docs_validators_dirty_worktree: the docs validators judge the working tree, and files differ from HEAD (${dirty.stdout.trim().split("\n").slice(0, 5).join("; ")}); commit or revert them, then rerun the --result run`);
+    };
+    assertCleanTree();
+    const results = await docsValidators({ root, git, ids: ["links", "rule-ownership", "decision-records"] });
+    // The validators ran against the working tree: a HEAD move or an edit during the run would make their verdict stale for currentHead.
+    assertStable();
+    assertCleanTree();
+    for (const { id, code, output, crashed } of results) {
       if (crashed) throw new Error(`docs validator ${id} crashed: ${output.trim()}`);
       if (code === 0) continue;
       const rule = /\b(?:ADR|LIFECYCLE)(?:-[A-Z0-9]+){2,}\b/.exec(output)?.[0];
       findings.push({ lifecycle: true, severity: "medium", summary: `docs validator ${id} refused this delta range${rule ? ` (${rule})` : ""}`, evidence: clip(output.trim()) });
     }
   }
+  assertStable();
   return findings;
 }
 
@@ -720,10 +731,12 @@ export async function runCli(
       if (decision.outcome === "bounded_out") decision = { ...decision, nextStep: "restart_on_replacement_pr" };
       if (priorRecord?.outcome === "locally_clear" && !decision.locallyClear) throw new Error(`reviewer-only: the locally_clear record for baseline ${baselineHead} is not replaced by a non-clearing result and is never overwritten. ${CHAIN_END_REMEDY}`);
     }
+    // A locally_clear result that validation refused (a coverage gap, a skipReason mismatch, an unaddressed stale-surface hit) gets one medium finding per error, so the fixer re-emission lists a task instead of sealing a record with no open work.
+    const refusalFindings = result?.outcome === "locally_clear" && decision.nextStep === "fix_and_rereview" ? (decision.errors ?? []).map((error) => ({ severity: "medium", summary: "validateDeltaResult refused the locally_clear delta result", evidence: clip(error) })) : [];
     // Local evidence for the emitter and the fixed-reply guard; never a gate verdict.
     const write = () => writeGateDeltaRecord({
       tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree),
-      sequence, candidateHead: currentHead, invocation: options.invocation, decision, result, lifecycleFindings, reserveOpenTasks: !options.threadsFile,
+      sequence, candidateHead: currentHead, invocation: options.invocation, decision, result, lifecycleFindings, refusalFindings, reserveOpenTasks: !options.threadsFile,
     });
     // The reviewer-only route read its prior record before the fetch, the scans and the changelog check: write only when the record is still the snapshot every check above judged.
     if (options.reviewerOnly) {

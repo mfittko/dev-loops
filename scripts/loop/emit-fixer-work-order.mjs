@@ -650,17 +650,19 @@ export async function emitFixerWorkOrder({
   // An unsealed fix_and_rereview record at HEAD is not "no record": a locally_clear reviewer result must not take the append-only path past its open lifecycle work.
   if (actListFile && phase === "commit_only" && delta && !actRecord) {
     let unsealed = null;
-    try { unsealed = readGateDeltaRecord(tmpRoot, headSha); } catch { /* unreadable: no record */ }
-    if (unsealed?.nextStep === "fix_and_rereview" && unsealed.candidateHead === worktreeHead) throw new Refusal(`delta_record_unsealed: delta record ${gateDeltaRecordPath(tmpRoot, headSha)} holds fix_and_rereview at the worktree HEAD but carries no matching seal (a --result write may have crashed), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record; nothing was written`);
+    // A record file that exists but cannot be parsed fails closed like the handback route: its open work cannot be ruled out.
+    try { unsealed = readGateDeltaRecord(tmpRoot, headSha); } catch (error) { throw new Refusal(`delta_record_unsealed: delta record ${gateDeltaRecordPath(tmpRoot, headSha)} cannot be parsed (${error.message}); re-run the --result step to rewrite and seal the record; nothing was written`); }
+    if (unsealed?.nextStep === "fix_and_rereview" && unsealed.candidateHead === worktreeHead && unsealed.actSetId === delta.parsed.actSetId) throw new Refusal(`delta_record_unsealed: delta record ${gateDeltaRecordPath(tmpRoot, headSha)} holds fix_and_rereview at the worktree HEAD but carries no matching seal (a --result write may have crashed), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record; nothing was written`);
   }
-  const openAtHead = actRecord?.nextStep === "fix_and_rereview" && actRecord.candidateHead === worktreeHead;
+  // A record of another act set (a closed sequence or a replaced act list) is not open work of this one, as in the full-phase path and the handback guard.
+  const openAtHead = actRecord?.nextStep === "fix_and_rereview" && actRecord.candidateHead === worktreeHead && actRecord.actSetId === delta.parsed.actSetId;
   if (openAtHead) {
     // The result must be the one the decision used: an earlier result of the same sequence shares the act set but not the record's statuses.
     if (itemPairs(delta.parsed.actionableItems) !== itemPairs(actRecord.items)) throw new Refusal(`--delta-result's item statuses differ from the delta record ${gateDeltaRecordPath(tmpRoot, headSha)}, so it is not the result that decision used; pass that decision's result, or re-run the delta review (dev-loops loop pre-push-delta); nothing was written`);
     const unresolved = (delta.parsed.actionableItems ?? []).filter((item) => ["not_resolved", "cannot_verify"].includes(item?.status))
       .map((item) => ({ severity: "medium", summary: `act item ${item.ref} is ${item.status} at the reviewed candidate`, evidence: [].concat(item.evidence ?? []).join("; ").slice(0, 2000) || item.status }));
     deltaFindings = [...(Array.isArray(actRecord.findings) ? actRecord.findings : []), ...unresolved];
-    if (deltaFindings.length === 0) throw new Refusal(`delta record ${gateDeltaRecordPath(tmpRoot, headSha)} holds fix_and_rereview at the worktree HEAD but no open task: it lists no finding and the --delta-result has no not_resolved or cannot_verify act item; re-run the delta review (dev-loops loop pre-push-delta); nothing was written`);
+    if (deltaFindings.length === 0) throw new Refusal(`delta_record_no_open_task: delta record ${gateDeltaRecordPath(tmpRoot, headSha)} holds fix_and_rereview at the worktree HEAD but no open task: it lists no finding and the --delta-result has no not_resolved or cannot_verify act item; re-run the delta review (dev-loops loop pre-push-delta); nothing was written`);
   }
   if (deltaFindings !== undefined) {
     const sealed = threadsFile ? readSealedGateDeltaRecord(tmpRoot, headSha) : actRecord;
@@ -669,8 +671,10 @@ export async function emitFixerWorkOrder({
       throw new Refusal(`delta record ${recordPath} is not sealed for ${headSha} or differs from the pinned read, so its findings are not evidence; re-run check-pre-push-delta --result to write it`);
     }
     const text = (value) => typeof value === "string" && value.length <= 2000;
-    if (!Array.isArray(deltaFindings) || deltaFindings.length > 20 || !deltaFindings.every((f) => text(f?.severity) && VALID_SEVERITIES.has(normalizeSeverity(f.severity)) && text(f.summary) && text(f.evidence) && ["residueOf", "site"].every((key) => f[key] === undefined || text(f[key])))) {
-      throw new Refusal(`delta record findings at ${recordPath} (plus one task per not_resolved or cannot_verify act ref) are malformed (an array of at most 20 entries of strings of at most 2000 characters: severity, summary, evidence, optional residueOf and site); re-run the delta review (dev-loops loop pre-push-delta) to rewrite the record`);
+    // The 20-entry cap bounds the record's own findings; the synthetic act-ref tasks are bounded by the act list (the writer reserves room for them only when a lifecycle finding exists).
+    const recordFindings = openAtHead ? actRecord.findings ?? [] : deltaFindings;
+    if (!Array.isArray(deltaFindings) || !Array.isArray(recordFindings) || recordFindings.length > 20 || !deltaFindings.every((f) => text(f?.severity) && VALID_SEVERITIES.has(normalizeSeverity(f.severity)) && text(f.summary) && text(f.evidence) && ["residueOf", "site"].every((key) => f[key] === undefined || text(f[key])))) {
+      throw new Refusal(`delta record findings at ${recordPath} are malformed (an array of at most 20 entries of strings of at most 2000 characters: severity, summary, evidence, optional residueOf and site); re-run the delta review (dev-loops loop pre-push-delta) to rewrite the record`);
     }
   }
   // A review body has no delta review route, so --phase full needs no delta record for it.
