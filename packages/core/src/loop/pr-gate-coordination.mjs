@@ -194,6 +194,12 @@ function normalizeGateComment(summary = null) {
 // gates MARK_READY_FOR_REVIEW below — gains this guard. -1 (fail-closed
 // "could not read thread state") counts as NOT clean, same as any positive
 // count.
+/** The one clean draft-verdict predicate (issue 3139 AC1): visible, verdict clean and a non-blank headSha. `toGateStatus` and the `write-gate-context` ordering check both call it. */
+export function isCleanDraftVerdict(comment) {
+  const normalized = normalizeGateComment(comment);
+  return normalized.visible && normalized.verdict === "clean" && normalized.headSha !== null;
+}
+
 function toGateStatus(comment, marker, currentHeadSha, unresolvedGateThreadCount) {
   const normalizedComment = normalizeGateComment(comment);
   const normalizedMarker = normalizeGateComment(marker);
@@ -202,7 +208,7 @@ function toGateStatus(comment, marker, currentHeadSha, unresolvedGateThreadCount
     && currentHeadSha.startsWith(normalizedMarker.headSha);
   const anyVisible = normalizedComment.visible || normalizedMarker.visible;
 
-  const cleanEvidenceExists = normalizedComment.visible && normalizedComment.verdict === "clean" && normalizedComment.headSha !== null;
+  const cleanEvidenceExists = isCleanDraftVerdict(comment);
   // Only null/undefined means "the caller supplied no signal" (preApprovalGate's
   // own toGateStatus call never passes this argument). Anything else that is
   // not a non-negative integer — NaN, a float, a string, a negative number

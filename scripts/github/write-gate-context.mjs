@@ -54,7 +54,7 @@ import { viewIssue } from "./view-issue.mjs";
 import { buildAdjacentBundle, decodeGitDiffPathToken, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
 import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
-import { capRoundExit, foldDraftGateSatisfied } from "@dev-loops/core/loop/pr-gate-coordination";
+import { capRoundExit, foldDraftGateSatisfied, isCleanDraftVerdict } from "@dev-loops/core/loop/pr-gate-coordination";
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
@@ -4185,7 +4185,7 @@ export async function main(
         const isDraftGate = options.gate === "draft_gate";
         const draftVerdict = coordination.gateEvidence?.draftGate;
         // A ready PR whose cap round is fixed holds no clean draft verdict: the sealed proof stands in for it, so pre_approval_gate can build its context.
-        const evidenceSatisfied = draftVerdict?.verdict === "clean" && typeof draftVerdict?.headSha === "string";
+        const evidenceSatisfied = isCleanDraftVerdict(draftVerdict);
         const { capRoundFixed, failure: capRoundFailure } = coordination.prData?.isDraft === false && !evidenceSatisfied
           ? await resolveDraftCapRoundFact({ ...coordination, repo: options.repo, pr: options.pr }, { repoRoot, resolve: resolveCapRoundFixedSeam })
           : { capRoundFixed: false, failure: null };

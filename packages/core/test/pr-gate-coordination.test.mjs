@@ -10,6 +10,7 @@ import {
   ADR_TRIPWIRE_REMEDIES,
   buildAdrTripwireField,
   buildSizeBudgetField,
+  isCleanDraftVerdict,
 } from "../src/loop/pr-gate-coordination.mjs";
 import { DISPOSITION, interpretLoopState, STATE } from "../src/loop/copilot-loop-state.mjs";
 
@@ -4845,3 +4846,24 @@ test("a draft PR with a missing refinement artifact is blocked on the operator d
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
   assert.equal(result.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
 });
+
+// Issue 3139 AC1: one clean draft-verdict predicate; the detector's cleanEvidenceExists and the ordering check agree on blank-headSha and invisible evidence.
+for (const { name, evidence, clean } of [
+  { name: "visible clean with a headSha", evidence: { visible: true, headSha: "abc1234", verdict: "clean" }, clean: true },
+  { name: "clean with a blank headSha", evidence: { visible: true, headSha: "  ", verdict: "clean" }, clean: false },
+  { name: "clean with visible false", evidence: { visible: false, headSha: "abc1234", verdict: "clean" }, clean: false },
+  { name: "blocked verdict", evidence: { visible: true, headSha: "abc1234", verdict: "blocked" }, clean: false },
+]) {
+  test(`isCleanDraftVerdict agrees with draftGate.cleanEvidenceExists: ${name}`, () => {
+    const result = evaluatePrGateCoordination({
+      pr: 10,
+      currentHeadSha: "abc123456789",
+      prDraft: true,
+      lifecycleState: STATE.PR_DRAFT,
+      loopDisposition: DISPOSITION.ACTION_REQUIRED,
+      draftGate: gate(evidence),
+    });
+    assert.equal(isCleanDraftVerdict(evidence), clean);
+    assert.equal(result.draftGate.cleanEvidenceExists, clean);
+  });
+}
