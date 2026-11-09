@@ -2235,7 +2235,7 @@ test("CLI tripwire: a pre_approval_gate with a satisfied draft gate builds its c
       run: stubGhRun,
       loadCoordination: async () => {
         coordinationCalls++;
-        return { prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true } };
+        return { prData: { isDraft: false }, gateEvidence: { draftGate: { verdict: "clean", headSha: "0ld1234" } } };
       },
     });
 
@@ -8653,7 +8653,7 @@ test("main() passes seamFirstRoundFor to the resolver: a pre_approval seam round
       await main(["--repo", id.repo, "--pr", String(id.pr), "--gate", "pre_approval_gate", "--head-sha", headSha, "--base", baseSha], {
         repoRoot,
         run: stubGhRun,
-        loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true } }),
+        loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGate: { verdict: "clean", headSha: "0ld1234" } } }),
       });
       return (await readGateContext({ ...id, gate: "pre_approval_gate" }, { repoRoot })).resolvedAngles;
     };
