@@ -22,14 +22,14 @@ function readAt(rev, file) {
       throw new UsageError(`unreadable path: ${file}`);
     }
   }
+  const { GIT_DIR, GIT_WORK_TREE, ...env } = process.env;
   try {
-    return execFileSync("git", ["cat-file", "blob", `${rev}:./${file}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28, env: gitEnv });
+    return execFileSync("git", ["cat-file", "blob", `${rev}:./${file}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28, env });
   } catch {
     throw new UsageError(`unknown revision or unreadable path: ${rev}:${file}`);
   }
 }
 
-const { GIT_DIR: _gd, GIT_WORK_TREE: _gw, ...gitEnv } = process.env;
 const stats = (text) => ({ bytes: Buffer.byteLength(text), words: text.split(/\s+/).filter(Boolean).length });
 
 // ponytail: sentence split on terminal punctuation, but not after "e.g."/"i.e."/"vs." so a trigger clause stays with its MUST/SHALL; other abbreviations split early, harmless for a presence check.
