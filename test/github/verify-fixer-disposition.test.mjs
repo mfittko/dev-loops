@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { copyFile, link, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { cp, copyFile, link, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
-import { test } from "bun:test";
+import { afterAll, describe, test } from "bun:test";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { decideDeltaNextStep, startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { parseReviewThreads } from "@dev-loops/core/github/review-threads";
@@ -1902,12 +1902,22 @@ for (const failure of [null, "query", "login"]) test(`empty ACT membership still
 async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   if (settings.legacy) return legacyCompletionFixture(repoRoot, kind, settings);
   repoRoot = await realpath(repoRoot);
-  initGitFixture(repoRoot, { branch: "issue-1" });
   const git = (...args) => execFileSync("git", ["-C", repoRoot, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
-  if (settings.site) { await writeFile(path.join(repoRoot, "site.txt"), typeof settings.site === "string" ? settings.site : "one\ntwo\nthree\nfour\nfive\n"); git("add", "site.txt"); git("commit", "-qm", "site"); }
-  await writeFile(path.join(repoRoot, ".gitignore"), "tmp/\n");
-  git("add", ".gitignore");
-  git("commit", "-qm", "ignore evidence");
+  const history = settings.pristineHistory;
+  if (history?.root) {
+    await cp(path.join(history.root, ".git"), path.join(repoRoot, ".git"), { recursive: true });
+    await writeFile(path.join(repoRoot, ".gitignore"), "tmp/\n");
+  } else {
+    initGitFixture(repoRoot, { branch: "issue-1" });
+    if (settings.site) { await writeFile(path.join(repoRoot, "site.txt"), typeof settings.site === "string" ? settings.site : "one\ntwo\nthree\nfour\nfive\n"); git("add", "site.txt"); git("commit", "-qm", "site"); }
+    await writeFile(path.join(repoRoot, ".gitignore"), "tmp/\n");
+    git("add", ".gitignore");
+    git("commit", "-qm", "ignore evidence");
+    if (history) {
+      history.root = await mkdtemp(path.join(os.tmpdir(), "completion-pristine-history-"));
+      await cp(path.join(repoRoot, ".git"), path.join(history.root, ".git"), { recursive: true });
+    }
+  }
   const baseline = git("rev-parse", "HEAD"), tmpRoot = path.join(repoRoot, "tmp");
   await mkdir(tmpRoot);
   const actList = [0, 1, 2].map((index) => ({ ...ACT_LIST[0], summary: index === 2 ? "second member" : "s", siteQuery: "query", acceptedForms: [`--${index}`] }));
@@ -2112,9 +2122,16 @@ async function legacyCompletionFixture(repoRoot, kind = "resolved", settings = {
   return { fixerPlan, plan, source, sourceRead, sourcePath, originPath, baseline, fixing, nodes, dispositions, seal, depsFor };
 }
 
+describe.serial("completion review baseline corruption", () => {
+  // Only pristine history is reused; every case owns its Git directory and producer evidence.
+  const pristineHistory = {};
+  afterAll(async () => {
+    if (pristineHistory.root) await rm(pristineHistory.root, { recursive: true, force: true });
+  });
+
 for (const mode of ["normal", "check", "construct"]) for (const defect of ["sourceDigest", "deltaResultDigest", "optional", "duplicate", "length", "baseline"]) test(`completion ${mode} refuses supplied review baseline ${defect} before optional authority branches`, async () => {
   await withRepoRoot(async (root) => {
-    const f = await completionFixture(root);
+    const f = await completionFixture(root, "resolved", { pristineHistory });
     const order = f.plan.workOrder;
     if (["sourceDigest", "deltaResultDigest"].includes(defect)) delete order.authority[defect];
     if (defect === "optional") order.requiredReads[0].required = false;
@@ -2128,6 +2145,7 @@ for (const mode of ["normal", "check", "construct"]) for (const defect of ["sour
     assert.equal(calls.length, 0);
     assert.equal(existsSync(path.join(root, "tmp/gate-findings")), false);
   });
+});
 });
 
 const LEGACY_PATTERN = "readValidationEvidence|requireBinding|validationResultsPath|prefix-file";
