@@ -78,7 +78,7 @@ test("MAIN-AGENT-COORDINATOR-REPORT-READ has three harness-neutral bullets", asy
   assert.equal(bullets.length, 3);
   assert.match(bullets[0], /hand-back or pause that lists children in flight and names no run-ending case is interim, whether or not it says so.*status, not a result.*re-dispatch a listed child.*next report/s);
   assert.match(bullets[1], /names a run-ending case.*Unit coordinator boundaries.*`units_stalled` or `round_retired` hand-back under `GATE-EXEC-HARNESS-JOIN`.*final even when it lists children.*treats each listed child as still running.*hand-back that states it is interim under `GATE-EXEC-HARNESS-JOIN` and whose packet status names no run-ending case is interim.*names a run-ending case.*ended the reporter's run.*final.*waits for no further report/s);
-  assert.match(bullets[2], /second hand-back that repeats the report.*already consumed.*first line and child list.*same coordinator.*run state unchanged.*duplicate.*interim reports too.*precedence over the interim bullet.*reads the state.*acts on nothing.*relays nothing/s);
+  assert.match(bullets[2], /second hand-back that repeats the report.*already consumed.*first line and child list.*same coordinator.*run state unchanged.*duplicate.*interim reports too.*precedence over the interim bullet.*packet status names a run-ending case is never a duplicate of a consumed report that named none.*reads the state.*acts on nothing.*relays nothing/s);
 });
 
 test("the read rule keeps Claude Code bullets Claude-specific and neutral bullets harness-neutral", async () => {
@@ -128,4 +128,9 @@ test("both gate coordinator agent files cite the forced hand-back exception", as
   for (const f of ["agents/gate-coordinator.agent.md", ".claude/agents/gate-coordinator.md"]) {
     assert.match(await readRepo(f), /except the forced hand-back that `GATE-EXEC-HARNESS-JOIN` allows/, f);
   }
+});
+
+test("the canonical run-ending list names the interim hand-back as the one other hand-back", async () => {
+  const text = await readRepo("skills/docs/main-agent-contract.md");
+  assert.match(text, /The one other hand-back is the interim hand-back sent with a child in flight under `GATE-EXEC-HARNESS-JOIN`, which names no run-ending case\./);
 });

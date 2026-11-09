@@ -198,7 +198,7 @@ identity for state reads and gate calls under the same assigned task. A report p
 The following is the one canonical list of run-ending cases (the "run-ending cases"). The coordinator hands
 back only at `final_approval_ready`, a stop that needs a decision, the route's own terminal
 completion, a changed route, a lockout, genuine recovery, an unavailable actor, a runtime
-constraint, or explicit operator direction. The issue-to-PR re-target caused by the unit's own draft PR is a continuation, not a changed route. When the orchestrator dispatches a replacement for one of those
+constraint, or explicit operator direction. The one other hand-back is the interim hand-back sent with a child in flight under `GATE-EXEC-HARNESS-JOIN`, which names no run-ending case. The issue-to-PR re-target caused by the unit's own draft PR is a continuation, not a changed route. When the orchestrator dispatches a replacement for one of those
 reasons, it emits the work order with
 `scripts/loop/emit-coordinator-work-order.mjs --input <startup-output path> --harness <claude|pi|codex> --entry <queue|direct>`
 and dispatches the printed `dispatchPayload` unchanged. The input is the startup-output path a
@@ -246,5 +246,5 @@ The rule binds the coordinator on every harness, so it stays outside the section
 - Claude Code: On the next notification of a reporter that named children in flight, read its output file before acting.
 - Every harness: A hand-back or pause that lists children in flight and names no run-ending case is interim, whether or not it says so. It is a status, not a result. The orchestrator relays it as a status, does not re-dispatch a listed child, and waits for the reporter's next report.
 - Every harness: A report that names a run-ending case (a run-ending case from the Unit coordinator boundaries section, or a gate coordinator's terminal `units_stalled` or `round_retired` hand-back under `GATE-EXEC-HARNESS-JOIN`) is final even when it lists children. The orchestrator treats each listed child as still running. A hand-back that states it is interim under `GATE-EXEC-HARNESS-JOIN` and whose packet status names no run-ending case is interim. When its packet status names a run-ending case, the forced hand-back has ended the reporter's run, so it is final and the orchestrator waits for no further report.
-- Every harness: A second hand-back that repeats the report the orchestrator already consumed, by first line and child list, from the same coordinator with the run state unchanged, is a duplicate. This holds for interim reports too and takes precedence over the interim bullet. The orchestrator reads the state, acts on nothing and relays nothing.
+- Every harness: A second hand-back that repeats the report the orchestrator already consumed, by first line and child list, from the same coordinator with the run state unchanged, is a duplicate. This holds for interim reports too and takes precedence over the interim bullet. A report whose packet status names a run-ending case is never a duplicate of a consumed report that named none. The orchestrator reads the state, acts on nothing and relays nothing.
 
