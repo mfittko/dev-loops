@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const read = (rel) => fs.readFileSync(path.join(repoRoot, rel), "utf8");
-const readNorm = (rel) => read(rel).replace(/\s+/g, " ");
+const normalize = (s) => s.replace(/\s+/g, " ");
+const readNorm = (rel) => normalize(read(rel));
 
 const OLD_PHRASES = [
   /run these steps directly/i,
@@ -54,13 +55,13 @@ test("Pi wording stays: read-only main agent and async dispatch (#1086)", () => 
   const start = full.indexOf("<!-- pi-only -->");
   const end = full.indexOf("<!-- /pi-only -->", start);
   assert.ok(start >= 0 && end > start, "pi-only markers must exist");
-  const text = full.slice(start, end).replace(/\s+/g, " ");
+  const text = normalize(full.slice(start, end));
   assert.match(text, /All tracked-file mutations flow through the `dev-loop` async subagent\./);
   assert.match(text, /## Async dispatch posture \(Pi\)/);
   assert.match(text, /Delegate to the `dev-loop` agent \(async, with worktree cwd\)/);
 });
 
 test("old-phrase guard catches a phrase split by a line break", () => {
-  const wrapped = "the dev-loop runs as a single\nagent".replace(/\s+/g, " ");
+  const wrapped = normalize("the dev-loop runs as a single\nagent");
   assert.ok(OLD_PHRASES.some((re) => re.test(wrapped)));
 });
