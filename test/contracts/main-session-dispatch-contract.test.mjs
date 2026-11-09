@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const read = (rel) => fs.readFileSync(path.join(repoRoot, rel), "utf8");
+const readNorm = (rel) => read(rel).replace(/\s+/g, " ");
 
 const OLD_PHRASES = [
   /run these steps directly/i,
@@ -18,6 +19,8 @@ const OLD_PHRASES = [
   /no Pi-style main-agent.{1,3}dev-loop async hop/i,
   /run the next watch cycle inline/i,
   /continue pending non-terminal waits inline in the same agent/i,
+  /dev-loop runs as a single agent/i,
+  /no separate read-only "main agent"/i,
 ];
 
 function listMarkdown(dir) {
@@ -35,20 +38,23 @@ test("no skill, command or agent text tells the main session to run loop steps d
 
 test("loop commands dispatch dev-loops:dev-loop and run no loop step in the main session", () => {
   for (const name of ["loop-start", "loop-continue", "loop-auto"]) {
-    const text = read(`commands/${name}.command.md`);
+    const text = readNorm(`commands/${name}.command.md`);
     assert.match(text, /dispatches the `dev-loops:dev-loop` coordinator/, `${name} must name the dispatch target`);
     assert.match(text, /main session runs no gate, fixer or reviewer step/, `${name} must bar main-session steps`);
   }
 });
 
 test("dev-loop skill and main-agent contract name the coordinator as the runner", () => {
-  assert.match(read("skills/dev-loop/SKILL.md"), /main session dispatches the `dev-loops:dev-loop` coordinator/);
-  assert.match(read("skills/docs/main-agent-contract.md"), /main session dispatches the `dev-loops:dev-loop` coordinator/);
+  assert.match(readNorm("skills/dev-loop/SKILL.md"), /main session dispatches the `dev-loops:dev-loop` coordinator/);
+  assert.match(readNorm("skills/docs/main-agent-contract.md"), /main session dispatches the `dev-loops:dev-loop` coordinator/);
 });
 
 test("Pi wording stays: read-only main agent and async dispatch (#1086)", () => {
-  const text = read("skills/docs/main-agent-contract.md");
-  assert.match(text, /<!-- pi-only -->/);
+  const full = read("skills/docs/main-agent-contract.md");
+  const start = full.indexOf("<!-- pi-only -->");
+  const end = full.indexOf("<!-- /pi-only -->", start);
+  assert.ok(start >= 0 && end > start, "pi-only markers must exist");
+  const text = full.slice(start, end).replace(/\s+/g, " ");
   assert.match(text, /All tracked-file mutations flow through the `dev-loop` async subagent\./);
   assert.match(text, /## Async dispatch posture \(Pi\)/);
   assert.match(text, /Delegate to the `dev-loop` agent \(async, with worktree cwd\)/);
