@@ -76,9 +76,15 @@ test("result-only changelog seam checks touched changes paths before writing evi
     await runCli([...args, "--spec-identity", "spec@1", "--findings-log", logFor(A)], seam);
     assert.equal(calls, 0, "input mode never checks changelog");
     if (changedPaths[0].startsWith("changes/")) {
-      await assert.rejects(runCli([...args, "--result", result, "--invocation", "1"], seam), /^Error: LIFECYCLE-CHANGELOG-COMPLETENESS/);
-      assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`)), false);
+      // Issue 2447: the refusal is a medium finding in the sealed record, exit 0, never a throw with no record.
+      const decision = await runCli([...args, "--result", result, "--invocation", "1"], seam);
+      assert.deepEqual([decision.outcome, decision.nextStep, decision.locallyClear], ["needs_fix", "fix_and_rereview", false]);
+      const record = readSealedGateDeltaRecord(seam.tmpRoot, A);
+      assert.equal(record.nextStep, "fix_and_rereview");
+      assert.deepEqual(record.findings.map((f) => [f.severity, /^LIFECYCLE-CHANGELOG-COMPLETENESS/.test(f.summary)]), [["medium", true]]);
       assert.equal(calls, 1);
+      const bounded = await runCli([...args, "--result", result, "--invocation", "3"], seam);
+      assert.deepEqual([bounded.outcome, bounded.nextStep], ["bounded_out", "push_to_gate"]);
     } else {
       assert.equal((await runCli([...args, "--result", result, "--invocation", "1"], seam)).nextStep, "push");
       assert.equal(calls, 0);
@@ -138,10 +144,11 @@ test("real delta CLI refuses committed invalid inputs concealed by uncommitted c
     const recordDir = path.join(resolveGateArtifactTmpRoot(dir), "gate-delta");
     if (length === 201 || correction) {
       const out = spawnSync(process.execPath, [path.resolve("scripts/loop/check-pre-push-delta.mjs"), ...resultArgs], { cwd: dir, encoding: "utf8" });
-      assert.equal(out.status, 2, out.stderr);
-      assert.match(JSON.parse(out.stderr).error, /^LIFECYCLE-CHANGELOG-COMPLETENESS/);
-      if (correction) assert.match(JSON.parse(out.stderr).error, /differs from HEAD/);
-      assert.equal(fs.existsSync(path.join(recordDir, `${baseline}.json`)), false);
+      assert.equal(out.status, 0, out.stderr);
+      assert.equal(JSON.parse(out.stdout).nextStep, "fix_and_rereview");
+      const [finding] = readGateDeltaRecord(resolveGateArtifactTmpRoot(dir), baseline).findings;
+      assert.match(finding.summary, /^LIFECYCLE-CHANGELOG-COMPLETENESS/);
+      if (correction) assert.match(finding.evidence, /differs from HEAD/);
     } else {
       let calls = 0;
       const seam = length ? quiet : { ...quiet, validateChangelog: async () => { calls++; throw new Error("must not run"); } };
@@ -183,9 +190,8 @@ test("result-mode changelog ignores inherited Git directory overrides", async ()
     const out = spawnSync(process.execPath, [path.resolve("scripts/loop/check-pre-push-delta.mjs"), ...args, "--result", resultPath, "--invocation", "1"], {
       cwd: dir, encoding: "utf8", env: { ...process.env, GIT_DIR: path.join(decoy, ".git"), GIT_WORK_TREE: decoy },
     });
-    assert.equal(out.status, 2, out.stderr);
-    assert.match(JSON.parse(out.stderr).error, /^LIFECYCLE-CHANGELOG-COMPLETENESS/);
-    assert.equal(fs.existsSync(path.join(recordDir, `${baseline}.json`)), false);
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(readGateDeltaRecord(resolveGateArtifactTmpRoot(target), baseline).findings[0].summary, /^LIFECYCLE-CHANGELOG-COMPLETENESS/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -1326,7 +1332,9 @@ test("the changes/ changelog check follows the PR-own paths only", async () => {
   try {
     let calls = 0;
     const validateChangelog = async () => { calls += 1; return 1; };
-    await assert.rejects(reviewerOnlyRun(own, {}, { extraSeam: { validateChangelog } }), /LIFECYCLE-CHANGELOG-COMPLETENESS/);
+    const refused = await reviewerOnlyRun(own, {}, { extraSeam: { validateChangelog } });
+    assert.equal(refused.decision.nextStep, "fix_and_rereview");
+    assert.match(refused.record.findings[0].summary, /^LIFECYCLE-CHANGELOG-COMPLETENESS/);
     assert.equal(calls, 1);
     const { decision } = await reviewerOnlyRun(base, {}, { extraSeam: { validateChangelog } });
     assert.equal(decision.outcome, "locally_clear");
@@ -1541,4 +1549,94 @@ test("the reviewer-only route accepts only the canonical draft_gate cap-round le
     assert.ok((await run(canonical)).input, "the canonical ledger is accepted");
     for (const file of [copy, otherGate]) await assert.rejects(run(file), /is not the draft_gate cap-round ledger/);
   } finally { cleanup(repo); }
+});
+
+// Issue 2447 slice 1: no handback at the reviewed candidate while must-fix work is open.
+function openRecordFixture(findings) {
+  const { dir, actList } = fixture();
+  const seam = headAt(B);
+  writeSealedGateDeltaRecord(seam.tmpRoot, A, { reviewBaselineHead: A, candidateHead: B, actSetId: "x", invocation: 1, outcome: "needs_fix", nextStep: "fix_and_rereview", items: [], findings });
+  const handback = (headSha, siteCoverage = []) => {
+    const coverage = path.join(dir, `coverage-${headSha}-${Math.random()}.json`);
+    fs.writeFileSync(coverage, JSON.stringify({ headSha, siteCoverage }));
+    return coverage;
+  };
+  const run = (coverage, extra = [], over = headAt(B)) => runDeltaCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--site-coverage", coverage, ...extra], { ...over, tmpRoot: seam.tmpRoot });
+  return { run, handback, headAt: (head) => headAt(head, seam.tmpRoot) };
+}
+const RESIDUE_FINDING = { severity: "low", summary: "same-class site left", evidence: "a.mjs:1", residueOf: "act-1", site: "s1" };
+const LIFECYCLE_FINDING = { severity: "medium", summary: "LIFECYCLE-CHANGELOG-COMPLETENESS: too long", evidence: "changes/x.md" };
+
+test("issue 2447: a handback at the reviewed candidate is refused in both runs while a residue finding has no skip reason, accepted at a new commit or with a skip reason", async () => {
+  const fx = openRecordFixture([RESIDUE_FINDING]);
+  const atC = fx.handback(B);
+  await assert.rejects(fx.run(atC, ["--handback"]), /open task[^]*new commit/);
+  await assert.rejects(fx.run(atC, ["--fixer-plan", "plan.json", "--findings-log", logFor(A)]), /open task[^]*new commit/);
+  const D = "d".repeat(40);
+  assert.ok((await fx.run(fx.handback(D), ["--handback"], fx.headAt(D))).ok);
+  const skipped = fx.handback(B, [{ fingerprint: ACT.fingerprint ?? FP, returnedSites: ["s1"], sites: [{ site: "s1", status: "skipped", reason: "intentional" }] }]);
+  assert.ok((await fx.run(skipped, ["--handback"])).ok);
+});
+
+test("issue 2447: a handback at the reviewed candidate is refused while the record holds a lifecycle finding, whatever skip reasons it records", async () => {
+  const fx = openRecordFixture([LIFECYCLE_FINDING, RESIDUE_FINDING]);
+  const skipped = fx.handback(B, [{ fingerprint: FP, returnedSites: ["s1"], sites: [{ site: "s1", status: "skipped", reason: "intentional" }] }]);
+  await assert.rejects(fx.run(skipped, ["--handback"]), /LIFECYCLE-CHANGELOG-COMPLETENESS[^]*new commit/);
+});
+
+// Issue 2447 slice 1: one docs validator list, run in the --result run only when the repo's test:docs calls it.
+test("issue 2447: package.json test:docs calls the one docs validator module, which lists the four validators", async () => {
+  const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+  assert.match(pkg.scripts["test:docs"], /scripts\/docs\/docs-validators\.mjs/);
+  assert.doesNotMatch(pkg.scripts["test:docs"], /validate-links/);
+  const { DOCS_VALIDATORS } = await import("../../scripts/docs/docs-validators.mjs");
+  assert.deepEqual(DOCS_VALIDATORS.map((v) => v.id), ["links", "rule-ownership", "decision-records", "changelog"]);
+});
+
+test("issue 2447: a docs validator refusal in the --result run is a medium finding; a repo whose test:docs does not call the module runs none", async () => {
+  for (const optIn of [true, false]) {
+    const { dir, threadsFile } = threadsFixture();
+    try {
+      initGitFixture(dir, { branch: "main", commit: null });
+      runGitFixture(dir, ["config", "commit.gpgsign", "false"]);
+      fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ scripts: { "test:docs": optIn ? "bun scripts/docs/docs-validators.mjs" : "bun scripts/docs/validate-links.mjs" } }));
+      runGitFixture(dir, ["add", "."]);
+      runGitFixture(dir, ["commit", "-qm", "base"]);
+      const baseline = runGitFixture(dir, ["rev-parse", "HEAD"]);
+      runGitFixture(dir, ["commit", "-q", "--allow-empty", "-m", "fix: edit adr"]);
+      const args = ["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", baseline, "--worktree", dir];
+      const input = (await runDeltaCli([...args, "--spec-identity", "spec@1", "--result-path", path.join(dir, "input-result.json")], quiet)).input;
+      const resultPath = path.join(dir, "review.json");
+      fs.writeFileSync(resultPath, JSON.stringify({ ...input.resultShape, actionableItems: input.actItems.map(({ ref }) => ({ ref, status: "resolved", evidence: ["checked"] })), newFindings: [], widenedReads: [], outcome: "locally_clear" }));
+      sealDeltaFixture(resolveGateArtifactTmpRoot(dir), resultPath);
+      const calls = [];
+      const docsValidators = async ({ root, ids }) => { calls.push(ids); return [{ id: "decision-records", code: 1, output: "ADR-SUPERSEDE-NOT-REWRITE: docs/decisions/0001-x.md edits an accepted Decision" }]; };
+      const decision = await runDeltaCli([...args, "--result", resultPath, "--invocation", "1"], { ...quiet, docsValidators });
+      if (!optIn) {
+        assert.equal(calls.length, 0);
+        assert.equal(decision.nextStep, "push");
+        continue;
+      }
+      assert.deepEqual(calls, [["links", "rule-ownership", "decision-records"]]);
+      assert.equal(decision.nextStep, "fix_and_rereview");
+      const [finding] = readGateDeltaRecord(resolveGateArtifactTmpRoot(dir), baseline).findings;
+      assert.equal(finding.severity, "medium");
+      assert.match(finding.summary, /ADR-SUPERSEDE-NOT-REWRITE/);
+      assert.match(finding.evidence, /edits an accepted Decision/);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+test("issue 2447: the contract docs state the finding route and the fixer contract states the re-dispatch rules", () => {
+  const read = (file) => fs.readFileSync(file, "utf8");
+  const lifecycle = read("skills/docs/pr-lifecycle-contract.md");
+  assert.doesNotMatch(lifecycle, /writes no record/);
+  assert.match(lifecycle, /medium finding[^\n]*fix_and_rereview/);
+  assert.match(read("skills/docs/pre-pr-review-contract.md"), /lifecycle refusal[^\n]*medium finding[^\n]*fix_and_rereview/);
+  for (const file of ["agents/fixer.agent.md", ".claude/agents/fixer.md"]) {
+    const text = read(file);
+    assert.match(text, /earlier candidate is at HEAD[^\n]*new commit on top of HEAD/);
+    assert.match(text, /fix every lifecycle task/);
+    assert.match(text, /run `handbackCheck`/);
+  }
 });

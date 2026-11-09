@@ -2573,6 +2573,9 @@ for (const route of ["Historical main", "OLD authority", "complete"]) test(`${ro
     const oldRoot = oldAuthority ? wt : root;
     assert.equal(spawnSync("tar", ["-xf", "-", "-C", oldRoot], { input: archive }).status, 0);
     for (const relative of ["scripts", "packages", "lib", "cli", "package.json", "skills", "agents"]) await cp(path.join(checkout, relative), path.join(emitting, relative), { recursive: true });
+    // The copied package.json would opt this fixture into the docs validators (issue 2447); the fixture holds no docs to validate.
+    const copiedPackage = path.join(emitting, "package.json");
+    await writeFile(copiedPackage, (await readFile(copiedPackage, "utf8")).replace("scripts/docs/docs-validators.mjs", "true"));
     if (oldAuthority) {
       git(emitting, "init", "-q", "-b", "emitting");
       git(emitting, "config", "user.name", "T");
@@ -3835,5 +3838,44 @@ test("issue 3111: a keyed fixer that commits exits through a canonical re-emissi
     const canonical = await fx.emit({ phase: "commit_only", deltaResult: undefined });
     assert.equal(canonical.planPath, prior.planPath, "the canonical plan names the new execution");
     assert.match((await locateFixerUnit({ ref: keyed.workOrderRef, cwd: fx.wt, tmpRoots })).stale, /orphaned/);
+  });
+});
+
+// Issue 2447 slice 1: the act-list re-emission reads the sealed record, never the reviewer's stated outcome.
+const openRecord = (fx, findings) => fx.writeRecord({ candidateHead: git(fx.wt, "rev-parse", "HEAD"), outcome: "needs_fix", nextStep: "fix_and_rereview", ...(findings ? { findings } : {}) }, { seal: true });
+const RESIDUE = { severity: "medium", summary: "test-only residue at site s", evidence: "e", residueOf: ACT_REF, site: "s" };
+const LIFECYCLE = { severity: "medium", summary: "LIFECYCLE-CHANGELOG-COMPLETENESS: entry is 317 characters", evidence: "changes/x.md" };
+
+test("issue 2447: a needs_fix record at the candidate that is HEAD lists its findings as tasks and tells the fixer to commit on top of HEAD", async () => {
+  await withFixture(async (fx) => {
+    await refusedDeltaFixture(fx, "needs_fix");
+    await openRecord(fx, [RESIDUE]);
+    const again = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.deepEqual(again.workOrder.deltaFindings.map((f) => f.summary), [RESIDUE.summary]);
+    const prompt = await readFile(again.promptPath, "utf8");
+    assert.match(prompt, /commit[^.]*on top of/);
+    assert.doesNotMatch(prompt, /skip it when you made no commit/);
+  });
+});
+
+test("issue 2447: a locally_clear reviewer result with a lifecycle finding in the record is a committing order, not the append-only plan", async () => {
+  await withFixture(async (fx) => {
+    const { prior, markerPath } = await refusedDeltaFixture(fx, "locally_clear");
+    await openRecord(fx, [LIFECYCLE]);
+    const marker = await readFile(markerPath);
+    const again = await fx.emit({ phase: "commit_only", keepRecord: true });
+    assert.equal(again.planPath, prior.planPath, "the canonical plan is superseded, no keyed plan");
+    assert.notDeepEqual(await readFile(markerPath), marker, "the marker names the new execution");
+    assert.deepEqual(again.workOrder.deltaFindings.map((f) => f.summary), [LIFECYCLE.summary]);
+  });
+});
+
+test("issue 2447: a fix_and_rereview record with no open task refuses with a named error and writes no plan", async () => {
+  await withFixture(async (fx) => {
+    const { prior } = await refusedDeltaFixture(fx, "locally_clear");
+    await openRecord(fx);
+    const planBytes = await readFile(prior.planPath);
+    await assert.rejects(fx.emit({ phase: "commit_only", keepRecord: true }), /no open task/);
+    assert.deepEqual(await readFile(prior.planPath), planBytes);
   });
 });

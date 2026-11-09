@@ -277,7 +277,7 @@ ${JSON.stringify(workOrder, null, 2)}
   const completion = workOrder.phase === "full" && workOrder.requiredReads.some((read) => read.kind === "completion-input");
   const verifier = workOrder.phase === "full" ? `node ${shellQuote(path.join(path.dirname(path.dirname(workOrder.executionRules.contract)), "scripts/github/verify-fixer-disposition.mjs"))} --repo ${shellQuote(workOrder.target.repo)} --pr ${workOrder.target.pr} --head-sha ${completion ? workOrder.headSha : "<pushed-head-sha>"} --fixer-plan ${shellQuote(path.join(path.dirname(path.dirname(dispositionPath)), PLAN_FILE))}` : null;
   const task = workOrder.phase === "commit_only"
-    ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery.${workOrder.siteCoverage ? " Start from the \`siteCoverage\` skeleton in the work order JSON below:" : ""} Set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site. Run each siteQuery and set \`returnedSites\` to exactly the sites it returns (empty when it returns none), add each returned site missing from \`sites\`, then delete the \`FILL:\` \`noSitesReason\` when the query returned sites, else replace it with the query outcome. Keep fingerprints and \`input_form\` texts unchanged.${workOrder.handbackCheck ? " Before you hand back, run the work order's \`handbackCheck\` command from your worktree and correct the record until it exits 0 (skip it when you made no commit)." : ""}`
+    ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery.${workOrder.siteCoverage ? " Start from the \`siteCoverage\` skeleton in the work order JSON below:" : ""} Set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site. Run each siteQuery and set \`returnedSites\` to exactly the sites it returns (empty when it returns none), add each returned site missing from \`sites\`, then delete the \`FILL:\` \`noSitesReason\` when the query returned sites, else replace it with the query outcome. Keep fingerprints and \`input_form\` texts unchanged.${workOrder.handbackCheck ? ` Before you hand back, run the work order's \`handbackCheck\` command from your worktree and correct the record until it exits 0${workOrder.deltaFindings ? "" : " (skip it when you made no commit)"}.` : ""}${workOrder.deltaFindings && workOrder.source === "act-list" ? " The earlier candidate commit at HEAD is your base: fix each listed task in a new commit on top of HEAD, and fix every lifecycle task." : ""}`
     : completion ? `Do not re-fix source or reclassify coverage. Keep every command's cwd at the mutation authority worktree. The authenticated completion-input preserves the original fixing commit and raw site coverage. Construction alone does not complete delivery.\n${fullPhaseSteps(workOrder, verifier, { push: `Push only the reviewed committed candidate \`${workOrder.headSha}\` to branch ${JSON.stringify(workOrder.mutationAuthority.branch)}.` })}`
     : workOrder.source === "review-body" ? reviewBodyFullTask(workOrder, verifier, dispositionPath)
     : workOrder.source === "ci-failure" ? ciFailureFullTask(workOrder, dispositionPath)
@@ -641,10 +641,20 @@ export async function emitFixerWorkOrder({
   await capture.read(gateDeltaRecordPath(tmpRoot, headSha));
   // ADR 0235: a commit_only thread-route re-dispatch carries the delta record's findings as act items.
   // Only a record of this sequence counts: fix_and_rereview on a candidate that is the worktree HEAD. A record of a closed sequence is stale.
-  const deltaFindings = threadsFile && phase === "commit_only" && delta?.parsed?.nextStep === "fix_and_rereview" && delta.parsed.candidateHead === execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim() ? delta.parsed.findings : undefined;
+  let deltaFindings = threadsFile && phase === "commit_only" && delta?.parsed?.nextStep === "fix_and_rereview" && delta.parsed.candidateHead === execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim() ? delta.parsed.findings : undefined;
+  // Issue 2447: the act-list route reads the sealed record the same way and decides from its nextStep, never from the reviewer's stated outcome.
+  // The open work is each record finding and each not_resolved or cannot_verify act ref of the reviewer's result.
+  const actRecord = actListFile && phase === "commit_only" && delta ? readSealedGateDeltaRecord(tmpRoot, headSha) : null;
+  const openAtHead = actRecord?.nextStep === "fix_and_rereview" && actRecord.candidateHead === execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim();
+  if (openAtHead) {
+    const unresolved = (delta.parsed.actionableItems ?? []).filter((item) => ["not_resolved", "cannot_verify"].includes(item?.status))
+      .map((item) => ({ severity: "medium", summary: `act item ${item.ref} is ${item.status} at the reviewed candidate`, evidence: [].concat(item.evidence ?? []).join("; ").slice(0, 2000) || item.status }));
+    deltaFindings = [...(Array.isArray(actRecord.findings) ? actRecord.findings : []), ...unresolved];
+    if (deltaFindings.length === 0) throw new Refusal(`delta record ${gateDeltaRecordPath(tmpRoot, headSha)} holds fix_and_rereview at the worktree HEAD but no open task: it lists no finding and the --delta-result has no not_resolved or cannot_verify act item; re-run the delta review (dev-loops loop pre-push-delta); nothing was written`);
+  }
   if (deltaFindings !== undefined) {
-    const sealed = readSealedGateDeltaRecord(tmpRoot, headSha);
-    if (!sealed || sha256(readFileSync(threadRecordPath)) !== delta.read.sha256) {
+    const sealed = threadsFile ? readSealedGateDeltaRecord(tmpRoot, headSha) : actRecord;
+    if (!sealed || (threadsFile && sha256(readFileSync(threadRecordPath)) !== delta.read.sha256)) {
       throw new Refusal(`delta record ${threadRecordPath} is not sealed for ${headSha} or differs from the pinned read, so its findings are not evidence; re-run check-pre-push-delta --result to write it`);
     }
     const text = (value) => typeof value === "string" && value.length <= 2000;
@@ -780,7 +790,7 @@ export async function emitFixerWorkOrder({
   // The delta sequence is in flight when the delta result reviewed the unpushed fixing commit (its candidate is the worktree HEAD, not the baseline) and the first fixer delivered its handback.
   // Only the refused PRE-PUSH-DELTA-RESULT case (a locally_clear result) is append-only; a needs_fix / fix_and_rereview re-dispatch is a committing second fixer and supersedes the plan.
   const appendOnly = prior?.phase === "commit_only" && prior.source === "act-list" && prior.headSha === headSha && prior.gate === gate
-    && delta.parsed.outcome === "locally_clear"
+    && delta.parsed.outcome === "locally_clear" && !openAtHead
     && delta.parsed.origin?.executionIdentity === JSON.parse(originalBytes).executionIdentity
     && delta.parsed.candidateHead !== headSha && delta.parsed.candidateHead === gitIn(cwd, "rev-parse", "HEAD").trim()
     && Boolean(await capture.read(prior.outputRefs?.[0]));

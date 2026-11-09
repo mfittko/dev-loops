@@ -49,7 +49,7 @@ import {
   threadsToActList,
 } from "@dev-loops/core/loop/pre-push-delta-review";
 import { collectStaleSurface } from "@dev-loops/core/loop/stale-surface-hits";
-import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
+import { normalizeFixerDispositionHandoff, recordedSkipReason, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
 import { HEAD_SHA_RE } from "@dev-loops/core/loop/spec-authority";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
@@ -61,7 +61,8 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { shellQuote } from "../lib/checkout-delegation-refusal.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
-import { gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord, writeGateDeltaRecord } from "./_gate-delta-record.mjs";
+import { gateDeltaRecordPath, isLifecycleFinding, readGateDeltaRecord, readSealedGateDeltaRecord, writeGateDeltaRecord } from "./_gate-delta-record.mjs";
+import { runDocsValidators } from "../docs/docs-validators.mjs";
 import { defaultFetchOrigin } from "./standing-authorization.mjs";
 import { createGitClient, main as validateChangelog } from "../docs/validate-changelog-completeness.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
@@ -491,9 +492,55 @@ function priorRecordRefusal(prior, { sequence, currentHead, isAncestor }) {
   return null;
 }
 
+const DOCS_VALIDATOR_MODULE = "scripts/docs/docs-validators.mjs";
+const clip = (text) => String(text).slice(0, 2000);
+
+// The lifecycle refusals of the delta range as record findings (`severity`, `summary`, `evidence`): the changelog check (the range touches `changes/`)
+// and, when the repo's committed test:docs script calls the one docs validator module, its other validators.
+async function lifecycleRefusals({ options, ownPaths, changedPaths, changelog, docsValidators, baselineHead, currentHead }) {
+  const findings = [];
+  const root = resolveRepoRoot(options.worktree);
+  if ((ownPaths ?? changedPaths(options.worktree, baselineHead, currentHead)).some((file) => file.startsWith("changes/"))) {
+    const diagnostics = [];
+    const log = { log: (...args) => diagnostics.push(args.join(" ")), error: (...args) => diagnostics.push(args.join(" ")) };
+    let code;
+    try {
+      const exec = promisify(execFile);
+      const git = createGitClient(root, (command, args, execOptions) => exec(command, args, { ...execOptions, env: gitEnvNoDirOverrides() }));
+      code = await changelog({ root, git, log, requireHeadInputs: true });
+    } catch (error) {
+      diagnostics.push(error.message);
+      code = 1;
+    }
+    if (code !== 0) findings.push({ severity: "medium", summary: "LIFECYCLE-CHANGELOG-COMPLETENESS: the changelog check refused this delta range", evidence: clip(diagnostics.join("; ")) });
+  }
+  const pkg = spawnSync("git", ["-C", root, "show", "HEAD:package.json"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+  let optedIn = false;
+  try { optedIn = pkg.status === 0 && String(JSON.parse(pkg.stdout).scripts?.["test:docs"] ?? "").includes(DOCS_VALIDATOR_MODULE); } catch { /* not JSON: no opt-in */ }
+  if (optedIn) {
+    for (const { id, code, output } of await docsValidators({ root, ids: ["links", "rule-ownership", "decision-records"] })) {
+      if (code === 0) continue;
+      const rule = /\b(?:ADR|LIFECYCLE)(?:-[A-Z0-9]+){2,}\b/.exec(output)?.[0];
+      findings.push({ severity: "medium", summary: `docs validator ${id} refused this delta range${rule ? ` (${rule})` : ""}`, evidence: clip(output.trim()) });
+    }
+  }
+  return findings;
+}
+
+// Issue 2447: a handback at the candidate that a fix_and_rereview record reviewed is refused while must-fix work is open there: a lifecycle finding, or a residue finding with no skip reason recorded for its site.
+function assertNoOpenWorkAtCandidate(prior, { handbackHead, siteCoverage, actItems }) {
+  if (prior?.nextStep !== "fix_and_rereview" || prior.candidateHead !== handbackHead) return;
+  const skipped = (f) => {
+    const item = actItems.find((a) => a.ref === f.residueOf);
+    return Boolean(item) && Boolean(recordedSkipReason(siteCoverage, item.fingerprint ?? item.ref, typeof f.site === "string" ? f.site : null));
+  };
+  const open = (prior.findings ?? []).filter((f) => isLifecycleFinding(f) || (f.residueOf && !skipped(f)));
+  if (open.length) throw new Error(`the handback is at ${handbackHead}, the candidate the sealed delta record reviewed, and ${open.length} open task(s) remain: ${open.map((f) => JSON.stringify(f.summary)).join("; ")}. Commit the fix on top of ${handbackHead} and hand back that new commit${open.every((f) => !isLifecycleFinding(f)) ? " (or record a skip reason for each residue site)" : ""}`);
+}
+
 export async function runCli(
   argv = process.argv.slice(2),
-  { revParse = gitRevParse, diffPatch = gitDiffPatch, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, changedPaths = gitChangedPaths, validateChangelog: changelog = validateChangelog, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, fetchBase = defaultFetchOrigin, fetchPr = defaultFetchPr, readRecord = readGateDeltaRecord, readSealedRecord = readSealedGateDeltaRecord, stdout = process.stdout, tmpRoot } = {},
+  { revParse = gitRevParse, diffPatch = gitDiffPatch, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, changedPaths = gitChangedPaths, validateChangelog: changelog = validateChangelog, docsValidators = runDocsValidators, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, fetchBase = defaultFetchOrigin, fetchPr = defaultFetchPr, readRecord = readGateDeltaRecord, readSealedRecord = readSealedGateDeltaRecord, stdout = process.stdout, tmpRoot } = {},
 ) {
   const options = parseCheckPrePushDeltaArgs(argv);
   if (options.help) {
@@ -599,6 +646,7 @@ export async function runCli(
     const reportBytes = readFileSync(options.siteCoverage);
     const raw = JSON.parse(reportBytes);
     const record = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
+    if (!options.result) assertNoOpenWorkAtCandidate(readSealedRecord(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), sequence.reviewBaselineHead), { handbackHead: record.headSha, siteCoverage: record.siteCoverage ?? [], actItems: sequence.actItems });
     if (options.fixerPlan && !options.result && !options.handback && (!fixCommitted || record.headSha !== currentHead)) {
       if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(raw.headSha)) throw new Error("sequence closure requires a canonical full commit SHA in the handback");
       const planBytes = readFileSync(options.fixerPlan);
@@ -645,6 +693,12 @@ export async function runCli(
       sequence, result, invocation: options.invocation, currentHead, siteCoverage, validationCoverage, coverageBinding,
       staleSurfaceHits: staleSurfaceTruncated ? [...staleSurfaceHits, staleSurfaceTruncatedHit()] : staleSurfaceHits,
     });
+    // Issue 2447: a lifecycle refusal is a medium finding in the sealed record, so the fixer has a task; it makes a clear result needs_fix (bounded_out at the last invocation).
+    const lifecycleFindings = await lifecycleRefusals({ options, ownPaths, changedPaths, changelog, docsValidators, baselineHead: sequence.reviewBaselineHead, currentHead });
+    if (lifecycleFindings.length && decision.locallyClear) {
+      const bounded = options.invocation >= DELTA_MAX_INVOCATIONS;
+      decision = { ...decision, outcome: bounded ? "bounded_out" : "needs_fix", nextStep: bounded ? "push_to_gate" : "fix_and_rereview", locallyClear: false };
+    }
     if (options.reviewerOnly) {
       // The reviewer read the input run's patch: the result run recomputes it and refuses a different range (a moved origin/<base> changes the PR-own paths).
       const readPatch = deltaPatchPath(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), baselineHead, currentHead, result.runId);
@@ -654,25 +708,10 @@ export async function runCli(
       if (decision.outcome === "bounded_out") decision = { ...decision, nextStep: "restart_on_replacement_pr" };
       if (priorRecord?.outcome === "locally_clear" && !decision.locallyClear) throw new Error(`reviewer-only: the locally_clear record for baseline ${baselineHead} is not replaced by a non-clearing result and is never overwritten. ${CHAIN_END_REMEDY}`);
     }
-    if ((ownPaths ?? changedPaths(options.worktree, sequence.reviewBaselineHead, currentHead)).some((file) => file.startsWith("changes/"))) {
-      const diagnostics = [];
-      const log = { log: (...args) => diagnostics.push(args.join(" ")), error: (...args) => diagnostics.push(args.join(" ")) };
-      let code;
-      try {
-        const root = resolveRepoRoot(options.worktree);
-        const exec = promisify(execFile);
-        const git = createGitClient(root, (command, args, options) => exec(command, args, { ...options, env: gitEnvNoDirOverrides() }));
-        code = await changelog({ root, git, log, requireHeadInputs: true });
-      } catch (error) {
-        diagnostics.push(error.message);
-        code = 1;
-      }
-      if (code !== 0) throw new Error(`LIFECYCLE-CHANGELOG-COMPLETENESS: ${diagnostics.join("; ")}`);
-    }
     // Local evidence for the emitter and the fixed-reply guard; never a gate verdict.
     const write = () => writeGateDeltaRecord({
       tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree),
-      sequence, candidateHead: currentHead, invocation: options.invocation, decision, result,
+      sequence, candidateHead: currentHead, invocation: options.invocation, decision, result, lifecycleFindings,
     });
     // The reviewer-only route read its prior record before the fetch, the scans and the changelog check: write only when the record is still the snapshot every check above judged.
     if (options.reviewerOnly) {

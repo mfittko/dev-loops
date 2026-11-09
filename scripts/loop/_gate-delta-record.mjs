@@ -65,10 +65,14 @@ export function listGateDeltaRecords(tmpRoot) {
   return records;
 }
 
+/** A lifecycle refusal recorded as a finding (issue 2447): the summary starts with the changelog rule ID or "docs validator". */
+export const isLifecycleFinding = (finding) => /^(?:LIFECYCLE-CHANGELOG-COMPLETENESS|docs validator )/.test(finding?.summary ?? "");
+
 /** Write the decision of one `--result` run. Returns the record path. */
-export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocation, decision, result }) {
+export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocation, decision, result, lifecycleFindings = [] }) {
   const items = Array.isArray(result?.actionableItems) ? result.actionableItems.map((item) => ({ ref: item?.ref, status: item?.status })) : [];
-  const findings = deltaFixerFindings(result);
+  // Lifecycle refusals lead; the 20-entry bound of the emitter's intake still holds.
+  const findings = [...lifecycleFindings, ...deltaFixerFindings(result)].slice(0, 20);
   const record = {
     ...deltaCoverageBinding(decision),
     reviewBaselineHead: sequence.reviewBaselineHead,
