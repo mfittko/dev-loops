@@ -1,8 +1,9 @@
 // Shared `--timeout <seconds>` parse for the wait/probe scripts (issue 2755).
 // `--timeout-ms` stays one release as a deprecated alias: it warns on stderr
 // and converts to seconds. Passing both flags fails closed.
-// Node-pure on purpose: no workspace imports (node: builtins only).
+import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 
 const NON_NEGATIVE_NUMBER = /^\d+(?:\.\d+)?$/u;
 
@@ -53,8 +54,8 @@ export function capWait(requestedMs, capMs = WAIT_CAP_MS) {
 
 export const shellWord = (word) => (/^[\w@%+=:,./-]+$/u.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`);
 
-/** The reissue launcher: the running script by absolute path, so the re-issue runs this same script from any cwd (WORKTREE-SCRIPT-LAUNCHER-CWD). */
-export const scriptCommand = (importMetaUrl) => `node ${shellWord(fileURLToPath(importMetaUrl))}`;
+/** The reissue launcher: the sanctioned `dev-loops-run --repo-root <checkout> <repo-relative script>` form (WORKTREE-SCRIPT-LAUNCHER-CWD), so the re-issue keeps the original checkout from any cwd. */
+export const scriptCommand = (importMetaUrl) => `dev-loops-run --repo-root ${shellWord(resolveRepoRoot(process.cwd()))} ${shellWord(path.relative(fileURLToPath(new URL("../..", import.meta.url)), fileURLToPath(importMetaUrl)))}`;
 
 /**
  * The fields a capped wait adds to its non-terminal result: `outcome: "pending"` and the exact

@@ -216,7 +216,7 @@ export async function runCli(
         const timeoutMs = isRetry ? Math.max(1, remainingMs()) : options.timeoutMs;
         isRetry = true;
         return watchCiStatus(
-          { repo: options.repo, pr: options.pr, timeoutMs, pollIntervalMs: options.pollIntervalMs, baselineSha, stallStartedAtMs },
+          { repo: options.repo, pr: options.pr, timeoutMs, pollIntervalMs: options.timeoutMs > 0 ? Math.min(options.pollIntervalMs, options.timeoutMs) : options.pollIntervalMs, baselineSha, stallStartedAtMs },
           {
             env, ghCommand, delayImpl, now, ensureOwnershipImpl, ...(runChild ? { runChild } : {}),
             onBaseline: (sha) => { baselineSha = sha; },

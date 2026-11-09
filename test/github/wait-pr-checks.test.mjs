@@ -132,10 +132,10 @@ test("wait-pr-checks caps one call at 170 s, returns pending (exit 2) with the r
     assert.equal(result.status, "timeout");
     assert.equal(result.outcome, "pending");
     assert.equal(result.remainingTimeoutSeconds, 430);
-    assert.match(result.reissue, /^node \S+\/scripts\/github\/wait-pr-checks\.mjs --repo owner\/repo --pr 7 --poll 10 --baseline-sha aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --timeout 430$/);
+    assert.match(result.reissue, /^dev-loops-run --repo-root \S+ scripts\/github\/wait-pr-checks\.mjs --repo owner\/repo --pr 7 --poll 10 --baseline-sha aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --timeout 430$/);
     reissue = result.reissue;
   });
-  const resumed = reissue.split(" ").slice(2);
+  const resumed = reissue.split(" ").slice(4);
   // A push between the calls is not absorbed: the carried baseline sees the new head.
   await withGhStub(
     [
@@ -180,7 +180,7 @@ test("wait-pr-checks carries the stall start in the re-issue and the resumed cal
   const first = await call(["--repo", "owner/repo", "--pr", "7", "--poll", "10", "--timeout", "600"], 1_000_000);
   assert.equal(first.outcome, "pending");
   assert.match(first.reissue, /--stall-started-at-ms 1000000 /);
-  const stuck = await call(first.reissue.split(" ").slice(2), 1_175_000);
+  const stuck = await call(first.reissue.split(" ").slice(4), 1_175_000);
   assert.equal(stuck.status, "stuck");
 });
 
@@ -457,7 +457,7 @@ test("wait-pr-checks returns pending when a 300 s reset is past the 170 s cap of
   assert.notEqual(result.status, "success");
   assert.equal(result.settled, false);
   assert.equal(result.outcome, "pending");
-  assert.match(result.reissue, /^node \S+\/scripts\/github\/wait-pr-checks\.mjs --repo owner\/repo --pr 7 .*--timeout \d+$/);
+  assert.match(result.reissue, /^dev-loops-run --repo-root \S+ scripts\/github\/wait-pr-checks\.mjs --repo owner\/repo --pr 7 .*--timeout \d+$/);
   assert.equal(code, 2);
 });
 
@@ -553,4 +553,25 @@ test("wait-pr-checks accepts --timeout 0, fractions and deprecated --timeout-ms;
 test("wait-pr-checks warns on stderr for deprecated --timeout-ms", () => {
   const err = captureStderr(() => parseWaitPrChecksCliArgs(["--repo", "owner/repo", "--pr", "7", "--timeout-ms", "1500"]));
   assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
+});
+
+test("wait-pr-checks clamps a poll interval above the cap so a check-less head still settles success", async () => {
+  await withGhStub(
+    [
+      { match: ["pr", "view"], stdout: prView("sha-a", []) },
+      { match: ["check-runs"], stdout: checkRuns([]) },
+      { match: ["/status"], stdout: statuses([]) },
+    ],
+    async (env) => {
+      let t = 1_000_000;
+      const stdout = makeStream();
+      const code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "200", "--timeout", "600"], {
+        stdout, stderr: makeStream(), env, ghCommand: "gh", now: () => t, delayImpl: async (ms) => { t += ms; },
+      });
+      const result = JSON.parse(stdout.text());
+      assert.equal(code, 0);
+      assert.equal(result.status, "success");
+      assert.ok(t - 1_000_000 <= 170_000 + 10_000, `waited ${t - 1_000_000} ms`);
+    },
+  );
 });

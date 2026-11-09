@@ -298,7 +298,7 @@ test("runCli re-issue round trip: the pending command parses below the 3600 s fl
   const pending = JSON.parse(first.text());
   assert.equal(pending.outcome, "pending");
   assert.equal(pending.remainingTimeoutSeconds, 3530);
-  const argv = pending.reissue.split(" ").slice(2);
+  const argv = pending.reissue.split(" ").slice(4);
   assert.equal(parseWatchInitialCopilotPrCliArgs(argv).timeoutMs, 3_530_000);
   assert.throws(() => parseWatchInitialCopilotPrCliArgs(["--repo", "owner/repo", "--issue", "59", "--timeout", "3530"]), /at least 3600/);
   const second = sink();

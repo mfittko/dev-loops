@@ -303,14 +303,14 @@ test("probe-copilot-review capped call returns pending, the re-issue keeps the b
     assert.equal(first.status, "timeout");
     assert.equal(first.outcome, "pending");
     assert.equal(first.remainingTimeoutSeconds, 430);
-    assert.match(first.reissue, /^node \S+\/scripts\/github\/probe-copilot-review\.mjs --repo owner\/repo --pr 17 --baseline-ids '\{.*"r-1".*\}' --timeout 430$/);
+    assert.match(first.reissue, /^dev-loops-run --repo-root \S+ scripts\/github\/probe-copilot-review\.mjs --repo owner\/repo --pr 17 --baseline-ids '\{.*"r-1".*\}' --timeout 430$/);
     const concise = sink();
     await runCli(["--repo", "owner/repo", "--pr", "17", "--timeout", "600", "--concise"], { stdout: concise, ...deps(env) });
     assert.match(concise.text(), /outcome:\s+pending \(430 s left\)/);
-    assert.match(concise.text(), /reissue:\s+node \S+\/scripts\/github\/probe-copilot-review\.mjs/);
+    assert.match(concise.text(), /reissue:\s+dev-loops-run --repo-root \S+ scripts\/github\/probe-copilot-review\.mjs/);
     // Activity between the calls is reported, not absorbed into a fresh baseline.
     // A real POSIX word split of the reissue tail: the quoted --baseline-ids JSON must survive as one argument.
-    const tail = first.reissue.split(" ").slice(2).join(" ");
+    const tail = first.reissue.split(" ").slice(4).join(" ");
     const split = spawnSync("sh", ["-c", 'eval "set -- $1"; printf "%s\\0" "$@"', "_", tail], { encoding: "utf8" });
     const resumed = split.stdout.split("\0").slice(0, -1);
     assert.equal(resumed.length, 8);

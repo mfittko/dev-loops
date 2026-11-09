@@ -5,6 +5,7 @@ import { link, mkdir, open, readFile, readdir, realpath, rm, stat, symlink, utim
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
+import { resolveRepoRoot } from "../scripts/loop/_repo-root-resolver.mjs";
 import { pullReceiptPath } from "../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../cli/index.mjs";
 import { ARTIFACT_STALE_REMEDY, ARTIFACT_TIMEOUT_REMEDY, main, parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
@@ -361,13 +362,13 @@ test("a --timeout above the cap is capped, returns pending (exit 2) and the re-i
     assert.equal(first.code, 2);
     assert.equal(first.result.outcome, "pending");
     assert.equal(first.result.remedy, undefined);
-    assert.equal(first.result.reissue, `node ${fileURLToPath(new URL("../scripts/loop/wait-for-gate-units.mjs", import.meta.url))} --emit-plan ${planPath} --tmp-root ${path.join(root, "tmp")} --timeout 330`);
+    assert.equal(first.result.reissue, `dev-loops-run --repo-root ${resolveRepoRoot(process.cwd())} scripts/loop/wait-for-gate-units.mjs --emit-plan ${planPath} --tmp-root ${path.join(root, "tmp")} --timeout 330`);
     // Resume: the re-issued args carry the remaining budget; it is capped again, then the last call times out for real.
-    const second = await runMain(first.result.reissue.split(" ").slice(2), real);
+    const second = await runMain(first.result.reissue.split(" ").slice(4), real);
     assert.equal(clock.now(), 340000);
     assert.equal(second.result.outcome, "pending");
     assert.equal(second.result.remainingTimeoutSeconds, 160);
-    const third = await runMain(second.result.reissue.split(" ").slice(2), real);
+    const third = await runMain(second.result.reissue.split(" ").slice(4), real);
     assert.equal(clock.now(), 500000);
     assert.equal(third.result.outcome, "timeout");
     assert.equal(third.code, 2);
