@@ -23,16 +23,16 @@
  *   <tmpRoot>/gate-context/<repo-slug>/pr-<N>/<gate>-<headSha>.json
  */
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { link, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, findAngleEntry, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { VERIFIED_ITEMS_ANGLES, baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { VERIFIED_ITEMS_ANGLES, baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves, validateAngleResult } from "@dev-loops/core/loop/gate-fanin";
 import { anchorBaseRef, normalizeBaseBranch } from "../lib/anchor-base-ref.mjs";
 import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-write-remote-freshness-guard.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
@@ -253,13 +253,13 @@ Optional:
   Base freshness (every run, with or without --base): the PR's base branch (baseRefName) is fetched from origin (bounded, no prompt) and the PR head must contain it. A stale head refuses with base_stale_integrate_first, a failed fetch with base_fetch_failed, a --head-sha that is not a local commit with base_head_unresolved; each writes no artifact for draft_gate and pre_approval_gate. An unreadable PR base (base_unresolved) refuses on every gate, review included. The review gate records the non-current status in baseFreshness and continues. The artifact records baseFreshness {status, base} on every path.
   --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing evidence file. OPTIONAL: when omitted, every of the PR's closing issue references is resolved, comma-joined and cross-repo-qualified (e.g. #1496, #1511 or owner/other#12) — an umbrella PR resolves all of them. The linked issues' bodies are fetched only when --issue-body is also omitted (see below). An unreadable PR or linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering absence. A whitespace-only value is treated as absent (resolves exactly as if the flag were omitted, never recorded as caller-provided).
   --validation-posture <text>    Short description of the validation posture. Refused (fails closed, never truncated) past 500 chars; keep details in --validation-results.
-  --pr-body <text>               PR description text, written to the round-bound pr-body read. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content). A changed body digest at the same head retires the completed body-reading units and any finished pending unit with a live sentinel (GATE-EXEC-BODY-ONLY-RERUN), reported in the result field \`bodyOnlyRerun\` ({retired, retirementDir, scopes}). It refuses while a pending unit is in flight, when the PR closes no issue or, on the all-flags path, the body has no Closes, Fixes or Resolves keyword (the body is then treated as the spec of record and the rebuild fails closed) and live sentinels exist, and under an abbreviated --head-sha when retirement needs the full head.
+  --pr-body <text>               PR description text, written to the round-bound pr-body read. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content). A changed body digest at the same head re-runs every dispatch unit that holds a body-reading angle (an angle whose configured prompt names the PR body or PR description, that declares \`readsPrBody\`, whose surface is always, that is a verifiedItems angle (acceptance-criteria, pr-checklist), or that has no config entry) and retires every finished pending unit with a live sentinel (GATE-EXEC-BODY-ONLY-RERUN), reported in the result field \`bodyOnlyRerun\` ({retired, retirementDir, scopes}). It refuses while a pending unit is in flight, when the PR closes no issue or, on the all-flags path, the body has no Closes, Fixes or Resolves keyword (the body is then treated as the spec of record and the rebuild fails closed) and live sentinels exist, and under an abbreviated --head-sha when retirement needs the full head.
   --issue-body <text>            Linked-issue body text, inlined into the briefing evidence file under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from every of the PR's closing issue references (an umbrella PR closes several), but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the evidence file should still carry issue text. An unreadable linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering the section as absent; the bodies are omitted from the evidence file entirely when the PR closes no issue. A whitespace-only value is treated as absent (resolved/fetched exactly as if the flag were omitted).
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and skips the label read too; the only GitHub read left in this mode is the PR base branch for the base freshness check (which also runs the base freshness git fetch origin and records baseFreshness; see Base freshness). Omit for the default self-rendered prefix (prefixMode inline|pointer).
   --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-RESOLUTION) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing evidence file, bound by sha256 as an optional read (read field by field with jq; the sentinel still verifies its hash) (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the label read is skipped (only the PR base branch read for the base freshness check remains), so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
-  --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, and a carried angle in a mixed group is stripped from it (recorded membership stays whole), so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). Omit for today's full-count behavior (nothing excluded).
+  --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, and a carried angle in a mixed group is stripped from it (recorded membership stays whole), so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). A carried body-reading angle is dropped (it re-runs) when the PR body digest differs from the head's sticky baseline (\`prBodyBaselineSha256\`, kept in \`<gate>-<headSha>.pr-body-baseline\` beside the context so a failed write keeps it). Omit for today's full-count behavior (nothing excluded).
   --known-findings <path>        Default \`capture-review-threads.mjs --repo --pr\` output (every open or resolved thread, full bodies). Rendered to the digest-keyed round-bound <gate>-<headSha>.known-findings-<digest12>.json and hash-bound as a required \`known-findings\` read (volatile tail and every work order; never the prefix) when at least one thread exists. Fails closed (exit 1) if unreadable or not that shape.
   --tmp-root <path>              Root tmp directory. Omitted, the worktree-local gate-context
                                  bundle is written under the worktree's tmp/ while the prior-round
@@ -612,13 +612,17 @@ export { buildGateContextPath };
 // skip-completed resume scan.
 export { buildGateReviewsDir };
 
-// The body-only rerun set (GATE-EXEC-BODY-ONLY-RERUN) is every angle whose shipped prompt reads the PR body: the always-surface
-// angles, the verifiedItems angles (labels copied from the PR body checklists), contradiction-lens (checks body statements
-// against the diff and contracts), scope (compares the body to the diff) and correctness (checks the body claims).
+// The body-only rerun set (GATE-EXEC-BODY-ONLY-RERUN) derives from the angle config: an angle is body-reading when its configured
+// prompt names the PR body or PR description, when its entry declares `readsPrBody: true`, when its surface is `always`, or when it is a
+// verifiedItems angle (labels copied from the PR body checklists). An angle with no config entry fails closed to body-reading.
 // Local to this path: angleReviewSurface keeps serving carry-forward.
-const BODY_READING_ANGLES = new Set([...VERIFIED_ITEMS_ANGLES, "contradiction-lens", "scope", "correctness"]);
-export function readsPrBody(angle) {
-  return angleReviewSurface(angle).kind === "always" || BODY_READING_ANGLES.has(baseAngleName(String(angle).trim()));
+const PR_BODY_PROMPT = /\b(?:PR|pull[ -]?request)(?:['’]s)?[\s-]+(?:body|bodies|description|descriptions)\b/i;
+export function readsPrBody(angle, config) {
+  const name = baseAngleName(String(angle).trim());
+  if (angleReviewSurface(angle).kind === "always" || VERIFIED_ITEMS_ANGLES.has(name)) return true;
+  // The same ungated lookup the dispatch emitter uses (resolveReviewerRole), so this check reads the prompt the reviewer receives.
+  const entry = findAngleEntry(config, name);
+  return !entry || entry.readsPrBody === true || PR_BODY_PROMPT.test(entry.prompt ?? "");
 }
 
 /**
@@ -649,7 +653,7 @@ export function readsPrBody(angle) {
  *
  * @returns {Promise<string[]>} angle names with a clean artifact at this head
  */
-export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot = "tmp", prBodySha256 = null }, { repoRoot = process.cwd() } = {}) {
+export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot = "tmp", prBodySha256 = null }, { repoRoot = process.cwd(), config } = {}) {
   const priorBodySha256 = typeof prBodySha256 === "string" ? await readPriorPrBodySha256({ repo, pr, gate, headSha, tmpRoot }, { repoRoot }) : null;
   // A missing prior digest counts as changed: an always-angle artifact cannot be shown to have read this body.
   const bodyChanged = typeof prBodySha256 === "string" && priorBodySha256 !== prBodySha256;
@@ -672,7 +676,7 @@ export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpR
     }
     if (parsed && parsed.verdict === "clean" && String(parsed.headSha ?? "").trim().toLowerCase() === want) {
       if (typeof parsed.angle !== "string" || parsed.angle.length === 0) continue;
-      if (bodyChanged && readsPrBody(parsed.angle)) continue;
+      if (bodyChanged && readsPrBody(parsed.angle, config)) continue;
       completed.push(parsed.angle);
     }
   }
@@ -687,18 +691,35 @@ export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpR
  * builds never overwrite). A missing baseline counts as changed, matching
  * readCompletedAnglesForHead.
  */
-export async function dropBodyReadingCarriedAngles(carriedAngles, { repo, pr, gate, headSha, tmpRoot = "tmp", prBodySha256: bodySha256 = null }, { repoRoot = process.cwd() } = {}) {
+export async function dropBodyReadingCarriedAngles(carriedAngles, { repo, pr, gate, headSha, tmpRoot = "tmp", prBodySha256: bodySha256 = null }, { repoRoot = process.cwd(), config } = {}) {
   if (!Array.isArray(carriedAngles) || carriedAngles.length === 0 || typeof bodySha256 !== "string") return carriedAngles;
   const baseline = await readPrBodyBaselineSha256({ repo, pr, gate, headSha, tmpRoot }, { repoRoot });
   if (baseline === bodySha256) return carriedAngles;
-  return carriedAngles.filter((angle) => !readsPrBody(angle));
+  return carriedAngles.filter((angle) => !readsPrBody(angle, config));
 }
 
 /**
- * The pr-body digest the head's first context recorded (`prBodyBaselineSha256`),
- * falling back to that context's pr-body read; null when no context exists.
+ * The body-aware angle state both context builders read (`buildGateContext` and `main`): the angles with a clean artifact at this head and the carried
+ * angles, each already adjusted for a changed PR body. A `--prefix-file` build carries no PR body, so it passes no digest.
+ */
+async function readBodyAwareAngleState({ repo, pr, gate, headSha, tmpRoot, prefixFile, prBody, carriedAngles, config }, { repoRoot }) {
+  const id = { repo, pr, gate, headSha, tmpRoot, ...(prefixFile ? {} : { prBodySha256: prBodySha256(prBody) }) };
+  return {
+    completedAngles: await readCompletedAnglesForHead(id, { repoRoot, config }),
+    carriedAngles: await dropBodyReadingCarriedAngles(carriedAngles, id, { repoRoot, config }),
+  };
+}
+
+// The sticky baseline lives in its own file beside the context, so the failure path that removes the context file keeps it.
+const buildPrBodyBaselinePath = (input) => buildGateArtifactPath({ ...input, suffix: ".pr-body-baseline" });
+
+/**
+ * The pr-body digest the head's first context recorded in its baseline file,
+ * falling back to that context's `prBodyBaselineSha256` and its pr-body read; null when neither exists.
  */
 export async function readPrBodyBaselineSha256(input, { repoRoot = process.cwd() } = {}) {
+  const stored = (await readFile(path.resolve(repoRoot, buildPrBodyBaselinePath({ ...input, tmpRoot: input.tmpRoot || "tmp" })), "utf8").catch(() => "")).trim();
+  if (/^[0-9a-f]{64}$/.test(stored)) return stored;
   const context = await readGateContext(input, { repoRoot }).catch(() => null);
   if (typeof context?.prBodyBaselineSha256 === "string") return context.prBodyBaselineSha256;
   return readPriorPrBodySha256(input, { repoRoot });
@@ -1910,12 +1931,20 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
 }
 
 /**
- * The shared finished-round predicate. A live same-head ledger is an in-round rewrite (replaced, not retained, not counted)
- * only when it has at least one finding and no finding carries a `judgeDisposition`; every other closed ledger, including a clean one with
- * `findings: []`, is a finished round that the writer retains and the round count includes.
+ * The shared finished-round predicate. The writer stamps `roundIdentity: { roundId, judgeExecution, completed }` on each ledger (the emit-plan round id and the judge execution identity, `null` when absent; `completed: true` on a finished round).
+ * A stamp without `completed: true` (an intermediate or aborted write) is always an in-round rewrite: replaced, not retained, not counted.
+ * A completed stamp is a rewrite only against a completed `incoming` write (`incoming.completed === true`) that shares its non-null `roundId` or `judgeExecution` (a repeated write of one round);
+ * for a reader or an identity-less incoming write it is a finished round that counts and is retained.
+ * Only a ledger written before the stamp (no `roundIdentity`) uses the earlier shape: at least one finding and no `judgeDisposition`.
+ * Every other closed ledger, including a clean one with `findings: []`, is a finished round.
  */
-export function isInRoundRewrite(log) {
-  return Array.isArray(log?.findings) && log.findings.length > 0 && !log.findings.some((f) => f?.judgeDisposition !== undefined);
+export function isInRoundRewrite(log, incoming) {
+  const stamp = log?.roundIdentity;
+  if (stamp === undefined) return Array.isArray(log?.findings) && log.findings.length > 0 && !log.findings.some((f) => f?.judgeDisposition !== undefined);
+  // An unfinished stamp (an intermediate or aborted unjudged write) is always replaced; the writer stamps `completed` on a finished round.
+  if (stamp?.completed !== true) return true;
+  const same = (a, b) => typeof a === "string" && a === b;
+  return incoming?.completed === true && (same(stamp?.roundId, incoming.roundId) || same(stamp?.judgeExecution, incoming.judgeExecution));
 }
 
 /**
@@ -1930,8 +1959,8 @@ export function isInRoundRewrite(log) {
  *
  * A retained same-head round (`<gate>-<sha>.round-<n>.json`, kept when a head is
  * re-written) is a closed round at any other head. At the current head it is read only
- * with `includeRetainedCurrentHead` (the round count), so the disposition, act-item and
- * cap-round readers keep their pre-retention view of the current head.
+ * with `includeRetainedCurrentHead` (the round count and {@link resolveCapRound}), so the disposition and act-item
+ * readers keep their pre-retention view of the current head.
  * `includeLiveCurrentHead` reads the live current-head ledger (`<gate>-<sha>.json`) only when the shared finished-round
  * predicate holds, so it counts exactly when the writer will retain it.
  *
@@ -2000,7 +2029,9 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
       onUnreadable?.(name);
       continue;
     }
-    if (!retained && (sha.startsWith(head) || head.startsWith(sha)) && isInRoundRewrite(log)) continue;
+    // A stamped ledger that never finished (an aborted or intermediate write) is no round at any head, current or earlier.
+    if (log.roundIdentity !== undefined && log.roundIdentity?.completed !== true) continue;
+    if (!retained && (sha.startsWith(head) || head.startsWith(sha)) && isInRoundRewrite(log, options.roundIdentity)) continue;
     // The live ledger ranks above every retained round of its head; retained rounds order by their number.
     const retainedNumber = /\.round-(\d+)\.json$/.exec(name);
     rounds.push({ sha, loggedAt: typeof log.loggedAt === "string" ? log.loggedAt : "", round: retainedNumber ? Number(retainedNumber[1]) : Infinity, log });
@@ -2128,6 +2159,8 @@ export const isCleanCapRound = (capRound) => capRound?.log?.verdict === "clean" 
  * The cap round of a draft_gate (ADR 0208): the last closed ledger when the completed rounds (the head being posted excluded) reached the cap and
  * that ledger is `findings_present` or `clean` (ADR 0250: a clean cap round has no act ref; its `residue` holds only `capClosed` items). Returns `{ log, residue }` or null. `residue` is the cap round's act items and `capClosed` items as
  * `{ fingerprint, file, line, title, disposition }`, the input `pre_approval_gate` receives.
+ * The candidate set is the closed prior rounds plus the retained rounds of the current head. The live current-head ledger is the round being posted
+ * (the head excluded, as in the round count), so it is never the cap-round authority and the latest retained round at the head is.
  */
 export async function resolveCapRound(options, { repoRoot }) {
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
@@ -2138,7 +2171,7 @@ export async function resolveCapRound(options, { repoRoot }) {
   if (!(cap > 0) || await countCompletedRounds(ledger, { repoRoot }) - 1 < cap) return null;
   // An unreadable ledger counts toward the cap but readClosedPriorRoundLogs drops it, so the cap-round authority could be an earlier round: fail closed.
   let unreadable = 0;
-  const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, onUnreadable: () => { unreadable += 1; } })).at(-1);
+  const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, includeRetainedCurrentHead: true, onUnreadable: () => { unreadable += 1; } })).at(-1);
   // The persisted severity verdict can read `clean` for judge-act mediums whose posted review composes findings_present: an open act item makes the round a cap round too.
   if (unreadable > 0 || !log || (log.verdict !== "findings_present" && log.verdict !== "clean" && listOpenActItems(log.findings).length === 0)) return null;
   // An act item the sealed cap-round delta record marks resolved is fixed, not residue; with no verifiable record every act item stays.
@@ -3404,16 +3437,23 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
 
   // Body-only rebuild (GATE-EXEC-BODY-ONLY-RERUN): a changed pr-body digest at
   // this head (or no readable prior digest) sends every pending dispatch unit
-  // that holds an always-surface angle back to a fresh run. Runs after the
+  // that holds a body-reading angle (readsPrBody) back to a fresh run, as a whole unit. Runs after the
   // volatile render so a malformed input throws before anything retires. A
-  // completed unit retires (sentinel, dispatch record, findings artifacts) so
-  // its re-run reviewer starts uncontaminated; a unit with a sentinel but not
-  // every artifact is in flight and refuses the rebuild. A completed unit
-  // without a live sentinel still loses its stale always-angle artifacts.
-  // Units without such an angle keep their sentinels and clean artifacts.
+  // finished unit with a live sentinel retires (sentinel, dispatch record, findings artifacts) so
+  // its re-run reviewer starts uncontaminated: every pending unit that holds a body-reading angle, and every
+  // pending non-body unit that finished with a live sentinel (it is re-emitted too). A unit with a live sentinel whose artifacts are not
+  // all valid findings for this head and angle is in flight and refuses the rebuild. A body-reading unit
+  // without a live sentinel still loses its stale artifacts. Other clean units keep their sentinels and artifacts.
   let bodyOnlyRerun = null;
+  // The full-diff-failure rebuild removes the context file, so it carries the prior body digest and the prior carried set read here.
+  let priorBodyState = null;
   if (prBodyRead && options.fanoutDispatch?.pendingGroups) {
-    const priorBodySha256 = await readPriorPrBodySha256(options, { repoRoot });
+    const priorBodySha256 = options.carriedPriorBodySha256 !== undefined ? options.carriedPriorBodySha256 : await readPriorPrBodySha256(options, { repoRoot });
+    // The earlier round dispatched its recorded groups (packed under its own carried set), so the in-flight check reads that membership, never this build's.
+    const priorFanout = options.carriedPriorGroups !== undefined ? { groups: options.carriedPriorGroups, preflight: { carriedAngles: options.carriedPriorCarriedAngles } } : (await readGateContext(options, { repoRoot }).catch(() => null))?.fanout;
+    const priorCarriedAngles = priorFanout?.preflight?.carriedAngles ?? [];
+    const priorGroups = Array.isArray(priorFanout?.groups) ? priorFanout.groups : options.fanoutDispatch.groups ?? [];
+    priorBodyState = { priorBodySha256, priorCarriedAngles, priorGroups };
     if (priorBodySha256 !== prBodyRead.sha256) {
       const { names: liveSentinels, scanError } = await scanLiveSentinels();
       if (scanError !== null) {
@@ -3429,48 +3469,67 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       const scopes = [];
       const findingsFiles = [];
       let retireHead = null;
-      // An artifact older than the sentinel belongs to an earlier round, so it does not prove the unit finished.
-      const wroteAfter = async (artifact, sentinel) => {
+      const sentinelOf = (scope) => liveSentinels.find((name) => name.startsWith(`${CHECKPOINT_SENTINEL_PREFIX}${scope}-`) && /^[0-9a-f]{40,64}$/.test(name.slice(CHECKPOINT_SENTINEL_PREFIX.length + scope.length + 1, -".json".length)));
+      const artifactOf = (angle) => path.join(reviewsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`);
+      const wantHead = String(options.headSha).trim().toLowerCase();
+      // An artifact proves its unit finished only when it is newer than the sentinel (an older one belongs to an earlier round)
+      // and parses as findings JSON that names this head and this angle; a truncated or foreign file is still in flight.
+      const finishedArtifact = async (angle, sentinel) => {
         try {
-          return (await stat(artifact)).mtimeMs >= (await stat(path.resolve(repoRoot, "tmp", sentinel))).mtimeMs;
+          const file = artifactOf(angle);
+          if ((await stat(file)).mtimeMs < (await stat(path.resolve(repoRoot, "tmp", sentinel))).mtimeMs) return false;
+          const parsed = JSON.parse(await readFile(file, "utf8"));
+          const head = String(parsed?.headSha ?? "").trim().toLowerCase();
+          // The artifact must stamp a full SHA; only an abbreviated --head-sha may match by prefix.
+          const isFullSha = (sha) => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha);
+          // A reviewer that exited through emit-reviewer-blocked.mjs writes verdict "blocked" with no findings; it is a finished unit.
+          const wellFormed = validateAngleResult(parsed?.verdict === "blocked" && Array.isArray(parsed.findings) && parsed.findings.length === 0 ? { ...parsed, verdict: "clean" } : parsed) === null;
+          return wellFormed && isFullSha(head) && (isFullSha(wantHead) ? head === wantHead : wantHead.length > 0 && head.startsWith(wantHead)) && String(parsed.angle).trim().toLowerCase() === String(angle).trim().toLowerCase();
         } catch {
           return false;
         }
+      };
+      const refuseInFlight = (scope) => {
+        throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}) while unit ${scope} is in flight; wait for it to write its findings, or retire the round: ${retireCommand}`);
       };
       // A unit whose clean artifact is stamped for this head is absent from pendingGroups, yet a re-dispatch may be in flight
       // (live sentinel newer than the artifact). Refuse on it too.
       const pendingScopes = new Set(options.fanoutDispatch.pendingGroups.map((unit) => dispatchUnitScope(options.gate, unit)));
       // Iterate the cap-split dispatch units: an oversized group runs as <name>-partN sub-units with their own sentinels.
+      // A carried angle is never dispatched (reviewerBudgetPreflight strips it), so the dispatched membership drops it before the scope and artifacts derive.
       const configuredGroupNames = new Set((options.config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
-      for (const unit of expandDispatchUnits(options.fanoutDispatch.groups ?? [], configuredGroupNames)) {
+      // The dispatched membership is the earlier round's, so both loops strip the prior context's carried set, never the current build's.
+      const priorCarried = new Set(priorCarriedAngles.map((angle) => String(angle).trim().toLowerCase()));
+      // The earlier round's recorded units (its own packing, its carried set stripped) are what its sentinels and artifacts belong to.
+      // A unit is pending now when its scope is pending or any of its angles sits in a pending unit (a newly carried angle keeps the group scope; a new packing renames it).
+      const keyOf = (angle) => String(angle).trim().toLowerCase();
+      const pendingKeys = new Set(options.fanoutDispatch.pendingGroups.flatMap((unit) => (Array.isArray(unit?.angles) ? unit.angles : []).map(keyOf)));
+      const covered = new Set();
+      for (const group of expandDispatchUnits(priorGroups, configuredGroupNames)) {
+        if (!Array.isArray(group?.angles)) continue;
+        const unit = { ...group, angles: group.angles.filter((angle) => !priorCarried.has(keyOf(angle))) };
+        unit.angles.forEach((angle) => covered.add(keyOf(angle)));
+        if (unit.angles.length === 0) continue;
         const scope = dispatchUnitScope(options.gate, unit);
-        if (pendingScopes.has(scope) || !Array.isArray(unit?.angles)) continue;
-        const sentinel = liveSentinels.find((name) => name.startsWith(`${CHECKPOINT_SENTINEL_PREFIX}${scope}-`) && /^[0-9a-f]{40,64}$/.test(name.slice(CHECKPOINT_SENTINEL_PREFIX.length + scope.length + 1, -".json".length)));
-        if (!sentinel) continue;
-        const done = await Promise.all(unit.angles.map((angle) => wroteAfter(path.join(reviewsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`), sentinel)));
-        if (!done.every(Boolean)) {
-          throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}) while unit ${scope} is in flight; wait for it to write its findings, or retire the round: ${retireCommand}`);
-        }
-      }
-      for (const unit of options.fanoutDispatch.pendingGroups) {
-        const angles = Array.isArray(unit?.angles) ? unit.angles : [];
-        const readsBody = angles.some(readsPrBody);
-        const scope = dispatchUnitScope(options.gate, unit);
-        const sentinel = liveSentinels.find((name) => name.startsWith(`${CHECKPOINT_SENTINEL_PREFIX}${scope}-`) && /^[0-9a-f]{40,64}$/.test(name.slice(CHECKPOINT_SENTINEL_PREFIX.length + scope.length + 1, -".json".length)));
-        const artifacts = angles.map((angle) => path.join(reviewsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`));
+        const sentinel = sentinelOf(scope);
+        const pending = pendingScopes.has(scope) || unit.angles.some((angle) => pendingKeys.has(keyOf(angle)));
         // A pending unit that holds no body-reading angle but finished with a live sentinel (a findings_present
         // artifact) is re-emitted too, so its sentinel must retire or the reviewer's fresh-context guard refuses it.
-        if (!sentinel && !readsBody) continue;
         if (sentinel) {
-          const finished = artifacts.every((file) => existsSync(file)) && (await Promise.all(artifacts.map((file) => wroteAfter(file, sentinel)))).every(Boolean);
-          if (!finished) {
-            // Any unfinished unit refuses: a non-body unit left live would be re-dispatched by the next --pending emission under a new execution.
-            throw new Error(`GATE-EXEC-BODY-ONLY-RERUN: refusing a body-only rebuild at head ${options.headSha} (${options.gate}) while unit ${scope} is in flight; wait for it to write its findings, or retire the round: ${retireCommand}`);
-          }
+          // Any unfinished unit refuses: a non-body unit left live would be re-dispatched by the next --pending emission under a new execution.
+          if (!(await Promise.all(unit.angles.map((angle) => finishedArtifact(angle, sentinel)))).every(Boolean)) refuseInFlight(scope);
+          if (!pending) continue;
           scopes.push(scope);
           retireHead = fullSha(sentinel);
+        } else if (!pending || !unit.angles.some((angle) => readsPrBody(angle, options.config))) {
+          continue;
         }
-        findingsFiles.push(...artifacts.filter((file) => existsSync(file)));
+        findingsFiles.push(...unit.angles.map(artifactOf).filter((file) => existsSync(file)));
+      }
+      // A pending body-reading angle the earlier round never recorded has no sentinel but may hold a stale artifact.
+      for (const unit of options.fanoutDispatch.pendingGroups) {
+        const fresh = (Array.isArray(unit?.angles) ? unit.angles : []).filter((angle) => !covered.has(keyOf(angle)));
+        if (fresh.some((angle) => readsPrBody(angle, options.config))) findingsFiles.push(...fresh.map(artifactOf).filter((file) => existsSync(file)));
       }
       if (scopes.length > 0 || findingsFiles.length > 0) {
         if (retireHead === null && !/^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(options.headSha)) {
@@ -3491,6 +3550,21 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   }
   // The full-diff-failure rebuild below runs after the context file is removed, so it carries the baseline read here.
   const prBodyBaselineSha256 = prBodyRead ? options.carriedPrBodyBaselineSha256 ?? (await readPrBodyBaselineSha256(options, { repoRoot })) ?? prBodyRead.sha256 : null;
+  if (prBodyBaselineSha256) {
+    // First write wins ("wx"); a retry after a failed write finds the earlier baseline and keeps it.
+    const baselinePath = path.resolve(repoRoot, buildPrBodyBaselinePath({ ...options, tmpRoot: options.tmpRoot || "tmp" }));
+    await mkdir(path.dirname(baselinePath), { recursive: true });
+    // Atomic: write a private temp file, then link it into place (link fails with EEXIST when a baseline exists), so a reader never sees a partial baseline.
+    const tempPath = `${baselinePath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(tempPath, `${prBodyBaselineSha256}\n`, "utf8");
+      await link(tempPath, baselinePath);
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    } finally {
+      await rm(tempPath, { force: true });
+    }
+  }
   const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants, capRoundResidue }), ...(requiredReads ? { requiredReads } : {}), ...(prBodyBaselineSha256 ? { prBodyBaselineSha256 } : {}), loggedAt };
   // Keep the marker available only when prefix AND referenced stable files
   // are unchanged on disk (the prefix hash-binds the evidence and full diff).
@@ -3516,7 +3590,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         // pointer/hash/plan without the failed path before publishing a marker.
         process.stderr.write(`[gate-context] full-diff capture failed (continuing without scope.diffPath): ${error.message}\n`);
         await rm(fullPath, { force: true });
-        return await writeGateContext({ ...options, diffPath: null, diffToWrite: null, carriedPrBodyBaselineSha256: prBodyBaselineSha256 }, { repoRoot });
+        return await writeGateContext({ ...options, diffPath: null, diffToWrite: null, carriedPrBodyBaselineSha256: prBodyBaselineSha256, ...(priorBodyState ? { carriedPriorBodySha256: priorBodyState.priorBodySha256, carriedPriorCarriedAngles: priorBodyState.priorCarriedAngles, carriedPriorGroups: priorBodyState.priorGroups } : {}) }, { repoRoot });
       }
     }
     if (pendingFilteredDiff) await writeFile(path.resolve(repoRoot, pendingFilteredDiff.path), pendingFilteredDiff.text, "utf8");
@@ -3708,8 +3782,9 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // AC3: same-head skip-completed resume — angles with a clean artifact
   // already stamped at this head are excluded from `preflight.requiredReviewers`
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
-  const completedAngles = input.completedAngles ?? await readCompletedAnglesForHead({ repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, ...(input.prefixFile ? {} : { prBodySha256: prBodySha256(input.prBody) }) }, { repoRoot });
-  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: await dropBodyReadingCarriedAngles(input.carriedAngles ?? null, { repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, ...(input.prefixFile ? {} : { prBodySha256: prBodySha256(input.prBody) }) }, { repoRoot }), singleWave: !isReviewGate });
+  const angleState = await readBodyAwareAngleState({ ...input, tmpRoot, carriedAngles: input.carriedAngles ?? null }, { repoRoot });
+  const completedAngles = input.completedAngles ?? angleState.completedAngles;
+  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: angleState.carriedAngles, singleWave: !isReviewGate });
 
   const writeResult = await writeGateContext(
     {
@@ -4325,8 +4400,9 @@ export async function main(
       // --prefix-file (config is a local file read).
       // AC3: same-head skip-completed resume (angles with a clean artifact
       // at this head are excluded from the required count + pending plan).
-      const completedAngles = await readCompletedAnglesForHead({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", ...(options.prefixFile ? {} : { prBodySha256: prBodySha256(options.prBody) }) }, { repoRoot });
-      options.carriedAngles = await dropBodyReadingCarriedAngles(options.carriedAngles, { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", ...(options.prefixFile ? {} : { prBodySha256: prBodySha256(options.prBody) }) }, { repoRoot });
+      const angleState = await readBodyAwareAngleState({ ...options, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });
+      const { completedAngles } = angleState;
+      options.carriedAngles = angleState.carriedAngles;
       options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles, singleWave: options.gate !== "review" });
     }
     const result = await writeGateContext(options, { repoRoot });
