@@ -183,9 +183,11 @@ function evaluatePredicate(value, predicate) {
 // Strict mode (read wrappers): a field path that no stream value carries is an
 // error, never a silent null a caller could write back. A null intermediate and
 // an out-of-range index are legitimate nulls and stay present.
+const MISSING = Symbol("missing");
+
 function hasPath(value, path) {
-  // undefined here is a path an earlier pipe stage did not find (a real null stays present).
-  if (value === undefined) return false;
+  // MISSING is a path an earlier strict pipe stage did not find (a real null stays present).
+  if (value === MISSING) return false;
   let cursor = value;
   for (const step of parsePathSteps(path)) {
     if (cursor === undefined || cursor === null) return true;
@@ -268,7 +270,7 @@ function applyStage(stream, rawStage, strict = false) {
   }
   // Plain path access (single value per input).
   if (strict) assertPathPresent(stream, stage);
-  return stream.map((v) => resolvePath(v, stage));
+  return stream.map((v) => (strict && !hasPath(v, stage) ? MISSING : resolvePath(v, stage)));
 }
 
 // Validate one pipe stage's syntax without touching data. Mirrors the
@@ -346,7 +348,7 @@ export function evaluateJqFilter(value, filter, { strict = false } = {}) {
   for (const stage of splitPipes(filter)) {
     stream = applyStage(stream, stage, strict);
   }
-  return stream;
+  return stream.map((v) => (v === MISSING ? null : v));
 }
 
 // Validate a --jq filter's SYNTAX only, independent of any data. Throws

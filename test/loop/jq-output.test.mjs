@@ -404,4 +404,7 @@ test("strict: a value an earlier pipe stage did not find is not evidence that a 
   const data = { items: [{ a: { body: "text" } }, {}] };
   assert.throws(() => evaluateJqFilter(data, ".items[] | .a | .typo", { strict: true }), /matches no field/);
   assert.deepEqual(evaluateJqFilter({ items: [{ a: { body: "text" } }] }, ".items[] | .a | .body", { strict: true }), ["text"]);
+  // A null intermediate and an out-of-range index stay present through pipes, like the dotted form.
+  assert.deepEqual(evaluateJqFilter({ a: null }, ".a | .b | .c", { strict: true }), [undefined]);
+  assert.deepEqual(evaluateJqFilter({ items: [] }, ".items[5] | .a", { strict: true }), [undefined]);
 });
