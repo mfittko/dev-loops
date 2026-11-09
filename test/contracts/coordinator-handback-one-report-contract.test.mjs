@@ -51,7 +51,7 @@ test("GATE-EXEC-HARNESS-JOIN names children in flight and cites the read rule", 
   const text = content.slice(start, content.indexOf("**Re-run rule:**", start));
   assert.match(text, /report sent while a child is in flight.*`COORDINATOR-HANDBACK-ONE-REPORT`/s);
   assert.match(text, /agent id, `joinRef`, and the next step/);
-  assert.match(text, /treats the reporter as still running\. On Claude Code the parent reads the reporter's output file on its next notification \(`MAIN-AGENT-COORDINATOR-REPORT-READ`.*terminal hand-back, not a pause.*keeps the child list\. The wait command cancels no child, so the parent treats each listed child as still running\./s);
+  assert.match(text, /treats the reporter as still running, unless the forced hand-back's packet status names a run-ending case.*final\. On Claude Code the parent reads the reporter's output file on its next notification \(`MAIN-AGENT-COORDINATOR-REPORT-READ`.*terminal hand-back, not a pause.*keeps the child list\. The wait command cancels no child, so the parent treats each listed child as still running\./s);
   assert.ok(!/last assistant message/.test(text), "the read rule is cited, not restated");
 });
 
@@ -77,7 +77,7 @@ test("MAIN-AGENT-COORDINATOR-REPORT-READ has three harness-neutral bullets", asy
   const bullets = text.split("\n").filter((l) => l.startsWith("- Every harness:"));
   assert.equal(bullets.length, 3);
   assert.match(bullets[0], /hand-back or pause that lists children in flight and names no run-ending case is interim, whether or not it says so.*status, not a result.*re-dispatch a listed child.*next report/s);
-  assert.match(bullets[1], /names a run-ending case.*Unit coordinator boundaries.*`units_stalled` or `round_retired` hand-back under `GATE-EXEC-HARNESS-JOIN`.*final even when it lists children.*treats each listed child as still running.*hand-back that states it is interim under `GATE-EXEC-HARNESS-JOIN` is interim and not final, even when its packet status names a run-ending case/s);
+  assert.match(bullets[1], /names a run-ending case.*Unit coordinator boundaries.*`units_stalled` or `round_retired` hand-back under `GATE-EXEC-HARNESS-JOIN`.*final even when it lists children.*treats each listed child as still running.*hand-back that states it is interim under `GATE-EXEC-HARNESS-JOIN` and whose packet status names no run-ending case is interim.*names a run-ending case.*ended the reporter's run.*final.*waits for no further report/s);
   assert.match(bullets[2], /second hand-back that repeats the report.*already consumed.*first line and child list.*same coordinator.*run state unchanged.*duplicate.*interim reports too.*precedence over the interim bullet.*reads the state.*acts on nothing.*relays nothing/s);
 });
 
