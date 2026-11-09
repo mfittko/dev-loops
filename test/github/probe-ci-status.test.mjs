@@ -1236,8 +1236,9 @@ test("probe-ci-status capped call returns pending and the re-issue keeps the bas
   const first = await call(argv, queued("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), 1_000_000);
   assert.equal(first.status, "timeout");
   assert.equal(first.outcome, "pending");
-  assert.equal(first.remainingTimeoutSeconds, 430);
-  assert.match(first.reissue, /^dev-loops-run --repo-root \S+ scripts\/github\/probe-ci-status\.mjs --repo owner\/repo --pr 7 --poll-interval-ms 30000 --baseline-sha aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --stall-started-at-ms 1000000 --timeout 430$/);
+  // Polls at 0, 30, ... 150 s end the slice at 150 s: the re-issue deducts that elapsed time, not the 170 s cap.
+  assert.equal(first.remainingTimeoutSeconds, 450);
+  assert.match(first.reissue, /^dev-loops-run --repo-root \S+ scripts\/github\/probe-ci-status\.mjs --repo owner\/repo --pr 7 --poll-interval-ms 30000 --baseline-sha aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --stall-started-at-ms 1000000 --timeout 450$/);
   const resumed = first.reissue.split(" ").slice(4);
   // A push between the calls is not absorbed: the carried baseline sees the new head.
   assert.equal((await call(resumed, queued("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), 1_175_000)).status, "changed");

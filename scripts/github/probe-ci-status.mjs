@@ -643,6 +643,7 @@ export async function runCli(
   const { timeoutMs, remainingMs } = capWait(requested.timeoutMs);
   // Only a capped call clamps: a poll interval above the cap would leave one poll per call, so the no-checks grace never accrues.
   const options = { ...requested, timeoutMs, pollIntervalMs: remainingMs > 0 ? Math.min(requested.pollIntervalMs, timeoutMs) : requested.pollIntervalMs };
+  const startedAtMs = (watchDeps.now ?? Date.now)();
   const carry = { "--baseline-sha": options.baselineSha, "--stall-started-at-ms": options.stallStartedAtMs };
   let result = options.commit !== undefined
     ? await watchCommitCiStatus(options, { env, ghCommand, ...watchDeps })
@@ -654,7 +655,9 @@ export async function runCli(
       onStall: (startedAtMs) => { carry["--stall-started-at-ms"] = startedAtMs; },
     });
   if (result.status === "timeout" && remainingMs > 0) {
-    result = { ...result, ...pendingFields({ remainingMs, command: scriptCommand(import.meta.url), argv, carry: options.commit !== undefined ? {} : carry }) };
+    // The re-issue deducts actual elapsed time, not the cap: a default-poll slice ends before the cap.
+    const leftMs = requested.timeoutMs - ((watchDeps.now ?? Date.now)() - startedAtMs);
+    result = { ...result, ...pendingFields({ remainingMs: leftMs, command: scriptCommand(import.meta.url), argv, carry: options.commit !== undefined ? {} : carry }) };
   }
   process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }

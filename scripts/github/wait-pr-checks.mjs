@@ -199,7 +199,7 @@ export async function runCli(
   // reset wait returns "changed" instead of settling an un-baselined head.
   let baselineSha = options.baselineSha;
   let stallStartedAtMs = options.stallStartedAtMs;
-  let pendingRemainingMs = capRemainingMs;
+  let pendingRemainingMs; // set by the rate-limit path; otherwise derived from actual elapsed time below
   // Refresh the runner lease during a reset wait, as the watch loop does between polls.
   const waitResetWithHeartbeat = (ms) => waitWithHeartbeat(ms, {
     attempt: 1, attemptBudget: 1, watchStartedAtMs: startedAt, timeoutMs: options.timeoutMs, now, delayImpl,
@@ -249,6 +249,7 @@ export async function runCli(
       stderr.write(`${JSON.stringify(result)}\n`);
     }
   }
+  pendingRemainingMs ??= capRemainingMs > 0 ? requested.timeoutMs - (now() - startedAt) : 0;
   if (result.status === "timeout" && pendingRemainingMs > 0) {
     const carry = { "--baseline-sha": baselineSha, "--stall-started-at-ms": stallStartedAtMs };
     result = { ...result, ...pendingFields({ remainingMs: pendingRemainingMs, command: scriptCommand(import.meta.url), argv, carry }) };

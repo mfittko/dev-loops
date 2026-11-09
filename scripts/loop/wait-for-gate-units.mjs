@@ -206,6 +206,16 @@ export async function waitForUnits({ artifact, after, emitPlan, judgePlan, units
   }
 }
 
+// The reissue runs from the repository root, so path flags resolve against this call's cwd first.
+const PATH_FLAGS = ["--emit-plan", "--judge-plan", "--tmp-root", "--artifact", "--after"];
+function absolutePathArgs(argv) {
+  return argv.map((token, i) => {
+    if (PATH_FLAGS.includes(argv[i - 1])) return path.resolve(token);
+    const flag = PATH_FLAGS.find((name) => token.startsWith(`${name}=`));
+    return flag ? `${flag}=${path.resolve(token.slice(flag.length + 1))}` : token;
+  });
+}
+
 export async function main(argv = process.argv.slice(2), { wait = waitForUnits } = {}) {
   let result;
   let options;
@@ -216,7 +226,7 @@ export async function main(argv = process.argv.slice(2), { wait = waitForUnits }
     result = await wait({ ...options, timeoutMs });
     if (result.outcome === "timeout" && remainingMs > 0) {
       const { remedy, ...rest } = result;
-      result = { ...rest, ...(remedy && remedy !== ARTIFACT_TIMEOUT_REMEDY ? { remedy } : {}), ...pendingFields({ remainingMs, command: scriptCommand(import.meta.url), argv }) };
+      result = { ...rest, ...(remedy && remedy !== ARTIFACT_TIMEOUT_REMEDY ? { remedy } : {}), ...pendingFields({ remainingMs, command: scriptCommand(import.meta.url), argv: absolutePathArgs(argv) }) };
     }
   } catch (error) {
     result = { ok: false, error: error instanceof Error ? error.message : String(error) };

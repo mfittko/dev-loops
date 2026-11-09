@@ -375,6 +375,18 @@ test("a --timeout above the cap is capped, returns pending (exit 2) and the re-i
   });
 });
 
+test("the re-issue resolves relative path args against the original cwd", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    const rel = (p) => path.relative(process.cwd(), p);
+    const argv = ["--emit-plan", rel(planPath), `--tmp-root=${rel(path.join(root, "tmp"))}`, "--timeout", "500"];
+    const clock = fakeClock();
+    const real = (options) => waitForUnits({ ...options, receiptTmpRoot: path.join(root, "tmp"), ...clock });
+    const { result } = await runMain(argv, real);
+    assert.match(result.reissue, new RegExp(`--emit-plan ${planPath.replaceAll(".", "\\.")} --tmp-root=${path.join(root, "tmp").replaceAll(".", "\\.")} --timeout 330$`));
+  });
+});
+
 test("a --timeout at or under the cap and --timeout 0 stay timeout", async () => {
   const stub = async () => ({ ok: true, outcome: "timeout", missing: [] });
   const argv = ["--emit-plan", "a", "--tmp-root", "t"];
