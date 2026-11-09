@@ -378,3 +378,17 @@ test("evaluateJqFilter: null sorts below numbers in order comparisons", () => {
   assert.deepEqual(evaluateJqFilter(rows, ".[] | select(.f >= 10)"), [{ f: 20 }]);
   assert.deepEqual(evaluateJqFilter(rows, ".[] | select(.f > null)"), [{ f: 20 }]);
 });
+
+test("strict: a typo in a select/comparison predicate path is a missing-path error, a present null is a value", () => {
+  const data = { a: null, b: 1 };
+  assert.throws(() => evaluateJqFilter(data, "select(.typo == 1)", { strict: true }), /matches no field/);
+  assert.throws(() => evaluateJqFilter(data, "select(.typo)", { strict: true }), /matches no field/);
+  assert.throws(() => evaluateJqFilter(data, ".typo == 1", { strict: true }), /matches no field/);
+  assert.deepEqual(evaluateJqFilter(data, ".a == null", { strict: true }), [true]);
+  assert.deepEqual(evaluateJqFilter(data, "select(.a == null)", { strict: true }), [data]);
+  assert.deepEqual(evaluateJqFilter(data, ".typo == 1"), [false]);
+});
+
+test("strict: inherited properties such as .constructor are not fields", () => {
+  assert.throws(() => evaluateJqFilter({ a: 1 }, ".constructor", { strict: true }), /matches no field/);
+});

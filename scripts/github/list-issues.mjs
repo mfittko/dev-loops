@@ -24,6 +24,7 @@ Output (stdout, JSON):
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage"?: "..." }
 ${JQ_OUTPUT_USAGE}
+--jq path matching no field in the output exits 2 listing the real paths.
 Exit codes:
   0  Success
   1  Argument error or gh failure

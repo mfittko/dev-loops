@@ -29,7 +29,7 @@ Output (stdout, JSON):
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage"?: "..." }
 ${JQ_OUTPUT_USAGE}
---jq resolves against the requested fields (.body and .issue.body both work); a path matching no field exits 2 listing the real paths.
+--jq resolves against the requested fields (.body and .issue.body both work; the requested fields are also addressable at the top level); a path matching no field exits 2 listing the real paths.
 Exit codes:
   0  Success
   1  Argument error or gh failure

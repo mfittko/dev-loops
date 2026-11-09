@@ -188,7 +188,7 @@ function hasPath(value, path) {
   for (const step of parsePathSteps(path)) {
     if (cursor === undefined || cursor === null) return true;
     if (step.field !== undefined) {
-      if (typeof cursor !== "object" || Array.isArray(cursor) || !(step.field in cursor)) return false;
+      if (typeof cursor !== "object" || Array.isArray(cursor) || !Object.hasOwn(cursor, step.field)) return false;
       cursor = cursor[step.field];
     } else {
       if (!Array.isArray(cursor)) return false;
@@ -203,6 +203,12 @@ function assertPathPresent(stream, path) {
   const error = new JqFilterError(`path ${path.trim()} matches no field in the output`);
   error.missingPath = path.trim();
   throw error;
+}
+
+// A typo in a predicate path must not read as "false" (exit 1 under --silent).
+function assertPredicatePath(stream, predicate) {
+  const parsed = parsePredicateSyntax(predicate);
+  assertPathPresent(stream, parsed.kind === "bare" ? parsed.path : parsed.leftRaw);
 }
 
 // One-level listing of the real paths in a result, for the missing-path error.
@@ -241,10 +247,12 @@ function applyStage(stream, rawStage, strict = false) {
   }
   const selectMatch = stage.match(/^select\((.*)\)$/);
   if (selectMatch) {
+    if (strict) assertPredicatePath(stream, selectMatch[1]);
     return stream.filter((v) => evaluatePredicate(v, selectMatch[1]));
   }
   // Top-level comparison expression yields a boolean per input (e.g. .x=="y").
   if (/(==|!=|<=|>=|<|>)/.test(stage)) {
+    if (strict) assertPredicatePath(stream, stage);
     return stream.map((v) => evaluatePredicate(v, stage));
   }
   // Iteration: a path ending in [] (incl. bare .[]).

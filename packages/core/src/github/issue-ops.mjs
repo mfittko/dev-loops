@@ -83,10 +83,7 @@ function assertRegularFilePath(path) {
 // the same path fresh — this validates what gh will actually see, not just the
 // path's literal spelling.
 export async function resolveCreateBody(options) {
-  if (options.bodyFile === undefined) {
-    if (options.body !== undefined) assertWritableBody(options.body, "--body", options.allowEmptyBody);
-    return options.body;
-  }
+  if (options.bodyFile === undefined) return options.body;
   assertRegularFilePath(options.bodyFile);
   return await readFile(options.bodyFile, "utf8");
 }
@@ -116,7 +113,10 @@ export async function createIssue(options, { env = process.env, ghCommand = "gh"
 // ── edit-issue ──────────────────────────────────────────────────────────
 
 export async function resolveEditBody(options) {
-  if (options.bodyFile === undefined) return options.body;
+  if (options.bodyFile === undefined) {
+    if (options.body !== undefined) assertWritableBody(options.body, "--body", options.allowEmptyBody);
+    return options.body;
+  }
   // Stdin (fd 0): fs/promises readFile does NOT accept an integer fd, so read
   // it synchronously via the callback-style API (which does). A real path
   // stays on the async promise read.

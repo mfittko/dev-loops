@@ -207,15 +207,16 @@ export function parseEditIssueCliArgs(argv) {
   if (options.repo === undefined || options.issue === undefined) {
     throw parseError("Editing an issue requires both --repo <owner/name> and --issue <number>");
   }
-  if (options.body !== undefined) {
-    try {
-      assertWritableBody(options.body, "--body", options.allowEmptyBody);
-    } catch (error) {
-      throw parseError(error instanceof Error ? error.message.replace("is empty", "must not be empty or whitespace-only") : String(error));
-    }
-  }
   if (options.body !== undefined && options.bodyFile !== undefined) {
     throw parseError("--body and --body-file are mutually exclusive; pass only one");
+  }
+  if (options.body !== undefined && !options.allowEmptyBody) {
+    if (options.body.trim().length === 0) throw parseError("--body must not be empty or whitespace-only");
+    try {
+      assertWritableBody(options.body, "--body");
+    } catch (error) {
+      throw parseError(error instanceof Error ? error.message : String(error));
+    }
   }
   if (options.reason !== undefined && options.state !== "closed") {
     throw parseError("--reason is only valid together with --state closed");
@@ -251,8 +252,6 @@ export async function editIssue(options, { env = process.env, ghCommand = "gh", 
     if (body === undefined) {
       body = options.bodyFile === "-" ? readFileSync(0, "utf8") : await readFile(options.bodyFile, "utf8");
       assertWritableBody(body, `--body-file ${options.bodyFile}`, options.allowEmptyBody);
-    } else {
-      assertWritableBody(body, "--body", options.allowEmptyBody);
     }
     let baseline;
     try {
