@@ -2,11 +2,11 @@
 
 How dev-loop work is structured depends on the harness.
 
-**Under the Claude Code harness, the dev-loop runs as a single agent that acts as a delegating
-COORDINATOR.** The agent invoked for dev-loop work runs git and PR lifecycle operations, runs the
+**Under the Claude Code harness, the main session dispatches the `dev-loops:dev-loop` coordinator
+(`dev-loop` inside the dev-loops repo itself), and the coordinator is one agent that acts as a delegating
+COORDINATOR.** The main session runs no gate, fixer or reviewer step. The coordinator runs git and PR lifecycle operations, runs the
 `dev-loops` CLI (including state-changing `gate` / `pr` / `loop` subcommands), and posts gate
-verdicts under the operating session's identity. There is no separate read-only "main agent" and
-no Pi-style main-agent→dev-loop async hop. As COORDINATOR, the dev-loop agent is read-only for
+verdicts under the operating session's identity. There is no separate read-only "main agent" on Claude Code. As COORDINATOR, the dev-loop agent is read-only for
 TRACKED repo files (source, tests, docs) and MUST delegate every tracked-file implementation edit
 and targeted verification run to a fresh WORKER subagent (`developer`/`fixer`/`quality`/`docs`).
 The coordinator MAY still write EPHEMERAL gitignored/non-repo artifacts directly: `tmp/`, the

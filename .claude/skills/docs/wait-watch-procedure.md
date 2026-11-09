@@ -88,7 +88,7 @@ Wait only through the deterministic tools in `COPILOT-FOLLOWUP-WAIT-TOOLS`.
 Helper-owned polling is expected; do not create shell sleep/poll loops, detached
 watchers, or transcript-tailing automation.
 
-Under Claude Code, continue pending non-terminal waits inline in the same agent,
+Under Claude Code, the dev-loop coordinator continues pending non-terminal waits in the same agent,
 using the fresh envelope on each re-entry, until the requested stop boundary or
 budget is reached. Do not exit just to have a parent re-dispatch the watch loop.
 
