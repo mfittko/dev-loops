@@ -4363,7 +4363,7 @@ test("the detector writes the body finding to the derived judge file and removes
 // ADR 0208 (#2462 slice 8): the PR 2976 shape. Cap round 4 found items, the fixer pass landed and its sealed delta cleared the current head, and a blocked round 5 sits at that head.
 // `record` "none" writes no delta record, `candidate` names a record candidate other than the head, `capFindings` are the cap round's findings, `orphaned` makes the head a parentless commit
 // the cap-round head (a real commit) is not an ancestor of; it returns the head and cap-round head the fixture uses.
-async function seedCapFixedRepo(repoRoot, { headSha, seal = true, record: recordKind = "sealed", candidate, capFindings = [], orphaned = false }) {
+async function seedCapFixedRepo(repoRoot, { headSha, seal = true, record: recordKind = "sealed", candidate, capFindings = [], orphaned = false, unreadable = false }) {
   initGitFixture(repoRoot, { branch: "main" });
   let capHead = "c".repeat(40);
   if (orphaned) {
@@ -4375,6 +4375,7 @@ async function seedCapFixedRepo(repoRoot, { headSha, seal = true, record: record
   const ledger = (head, verdict, i, list = []) => writeFile(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict, loggedAt: `2026-11-0${i}T00:00:00.000Z`, findings: list }), "utf8");
   for (const [i, head] of ["1", "2", "3"].entries()) await ledger(head.repeat(40), "findings_present", i + 1);
   await ledger(capHead, "findings_present", 4, capFindings);
+  if (unreadable) await writeFile(path.join(findings, `draft_gate-${capHead}.json`), "not json", "utf8");
   await ledger(headSha, "blocked", 5);
   const deltaDir = path.join(repoRoot, "tmp", "gate-delta");
   await mkdir(deltaDir, { recursive: true });
@@ -4655,7 +4656,12 @@ const PR_HEAD = "abc1234567".repeat(4);
 const toolchainSeams = (root, { rootHead = "d".repeat(40), contains = false, worktrees = [] } = {}) => ({
   toolchainRoot: root,
   originSlug: () => "owner/repo",
-  git: (_cwd, args) => { if (args[1] === "--show-toplevel") return root; if (args[0] === "rev-parse") return rootHead; if (contains) return ""; throw new Error("not an ancestor"); },
+  git: (_cwd, args) => {
+    if (args[0] === "rev-parse") return args[1] === "--show-toplevel" ? root : rootHead;
+    if (args.join(" ") !== `merge-base --is-ancestor ${PR_HEAD} HEAD`) throw new Error(`unexpected git call: ${args.join(" ")}`);
+    if (contains) return "";
+    throw new Error("not an ancestor");
+  },
   worktrees: () => [{ path: root, head: rootHead }, ...worktrees],
 });
 
@@ -4745,6 +4751,7 @@ for (const { name, isDraft, seal, verdict, threads = 0, seed = true, satisfied, 
   { name: "ready with a record that does not cover the act refs (items_do_not_cover)", isDraft: false, seal: true, verdict: "blocked", satisfied: false, condition: "items_do_not_cover", fixture: { capFindings: [AC1_ACT] } },
   { name: "draft with a chain that ends before the head (chain_does_not_reach_head)", isDraft: true, seal: true, verdict: "blocked", satisfied: false, condition: "chain_does_not_reach_head", fixture: { candidate: "d".repeat(40) } },
   { name: "ready with an orphaned cap-round head (baseline_orphaned)", isDraft: false, seal: true, verdict: "blocked", satisfied: false, condition: "baseline_orphaned", fixture: { orphaned: true, record: "none" } },
+  { name: "ready with an unreadable cap-round ledger (cap_round_unresolved)", isDraft: false, seal: true, verdict: "blocked", satisfied: false, condition: "cap_round_unresolved", fixture: { unreadable: true } },
   { name: "ready with no cap-round ledger (below the cap, no failure)", isDraft: false, seal: true, verdict: "blocked", seed: false, satisfied: false },
 ]) {
   test(`issue 3139 AC1: detector, write-gate-context and upsert-checkpoint-verdict agree on draftGateSatisfied for ${name}`, async () => {
