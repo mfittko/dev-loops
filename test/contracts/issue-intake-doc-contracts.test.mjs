@@ -244,7 +244,7 @@ test("issue-intake flow carries the resolved repo slug through later GitHub issu
   assert.match(skillContent, /Carry that resolved repo slug through every later GitHub issue\/PR command/i);
   assert.match(skillContent, /gh issue create --repo <resolved-repo> --assignee @me/);
   assert.match(skillContent, /node <dev-loops-package-root>\/cli\/index\.mjs issue edit --repo <resolved-repo> --issue <number> --body-file <updated-body-file>/);
-  assert.match(skillContent, /node <dev-loops-package-root>\/cli\/index\.mjs issue edit --repo <resolved-repo> --issue <number> --add-assignee @me/);
+  assert.match(skillContent, /loop startup --issue <number> --claim/);
   assert.match(skillContent, /node <dev-loops-package-root>\/cli\/index\.mjs issue edit --repo <resolved-repo> --issue <number> --add-assignee copilot-swe-agent/);
   const intake = await readRepo("skills/docs/issue-intake-procedure.md");
   assertIntakePrEditUsesWrapper(intake);

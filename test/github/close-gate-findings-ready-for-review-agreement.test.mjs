@@ -64,7 +64,7 @@ function threadNodeFromState(threadState) {
         id: `gid-${c.databaseId}`,
         databaseId: c.databaseId,
         body: c.body,
-        author: { login: c.author, __typename: "User" },
+        authorAssociation: "OWNER", author: { login: c.author, __typename: "User" },
       })),
     },
   };
@@ -93,7 +93,7 @@ function buildSharedMockForThreads(threadStates) {
     if (args.includes(`repos/${REPO}/issues/${PR}/comments?per_page=100`)) {
       return {
         code: 0,
-        stdout: `${JSON.stringify([{ id: 1, body: DRAFT_GATE_BODY, html_url: "https://x/1", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" }])}\n`,
+        stdout: `${JSON.stringify([{ id: 1, body: DRAFT_GATE_BODY, user: { login: "maintainer", type: "User" }, author_association: "MEMBER", html_url: "https://x/1", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" }])}\n`,
         stderr: "",
       };
     }

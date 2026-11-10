@@ -8,7 +8,6 @@
  * with a typed reason and leaves the body unchanged. The scope is fixed here;
  * the standing authorization record carries no scope field.
  */
-import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -17,7 +16,7 @@ import { detectRepoSlug, parseRepoSlug, repoSlugEquals } from "@dev-loops/core/g
 import { ghJson } from "@dev-loops/core/github/gh";
 import { CAP_ROUND_REFUSAL } from "@dev-loops/core/loop/pr-gate-coordination";
 import { extractClosingIssueNumbers } from "@dev-loops/core/github/closing-ref-guard";
-import { detectAcDodMatrix } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { detectAcDodMatrix, stripFencesAndCodeSpans } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { computeSpecDigest, requireSpecFromBody } from "@dev-loops/core/loop/spec-authority";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { evaluateAdrTripwire as realEvaluateAdrTripwire } from "../loop/check-adr-tripwire.mjs";
@@ -27,11 +26,12 @@ import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { fetchIssueBody as realFetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
 import { fetchDraftGateEvidence as realFetchDraftGateEvidence } from "./_gate-finding-surface.mjs";
 import { buildLogPath } from "./_gate-artifact-paths.mjs";
+import { readSealed } from "./_gate-artifact-seal.mjs";
 import { editPr as realEditPr } from "./edit-pr.mjs";
 import { resolveCapRoundFixed as realResolveCapRoundFixed } from "./write-gate-context.mjs";
 
 function noProofRefusal({ repo, pr, headSha }) {
-  return refuse("no_clean_draft_gate", `GATE-EXEC-ROUND-CAP-WAIVER-PROOF: no clean draft_gate or pre_approval_gate checkpoint verdict and no cap-round-fixed proof on the current head ${headSha.slice(0, 7)}. For a cap-round PR whose later commits are docs and tests only, run: node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo ${repo} --pr ${pr}. Otherwise run: node <dev-loops-package-root>/cli/index.mjs loop gate-coordination --repo ${repo} --pr ${pr} and follow its next action`);
+  return refuse("no_clean_draft_gate", `GATE-EXEC-ROUND-CAP-WAIVER-PROOF: no clean draft_gate or pre_approval_gate checkpoint verdict and no cap-round-fixed proof on the current head ${headSha.slice(0, 7)}. For a cap-round PR whose later commits are docs and tests only, or code that a locally_clear pre-push delta covers (ADR 0254), run: node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo ${repo} --pr ${pr}. Otherwise run: node <dev-loops-package-root>/cli/index.mjs loop gate-coordination --repo ${repo} --pr ${pr} and follow its next action`);
 }
 
 const USAGE = `Usage: waive-adr-tripwire.mjs --repo <owner/name> --pr <number>
@@ -41,8 +41,10 @@ create-pr.mjs refuse a hand-written one. It applies the waiver only when:
   - a standing authorization (.devloops standingAuthorizations.adrTripwireWaiver
     on origin/<defaultBranch>) is in force (present, well-formed, at most 90 days,
     not expired);
-  - the PR body links exactly one tracker issue (Closes/Fixes) and is not on the
-    lightweight pr_body path;
+  - the PR body links exactly one tracker issue (Closes/Fixes, or Refs when the
+    body has no closing keyword: the one Refs target with an AC / DoD matrix; two
+    or more refuse ambiguous_refs_tracker_issue) and is not on the lightweight
+    pr_body path;
   - the ADR tripwire blocks, and every trigger is a skills/docs/*-contract.md path;
   - every triggering path appears, backticked, in a row of the linked issue's AC / DoD matrix;
   - the current head has a clean draft_gate or pre_approval_gate verdict, or the
@@ -98,17 +100,32 @@ async function defaultFetchDefaultBranch({ repo }, { env, ghCommand, runChild })
 }
 
 async function defaultReadRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate = "draft_gate" }) {
-  const ledgerPath = buildLogPath({ repo, pr, gate, headSha, tmpRoot: resolveGateArtifactTmpRoot(repoRoot) });
   try {
-    const ledger = JSON.parse(await readFile(ledgerPath, "utf8"));
+    const ledgerPath = buildLogPath({ repo, pr, gate, headSha, tmpRoot: resolveGateArtifactTmpRoot(repoRoot) });
+    const ledger = JSON.parse(await readSealed(ledgerPath));
     return typeof ledger?.specAuthority?.specDigest === "string" ? ledger.specAuthority.specDigest : null;
   } catch {
     return null;
   }
 }
 
+// Same-repo issue numbers of `Refs a/b#1, #2 and c/d#3` lists outside code spans and fences; each entry carries its own optional qualifier. De-duplicated.
+const REF_ENTRY = String.raw`(?:[\w.-]+\/[\w.-]+)?#\d+\b`;
+const REFS_RE = new RegExp(String.raw`\brefs\s*:?\s+${REF_ENTRY}(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+)${REF_ENTRY})*`, "giu");
+function extractSameRepoRefsIssueNumbers(body, repo) {
+  const numbers = new Set();
+  for (const [list] of stripFencesAndCodeSpans(body).matchAll(REFS_RE)) {
+    for (const [, slug, raw] of list.matchAll(/(?:([\w.-]+\/[\w.-]+))?#(\d+)\b/gu)) {
+      if (slug && !repoSlugEquals(slug, repo)) continue;
+      const n = Number(raw);
+      if (Number.isSafeInteger(n) && n > 0) numbers.add(n);
+    }
+  }
+  return [...numbers];
+}
+
 /** Every trigger path must appear, backticked, in some row of the issue's valid AC / DoD matrix. */
-function pathsMissingFromMatrix(paths, issueBody) {
+export function pathsMissingFromMatrix(paths, issueBody) {
   const matrix = detectAcDodMatrix(issueBody);
   if (!matrix.found || !matrix.valid) return { matrixInvalid: true, missing: paths };
   const missing = paths.filter((p) => !matrix.rows.some((row) => `${row.criterion}\n${row.evidence}`.includes(`\`${p}\``)));
@@ -170,13 +187,15 @@ export async function waiveAdrTripwire(options, {
   }
   const bodyIssues = extractClosingIssueNumbers(body);
   const linkedIssues = (prState.closingIssuesReferences?.nodes ?? prState.closingIssuesReferences ?? []).map((n) => n?.number).filter(Number.isInteger);
-  if (bodyIssues.length === 0) {
+  // With no closing keyword, a same-repo Refs target is the link; the matrix step picks the issue.
+  const refsIssues = bodyIssues.length > 0 ? [] : extractSameRepoRefsIssueNumbers(body, repo);
+  if (bodyIssues.length === 0 && refsIssues.length === 0) {
     return refuse("lightweight_pr_body_path", `PR #${pr} links no tracker issue (a lightweight pr_body PR is not eligible)`);
   }
-  if (bodyIssues.length !== 1 || (linkedIssues.length > 0 && (linkedIssues.length !== 1 || linkedIssues[0] !== bodyIssues[0]))) {
+  if (refsIssues.length === 0 && (bodyIssues.length !== 1 || (linkedIssues.length > 0 && (linkedIssues.length !== 1 || linkedIssues[0] !== bodyIssues[0])))) {
     return refuse("not_exactly_one_tracker_issue", `PR #${pr} must link exactly one canonical tracker issue via Closes/Fixes (body: ${bodyIssues.join(", ")}; GitHub: ${linkedIssues.join(", ") || "none"})`);
   }
-  const issue = bodyIssues[0];
+  let issue = bodyIssues[0];
 
   const tripwire = await evaluateAdrTripwire({ base: `origin/${prState.baseRefName}`, head: headSha, prBody: body, repoRoot, env, now });
   if (tripwire.outcome !== "block") {
@@ -188,9 +207,35 @@ export async function waiveAdrTripwire(options, {
   }
   const paths = [...new Set(tripwire.triggers.map((t) => t.path))].sort();
 
-  const issueBody = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
+  let issueBody;
+  let issueUnreadable = false;
+  let unreadableRefs = [];
+  if (refsIssues.length === 0) {
+    issueBody = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
+  } else {
+    // The Refs target that carries a valid AC / DoD matrix is the issue; none carrying one falls to the first target and refuses below.
+    // An unreadable target (deleted, transferred, a PR number) carries no matrix.
+    const fetched = await Promise.all(refsIssues.map(async (n) => {
+      let unreadable = false;
+      const text = await fetchIssueBody({ repo, issue: n }, { env, ghCommand, runChild }).catch(() => { unreadable = true; return ""; });
+      return { n, text, unreadable };
+    }));
+    const carrying = fetched.filter(({ text }) => { const m = detectAcDodMatrix(text); return m.found && m.valid; });
+    if (carrying.length > 1) {
+      return refuse("ambiguous_refs_tracker_issue", `PR #${pr} Refs ${carrying.map(({ n }) => `#${n}`).join(", ")} carry an AC / DoD matrix; exactly one matrix-carrying tracker issue is required`, { issues: carrying.map(({ n }) => n) });
+    }
+    const chosen = carrying[0] ?? fetched[0];
+    issue = chosen.n;
+    issueBody = chosen.text;
+    issueUnreadable = chosen.unreadable;
+    // With no matrix-carrying target, name every unreadable target so a read failure is not hidden behind the fallback.
+    if (!carrying[0]) unreadableRefs = fetched.filter((f) => f.unreadable && f.n !== issue).map((f) => `#${f.n}`);
+    if (linkedIssues.length > 0 && (linkedIssues.length !== 1 || linkedIssues[0] !== issue)) {
+      return refuse("not_exactly_one_tracker_issue", `PR #${pr} links #${issue} via Refs but GitHub closing references are ${linkedIssues.join(", ")}`);
+    }
+  }
   const { matrixInvalid, missing } = pathsMissingFromMatrix(paths, issueBody);
-  if (matrixInvalid) return refuse("issue_matrix_invalid", `linked issue #${issue} has no valid AC / DoD matrix`);
+  if (matrixInvalid) return refuse("issue_matrix_invalid", `${issueUnreadable ? `linked issue #${issue} could not be read` : `linked issue #${issue} has no valid AC / DoD matrix`}${unreadableRefs.length > 0 ? ` (unreadable Refs targets: ${unreadableRefs.join(", ")})` : ""}`);
   if (missing.length > 0) {
     return refuse("contract_doc_not_in_matrix", `contract doc(s) not named as a backticked path in a row of issue #${issue}'s AC / DoD matrix: ${missing.join(", ")}`, { missing });
   }
@@ -198,8 +243,13 @@ export async function waiveAdrTripwire(options, {
   const gate = await fetchDraftGateEvidence({ repo, pr, headSha }, gh);
   // A post-ready push gets only a pre_approval_gate round, so that verdict is the alternative.
   // Every clean current-head gate is tried in order; the first matching digest wins.
+  // A converged or carried draft_gate marker names the head whose sealed ledger recorded the digest.
+  const sourceHead = gate?.draftGateMarker?.convergedFromHeadSha ?? gate?.draftGateMarker?.carriedFrom ?? headSha;
   const sources = [gate?.currentHeadClean && "draft_gate", gate?.preApprovalCurrentHeadClean && "pre_approval_gate"].filter(Boolean)
-    .map((name) => ({ name, read: () => readRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate: name }) }));
+    .map((name) => {
+      const head = name === "draft_gate" ? sourceHead : headSha;
+      return { name, head, read: () => readRecordedSpecDigest({ repo, pr, headSha: head, repoRoot, gate: name }) };
+    });
   // GATE-EXEC-ROUND-CAP-WAIVER-PROOF: with no clean verdict, the cap-round-fixed proof that ready-for-review.mjs accepts also qualifies.
   if (sources.length === 0) {
     // A config or ledger error fails closed here and in ready-for-review.mjs; only a null proof means "no proof".
@@ -222,12 +272,12 @@ export async function waiveAdrTripwire(options, {
   }
   let digestRefusal = null;
   let matched = false;
-  for (const { name, read } of sources) {
+  for (const { name, head, read } of sources) {
     const recorded = await read();
     if (recorded === currentSpecDigest) { matched = true; break; }
     // A recorded-but-stale digest outranks an unrecorded one in the refusal.
     if (recorded !== null) digestRefusal = refuse("spec_digest_mismatch", `the ${name} recorded specDigest ${recorded}, but issue #${issue} now yields ${currentSpecDigest}`);
-    else digestRefusal ??= refuse("spec_digest_unrecorded", `the ${name} for head ${headSha.slice(0, 7)} recorded no specDigest`);
+    else digestRefusal ??= refuse("spec_digest_unrecorded", `the ${name} for head ${(head ?? headSha).slice(0, 7)} recorded no specDigest`);
   }
   if (!matched) return digestRefusal;
 

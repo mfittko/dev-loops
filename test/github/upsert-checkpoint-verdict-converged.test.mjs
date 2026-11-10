@@ -161,15 +161,48 @@ test("an all-act converged round composes clean from a findings_present ledger v
 });
 
 // GATE-EXEC-ROUND-CAP choke point with the cap on (default 4): the converged post carries only the judged ledger.
-test("with the round cap on, a converged post with --findings-ledger only posts clean", async () => {
+// Closed prior rounds in the cap-on root: the posted round at A is round `prior + 1`.
+async function withPriorRounds(prior, fn) {
+  const dir = path.join(capOnRoot, "tmp", "gate-findings", "owner-repo", "pr-17");
+  await rm(dir, { recursive: true, force: true });
+  await mkdir(dir, { recursive: true });
+  for (let c = 1; c <= prior; c += 1) {
+    const head = String(c).repeat(40);
+    await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${c}T00:00:00.000Z`, findings: [],
+    }), "utf8");
+  }
+  try {
+    await fn();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+test("with the round cap on, a converged post at the cap round with --findings-ledger only posts clean", async () => {
   await withTempDir(async (tempDir) => {
-    const findings = [finding("low", 1), finding("nit", 2)];
-    const { result, body, error } = await post(tempDir, { findings, converged: convergedInput(findings), root: capOnRoot });
-    assert.equal(error, undefined);
-    assert.equal(result.action, "updated");
-    assert.match(body, /\*\*Verdict:\*\* clean/);
-    assert.match(body, /\*\*Converged:\*\*/);
+    await withPriorRounds(3, async () => {
+      const findings = [finding("low", 1), finding("nit", 2)];
+      const { result, body, error } = await post(tempDir, { findings, converged: convergedInput(findings), root: capOnRoot });
+      assert.equal(error, undefined);
+      assert.equal(result.action, "updated");
+      assert.match(body, /\*\*Verdict:\*\* clean/);
+      assert.match(body, /\*\*Converged:\*\*/);
+    });
   }, { prefix: "dev-loops-converged-capon-ok-" });
+});
+
+test("below the cap a converged post is refused and nothing is posted", async () => {
+  await withTempDir(async (tempDir) => {
+    for (const prior of [0, 2]) {
+      await withPriorRounds(prior, async () => {
+        const findings = [finding("low", 1), finding("nit", 2)];
+        const out = await post(tempDir, { findings, converged: convergedInput(findings), root: capOnRoot });
+        assert.match(out.error ?? "", new RegExp(`converged verdict applies only at the cap round or later \\(round ${prior + 1}, cap 4\\)`));
+        assert.equal(out.puts.length, 0, "nothing is posted");
+      });
+    }
+  }, { prefix: "dev-loops-converged-capon-below-" });
 });
 
 test("with the round cap on, a converged post with --findings-json is refused by GATE-EXEC-ROUND-CAP", async () => {

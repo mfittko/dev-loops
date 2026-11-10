@@ -33,6 +33,7 @@
                   {
                     "id": "c-2",
                     "body": "Resolve after the docs update lands.",
+                    "authorAssociation": "OWNER",
                     "author": {
                       "login": "maintainer",
                       "__typename": "User"
@@ -49,6 +50,7 @@
                   {
                     "id": "c-1",
                     "body": "Please add regression coverage.",
+                    "authorAssociation": "MEMBER",
                     "author": {
                       "login": "reviewer",
                       "__typename": "User"

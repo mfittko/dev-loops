@@ -20,6 +20,7 @@
  * precondition, and the aggregate naming.
  */
 
+import { isSanctionedCopilotReviewerLogin } from "../github/comment-trust.mjs";
 import { isCopilotLogin, classifyCopilotReviewBodyDisposition, COPILOT_DISPOSITION, SUBMITTED_REVIEW_STATES, extractReviewCommitSha } from "../github/copilot-helpers.mjs";
 import { findBlockingTitleMarkers } from "./pr-title-markers.mjs";
 import { resolveSizeBudgetHumanApprovalRequired } from "./size-budget-merge-gate.mjs";
@@ -259,7 +260,8 @@ export function evaluateCopilotConvergence({ currentHeadSha = null, reviews = []
     // affect verifyFreshHumanApproval (which keeps its own REST-only
     // reviewLogin/reviewCommit).
     const login = copilotConvergenceReviewLogin(entry);
-    if (login === null || !isCopilotLogin(login)) continue;
+    // Exact sanctioned reviewer, the same predicate as summarizeCopilotReviews, so a lookalike cannot block.
+    if (login === null || !isSanctionedCopilotReviewerLogin(login)) continue;
     if (extractReviewCommitSha(entry) !== head) continue; // only current-head reviews
     const state = typeof entry?.state === "string" ? entry.state.toUpperCase() : "";
     if (state === "PENDING" || !SUBMITTED_REVIEW_STATES.has(state)) continue; // PENDING/unknown never sets the finding

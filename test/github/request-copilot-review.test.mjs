@@ -5,8 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { afterAll, beforeAll, describe, it, test } from "bun:test";
-import { captureStream, makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
-import { checkForCopilotComments, parseRequestCliArgs, performCopilotReviewRequest, runCli } from "../../scripts/github/request-copilot-review.mjs";
+import { captureStream, makeGhMock as makeGhMockRaw, runNode as runNodeHelper, trustGhEntries, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+
+// Gate-formatted fixture comments need a maintainer identity (ADR 0248).
+const makeGhMock = (entries, options) => makeGhMockRaw(trustGhEntries(entries), options);
+import { checkForCopilotComments, isCopilotReviewObservableViaGraphql, parseRequestCliArgs, performCopilotReviewRequest, runCli } from "../../scripts/github/request-copilot-review.mjs";
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { pullReceiptPath, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
@@ -208,6 +211,19 @@ test("request-copilot-review issues the REST requested_reviewers POST with the [
   assert.equal(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit"), false);
   const requestCall = calls.find(isCopilotRequestCall);
   assert.ok(requestCall.args.includes("reviewers[]=copilot-pull-request-reviewer[bot]"));
+});
+
+test("request-copilot-review does not count a copilot-x requested reviewer as requested", async () => {
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+      { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[{"login":"copilot-x"}],"teams":[]}\n' },
+      { assertArgs: PR_VIEW_ARGS, stdout: '{"reviews":[]}\n' },
+      { assertArgs: REQUEST_COPILOT_ARGS, stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+      { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}],"teams":[]}\n' },
+      { assertArgs: PR_VIEW_ARGS, stdout: '{"reviews":[]}\n' },
+    ]);
+
+  assert.equal(result.status, "requested");
+  assert.equal(calls.filter(isCopilotRequestCall).length, 1);
 });
 
 test("request-copilot-review recognizes Copilot under the requested reviewer login returned by GitHub", async () => {
@@ -2850,7 +2866,7 @@ for (const [active, failure, opts] of [["missing", /result_missing/], ["empty", 
       const headRefOid = "a".repeat(40);
       const extra = active === "omitted ACT" ? [
         { assertArgs: ["pr", "view", "17", "--json", "headRefOid,statusCheckRollup"], stdout: JSON.stringify({ headRefOid, statusCheckRollup: [] }) },
-        { assertArgs: GRAPHQL_ARGS, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_ACT", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "<!-- dev-loops:finding 0123456789abcdef -->", author: { login: "gate", __typename: "User" } }] } }] } } } } }) },
+        { assertArgs: GRAPHQL_ARGS, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_ACT", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "<!-- dev-loops:finding 0123456789abcdef -->", authorAssociation: "OWNER", author: { login: "gate", __typename: "User" } }] } }] } } } } }) },
         { assertArgs: ["api", "user"], stdout: '{"login":"gate"}' },
       ] : [];
       const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [FIXER_REQUESTED, { assertArgs: PR_VIEW_ARGS, stdout: JSON.stringify({ headRefOid, isDraft: false, reviews: [] }) }, ...extra, ...PROCEED(headRefOid)], { repoRoot });
@@ -2865,7 +2881,7 @@ for (const [active, failure, opts] of [["missing", /result_missing/], ["empty", 
 for (const [step, compare, reply] of [["commit_not_contained", "diverged", false], ["reply_missing", "ahead", false], ["not_resolved", "ahead", true]]) {
   test(`request-copilot-review proceeds with a ${step} warning for a tackled checkpoint`, async () => {
     await withFixerHandoff(async (repoRoot) => {
-      const comments = reply ? [{ id: "c1", databaseId: 1, body: "Fixed in commit fed9876543fed9876543fed9876543fed9876543", author: { login: "bot", __typename: "User" } }] : [];
+      const comments = reply ? [{ id: "c1", databaseId: 1, body: "Fixed in commit fed9876543fed9876543fed9876543fed9876543", authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] : [];
       const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
         FIXER_REQUESTED,
         FIXER_PR_VIEW,
@@ -2902,4 +2918,29 @@ test("request-copilot-review proceeds once the fixer-disposition checkpoint for 
     assert.equal(result.fixerDispositionWarning, undefined);
     assert.equal(calls.some(isCopilotRequestCall), true);
   }, { checkpoint: true });
+});
+
+test("checkForCopilotComments blocks a bare @copilot comment from a copilot-x account, which is not the sanctioned reviewer", async () => {
+  const { runChild } = makeGhMock([
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "--paginate", "--jq", ".[]"],
+        stdout: JSON.stringify({ id: 1002, body: "@copilot Please re-review this PR", user: { login: "copilot-x" } }) + "\n",
+      },
+    ], { repeatLastOnOverflow: true });
+
+  const result = await checkForCopilotComments({ repo: "owner/repo", pr: 17 }, { runChild });
+
+  assert.deepEqual(result.violationCommentIds, [1002]);
+});
+
+test("isCopilotReviewObservableViaGraphql does not treat a copilot-x review request or current-head review as the sanctioned reviewer", async () => {
+  const payload = {
+    data: { repository: { pullRequest: {
+      reviewRequests: { nodes: [{ requestedReviewer: { __typename: "Bot", login: "copilot-x" } }] },
+      reviews: { nodes: [{ author: { login: "copilot-x" }, commit: { oid: "abc123" } }] },
+    } } },
+  };
+  const runChild = async () => ({ code: 0, stdout: JSON.stringify(payload), stderr: "" });
+  const observable = await isCopilotReviewObservableViaGraphql({ repo: "owner/repo", pr: 17, headSha: "abc123" }, { runChild });
+  assert.equal(observable, false);
 });

@@ -1517,6 +1517,20 @@ describe("applyJudgeDispositions (#1525)", () => {
     assert.equal(scopeDrift.verdict, "within_scope");
   });
 
+  test("appended stamped findings share one cluster on an unstamped ledger", () => {
+    const findings = [
+      { severity: "high", angle: "correctness", summary: "unstamped" },
+      { severity: "low", angle: "copilot", summary: "body one", clusterId: 1 },
+      { severity: "low", angle: "copilot", summary: "body two", clusterId: 1 },
+    ];
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "x" },
+      { index: 1, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "y" },
+    ]);
+    const { findings: out } = applyJudgeDispositions(findings, verdict, { pastCap: false, round: 1 });
+    assert.deepEqual(out.map((f) => f.judgeRationale), ["x", "y", "y"]);
+  });
+
   // GATE-EXEC-THREAD-DISPOSITION: a high, a question and an all-nit cluster are never deferred.
   for (const [severity, others] of [["high", ["low"]], ["question", ["low"]], ["nit", ["nit", "nit"]]]) {
     test(`a defer on a cluster whose findings are ${severity} fails closed`, () => {
@@ -1704,6 +1718,17 @@ describe("applyJudgeDispositions (#1525)", () => {
     const { scopeDrift } = applyJudgeDispositions(baseFindings, verdict);
     assert.equal(scopeDrift.verdict, "drift_detected");
     assert.equal(scopeDrift.driftedAreas[0], "cli surface");
+  });
+
+  test("missing driftedAreas defaults to [] for within_scope and none, errors otherwise (#3051)", () => {
+    const disp = [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "x", criterion: "AC-1" }];
+    for (const verdict of ["within_scope", "none"]) {
+      const out = validateJudgeVerdict(judgeVerdict(disp, { verdict, rationale: "x" }));
+      assert.equal(out.scopeDrift.verdict, "within_scope");
+      assert.deepEqual(out.scopeDrift.driftedAreas, []);
+    }
+    assert.throws(() => validateJudgeVerdict(judgeVerdict(disp, { verdict: "drift_detected", rationale: "x" })), /driftedAreas must be an array/);
+    assert.throws(() => validateJudgeVerdict(judgeVerdict(disp, { verdict: "within_scope", rationale: "x", driftedAreas: "a" })), /driftedAreas must be an array/);
   });
 
   test("scopeDrift.verdict 'none' normalizes to within_scope, rationale and driftedAreas byte-intact (#2260)", () => {
@@ -2077,5 +2102,20 @@ describe("fan-in never disposes; the judge disposes each cluster and authors its
     assert.throws(() => validateJudgeVerdict(verdict({ ...base, disposition: "defer", followUpDraft })), /reason must be a non-empty one-sentence string/);
     assert.doesNotThrow(() => validateJudgeVerdict(verdict({ ...base, disposition: "defer", followUpDraft, reason: "Follow-up." })));
     assert.doesNotThrow(() => validateJudgeVerdict(verdict(base)));
+  });
+});
+
+describe("pastCapBlockers evidence_only act items", () => {
+  const item = (overrides) => ({ severity: "high", summary: "needs a body edit", judgeDisposition: "act", ...overrides });
+
+  test("an evidence_only act item at the cap round composes no blocker while an ordinary high without a fix blocks", () => {
+    assert.deepEqual(fanin.pastCapBlockers([item({ remedyKind: "evidence_only" })], { round: 4, cap: 4 }), []);
+    assert.equal(fanin.pastCapBlockers([item({})], { round: 4, cap: 4 }).length, 1);
+  });
+
+  test("hasSeverityText accepts only a non-blank severity string", () => {
+    assert.equal(fanin.hasSeverityText({ severity: "low" }), true);
+    for (const severity of ["", "  ", undefined, null, 3]) assert.equal(fanin.hasSeverityText({ severity }), false);
+    assert.equal(fanin.hasSeverityText(undefined), false);
   });
 });

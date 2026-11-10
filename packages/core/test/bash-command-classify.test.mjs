@@ -3,6 +3,7 @@ import { test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { INLINE_DENY_ROWS } from "../../../test/fixtures/bash-command-classify.inline-deny-rows.mjs";
 
 import {
   commandContainsTimeoutWrappedSanctionedTool,
@@ -561,6 +562,8 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   // this to "detach AND family reference"; restored to the pre-#2065 unconditional ban (regression
   // guard, main/coordinator context — subagent context is covered separately below).
   assert.equal(commandContainsDetachedWaitTool("nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &"), true);
+  for (const c of ["echo 'node scripts/loop/probe-copilot-review.mjs --pr 5 &' | bash", "git rebase -x 'node scripts/loop/probe-copilot-review.mjs --pr 5 &' HEAD~1", "git rebase --exec='node scripts/loop/probe-copilot-review.mjs --pr 5 &' HEAD~1", "export PATH=tmp:$PATH; grep -ec 'node scripts/loop/probe-copilot-review.mjs --pr 5 &'", "source tmp/f.sh; grep 'node scripts/loop/probe-copilot-review.mjs --pr 5 &'", "echo $(echo 'x; nohup node scripts/loop/probe-copilot-review.mjs --pr 5 &')", "echo `echo 'x; nohup y'`"]) assert.equal(commandContainsDetachedWaitTool(c), true, c);
+  for (const c of ['echo "while" "sleep" gh', "grep -c 'node -e x' README.md", "echo eval 'node -e x'"]) assert.equal(commandContainsDetachedWaitTool(c) || commandIsSleepPollLoop(c) || commandContainsInlineInterpreter(c), false, c);
   assert.equal(commandContainsDetachedWaitTool("disown"), true);
   assert.equal(commandContainsDetachedWaitTool("tmux new-session -d -s loop"), true);
   assert.equal(commandContainsDetachedWaitTool("screen -dmS loop"), true);
@@ -577,8 +580,10 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   assert.equal(commandContainsDetachedWaitTool("echo disown is a shell builtin"), false);
   // a polling loop with a LEADING expression is still a polling loop
   assert.equal(commandContainsDetachedWaitTool("gh pr view 1 && while ! gh pr view 1; do sleep 5; done"), true);
-  // a bare mention of `gh` inside another word (grep gh-notes) is NOT a GitHub poll call
-  assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep gh-notes x; done"), false);
+  // a bare mention of `gh` inside another word (grep gh-notes) is NOT a GitHub poll call (commandIsSleepPollLoop);
+  // AC1 of #3028 widened the ban, so the loop is still denied as a sleep loop.
+  assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep gh-notes x; done"), true);
+  assert.equal(commandIsSleepPollLoop("for i in $(seq 1 3); do sleep 1; grep gh-notes x; done"), false);
   // until/seq loop forms are detected too
   assert.equal(commandContainsDetachedWaitTool("until gh pr view 1; do sleep 5; done"), true);
   assert.equal(commandContainsDetachedWaitTool("seq 1 10 | while read i; do sleep 1; gh pr view 1; done"), true);
@@ -587,7 +592,9 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   // a bare `seq` sequence-generator (not a loop head) is NOT a polling loop
   assert.equal(commandContainsDetachedWaitTool("seq 1 5 > /tmp/f; sleep 2; gh pr view 1"), false);
   // loop-state must be a command-head CALL, not a substring of a grep/echo target
-  assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep loop-state x; done"), false);
+  // AC1 of #3028 widened the ban: any loop containing sleep is denied.
+  assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep loop-state x; done"), true);
+  assert.equal(commandIsSleepPollLoop("for i in $(seq 1 3); do sleep 1; grep loop-state x; done"), false);
   assert.equal(commandContainsDetachedWaitTool("while true; do sleep 1; loop-state status; done"), true);
 });
 
@@ -683,6 +690,140 @@ test("H2: stripQuotedLiterals no-regression — -c-not-last short-flag clusters 
 test("H1: commandIsFileMarkerPollLoop excludes string (-z/-n) test operators", () => {
   assert.equal(commandIsFileMarkerPollLoop('while [ -z "$x" ]; do sleep 5; done'), false);
   assert.equal(commandIsFileMarkerPollLoop('while [ -n "$x" ]; do sleep 5; done'), false);
+});
+
+test("commandContainsDetachedWaitTool denies any loop containing sleep, whatever the condition (#3028)", () => {
+  for (const cmd of [
+    'until grep -q "x" f; do sleep 3; done',
+    'until ! pgrep -f "bun test test/github" > /dev/null; do sleep 5; done; tail f',
+    "while true; do ls; sleep 5; done",
+    "for i in 1 2 3; do ls; sleep 5; done",
+    "until [ -f f ]; do sleep 5; done",
+    "eval 'until grep -q x f; do sleep 3; done'",
+    "while curl -s u; do sleep 2; done",
+    "timeout 600 bash -c 'until grep -q X f; do sleep 3; done'",
+    "env FOO=1 sh -c 'while true; do sleep 1; done'",
+    "bash -c 'while true; do sleep 1; done' _",
+    "sh -c 'while true; do sleep 1; done' sh arg",
+    "while sleep 5; do cat out.txt; done",
+    "until sleep 1; grep -q x f; do :; done",
+    "( while true; do sleep 1; done )",
+    "(while true; do sleep 1; done)",
+    "time until grep -q x f; do sleep 3; done",
+    "while true; do /bin/sleep 5; done",
+    "while true; do timeout 10 sleep 5; done",
+    "echo $(while true; do sleep 1; done)",
+    "while true; do nohup sleep 5; done",
+    "while true; do nice -n 10 sleep 5; done",
+    "while true; do stdbuf -o0 sleep 5; done",
+    "while true; do exec sleep 5; done",
+    "for((i=0;i<3;i++)); do sleep 1; done",
+    "while(true); do sleep 1; done",
+    "until(false); do sleep 1; done",
+    "timeout --signal KILL 5 bash -c 'while true; do sleep 1; done'",
+    "sudo --user root bash -c 'while true; do sleep 1; done'",
+    "timeout 0.5 bash -c 'while true; do sleep 1; done'",
+    "while true; do env -i gtimeout 5 sleep 1; done",
+    "sudo -u root timeout 0.5 bash -c 'while true; do sleep 1; done'",
+    "nice -n 10 timeout 0.5 bash -c 'while true; do sleep 1; done'",
+    "f() { while true; do sleep 1; done; }; f",
+    "cat <(while true; do sleep 1; done)",
+    "env -u FOO bash -c 'while true; do sleep 1; done'",
+    "nice -n 10 sh -c 'while true; do sleep 1; done'",
+    "sudo -u x bash -c 'while true; do sleep 1; done'",
+    "dash -c 'while true; do sleep 1; done'",
+    "ksh -c 'while true; do sleep 1; done'",
+    "env -i PATH=/bin bash -c 'while true; do sleep 1; done'",
+    "xargs -I{} sh -c 'while true; do sleep 1; done'",
+    'while true; do sleep 1; done; echo "x',
+    "bash -o pipefail -c 'while true; do sleep 1; done'",
+    "bash -O extglob -c 'while true; do sleep 1; done'",
+    "bash -euo pipefail -c 'while true; do sleep 1; done'",
+    "for i in 1;do(sleep 0);done",
+    "while true; do case x in 'x') sleep 1;; esac; done",
+    "f(){ while true; do sleep 1; done; }; f",
+    "bash -o pipefail <<'EOF'\nwhile true; do sleep 1; done\nEOF",
+    "bash > out <<'EOF'\nwhile true; do sleep 1; done\nEOF",
+    "echo \"$(echo 'while true; do sleep 1; done' | bash)\"",
+    "while sh -c 'sleep 0; exit 1'; do :; done",
+    "while true; do sudo -u x sleep 5; done",
+    "while true; do sh -c 'sleep 5'; done",
+    "while true; do eval sleep 5; done",
+    "while true; do 2>/dev/null sleep 1; done",
+    "while true; do >/dev/null sleep 1; done",
+    "while true; do case $x in a) sleep 1;; esac; done",
+    "while true; do builtin sleep 1; done",
+    "until grep -q x f; do sleep 5; done",
+    "bash <<'EOF'\nwhile true; do sleep 1; done\nEOF",
+    "bash -s <<'EOF'\nwhile true; do sleep 1; done\nEOF",
+    "echo 'while true; do sleep 1; done' | bash",
+    "while true; do command -p sleep 1; done",
+    "while true; do command sleep 1; done",
+    "s() { sleep 1; }; while true; do s; done",
+    "while true; do s() { sleep 1; }; s; done",
+    "bash -c -- 'while true; do sleep 1; done'",
+    "sh -c -- 'until false; do sleep 2; done'",
+    "for f in a; do echo $f; done; sleep 1",
+    "until grep -q x f; do command -- sleep 5; done",
+    "until grep -q x f; do command -p -- sleep 5; done",
+    "while true; do cat <(sleep 5); done",
+    "while true; do sudo --user root sleep 1; done",
+    "eval -- 'until grep -q x f; do sleep 3; done'",
+    "bash -s -- arg <<'EOF'\nwhile true; do sleep 1; done\nEOF",
+    "bash <<< 'while true; do sleep 1; done'",
+    "cat <<'EOF' | bash\nwhile true; do sleep 1; done\nEOF",
+    "bash /dev/null -c 'while true; do sleep 1; done'",
+    "timeout 1e1 bash -c 'while true; do sleep 1; done'",
+  ]) assert.equal(commandContainsDetachedWaitTool(cmd), true, cmd);
+  for (const cmd of [
+    'echo "while true; do nohup sleep 5; done"',
+    "nice -n 10 sleep 5",
+    "for f in a b; do echo $f; done",
+    "f() { echo hi; }; f",
+    "cat <(ls)",
+    "env -u FOO bash -c 'echo hi'",
+    "nice -n 10 sh -c 'sleep 1'",
+    "bash -c 'echo hi'",
+    "for i in 1;do(echo hi);done",
+    "case x in 'a)') echo sleep;; esac; while true; do :; done",
+    "f(){ echo hi; }; f",
+    "while sh -c 'exit 1'; do :; done",
+    "echo \"$(echo hi | bash)\"",
+    "echo 'while true; do sleep 1; done'",
+    'echo "until grep -q x f; do sleep 3; done"',
+    "git commit -m \"$(cat <<'EOF'\nuntil grep -q x f; do sleep 3; done\nEOF\n)\"",
+    "node scripts/github/wait-pr-checks.mjs --pr 5 --timeout 600",
+    "node scripts/github/probe-copilot-review.mjs --pr 5 --timeout 300",
+    "gh run watch 123 --exit-status",
+    "bash -c 'echo hi' sleep",
+    "for f in a b; do timeout 5 grep sleep $f; done",
+    "for f in *.log; do sudo grep sleep $f; done",
+    "echo 'while true; do 2>/dev/null sleep 1; done'",
+    "case $x in a) sleep 1;; esac",
+    "echo bash -c 'while true; do sleep 1; done'",
+    "printf '%s' bash -c 'while true; do sleep 1; done'",
+    "ls; until-ready 3; sleep 1",
+    "while-x; sleep 1",
+    "echo 'while(true); do sleep 1; done'",
+    "echo timeout --signal KILL 5 bash -c 'while true; do sleep 1; done'",
+    "echo timeout 0.5 bash -c 'while true; do sleep 1; done'",
+    "echo sudo -u root timeout 0.5 bash -c 'while true; do sleep 1; done'",
+    "echo nice -n 10 timeout 0.5 bash -c 'while true; do sleep 1; done'",
+    "for f in a b; do grep 'x)' sleep; done",
+    "cat <<'EOF' > s.sh\nwhile true; do sleep 1; done\nEOF",
+    "command -v sleep",
+    "while true; do command -p ls; done",
+    "s() { ls; }; while true; do s; done",
+    "s() { sleep 1; }; s",
+    "bash -c -- 'echo hi'",
+    "for f in a; do printf '%s\\n' '{' sleep; done",
+    "echo ':' | bash; echo 'while true; do sleep 1; done'",
+    "while true; do sudo --user root echo sleep; done",
+    "while true; do cat <(echo sleep); done",
+    "while true; do command -- ls; done",
+    "eval -- 'echo hi'",
+    "bash <<< 'echo hi'",
+  ]) assert.equal(commandContainsDetachedWaitTool(cmd), false, cmd);
 });
 
 // M1 (#2317 follow-up): stripQuotedLiterals only matched a quoted literal WITHOUT the `s` (dotAll)
@@ -1162,14 +1303,19 @@ test("explicitRepoProvenForeign truth table", () => {
   assert.equal(explicitRepoProvenForeign("other/repo", "acme/widgets;id"), false);
 });
 
-test("decideBashGate (hook-decisions.mjs) resolves inManagedRepo via the shared deriveInManagedRepo predicate", () => {
+test("decideBashGate resolves inManagedRepo via the shared deriveInManagedRepo predicate", () => {
   // Parity guard: the Claude Bash-hook guard and this Pi-harness helper must agree on the same
   // managed-repo-identity resolution rather than drifting into two divergent implementations.
-  const hookDecisionsSource = fs.readFileSync(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/claude/hook-decisions.mjs"),
-    "utf8",
+  // The gate's rule bodies (and so this composition) live in the harness-neutral
+  // loop/bash-gate-decisions.mjs; the Claude seam delegates to them.
+  const coreSrc = path.join(path.dirname(fileURLToPath(import.meta.url)), "../src");
+  const decisionSource = fs.readFileSync(path.join(coreSrc, "loop/bash-gate-decisions.mjs"), "utf8");
+  assert.match(decisionSource, /deriveInManagedRepo/, "bash-gate-decisions.mjs must import/use deriveInManagedRepo from the shared module");
+  assert.match(
+    fs.readFileSync(path.join(coreSrc, "claude/hook-decisions.mjs"), "utf8"),
+    /decideBashGateDeny/,
+    "decideBashGate must delegate to the shared Bash-gate deny decision",
   );
-  assert.match(hookDecisionsSource, /deriveInManagedRepo/, "hook-decisions.mjs must import/use deriveInManagedRepo from the shared module");
 
   // Same input table, both call sites: `decideBashGate` composes `deriveInManagedRepo` the same
   // way the Pi harness does (verified indirectly — decideBashGate's own gate behavior when
@@ -1550,6 +1696,9 @@ test("tokenizeShellCommand: malformed input is incomplete and the classifier den
   // a terminated quote span after the earliest unclosed opener stays raw executable text
   assert.equal(commandIsSleepPollLoop("echo $(echo 'while true; do gh pr view 5; sleep 5; done'"), true);
   assert.equal(commandIsSleepPollLoop("cat <<EOF 'while true; do gh pr view 5; sleep 5; done'\nx"), true);
+  // an executed single-quoted poll loop stays denied, as do the inert echo and sed forms (as on origin/main; the sed-expression and echo $(...) poll cases move to v1.0.10); a later eval, sh -c or $_ re-runs the quoted span
+  for (const c of ["echo 'while [ \"`gh pr view 5`\" != MERGED ]; do sleep 5; done'; eval \"$_\"", "printf '%s' 'while [ \"`gh pr view 5`\" != MERGED ]; do sleep 5; done'; eval \"$_\"", "echo 'while [ \"`gh pr view 5`\" != MERGED ]; do sleep 5; done'; bash -c \"$_\"", "echo 'while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done' > l.sh; bash l.sh", "perl -e 'system q(while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done)'", "sed -n 's/`gh pr view 5`/while sleep 5/e' f", "sed -i 's/`gh pr view 5`/while sleep 5/' f", "sed -n 's/`gh pr view 5`/while sleep 5/p' f", "echo 'while [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done'", "echo 'while [ \"`gh pr view 5`\" != MERGED ]; do sleep 5; done'", "sed -n --expression='s/`gh pr view 5`/while sleep 5/e' f"]) assert.equal(commandIsSleepPollLoop(c), true, c);
+  assert.equal(commandIsSleepPollLoop("gh issue create --body 'while true; do sleep 5; gh pr view 5; done'"), false);
   // a quote pair after an unclosed opener keeps the permissive callers (-X GET, foreign --repo) from allowing
   assert.equal(commandContainsRawPrBodyApiWrite(`gh api repos/mfittko/dev-loops/pulls/5 -f body=x -f "title=$(echo ' -X GET ' ; true)"`, "mfittko/dev-loops"), true);
   assert.equal(commandContainsRawPrBodyEdit(`gh pr edit 5 --body x --title "$(echo ' --repo other/x ' ; true)"`, "mfittko/dev-loops"), true);
@@ -1574,7 +1723,7 @@ test("stripQuotedLiterals is built on tokenizeShellCommand and the regex pairing
   const source = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/loop/bash-command-classify.mjs"), "utf8");
   assert.equal(source.includes("/(['\"])((?:(?!\\1).)*)\\1/gs"), false);
   assert.equal(source.includes("neutralizeQuoteNoise"), false);
-  assert.match(source, /function stripQuotedLiterals\(command\) \{\s*const \{[^}]*\} = tokenizeShellCommand\(command\)/);
+  assert.match(source, /function stripQuotedLiterals\(command, precise = false, waitView = false\) \{\s*const tok = tokenizeShellCommand\(command\)/);
 });
 
 test("stripQuotedLiterals callers keep their decisions on tokenizer-backed quoting (#2442)", () => {
@@ -1587,8 +1736,9 @@ test("stripQuotedLiterals callers keep their decisions on tokenizer-backed quoti
   assert.equal(commandIsFileMarkerPollLoop("echo 'while [ ! -f tmp/done ]; do sleep 2; done'"), false);
 });
 
-test("stripQuotedLiterals blanks nothing near quote-pairing hazards, slice 1 stays fail-closed (#2442)", () => {
+test("the wait and poll predicates trust the tokenizer near former quote-pairing hazards (#2442 slice 2)", () => {
   const LOOP = "while true; do gh pr view 5; sleep 5; done";
+  // the poll predicates keep origin/main's coarse stripper: a quote-pairing hazard keeps the quoted loop visible (fail closed)
   for (const c of [
     `# it's\necho 'LOOP'`.replace("LOOP", LOOP),
     `echo "a \\" ; ${LOOP}"`,
@@ -1596,6 +1746,8 @@ test("stripQuotedLiterals blanks nothing near quote-pairing hazards, slice 1 sta
     `cat <<'EOF'\nit's\nEOF\necho '${LOOP}'`,
     `echo it\\'s; echo '${LOOP}'`,
   ]) assert.equal(commandIsSleepPollLoop(c), true, c);
+  // the same hazard text around a real loop stays denied
+  for (const c of [`# it's\n${LOOP}`, `echo it\\'s; ${LOOP}`, `echo "a \\" b"; ${LOOP}`, `cat <<'EOF'\nit's\nEOF\n${LOOP}`]) assert.equal(commandIsSleepPollLoop(c), true, c);
 });
 
 test("an unmatched quote inside an unquoted backtick span is a quote-pairing hazard; balanced spans still blank (#2442)", () => {
@@ -1622,6 +1774,93 @@ test("review fixes: hazard text keeps the body flag visible, nested quotes are a
   assert.equal(commandContainsInlineInterpreter(": <<$'EO\\x46'\nbody\nEOF"), false);
 });
 
+const PROBE = "scripts/loop/probe-copilot-review.mjs";
+
+test("slice 2: the wait predicate ignores operators and names in data, and still denies real waits (#2442)", () => {
+  for (const c of [
+    "cat > tmp/f <<'EOF'\nnode scripts/loop/detect-copilot-loop-state.mjs & more\nEOF",
+    'echo "detect-copilot-loop-state.mjs & more"',
+  ]) assert.equal(commandContainsDetachedWaitTool(c), false, c);
+  for (const c of [
+    `node ${PROBE} --pr 5 --timeout-ms 1000 &`,
+    `node "${PROBE}" &`,
+    `bash <<'EOF'\nnode ${PROBE} &\nEOF`,
+    `bash <<< 'node ${PROBE} &'`,
+    `bash -c -e 'node ${PROBE} &'`,
+    "cat > tmp/x <<EOF\n$(while true; do gh pr view 5; sleep 5; done)\nEOF",
+    "# don't\nwhile [ \"$(gh pr view 5)\" != MERGED ]; do sleep 5; done # it's",
+    `cat > tmp/r.sh <<'EOF'\nnode ${PROBE} &\nEOF\nbash tmp/r.sh`,
+    "while :; do `true '`; 'sleep' 5; gh pr view 5; done", // a quoted whole-word keyword still runs
+  ]) assert.equal(commandContainsDetachedWaitTool(c), true, c);
+});
+
+test("slice 2: a written script run through a wrapper, runner payload, glob or alias, an eval-ed or piped substitution heredoc, a git/env host and process substitution stay visible (#2442)", () => {
+  const LOOP = "while true; do gh pr view 5; sleep 5; done";
+  for (const c of [
+    `cat > tmp/l.sh <<'EOF'\n${LOOP}\nEOF\ntimeout 600 bash tmp/l.sh`,
+    `cat > tmp/l.sh <<'EOF'\n${LOOP}\nEOF\nchmod +x tmp/l.sh && tmp/l.sh`,
+    `cat > tmp/l.sh <<'EOF'\n${LOOP}\nEOF\ncd tmp && env bash ./l.sh`,
+    `cat > tmp/l.sh <<'EOF'\n${LOOP}\nEOF\nnohup /abs/tmp/l.sh`,
+    `x=$(cat <<'EOF'\n${LOOP}\nEOF\n); eval "$x"`,
+    `tee >(sh) <<'EOF'\n${LOOP}\nEOF`,
+    `cat <<'EOF' > >(bash)\n${LOOP}\nEOF`,
+    `echo "$(cat <<'EOF'\n${LOOP}\nEOF)rest"`,
+    `cat > tmp/l.sh <<'EOF'\n${LOOP}\nEOF\nbash -c 'bash tmp/l.sh'`,
+    `echo "$(cat <<'EOF'\n${LOOP}\nEOF\n)" > tmp/l.sh; bash tmp/l.sh`,
+    `cat &> tmp/l.sh <<'EOF'\n${LOOP}\nEOF\nbash tmp/l.sh`,
+  ]) assert.equal(commandIsSleepPollLoop(c), true, c);
+  for (const c of INLINE_DENY_ROWS) assert.equal(commandContainsInlineInterpreter(c), true, c);
+});
+
+test("slice 2: any multi-segment command keeps every heredoc body visible, whatever hides the exec redirect (#2442)", () => {
+  const c = "eval 'exec >l.sh'\ncat <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF\nbash l.sh";
+  assert.equal(commandIsSleepPollLoop(c) && commandContainsDetachedWaitTool(c), true);
+});
+
+test("slice 2: the sanctioned single-segment shapes stay visible when an executor hides inside them, and executor arguments are payloads (#2442)", () => {
+  const t = "tee />(sh) <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF";
+  assert.equal(commandIsSleepPollLoop(t) && commandContainsDetachedWaitTool(t), true);
+  assert.equal(commandContainsInlineInterpreter("git commit -m \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\""), false);
+  assert.equal(commandContainsInlineInterpreter("gh pr create --body \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\""), true); // gh is no text host: the heredoc body stays visible
+});
+
+test("slice 2: quoted literals and cat/tee heredoc bodies that name an interpreter are data; payloads stay visible (#2442)", () => {
+  for (const c of [
+    "cat > tmp/f <<'EOF'\nnode -e 'x'\nEOF",
+    "cat > tmp/f <<'EOF'\npython3 -c x\nEOF",
+    "cat > tmp/f <<'EOF'\ndetect-copilot-loop-state.mjs &\nEOF",
+    "tee tmp/f <<EOF\nnode -e x\nEOF",
+    "git commit -m \"$(cat <<'EOF'\nuse node -e and sed -i here\nEOF\n)\"",
+    'node scripts/loop/x.mjs --notes "11 were python3 or node -e; python3 -c denied"',
+    'node scripts/loop/x.mjs --notes "a | node -e b"',
+    "node scripts/loop/x.mjs --notes 'perl -0pi -e & ruby -e'",
+    "node scripts/loop/x.mjs --notes 'tee src/a.mjs <<EOF'",
+    'grep -n "sed -i" README.md',
+  ]) assert.equal(commandContainsInlineInterpreter(c), false, c);
+  for (const c of [
+    `bash <<< "a b"'; node -e y'`,
+    `bash -c "a b"'; node -e y'`,
+    `bash -c -e 'x; node -e y'`,
+    `bash -c $'x; node -e y'`,
+    `eval $'x; node -e y'`,
+    `bash<<<'x; node -e y'`,
+    `bash <<<$'x; node -e y'`,
+    "# don't\nnode -e 'console.log(1)'",
+    "git commit -F - <<'MSG'\ndon't\nMSG\nnode -e 'x'",
+    "cat <<'EOF' | sh\nnode -e 'x'\nEOF",
+    "bash <<'EOF'\nnode -e 'x'\nEOF",
+    "node - <<'EOF'\nx\nEOF",
+    "python3 - <<'EOF'\nx\nEOF",
+    "cat > tmp/r.sh <<'EOF'\nnode -e 'x'\nEOF\nbash tmp/r.sh",
+    "cat > tmp/x <<EOF\n$(node -e 'x')\nEOF",
+    "bash <<< \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
+  ]) assert.equal(commandContainsInlineInterpreter(c), true, c);
+});
+
+test("slice 2: a heredoc closed by EOF) outside a substitution is incomplete (#2442)", () => {
+  assert.equal(tokenizeShellCommand("cat <<'EOF'\nbody\nEOF)").incomplete, true);
+});
+
 test("tokenizeShellCommand: $((expr)) is arithmetic and DELIM) closes a heredoc inside $(...) (#2442)", () => {
   for (const c of ["echo $((1<<2))", "x=$((a<<b)); echo $x"]) assert.equal(commandContainsInlineInterpreter(c), false, c);
   assert.equal(tokenizeShellCommand(": $((1<<2))").incomplete, false);
@@ -1645,5 +1884,20 @@ test("tokenizeShellCommand: $((expr)) is arithmetic and DELIM) closes a heredoc 
   const closed = "echo \"$(cat <<'EOF'\nbody\nEOF)\"";
   assert.equal(tokenizeShellCommand(closed).incomplete, false);
   assert.equal(tokenizeShellCommand("cat <<'EOF'\nbody\nEOF)").incomplete, true); // outside a substitution `EOF)` is no delimiter
-  assert.equal(commandContainsInlineInterpreter("gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\""), false);
+  assert.equal(commandContainsInlineInterpreter("gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\""), true); // gh is no text host
+});
+
+test("round 3: a shell reached through env/command/exec or `<(`, a joined heredoc line and text consumers (#2442)", () => {
+  // thread 1: process substitution into a shell keeps quoted words visible
+  assert.equal(commandContainsDetachedWaitTool(`bash <(printf '%s\\n' 'node ${PROBE} --pr 5 &')`), true);
+  // thread 2: the receiving shell is found behind env/command/exec
+  assert.equal(commandContainsInlineInterpreter("{\necho 'true; node -e y'\n} | env sh"), true);
+  assert.equal(commandContainsDetachedWaitTool(`echo 'node ${PROBE} --pr 5 &' | env bash`), true);
+  assert.equal(commandContainsDetachedWaitTool(`echo 'node ${PROBE} --pr 5 &' | grep x`), true); // multi-segment keeps origin/main's split
+  // thread 3: backslash-newline joins before the unquoted-heredoc check
+  assert.equal(commandContainsInlineInterpreter("cat <<EOF\n$\\\n(true; node -e x)\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("cat <<'EOF'\n$\\\n(true; node -e x)\nEOF"), false);
+  // thread 5: a here-string or `-c` counts as payload only for a consumer that executes text
+  for (const c of ["cat <<< 'node -e x'", "head -c 100 'node -e x'", "env head -c 100 'node -e x'", 'echo "${HOME}"']) assert.equal(commandContainsInlineInterpreter(c), false, c);
+  for (const c of ["bash <<< 'node -e x'", "env bash <<< 'node -e x'", "exec sh -c 'node -e x'"]) assert.equal(commandContainsInlineInterpreter(c), true, c);
 });

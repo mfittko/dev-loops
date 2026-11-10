@@ -166,6 +166,12 @@ gates:
     blockCleanOnFindingSeverities:
       - high
 
+# Opt in to the dev-loops changelog completeness rule (LIFECYCLE-CHANGELOG-COMPLETENESS).
+# Reference example of the setting; consumer repos omit it unless they use
+# `changes/<slug>.md` fragments and a `CHANGELOG.md` `## Unreleased` section.
+changelog:
+  required: true
+
 workflow:
   requireRetrospective: true
   requireDraftFirst: true

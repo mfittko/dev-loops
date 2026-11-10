@@ -107,6 +107,13 @@ describe("withdraw-copilot-review-request", () => {
       assert.ok(!gh.calls.some((argv) => argv.includes("--remove-reviewer")), "must not remove the reviewer");
     });
 
+    it("REFUSES when the only prior review is from a copilot-x account, which is not the sanctioned reviewer", async () => {
+      const gh = ghStub({ copilotRequested: true, reviews: [{ author: { login: "copilot-x" }, state: "COMMENTED", commit: { oid: "currentsha" } }] });
+      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild });
+      assert.equal(result.status, "refused");
+      assert.match(result.reason, /no prior review to fall back on/);
+    });
+
     it("REFUSES when Copilot never submitted a review — withdrawing would skip the first review", async () => {
       const gh = ghStub({ copilotRequested: true, reviews: [] });
       const result = await main({ repo: "o/n", pr: 10 }, { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild });

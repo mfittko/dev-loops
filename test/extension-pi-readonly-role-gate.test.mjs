@@ -80,12 +80,12 @@ test("Pi and Claude judge gates agree on the decision-check matcher", async () =
 test("Pi reviewer reads and searches but cannot run tests or builds", async () => {
   for (const cmd of ["git diff origin/main...HEAD", "grep -rn foo src", "rg foo", "cat README.md", PULL,
     "cd /w/tree && dev-loops-run scripts/github/verify-fresh-review-context.mjs --context-path a.json",
-    "dev-loops-run scripts/github/emit-reviewer-blocked.mjs --head abc", "jq .adjacentCode a.json", "find src -name x.ts", 'git -C "/w/tree" diff origin/main...HEAD']) {
+    "dev-loops-run scripts/github/emit-reviewer-blocked.mjs --head abc", "dev-loops-run scripts/loop/seal-evidence.mjs --kind delta --file /w/r.json", "jq .adjacentCode a.json", "find src -name x.ts", 'git -C "/w/tree" diff origin/main...HEAD']) {
     assert.deepEqual(await callAs("review", cmd), { block: false }, cmd);
   }
   for (const cmd of ["bun run test", "npm test", "bun run build", "node script.mjs", "cat a > b", "git push", "grep x $(id)", "ls; bun test",
     "rg --pre bun foo test/", "rg --pre sh . x", "git grep -Obun foo", "git grep --open-files-in-pager=sh x", "git diff --output=x", "git diff --ext-diff",
-    "find . -exec sh -c x ;", "find . -delete", "dev-loops-run scripts/other.mjs", "cd /w && bun test", "git -C /w push",
+    "find . -exec sh -c x ;", "find . -delete", "dev-loops-run scripts/other.mjs", "dev-loops-run scripts/loop/other.mjs --file x", "cd /w && bun test", "git -C /w push",
     "rg '--pre' bun foo test/", "rg --p're' bun foo", 'git diff "--output=x"', 'git grep "-Obun" foo', "git grep -nObun foo", "file -bC -m x", "find . '-delete'", "rg foo *", "find . -delet?", "rg --hostname-bin=make foo", "rg --host=make foo", "file --compile -m x", "file --comp -m x"]) {
     assert.equal((await callAs("review", cmd)).block, true, cmd);
   }

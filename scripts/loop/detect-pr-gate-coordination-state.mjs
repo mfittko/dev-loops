@@ -4,7 +4,6 @@ import { randomBytes } from "node:crypto";
 import {
   buildParseError,
   formatCliError,
-  isCopilotLogin,
   isDirectCliRun,
   parseJsonText,
   parseReviewThreads,
@@ -14,9 +13,11 @@ import {
 import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
+import { isSanctionedCopilotReviewerLogin } from "@dev-loops/core/github/comment-trust";
+import { buildSnapshotFromPrFacts, DISPOSITION, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateEarlySurface } from "./early-surface-checks.mjs";
-import { buildAdrTripwireField, buildSizeBudgetField, evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
+import { checkBaseFreshness } from "./pre-write-remote-freshness-guard.mjs";
+import { CONFLICT_FORBIDDEN_ACTIONS, buildAdrTripwireField, buildSizeBudgetField, evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
 import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
@@ -28,7 +29,7 @@ import {
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
-import { countCompletedRounds, resolveCapRoundFixed } from "../github/write-gate-context.mjs";
+import { countCompletedRounds, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
 import { workOrderDigest } from "../github/_work-order-protocol.mjs";
@@ -41,7 +42,7 @@ import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.m
 import { evaluateCopilotConvergence } from "@dev-loops/core/loop/merge-approval";
 import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "./_copilot-convergence-carry.mjs";
 import { copilotBodyJudgePath, readReviewMarkerCommits, resolveCurrentHeadBodyFeedback } from "../github/_copilot-body-disposition.mjs";
-import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { evaluateToolchainAuthority, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
 import { existsSync } from "node:fs";
@@ -137,8 +138,14 @@ Output (stdout, JSON):
     "forbiddenActions": ["run_pre_approval_gate", "declare_merge_ready"],
     "nextAction": "resolve_merge_conflicts",
     "reason": "...",
-    "fixerDispositionWarning"?: { "warning": "...", "incomplete": [{ "threadId": "...", "failedStep": "..." }] }
+    "fixerDispositionWarning"?: { "warning": "...", "incomplete": [{ "threadId": "...", "failedStep": "..." }] },
+    "blockedOn"?: "operator_decision",
+    "agentRemedy"?: { "command": "...", "summary": "..." }
   }
+  (blockedOn and agentRemedy are present only on report_blocked results; a
+  result carries at most one of them. Results listed in KNOWN_GAPS in
+  packages/core/src/loop/gate-no-dead-end.mjs carry neither until the
+  issue 3105 slices that remove them land)
   (fixerDispositionWarning is present only when the fixer disposition is
   incomplete; it is advisory and blocks nothing, ADR 0155)
   (refinementArtifact.planDocPath is present only when specSource is
@@ -1001,6 +1008,9 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   if (!currentHeadSha) {
     throw new Error("Invalid gh pr view payload: missing headRefOid");
   }
+  // ADR 0117 (issue 3139): a run the toolchain guard refuses must not write or remove the shared Copilot body judge file, so the guard runs before any such write.
+  const toolchain = runtime.guardToolchain ? evaluateToolchainAuthority({ repo: options.repo, pr: options.pr, prState: prData?.state, prHeadSha: currentHeadSha, changedFiles: extractChangedFiles(prData) }, runtime.toolchain) : null;
+  if (toolchain?.refusal) throw new Error(toolchain.refusal);
   // Fetch Copilot requested-reviewers at the original position (before threads/graphql)
   // to preserve the gh call order existing tests expect; the reconciliation (timeline
   // fetch) is deferred to after reviewSummary is computed.
@@ -1228,6 +1238,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     conflictFiles,
     prData,
     snapshot,
+    skippedUntrusted: parsedThreads.skippedUntrusted,
     gateEvidence,
     unresolvedGateThreadCount,
     interpretation,
@@ -1243,6 +1254,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     copilotBodyJudgeFile,
     copilotBodyJudgeFileError,
     fixerDisposition,
+    toolchain,
   };
 }
 
@@ -1257,7 +1269,7 @@ export function resolveRoundCapCleanFallback({ roundCapCleanEligible, evaluatorR
   return roundCapCleanEligible === true || isRoundCapReachedCleanGrant(evaluatorResult);
 }
 
-async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
     ghCommand,
     ["api", `repos/${repo}/issues/${pr}/timeline`, "--paginate", "--jq",
@@ -1267,7 +1279,7 @@ async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = process.e
   if (result.code !== 0) return false;
   for (const line of result.stdout.trim().split("\n")) {
     const login = line.trim();
-    if (login && isCopilotLogin(login)) return true;
+    if (login && isSanctionedCopilotReviewerLogin(login)) return true;
   }
   return false;
 }
@@ -1361,7 +1373,9 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
   // The config loads first: a config load error refuses before any gh read.
   const config = (await loadDevLoopConfigStrict({ repoRoot })).config ?? {};
-  const context = await loadPrGateCoordinationContext(options, runtime);
+  // ADR 0117 (issue 3139): an open self-hosting PR is answered by its own head's toolchain; another checkout refuses inside the loader, before any shared gate state is written.
+  const context = await loadPrGateCoordinationContext(options, { ...runtime, guardToolchain: true });
+  const { toolchain } = context;
   const draftGateConfig = resolveGateConfig(config, "draft");
   const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
   // Shared with interpreterRefinementConfig.maxCopilotRounds in
@@ -1429,10 +1443,9 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
       });
   // ADR 0208: a PR whose cap round is fixed never runs draft_gate again; fail closed when the evidence is unreadable.
   // A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
-  let draftCapRoundFailure = null;
-  const draftCapRoundFixed = await (runtime.resolveCapRoundFixed ?? resolveCapRoundFixed)({ repo: context.repo, pr: context.pr, headSha: context.currentHeadSha, baseRefName: prBaseRefName, anyHead: context.prData?.isDraft !== true }, { repoRoot, onFailure: (condition) => { draftCapRoundFailure = condition; } }).then(Boolean, () => { draftCapRoundFailure = "cap_round_unresolved"; return false; });
+  const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure } = await resolveDraftCapRoundFact(context, { repoRoot, resolve: runtime.resolveCapRoundFixed ?? resolveCapRoundFixed });
   const draftRoundRefused = context.prData?.isDraft === true && !draftCapRoundFixed
-    && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), () => false);
+    && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot, includeLiveCurrentHead: true }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), () => false);
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
     context: evaluatorContext,
     maxCopilotRounds,
@@ -1529,8 +1542,28 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     result.reason = "No contract-complete pre_approval_gate marker exists for the current head SHA; run pre_approval_gate before proceeding.";
     result.allowedNextActions = [PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE];
   }
+  // GATE-EXEC-BASE-REFRESH: a stale head must integrate the base before a gate-run action. A fetch failure or unresolved head keeps the action (write-gate-context still refuses at dispatch).
+  if (result.nextAction === PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE || result.nextAction === PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE) {
+    const checkFreshness = runtime.checkBaseFreshness ?? (runtime.runChild ? null : checkBaseFreshness);
+    if (checkFreshness && prBaseRefName.length > 0 && typeof context.currentHeadSha === "string" && context.currentHeadSha.length > 0) {
+      const freshness = await checkFreshness({ base: prBaseRefName, head: context.currentHeadSha, cwd: repoRoot, env: runtime.env ?? process.env, trusted: true })
+        .catch(() => ({ ok: false, error: "base_fetch_failed" }));
+      result.baseFreshness = { status: freshness.ok ? freshness.status : freshness.error, base: prBaseRefName };
+      if (freshness.error === "base_stale_integrate_first") {
+        result.baseFreshness.newerCommits = freshness.newerCommits;
+        result.gateBoundary = PR_CHECKPOINT.CONFLICT_RESOLUTION;
+        result.loopDisposition = DISPOSITION.ACTION_REQUIRED;
+        result.nextAction = PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS;
+        result.reason = `base_stale_integrate_first: head ${context.currentHeadSha} does not contain origin/${prBaseRefName} (GATE-EXEC-BASE-REFRESH). ${freshness.remedy}`;
+        result.allowedNextActions = [PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS];
+        result.forbiddenActions = [...new Set([...(result.forbiddenActions ?? []), ...CONFLICT_FORBIDDEN_ACTIONS])];
+      }
+    }
+  }
   // Expose effective round count in output for testability
   result.copilotReviewRoundCount = context.snapshot?.copilotReviewRoundCount ?? 0;
+  // ADR 0238: all-untrusted open threads are non-blocking but visible, with authors and the remedy.
+  if (context.skippedUntrusted?.length > 0) result.skippedUntrusted = context.skippedUntrusted;
   // ADR 0155: an incomplete fixer disposition is a visible warning, never a block.
   if (context.fixerDisposition?.warning) {
     result.fixerDispositionWarning = { warning: context.fixerDisposition.warning, incomplete: context.fixerDisposition.incomplete };
@@ -1545,6 +1578,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   result.copilotBodyJudgeFinding = context.copilotBodyJudgeFinding ?? null;
   result.copilotBodyJudgeFile = context.copilotBodyJudgeFile ?? null;
   result.copilotBodyJudgeFileError = context.copilotBodyJudgeFileError ?? null;
+  result.toolchain = { root: toolchain.root, headSha: toolchain.headSha, selfHosting: toolchain.selfHosting };
   // Auto-release the runner-coordination lock at gate-coordination terminal stop
   // boundaries — see TERMINAL_RUNNER_RELEASE_ACTIONS above for the rationale
   // (success-or-stop release vs 30-min TTL; env-aware, best-effort,

@@ -15,6 +15,11 @@ const GIT_ISOLATION = [
   "-c", "core.autocrlf=false",
   "-c", "core.quotePath=false",
 ];
+// The isBaseOnlyMergeSince name diff and the captureMainRelativeChangedFilesSince
+// diffs pin --ignore-submodules=none, so an ambient diff.ignoreSubmodules or
+// submodule.<name>.ignore never hides a gitlink change from the base-only check.
+// captureChangedFilesBetween keeps the unpinned diff.
+const GIT_DIFF = [...GIT_ISOLATION, "diff", "--no-ext-diff", "--ignore-submodules=none"];
 
 /**
  * Two-dot changed-files delta between `base` and `head`: the direct tree diff,
@@ -115,7 +120,7 @@ export async function captureMainRelativeChangedFilesSince({ base, mainRef = "or
   }
   // Incremental delta since the prior reviewed head (two-dot base..head).
   const incRange = `${normalizedBase}..${normalizedHead}`;
-  const incResult = await runGit([...GIT_ISOLATION, "diff", "--no-ext-diff", "--name-status", incRange], { repoRoot });
+  const incResult = await runGit([...GIT_DIFF, "--name-status",incRange], { repoRoot });
   if (incResult.code !== 0) throw new Error(`git diff ${incRange} failed: ${incResult.stderr.trim() || `exit ${incResult.code}`}`);
   const incrementalFiles = [];
   for (const line of incResult.stdout.split("\n")) {
@@ -136,7 +141,7 @@ export async function captureMainRelativeChangedFilesSince({ base, mainRef = "or
   // PR-own surface. A file already on main at head is byte-identical to main and
   // never appears here, so intersecting removes it.
   const mainRange = `${normalizedMain}..${normalizedHead}`;
-  const mainResult = await runGit([...GIT_ISOLATION, "diff", "--no-ext-diff", "--name-status", mainRange], { repoRoot });
+  const mainResult = await runGit([...GIT_DIFF, "--name-status",mainRange], { repoRoot });
   if (mainResult.code !== 0) throw new Error(`git diff ${mainRange} failed: ${mainResult.stderr.trim() || `exit ${mainResult.code}`}`);
   const prOwn = new Set(parseChangedFiles(mainResult.stdout));
 
@@ -148,7 +153,7 @@ export async function captureMainRelativeChangedFilesSince({ base, mainRef = "or
   const mb = await runGit(["merge-base", normalizedBase, normalizedMain], { repoRoot });
   if (mb.code === 0 && mb.stdout.trim()) {
     const baseRange = `${mb.stdout.trim()}..${normalizedMain}`;
-    const baseResult = await runGit([...GIT_ISOLATION, "diff", "--no-ext-diff", "--name-status", baseRange], { repoRoot });
+    const baseResult = await runGit([...GIT_DIFF, "--name-status",baseRange], { repoRoot });
     if (baseResult.code === 0) {
       baseSide = new Set();
       for (const line of baseResult.stdout.split("\n")) {
@@ -221,7 +226,7 @@ export async function isBaseOnlyMergeSince({ fromHead, head, mainRef, repoRoot, 
   const ownBase = await runGit(["merge-base", fromHead, mergedBase], { repoRoot });
   if (ownBase.code !== 0 || !ownBase.stdout.trim()) return false;
   const names = async (a, b) => {
-    const r = await runGit([...GIT_ISOLATION, "diff", "--no-ext-diff", "--no-renames", "--name-only", `${a}..${b}`], { repoRoot });
+    const r = await runGit([...GIT_DIFF, "--no-renames", "--name-only", `${a}..${b}`], { repoRoot });
     return r.code === 0 ? new Set(r.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) : null;
   };
   const prOwnAtFromHead = await names(ownBase.stdout.trim(), fromHead);

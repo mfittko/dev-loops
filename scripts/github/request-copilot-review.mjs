@@ -5,7 +5,6 @@ import {
   buildParseError,
   containsBareCopilotSummon,
   formatCliError,
-  isCopilotLogin,
   isDirectCliRun,
   parseReviewThreads,
   resolveCopilotReviewPresence,
@@ -15,6 +14,7 @@ import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from ".
 import { resolveFixerDispositionInput } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { resolveDraftGateAdjustedRoundCount } from "./_gate-finding-surface.mjs";
+import { isSanctionedCopilotReviewerLogin } from "@dev-loops/core/github/comment-trust";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
@@ -216,7 +216,7 @@ function parseRequestedReviewersPayload(text) {
   return {
     users,
     teams,
-    requested: users.some((user) => isCopilotLogin(user?.login)),
+    requested: users.some((user) => isSanctionedCopilotReviewerLogin(user?.login)),
   };
 }
 function parseReviewsPayload(text, { draftGateResetAtMs = null } = {}) {
@@ -365,12 +365,12 @@ export async function isCopilotReviewObservableViaGraphql(
     const payload = JSON.parse(result.stdout);
     const pullRequest = payload?.data?.repository?.pullRequest;
     const requestNodes = Array.isArray(pullRequest?.reviewRequests?.nodes) ? pullRequest.reviewRequests.nodes : [];
-    if (requestNodes.some((node) => isCopilotLogin(node?.requestedReviewer?.login))) {
+    if (requestNodes.some((node) => isSanctionedCopilotReviewerLogin(node?.requestedReviewer?.login))) {
       return true;
     }
     const reviewNodes = Array.isArray(pullRequest?.reviews?.nodes) ? pullRequest.reviews.nodes : [];
     return reviewNodes.some((node) => {
-      if (!isCopilotLogin(node?.author?.login)) return false;
+      if (!isSanctionedCopilotReviewerLogin(node?.author?.login)) return false;
       // Only current-head reviews count — a stale review on an old head must
       // not be misread as "the current request/round is already covered"
       // (mirrors the REST hasPendingReviewOnCurrentHead head-scoping above).
@@ -659,7 +659,7 @@ export async function checkForCopilotComments({ repo, pr }, { env = process.env,
   for (const comment of comments) {
     const author = comment?.user?.login ?? "";
     const body = comment?.body ?? "";
-    if (isCopilotLogin(author)) {
+    if (isSanctionedCopilotReviewerLogin(author)) {
       continue;
     }
     // Exempt bare-text occurrences inside inline code spans/fenced blocks: a

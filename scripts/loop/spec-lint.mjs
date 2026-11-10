@@ -14,7 +14,9 @@ import { parseArgs } from "node:util";
 import { loadDevLoopConfigStrict } from "@dev-loops/core/config";
 import { extractSection } from "@dev-loops/core/loop/markdown-sections";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { pathsMissingFromMatrix } from "../github/waive-adr-tripwire.mjs";
 import { resolveSizeBounds } from "./check-size-budget.mjs";
+import { CONTRACT_DOC_RE } from "./check-adr-tripwire.mjs";
 import {
   FORWARD_RULE_REFERENCES,
   NON_RULE_TOKENS,
@@ -44,7 +46,8 @@ size_forecast_missing, size_forecast_malformed, size_forecast_split_required (PL
 a line at or above the resolved default-tier waiverLoc must be split, not disposed;
 a list item that starts with the word "forecast" or contains "wloc=" and does not parse is
 size_forecast_malformed, also not disposable; non-list lines are never claimed),
-simplest_design_missing (DESIGN-SIMPLEST-FIRST; a body with a "## Size forecast" section and no "## Simplest design" section).
+simplest_design_missing (DESIGN-SIMPLEST-FIRST; a body with a "## Size forecast" section and no "## Simplest design" section),
+contract_doc_not_in_matrix (a contract doc in a forecast files= list that no row of a valid AC / DoD matrix names in backticks; a body without a valid matrix is not flagged).
 ADR citation forms: "ADR NNNN", "ADR-<digits>" and docs/decisions/NNNN-*.md links.
 
 ${JQ_OUTPUT_USAGE}
@@ -261,6 +264,21 @@ export function lintSimplestDesign(body) {
   return [{ kind: "simplest_design_missing", id: "simplest-design", detail: { reason: "no `## Simplest design` section (minimal approach, rejected alternatives, cost comparison)" } }];
 }
 
+/** A contract doc in the forecast `files=` list must be named, backticked, in the AC / DoD matrix so the spec digest covers it. */
+export function lintContractDocsInMatrix(body) {
+  const section = extractSection(stripFencedCode(body), "Size forecast") ?? "";
+  const docs = section.split(/\r?\n/)
+    .map((line) => FORECAST_LINE_RE.exec(line)?.[3])
+    .filter(Boolean)
+    .flatMap((files) => files.split(","))
+    .filter((file) => CONTRACT_DOC_RE.test(file));
+  if (docs.length === 0) return [];
+  const { matrixInvalid, missing } = pathsMissingFromMatrix([...new Set(docs)], body);
+  if (matrixInvalid) return [];
+  return missing
+    .map((doc) => ({ kind: "contract_doc_not_in_matrix", id: doc, detail: { reason: `contract doc \`${doc}\` is in the Size forecast files but no AC / DoD matrix row names it in backticks` } }));
+}
+
 export async function lintSpec({ body, repoRoot }) {
   const rootStat = await stat(repoRoot).catch((error) => {
     if (isMissing(error)) return null;
@@ -280,6 +298,7 @@ export async function lintSpec({ body, repoRoot }) {
   findings.push(...lintSizeForecast(body, resolveSizeBounds(config)));
   checks.sizeForecast = { status: "ran" };
   findings.push(...lintSimplestDesign(body));
+  findings.push(...lintContractDocsInMatrix(body));
   const decisionsDir = path.join(repoRoot, "docs", "decisions");
   const records = await indexDecisionRecords(decisionsDir);
   if (records) {

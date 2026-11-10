@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { link, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { cp, copyFile, link, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
-import { test } from "bun:test";
+import { afterAll, describe, test } from "bun:test";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { decideDeltaNextStep, startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { parseReviewThreads } from "@dev-loops/core/github/review-threads";
@@ -23,7 +23,8 @@ import { selectActThreadBinding } from "../../scripts/github/_fixer-act-thread-b
 import { fixerReportPath, materializationHash, pullReceiptPath, pullWorkOrder, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitFixerWorkOrder, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
-import { gitEnvNoDirOverrides } from "../../scripts/loop/_repo-root-resolver.mjs";
+import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
+import { sealDeltaFixture } from "../loop/_seal-fixture.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import * as legacyOwner from "../../scripts/github/_legacy-fixer-revalidation.mjs";
@@ -33,10 +34,57 @@ const REPO = "owner/repo";
 const PR = 1975;
 const HEAD_SHA = "a".repeat(40);
 const FIX_SHA = "b".repeat(40);
+const initialHistories = new Map(), completionHistories = new Map(), legacyHistory = {};
+afterAll(async () => {
+  for (const history of [...initialHistories.values(), ...completionHistories.values(), legacyHistory]) {
+    await history.ready?.catch(() => {});
+    if (history.root) await rm(history.root, { recursive: true, force: true });
+  }
+});
+
+async function initPristineGitFixture(root, site = false) {
+  const text = site ? typeof site === "string" ? site : "one\ntwo\nthree\nfour\nfive\n" : null;
+  const history = initialHistories.get(text) ?? {};
+  initialHistories.set(text, history);
+  history.ready ??= (async () => {
+    history.root = await mkdtemp(path.join(os.tmpdir(), "fixer-initial-history-"));
+    initGitFixture(history.root, { branch: "issue-1" });
+    if (text) {
+      await writeFile(path.join(history.root, "site.txt"), text);
+      execFileSync("git", ["-C", history.root, "add", "site.txt"]);
+      execFileSync("git", ["-C", history.root, "commit", "-qm", "site"]);
+    }
+    history.head = execFileSync("git", ["-C", history.root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+  })();
+  await history.ready;
+  await cp(path.join(history.root, ".git"), path.join(root, ".git"), { recursive: true });
+  if (text) await writeFile(path.join(root, "site.txt"), text);
+  return history.head;
+}
+
+test("pristine fixture histories initialize simultaneously with independent Git copies", async () => {
+  for (const build of [initPristineGitFixture, completionFixture, legacyFixture]) {
+    await withRepoRoot(async (left) => withRepoRoot(async (right) => {
+      const [leftFixture, rightFixture] = await Promise.all([build(left), build(right)]);
+      const git = (root, ...args) => execFileSync("git", ["-C", root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+      const head = git(right, "rev-parse", "HEAD");
+      assert.equal(leftFixture.baseline ?? leftFixture, rightFixture.baseline ?? rightFixture);
+      assert.notEqual((await stat(path.join(left, ".git", "config"))).ino, (await stat(path.join(right, ".git", "config"))).ino);
+      git(left, "commit", "-q", "--allow-empty", "-m", "independent mutation");
+      assert.equal(git(right, "rev-parse", "HEAD"), head);
+      const histories = [...initialHistories.values(), ...completionHistories.values(), legacyHistory].filter((history) => history.root);
+      for (const history of histories) {
+        assert.equal(git(history.root, "rev-parse", "HEAD"), history.head ?? history.candidate);
+        assert.equal(existsSync(path.join(history.root, ".git", "worktrees")), false);
+        assert.equal(existsSync(path.join(history.root, "tmp")), false);
+      }
+    }));
+  }
+});
 
 for (const change of ["miss", "metadata-text", "mode", "offset", "offset-touch", "multi-hunk", "multiline", "overlap", "revert", "rename", "delete", "binary", "left", "missing", "foreign", "unknown", "merge"]) test(`C19 historical root proof: ${change}`, async () => {
   await withRepoRoot(async (root) => {
-    initGitFixture(root, { branch: "issue-1" });
+    await initPristineGitFixture(root);
     const git = (...args) => execFileSync("git", ["-C", root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
     const file = path.join(root, "site.txt"), original = "one\ntwo\nthree\nfour\nfive\n";
     const commit = async (text) => { await writeFile(file, text); git("add", "-A"); git("commit", "-qm", "site change"); return git("rev-parse", "HEAD"); };
@@ -388,7 +436,7 @@ test("review-body: a trusted post that the immediate re-read misses is a re-run 
 test("an already resolved thread completes with a full-SHA reply and refuses resolved_short_sha_reply with a short-SHA reply", async () => {
   for (const [body, complete] of [[`Fixed in commit ${FIX_SHA}.`, true], [`Fixed in commit ${FIX_SHA.slice(0, 7)}.`, false]]) await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, TACKLED);
-    const thread = { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body, author: { login: "bot", __typename: "User" } }] } };
+    const thread = { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body, authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } };
     const { deps, calls } = runtime([threadsCallEntry([thread]), compareEntry(FIX_SHA, "ahead")], repoRoot);
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps);
     assert.equal(result.complete, complete, JSON.stringify(result));
@@ -428,12 +476,11 @@ test("bound active full missing output is typed subject evidence and resolver st
 test("emitted and pulled THREAD full binds missing output without an execution directory", async () => {
   await withRepoRoot(async (root) => {
     root = await realpath(root);
-    initGitFixture(root, { branch: "issue-1" });
-    const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+    const head = await initPristineGitFixture(root);
     const tmpRoot = path.join(root, "tmp"), threadsFile = path.join(tmpRoot, "threads.json");
     const recordPath = path.join(tmpRoot, "gate-delta", `${head}.json`);
     await mkdir(path.dirname(recordPath), { recursive: true });
-    await writeFile(threadsFile, JSON.stringify({ ok: true, repo: REPO, pr: PR, threads: [{ threadId: "PRRT_T1", isResolved: false }] }));
+    await writeFile(threadsFile, JSON.stringify({ ok: true, repo: REPO, pr: PR, threads: [{ threadId: "PRRT_T1", isResolved: false, trusted: true }] }));
     await writeFile(recordPath, JSON.stringify({ reviewBaselineHead: head, candidateHead: head, actSetId: "0".repeat(16),
       invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "PRRT_T1", status: "resolved" }] }));
     const plan = await emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, phase: "full", threadsFile, cwd: root,
@@ -459,19 +506,13 @@ test("emitted and pulled THREAD full binds missing output without an execution d
 // An emitted and pulled THREAD full plan whose pushed head is the baseline head (issue 2787 C3, C4).
 async function threadConstructFixture(root, recordOver, site = false, commitCandidate = false) {
   root = await realpath(root);
-  initGitFixture(root, { branch: "issue-1" });
-  if (site) {
-    await writeFile(path.join(root, "site.txt"), typeof site === "string" ? site : "one\ntwo\nthree\nfour\nfive\n");
-    execFileSync("git", ["-C", root, "add", "site.txt"]);
-    execFileSync("git", ["-C", root, "commit", "-qm", "site"]);
-  }
-  const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+  const head = await initPristineGitFixture(root, site);
   if (commitCandidate) execFileSync("git", ["-C", root, "commit", "-q", "--allow-empty", "-m", "fix"], { env: gitEnvNoDirOverrides() });
-  const candidate = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+  const candidate = commitCandidate ? execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim() : head;
   const tmpRoot = path.join(root, "tmp"), threadsFile = path.join(tmpRoot, "threads.json");
   const recordPath = path.join(tmpRoot, "gate-delta", `${head}.json`);
   await mkdir(path.dirname(recordPath), { recursive: true });
-  await writeFile(threadsFile, JSON.stringify({ ok: true, repo: REPO, pr: PR, threads: [{ threadId: "PRRT_T1", isResolved: false }] }));
+  await writeFile(threadsFile, JSON.stringify({ ok: true, repo: REPO, pr: PR, threads: [{ threadId: "PRRT_T1", isResolved: false, trusted: true }] }));
   const record = { reviewBaselineHead: head, candidateHead: candidate, actSetId: "0".repeat(16),
     invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "PRRT_T1", status: "resolved" }],
     ...(recordOver?.outcome === "bounded_out" ? recordOver : {}) };
@@ -492,7 +533,7 @@ test("THREAD full --construct builds the report from the threads, the clearing r
     assert.equal(constructed.constructed, true);
     assert.deepEqual(JSON.parse(await readFile(f.output, "utf8")), { headSha: f.head, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: f.head, disposition: "tackled" }] });
     for (const check of [false, true]) {
-      const mock = f.runtimeFor([threadsCallEntry([{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }]), ...ciEntries(f.head), compareEntry(f.head, "identical", f.head)]);
+      const mock = f.runtimeFor([threadsCallEntry([{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }]), ...ciEntries(f.head), compareEntry(f.head, "identical", f.head)]);
       assert.equal((await verifyFixerDisposition({ ...f.options, check }, mock.deps)).complete, true);
     }
   });
@@ -502,7 +543,7 @@ test("--report-path is final-on-write: absent until the last step, atomic, compl
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root);
     const reportPath = fixerReportPath(f.output);
-    const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }];
+    const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }];
     const finalMock = () => f.runtimeFor([threadsCallEntry(resolved), ...ciEntries(f.head), compareEntry(f.head, "identical", f.head)]);
     await assert.rejects(verifyFixerDisposition({ ...f.options, construct: true, reportPath }, f.runtimeFor([threadsCallEntry([])]).deps), /valid only with --check; pass --check, or drop --report-path/);
     await assert.rejects(verifyFixerDisposition({ ...f.options, reportPath }, finalMock().deps), /valid only with --check; pass --check, or drop --report-path/);
@@ -536,7 +577,7 @@ test("--report-path is first-write-wins: a second --check run refuses and leaves
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root);
     const reportPath = fixerReportPath(f.output);
-    const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }];
+    const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }];
     const finalMock = () => f.runtimeFor([threadsCallEntry(resolved), ...ciEntries(f.head), compareEntry(f.head, "identical", f.head)]);
     await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
     await verifyFixerDisposition({ ...f.options, check: true, reportPath }, finalMock().deps);
@@ -568,7 +609,7 @@ test("--report-path publishes an incomplete outcome and a refused outcome with t
     const f = await threadConstructFixture(root);
     const reportPath = fixerReportPath(f.output);
     await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
-    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }] } }];
+    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }];
     await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath }, f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { failing: "lint" })]).deps), /ci_failed.*lint/);
     const refused = JSON.parse(await readFile(reportPath, "utf8"));
     assert.equal(refused.ok, false);
@@ -618,7 +659,7 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
     if (scenario.startsWith("touch-color")) git("config", scenario === "touch-color-diff" ? "color.diff" : "color.ui", "always");
     let head = git("rev-parse", "HEAD");
     const ids = route === "THREAD" ? ["PRRT_T1"] : ["PRRT_MERGED", "PRRT_SHARED"];
-    const nodes = route === "THREAD" ? [{ id: ids[0], isResolved: false, comments: { nodes: [{ id: "root0", databaseId: 1, body: "open", author: { login: "bot" } }] } }] : structuredClone(f.nodes);
+    const nodes = route === "THREAD" ? [{ id: ids[0], isResolved: false, comments: { nodes: [{ id: "root0", databaseId: 1, body: "open", authorAssociation: "OWNER", author: { login: "bot" } }] } }] : structuredClone(f.nodes);
     nodes.forEach((node, index) => { node.isResolved = false; node.comments.nodes[0].id = `root${index}`; node.comments.nodes[0].body = node.comments.nodes[0].body.replace(/Fixed in commit [a-f0-9]+\./, ""); });
     if (scenario === "missing-report") await rm(output);
     if (scenario === "forged-source") await writeFile(f.plan.workOrder.requiredReads[0].path, "[]");
@@ -635,7 +676,7 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
       if (args.includes("POST")) { posts.push(stdin); return { code: 0, stdout: JSON.stringify({ id: 9, html_url: "https://example.com/9" }) }; }
       if (args[1] === "graphql" && args.some((arg) => arg.includes("resolveReviewThread"))) { resolved = true; return { code: 0, stdout: JSON.stringify({ data: { resolveReviewThread: { thread: { id: args.find((arg) => arg.startsWith("threadId="))?.slice(9) ?? ids[0], isResolved: true } } } }) }; }
       if (args[1] === "graphql") {
-        if (resolved) nodes.forEach((node) => { node.isResolved = true; node.comments.nodes.push({ id: "reply", databaseId: 99, body: `Fixed in commit ${candidate}.`, author: { login: "bot" } }); });
+        if (resolved) nodes.forEach((node) => { node.isResolved = true; node.comments.nodes.push({ id: "reply", databaseId: 99, body: `Fixed in commit ${candidate}.`, authorAssociation: "OWNER", author: { login: "bot" } }); });
         return { code: 0, stdout: threadsPayload(nodes) };
       }
       if (args[1]?.includes("/check-runs")) return { code: 0, stdout: JSON.stringify({ check_runs: ["red", "pending"].includes(scenario) ? [{ name: "unit", status: scenario === "red" ? "completed" : "in_progress", conclusion: scenario === "red" ? "failure" : null }] : [] }) };
@@ -657,7 +698,7 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
         "--angles", '["correctness"]', "--known-findings", capture, "--silent"], { repoRoot: root,
         run: async () => ({ code: 0, stdout: JSON.stringify({ body: "review recovery", closingIssuesReferences: [], baseRefName: "main" }) }),
         checkBaseFreshness: async () => ({ ok: true, status: "base_current", base: "main" }),
-        loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true, draftGate: { verdict: "clean", headSha: candidate } } }) });
+        loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true, draftGate: { visible: true, verdict: "clean", headSha: candidate } } }) });
       const context = await readGateContext({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: head }, { repoRoot: root });
       const read = context.requiredReads.find((entry) => entry.kind === "known-findings"), bytes = await readFile(path.resolve(root, read.path));
       assert.equal(read.sha256, createHash("sha256").update(bytes).digest("hex"));
@@ -812,7 +853,7 @@ test("THREAD full --construct with a pushed candidate later than the order head 
     assert.equal(constructed.constructed, true);
     assert.deepEqual(JSON.parse(await readFile(f.output, "utf8")), { headSha: pushed, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: pushed, disposition: "tackled" }] });
     for (const check of [false, true]) {
-      const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${pushed}.`, author: { login: "bot", __typename: "User" } }] } }];
+      const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${pushed}.`, authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }];
       const mock = mockFor([ahead, liveHeadEntry(pushed), threadsCallEntry(resolved), ...ciEntries(pushed), compareEntry(pushed, "identical", pushed)]);
       assert.equal((await verifyFixerDisposition({ ...options, check }, mock.deps)).complete, true);
     }
@@ -823,7 +864,7 @@ test("a head whose only check run is gate-evidence is settled check-less and acc
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root);
     await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
-    const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }];
+    const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }];
     const mock = f.runtimeFor([threadsCallEntry(resolved), ...ciEntries(f.head, { runs: [{ name: "gate-evidence", status: "completed", conclusion: "success" }] }), compareEntry(f.head, "identical", f.head)]);
     assert.equal((await verifyFixerDisposition(f.options, mock.deps)).complete, true);
   });
@@ -873,7 +914,7 @@ test("normal mode refuses while the head's checks are red and posts no reply", a
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root);
     await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
-    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }] } }];
+    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }];
     const mock = f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { failing: "lint" })]);
     await assert.rejects(verifyFixerDisposition(f.options, mock.deps), /ci_failed.*lint/);
     assert.equal(hasPost(mock.calls), false);
@@ -892,7 +933,7 @@ for (const [label, ci, expected] of [
     await withRepoRoot(async (root) => {
       const f = await threadConstructFixture(root);
       await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
-      const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }] } }];
+      const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }];
       const mock = f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, ci)]);
       await assert.rejects(verifyFixerDisposition(f.options, mock.deps), expected);
       assert.equal(hasPost(mock.calls), false);
@@ -904,7 +945,7 @@ test("a failing check run outside the PR rollup is ignored like wait-pr-checks d
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root);
     await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
-    const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }];
+    const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }];
     const runs = [{ name: "build", status: "completed", conclusion: "success" }, { name: "codeql", status: "completed", conclusion: "failure" }];
     const mock = f.runtimeFor([threadsCallEntry(resolved), ...ciEntries(f.head, { runs }), compareEntry(f.head, "identical", f.head)], [{ name: "build" }]);
     assert.equal((await verifyFixerDisposition(f.options, mock.deps)).complete, true);
@@ -916,7 +957,7 @@ test("a hidden cancelled or stale run beside a visible green build does not down
     await withRepoRoot(async (root) => {
       const f = await threadConstructFixture(root);
       await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
-      const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }];
+      const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }];
       const runs = [{ name: "build", status: "completed", conclusion: "success" }, { name: "hidden", status: "completed", conclusion }];
       const mock = f.runtimeFor([threadsCallEntry(resolved), ...ciEntries(f.head, { runs }), compareEntry(f.head, "identical", f.head)], [{ name: "build" }]);
       assert.equal((await verifyFixerDisposition(f.options, mock.deps)).complete, true);
@@ -928,7 +969,7 @@ test("a failing check run inside the PR rollup still refuses ci_failed and posts
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root);
     await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
-    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }] } }];
+    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }];
     const runs = [{ name: "build", status: "completed", conclusion: "success" }, { name: "codeql", status: "completed", conclusion: "failure" }];
     const mock = f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { runs })], [{ name: "build" }, { name: "codeql" }]);
     await assert.rejects(verifyFixerDisposition(f.options, mock.deps), /ci_failed.*codeql/);
@@ -940,7 +981,7 @@ test("a rollup that lists a real check is not check-less when both commit APIs r
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root);
     await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
-    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }] } }];
+    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }];
     const mock = f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { runs: [] })], [{ name: "build" }]);
     await assert.rejects(verifyFixerDisposition(f.options, mock.deps), /ci_unknown/);
     assert.equal(hasPost(mock.calls), false);
@@ -951,8 +992,8 @@ test("a hidden pending run beside a visible green run does not block replies on 
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root);
     await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
-    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }] } }];
-    const done = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }, { id: "c2", databaseId: 2, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }];
+    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }];
+    const done = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }, { id: "c2", databaseId: 2, body: `Fixed in commit ${f.head}.`, authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }];
     const runs = [{ name: "build", status: "completed", conclusion: "success" }, { name: "codeql", status: "in_progress" }];
     const mock = f.runtimeFor([
       threadsCallEntry(open), ...ciEntries(f.head, { runs }), compareEntry(f.head, "identical", f.head),
@@ -970,7 +1011,7 @@ test("a settled head with no check runs and no statuses is accepted", async () =
     const f = await threadConstructFixture(root);
     await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
     for (const check of [false, true]) {
-      const mock = f.runtimeFor([threadsCallEntry([{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }]), ...ciEntries(f.head, { runs: [] }), compareEntry(f.head, "identical", f.head)]);
+      const mock = f.runtimeFor([threadsCallEntry([{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }]), ...ciEntries(f.head, { runs: [] }), compareEntry(f.head, "identical", f.head)]);
       assert.equal((await verifyFixerDisposition({ ...f.options, check }, mock.deps)).complete, true);
     }
   });
@@ -1249,7 +1290,7 @@ test("records a checkpoint, replies+resolves a tackled thread with missing evide
     const { deps, calls } = runtime([
       // 1. initial live-thread capture
       threadsCallEntry([
-        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }] } },
       ]),
       // 2. containment compare for FIX_SHA
       compareEntry(FIX_SHA, "ahead"),
@@ -1259,7 +1300,7 @@ test("records a checkpoint, replies+resolves a tackled thread with missing evide
       { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: true } } } })}\n` },
       // 5. re-read live threads
       threadsCallEntry([
-        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, authorAssociation: "OWNER", author: { login: "gate-bot", __typename: "User" } }] } },
       ]),
     ], repoRoot);
 
@@ -1290,7 +1331,7 @@ for (const check of [false, true]) test(`uncontained commit stays incomplete and
     ]);
     const { deps, calls } = runtime([
       threadsCallEntry([
-        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }] } },
       ]),
       compareEntry(FIX_SHA, "diverged"),
     ], repoRoot);
@@ -1321,13 +1362,13 @@ test("re-entry after reply-succeeded/resolve-failed only resolves, never posts a
     // reports the thread as NOT resolved (simulating a resolve failure).
     const first = runtime([
       threadsCallEntry([
-        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }] } },
       ]),
       compareEntry(FIX_SHA, "ahead"),
       { assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/101/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` },
       { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: false } } } })}\n` },
       threadsCallEntry([
-        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, authorAssociation: "OWNER", author: { login: "gate-bot", __typename: "User" } }] } },
       ]),
     ], repoRoot);
 
@@ -1341,12 +1382,12 @@ test("re-entry after reply-succeeded/resolve-failed only resolves, never posts a
     // resolveThread — never postReply again.
     const second = runtime([
       threadsCallEntry([
-        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, authorAssociation: "OWNER", author: { login: "gate-bot", __typename: "User" } }] } },
       ]),
       compareEntry(FIX_SHA, "ahead"),
       { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: true } } } })}\n` },
       threadsCallEntry([
-        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, authorAssociation: "OWNER", author: { login: "gate-bot", __typename: "User" } }] } },
       ]),
     ], repoRoot);
 
@@ -1365,41 +1406,7 @@ test("re-entry after reply-succeeded/resolve-failed only resolves, never posts a
 // never block a resolve-only action.
 // ---------------------------------------------------------------------------
 
-test("resolve-only path (NOT_RESOLVED) proceeds via threadId alone when no commentId is matched", async () => {
-  await withRepoRoot(async (repoRoot) => {
-    const fixerPlan = await deliver(repoRoot, [
-      { threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" },
-    ]);
-    const { deps, calls } = runtime([
-      // 1. initial live-thread capture: T1 already carries the commit-evidenced
-      // reply, but its author has no login (e.g. a deleted GitHub account),
-      // so authorMatchesFilter("all") filters it out and planBatchReplyTargets
-      // never matches a commentId for T1. This is NOT_RESOLVED only — no
-      // reply is missing — so no commentId should ever be required.
-      threadsCallEntry([
-        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, author: null }] } },
-      ]),
-      // 2. containment compare for FIX_SHA
-      compareEntry(FIX_SHA, "ahead"),
-      // 3. resolve GraphQL mutation — no reply POST at all.
-      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: true } } } })}\n` },
-      // 4. re-read live threads
-      threadsCallEntry([
-        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, author: null }] } },
-      ]),
-    ], repoRoot);
-
-    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
-
-    assert.equal(result.complete, true);
-    assert.equal(result.actions.length, 1);
-    assert.equal(result.actions[0].ok, true);
-    assert.equal(result.actions[0].step, "resolved");
-    // No POST .../replies call anywhere in this run's gh call log.
-    assert.ok(calls.every((call) => !call.args.some((arg) => String(arg).includes("/replies"))));
-    assert.equal(calls.length, 5);
-  });
-});
+// ADR 0238: a thread whose only comment has no login (a deleted account) is untrusted and skipped, so the deleted-account scenario cannot occur.
 
 // ---------------------------------------------------------------------------
 // AC row 5 — resolve success / re-read failure: the resolve mutation LIES
@@ -1415,7 +1422,7 @@ test("resolve mutation reports isResolved:true but the live re-read still shows 
     const { deps, calls } = runtime([
       // 1. initial live-thread capture
       threadsCallEntry([
-        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }] } },
       ]),
       // 2. containment compare for FIX_SHA
       compareEntry(FIX_SHA, "ahead"),
@@ -1425,7 +1432,7 @@ test("resolve mutation reports isResolved:true but the live re-read still shows 
       { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: true } } } })}\n` },
       // 5. re-read live threads: still unresolved despite the mutation's claim.
       threadsCallEntry([
-        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, authorAssociation: "OWNER", author: { login: "gate-bot", __typename: "User" } }] } },
       ]),
     ], repoRoot);
 
@@ -1454,9 +1461,9 @@ test("deferred/foreign/newly-arrived threads are never replied to or resolved", 
     ]);
     const { deps, calls } = runtime([
       threadsCallEntry([
-        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
-        { id: "PRRT_T2", isResolved: false, comments: { nodes: [{ id: "c2", databaseId: 201, body: "unrelated nit", author: { login: "someone-else", __typename: "User" } }] } },
-        { id: "PRRT_T3", isResolved: false, comments: { nodes: [{ id: "c3", databaseId: 301, body: "brand new finding", author: { login: "reviewer", __typename: "User" } }] } },
+        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, authorAssociation: "OWNER", author: { login: "gate-bot", __typename: "User" } }] } },
+        { id: "PRRT_T2", isResolved: false, comments: { nodes: [{ id: "c2", databaseId: 201, body: "unrelated nit", authorAssociation: "OWNER", author: { login: "someone-else", __typename: "User" } }] } },
+        { id: "PRRT_T3", isResolved: false, comments: { nodes: [{ id: "c3", databaseId: 301, body: "brand new finding", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }] } },
       ]),
       compareEntry(FIX_SHA, "identical"),
     ], repoRoot);
@@ -1475,7 +1482,7 @@ test("site coverage riding a fingerprinted thread entry satisfies the act item's
     ], { actList: [{ fingerprint: "fp1", severity: "high", summary: "s", judgeDisposition: "act", siteQuery: "git grep -n x" }] });
     const { deps } = runtime([
       threadsCallEntry([
-        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, authorAssociation: "OWNER", author: { login: "gate-bot", __typename: "User" } }] } },
       ]),
       { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "gate" })}\n` },
       compareEntry(FIX_SHA, "identical"),
@@ -1522,7 +1529,7 @@ test("a thread the applicable delta record marks not_resolved gets no Fixed repl
     }));
     const { deps, calls } = runtime([
       threadsCallEntry([
-        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }] } },
       ]),
       compareEntry(FIX_SHA, "ahead"),
     ], repoRoot);
@@ -1567,7 +1574,7 @@ function runtimeWithGit(entries, repoRoot, git) {
 }
 
 const unresolvedT1 = () => threadsCallEntry([
-  { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
+  { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }] } },
 ]);
 const hasPost = (calls) => calls.some((call) => call.args.includes("POST"));
 
@@ -1803,7 +1810,7 @@ test("a record whose baseline..candidate range excludes the fixing commit still 
       { assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/101/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` },
       { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: true } } } })}\n` },
       threadsCallEntry([
-        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, authorAssociation: "OWNER", author: { login: "gate-bot", __typename: "User" } }] } },
       ]),
     ], repoRoot, (args) => (args[0] === "rev-parse" ? { code: 0, stdout: `${FIX_SHA}\n` } : { code: 1 }));
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
@@ -1822,7 +1829,7 @@ test("a resolved delta item for the thread still lets the Fixed reply post", asy
       { assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/101/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` },
       { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: true } } } })}\n` },
       threadsCallEntry([
-        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, authorAssociation: "OWNER", author: { login: "gate-bot", __typename: "User" } }] } },
       ]),
     ], repoRoot, () => ({ code: 0, stdout: `${FIX_SHA}\n` }));
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
@@ -1855,8 +1862,8 @@ test("the finding marker is found on any comment of the thread, not only the id-
     const { deps } = runtimeWithGit([
       threadsCallEntry([
         { id: "PRRT_T1", isResolved: false, comments: { nodes: [
-          { id: "c2", databaseId: 200, body: "<!-- dev-loops:finding 0123456789abcdef -->\nroot", author: { login: "reviewer", __typename: "User" } },
-          { id: "c1", databaseId: 100, body: "earlier id, no marker", author: { login: "reviewer", __typename: "User" } },
+          { id: "c2", databaseId: 200, body: "<!-- dev-loops:finding 0123456789abcdef -->\nroot", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } },
+          { id: "c1", databaseId: 100, body: "earlier id, no marker", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } },
         ] } },
       ]),
       compareEntry(FIX_SHA, "ahead"),
@@ -1877,7 +1884,7 @@ const ciEntries = (head, { failing, runs, statuses = [], checkRunsExit = 0 } = {
 ];
 // A report as the verifier's own --construct leaves it: the bytes plus the sha256 mark beside them.
 const writeMarked = async (file, text) => { await writeFile(file, text); await writeFile(`${file}.constructed`, sha256Hex(text)); };
-const gateComment = (id, databaseId, body = `${ACT_MARKER}\n**Problem:** s`, login = "gate") => ({ id, databaseId, body, author: { login, __typename: "User" } });
+const gateComment = (id, databaseId, body = `${ACT_MARKER}\n**Problem:** s`, login = "gate") => ({ id, databaseId, body, authorAssociation: "OWNER", author: { login, __typename: "User" } });
 const actThread = (id, comments, isResolved = false) => ({ id, isResolved, comments: { nodes: comments } });
 
 test("ACT thread selector preserves the genuine public root and complete synthetic memberships", () => {
@@ -1935,13 +1942,25 @@ for (const failure of [null, "query", "login"]) test(`empty ACT membership still
 async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   if (settings.legacy) return legacyCompletionFixture(repoRoot, kind, settings);
   repoRoot = await realpath(repoRoot);
-  initGitFixture(repoRoot, { branch: "issue-1" });
   const git = (...args) => execFileSync("git", ["-C", repoRoot, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
-  if (settings.site) { await writeFile(path.join(repoRoot, "site.txt"), typeof settings.site === "string" ? settings.site : "one\ntwo\nthree\nfour\nfive\n"); git("add", "site.txt"); git("commit", "-qm", "site"); }
+  const site = settings.site ? typeof settings.site === "string" ? settings.site : "one\ntwo\nthree\nfour\nfive\n" : null;
+  const history = completionHistories.get(site) ?? {};
+  completionHistories.set(site, history);
+  history.ready ??= (async () => {
+    history.root = await mkdtemp(path.join(os.tmpdir(), "completion-pristine-history-"));
+    const seedGit = (...args) => execFileSync("git", ["-C", history.root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+    initGitFixture(history.root, { branch: "issue-1" });
+    if (site) { await writeFile(path.join(history.root, "site.txt"), site); seedGit("add", "site.txt"); seedGit("commit", "-qm", "site"); }
+    await writeFile(path.join(history.root, ".gitignore"), "tmp/\n");
+    seedGit("add", ".gitignore");
+    seedGit("commit", "-qm", "ignore evidence");
+    history.head = seedGit("rev-parse", "HEAD");
+  })();
+  await history.ready;
+  await cp(path.join(history.root, ".git"), path.join(repoRoot, ".git"), { recursive: true });
+  if (site) await writeFile(path.join(repoRoot, "site.txt"), site);
   await writeFile(path.join(repoRoot, ".gitignore"), "tmp/\n");
-  git("add", ".gitignore");
-  git("commit", "-qm", "ignore evidence");
-  const baseline = git("rev-parse", "HEAD"), tmpRoot = path.join(repoRoot, "tmp");
+  const baseline = history.head, tmpRoot = path.join(repoRoot, "tmp");
   await mkdir(tmpRoot);
   const actList = [0, 1, 2].map((index) => ({ ...ACT_LIST[0], summary: index === 2 ? "second member" : "s", siteQuery: "query", acceptedForms: [`--${index}`] }));
   for (const item of actList) item.fingerprint = fingerprintFinding(item);
@@ -1967,11 +1986,12 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   await writeFile(originPath, JSON.stringify({ headSha: fixing, siteCoverage }));
   await writeFile(logPath, JSON.stringify({ headSha: baseline, provenance: { perAngle: [{ angle: "correctness" }] } }));
   const args = ["--act-list", actPath, "--baseline", baseline, "--worktree", repoRoot, "--fixer-plan", prior.planPath, "--site-coverage", originPath];
-  const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", logPath], { stdout: { write() {} } });
+  const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", logPath, "--result-path", path.join(tmpRoot, "delta-result.json")], { stdout: { write() {} } });
   if (residual) git("commit", "-q", "--allow-empty", "-m", "candidate B");
   const candidate = git("rev-parse", "HEAD"), items = input.input.actItems.map(({ ref }, index) => ({ ref, status: isResidual(index) ? "cannot_verify" : "resolved", evidence: ["focused check"] }));
   const delta = { ...input.input.resultShape, candidateHead: residual ? fixing : candidate, actionableItems: items, newFindings: [], widenedReads: [], outcome: residual ? "bounded_out" : "locally_clear" };
   await writeFile(deltaPath, JSON.stringify(delta));
+  sealDeltaFixture(resolveGateArtifactTmpRoot(repoRoot), deltaPath);
   assert.equal((await runCli([...args, "--result", deltaPath, "--invocation", residual ? "3" : "1"], { stdout: { write() {} } })).nextStep, residual ? "push_to_gate" : "push");
   const threadBindings = kind === "threadless" ? [] : [{ threadId: "PRRT_MERGED", fingerprints: [ACT_FP, second] }, { threadId: "PRRT_SHARED", fingerprints: [ACT_FP] }];
   const dispositions = threadBindings.map(({ threadId, fingerprints }) => ({ threadId, fixingCommitSha: fixing,
@@ -1979,12 +1999,21 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   const nodes = threadBindings.map(({ threadId, fingerprints }, index) => actThread(threadId, [gateComment(`c${index}`, index + 1,
     fingerprints.map((fp) => `<!-- dev-loops:finding ${fp} severity=medium angle=correctness round=1 -->`).join("\n") + `\nFixed in commit ${fixing}.`)], dispositions[index].disposition === "tackled"));
   const plan = await emit("full", { deltaResult: deltaPath, runChild: makeGhMock([threadsCallEntry(nodes), userEntry]).runChild });
+  let live = null;
   if (settings.complete) {
     plan.executionIdentity = `f${Date.now()}-2800abcd`;
     plan.workOrderRef = `fixer:${REPO}#${PR}:${candidate}:${plan.executionIdentity}`;
     plan.workOrder.outputRefs = [path.join(path.dirname(plan.planPath), plan.executionIdentity, "fixer-disposition.json")];
     plan.promptPath = path.join(path.dirname(plan.planPath), "work-orders", `${plan.executionIdentity}.md`);
     plan.workOrder.operation = "complete";
+    if (settings.descendant) {
+      // A descendant re-entry (issue 2787 C14) emits the complete order at the live head L, ahead of the candidate.
+      git("commit", "-q", "--allow-empty", "-m", "ci fix");
+      live = git("rev-parse", "HEAD");
+      plan.workOrder.headSha = live;
+      plan.workOrderRef = `fixer:${REPO}#${PR}:${live}:${plan.executionIdentity}`;
+    }
+    plan.workOrder.completesExecution = { executionIdentity: plan.executionIdentity, heads: [plan.workOrder.headSha] };
     plan.workOrder.mutationAuthority.allowedPaths = [];
     plan.workOrderDigest = workOrderDigest(plan.workOrder);
     const text = renderWorkOrder(plan.workOrder);
@@ -1996,8 +2025,24 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   await pull(plan);
   const fixerPlan = plan.planPath, sourceRead = plan.workOrder.requiredReads.find((read) => read.kind === "completion-input"), sourcePath = sourceRead.path;
   const source = JSON.parse(await readFile(sourcePath));
-  const depsFor = (extra = []) => runtime([compareEntry(baseline, "ahead", candidate), compareEntry(fixing, "ahead", candidate), liveHeadEntry(candidate), threadsCallEntry(nodes), userEntry, ...ciEntries(candidate), ...extra], repoRoot, { live: false });
-  assert.equal((await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: candidate, fixerPlan, construct: true }, depsFor().deps)).constructed, true);
+  // A descendant order is observed at its live head L; the operator-reset case passes the candidate instead.
+  const observed = live ?? candidate;
+  const depsFor = (extra = []) => withDescendantSites(runtime([...live ? [compareEntry(live, "behind", candidate), compareEntry(baseline, "ahead", candidate)] : [compareEntry(baseline, "ahead", candidate)], compareEntry(fixing, "ahead", candidate), liveHeadEntry(observed), threadsCallEntry(nodes), userEntry, ...live ? [compareEntry(candidate, "ahead", live), { assertArgs: ["pr", "view", String(PR), "headRefOid"], stdout: `${JSON.stringify({ headRefOid: live })}\n` }] : [], ...ciEntries(observed), ...extra], repoRoot, { live: false }));
+  // A descendant delivery proves each tackled thread's site against real history, so git and the historical root run live.
+  function withDescendantSites(mock) {
+    if (!live) return mock;
+    const inner = mock.deps.runChild;
+    mock.deps.runChild = async (cmd, args = [], env, stdin) => {
+      if (cmd === "git") { const r = spawnSync(cmd, args, { cwd: repoRoot, env, encoding: "utf8" }); return { code: r.status, stdout: r.stdout, stderr: r.stderr }; }
+      if (args[1]?.includes("/pulls/comments/")) {
+        const index = Number(args[1].split("/").at(-1)) - 1;
+        return { code: 0, stdout: JSON.stringify({ id: index + 1, node_id: `c${index}`, pull_request_url: `https://api.github.com/repos/${REPO}/pulls/${PR}`, path: "site.txt", original_commit_id: candidate, original_line: 3, side: "RIGHT" }) };
+      }
+      return inner(cmd, args, env, stdin);
+    };
+    return mock;
+  }
+  assert.equal((await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: observed, fixerPlan, construct: true }, depsFor().deps)).constructed, true);
   // Negative tests may reseal a corruption only after a genuine baseline was constructed.
   const seal = async () => {
     const bytes = `${JSON.stringify(source, null, 2)}\n`;
@@ -2011,7 +2056,7 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
     await writeFile(receiptPath, JSON.stringify({ ...receipt, workOrderDigest: plan.workOrderDigest }));
     await writeMarked(plan.workOrder.outputRefs[0], JSON.stringify({ headSha: candidate, dispositions, siteCoverage }));
   };
-  return { fixerPlan, plan, source, sourceRead, sourcePath, originPath, baseline, fixing, candidate, nodes, dispositions, seal, depsFor };
+  return { live, fixerPlan, plan, source, sourceRead, sourcePath, originPath, baseline, fixing, candidate, nodes, dispositions, seal, depsFor };
 }
 
 for (const kind of ["resolved", "threadless", "mixed"]) test(`explicit complete ACT constructs then verifies without clobber (${kind})`, async () => {
@@ -2025,6 +2070,16 @@ for (const kind of ["resolved", "threadless", "mixed"]) test(`explicit complete 
     }
     await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan, construct: true }, f.depsFor().deps), /EEXIST/);
     assert.deepEqual(await readFile(output), before);
+  });
+});
+
+for (const observed of ["live", "reset"]) test(`a complete ACT order at a descendant live head ${observed === "live" ? "passes" : "refuses a PR reset to the candidate"}`, async () => {
+  await withRepoRoot(async (root) => {
+    const f = await completionFixture(root, "resolved", { complete: true, descendant: true, site: true });
+    const options = { repo: REPO, pr: PR, headSha: observed === "live" ? f.live : f.candidate, fixerPlan: f.fixerPlan };
+    if (observed === "live") assert.equal((await verifyFixerDisposition(options, f.depsFor([compareEntry(f.fixing, "ahead", f.live)]).deps)).complete, true);
+    // After a reset to C the order head L is not contained by C on either comparison, so delivery refuses.
+    else await assert.rejects(verifyFixerDisposition(options, runtime([compareEntry(f.live, "behind", f.candidate), compareEntry(f.live, "behind", f.candidate)], root, { live: false }).deps), /is not contained by the observed head/);
   });
 });
 
@@ -2109,9 +2164,10 @@ async function legacyCompletionFixture(repoRoot, kind = "resolved", settings = {
   return { fixerPlan, plan, source, sourceRead, sourcePath, originPath, baseline, fixing, nodes, dispositions, seal, depsFor };
 }
 
+describe.serial("completion review baseline corruption", () => {
 for (const mode of ["normal", "check", "construct"]) for (const defect of ["sourceDigest", "deltaResultDigest", "optional", "duplicate", "length", "baseline"]) test(`completion ${mode} refuses supplied review baseline ${defect} before optional authority branches`, async () => {
   await withRepoRoot(async (root) => {
-    const f = await completionFixture(root);
+    const f = await completionFixture(root, "resolved");
     const order = f.plan.workOrder;
     if (["sourceDigest", "deltaResultDigest"].includes(defect)) delete order.authority[defect];
     if (defect === "optional") order.requiredReads[0].required = false;
@@ -2125,6 +2181,7 @@ for (const mode of ["normal", "check", "construct"]) for (const defect of ["sour
     assert.equal(calls.length, 0);
     assert.equal(existsSync(path.join(root, "tmp/gate-findings")), false);
   });
+});
 });
 
 const LEGACY_PATTERN = "readValidationEvidence|requireBinding|validationResultsPath|prefix-file";
@@ -2158,17 +2215,24 @@ const LEGACY_FORMS = [
   "not_configured with missing or invalid trusted absence provenance",
 ];
 async function legacyFixture(repoRoot) {
-  initGitFixture(repoRoot, { branch: "issue-1" });
   const git = (...args) => execFileSync("git", ["-C", repoRoot, ...args], { env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined,
     GIT_CONFIG_PARAMETERS: undefined, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "grep.column", GIT_CONFIG_VALUE_0: "false" }, encoding: "utf8" });
-  const baseline = git("rev-parse", "HEAD").trim();
-  for (const [index, file] of LEGACY_FILES.entries()) {
-    await mkdir(path.dirname(path.join(repoRoot, file)), { recursive: true });
-    await writeFile(path.join(repoRoot, file), "readValidationEvidence\n".repeat(index < 11 ? 12 : 11));
-  }
-  git("add", ".");
-  git("commit", "-qm", "209 legacy query rows across 18 files");
-  const candidate = git("rev-parse", "HEAD").trim();
+  legacyHistory.ready ??= (async () => {
+    legacyHistory.root = await mkdtemp(path.join(os.tmpdir(), "fixer-legacy-history-"));
+    const seedGit = (...args) => execFileSync("git", ["-C", legacyHistory.root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+    initGitFixture(legacyHistory.root, { branch: "issue-1" });
+    for (const [index, file] of LEGACY_FILES.entries()) {
+      await mkdir(path.dirname(path.join(legacyHistory.root, file)), { recursive: true });
+      await writeFile(path.join(legacyHistory.root, file), "readValidationEvidence\n".repeat(index < 11 ? 12 : 11));
+    }
+    seedGit("add", ".");
+    seedGit("commit", "-qm", "209 legacy query rows across 18 files");
+    legacyHistory.baseline = seedGit("rev-parse", "HEAD^");
+    legacyHistory.candidate = seedGit("rev-parse", "HEAD");
+  })();
+  await legacyHistory.ready;
+  await cp(legacyHistory.root, repoRoot, { recursive: true });
+  const { baseline, candidate } = legacyHistory;
   const coverage = [{ fingerprint: ACT_FP, returnedSites: [...LEGACY_FILES], sites: [
     ...LEGACY_FORMS.map((site) => ({ site, kind: "input_form", status: "fixed", reason: "", test: "test/github/validation-evidence.test.mjs: historical input form" })),
     ...LEGACY_FILES.map((site, index) => ({ site, kind: "site", status: index ? "skipped" : "fixed", reason: index ? "shared reader; no direct edit" : "", ...index ? {} : { test: "historical reader regression" } })),
@@ -2842,7 +2906,10 @@ for (const [defect, expectedError] of Object.entries({
         const other = path.join(repoRoot, "unrelated");
         await mkdir(other);
         await writeFile(path.join(other, "fixer-disposition.json"), "must remain unchanged");
-        if (defect === "directorySymlink") { await rm(path.dirname(canonical), { recursive: true }); await symlink(other, path.dirname(canonical), "dir"); }
+        if (defect === "directorySymlink") {
+          // C15: the pinned act-list copy lives in the execution directory, so it moves with the redirect.
+          await copyFile(path.join(path.dirname(canonical), "act-list.json"), path.join(other, "act-list.json")).catch(() => {});
+          await rm(path.dirname(canonical), { recursive: true }); await symlink(other, path.dirname(canonical), "dir"); }
         else await symlink(path.join(other, "fixer-disposition.json"), canonical);
       }
       const evidenceBefore = await Promise.all([f.originPath, f.sourcePath].map((file) => readFile(file, "utf8").catch(() => null)));
@@ -3091,7 +3158,7 @@ test("a full-phase handoff that omits a disposition entry for an open gate threa
       { assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/101/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` },
       { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_ACT", isResolved: true } } } })}\n` },
       threadsCallEntry([
-        actThread("PRRT_ACT", [gateComment("c1", 101), { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }], true),
+        actThread("PRRT_ACT", [gateComment("c1", 101), { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, authorAssociation: "OWNER", author: { login: "gate-bot", __typename: "User" } }], true),
       ]),
     ], repoRoot);
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
@@ -3244,7 +3311,7 @@ test("bounded_out THREAD normal mode posts one residual reply on a not_resolved 
     const f = await threadConstructFixture(root, { outcome: "bounded_out", nextStep: "push_to_gate", invocation: 3, items: [{ ref: "PRRT_T1", status: "not_resolved" }] });
     await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
     assert.deepEqual(JSON.parse(await readFile(f.output, "utf8")).dispositions, [{ threadId: "PRRT_T1", fixingCommitSha: f.head, disposition: "deferred" }]);
-    const reviewer = { id: "c1", databaseId: 1, body: "please fix", author: { login: "reviewer", __typename: "User" } };
+    const reviewer = { id: "c1", databaseId: 1, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } };
     const withGit = (mock) => {
       const inner = mock.deps.runChild;
       mock.deps.runChild = async (cmd, args = [], ...rest) => (cmd === "git" ? (mock.calls.push({ command: cmd, args: [...args], stdinText: "" }), { code: 0, stderr: "", stdout: `${f.head}\n` }) : inner(cmd, args, ...rest));
@@ -3258,7 +3325,7 @@ test("bounded_out THREAD normal mode posts one residual reply on a not_resolved 
     assert.equal(first.residualPosts.length, 1);
     assert.ok(first.residualPosts[0].args.includes(`repos/${REPO}/pulls/${PR}/comments/1/replies`));
     assert.equal(first.calls.some((call) => JSON.stringify(call.args).includes("resolveReviewThread")), false, "the thread stays open");
-    const residual = { id: "c2", databaseId: 2, body: `Residual delta status: not_resolved after the delta review of commit ${f.head}.`, author: { login: "bot", __typename: "User" } };
+    const residual = { id: "c2", databaseId: 2, body: `Residual delta status: not_resolved after the delta review of commit ${f.head}.`, authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } };
     const again = withGit(f.runtimeFor([threadsCallEntry([{ id: "PRRT_T1", isResolved: false, comments: { nodes: [reviewer, residual] } }]), ...ciEntries(f.head)]));
     const reentry = await verifyFixerDisposition(f.options, again.deps);
     assert.deepEqual(nonResidual(reentry.actions), []);
@@ -3272,7 +3339,7 @@ test("bounded_out THREAD residual POST failure is incomplete and ok:false; clean
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root, { outcome: "bounded_out", nextStep: "push_to_gate", invocation: 3, items: [{ ref: "PRRT_T1", status: "not_resolved" }] });
     await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
-    const reviewer = { id: "c1", databaseId: 1, body: "please fix", author: { login: "reviewer", __typename: "User" } };
+    const reviewer = { id: "c1", databaseId: 1, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } };
     const withGit = (mock) => {
       const inner = mock.deps.runChild;
       mock.deps.runChild = async (cmd, args = [], ...rest) => (cmd === "git" ? (mock.calls.push({ command: cmd, args: [...args], stdinText: "" }), { code: 0, stderr: "", stdout: `${f.head}\n` }) : inner(cmd, args, ...rest));
@@ -3284,7 +3351,7 @@ test("bounded_out THREAD residual POST failure is incomplete and ok:false; clean
     assert.equal(failing.complete, false);
     assert.ok(failing.incomplete.some((entry) => entry.threadId === "PRRT_T1" && entry.failedStep === "residual_reply_failed"));
     assert.match(failing.reason, /PRRT_T1/);
-    const stale = { id: "c2", databaseId: 2, body: `Residual delta status: not_resolved after the delta review of commit ${"a".repeat(40)}; stays open.`, author: { login: "bot", __typename: "User" } };
+    const stale = { id: "c2", databaseId: 2, body: `Residual delta status: not_resolved after the delta review of commit ${"a".repeat(40)}; stays open.`, authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } };
     const rerun = withGit(f.runtimeFor(open(stale)));
     const posted = await verifyFixerDisposition(f.options, rerun.deps);
     assert.equal(posted.ok, true);
@@ -3301,7 +3368,7 @@ test("bounded_out THREAD failed residual POST stays incomplete under --check; cl
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root, { outcome: "bounded_out", nextStep: "push_to_gate", invocation: 3, items: [{ ref: "PRRT_T1", status: "not_resolved" }] });
     await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
-    const reviewer = { id: "c1", databaseId: 1, body: "please fix", author: { login: "reviewer", __typename: "User" } };
+    const reviewer = { id: "c1", databaseId: 1, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } };
     const withGit = (mock) => {
       const inner = mock.deps.runChild;
       mock.deps.runChild = async (cmd, args = [], ...rest) => (cmd === "git" ? (mock.calls.push({ command: cmd, args: [...args], stdinText: "" }), { code: 0, stderr: "", stdout: `${f.head}\n` }) : inner(cmd, args, ...rest));
@@ -3317,7 +3384,7 @@ test("bounded_out THREAD failed residual POST stays incomplete under --check; cl
     const rerun = withGit(f.runtimeFor(open()));
     assert.equal((await verifyFixerDisposition(f.options, rerun.deps)).ok, true);
     assert.equal(rerun.residualPosts.length, 1);
-    const live = { id: "c2", databaseId: 2, body: `Residual delta status: not_resolved after the delta review of commit ${f.head}; stays open.`, author: { login: "bot", __typename: "User" } };
+    const live = { id: "c2", databaseId: 2, body: `Residual delta status: not_resolved after the delta review of commit ${f.head}; stays open.`, authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } };
     const passing = withGit(f.runtimeFor(open(live)));
     const done = await verifyFixerDisposition({ ...f.options, check: true }, passing.deps);
     assert.equal(done.complete, true);
@@ -3329,7 +3396,7 @@ test("--report-path creates a missing parent directory and a failed publish keep
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root);
     await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
-    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }] } }];
+    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }];
     const nested = path.join(root, "missing", "dir", "x.report");
     await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: nested }, f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { failing: "lint" })]).deps), /ci_failed.*lint/);
     assert.equal(JSON.parse(await readFile(nested, "utf8")).outcome, "refused", "the parent directory is created");

@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 
 import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { containsBareCopilotSummon } from "../../scripts/_core-helpers.mjs";
+import { trustCommentFixtures } from "../_helpers.mjs";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import {
   buildCommentableLineSet,
@@ -21,6 +22,7 @@ import {
   commentDeferredFindings,
   fetchListedFingerprints,
   resolveDeferralCommentTarget,
+  filterTrustedRoundInputs,
   fingerprintFinding,
   isBelowInlineFloor,
   isDeferredAtRound,
@@ -773,7 +775,7 @@ test("listPrReviews excludes PENDING and timestamp-less reviews from round/suppr
   ]]);
   const runChildStub = async () => ({ code: 0, stdout: payload, stderr: "" });
   const reviews = await listPrReviews({ repo: "owner/repo", pr: 17 }, { env: {}, ghCommand: "gh", runChild: runChildStub });
-  assert.deepEqual(reviews, [{ id: 1, body: "real review", author: "octocat" }]);
+  assert.deepEqual(reviews, [{ id: 1, body: "real review", author: "octocat", user: { login: "octocat" }, author_association: null }]);
 });
 
 test("listPrReviews shares the full submitted-review predicate (body/junk branches too)", async () => {
@@ -786,7 +788,7 @@ test("listPrReviews shares the full submitted-review predicate (body/junk branch
   ]]);
   const runChildStub = async () => ({ code: 0, stdout: payload, stderr: "" });
   const reviews = await listPrReviews({ repo: "owner/repo", pr: 17 }, { env: {}, ghCommand: "gh", runChild: runChildStub });
-  assert.deepEqual(reviews, [{ id: 1, body: "real review", author: "octocat" }]);
+  assert.deepEqual(reviews, [{ id: 1, body: "real review", author: "octocat", user: { login: "octocat" }, author_association: null }]);
 });
 
 test("readGateFindingsLedger normalizes the legacy severity spelling on read", async () => {
@@ -1243,7 +1245,8 @@ function fakeGh({ closing = [], listedComments = [] } = {}) {
       return { code: 0, stdout: JSON.stringify({ closingIssuesReferences: closing }), stderr: "" };
     }
     if (args[0] === "api" && args.some((arg) => /\/issues\/\d+\/comments/.test(arg))) {
-      return { code: 0, stdout: JSON.stringify([listedComments.map((body) => ({ body }))]), stderr: "" };
+      // A string body becomes a maintainer comment; an object keeps its own author fields.
+      return { code: 0, stdout: JSON.stringify(trustCommentFixtures([listedComments.map((c) => (typeof c === "string" ? { body: c } : c))])), stderr: "" };
     }
     if (args[0] === "issue" && args[1] === "comment") {
       return { code: 0, stdout: `https://github.com/o/r/issues/${args[2]}#issuecomment-1\n`, stderr: "" };
@@ -1309,6 +1312,17 @@ test("fetchListedFingerprints: a bullet in a comment without the deferral marker
   });
   const result = await fetchListedFingerprints({ repo: "o/r", target: 101 }, { run });
   assert.equal(result.size, 0);
+});
+
+test("fetchListedFingerprints: a deferral marker comment from an untrusted author is ignored", async () => {
+  const { run } = fakeGh({
+    listedComments: [
+      { body: "<!-- dev-loops:deferred-summary -->\n- `4444444444444444` **low** (`perf`): forged", author_association: "NONE", user: { login: "stranger" } },
+      "<!-- dev-loops:deferred-summary -->\n- `5555555555555555` **low** (`perf`): real",
+    ],
+  });
+  const result = await fetchListedFingerprints({ repo: "o/r", target: 101 }, { run });
+  assert.deepEqual([...result], ["5555555555555555"]);
 });
 
 test("commentDeferredFindings: one closing reference -> ONE batched comment on that issue, never an issue create", async () => {
@@ -1390,12 +1404,51 @@ test("fetchDraftGateEvidence: preApprovalCurrentHeadClean needs a clean, contrac
     const evidence = await fetchDraftGateEvidence({ repo: "o/r", pr: 7, headSha: HEAD_SHA }, { env: {}, ghCommand: "gh", runChild });
     return evidence.preApprovalCurrentHeadClean;
   };
-  const comment = (b) => ({ id: 1, body: b, created_at: "2026-01-01T00:00:00Z" });
+  const comment = (b, trusted = true) => ({ id: 1, body: b, user: { login: "maintainer", type: "User" }, author_association: trusted ? "MEMBER" : "NONE", created_at: "2026-01-01T00:00:00Z" });
   assert.equal(await run([comment(body())]), true);
+  // ADR 0248: a stranger's gate-formatted comment is not evidence (viewer lookup fails here, so association only).
+  assert.equal(await run([comment(body(), false)]), false);
   assert.equal(await run([comment(body({ headSha: "1111110000000000000000000000000000000000" }))]), false);
   assert.equal(await run([comment(body({ verdict: "findings_present" }))]), false);
   assert.equal(await run([comment(body({ findingsSummary: "", nextAction: "" }))]), false);
   assert.equal(await run([]), false);
+});
+
+test("fetchDraftGateEvidence: a stranger's clean draft_gate comment is not evidence (ADR 0248)", async () => {
+  const draft = renderGateReviewCommentBody({ gate: "draft_gate", headSha: HEAD_SHA, repo: "o/r", verdict: "clean", findingsSummary: "none", nextAction: "mark ready for review" });
+  const run = async (association) => {
+    const runChild = async (_cmd, args) => (args.some((a) => String(a).includes("issues/7/comments"))
+      ? { code: 0, stdout: JSON.stringify([[{ id: 1, body: draft, user: { login: "someone", type: "User" }, author_association: association, created_at: "2026-01-01T00:00:00Z" }]]), stderr: "" }
+      : { code: 1, stdout: "", stderr: "unavailable" });
+    return (await fetchDraftGateEvidence({ repo: "o/r", pr: 7, headSha: HEAD_SHA }, { env: {}, ghCommand: "gh", runChild })).currentHeadClean;
+  };
+  assert.equal(await run("MEMBER"), true);
+  assert.equal(await run("NONE"), false);
+});
+
+test("fetchDraftGateEvidence: a stranger's clean draft_gate PR review is not evidence (ADR 0248, review stream)", async () => {
+  const draft = renderGateReviewCommentBody({ gate: "draft_gate", headSha: HEAD_SHA, repo: "o/r", verdict: "clean", findingsSummary: "none", nextAction: "mark ready for review" });
+  const run = async (association) => {
+    const review = { id: 5, state: "COMMENTED", submitted_at: "2026-01-01T00:00:00Z", body: draft, user: { login: "someone", type: "User" }, author_association: association };
+    const runChild = async (_cmd, args) => {
+      const joined = args.map(String).join(" ");
+      if (joined.includes("issues/7/comments")) return { code: 0, stdout: "[[]]", stderr: "" };
+      if (joined.includes("pulls/7/reviews")) return { code: 0, stdout: JSON.stringify([[review]]), stderr: "" };
+      return { code: 1, stdout: "", stderr: "unavailable" };
+    };
+    return (await fetchDraftGateEvidence({ repo: "o/r", pr: 7, headSha: HEAD_SHA }, { env: {}, ghCommand: "gh", runChild })).currentHeadClean;
+  };
+  assert.equal(await run("MEMBER"), true);
+  assert.equal(await run("NONE"), false);
+});
+
+test("filterTrustedRoundInputs drops a stranger's round-bearing review and keeps the viewer's own (ADR 0248)", () => {
+  const body = "<!-- dev-loops:gate-findings-review draft_gate abcdef1 round=3 -->";
+  const stranger = { body, user: { login: "stranger", type: "User" }, author_association: "NONE" };
+  const viewer = { body, user: { login: "gate-bot", type: "Bot" }, author_association: "NONE" };
+  const member = { body, user: { login: "m", type: "User" }, author_association: "MEMBER" };
+  assert.deepEqual(filterTrustedRoundInputs([stranger, viewer, member], "gate-bot"), [viewer, member]);
+  assert.deepEqual(filterTrustedRoundInputs([stranger], null), []);
 });
 
 test("renderVerdictDetailsBlock: a Deferred entry carries issue=<pr> in its marker; other groups do not", () => {

@@ -13,6 +13,7 @@ import {
   runJudgePass,
   validateCliArgs,
 } from "../../scripts/loop/judge-pass.mjs";
+import { trustCommentFixtures } from "../_helpers.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { hasReopenLine, rejectClosingRefRemoval, sliceLinkageIssues } from "../../scripts/loop/_slice-linkage.mjs";
 import { readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
@@ -22,6 +23,8 @@ import { shellQuote } from "../../scripts/lib/checkout-delegation-refusal.mjs";
 import { TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { executionIndexPath, pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
+import { copilotBodyJudgePath, withPinnedCopilotBodyCluster } from "../../scripts/github/_copilot-body-disposition.mjs";
+import { createHash } from "node:crypto";
 import { bindEvidenceToPrBody, deliverJudge, seedJudgeSources, writeVerdictAfterPull } from "./_judge-delivery-fixture.mjs";
 
 const HEAD = "0123456789abcdef".padEnd(40, "0");
@@ -433,7 +436,7 @@ test("judgePassCli accepts a clean verdict whose acts are all non-blocking, prod
   );
 });
 
-for (const [label, maxReviewRounds, expectedActs] of [["at the round cap", 1, 0], ["in draft round 1 below the round cap", 4, 4]]) test(`judgePassCli: an act verdict on 3 low + 1 nit findings ${label} leaves ${expectedActs} act items (ADR 0188)`, async () => {
+for (const [label, maxReviewRounds, expectedActs] of [["at the round cap", 1, 4], ["in draft round 1 below the round cap", 4, 4]]) test(`judgePassCli: an act verdict on 3 low + 1 nit findings ${label} leaves ${expectedActs} act items (ADR 0188)`, async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-low-nit-"));
   await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds } } }));
   await writeFile(
@@ -460,6 +463,25 @@ for (const [label, maxReviewRounds, expectedActs] of [["at the round cap", 1, 0]
   assert.equal(payload.ok, true);
   assert.equal(payload.actCount, expectedActs);
   assert.equal(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8")).length, expectedActs);
+});
+
+test("judgePassCli: after the round's own durable ledger is written, round 1 keeps an all-nit act cluster (GATE-EXEC-LOW-FIX-UNTIL-CAP)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-own-ledger-"));
+  await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
+  // The conductor runs judge-pass after write-gate-findings-log wrote this round's judged ledger at the head.
+  const ledgerDir = path.join(tmpDir, "tmp", "gate-findings", "mfittko-dev-loops", "pr-3080");
+  await mkdir(ledgerDir, { recursive: true });
+  await writeFile(path.join(ledgerDir, `draft_gate-${HEAD}.json`), JSON.stringify({
+    repo: "mfittko/dev-loops", pr: 3080, gate: "draft_gate", headSha: HEAD, verdict: "findings_present", loggedAt: "2026-11-05T00:00:00.000Z",
+    findings: [finding({ severity: "nit", summary: "a nit", judgeDisposition: "act" })],
+  }));
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ severity: "nit", summary: "a nit" })] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tidy" }] })));
+  const payload = await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "3080", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json", tmpRoot: "./tmp" },
+    { repoRoot: tmpDir, ...stubDeferralDeps().deps },
+  );
+  assert.equal(payload.actCount, 1, "round 1 keeps the all-nit act cluster");
 });
 
 test("runJudgePass never defers an unstamped [low, medium] duplicate cluster through the low-nit coercion (ADR 0188)", () => {
@@ -694,7 +716,7 @@ function stubDeferralDeps({ closing = [], listed = [] } = {}) {
       return { code: 0, stdout: JSON.stringify({ closingIssuesReferences: closing.map((number) => ({ number, repository: { name: "dev-loops", owner: { login: "mfittko" } } })) }), stderr: "" };
     }
     if (args[0] === "api" && args.some((arg) => /\/issues\/\d+\/comments/.test(arg))) {
-      return { code: 0, stdout: JSON.stringify([listed.map((body) => ({ body }))]), stderr: "" };
+      return { code: 0, stdout: JSON.stringify(trustCommentFixtures([listed.map((body) => ({ body }))])), stderr: "" };
     }
     throw new Error(`unexpected gh call: ${args.join(" ")}`);
   };
@@ -1794,6 +1816,15 @@ test("judge-pass J5: a round retired after emission refuses at acceptance", asyn
   assert.equal(existsSync(path.join(root, "act.json")), false);
 });
 
+test("judge-pass J5: a scoped (body-only rerun) retirement after emission refuses at acceptance", async () => {
+  const { root, runPass } = await deliveryCase();
+  const retired = path.join(root, "tmp", "retired-gate-rounds", HEAD, "r1");
+  await mkdir(retired, { recursive: true });
+  await writeFile(path.join(retired, "retirement.json"), JSON.stringify({ gate: "draft_gate", scopes: ["draft-gate-group-process"], retiredAt: new Date().toISOString() }));
+  await assert.rejects(runPass(), /retired as r1/);
+  assert.equal(existsSync(path.join(root, "act.json")), false);
+});
+
 // Recurrence escalation: act items on one (file, symbol) surface in three counted rounds.
 const GUARD_FILE = "src/guard.mjs";
 const REC_REPO = "mfittko/dev-loops";
@@ -2360,4 +2391,110 @@ test("judgePassCli reports a null --spec-file as the typed parse error, not a ba
     sliceRound(await mkdtemp(path.join(os.tmpdir(), "judge-pass-slice-null-")), { specText: "null" }),
     (e) => !(e instanceof TypeError) && /--spec-file/.test(e.message),
   );
+});
+
+// Issue 3080 AC11: a pinned Copilot body finding is a ledger cluster the judge must dispose (the PR 3129 pre_approval_gate shape).
+async function copilotBodyRound(tmpDir, { dispositions, clusterIds = [0, 1, 2], overallVerdict = "findings_present", bodySeverity = "medium" }) {
+  const findings = clusterIds.map((clusterId, n) => finding({ severity: "medium", summary: `defect ${n}`, recommendation: `fix ${n}`, clusterId }));
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict, findings }));
+  const derived = copilotBodyJudgePath({ tmpRoot: path.join(tmpDir, "tmp"), repo: "mfittko/dev-loops", pr: 3129, headSha: HEAD });
+  await mkdir(path.dirname(derived), { recursive: true });
+  await writeFile(derived, JSON.stringify({ angle: "copilot-body", findings: [{ severity: bodySeverity, summary: "Refs list that mixes owner/repo#N and #N drops entries", recommendation: "parse both forms" }] }));
+  const disposed = (index) => ({ index, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" });
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({
+    scopeDrift: { verdict: "within_scope", rationale: "The Copilot body defect is confirmed here, not in a cluster.", driftedAreas: [] },
+    dispositions: dispositions.map(disposed),
+  })));
+  return derived;
+}
+const copilotBodyArgs = { repo: "mfittko/dev-loops", pr: "3129", gate: "pre_approval_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", ledgerOut: "./enriched.json" };
+
+test("judgePassCli refuses a verdict that leaves the pinned Copilot body cluster undisposed and writes no ledger (issue 3080 AC11)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-copilot-body-"));
+  try {
+    await copilotBodyRound(tmpDir, { dispositions: [0, 1, 2] });
+    await assert.rejects(judgePassCli(copilotBodyArgs, { repoRoot: tmpDir }), /does not dispose 1 cluster\(s\) \(clusterIds: 3\)/);
+    assert.equal(existsSync(path.join(tmpDir, "enriched.json")), false);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("judgePassCli puts an acted Copilot body cluster in the --ledger-out ledger with its judgeDisposition (issue 3080 AC11)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-copilot-body-act-"));
+  try {
+    await copilotBodyRound(tmpDir, { dispositions: [0, 1, 2, 3] });
+    const payload = await judgePassCli(copilotBodyArgs, { repoRoot: tmpDir });
+    assert.equal(payload.ok, true);
+    const written = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings;
+    const body = written.find((f) => f.angle === "copilot-body");
+    assert.equal(body.judgeDisposition, "act");
+    assert.equal(body.clusterId, 3);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("judgePassCli raises a clean ledger verdict when an acted Copilot body cluster is blocking (issue 3080)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-copilot-body-clean-"));
+  try {
+    await copilotBodyRound(tmpDir, { dispositions: [0, 1, 2, 3], overallVerdict: "clean", bodySeverity: "high" });
+    await judgePassCli(copilotBodyArgs, { repoRoot: tmpDir });
+    assert.equal(JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).overallVerdict, "findings_present");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("withPinnedCopilotBodyCluster refuses a changed pinned file and a plan without copilotBodyClusterId (issue 3080 AC11)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-copilot-body-changed-"));
+  try {
+    const file = path.join(tmpDir, "body.json");
+    const bytes = JSON.stringify({ angle: "copilot-body", findings: [{ severity: "medium", summary: "s", recommendation: "r" }] });
+    await writeFile(file, bytes);
+    const order = { copilotBodyClusterId: 2, requiredReads: [{ kind: "copilot-body-feedback", path: file, sha256: createHash("sha256").update(bytes).digest("hex") }] };
+    const two = [{ clusterId: 0 }, { clusterId: 1 }];
+    assert.equal((await withPinnedCopilotBodyCluster(two, order))[2].clusterId, 2);
+    await assert.rejects(withPinnedCopilotBodyCluster([...two, { clusterId: 2 }], order), /pinned the Copilot cluster at 2.*re-emit the judge work order/);
+    await assert.rejects(withPinnedCopilotBodyCluster(two, { ...order, copilotBodyClusterId: undefined }), /re-emit the judge work order/);
+    await writeFile(file, bytes.replace("medium", "low"));
+    await assert.rejects(withPinnedCopilotBodyCluster(two, order), /changed since the judge work order pinned it/);
+    assert.deepEqual(await withPinnedCopilotBodyCluster([1], { requiredReads: [] }), [1], "no pinned read leaves the findings unchanged");
+    await rm(file);
+    await assert.rejects(withPinnedCopilotBodyCluster(two, order), /body\.json is gone; re-emit the judge work order/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("judgePassCli disposes the Copilot body cluster after a two-member cluster (issue 3080 representativeIndex shape)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-copilot-body-multi-"));
+  try {
+    await copilotBodyRound(tmpDir, { dispositions: [0, 2], clusterIds: [0, 0] });
+    const payload = await judgePassCli(copilotBodyArgs, { repoRoot: tmpDir });
+    assert.equal(payload.ok, true);
+    const body = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings.find((f) => f.angle === "copilot-body");
+    assert.equal(body.clusterId, 2);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("judgePassCli accepts a spec-authority verdict that also decides the pinned Copilot body cluster (issue 3148)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-copilot-body-spec-"));
+  try {
+    await copilotBodyRound(tmpDir, { dispositions: [0, 1], clusterIds: [0] });
+    const { specDigest, contentDigest, criterionIds } = await specDigests();
+    await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+    const decide = (index) => ({ index, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "valid and compliant", authorizedRemediation: "fix it", defectClass: "c", siteQuery: "q" });
+    // Spec-authority covers the findings read only (index 0); the judge also keyed index 1, the pinned Copilot cluster.
+    await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [decide(0), decide(1)] }));
+    const payload = await judgePassCli({ ...copilotBodyArgs, specFile: "./spec.json", contentDigest, specAuthorityVerdict: "./spec-authority.json" }, { repoRoot: tmpDir });
+    assert.equal(payload.ok, true);
+    assert.equal(payload.specAuthority.outcomeCounts.valid_compliant, 1);
+    const written = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings;
+    assert.equal(written.find((f) => f.angle === "copilot-body").judgeDisposition, "act");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
 });

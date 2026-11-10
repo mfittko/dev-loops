@@ -38,8 +38,10 @@ import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
+import { raiseVerdictForActedCopilotBlock, withPinnedCopilotBodyCluster, withoutCopilotBodyDecision } from "../github/_copilot-body-disposition.mjs";
 import { codeTreeSkewNote, materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
+import { ANY_SCOPE } from "@dev-loops/core/loop/gate-round-retirement";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { rejectClosingRefRemoval } from "./_slice-linkage.mjs";
 import { shellQuote } from "../lib/checkout-delegation-refusal.mjs";
@@ -458,7 +460,7 @@ export function validateCliArgs(options) {
  * @param {Array<object>} findings — the flat consolidated findings array (already unwrapped)
  * @param {object} judgeVerdict — the judge agent's verdict artifact (JSON object)
  * @param {string} headSha — the round's current head (the verdict must be current-head)
- * @param {{ pastCap?: boolean, round?: number }} [options] — `pastCap` receives the `lowFixCapped` state from `resolveDraftRoundCap`, true at or past the draft_gate cap and at pre_approval_gate
+ * @param {{ pastCap?: boolean, round?: number }} [options] — `pastCap` receives the `lowFixCapped` state from `resolveDraftRoundCap`, true at pre_approval_gate only (the draft gate fixes a low at the cap round)
  * @returns {{ enriched: Array<object>, act: Array<object>, scopeDrift: object,
  *             counts: { act: number, defer: number, reject: number } (act excludes evidence-only remedies), headSha: string }}
  */
@@ -652,7 +654,7 @@ async function readJsonArtifact(artifactPath, label, parseErr) {
  *   humanDecisionIndices: number[], findingConflictIndices: number[],
  *   approvedCriteria: string[], invalidation: object|null } | null}
  */
-async function enforceSpecAuthority(options, findings, resolvedRoot) {
+async function enforceSpecAuthority(options, findings, resolvedRoot, order) {
   if (options.specFile === undefined) return null;
   const spec = await readJsonArtifact(path.resolve(resolvedRoot, options.specFile), "--spec-file", parseError);
   if (spec?.specKind === PR_SCOPE_SPEC_KIND && options.gate !== "review") {
@@ -681,7 +683,7 @@ async function enforceSpecAuthority(options, findings, resolvedRoot) {
   );
   let validated;
   try {
-    validated = validateSpecAuthorityVerdict(verdict, { findingsCount: findings.length, criterionIds, clusterIds: findings.map((f) => f?.clusterId) });
+    validated = validateSpecAuthorityVerdict(withoutCopilotBodyDecision(verdict, order), { findingsCount: findings.length, criterionIds, clusterIds: findings.map((f) => f?.clusterId) });
   } catch (error) {
     const code = error?.code;
     throw Object.assign(new Error(`spec-authority verdict failed validation${code ? ` [${code}]` : ""}: ${error instanceof Error ? error.message : String(error)}`), code ? { code } : {});
@@ -900,7 +902,7 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
   // The plan sits at <tmpRoot>/gate-judge/<slug>/pr-<N>/<gate>-<headSha>/; the main checkout's tmp is checked too.
   const planTmpRoot = path.resolve(path.dirname(resolve(options.judgePlan)), "../../../..");
   let retired = null;
-  for (const tmpRoot of new Set([planTmpRoot, path.resolve(receiptTmpRoot)])) retired ??= await findRetirementAfter(tmpRoot, order.roundIdentity.gate, order.headSha, emittedAtMs);
+  for (const tmpRoot of new Set([planTmpRoot, path.resolve(receiptTmpRoot)])) retired ??= await findRetirementAfter(tmpRoot, order.roundIdentity.gate, order.headSha, emittedAtMs, ANY_SCOPE);
   if (retired) throw new Error(`judge execution ${plan.executionIdentity} belongs to a ${options.gate} round retired as ${retired}; re-emit the judge work order and re-run the judge`);
   // A verdict counts only at this round's outputRefs, so a superseded round's late write never passes as this one's.
   const canonical = (p) => realpath(p).catch(() => path.resolve(p));
@@ -931,7 +933,7 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
   if (!current || current.stale || current.workOrderDigest !== plan.workOrderDigest || current.executionIdentity !== plan.executionIdentity) {
     throw new Error(`judge execution ${plan.executionIdentity} is not the current emission for ${options.gate} at ${options.headSha} (${current?.stale ?? "no checkout holds its plan"}); re-emit the judge work order and re-run the judge`);
   }
-  return { ...order.authority, sliceLinkageIssues: Array.isArray(order.sliceLinkageIssues) ? order.sliceLinkageIssues : [] };
+  return { ...order.authority, sliceLinkageIssues: Array.isArray(order.sliceLinkageIssues) ? order.sliceLinkageIssues : [], order };
 }
 
 /**
@@ -983,14 +985,16 @@ export async function judgePassCli(
 ) {
   const resolvedRoot = options.repoRoot ? path.resolve(repoRoot, options.repoRoot) : repoRoot;
   const pinned = await verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot ?? resolveGateArtifactTmpRoot(resolvedRoot));
-  const { findings, overallVerdict } = await resolvePayload(options, resolvedRoot);
+  const { findings, overallVerdict: ledgerVerdict } = await resolvePayload(options, resolvedRoot);
+  // The Copilot body finding is one more cluster for the judge to dispose; the spec-authority check below still covers the findings read only.
+  const judged = await withPinnedCopilotBodyCluster(findings, pinned.order);
   const judgeVerdict = await readJsonArtifact(
     path.resolve(resolvedRoot, options.judgeVerdict),
     "--judge-verdict",
     parseError,
   );
   const { lowFixCapped, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot });
-  const result = runJudgePass(findings, judgeVerdict, options.headSha, { pastCap: lowFixCapped, round });
+  const result = runJudgePass(judged, judgeVerdict, options.headSha, { pastCap: lowFixCapped, round });
 
   // Only the pinned work order's sliceLinkageIssues arm the coercion; the emitter already read the spec and PR body Non-goals.
   if (rejectClosingRefRemoval(result.enriched, pinned.sliceLinkageIssues) > 0) {
@@ -1001,7 +1005,7 @@ export async function judgePassCli(
   // Immutable spec-authority gate (opt-in via --spec-file). A spec_cannot_decide
   // outcome fails closed here so the loop stops at the human-spec-decision state
   // and never writes an act list from an undecidable spec.
-  const specAuthority = await enforceSpecAuthority(options, findings, resolvedRoot);
+  const specAuthority = await enforceSpecAuthority(options, findings, resolvedRoot, pinned.order);
   if (specAuthority && (specAuthority.specDigest !== pinned.specDigest || specAuthority.contentDigest !== pinned.contentDigest)) {
     throw new Error(`--spec-file/--content-digest (${specAuthority.specDigest}, ${specAuthority.contentDigest}) differ from the judge work order's pinned authority (${pinned.specDigest}, ${pinned.contentDigest}); re-emit the judge work order and re-run the judge`);
   }
@@ -1051,8 +1055,10 @@ export async function judgePassCli(
   // compute overallVerdict, so the two cannot disagree on what "blocking" means.
   const { blockingSeverities, trackerProvider } = await resolveGateSettings(options, resolvedRoot);
   // A failOpen promotion (ADR 0188) raised a low to medium after the consolidator computed overallVerdict, so check the ORIGINAL severities.
-  const actAtInputSeverity = result.enriched.flatMap((f, i) => (isOpenActItem(f) ? [{ ...f, severity: findings[i]?.severity ?? f.severity }] : []));
-  assertCleanImpliesNoBlockingAct(overallVerdict, actAtInputSeverity, blockingSeverities);
+  const actAtInputSeverity = result.enriched.flatMap((f, i) => (isOpenActItem(f) ? [{ i, f: { ...f, severity: judged[i]?.severity ?? f.severity } }] : []));
+  // Only ledger findings (below findings.length) were weighed by the consolidator; an acted Copilot body cluster at a blocking severity raises the verdict instead.
+  assertCleanImpliesNoBlockingAct(ledgerVerdict, actAtInputSeverity.filter((a) => a.i < findings.length).map((a) => a.f), blockingSeverities);
+  const overallVerdict = raiseVerdictForActedCopilotBlock(ledgerVerdict, actAtInputSeverity.filter((a) => a.i >= findings.length).map((a) => a.f.severity), blockingSeverities);
 
   // Persist the durable approval record AFTER the act list is finalized, so a
   // round with remaining act findings approves nothing (re-entry stays honest).

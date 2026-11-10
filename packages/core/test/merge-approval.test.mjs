@@ -306,6 +306,14 @@ test("evaluateCopilotConvergence: current-head 🟡 Changes recommended blocks (
   assert.equal(res.disposition, "changes_recommended");
 });
 
+test("evaluateCopilotConvergence: a lookalike account's current-head 🟡 review does not block", () => {
+  const res = evaluateCopilotConvergence({
+    currentHeadSha: HEAD,
+    reviews: [{ login: "copilot-fan", commit_id: HEAD, state: "COMMENTED", body: "### 🟡 Changes recommended" }],
+  });
+  assert.notEqual(res.disposition, "changes_recommended");
+});
+
 test("evaluateCopilotConvergence: current-head commitId-shaped 🟡 blocks", () => {
   const res = evaluateCopilotConvergence({
     currentHeadSha: HEAD,

@@ -18,7 +18,8 @@
 //     roundCapAutoRerequestEligibility)
 
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { isCopilotLogin, parseJsonText } from "../_core-helpers.mjs";
+import { isSanctionedCopilotReviewerLogin } from "@dev-loops/core/github/comment-trust";
+import { parseJsonText } from "../_core-helpers.mjs";
 
 // Whether Copilot is currently listed in the PR's `requested_reviewers`.
 export async function fetchCopilotRequested({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
@@ -33,7 +34,7 @@ export async function fetchCopilotRequested({ repo, pr }, { env = process.env, g
   }
   const payload = parseJsonText(result.stdout, { label: "gh requested reviewers" });
   const users = Array.isArray(payload?.users) ? payload.users : [];
-  return users.some((user) => isCopilotLogin(user?.login));
+  return users.some((user) => isSanctionedCopilotReviewerLogin(user?.login));
 }
 
 // Latest `review_requested` timeline event timestamp for Copilot, or null when
@@ -55,7 +56,7 @@ export async function fetchLatestCopilotReviewRequestAt({ repo, pr }, { env = pr
     if (!line) continue;
     try {
       const event = JSON.parse(line);
-      if (isCopilotLogin(event?.login)) {
+      if (isSanctionedCopilotReviewerLogin(event?.login)) {
         if (latestAt === null || event.created_at > latestAt) {
           latestAt = event.created_at;
         }

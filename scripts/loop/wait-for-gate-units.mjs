@@ -15,24 +15,25 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { WAIT_CAP_MS, capWait, pendingFields, resolveTimeoutMs, scriptCommand } from "../lib/timeout-flag.mjs";
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { verifyPullReceipt, verifyPulledResult } from "../github/_work-order-protocol.mjs";
 import { CHECKPOINT_SENTINEL_PREFIX } from "../github/verify-fresh-review-context.mjs";
-import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
+import { ANY_SCOPE, findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 
 export const DEFAULT_TIMEOUT_MS = 540000;
 export const MAX_TIMEOUT_MS = 570000;
 export const RECHECK_INTERVAL_MS = 2000;
 export const ARTIFACT_STABLE_MS = 10000;
-const EXIT = { all_done: 0, timeout: 2, round_retired: 3 };
+const EXIT = { all_done: 0, timeout: 2, pending: 2, round_retired: 3 };
 
 const USAGE = `Usage: wait-for-gate-units.mjs (--emit-plan <path> [--unit <scope>]... | --judge-plan <path>) --tmp-root <worktree>/tmp [--timeout <seconds>]
        wait-for-gate-units.mjs --artifact <path> --after <path> [--timeout <seconds>]
 Block in one foreground process until the round's dispatched units are done.
-Outcomes (JSON on stdout): all_done (exit 0), timeout (exit 2), round_retired (exit 3). Invalid input: ok false, exit 1.
+One call waits at most ${WAIT_CAP_MS / 1000} seconds (GATE-EXEC-BOUNDED-WAIT-CAP): a longer --timeout returns pending (exit 2) with a \`reissue\` command carrying the remaining --timeout; run it.
+Outcomes (JSON on stdout): all_done (exit 0), timeout (exit 2), pending (exit 2), round_retired (exit 3; a whole-round record, or a scoped body-only-rerun record naming any waited unit, ends the whole wait, so stop the round and re-emit). Invalid input: ok false, exit 1.
   --emit-plan <path>   the round's <gate>-<headSha>.emit-plan.json; waits on every unit unless --unit narrows it
   --unit <scope>       repeatable; restrict the wait to these unit scopes
   --judge-plan <path>  the round's judge-emit-plan.json; waits on the one judge unit
@@ -141,9 +142,12 @@ async function checkUnit(unit, { role, receiptTmpRoot, tmpRoot, headSha }) {
   return { scope: unit.scope, executionIdentity: unit.executionIdentity, state, missingAngles };
 }
 
-export const ARTIFACT_TIMEOUT_REMEDY = "Delta reviewer and commit_only fixer: re-run the same command; after three consecutive timeout outcomes, stop and return the typed observation units_stalled. Full-phase fixer: after one timeout, end your turn once to receive the fixer's completion notification (COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK; an interim or not-reported-yet notification is not the join, so end your turn again), then, only after the final notification, run the same command once with --timeout 0; if it returns all_done, act on the published report, otherwise act on the typed exit code or hand-back text the notification carries, and do not repeat the wait.";
+export const ARTIFACT_TIMEOUT_REMEDY = "Delta reviewer and commit_only fixer: re-run the original command with its original --timeout, never the last reissue; after three consecutive timeout outcomes, stop and return the typed observation units_stalled. Full-phase fixer: after one timeout, end your turn once to receive the fixer's completion notification (COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK; an interim or not-reported-yet notification is not the join, so end your turn again), then, only after the final notification, run the same command once with --timeout 0; if it returns all_done, act on the published report, otherwise act on the typed exit code or hand-back text the notification carries, and do not repeat the wait.";
 
-export const ARTIFACT_STALE_REMEDY = "The artifact predates --after, so it is a leftover. Fixer: check that --after and the artifact path both come from the current emission (the latest emitted plan and its joinRef); if not, re-emit the work order and join the new joinRef. Delta reviewer: use a fresh --result path and pass the current input.patchPath as --after. Otherwise re-run the same command; after three consecutive timeout outcomes, stop and return the typed observation units_stalled. Full-phase fixer: follow COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK instead of re-running.";
+export const ARTIFACT_STALE_REMEDY = "The artifact predates --after, so it is a leftover. Fixer: check that --after and the artifact path both come from the current emission (the latest emitted plan and its joinRef); if not, re-emit the work order and join the new joinRef. Delta reviewer: use a fresh --result path and pass the current input.patchPath as --after. Otherwise re-run the original command with its original --timeout, never the last reissue; after three consecutive timeout outcomes, stop and return the typed observation units_stalled. Full-phase fixer: follow COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK instead of re-running.";
+
+// A capped stale join is pending and runs reissue unchanged, so its remedy carries only the stale-detection checks.
+export const ARTIFACT_STALE_PENDING_REMEDY = "The artifact predates --after, so it is a leftover. Fixer: check that --after and the artifact path both come from the current emission (the latest emitted plan and its joinRef); if not, re-emit the work order and join the new joinRef. Delta reviewer: use a fresh --result path and pass the current input.patchPath as --after.";
 
 // Any hand-back type, with no writer obligation on the child: the artifact parses as JSON and carries its terminal field
 // (`outcome`, as a DeltaPrePushReviewResult does), or, with no terminal field, stays byte-identical for ARTIFACT_STABLE_MS.
@@ -188,12 +192,14 @@ export async function waitForUnits({ artifact, after, emitPlan, judgePlan, units
   const { gate, headSha, role, units } = selectUnits({ plan: await readPlan(planPath), judge: judgePlan !== undefined, wanted });
   const receipts = receiptTmpRoot ?? resolveGateArtifactTmpRoot(path.dirname(path.resolve(tmpRoot)));
   const started = now();
+  // A whole-round record retires the round; a scoped (body-only rerun) record retires only the units it names. The judge matches any scoped record, as the judge pull and judge-pass do.
+  const roundRetired = () => retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs) || units.some((unit) => retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs, role === "judge" ? ANY_SCOPE : unit.scope));
   for (;;) {
     const result = (outcome, missing = [], done = []) => ({ ok: true, outcome, gate, headSha, unitCount: units.length, done, missing, elapsedMs: now() - started });
-    if (!await exists(planPath) || retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs)) return result("round_retired");
+    if (!await exists(planPath) || roundRetired()) return result("round_retired");
     const checks = await Promise.all(units.map((unit) => checkUnit(unit, { role, receiptTmpRoot: receipts, tmpRoot, headSha })));
     // A round retired while the checks were in flight must not advance on their stale result.
-    if (!await exists(planPath) || retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs)) return result("round_retired");
+    if (!await exists(planPath) || roundRetired()) return result("round_retired");
     const missing = checks.filter(Boolean);
     const done = units.filter((_, index) => checks[index] === null).map((unit) => unit.scope);
     if (missing.length === 0) return result("all_done", [], done);
@@ -203,13 +209,28 @@ export async function waitForUnits({ artifact, after, emitPlan, judgePlan, units
   }
 }
 
-export async function main(argv = process.argv.slice(2)) {
+// The reissue runs from the repository root, so path flags resolve against this call's cwd first.
+const PATH_FLAGS = ["--emit-plan", "--judge-plan", "--tmp-root", "--artifact", "--after"];
+function absolutePathArgs(argv) {
+  return argv.map((token, i) => {
+    if (PATH_FLAGS.includes(argv[i - 1])) return path.resolve(token);
+    const flag = PATH_FLAGS.find((name) => token.startsWith(`${name}=`));
+    return flag ? `${flag}=${path.resolve(token.slice(flag.length + 1))}` : token;
+  });
+}
+
+export async function main(argv = process.argv.slice(2), { wait = waitForUnits } = {}) {
   let result;
   let options;
   try {
     options = parseWaitArgs(argv);
     if (options.help) { process.stdout.write(`${USAGE}\n${JQ_OUTPUT_USAGE}\n`); return; }
-    result = await waitForUnits(options);
+    const { timeoutMs, remainingMs } = capWait(options.timeoutMs);
+    result = await wait({ ...options, timeoutMs });
+    if (result.outcome === "timeout" && remainingMs > 0) {
+      const { remedy, ...rest } = result;
+      result = { ...rest, ...(remedy && remedy !== ARTIFACT_TIMEOUT_REMEDY ? { remedy: remedy === ARTIFACT_STALE_REMEDY ? ARTIFACT_STALE_PENDING_REMEDY : remedy } : {}), ...pendingFields({ remainingMs, command: scriptCommand(import.meta.url), argv: absolutePathArgs(argv) }) };
+    }
   } catch (error) {
     result = { ok: false, error: error instanceof Error ? error.message : String(error) };
   }

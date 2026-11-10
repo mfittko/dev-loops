@@ -153,3 +153,14 @@ test("summarizeCopilotLoopIterations marks no-review/no-request PRs unavailable"
     reason: "no_copilot_review_history",
   });
 });
+
+test("summarizeCopilotLoopIterations ignores copilot-x lookalike logins on every surface", () => {
+  const base = { reviewRequestEvents: [], reviews: [], reviewComments: [], commits: [], reviewThreadSummary: { totalThreads: 0, unresolvedThreads: 0 }, currentHeadSha: "sha-1", currentReviewRequestStatus: "none" };
+  const lookalike = {
+    ...base,
+    reviewRequestEvents: [{ createdAt: "2026-05-01T10:00:00Z", requestedReviewerLogin: "copilot-x" }],
+    reviews: [{ state: "COMMENTED", submittedAt: "2026-05-01T10:05:00Z", authorLogin: "copilot-x", commitSha: "sha-1" }],
+    reviewComments: [{ createdAt: "2026-05-01T10:06:00Z", authorLogin: "copilot-x" }],
+  };
+  assert.deepEqual(summarizeCopilotLoopIterations(lookalike), summarizeCopilotLoopIterations(base));
+});

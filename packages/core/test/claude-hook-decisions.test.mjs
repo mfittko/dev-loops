@@ -962,6 +962,13 @@ test("decideBashGate names incomplete tokenization in the OPS-NO-INLINE-INTERPRE
   assert.doesNotMatch(decideBashGate({ command: 'node -e "x"', ...ctx }).reason, /incomplete tokenization/);
 });
 
+test("decideBashGate allows a heredoc write whose body only names a wait script and denies a backgrounded probe (#2442)", () => {
+  const ctx = { repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET };
+  const write = "cat > tmp/f <<'EOF'\nnode scripts/loop/detect-copilot-loop-state.mjs & then node -e 'x'\nEOF";
+  assert.equal(decideBashGate({ command: write, ...ctx }).decision, "allow");
+  assert.equal(decideBashGate({ command: "node scripts/loop/probe-copilot-review.mjs --pr 5 --timeout-ms 1000 &", ...ctx }).decision, "deny");
+});
+
 test("decideBashGate allows sanctioned node/python script invocations and off-target inline interpreters", () => {
   assert.equal(decideBashGate({ command: "node scripts/github/comment-issue.mjs 5", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
   assert.equal(decideBashGate({ command: 'node -e "console.log(1)"', repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
@@ -1182,6 +1189,12 @@ test("decideBashGate denies a bare-& backgrounded probe and a sleep-poll loop fo
   const fg = "node scripts/github/probe-copilot-review.mjs --repo mfittko/dev-loops --pr 5 --timeout-ms 300000";
   assert.equal(decideBashGate({ command: fg, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision, "allow");
   assert.equal(decideBashGate({ command: fg, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "dev-loop" }).decision, "allow");
+});
+
+test("decideBashGate denies an until grep -q sleep loop (#3028)", () => {
+  const d = decideBashGate({ command: "until grep -q x f; do sleep 3; done", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
 });
 
 // Copilot review (#2065): the detached-wait deny is evaluated BEFORE the gh pr create/ready/merge

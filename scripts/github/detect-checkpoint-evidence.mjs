@@ -26,13 +26,14 @@ import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "./_gate-finding-
 import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
+import { isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
 import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, assertConfigLoaded, isSizeOutcomeT1Clean, loadDevLoopConfig, loadDevLoopConfigStrict, stripConfigKeyPaths, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveGateDispatchMode, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
 import { FANOUT_UNAVAILABLE_MESSAGE, JUDGE_DISPOSITIONS, VALID_SEVERITIES, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, ledgerAngleNames, listOpenActItems, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseChangedFiles } from "../loop/detect-change-scope.mjs";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { resolveCapRoundFixed } from "./write-gate-context.mjs";
-import { crossCheckRoundFromReviewBodies, normalizePrReviewsPayload, parseFindingMarker, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
+import { crossCheckRoundFromReviewBodies, normalizePrReviewsPayload, resolveTrustedEvidencePredicate, parseFindingMarker, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
 import { isCapRound } from "@dev-loops/core/loop/review-round-cap";
 import { flattenPaginatedSlurp, resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
@@ -161,6 +162,9 @@ Output (stdout, JSON; always includes preMergeGateCheck):
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
   { "ok": false, "error": "..." }
+  A failed pre-merge check also carries draftGate and preApprovalGate (headSha, verdict) so a follow-up reviewer can read the latest trusted verdict head.
+  { "ok": false, "error": "...", "status": "...", "message": "...", "staleRunner": {...}, "staleRunnerCheck": { "ok": false, "failures": [...] }, "preMergeGateCheck": { "ok": false, "failures": [...] } }
+  A stale or signalled runner claim (stale_runner, exit_signal_recorded) writes this shape. Its preMergeGateCheck carries failures only, with no draftGate or preApprovalGate.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success (gate evidence is valid)
@@ -371,7 +375,11 @@ function normalizeGateMarkerSummary(summary) {
  * human login the two streams surface against the one existing resolver
  * rather than reimplementing its bot-exclusion/head-pinning/marker rules.
  */
-function anyFreshHumanApproval({ currentHeadSha, reviews, comments }) {
+function anyFreshHumanApproval({ currentHeadSha, reviews: allReviews, comments: allComments }) {
+  // Only association-trusted entries can approve (ADR 0248); a stranger's
+  // "approve merge <head>" comment or APPROVED review never satisfies the gate.
+  const reviews = allReviews.filter((e) => e?.trusted === true);
+  const comments = allComments.filter((e) => e?.trusted === true);
   const candidateLogins = new Set();
   for (const entry of reviews) {
     if (typeof entry?.login === "string" && entry.login.length > 0) candidateLogins.add(entry.login);
@@ -1145,7 +1153,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
   // the back-compat read that still sees legacy verdicts and the zero-dep
   // fallback poster's output. Both feed the same summarizers, so a verdict is
   // counted once wherever it lives.
-  let prReviews = [];
+  let rawReviews = [];
   // Flat { login, state, commit_id, type } facts for the size-budget merge
   // gate below — the SAME shape merge-pr.mjs's own evaluateMergePreconditions
   // call feeds countUnresolvedHumanChangesRequested/verifyFreshHumanApproval,
@@ -1154,7 +1162,6 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
   // SUBMITTED_REVIEW_STATES survive — a PENDING (unsubmitted draft) review
   // must never shadow an already-submitted APPROVED review from the same
   // login in the "last entry per login wins" resolvers below.
-  let reviewFacts = [];
   // Distinct from "reviews fetched, zero reviews": a genuine read failure
   // must never be consumed by the size-budget merge gate as "zero blocking
   // reviews" (see buildPreMergeGateCheck below). Every other evidence
@@ -1166,8 +1173,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
       prReviewsApiArgs(options.repo, options.pr),
       { env, ghCommand, runChild, restFallback: () => restGetPaginatedJson(prReviewsApiPath(options.repo, options.pr), env) },
     );
-    prReviews = normalizePrReviewsPayload(reviewsRaw);
-    reviewFacts = projectSubmittedReviewFacts(flattenPaginatedSlurp(reviewsRaw));
+    rawReviews = flattenPaginatedSlurp(reviewsRaw);
   } catch {
     // Graceful fallback for the comment/verdict summarizers below: PR reviews
     // fetch failure is non-fatal there, and they continue with issue comments
@@ -1175,12 +1181,25 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
     // see reviewsReadFailed above.
     reviewsReadFailed = true;
   }
-  const commentFacts = commentsPayload.map((c) => ({
-    login: c?.user?.login ?? null, body: c?.body ?? "", type: c?.user?.type ?? null,
-  }));
   // Machine-artifact bodies are filtered inside the two summarizers below, not
   // here — see the import comment above.
-  const allComments = [...commentsPayload, ...prReviews];
+  // Trust boundary (ADR 0238/0248): a gate-formatted comment or review from a
+  // stranger must not reach the coordinator as evidence text. Trusted means a
+  // maintainer-association author, Copilot, or the authenticated viewer (the
+  // gate poster's own identity, which may be a bot). The viewer lookup runs
+  // only when an untrusted candidate exists; a failed lookup trusts by
+  // association only.
+  const isTrustedEvidence = await resolveTrustedEvidencePredicate([...commentsPayload, ...rawReviews], { env, ghCommand, runChild });
+  // Size-budget facts: every review/comment still counts toward blocking
+  // (CHANGES_REQUESTED fails closed), but only association-trusted entries can
+  // supply the human approval (`trusted`, read by anyFreshHumanApproval).
+  const trustedByAssociation = (c) => isTrustedRestComment(c, { allowCopilot: true });
+  const reviewFacts = rawReviews.flatMap((r) => projectSubmittedReviewFacts([r]).map((f) => ({ ...f, trusted: trustedByAssociation(r) })));
+  const commentFacts = commentsPayload.map((c) => ({
+    login: c?.user?.login ?? null, body: c?.body ?? "", type: c?.user?.type ?? null, trusted: trustedByAssociation(c),
+  }));
+  const prReviews = normalizePrReviewsPayload(rawReviews.filter(isTrustedEvidence));
+  const allComments = [...commentsPayload.filter(isTrustedEvidence), ...prReviews];
   const commentSummary = summarizeGateReviewComments(allComments);
   const markerSummary = summarizeGateReviewCommentMarkers(allComments, { headSha: currentHeadSha });
   // The head-filtered summary hides markers at other heads, so the carry candidate is the latest
@@ -1189,7 +1208,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
   // The carry seam (baseRefName fetch with REST fallback, posted carried-heads record) runs only for a
   // clean contract-complete cross-head candidate, so non-carry flows make no extra gh call. Only the
   // coordination path passes recordCarry; a fetch or record failure means no carry (fail closed).
-  const carryComments = [...commentsPayload];
+  const carryComments = commentsPayload.filter(isTrustedEvidence);
   const resolveGateMarker = async (gate) => {
     const filtered = normalizeGateMarkerSummary(markerSummary[gate]);
     if (filtered.visible) return { marker: filtered, fanoutMarker: filtered };
@@ -1341,10 +1360,12 @@ async function main() {
     let unresolvedThreadCount = -1;
     let unresolvedGateThreadCount = -1;
     let githubCapFixed = false;
+    let skippedUntrusted = [];
     try {
       const threadsPayload = await fetchGithubReviewThreadsPayload(options, { env: process.env });
       const parsedThreads = parseReviewThreads(threadsPayload);
       unresolvedThreadCount = coerceUnresolvedThreadCount(parsedThreads);
+      skippedUntrusted = parsedThreads.skippedUntrusted ?? [];
       githubCapFixed = capRoundThreadsResolved(result.capRoundNumber, threadsPayload);
       // The draftGateSatisfied field must assert 0 unresolved gate-authored
       // threads (high, medium, low, question, AND nit), not just a clean
@@ -1403,7 +1424,7 @@ async function main() {
     // are excluded here to keep emitted output bounded regardless of how many
     // comments the PR has accumulated.
     const { reviews: _reviews, comments: _comments, capRoundNumber: _capRoundNumber, ...serializableResult } = result;
-    const output = { ...serializableResult, preMergeGateCheck, staleRunnerCheck, evidenceState };
+    const output = { ...serializableResult, preMergeGateCheck, staleRunnerCheck, evidenceState, ...(skippedUntrusted.length > 0 ? { skippedUntrusted } : {}) };
     if (!preMergeGateCheck.ok) {
       process.stderr.write(`${JSON.stringify({
         ok: false,
@@ -1413,6 +1434,9 @@ async function main() {
         currentHeadSha: result.currentHeadSha,
         // Size facts survive a size-approval failure so merge-pr --check can still name the escalated class.
         preApprovalGateMarker: result.preApprovalGateMarker,
+        // The latest trusted verdict heads survive a failed check so a follow-up reviewer can bound its delta.
+        draftGate: result.draftGate,
+        preApprovalGate: result.preApprovalGate,
         preMergeGateCheck,
         staleRunnerCheck,
         staleRunner: result.staleRunner,
@@ -1437,7 +1461,7 @@ async function main() {
           ? [`stale runner: ${error.staleRunner.staleRunner?.runId} claimed ${error.staleRunner.staleRunner?.claimedAgeMs}ms ago, last updated ${error.staleRunner.staleRunner?.updatedAgeMs}ms ago (max age ${error.staleRunner.staleRunner?.maxAgeMs}ms)`]
           : error.staleRunner.status === "exit_signal_recorded"
           ? [`exit signal recorded for run ${error.staleRunner.activeRun?.runId}: refuse to merge`]
-          : [],
+          : [`runner claim check failed (${error.staleRunner.status}): ${error.staleRunner.message}; release or clear the runner claim`],
       };
       process.stderr.write(`${JSON.stringify({
         ok: false,
@@ -1453,6 +1477,8 @@ async function main() {
           filePath: error.staleRunner.filePath,
         },
         staleRunnerCheck,
+        // The merge gate reads preMergeGateCheck.failures, so a stale claim names its run there instead of a bare error string.
+        preMergeGateCheck: { ok: false, failures: [...staleRunnerCheck.failures, "the posted gate verdicts were not read"] },
       })}\n`);
       process.exitCode = 1;
       return;

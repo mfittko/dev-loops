@@ -145,7 +145,7 @@ test("reply-resolve-review-threads replies to matching unresolved threads withou
             comments: {
               nodes: [
                 { id: "PRRC_node_101", databaseId: 101, body: "copilot note", author: { login: "Copilot", __typename: "Bot" } },
-                { id: "PRRC_node_102", databaseId: 102, body: "human note", author: { login: "reviewer", __typename: "User" } },
+                { id: "PRRC_node_102", databaseId: 102, body: "human note", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } },
               ],
             },
           },
@@ -163,7 +163,7 @@ test("reply-resolve-review-threads replies to matching unresolved threads withou
             isResolved: false,
             comments: {
               nodes: [
-                { id: "PRRC_node_301", databaseId: 301, body: "human only", author: { login: "reviewer", __typename: "User" } },
+                { id: "PRRC_node_301", databaseId: 301, body: "human only", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } },
               ],
             },
           },
@@ -343,7 +343,7 @@ test("reply-resolve-review-threads chooses the newest matching author-authored c
             comments: {
               nodes: [
                 { id: "PRRC_node_101", databaseId: 101, body: "older note", author: { login: "Copilot", __typename: "Bot" } },
-                { id: "PRRC_node_105", databaseId: 105, body: "reviewer note", author: { login: "reviewer", __typename: "User" } },
+                { id: "PRRC_node_105", databaseId: 105, body: "reviewer note", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } },
                 { id: "PRRC_node_109", databaseId: 109, body: "newest note", author: { login: "Copilot", __typename: "Bot" } },
               ],
             },
@@ -658,7 +658,7 @@ test("reply-resolve-review-threads defaults to all reviewers and processes mixed
             isResolved: false,
             comments: {
               nodes: [
-                { id: "PRRC_node_201", databaseId: 201, body: "human review note", author: { login: "reviewer", __typename: "User" } },
+                { id: "PRRC_node_201", databaseId: 201, body: "human review note", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } },
               ],
             },
           },
@@ -703,7 +703,7 @@ test("reply-resolve-review-threads filters to human-only unresolved threads with
             isResolved: false,
             comments: {
               nodes: [
-                { id: "PRRC_node_201", databaseId: 201, body: "human note", author: { login: "reviewer", __typename: "User" } },
+                { id: "PRRC_node_201", databaseId: 201, body: "human note", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } },
               ],
             },
           },
@@ -753,7 +753,7 @@ test("reply-resolve-review-threads skips resolved human threads by default", asy
             isResolved: true,
             comments: {
               nodes: [
-                { id: "PRRC_node_201", databaseId: 201, body: "human resolved note", author: { login: "reviewer", __typename: "User" } },
+                { id: "PRRC_node_201", databaseId: 201, body: "human resolved note", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } },
               ],
             },
           },
@@ -1144,8 +1144,8 @@ test("reply-resolve-review-threads refuses the whole call before any post when o
     const gh = await writeGhStub(tempDir, [
       {
         stdout: createReviewThreadsPayload([
-          { id: "THREAD_1", isResolved: false, comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", author: { login: "reviewer", __typename: "User" } }] } },
-          { id: "THREAD_2", isResolved: false, comments: { nodes: [{ id: "PRRC_node_202", databaseId: 202, body: "note", author: { login: "reviewer", __typename: "User" } }] } },
+          { id: "THREAD_1", isResolved: false, comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }] } },
+          { id: "THREAD_2", isResolved: false, comments: { nodes: [{ id: "PRRC_node_202", databaseId: 202, body: "note", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }] } },
         ]),
       },
       { stdout: `${JSON.stringify({ headRefOid: headSha })}\n` },
@@ -1206,7 +1206,7 @@ test("reply-resolve-review-threads checks a shared fixed --message for a full SH
     const gh = await writeGhStub(tempDir, [
       {
         stdout: createReviewThreadsPayload([
-          { id: "THREAD_1", isResolved: false, comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", author: { login: "reviewer", __typename: "User" } }] } },
+          { id: "THREAD_1", isResolved: false, comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }] } },
         ]),
       },
       { stdout: `${JSON.stringify({ headRefOid: headSha })}\n` },
@@ -1235,7 +1235,7 @@ async function runDeltaGuardedBatch({ items, rootBody = "note" }) {
       reviewBaselineHead: baseline, candidateHead: fix, actSetId: "0".repeat(16), invocation: 1, outcome: "needs_fix", nextStep: "fix_and_rereview", items,
     }));
     const gh = await writeGhStub(tempDir, [
-      { stdout: createReviewThreadsPayload([{ id: "THREAD_1", isResolved: false, comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: rootBody, author: { login: "reviewer", __typename: "User" } }] } }]) },
+      { stdout: createReviewThreadsPayload([{ id: "THREAD_1", isResolved: false, comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: rootBody, authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } }] } }]) },
       { stdout: `${JSON.stringify({ headRefOid: fix })}\n` },
       { stdout: '{"id":2301,"html_url":"https://github.com/owner/repo/pull/17#discussion_r2301"}\n' },
     ]);

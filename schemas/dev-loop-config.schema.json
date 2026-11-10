@@ -365,6 +365,10 @@
                           "docs-only"
                         ]
                       },
+                      "readsPrBody": {
+                        "description": "Declare that this angle reads the PR body, so a PR-body-only edit re-runs its dispatch unit (GATE-EXEC-BODY-ONLY-RERUN). An angle whose prompt names the PR body or PR description is body-reading without it.",
+                        "type": "boolean"
+                      },
                       "categories": {
                         "description": "Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed.",
                         "minItems": 1,
@@ -541,7 +545,7 @@
               "description": "Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class."
             },
             "maxReviewRounds": {
-              "description": "Round cap for the draft gate: a round whose count of completed judged rounds reaches this number is past the cap, and a new act item then blocks with round_cap_reached instead of running another fixer round. 0 disables the cap. Default 4.",
+              "description": "Round cap for the draft gate: a round whose count of completed judged rounds reaches this number is past the cap, and at the cap round only a named human decision blocks with round_cap_reached (GATE-EXEC-SOFT-CAP); other act items go to the fixer, and a round after the cap round is refused. 0 disables the cap. Default 4.",
               "type": "integer",
               "minimum": 0
             }
@@ -604,6 +608,10 @@
                           "changed-files",
                           "docs-only"
                         ]
+                      },
+                      "readsPrBody": {
+                        "description": "Declare that this angle reads the PR body, so a PR-body-only edit re-runs its dispatch unit (GATE-EXEC-BODY-ONLY-RERUN). An angle whose prompt names the PR body or PR description is body-reading without it.",
+                        "type": "boolean"
                       },
                       "categories": {
                         "description": "Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed.",
@@ -839,6 +847,10 @@
                           "changed-files",
                           "docs-only"
                         ]
+                      },
+                      "readsPrBody": {
+                        "description": "Declare that this angle reads the PR body, so a PR-body-only edit re-runs its dispatch unit (GATE-EXEC-BODY-ONLY-RERUN). An angle whose prompt names the PR body or PR description is body-reading without it.",
+                        "type": "boolean"
                       },
                       "categories": {
                         "description": "Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed.",
@@ -2063,6 +2075,17 @@
       },
       "additionalProperties": false,
       "description": "Validation resolution: gate mode, optional full command, and a path-to-command map. Only the `.devloops` family file is read; the key has no effect in `.pi/dev-loop/defaults.*`. Requires a dev-loops CLI that knows the `validation` key."
+    },
+    "changelog": {
+      "type": "object",
+      "properties": {
+        "required": {
+          "type": "boolean",
+          "description": "`true` enforces the dev-loops changelog completeness rule (a `changes/<slug>.md` fragment or a `CHANGELOG.md` `## Unreleased` item) before PR creation, in pre-push-delta results and in `test:docs`. Default `false`: the rule is skipped."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Changelog completeness opt-in. Only `required: true` enables the check; file presence never does. Only the `.devloops` family file is read; the key has no effect in `.pi/dev-loop/defaults.*` or the extension defaults."
     }
   },
   "required": [

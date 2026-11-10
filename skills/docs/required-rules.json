@@ -160,7 +160,7 @@
     {
       "id": "COPILOT-FOLLOWUP-WAIT-TOOLS",
       "enforcement": "agent",
-      "enforcementNote": "Choosing a wait tool is behavioral guidance; backgrounding a wait/probe (detach wrappers, while-sleep-poll loops, bare-& probe scripts, or any wrapper around one — timeout/nohup/sh -c/a node loader flag) is mechanically denied by the PreToolUse Bash-gate, actor-independently and fail-closed, for the coordinator and every subagent (#2065)."
+      "enforcementNote": "Choosing a wait tool is behavioral guidance; backgrounding a wait/probe (detach wrappers, any while/until/for loop that runs sleep, foreground or backgrounded, as a whole-command check, bare-& probe scripts, or any wrapper around one — timeout/nohup/sh -c/a node loader flag) is mechanically denied by the PreToolUse Bash-gate, actor-independently and fail-closed, for the coordinator and every subagent (#2065)."
     },
     {
       "id": "COPILOT-STATE-ACTIVE-REQUEST-WAIT"
@@ -317,6 +317,10 @@
       "enforcement": "runtime"
     },
     {
+      "id": "GATE-REVIEW-COMMENT-TRUST",
+      "enforcement": "runtime"
+    },
+    {
       "id": "GATE-REVIEW-SUBMIT-MODES",
       "enforcement": "runtime"
     },
@@ -329,6 +333,10 @@
     },
     {
       "id": "GATE-EXEC-ANGLE-COVERAGE"
+    },
+    {
+      "id": "GATE-EXEC-EVIDENCE-SEALED",
+      "enforcement": "runtime"
     },
     {
       "id": "GATE-EXEC-ARTIFACT-HEAD-STAMP",
@@ -346,6 +354,11 @@
       "id": "GATE-EXEC-BLOCKING-ONLY-FIX"
     },
     {
+      "id": "GATE-EXEC-BODY-ONLY-RERUN",
+      "enforcement": "runtime",
+      "enforcementNote": "Enforced by writeGateContext and readCompletedAnglesForHead in write-gate-context.mjs (pr-body read, body-unit retirement, in-flight refusal) and emitJudgeWorkOrder in emit-judge-work-order.mjs (stale pinned pr-body refusal); the rule body in gate-review-sub-loop-contract.md owns the clauses"
+    },
+    {
       "id": "GATE-EXEC-BRIEFING-PREFIX",
       "enforcement": "runtime"
     },
@@ -359,7 +372,7 @@
     {
       "id": "GATE-EXEC-COPILOT-BODY-TO-JUDGE",
       "enforcement": "runtime",
-      "enforcementNote": "Enforced by detect-pr-gate-coordination-state.mjs (copilotBodyJudgeFinding, no gate-entry block) and emit-judge-work-order.mjs (derived copilotBodyJudgeFile pinned read)"
+      "enforcementNote": "Enforced by detect-pr-gate-coordination-state.mjs (copilotBodyJudgeFinding, no gate-entry block) and emit-judge-work-order.mjs (derived copilotBodyJudgeFile pinned read, copilotBodyClusterId stamp); judge-pass.mjs (judgePassCli) and write-gate-findings-log.mjs (writeGateFindingsLog) append the pinned cluster through withPinnedCopilotBodyCluster in _copilot-body-disposition.mjs with a sha256 re-check and drop a spec-authority decision keyed at the cluster id through withoutCopilotBodyDecision before validation, and the findings-log writer refuses a judge plan that is missing, foreign or unbound to the repo, PR, gate and head"
     },
     {
       "id": "GATE-EXEC-DEFERRAL-RECORD",
@@ -370,6 +383,10 @@
     },
     {
       "id": "GATE-EXEC-DISPATCH-RETRY-BACKOFF",
+      "enforcement": "doc"
+    },
+    {
+      "id": "GATE-EXEC-BOUNDED-WAIT-CAP",
       "enforcement": "doc"
     },
     {
@@ -453,7 +470,7 @@
     {
       "id": "GATE-EXEC-LOW-FIX-UNTIL-CAP",
       "enforcement": "runtime",
-      "enforcementNote": "applyJudgeDispositions coerces the disposition (lowFixCapped and round from resolveDraftRoundCap) and emit-fixer-work-order.mjs refuses a low/nit-only act list at or past the draft_gate cap or at pre_approval_gate, or a nit-only list outside draft round 1, with code low_fix_until_cap"
+      "enforcementNote": "applyJudgeDispositions coerces the disposition (lowFixCapped and round from resolveDraftRoundCap) and emit-fixer-work-order.mjs refuses a low/nit-only act list at pre_approval_gate, or a nit-only list outside draft round 1, with code low_fix_until_cap"
     },
     {
       "id": "GATE-EXEC-OPERATOR-FOCUS",
@@ -530,7 +547,7 @@
     {
       "id": "GATE-EXEC-ROUND-CAP-CHAIN-EXTEND",
       "enforcement": "runtime",
-      "enforcementNote": "Enforced by extend-cap-round-chain.mjs, which refuses any commit after the chain end that is not docs or tests and verifies the extension with resolveCapRoundFixed; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+      "enforcementNote": "Enforced by extend-cap-round-chain.mjs, which refuses any commit after the start of the logic range that is not docs or tests unless a sealed locally_clear pre-push delta covers it (delta_covered), and verifies the extension with resolveCapRoundFixed; the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-ROUND-CAP-THREAD-ROUTE",
@@ -545,6 +562,11 @@
     {
       "id": "GATE-EXEC-ROUND-RETIREMENT",
       "enforcement": "runtime"
+    },
+    {
+      "id": "GATE-EXEC-SOFT-CAP",
+      "enforcement": "runtime",
+      "enforcementNote": "Enforced by pastCapBlockers in packages/core/src/loop/gate-fanin.mjs, which upsert-checkpoint-verdict.mjs and emit-fixer-work-order.mjs call; the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-SEPARATE-CHAINS"
@@ -723,7 +745,7 @@
     {
       "id": "MAIN-AGENT-COORDINATOR-REPORT-READ",
       "enforcement": "agent",
-      "enforcementNote": "Reading the coordinator output file is an orchestrator step; no script observes it."
+      "enforcementNote": "Reading a coordinator report and classifying it as interim, final or duplicate is an orchestrator step; no script observes it."
     },
     {
       "id": "MAIN-AGENT-FILING-BLOCKER-ONLY",

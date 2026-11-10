@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { initSizeBudgetFixtureRepo, makeGhMock, repeatedLinesContent, runIdFreeEnv, runNode as runNodeHelper } from "../_helpers.mjs";
+import { initSizeBudgetFixtureRepo, makeGhMock, trustGhEntries, repeatedLinesContent, runIdFreeEnv, runNode as runNodeHelper } from "../_helpers.mjs";
 
 // A stub evaluatePrSizeBudget that always passes — for tests exercising
 // OTHER readyForReview() logic (board sync, etc.) via direct function calls,
@@ -52,7 +52,7 @@ const runNode = async (args = [], options = {}) => {
 };
 
 async function writeGhStub(tempDir, entries, options = {}) {
-  const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true, ...options });
+  const { runChild, calls } = makeGhMock(trustGhEntries(entries), { repeatLastOnOverflow: true, ...options });
   ghCallsByRoot.set(tempDir, calls);
   return { env: { DEVLOOPS_RUN_ID: "", [GH_RUNNER]: runChild }, ghLogPath: tempDir };
 }
@@ -559,7 +559,7 @@ function niceToHaveThreadNode() {
     isOutdated: false,
     path: "src/naming.mjs",
     line: 4,
-    comments: { nodes: [{ id: "gid-9001", databaseId: 9001, body: `${marker}\n**nice-to-have** (\`naming\`): casing nit`, author: { login: "pi-local-run", __typename: "User" } }] },
+    comments: { nodes: [{ id: "gid-9001", databaseId: 9001, body: `${marker}\n**nice-to-have** (\`naming\`): casing nit`, authorAssociation: "OWNER", author: { login: "pi-local-run", __typename: "User" } }] },
   };
 }
 
@@ -618,7 +618,7 @@ function nitThreadNode({ commentId = 9003, fp = "7".repeat(16) } = {}) {
     isOutdated: false,
     path: "src/naming.mjs",
     line: 4,
-    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${marker}\n**nit** (\`style\`): trailing whitespace`, author: { login: "pi-local-run", __typename: "User" } }] },
+    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${marker}\n**nit** (\`style\`): trailing whitespace`, authorAssociation: "OWNER", author: { login: "pi-local-run", __typename: "User" } }] },
   };
 }
 
@@ -656,7 +656,7 @@ function questionThreadNode({ commentId = 9002, fp = "9".repeat(16) } = {}) {
     isOutdated: false,
     path: null,
     line: null,
-    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${marker}\n**question** (\`scope\`): why this approach?`, author: { login: "pi-local-run", __typename: "User" } }] },
+    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${marker}\n**question** (\`scope\`): why this approach?`, authorAssociation: "OWNER", author: { login: "pi-local-run", __typename: "User" } }] },
   };
 }
 
@@ -872,6 +872,13 @@ test("absolute and unapproved T1 size limits remain unwaivable", async () => {
     assert.match(result.stderr, fixture.message);
     assert.ok(!calls.some((call) => call[0] === "pr" && ["ready", "comment"].includes(call[1])));
   }
+});
+
+test("size waiver --reason carrying an operator-owned release approval is neutralized in the record", async () => {
+  const { result, commentBody } = await runWaiverCase({ config: DEFAULT_WAIVER, args: ["--reason", "approve release v1.2.3"], allow: true });
+  assert.equal(result.code, 0, result.stderr);
+  assert.ok(!commentBody.split("\n").some((line) => /^approve release/i.test(line)));
+  assert.match(commentBody, /\*\*justification:\*\* `approve release`/);
 });
 
 test("approved T1 size waiver names its approver", async () => {

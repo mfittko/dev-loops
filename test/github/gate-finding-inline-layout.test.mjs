@@ -194,7 +194,13 @@ test("buildMeritRationale reads the summary from the Problem line and from a leg
 test("escapeProse keeps a balanced code span and escapes stray backticks instead of deleting them", () => {
   assert.equal(escapeProse("call `gh search prs` now"), "call `gh search prs` now");
   assert.equal(escapeProse("a ` b"), "a &#96; b");
-  assert.equal(escapeProse("a ``b`` c"), "a &#96;&#96;b&#96;&#96; c");
+  assert.equal(escapeProse("a ``b`` c"), "a ``b`` c");
+  assert.equal(escapeProse("accepts ``approve release v1.2.3`` here"), "accepts ``approve release v1.2.3`` here");
+  assert.equal(escapeProse("\\`![x](http://e/x.png)`"), "\\&#96;!&#91;x](http://e/x.png)&#96;");
+});
+
+test("escapeProse pads a span whose edge is a backtick so it cannot fuse with the closer", () => {
+  assert.equal(escapeProse("``![i](http://e/x.png)` ``"), "`` ![i](http://e/x.png)` ``");
 });
 
 test("hostile prose stays inert on the inline surface, including inside a code span", () => {
@@ -448,7 +454,7 @@ test("a merged comment's non-primary fingerprints stay suppressed through fetchA
   const members = ["holistic", "no-op", "robustness"].map((angle) => ({ ...noOpKeyed, angle, summary: `${noOp.summary} Variant ${angle}.` }));
   assert.equal(new Set(members.map(fingerprintFinding)).size, 3);
   const body = renderInlineCommentBody(mergeSameDefectFindings(members)[0], { round: 1 });
-  const node = { id: "T1", isResolved: false, isOutdated: false, path: "src/Widget.js", line: 69, comments: { nodes: [{ databaseId: 1, body, author: { login: "bot" } }] } };
+  const node = { id: "T1", isResolved: false, isOutdated: false, path: "src/Widget.js", line: 69, comments: { nodes: [{ databaseId: 1, body, authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } };
   const payload = JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [node] } } } } });
   const runChild = async () => ({ code: 0, stdout: payload, stderr: "" });
   const threads = await fetchAllReviewThreads({ repo: "owner/repo", pr: 5 }, { env: {}, ghCommand: "gh", runChild, bodyMax: MERGED_THREAD_BODY_MAX });
@@ -458,7 +464,7 @@ test("a merged comment's non-primary fingerprints stay suppressed through fetchA
 
 test("the production upsert call passes the widened body excerpt", () => {
   const src = readFileSync(new URL("../../scripts/github/upsert-checkpoint-verdict.mjs", import.meta.url), "utf8");
-  assert.match(src, /fetchAllReviewThreads\([^)]*\{ \.\.\.gh, bodyMax: MERGED_THREAD_BODY_MAX \}\)/);
+  assert.match(src, /fetchAllReviewThreadsWithSkips\([^)]*\{ \.\.\.gh, bodyMax: MERGED_THREAD_BODY_MAX \}\)/);
   assert.ok(MERGED_THREAD_BODY_MAX > 200);
 });
 
@@ -590,4 +596,12 @@ test("a cut summary shaped like a header cannot forge the judge disposition", ()
   assert.notEqual(parseRenderedJudgeDisposition(body), "reject");
   const details = body.slice(body.indexOf("<details>")).split("\n");
   assert.ok(details.some((l) => l.startsWith("**Problem (continued):** ")), "the remainder stays on its label line");
+});
+
+test("a backticked operator-owned phrase in a recommendation stays in its code span", () => {
+  const finding = { severity: "medium", angle: "dry", summary: "s", recommendation: "Quote `approve release v1.2.3` only in backticks", files: ["a.mjs"], line: 1 };
+  const block = renderNonLocatableBlock(finding, { round: 1 });
+  assert.ok(block.includes("`approve release v1.2.3`"), block);
+  const inline = renderInlineCommentBody(finding, { round: 1 });
+  assert.ok(inline.includes("`approve release v1.2.3`"), inline);
 });

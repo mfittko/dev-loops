@@ -60,6 +60,7 @@ import { fileURLToPath } from "node:url";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
+import { isTypedOrKnownGap } from "@dev-loops/core/loop/gate-no-dead-end";
 import { DISPOSITION, interpretLoopState, STATE, TRANSITIONS } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateConductorRouting, getAllowedOuterTransitions, OUTER_STATE, OUTER_TERMINAL_STATES } from "@dev-loops/core/loop/conductor-routing";
 import { interpretReviewerLoopState, REVIEWER_STATE, REVIEWER_TRANSITIONS } from "@dev-loops/core/loop/reviewer-loop-state";
@@ -624,6 +625,11 @@ const PR_GATE_COORDINATION_MACHINE = {
           PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
         ].includes(action)),
     },
+    {
+      // Issue 3105: a report_blocked result names who decides or a command an agent can run, unless it is a known gap.
+      name: "blocked-names-decision-or-remedy",
+      check: (result) => isTypedOrKnownGap(undefined, result),
+    },
   ],
 };
 
@@ -1088,7 +1094,6 @@ const FIX_LOOP_TO_FIXTURE = new Map([
 export const FIX_LOOP_KNOWN_GAPS = new Map([
   ["head_moved->full_gate_round", "slice 3 (C19): unresolved gate-thread recovery admission deferred until PR #2990 merges"],
   ["no_commit->full_gate_round", "slice 3 (C19): unresolved gate-thread recovery admission deferred until PR #2990 merges"],
-  ["delivery_incomplete->disposition_complete", "slice 5 (C14): --completion-only delivery re-entry"],
 ]);
 
 {

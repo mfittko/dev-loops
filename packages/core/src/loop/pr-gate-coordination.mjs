@@ -1,9 +1,10 @@
 import { DISPOSITION, isCopilotRoundCapReached, STATE } from "./copilot-loop-state.mjs";
 import { CAP_ROUND_FIXED_NEXT_ACTION } from "./review-round-cap.mjs";
-import { findBlockingTitleMarkers } from "./pr-title-markers.mjs";
+import { findBlockingTitleMarkers, stripBlockingTitleMarkers } from "./pr-title-markers.mjs";
 import { evaluateUiE2eScoping } from "./ui-e2e-scoping.mjs";
 import { evaluateUiDesignerReviewScoping } from "./ui-designer-review-scoping.mjs";
 import { trimmedOrNull } from "./normalize.mjs";
+import { isSafeRepoSegment } from "../github/repo-slug.mjs";
 import {
   MALFORMED_AC_DOD_MATRIX_FINDING,
   MISSING_AC_DOD_MATRIX_FINDING,
@@ -82,6 +83,83 @@ export const PR_CHECKPOINT_ACTION = Object.freeze({
   COMPLETE_FIXER_DISPOSITION: COMPLETE_FIXER_DISPOSITION_ACTION,
 });
 
+// Actions forbidden while the head conflicts with, or is stale against, the base.
+export const CONFLICT_FORBIDDEN_ACTIONS = Object.freeze([
+  PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+  PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE,
+  PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+  PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
+  PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW,
+  PR_CHECKPOINT_ACTION.WAIT_FOR_CI,
+  PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK,
+  PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
+  PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW,
+  PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
+  PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
+  PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+]);
+
+// Issue 3105: closed enum naming who must decide when a gate result is report_blocked.
+// OPERATOR_DECISION is a slice 1 catch-all for results with no runnable remedy; slice 9 narrows it.
+export const BLOCKED_ON = Object.freeze({
+  OPERATOR_DECISION: "operator_decision",
+  HIGH_FINDING_PAST_CAP: "high_finding_past_cap",
+  FAIL_OPEN_FINDING: "fail_open_finding",
+  SECURITY_FINDING: "security_finding",
+  EVIDENCE_INTEGRITY: "evidence_integrity",
+  SPEC_CHANGE: "spec_change",
+  OPERATOR_QUESTION: "operator_question",
+});
+
+// Issue 3105: an agentRemedy needs a real repo and integer PR; otherwise the result names the operator.
+// The repo must be a plain owner/name slug and the PR positive: the command is run by an agent.
+const isPlainRepoSlug = (repo) => typeof repo === "string"
+  && /^[\w.-]+\/[\w.-]+$/.test(repo)
+  && repo.split("/").every(isSafeRepoSegment);
+
+function remedyOrOperator(input, build) {
+  if (isPlainRepoSlug(input.repo) && Number.isInteger(input.pr) && input.pr > 0) {
+    return { agentRemedy: build(input.repo, input.pr) };
+  }
+  return { blockedOn: BLOCKED_ON.OPERATOR_DECISION };
+}
+
+const shellQuote = (text) => `'${text.replaceAll("'", "'\\''")}'`;
+
+// Issue 3105: the command an agent can run to clear a report_blocked CI result.
+function ciAgentRemedy(input, ciStatus) {
+  // Failing CI has no runnable repair command yet (startup routes back to the same block), so the operator fallback applies.
+  if (ciStatus === "failure") return { blockedOn: BLOCKED_ON.OPERATOR_DECISION };
+  return remedyOrOperator(input, (repo, pr) => ({
+    command: `dev-loops-run scripts/github/wait-pr-checks.mjs --repo ${repo} --pr ${pr} --timeout 600`,
+    summary: "Wait for the head checks to confirm CI, then re-run gate coordination.",
+  }));
+}
+
+// Issue 3105: strip the merge-blocking markers (see pr-title-markers.mjs) and name the title edit.
+function titleMarkerAgentRemedy(input) {
+  const title = stripBlockingTitleMarkers(input.prTitle);
+  // edit-pr.mjs rejects a --title value that starts with "--", even when shell-quoted.
+  if (!title || title.startsWith("--") || findBlockingTitleMarkers(title).length > 0) {
+    return { blockedOn: BLOCKED_ON.OPERATOR_DECISION };
+  }
+  return remedyOrOperator(input, (repo, pr) => ({
+    command: `dev-loops-run scripts/github/edit-pr.mjs --repo ${repo} --pr ${pr} --title ${shellQuote(title)}`,
+    summary: "Remove the merge-blocking marker from the PR title.",
+  }));
+}
+
+// Issue 3105: type the stuck early-surface stop. An unresolved ref gets a fetch remedy;
+// a non-waivable size block needs the operator.
+function stuckTyping(input, fetchable) {
+  return fetchable
+    ? remedyOrOperator(input, (_repo, pr) => ({
+      command: `git fetch origin && dev-loops loop startup --pr ${pr}`,
+      summary: "Fetch the base and head refs, then re-run startup so the size budget and ADR tripwire re-evaluate.",
+    }))
+    : { blockedOn: BLOCKED_ON.OPERATOR_DECISION };
+}
+
 function normalizeGateComment(summary = null) {
   if (!summary || typeof summary !== "object") {
     return {
@@ -116,6 +194,12 @@ function normalizeGateComment(summary = null) {
 // gates MARK_READY_FOR_REVIEW below — gains this guard. -1 (fail-closed
 // "could not read thread state") counts as NOT clean, same as any positive
 // count.
+/** The one clean draft-verdict predicate (issue 3139 AC1): visible, verdict clean and a non-blank headSha. `toGateStatus` and the `write-gate-context` ordering check both call it. */
+export function isCleanDraftVerdict(comment) {
+  const normalized = normalizeGateComment(comment);
+  return normalized.visible && normalized.verdict === "clean" && normalized.headSha !== null;
+}
+
 function toGateStatus(comment, marker, currentHeadSha, unresolvedGateThreadCount) {
   const normalizedComment = normalizeGateComment(comment);
   const normalizedMarker = normalizeGateComment(marker);
@@ -124,7 +208,7 @@ function toGateStatus(comment, marker, currentHeadSha, unresolvedGateThreadCount
     && currentHeadSha.startsWith(normalizedMarker.headSha);
   const anyVisible = normalizedComment.visible || normalizedMarker.visible;
 
-  const cleanEvidenceExists = normalizedComment.visible && normalizedComment.verdict === "clean" && normalizedComment.headSha !== null;
+  const cleanEvidenceExists = isCleanDraftVerdict(comment);
   // Only null/undefined means "the caller supplied no signal" (preApprovalGate's
   // own toGateStatus call never passes this argument). Anything else that is
   // not a non-negative integer — NaN, a float, a string, a negative number
@@ -403,6 +487,7 @@ function buildTitleMarkerBlockedResult({
     allowedNextActions,
     forbiddenActions,
     nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+    ...titleMarkerAgentRemedy(input),
     reason: `Blocked: the PR title contains merge-blocking marker(s): ${markers.join(", ")}. Remove them from the title before the PR can leave draft, enter the pre-approval gate, or reach final approval.`,
     mergeStateStatus,
     conflictFiles,
@@ -473,6 +558,8 @@ function buildResult({
   refinementArtifact = null,
   inputRefinementArtifact = null,
   copilotReviewRoundCount = null,
+  blockedOn = null,
+  agentRemedy = null,
 }) {
   const effectiveRefinementArtifact = refinementArtifact ?? inputRefinementArtifact ?? null;
   return {
@@ -496,6 +583,8 @@ function buildResult({
     gateEvidenceRequiredForMerge: true,
     ...(gateEvidenceNote ? { gateEvidenceNote } : {}),
     ...(effectiveRefinementArtifact ? { refinementArtifact: effectiveRefinementArtifact } : {}),
+    ...(blockedOn ? { blockedOn } : {}),
+    ...(agentRemedy ? { agentRemedy } : {}),
   };
 }
 
@@ -804,7 +893,7 @@ const DRAFT_GATE_EVIDENCE_GUARDED_BOUNDARIES = Object.freeze([
   PR_CHECKPOINT.FINAL_APPROVAL_READY,
 ]);
 
-function applyDraftGateEvidenceGuard(result, { prDraft = false } = {}) {
+function applyDraftGateEvidenceGuard(result, { prDraft = false, input = {} } = {}) {
   if (!result || typeof result !== "object") {
     return result;
   }
@@ -822,14 +911,21 @@ function applyDraftGateEvidenceGuard(result, { prDraft = false } = {}) {
   if (result.draftGate?.cleanEvidenceExists === true) {
     return result;
   }
-  if (!DRAFT_GATE_EVIDENCE_GUARDED_BOUNDARIES.includes(result.gateBoundary)) {
+  // A DRAFT_GATE_NEEDED result (clean pre_approval evidence, no clean draft evidence) takes the same failure handling when the cap round proof failed.
+  const neededWithCapFailure = result.gateBoundary === PR_CHECKPOINT.DRAFT_GATE_NEEDED && Boolean(input.draftCapRoundFailure);
+  if (!neededWithCapFailure && !DRAFT_GATE_EVIDENCE_GUARDED_BOUNDARIES.includes(result.gateBoundary)) {
     return result;
   }
 
+  // Issue 3139: one next step. The failure is set only when a cap round exists and its proof failed: that exit is then the next action, and reconcile_draft_gate never runs beside it.
+  // Without a cap round the result is reconcile_draft_gate alone, with no blockedOn and no agentRemedy.
+  const capRoundFailed = Boolean(input.draftCapRoundFailure);
+  const nextAction = capRoundFailed ? PR_CHECKPOINT_ACTION.REPORT_BLOCKED : PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE;
   const allowedNextActions = [];
   const forbiddenActions = [];
-  pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE]);
+  pushUnique(allowedNextActions, [nextAction]);
   pushUnique(forbiddenActions, [
+    ...(capRoundFailed ? [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE] : []),
     PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
     PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
     PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
@@ -838,17 +934,22 @@ function applyDraftGateEvidenceGuard(result, { prDraft = false } = {}) {
     PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
     PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
   ]);
+  const evidenceReason = result.draftGate?.anyVisible
+    ? "Clean draft_gate evidence is required before merge (no gate exemptions, #579). A draft_gate comment exists but is not clean; convert the PR back to draft before re-running draft_gate, or clear the existing evidence before running reconcile_draft_gate."
+    : "Clean draft_gate evidence is required before merge (no gate exemptions, #579). No visible clean draft_gate comment exists for this PR; run reconcile_draft_gate before proceeding.";
 
   return {
     ...result,
     gateBoundary: PR_CHECKPOINT.DRAFT_GATE_NEEDED,
-    nextAction: PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE,
+    nextAction,
     allowedNextActions,
     forbiddenActions,
-    reason: result.draftGate?.anyVisible
-      ? "Clean draft_gate evidence is required before merge (no gate exemptions, #579). A draft_gate comment exists but is not clean; convert the PR back to draft before re-running draft_gate, or clear the existing evidence before running reconcile_draft_gate."
-      : "Clean draft_gate evidence is required before merge (no gate exemptions, #579). No visible clean draft_gate comment exists for this PR; run reconcile_draft_gate before proceeding.",
+    reason: capRoundFailed
+      ? `Clean draft_gate evidence is required before merge (no gate exemptions, #579), and the cap round's proof failed, so no draft_gate round can supply it. ${Object.hasOwn(CAP_ROUND_REFUSAL, input.draftCapRoundFailure) ? CAP_ROUND_REFUSAL[input.draftCapRoundFailure] : CAP_ROUND_REFUSAL.cap_round_unresolved}`
+      : evidenceReason,
     gateEvidenceNote: null,
+    // The failed cap-round proof carries the same typed condition and exit the write-gate-context refusal names.
+    ...(capRoundFailed ? { capRoundFailure: input.draftCapRoundFailure, ...capRoundExit(input.draftCapRoundFailure, input) } : {}),
   };
 }
 
@@ -860,15 +961,41 @@ export const ADR_TRIPWIRE_REMEDIES = Object.freeze([
   "add an `adr-tripwire:allow <reason>` line to the PR body",
 ]);
 
-/** The one failed cap-round-fixed condition (`resolveCapRoundFixed` `onFailure`, ADR 0218) and its remedy. */
+// The flags every reviewer-only remedy needs (the route binds the findings log to the PR, ADR 0255).
+const REVIEWER_ONLY_FLAGS = " The reviewer-only command takes `--repo <owner/name> --pr <number> --baseline <sha> --pr-head <sha> --findings-log <draft_gate cap-round ledger path>` and, on the input run, `--spec-identity <id> --result-path <result-file>` (`loop pre-push-delta --help`).";
+
+/** The one failed cap-round-fixed condition (`resolveCapRoundFixed` `onFailure`, ADR 0218) and its remedy. `onFailure` also receives `no_cap_round` below the cap, the one non-failure condition, which has no entry. */
 export const CAP_ROUND_REFUSAL = Object.freeze({
   baseline_orphaned: "Condition baseline_orphaned: the cap-round baseline is not an ancestor of the current head (a rebase rewrote it), so no clearing record can bind to this head. Remedy: push the head to a new branch that keeps the issue slug (`git push origin HEAD:<new-branch>`), record a pre-PR review on the new branch head (`node <dev-loops-package-root>/cli/index.mjs loop pre-pr-review ...`) before `pr create`, run `node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr <this PR number>` while this PR is still open, then close this PR (gate history restarts at round 1); do not rebase a PR that reached the cap round, merge the base instead.",
-  no_clearing_record: "Condition no_clearing_record: no sealed clearing delta record exists for the cap-round baseline. Remedy: complete the cap round's fixer pass and run `check-pre-push-delta.mjs --result` for that baseline. Only after that initial fixer-pass record exists, when the later commits are docs and tests only, run `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo <owner/name> --pr <number>` to extend the chain.",
-  unsealed_record: "Condition unsealed_record: the delta record for the cap-round baseline carries no valid seal. Remedy: rerun `check-pre-push-delta.mjs --result` for that baseline so the writer seals it; never edit the record.",
-  items_do_not_cover: "Condition items_do_not_cover: the clearing record's items do not cover the cap round's act refs (it may belong to another route). Remedy: rerun the pre-push delta on the cap round's act list so every act ref is resolved.",
+  no_clearing_record: "Condition no_clearing_record: no sealed clearing delta record exists for the cap-round baseline. Remedy: run `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` for that baseline. A clean cap round has no fixer pass: when every commit since the cap-round head is docs and tests only, run `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo <owner/name> --pr <number>` directly with no fixer pass. Otherwise, after the cap-round clearing record exists, when the later commits are docs and tests only, run `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo <owner/name> --pr <number>` to extend the chain. When the later commits touch code, run the pre-push delta for them (`node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` with the start of the logic range as baseline: the cap-round head for a clean cap round whose cap-head record is absent or carries no extension, the end of the extended chain when it carries one, and otherwise the chain end) until it is `locally_clear` for exactly that start..head, then run the same `gate extend-cap-round-chain` command; it seals the `delta_covered` extension (ADR 0254)." + REVIEWER_ONLY_FLAGS,
+  unsealed_record: "Condition unsealed_record: the delta record for the cap-round baseline carries no valid seal. Remedy: rerun `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` for that baseline. It takes over an unsealed non-clearing record over the same act refs and seals the new record; any other unsealed record refuses `unsealed_record` with an `rm -f <record> <record>.seal` remedy to run before the rerun; never edit the record." + REVIEWER_ONLY_FLAGS,
+  items_do_not_cover: "Condition items_do_not_cover: the clearing record's items do not cover the cap round's act refs (it may belong to another route). Remedy: run `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` so every act ref of the cap round is resolved. A clean cap round has no act list: when every commit since the cap-round head is docs and tests only, run `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo <owner/name> --pr <number>` to seal an extension record at the end of that chain. When the later commits touch code, run the pre-push delta for them (`node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` with the start of the logic range as baseline: the cap-round head for a clean cap round whose cap-head record is absent or carries no extension, the end of the extended chain when it carries one, and otherwise the chain end) until it is `locally_clear` for exactly that start..head, then run the same `gate extend-cap-round-chain` command; it seals the `delta_covered` extension (ADR 0254)." + REVIEWER_ONLY_FLAGS,
   cap_round_unresolved: "Condition cap_round_unresolved: the cap round could not be resolved (an unreadable findings ledger or config, or no cap round with a verdict). Remedy: repair or quarantine the unreadable ledger or config under the gate tmp root, then rerun the coordination check.",
-  chain_does_not_reach_head: "Condition chain_does_not_reach_head: the sealed clearing chain ends before the current head and the head is not a base-only merge of its last candidate. Remedy: run the pre-push delta for the current head's fix commit, or fetch origin/<base> so a base-only merge is verifiable. When the later commits are docs and tests only, run `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo <owner/name> --pr <number>`.",
+  chain_does_not_reach_head: "Condition chain_does_not_reach_head: the sealed clearing chain ends before the current head and the head is not a base-only merge of its last candidate. Remedy: run `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` for the current head, or fetch origin/<base> so a base-only merge is verifiable. When the later commits are docs and tests only, run `node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo <owner/name> --pr <number>`. When the later commits touch code, run the pre-push delta for them (`node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta --reviewer-only` with the start of the logic range as baseline: the cap-round head for a clean cap round whose cap-head record is absent or carries no extension, the end of the extended chain when it carries one, and otherwise the chain end) until it is `locally_clear` for exactly that start..head, then run the same `gate extend-cap-round-chain` command; it seals the `delta_covered` extension (ADR 0254)." + REVIEWER_ONLY_FLAGS,
 });
+
+const CAP_ROUND_COMMAND_CONDITIONS = Object.freeze(["no_clearing_record", "items_do_not_cover", "chain_does_not_reach_head", "unsealed_record"]);
+
+/**
+ * The one exit of a failed cap-round-fixed condition (issue 3139). ADR 0254: these conditions end at the chain-extension command, which seals docs and tests commits or code commits a locally_clear delta covers.
+ * ADR 0255: baseline_orphaned (replacement PR) and cap_round_unresolved (ledger repair) have no command that clears them: the operator decides.
+ * @returns {{ agentRemedy: { command: string, summary: string } } | { blockedOn: string }}
+ */
+export function capRoundExit(condition, { repo, pr }) {
+  if (!CAP_ROUND_COMMAND_CONDITIONS.includes(condition)) return { blockedOn: BLOCKED_ON.OPERATOR_DECISION };
+  return remedyOrOperator({ repo, pr }, (r, n) => ({
+    command: `dev-loops gate extend-cap-round-chain --repo ${r} --pr ${n}`,
+    summary: "Extend the sealed cap-round clearing chain over the later commits; the command refuses with a typed reason that names the next step.",
+  }));
+}
+
+/**
+ * The one draft-gate satisfaction fold (issue 3139): clean draft_gate evidence, or (on a PR out of draft) the ADR 0208 cap-round-fixed proof standing in for it.
+ * `evaluatePrGateCoordination`, the `write-gate-context` ordering check and the `upsert-checkpoint-verdict` gate check all call it.
+ */
+export function foldDraftGateSatisfied({ isDraft, evidenceSatisfied, capRoundFixed }) {
+  return evidenceSatisfied === true || (!isDraft && capRoundFixed === true);
+}
 
 /** Typed `adrTripwire` field from an `evaluateAdrTripwire` result (null = evaluation failed). */
 export function buildAdrTripwireField(evaluation) {
@@ -922,19 +1049,24 @@ function applyEarlySurfaceGuard(result, input) {
 
   const decisions = [];
   let stuck = false;
+  let unknownOutcome = false;
+  let operatorStop = false;
   if (adr?.outcome === "block") {
     decisions.push(`ADR tripwire blocks this head: resolve it by choosing exactly one remedy (${ADR_TRIPWIRE_REMEDIES.join("; or ")}).`);
   } else if (adr?.outcome === "unknown") {
     stuck = true;
+    unknownOutcome = true;
     decisions.push("The ADR tripwire outcome is unknown (the base or head ref does not resolve locally); run `git fetch origin` and re-run gate coordination.");
   }
   if (size?.outcome === "block" && size.waivable === true) {
     decisions.push(`The size budget blocks this head (whole-PR logic LOC ${size.wholeLogicLoc}); the operator decides a size-budget waiver (the orchestrator then runs \`pr ready-for-review --waive-size-budget\`) or a split.`);
   } else if (size?.outcome === "block") {
     stuck = true;
+    operatorStop = true;
     decisions.push(`The size budget blocks this head (whole-PR logic LOC ${size.wholeLogicLoc}) and no waiver applies; split the PR.`);
   } else if (size?.outcome === "unknown") {
     stuck = true;
+    unknownOutcome = true;
     decisions.push("The size budget outcome is unknown (the base or head ref does not resolve locally); run `git fetch origin` and re-run gate coordination.");
   }
   if (decisions.length === 0) {
@@ -953,6 +1085,7 @@ function applyEarlySurfaceGuard(result, input) {
     nextAction,
     allowedNextActions: [nextAction],
     forbiddenActions,
+    ...(stuck ? stuckTyping(input, unknownOutcome && !operatorStop) : {}),
     reason: `Clean current-head draft_gate evidence exists, but \`gh pr ready\` is refused (ADR-TRIPWIRE-EARLY-SURFACE): ${decisions.join(" ")}`,
   };
 }
@@ -979,21 +1112,21 @@ function evaluateWithTitleGuard(input = {}) {
 
   const unsettledReviewResult = applyUnsettledCopilotReviewEntryGuard(input, result);
   if (unsettledReviewResult) {
-    return applyDraftGateEvidenceGuard(unsettledReviewResult, { prDraft });
+    return applyDraftGateEvidenceGuard(unsettledReviewResult, { prDraft, input });
   }
 
   const prTitle = typeof input.prTitle === "string" ? input.prTitle : "";
   // Draft PRs may legitimately carry a WIP title; the marker only blocks once
   // the PR has left draft and is at a pre-approval/final-approval boundary.
   if (prDraft || !result || typeof result !== "object") {
-    return applyDraftGateEvidenceGuard(result, { prDraft });
+    return applyDraftGateEvidenceGuard(result, { prDraft, input });
   }
   if (!TITLE_MARKER_GUARDED_BOUNDARIES.includes(result.gateBoundary)) {
-    return applyDraftGateEvidenceGuard(result, { prDraft });
+    return applyDraftGateEvidenceGuard(result, { prDraft, input });
   }
   const markers = findBlockingTitleMarkers(prTitle);
   if (markers.length === 0) {
-    return applyDraftGateEvidenceGuard(result, { prDraft });
+    return applyDraftGateEvidenceGuard(result, { prDraft, input });
   }
 
   return applyDraftGateEvidenceGuard(buildTitleMarkerBlockedResult({
@@ -1006,7 +1139,7 @@ function evaluateWithTitleGuard(input = {}) {
     conflictFiles: result.conflictFiles ?? [],
     markers,
     refinementArtifact: result.refinementArtifact ?? null,
-  }), { prDraft });
+  }), { prDraft, input });
 }
 
 /**
@@ -1098,7 +1231,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
 
   const baseDraftGate = toGateStatus(input.draftGate, input.draftGateMarker, currentHeadSha, input.unresolvedGateThreadCount);
   // ADR 0208: on a ready PR the cap-round-fixed proof stands in for clean draft_gate evidence, so the evidence guard never reconciles it.
-  const draftGate = !prDraft && input.draftCapRoundFixed === true && !baseDraftGate.cleanEvidenceExists ? { ...baseDraftGate, cleanEvidenceExists: true } : baseDraftGate;
+  const draftGate = !baseDraftGate.cleanEvidenceExists && foldDraftGateSatisfied({ isDraft: prDraft, evidenceSatisfied: false, capRoundFixed: input.draftCapRoundFixed === true }) ? { ...baseDraftGate, cleanEvidenceExists: true } : baseDraftGate;
   const preApprovalGate = toGateStatus(input.preApprovalGate, input.preApprovalGateMarker, currentHeadSha);
   // A base-merge carried verdict (ADR 0186) proves the review, not the new head's CI.
   const draftGateCarried = draftGate.currentHeadClean && trimmedOrNull(input.draftGateMarker?.carriedFrom) !== null;
@@ -1163,6 +1296,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       allowedNextActions,
       forbiddenActions,
       nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+      blockedOn: BLOCKED_ON.OPERATOR_DECISION,
       reason: "The PR is in a blocked lifecycle state, so gate progression must stop for a user decision.",
       mergeStateStatus,
       conflictFiles,
@@ -1210,20 +1344,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
 
   if (hasBlockedMergeStatus(mergeStateStatus) || mergeable === "CONFLICTING" || conflictFiles.length > 0) {
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS]);
-    pushUnique(forbiddenActions, [
-      PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
-      PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE,
-      PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
-      PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
-      PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW,
-      PR_CHECKPOINT_ACTION.WAIT_FOR_CI,
-      PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK,
-      PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
-      PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW,
-      PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
-      PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
-      PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
-    ]);
+    pushUnique(forbiddenActions, CONFLICT_FORBIDDEN_ACTIONS);
     return buildResult({
       repo: input.repo ?? null,
       pr: Number.isInteger(input.pr) ? input.pr : null,
@@ -1350,6 +1471,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+        blockedOn: BLOCKED_ON.OPERATOR_DECISION,
         reason: formatRefinementBlockedReason(refinementLinkedIssue, refinementArtifactStatus, refinementArtifact),
         mergeStateStatus,
         conflictFiles,
@@ -1469,6 +1591,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
           allowedNextActions,
           forbiddenActions,
           nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+          ...ciAgentRemedy(input, ciStatus),
           reason: draftGateCarried ? "The draft_gate verdict is carried from an earlier head, and this repo requires green current-head CI before `mark-ready`. The current head is failing CI, so fix the checks before marking ready for review." : "The PR is still draft, and this repo requires green current-head CI before entering `draft_gate`. The current head is failing CI, so fix the checks before retrying the draft gate.",
           mergeStateStatus,
           conflictFiles,
@@ -1521,6 +1644,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+        ...capRoundExit(input.draftCapRoundFailure, input),
         reason: `The PR is still draft and the next \`draft_gate\` round is past the round cap (\`round_cap_reached\`, ADR 0208), but the cap round's fixer pass is not proven landed with a cleared pre-push delta. ${Object.hasOwn(CAP_ROUND_REFUSAL, input.draftCapRoundFailure) ? CAP_ROUND_REFUSAL[input.draftCapRoundFailure] : CAP_ROUND_REFUSAL.cap_round_unresolved} Round N+1 never runs.`,
         mergeStateStatus,
         conflictFiles,
@@ -1595,6 +1719,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
           allowedNextActions,
           forbiddenActions,
           nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+          ...ciAgentRemedy(input, ciStatus),
           reason: ciStatus === "crediblyGreen"
             ? "The current head has unconfirmed CI (credibly green), so gate progression remains blocked until CI is confirmed green."
             : "The current head has failing CI, so gate progression remains blocked until the failing checks are fixed and revalidated.",
@@ -1798,6 +1923,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+        ...ciAgentRemedy(input, ciStatus),
         reason: ciStatus === "crediblyGreen"
           ? "The current head has unconfirmed CI (credibly green), so gate progression remains blocked until CI is confirmed green."
           : "The current head still has failing CI, so gate progression remains blocked until the failing checks are fixed and revalidated.",
@@ -2334,6 +2460,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+        ...ciAgentRemedy(input, ciStatus),
         reason: ciStatus === "crediblyGreen"
           ? "The low-signal heuristic indicates convergence, but the current head has unconfirmed CI (credibly green), so gate progression remains blocked until CI is confirmed green."
           : "The low-signal heuristic indicates convergence, but the current head still has failing CI, so gate progression remains blocked.",

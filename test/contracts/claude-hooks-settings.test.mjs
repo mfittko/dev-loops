@@ -108,7 +108,7 @@ test("the SubagentStop uncommitted-work guard hook exists under the plugin root 
 });
 
 test("the self-contained hook bundle modules exist under the plugin root (#843)", () => {
-  for (const module of ["_bash-command-classify.mjs", "_run-context.mjs", "_hook-decisions.mjs"]) {
+  for (const module of ["_bash-command-classify.mjs", "_bash-gate-decisions.mjs", "_run-context.mjs", "_hook-decisions.mjs"]) {
     assert.ok(fs.existsSync(path.join(hooksDir, module)), `missing bundled module ${module}`);
   }
 });

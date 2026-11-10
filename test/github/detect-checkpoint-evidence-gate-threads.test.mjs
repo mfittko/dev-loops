@@ -3,7 +3,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { onTestFinished, test } from "bun:test";
-import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { runIdFreeEnv, runNode as runNodeHelper, trustGhEntries, writeGhStub as writeGhStubRaw } from "../_helpers.mjs";
+
+const writeGhStubHelper = (tempDir, entries, options) => writeGhStubRaw(tempDir, trustGhEntries(entries), options);
 import { buildFindingMarker, countUnresolvedGateAuthoredThreadsFromRawNodes } from "../../scripts/github/_gate-finding-surface.mjs";
 import { detectCheckpointEvidence } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
@@ -56,7 +58,7 @@ test("#1585: an unresolved gate-authored thread carrying a finding marker fails 
       assertArgContains: ["reviewThreads"],
       stdout: JSON.stringify({
         data: { repository: { pullRequest: { reviewThreads: { nodes: [
-          { id: "t1", isResolved: false, comments: { nodes: [{ databaseId: 9001, body: marker + "\n**nice-to-have** (`naming`): casing nit", author: { login: "gate-bot" } }] } },
+          { id: "t1", isResolved: false, comments: { nodes: [{ databaseId: 9001, body: marker + "\n**nice-to-have** (`naming`): casing nit", viewerDidAuthor: true, author: { login: "gate-bot" } }] } },
         ] } } } },
       }) + "\n",
     },
@@ -98,7 +100,7 @@ test("#1585: draftGateSatisfied stays true when the gate-authored thread is reso
       assertArgContains: ["reviewThreads"],
       stdout: JSON.stringify({
         data: { repository: { pullRequest: { reviewThreads: { nodes: [
-          { id: "t1", isResolved: true, comments: { nodes: [{ databaseId: 9002, body: marker + "\n**nice-to-have** (`naming`): casing nit", author: { login: "gate-bot" } }] } },
+          { id: "t1", isResolved: true, comments: { nodes: [{ databaseId: 9002, body: marker + "\n**nice-to-have** (`naming`): casing nit", viewerDidAuthor: true, author: { login: "gate-bot" } }] } },
         ] } } } },
       }) + "\n",
     },
@@ -167,7 +169,7 @@ test("#2381: a foreign marker-quoting thread narrows the gate-authored count to 
   const rawThreadNodes = [
     // Marker-bearing, unresolved — but authored by a FOREIGN login, not this
     // gate's own authenticated login (resolved below as "gate-bot").
-    { id: "t1", isResolved: false, comments: { nodes: [{ databaseId: 9003, body: marker + "\n**nice-to-have** (`naming`): casing nit", author: { login: "someone-else" } }] } },
+    { id: "t1", isResolved: false, comments: { nodes: [{ databaseId: 9003, body: marker + "\n**nice-to-have** (`naming`): casing nit", authorAssociation: "COLLABORATOR", author: { login: "someone-else" } }] } },
   ];
   const { env } = await writeGhStubHelper(tempDir, [
     { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
@@ -235,7 +237,7 @@ test("#2381: a login-resolution failure (after a marker-only candidate is found)
       assertArgContains: ["reviewThreads"],
       stdout: JSON.stringify({
         data: { repository: { pullRequest: { reviewThreads: { nodes: [
-          { id: "t1", isResolved: false, comments: { nodes: [{ databaseId: 9005, body: marker + "\n**nice-to-have** (`naming`): casing nit", author: { login: "gate-bot" } }] } },
+          { id: "t1", isResolved: false, comments: { nodes: [{ databaseId: 9005, body: marker + "\n**nice-to-have** (`naming`): casing nit", viewerDidAuthor: true, author: { login: "gate-bot" } }] } },
         ] } } } },
       }) + "\n",
     },

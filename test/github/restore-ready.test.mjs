@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { initSizeBudgetFixtureRepo, makeGhMock, runIdFreeEnv, runNode as runNodeHelper } from "../_helpers.mjs";
+import { initSizeBudgetFixtureRepo, makeGhMock, trustGhEntries, runIdFreeEnv, runNode as runNodeHelper } from "../_helpers.mjs";
 
 import { parseRestoreReadyCliArgs, restoreReady } from "../../scripts/github/restore-ready.mjs";
 import { buildFindingMarker } from "../../scripts/github/_gate-finding-surface.mjs";
@@ -33,7 +33,7 @@ const runNode = async (args = [], options = {}) => {
 };
 
 async function writeGhStub(tempDir, entries) {
-  const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true });
+  const { runChild, calls } = makeGhMock(trustGhEntries(entries), { repeatLastOnOverflow: true });
   ghCallsByRoot.set(tempDir, calls);
   return { DEVLOOPS_RUN_ID: "", [GH_RUNNER]: runChild };
 }
@@ -249,7 +249,7 @@ test("refuses when a gate-authored review thread is unresolved", async () => {
                       isResolved: false,
                       comments: {
                         nodes: [{
-                          author: { login: "pi-local-run" },
+                          viewerDidAuthor: true, author: { login: "pi-local-run" },
                           body: `${buildFindingMarker({ fp: "f".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): casing nit`,
                         }],
                       },

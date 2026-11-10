@@ -123,13 +123,20 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
  */
 const HOOK_BUNDLE = [
   { source: "packages/core/src/loop/bash-command-classify.mjs", target: ".claude/hooks/_bash-command-classify.mjs", rewrites: [] },
+  // The harness-neutral Bash-gate deny rules, vendored so the Claude PreToolUse hook reaches them
+  // without `@dev-loops/core` (unresolvable from the plugin cache).
+  {
+    source: "packages/core/src/loop/bash-gate-decisions.mjs",
+    target: ".claude/hooks/_bash-gate-decisions.mjs",
+    rewrites: [["\"./bash-command-classify.mjs\"", "\"./_bash-command-classify.mjs\""]],
+  },
   { source: "packages/core/src/loop/run-context.mjs", target: ".claude/hooks/_run-context.mjs", rewrites: [] },
   {
     source: "packages/core/src/claude/hook-decisions.mjs",
     target: ".claude/hooks/_hook-decisions.mjs",
     rewrites: [
       ['"../loop/run-context.mjs"', '"./_run-context.mjs"'],
-      ['"../loop/bash-command-classify.mjs"', '"./_bash-command-classify.mjs"'],
+      ['"../loop/bash-gate-decisions.mjs"', '"./_bash-gate-decisions.mjs"'],
       ['"../loop/worktree-guard.mjs"', '"./_worktree-guard.mjs"'],
       ['"../loop/work-order-digest.mjs"', '"./_work-order-digest.mjs"'],
     ],

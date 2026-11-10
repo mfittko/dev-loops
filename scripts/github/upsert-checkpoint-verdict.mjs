@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
+import { wrapOperatorOwnedPhrases } from "@dev-loops/core/github/operator-owned-lines";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isFullyJudged, isOpenActItem, isPastRoundCap, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, pastCapBlockers, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
@@ -28,7 +29,7 @@ import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
-import { listIssueComments, resolveAuthenticatedLogin, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
+import { escapeProse, listIssueComments, resolveAuthenticatedLogin, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { VALID_DISPOSITIONS } from "./write-gate-findings-log.mjs";
 import {
   buildCommentableLineSet,
@@ -41,6 +42,7 @@ import {
   findOwnPendingReview,
   findOwnSubmittedReview,
   fingerprintFinding,
+  filterTrustedRoundInputs,
   isBelowInlineFloor,
   isVisibleFinding,
   isLocatableFinding,
@@ -53,14 +55,15 @@ import {
   submitPendingReview,
   updateGateReview,
 } from "./_gate-finding-surface.mjs";
-import { fetchAllReviewThreads } from "./list-review-threads.mjs";
+import { fetchAllReviewThreadsWithSkips } from "./list-review-threads.mjs";
+import { postUntrustedSkipNote } from "./_untrusted-skip-note.mjs";
 import { mergeSameDefectFindings, normalizeFindingSummary } from "./_gate-finding-text.mjs";
 import { computeSpecDigest, extractSpecFromBody, normalizeCriterionText, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
-import { buildValidationResultsPath, countCompletedRounds, resolveCapRoundFixed } from "./write-gate-context.mjs";
+import { buildValidationResultsPath, countCompletedRounds, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
 // Mapped to the GitHub create-review `event` value in
@@ -524,9 +527,10 @@ function normalizeExecutionMode(value) {
 // at column 0 of a rendered verdict comment and be mistaken for a genuine
 // machine artifact by the shared comment summarizers. This covers the
 // free-text findings-summary/next-action/--findings-file paths below, which
-// render with newlines preserved and no other escaping.
+// render with newlines preserved and no other escaping. The same free text also
+// gets every bare operator-owned phrase wrapped in a code span (ADR 0258).
 function encodeMachineArtifactMarkerDelimiters(value) {
-  return value.replace(/<!--/gu, "&lt;!--").replace(/-->/gu, "--&gt;");
+  return wrapOperatorOwnedPhrases(value.replace(/<!--/gu, "&lt;!--").replace(/-->/gu, "--&gt;"));
 }
 // Blockquote-prefix every continuation line (2nd line onward) of a newline-preserving
 // free-text field (currently only --findings-file content) before it is spliced into
@@ -868,7 +872,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       if (reason.length === 0) {
         throw parseError("--inline-reason must be a non-empty string");
       }
-      options.inlineReason = enforcePostedCommentLimit(reason, MAX_GATE_COMMENT_TEXT_LENGTH, "--inline-reason");
+      options.inlineReason = wrapOperatorOwnedPhrases(enforcePostedCommentLimit(reason, MAX_GATE_COMMENT_TEXT_LENGTH, "--inline-reason"));
       continue;
     }
     if (token.name === "allowed-refs") {
@@ -1066,7 +1070,8 @@ for (const disposition of RESOLVED_DISPOSITIONS) {
 // (post-gate-findings.mjs's sanitizeCodeSpan/sanitizeInline) — one shared
 // implementation so the two files can never drift out of parity. Behavior is
 // documented at that owner; sanitizeStructuredCodeSpan renders enum
-// labels/paths/refs, sanitizeStructuredInline renders the finding summary.
+// labels/paths/refs, sanitizeStructuredInline renders bare labels (severity, angle).
+// The finding summary goes through escapeProse, not these.
 const sanitizeStructuredCodeSpan = sanitizeCodeSpan;
 const sanitizeStructuredInline = sanitizeInline;
 // Normalize a single finding object into a deterministic render entry, or null
@@ -1432,7 +1437,7 @@ function renderBodyOnlyFindingLine(finding, ctx) {
   // or no severity at all never renders a double space or a dangling " — ".
   const marker = [emoji, safeSeverity].filter(Boolean).join(" ");
   const markerPrefix = marker ? `${marker} — ` : "";
-  const summary = sanitizeStructuredInline(finding.summary);
+  const summary = escapeProse(finding.summary);
   const location = renderBodyOnlyFindingLocation(finding, ctx);
   const dispositionSuffix = finding.disposition
     ? ` — _\`${sanitizeStructuredCodeSpan(finding.disposition)}\`_`
@@ -1782,7 +1787,7 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
   // summary, which would read as double punctuation and make machine-added text
   // indistinguishable from operator prose. Parity: both the structured and
   // free-text findings-summary paths get this same treatment.
-  const normalizedGateEvidenceNote = typeof gateEvidenceNote === "string" ? collapseWhitespace(gateEvidenceNote) : "";
+  const normalizedGateEvidenceNote = typeof gateEvidenceNote === "string" ? wrapOperatorOwnedPhrases(collapseWhitespace(gateEvidenceNote)) : "";
   if (normalizedGateEvidenceNote.length > 0) {
     lines.push(
       "",
@@ -2032,6 +2037,7 @@ export function buildCoordinationEvaluatorInput({
   preApprovalGateConfig,
   reviewMode,
   draftCapRoundFixed = false,
+  draftCapRoundFailure = null,
 }) {
   return {
     repo: coordinationContext.repo,
@@ -2074,6 +2080,7 @@ export function buildCoordinationEvaluatorInput({
     preApprovalGateMarker: coordinationContext.gateEvidence.preApprovalGateMarker,
     ...(reviewMode ? { reviewMode } : {}),
     draftCapRoundFixed,
+    draftCapRoundFailure,
   };
 }
 
@@ -2209,7 +2216,33 @@ async function loadMatchingFindingsLedger(options, headSha) {
   return ledger;
 }
 export const MERGED_THREAD_BODY_MAX = 4000;
-async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, preloadedLedger, inlineSeverityFloor, blockingSeverities = [] }, gh) {
+// ADR 0247: once per verdict write, ledger or not. Returns the reads so the ledger path reuses them; a read or post failure only warns.
+async function postSkipNoteForRound({ options, headSha, hasLedger }, gh) {
+  let read = null;
+  let skipped = [];
+  try {
+    const login = await resolveAuthenticatedLogin(gh);
+    // Same read order as before the move (login, reviews, comments, threads) for the ledger path.
+    const reviews = hasLedger ? await listPrReviews({ repo: options.repo, pr: options.pr }, gh) : null;
+    const issueComments = await listIssueComments({ repo: options.repo, pr: options.pr }, gh);
+    // A merged comment carries one marker per merged finding, and later markers
+    // fall past the default 200-char listing excerpt, so widen the excerpt.
+    const fetched = await fetchAllReviewThreadsWithSkips({ repo: options.repo, pr: options.pr }, { ...gh, bodyMax: MERGED_THREAD_BODY_MAX });
+    skipped = fetched.skipped.filter((entry) => !entry.isResolved);
+    read = { login, reviews, issueComments, threads: fetched.threads };
+  } catch (error) {
+    // Ledger rounds need these reads, so their failure stays fatal as before; otherwise the note is best-effort.
+    if (hasLedger) throw error;
+    return null;
+  }
+  try {
+    await postUntrustedSkipNote({ repo: options.repo, pr: options.pr, headSha, skipped, issueComments: read.issueComments, login: read.login }, gh);
+  } catch (error) {
+    process.stderr.write(`warning: could not post the untrusted-comments note: ${error.message}\n`);
+  }
+  return read;
+}
+async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, preloadedLedger, inlineSeverityFloor, blockingSeverities = [], roundRead }, gh) {
   // The withheld-tier coverage check above already loaded and validated this
   // same --findings-ledger file for this same round; reuse it instead of
   // reading it a second time (undefined means it was never preloaded, e.g. a
@@ -2218,20 +2251,15 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
   if (!ledger) {
     return null;
   }
-  const login = await resolveAuthenticatedLogin(gh);
-  const reviews = await listPrReviews({ repo: options.repo, pr: options.pr }, gh);
-  const issueComments = await listIssueComments({ repo: options.repo, pr: options.pr }, gh);
-  // A merged comment carries one marker per merged finding, and later markers
-  // fall past the default 200-char listing excerpt, so widen the excerpt.
-  const threads = await fetchAllReviewThreads({ repo: options.repo, pr: options.pr }, { ...gh, bodyMax: MERGED_THREAD_BODY_MAX });
+  const { login, reviews, issueComments, threads } = roundRead;
   const suppressed = collectSuppressedFingerprints({ reviews, threads, login });
   const round = await resolveGateRound({
     repo: options.repo,
     pr: options.pr,
     gate: options.gate,
     headSha,
-    reviews,
-    issueComments,
+    reviews: filterTrustedRoundInputs(reviews, login),
+    issueComments: filterTrustedRoundInputs(issueComments, login),
     repoRoot,
   });
   const candidates = ledger.findings.filter((f) => !suppressed.has(fingerprintFinding(f)));
@@ -2760,7 +2788,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const fromPassed = group(listOpenActItems(findings.filter((f) => !ledgerFindings.includes(f))));
     const roundActItems = [...new Set([...fromLedger.keys(), ...fromPassed.keys()])]
       .flatMap((k) => ((fromLedger.get(k)?.length ?? 0) >= (fromPassed.get(k)?.length ?? 0) ? fromLedger.get(k) : fromPassed.get(k)));
-    convergedMarker = composeConvergedDraftGate({ gate: options.gate, headSha: canonicalHeadSha, roundActItems, converged: convergedInput });
+    const round = await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot });
+    convergedMarker = composeConvergedDraftGate({ gate: options.gate, headSha: canonicalHeadSha, round, cap: draftGateConfig?.maxReviewRounds ?? 0, roundActItems, converged: convergedInput });
     return [];
   };
   if (!isReviewGate) {
@@ -2797,10 +2826,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       // Proceed with the default (external Copilot review) mode.
     }
     // ADR 0208: the same cap-round-fixed proof the detector resolves, so a ready cap-fixed PR can enter pre_approval_gate; fail closed on error.
-    const prBaseRefName = typeof coordinationContext.prData?.baseRefName === "string" ? coordinationContext.prData.baseRefName.trim() : "";
-    const draftCapRoundFixed = await resolveCapRoundFixed({ repo: options.repo, pr: options.pr, headSha: coordinationContext.currentHeadSha, baseRefName: prBaseRefName, anyHead: coordinationContext.prData?.isDraft !== true }, { repoRoot }).then(Boolean, () => false);
+    const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure } = await resolveDraftCapRoundFact({ ...coordinationContext, repo: options.repo, pr: options.pr }, { repoRoot });
     coordination = evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
       draftCapRoundFixed,
+      draftCapRoundFailure,
       coordinationContext,
       maxCopilotRounds,
       draftGateConfig,
@@ -3186,7 +3215,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
     const gateBlockers = [
       ...collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact),
-      ...(isPastRoundCap(completedRound, cap) ? pastCapBlockers(roundFindings, { pr: Number(options.pr), round: completedRound, cap }) : []),
+      ...(isPastRoundCap(completedRound, cap) ? pastCapBlockers(roundFindings, { round: completedRound, cap }) : []),
     ];
     const composedVerdict = composeCheckpointVerdict({ reviewVerdict: ledgerVerdict, blockers: gateBlockers });
     if (options.verdict === undefined) {
@@ -3619,13 +3648,16 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // The round's finding surface (this same review): resolved BEFORE the body is
   // rendered, since the body carries the round number, the body-filed findings,
   // and the reduced per-angle digest that depends on them.
+  const roundLedger = preloadedFindingsLedger !== undefined ? preloadedFindingsLedger : await loadMatchingFindingsLedger(options, canonicalHeadSha);
+  const roundRead = await postSkipNoteForRound({ options, headSha: canonicalHeadSha, hasLedger: Boolean(roundLedger) }, gh);
   const findingSurface = await resolveFindingSurface(
     {
       options,
+      roundRead,
       headSha: canonicalHeadSha,
       repoRoot,
       isUpdate: existing !== null,
-      preloadedLedger: preloadedFindingsLedger,
+      preloadedLedger: roundLedger,
       inlineSeverityFloor: activeGateConfig.inlineSeverityFloor,
       blockingSeverities: activeGateConfig.blockCleanOnFindingSeverities ?? [],
     },

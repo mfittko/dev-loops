@@ -11,8 +11,9 @@ import { test } from "bun:test";
 import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, codeTreeSkewNote, executionIndexPath, materializationHash, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { seedJudgeSources } from "../loop/_judge-delivery-fixture.mjs";
-import { withTempDir } from "../_helpers.mjs";
+import { withTempDir, writeGhStub } from "../_helpers.mjs";
 import { findRetirementAfter, main as pullMain, pullDelegationTarget, shouldRetryFixerPullLocally } from "../../scripts/github/pull-work-order.mjs";
+import { keyedFixerPlanPathForRef } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { shellQuote } from "../../scripts/lib/checkout-delegation-refusal.mjs";
 import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
 import { decideFixerWriteGuard } from "../../packages/core/src/claude/hook-decisions.mjs";
@@ -181,6 +182,27 @@ test("a ref bound to a retired same-head round refuses as stale even when a newe
     assert.equal(pull(current, root).status, 0);
     assert.equal(refusal(pullShort(retiredUnit.executionIdentity, root)).refusal, "stale_dispatch");
     assert.equal(pullShort(current.executionIdentity, root).status, 0);
+  });
+});
+
+test("a scoped body-only retirement retires only the named unit: a kept unit still pulls", async () => {
+  await withDir(async (root) => {
+    const unit = await emitRound(root);
+    const record = path.join(root, "tmp", "retired-gate-rounds", HEAD, "round-1", "retirement.json");
+    await mkdir(path.dirname(record), { recursive: true });
+    const retiredAt = new Date(Date.now() + 60_000).toISOString();
+    // A whole-round query and a unit outside the record's scopes ignore the scoped record.
+    await writeFile(record, JSON.stringify({ gate: GATE, retiredAt, scopes: ["some-other-unit"] }));
+    assert.equal(findRetirementAfter(path.join(root, "tmp"), GATE, HEAD, 0), null);
+    assert.equal(findRetirementAfter(path.join(root, "tmp"), GATE, HEAD, 0, unit.scope), null);
+    assert.equal(pull(unit, root).status, 0);
+    assert.equal(pullShort(unit.executionIdentity, root).status, 0);
+    // The named unit refuses as retired.
+    await writeFile(record, JSON.stringify({ gate: GATE, retiredAt, scopes: [unit.scope] }));
+    assert.equal(findRetirementAfter(path.join(root, "tmp"), GATE, HEAD, 0), null);
+    assert.equal(findRetirementAfter(path.join(root, "tmp"), GATE, HEAD, 0, unit.scope), "round-1");
+    assert.equal(refusal(pull(unit, root)).refusal, "stale_dispatch");
+    assert.equal(refusal(pullShort(unit.executionIdentity, root)).refusal, "stale_dispatch");
   });
 });
 
@@ -493,7 +515,7 @@ test("historical judge pull delegates to the index-owning new renderer and its p
     const emit = async (root) => {
       const sources = await seedJudgeSources(root, { headSha: HEAD, pr: 800000 + parseInt(randomBytes(3).toString("hex"), 16) });
       const result = spawnSync("node", [path.join(root, "scripts/loop/emit-judge-work-order.mjs"), "--repo", sources.repo, "--pr", String(sources.pr), "--gate", sources.gate, "--head-sha", HEAD,
-        "--findings-file", sources.findingsFile, "--spec-file", sources.specFile, "--identity-file", sources.identityFile], { cwd: root, encoding: "utf8" });
+        "--findings-file", sources.findingsFile, "--spec-file", sources.specFile, "--identity-file", sources.identityFile], { cwd: root, encoding: "utf8", env: (await writeGhStub(root, [{ stdout: JSON.stringify({ body: "Declared scope: fix the finding.\n" }) }], { repeatLastOnOverflow: true })).env });
       assert.equal(result.status, 0, result.stdout + result.stderr);
       return JSON.parse(await readFile(JSON.parse(result.stdout).planPath, "utf8"));
     };
@@ -645,6 +667,23 @@ test("pullDelegationTarget: a main-anchored fixer pull delegates to the linked d
     await rm(executionIndexPath(path.join(main, "tmp"), FIXER_ID));
     await seedFixerPlan(main, "gone");
     assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), null);
+  });
+});
+
+test("pullDelegationTarget: a keyed fixer plan beside a canonical plan of another ref delegates to the keyed order's branch worktree", async () => {
+  await withDir(async (base) => {
+    const main = path.join(base, "main");
+    const git = await seedFixerMain(main);
+    const linked = path.join(base, "keyed-unit");
+    git(["worktree", "add", "-q", "-b", "issue-11", linked]);
+    await seedDelegateCheckout(linked);
+    const tmp = path.join(main, "tmp");
+    const keyedId = "f1790000000002-abcdef34";
+    const workOrderRef = `fixer:o/r#7:${HEAD}:${keyedId}`;
+    const workOrder = { mutationAuthority: { branch: "issue-11", allowedPaths: ["."] } };
+    await writeExecutionIndex(tmp, { executionIdentity: keyedId, workOrderRef, workOrderDigest: workOrderDigest(workOrder) });
+    await writeFile(keyedFixerPlanPathForRef(workOrderRef, tmp), JSON.stringify({ workOrderRef, workOrder }), "utf8");
+    assert.equal(pullDelegationTarget(keyedId, [tmp], { toolchainRoot: main, env: {} }), linked);
   });
 });
 

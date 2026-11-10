@@ -48,6 +48,7 @@ test("parse-review-threads CLI emits stable machine-readable success output", as
   assert.deepEqual(output.summary, {
     totalThreads: 3,
     unresolvedThreads: 2,
+    skippedUntrustedThreads: 0,
     actionableThreads: 1,
     actionableComments: 1,
   });

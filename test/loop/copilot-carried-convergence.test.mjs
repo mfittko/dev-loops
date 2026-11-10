@@ -10,7 +10,10 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, it, test } from "bun:test";
-import { makeGhMock, runIdFreeEnv } from "../_helpers.mjs";
+import { makeGhMock as makeGhMockRaw, runIdFreeEnv, trustGhEntries } from "../_helpers.mjs";
+
+// Gate-formatted fixture comments need a maintainer identity (ADR 0248).
+const makeGhMock = (entries, options) => makeGhMockRaw(trustGhEntries(entries), options);
 import { performCopilotReviewRequest } from "../../scripts/github/request-copilot-review.mjs";
 import { resolveDraftGateAdjustedRoundCount } from "../../scripts/github/_gate-finding-surface.mjs";
 import { mergePr } from "../../scripts/github/merge-pr.mjs";
@@ -24,7 +27,7 @@ import {
   resolveCopilotBodyDisposition,
   resolveLatestCopilotReview,
 } from "../../scripts/github/_copilot-body-disposition.mjs";
-import { fetchDeltaChangedFiles, isBelowCopilotRoundCap, resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copilot-convergence-carry.mjs";
+import { fetchDeltaChangedFiles, hasCurrentHeadCopilotReview, isBelowCopilotRoundCap, resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copilot-convergence-carry.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { summarizeCopilotReviews } from "@dev-loops/core/github/copilot-helpers";
 import { interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
@@ -124,6 +127,8 @@ function scenario({ priorBody = "", threads = [], delta = DOCS_DELTA, prOwn = de
     commentsEntry(dispositions),
     commentsEntry(dispositions),
     ...(gatePassedRead ? [
+      // The gate-evidence reader also resolves the viewer for its trusted-or-viewer filter (ADR 0248).
+      { matchByClaims: true, assertArgs: ["api", "user"], stdout: line({ login: "fixture-viewer" }) },
       slurpEntry(`repos/${REPO}/issues/${PR}/comments?per_page=100`, gatePassedRead.issueComments ?? []),
       { ...slurpEntry(`repos/${REPO}/pulls/${PR}/reviews?per_page=100`, gatePassedRead.prReviews ?? []), ...(gatePassedRead.reviewsFail ? { exitCode: 1, stdout: "" } : {}) },
     ] : []),
@@ -1133,12 +1138,18 @@ describe("COPILOT-STATE-CONVERGED-BELOW-CAP: below the round cap an unclean revi
   const below = { copilotReviewRoundCount: 1, effectiveCap: 5 };
   const atCap = { copilotReviewRoundCount: 5, effectiveCap: 5 };
   const own = [thread({ isResolved: true, reviewId: "PRR_prior" })];
-  const gatePassed = { id: 900, body: `### Gate review: \`pre_approval_gate\`\n\nGate: pre_approval_gate\nHead SHA: ${OLDER}\nVerdict: clean\nFindings: none\nNext action: merge`, user: { login: "maintainer" } };
+  const gatePassed = { id: 900, body: `### Gate review: \`pre_approval_gate\`\n\nGate: pre_approval_gate\nHead SHA: ${OLDER}\nVerdict: clean\nFindings: none\nNext action: merge`, user: { login: "maintainer" }, author_association: "MEMBER" };
   const carry = async (fixture, extra = {}) => {
     const { reviews, shared } = scenario({ delta: CODE_DELTA, gatePassedRead: {}, ...fixture });
     const { runtime } = runtimeFor(shared);
     return resolveCarriedConvergence({ repo: REPO, pr: PR, currentHeadSha: HEAD, prData: { reviews }, copilotReviewRequestStatus: "none", ...extra }, runtime);
   };
+
+  it("hasCurrentHeadCopilotReview counts the sanctioned reviewer only, not a lookalike", () => {
+    const review = (login) => ({ state: "COMMENTED", author: { login }, commit: { oid: HEAD }, body: "### 🟡 Changes recommended" });
+    assert.equal(hasCurrentHeadCopilotReview({ reviews: [review("copilot-fan")] }, HEAD), false);
+    assert.equal(hasCurrentHeadCopilotReview({ reviews: [review("copilot-pull-request-reviewer")] }, HEAD), true);
+  });
 
   it("the shared cap predicate: below, at the cap, a light cap of 1, and missing inputs", () => {
     assert.equal(isBelowCopilotRoundCap({ copilotReviewRoundCount: 1, effectiveCap: 2 }), true);

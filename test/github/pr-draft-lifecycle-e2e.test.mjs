@@ -126,6 +126,10 @@ test("convert-to-draft -> fan-out draft_gate post -> restore-ready composes with
       // match for this call takes THIS (empty) entry first because it sorts
       // before phase 3's populated one below.
       { assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/pulls/${PR}/reviews?per_page=100`], stdout: "[]" },
+      // Best-effort untrusted-skip-note reads (ADR 0247); nothing skipped, no note.
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/issues/${PR}/comments?per_page=100`], stdout: "[]" },
+      { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) },
       {
         assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/reviews`, "--input", "-"],
         assertStdinIncludes: ["**Verdict:** clean"],
@@ -155,6 +159,8 @@ test("convert-to-draft -> fan-out draft_gate post -> restore-ready composes with
         assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/pulls/${PR}/reviews?per_page=100`],
         stdout: JSON.stringify([{ id: 101, state: "COMMENTED", submitted_at: "2026-06-05T00:00:00Z", user: { login: "gate-bot" }, body: cleanDraftGateReviewBody(headSha) }]),
       },
+      // Claimed twice: the evidence trust filter (ADR 0248) and the gate-thread login check.
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "gate-bot" }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "gate-bot" }) },
       {
         assertArgs: ["api", "graphql"],

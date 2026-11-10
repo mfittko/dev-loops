@@ -34,6 +34,7 @@ test("capture-review-threads emits deterministic JSON for --input", async () => 
   assert.deepEqual(output.summary, {
     totalThreads: 3,
     unresolvedThreads: 2,
+    skippedUntrustedThreads: 0,
     actionableThreads: 1,
     actionableComments: 1,
   });
@@ -126,7 +127,7 @@ test("capture-review-threads exposes numeric comment database ids in normalized 
                             id: "PRRC_node_456",
                             databaseId: 456,
                             body: "Use the numeric comment id for REST follow-up.",
-                            author: { login: "reviewer", __typename: "User" },
+                            authorAssociation: "MEMBER", author: { login: "reviewer", __typename: "User" },
                           },
                         ],
                       },
@@ -152,6 +153,8 @@ test("capture-review-threads exposes numeric comment database ids in normalized 
         isResolved: false,
         reviewId: null,
         isActionable: true,
+        untrusted: false,
+        untrustedAuthors: [],
         commentIds: ["PRRC_node_456"],
         commentDatabaseIds: ["456"],
         actionableCommentIds: ["PRRC_node_456"],
@@ -166,6 +169,7 @@ test("capture-review-threads exposes numeric comment database ids in normalized 
         author: { login: "reviewer", type: "User", isBot: false },
         body: "Use the numeric comment id for REST follow-up.",
         isActionable: true,
+        trusted: true,
       },
     ]);
   } finally {
@@ -249,8 +253,8 @@ test("--unresolved --bodies emits only unresolved threads with joined bodies (fi
                 path: "src/a.mjs",
                 line: 12,
                 comments: { nodes: [
-                  { id: "c-1", body: "first" },
-                  { id: "c-2", body: "second" },
+                  { id: "c-1", body: "first", authorAssociation: "MEMBER", author: { login: "u", __typename: "User" } },
+                  { id: "c-2", body: "second", authorAssociation: "MEMBER", author: { login: "u", __typename: "User" } },
                 ] },
               },
               {
@@ -258,7 +262,7 @@ test("--unresolved --bodies emits only unresolved threads with joined bodies (fi
                 isResolved: true,
                 path: "src/b.mjs",
                 line: 3,
-                comments: { nodes: [{ id: "c-3", body: "resolved" }] },
+                comments: { nodes: [{ id: "c-3", body: "resolved", authorAssociation: "MEMBER", author: { login: "u", __typename: "User" } }] },
               },
             ],
           },
@@ -317,7 +321,7 @@ test("a lone --unresolved or --bodies flag fails closed, and the default shape i
 
   const plain = await runNode([], { stdin });
   const output = JSON.parse(plain.stdout);
-  assert.deepEqual(Object.keys(output).sort(), ["comments", "ok", "source", "summary", "threads"]);
+  assert.deepEqual(Object.keys(output).sort(), ["comments", "ok", "skippedUntrusted", "source", "summary", "threads"]);
   assert.equal(output.threads.some((thread) => thread.isResolved), true, "default output keeps resolved threads");
 });
 
@@ -340,8 +344,8 @@ test("the working-set threads are id-sorted, not payload-ordered", async () => {
 test("--jq '.threads[]' composes with the working-set view (the documented one-call read)", async () => {
   const snapshot = JSON.stringify({
     data: { repository: { pullRequest: { reviewThreads: { nodes: [
-      { id: "t-1", isResolved: false, path: "a.mjs", line: 4, comments: { nodes: [{ id: "c-1", body: "one" }] } },
-      { id: "t-2", isResolved: true, comments: { nodes: [{ id: "c-2", body: "gone" }] } },
+      { id: "t-1", isResolved: false, path: "a.mjs", line: 4, comments: { nodes: [{ id: "c-1", body: "one", authorAssociation: "MEMBER", author: { login: "u", __typename: "User" } }] } },
+      { id: "t-2", isResolved: true, comments: { nodes: [{ id: "c-2", body: "gone", authorAssociation: "MEMBER", author: { login: "u", __typename: "User" } }] } },
     ] } } } },
   });
   const result = await runNode(["--unresolved", "--bodies", "--jq", ".threads[]"], { stdin: snapshot });
@@ -369,7 +373,7 @@ test("live mode paginates past 100 threads and feeds the working-set parser", as
     const gh = await writeGhStub(tempDir, [
       {
         stdout: page(
-          [{ id: "t-a", isResolved: false, path: "x.mjs", line: 1, comments: { nodes: [{ id: "c-1", body: "page one" }] } }],
+          [{ id: "t-a", isResolved: false, path: "x.mjs", line: 1, comments: { nodes: [{ id: "c-1", body: "page one", authorAssociation: "MEMBER", author: { login: "u", __typename: "User" } }] } }],
           { hasNextPage: true, endCursor: "CURSOR-1" },
         ),
       },
@@ -377,8 +381,8 @@ test("live mode paginates past 100 threads and feeds the working-set parser", as
         assertArgs: ["after=CURSOR-1"],
         stdout: page(
           [
-            { id: "t-b", isResolved: true, comments: { nodes: [{ id: "c-2", body: "resolved" }] } },
-            { id: "t-c", isResolved: false, isOutdated: true, comments: { nodes: [{ id: "c-3", body: "page two" }] } },
+            { id: "t-b", isResolved: true, comments: { nodes: [{ id: "c-2", body: "resolved", authorAssociation: "MEMBER", author: { login: "u", __typename: "User" } }] } },
+            { id: "t-c", isResolved: false, isOutdated: true, comments: { nodes: [{ id: "c-3", body: "page two", authorAssociation: "MEMBER", author: { login: "u", __typename: "User" } }] } },
           ],
           { hasNextPage: false, endCursor: null },
         ),

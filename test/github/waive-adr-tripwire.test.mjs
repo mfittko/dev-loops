@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { test } from "bun:test";
 
 import { computeSpecDigest, requireSpecFromBody } from "@dev-loops/core/loop/spec-authority";
 import { parseWaiveAdrTripwireCliArgs, runCli, waiveAdrTripwire } from "../../scripts/github/waive-adr-tripwire.mjs";
 import { captureStream } from "../_helpers.mjs";
+import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 
 const HEAD = "d".repeat(40);
 const CONTRACT = "skills/docs/x-contract.md";
@@ -53,7 +59,7 @@ function harness(over = {}) {
     editPr: async (opts, rt) => { edits.push({ opts, rt }); return { ok: true }; },
     ...over,
   };
-  return { edits, run: () => waiveAdrTripwire(OPTIONS, deps) };
+  return { edits, deps, run: () => waiveAdrTripwire(OPTIONS, deps) };
 }
 
 async function assertRefusal(over, reason) {
@@ -127,6 +133,110 @@ test("refuses when GitHub reports no default branch", async () => {
 
 test("refuses a lightweight PR on the pr_body path (no closing issue)", async () => {
   await assertRefusal({ fetchPr: async () => ({ body: "Summary only.", headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [] } }) }, "lightweight_pr_body_path");
+});
+
+const refsPr = (body) => async () => ({ body, headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [] } });
+
+test("a Refs-linked tracker issue with a matrix passes the link check", async () => {
+  const fetched = [];
+  const { run } = harness({
+    fetchPr: refsPr("Slice.\n\nRefs #5\nRefs #7\n"),
+    fetchIssueBody: async ({ issue }) => { fetched.push(issue); return issue === 7 ? ISSUE_BODY : "Epic, no matrix."; },
+  });
+  const result = await run();
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.issue, 7);
+  assert.deepEqual(fetched.sort((a, b) => a - b), [5, 7]);
+});
+
+test("a Refs inside a code span or fence is no link", async () => {
+  await assertRefusal({ fetchPr: refsPr("Summary `Refs #7`\n\n```\nRefs #8\n```\n") }, "lightweight_pr_body_path");
+});
+
+test("refuses two matrix-carrying Refs targets and names both", async () => {
+  const result = await assertRefusal({ fetchPr: refsPr("Refs #7\nRefs #8\n") }, "ambiguous_refs_tracker_issue");
+  assert.match(result.detail, /#7, #8 carry/u);
+});
+
+for (const body of ["Refs #7, #8\n", "Refs #7 and #8\n", "Refs #7, #8 and #9\n"]) {
+  test(`a Refs list ${JSON.stringify(body)} feeds every number to the ambiguity check`, async () => {
+    const result = await assertRefusal({ fetchPr: refsPr(body) }, "ambiguous_refs_tracker_issue");
+    assert.deepEqual(result.issues, [...body.matchAll(/#(\d+)/gu)].map((m) => Number(m[1])));
+  });
+}
+
+test("an unreadable only Refs target refuses issue_matrix_invalid naming the read failure", async () => {
+  const result = await assertRefusal({
+    fetchPr: refsPr("Refs #7\n"),
+    fetchIssueBody: async () => { throw new Error("gh issue view failed"); },
+  }, "issue_matrix_invalid");
+  assert.match(result.detail, /#7 could not be read/u);
+});
+
+test("a readable matrix-less first target does not hide an unreadable later target", async () => {
+  const result = await assertRefusal({
+    fetchPr: refsPr("Refs #5\nRefs #6\n"),
+    fetchIssueBody: async ({ issue }) => { if (issue === 6) throw new Error("gh issue view failed"); return "Epic, no matrix."; },
+  }, "issue_matrix_invalid");
+  assert.match(result.detail, /#5 has no valid AC \/ DoD matrix/u);
+  assert.match(result.detail, /unreadable Refs targets: #6/u);
+});
+
+test("an unreadable first target does not hide an unreadable later target", async () => {
+  const result = await assertRefusal({
+    fetchPr: refsPr("Refs #5\nRefs #6\n"),
+    fetchIssueBody: async () => { throw new Error("gh issue view failed"); },
+  }, "issue_matrix_invalid");
+  assert.match(result.detail, /#5 could not be read/u);
+  assert.match(result.detail, /unreadable Refs targets: #6/u);
+});
+
+test("an unreadable Refs target is treated as non-matrix-carrying", async () => {
+  const { run } = harness({
+    fetchPr: refsPr("Refs #5\nRefs #6\nRefs #7\n"),
+    fetchIssueBody: async ({ issue }) => { if (issue === 6) throw new Error("gh issue view failed"); return issue === 7 ? ISSUE_BODY : "Epic, no matrix."; },
+  });
+  const result = await run();
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.issue, 7);
+});
+
+test("Refs forms outside the accepted shape are no link", async () => {
+  await assertRefusal({ fetchPr: refsPr("Refs 7\n") }, "lightweight_pr_body_path");
+});
+
+test("a Refs body whose GitHub closing reference differs refuses not_exactly_one_tracker_issue", async () => {
+  await assertRefusal({
+    fetchPr: async () => ({ body: "Refs #7\n", headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [{ number: 99 }] } }),
+  }, "not_exactly_one_tracker_issue");
+});
+
+test("a closing keyword makes Refs lines inert", async () => {
+  const fetched = [];
+  const { run } = harness({
+    fetchPr: refsPr("Closes #7\nRefs #8\n"),
+    fetchIssueBody: async ({ issue }) => { fetched.push(issue); return ISSUE_BODY; },
+  });
+  const result = await run();
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.issue, 7);
+  assert.deepEqual(fetched, [7]);
+});
+
+test("a same-repo full-form Refs is a link and a cross-repo one is ignored", async () => {
+  const fetched = [];
+  const { run } = harness({
+    fetchPr: refsPr("Refs x/y#5\nRefs o/n#7\n"),
+    fetchIssueBody: async ({ issue }) => { fetched.push(issue); return ISSUE_BODY; },
+  });
+  const result = await run();
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.issue, 7);
+  assert.deepEqual(fetched, [7]);
+});
+
+test("Refs targets without any matrix refuse issue_matrix_invalid", async () => {
+  await assertRefusal({ fetchPr: refsPr("Refs #7\n"), fetchIssueBody: async () => "no matrix" }, "issue_matrix_invalid");
 });
 
 test("refuses a PR that links more than one tracker issue, or whose GitHub link disagrees with the body", async () => {
@@ -323,4 +433,86 @@ test("fetches the PR base branch and refuses when the fetch fails", async () => 
   await run();
   assert.deepEqual(seen, ["release-x"]);
   await assertRefusal({ fetchBaseBranch: () => { throw new Error("offline"); } }, "base_fetch_failed");
+});
+
+const SOURCE = "a".repeat(40);
+const converged = { currentHeadClean: true, draftGateMarker: { headSha: HEAD, convergedFromHeadSha: SOURCE } };
+const carried = { currentHeadClean: true, draftGateMarker: { headSha: HEAD, carriedFrom: SOURCE } };
+
+test("a converged or carried draft_gate marker reads the ledger at the head it names", async () => {
+  for (const marker of [converged, carried]) {
+    const reads = [];
+    const { edits, run } = harness({
+      fetchDraftGateEvidence: async () => marker,
+      readRecordedSpecDigest: async ({ headSha, gate }) => { reads.push([gate, headSha]); return DIGEST; },
+    });
+    assert.equal((await run()).action, "waiver_written");
+    assert.deepEqual(reads, [["draft_gate", SOURCE]]);
+    assert.equal(edits.length, 1);
+  }
+});
+
+test("an unconverged marker and a pre_approval_gate source read the current head", async () => {
+  const cases = [
+    { currentHeadClean: true, draftGateMarker: { headSha: HEAD } },
+    { currentHeadClean: false, preApprovalCurrentHeadClean: true, draftGateMarker: { headSha: HEAD, convergedFromHeadSha: SOURCE } },
+  ];
+  for (const evidence of cases) {
+    const reads = [];
+    const { run } = harness({ fetchDraftGateEvidence: async () => evidence, readRecordedSpecDigest: async ({ headSha }) => { reads.push(headSha); return DIGEST; } });
+    assert.equal((await run()).action, "waiver_written");
+    assert.deepEqual(reads, [HEAD]);
+  }
+});
+
+test("a converged source ledger with a stale or missing digest still refuses", async () => {
+  const over = { fetchDraftGateEvidence: async () => converged };
+  await assertRefusal({ ...over, readRecordedSpecDigest: async () => "sha256:edited-after-the-round" }, "spec_digest_mismatch");
+  const unrecorded = await assertRefusal({ ...over, readRecordedSpecDigest: async () => null }, "spec_digest_unrecorded");
+  assert.match(JSON.stringify(unrecorded), /aaaaaaa/);
+  await assertRefusal({
+    fetchDraftGateEvidence: async () => ({ currentHeadClean: true, draftGateMarker: { headSha: HEAD, convergedFromHeadSha: "abc1234" } }),
+    readRecordedSpecDigest: async ({ headSha }) => (/^[0-9a-f]{40}$/.test(headSha) ? DIGEST : null),
+  }, "spec_digest_unrecorded");
+});
+
+test("the default reader fails closed on a source ledger modified after it was sealed", async () => {
+  const repoRoot = realpathSync(mkdtempSync(path.join(tmpdir(), "waive-seal-")));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: repoRoot });
+    const ledgerPath = buildLogPath({ repo: "o/n", pr: 9, gate: "draft_gate", headSha: SOURCE, tmpRoot: path.join(repoRoot, "tmp") });
+    mkdirSync(path.dirname(ledgerPath), { recursive: true });
+    const ledger = JSON.stringify({ specAuthority: { specDigest: DIGEST } });
+    await writeSealed(ledgerPath, ledger);
+    const { deps } = harness({ fetchDraftGateEvidence: async () => converged });
+    delete deps.readRecordedSpecDigest;
+    const run = () => waiveAdrTripwire(OPTIONS, { ...deps, repoRoot });
+    assert.equal((await run()).action, "waiver_written");
+    writeFileSync(ledgerPath, ledger.replace(DIGEST, "sha256:forged"));
+    assert.equal((await run()).reason, "spec_digest_unrecorded");
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+for (const [body, issues] of [
+  ["Refs o/n#7, #8\n", [7, 8]],
+  ["Refs #7, o/n#8\n", [7, 8]],
+  ["Refs #7, o/n#8 and #9\n", [7, 8, 9]],
+]) {
+  test(`a mixed-qualifier Refs list ${JSON.stringify(body)} counts each same-repo entry`, async () => {
+    const result = await assertRefusal({ fetchPr: refsPr(body) }, "ambiguous_refs_tracker_issue");
+    assert.deepEqual(result.issues, issues);
+  });
+}
+
+test("a cross-repo entry inside a Refs list does not count as this repo's issue", async () => {
+  const fetched = [];
+  const { run } = harness({
+    fetchPr: refsPr("Refs x/y#5, #7\n"),
+    fetchIssueBody: async ({ issue }) => { fetched.push(issue); return ISSUE_BODY; },
+  });
+  const result = await run();
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(fetched, [7]);
 });

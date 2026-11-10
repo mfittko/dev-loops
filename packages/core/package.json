@@ -1,6 +1,6 @@
 {
   "name": "@dev-loops/core",
-  "version": "1.0.9-pre.4",
+  "version": "1.0.11-pre.1",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -20,8 +20,11 @@
     "./debt/remediation-to-issue": "./src/debt/remediation-to-issue.mjs",
     "./debt/shape": "./src/debt/shape.mjs",
     "./debt/signal": "./src/debt/debt-signal.mjs",
+    "./github/comment-trust": "./src/github/comment-trust.mjs",
     "./github/copilot-helpers": "./src/github/copilot-helpers.mjs",
     "./github/comment-id-guard": "./src/github/comment-id-guard.mjs",
+    "./github/copilot-body-disposition-marker": "./src/github/copilot-body-disposition-marker.mjs",
+    "./github/operator-owned-lines": "./src/github/operator-owned-lines.mjs",
     "./github/closing-ref-guard": "./src/github/closing-ref-guard.mjs",
     "./github/gh": "./src/github/gh.mjs",
     "./github/issue-ops": "./src/github/issue-ops.mjs",
@@ -32,6 +35,7 @@
     "./loop/async-start-contract": "./src/loop/async-start-contract.mjs",
     "./loop/agent-stall": "./src/loop/agent-stall.mjs",
     "./loop/bash-command-classify": "./src/loop/bash-command-classify.mjs",
+    "./loop/bash-gate-decisions": "./src/loop/bash-gate-decisions.mjs",
     "./loop/child-launch-bound": "./src/loop/child-launch-bound.mjs",
     "./loop/reviewer-unit-bound": "./src/loop/reviewer-unit-bound.mjs",
     "./loop/conductor-routing": "./src/loop/conductor-routing.mjs",
@@ -63,6 +67,7 @@
     "./loop/pr-title-markers": "./src/loop/pr-title-markers.mjs",
     "./loop/public-dev-loop-routing": "./src/loop/public-dev-loop-routing.mjs",
     "./loop/public-dev-loop-routing-contract": "./src/loop/public-dev-loop-routing-contract.mjs",
+    "./loop/gate-no-dead-end": "./src/loop/gate-no-dead-end.mjs",
     "./loop/fix-loop-state": "./src/loop/fix-loop-state.mjs",
     "./loop/refinement-grill-state": "./src/loop/refinement-grill-state.mjs",
     "./loop/queue-board-ordering": "./src/loop/queue-board-ordering.mjs",
@@ -76,6 +81,7 @@
     "./loop/size-budget-merge-gate": "./src/loop/size-budget-merge-gate.mjs",
     "./loop/cache-telemetry-evidence": "./src/loop/cache-telemetry-evidence.mjs",
     "./loop/execution-record": "./src/loop/execution-record.mjs",
+    "./loop/evidence-seal": "./src/loop/evidence-seal.mjs",
     "./loop/pre-push-delta-review": "./src/loop/pre-push-delta-review.mjs",
     "./loop/stale-surface-hits": "./src/loop/stale-surface-hits.mjs",
     "./loop/review-dispatch-plan": "./src/loop/review-dispatch-plan.mjs",
