@@ -16,6 +16,9 @@
 // closed to a full re-review.
 const DOTFILE_CONFIG_BASENAMES = new Set([".devloops", ".gitignore", ".gitattributes", ".editorconfig", ".dockerignore"]);
 
+// Size accounting excludes pins; classification still fails closed for review.
+export const RUNTIME_PIN_BASENAMES = new Set([".nvmrc", ".node-version", ".ruby-version", ".python-version", ".tool-versions"]);
+
 // Generic classifier tables. Files are classified by principle (broad extension
 // tables + directory/basename conventions), not by a bespoke per-language rule.
 // A new mainstream language is covered by adding its extension here, not by a new
