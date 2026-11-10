@@ -66,42 +66,48 @@ const denyForEveryActor = (root, command, reason) => {
   }
 };
 
-test("raw gh pr edit and gh api PR/issue body writes are denied for every Claude actor", async () => {
-  await withManagedRepo(async (root) => {
-    // Every `gh pr edit` body form the hook header names is pinned here — the short `-b`/`-F`
-    // flags as well as the long ones — together with the two API forms beyond a plain body
-    // field (an `--input` payload and a `gh api graphql` `updatePullRequest`), so the header
-    // cannot drift from what the nominated predicate denies.
-    for (const command of [
-      "gh pr edit 5 --body-file waiver.md",
-      "gh pr edit 5 --body 'text with an adr-tripwire:allow line'",
-      "gh pr edit 5 -b 'text with an adr-tripwire:allow line'",
-      "gh pr edit 5 -F waiver.md",
-      "gh api -X PATCH repos/o/r/pulls/5 -f body=x",
-      "gh api -X PATCH repos/o/r/issues/5 --field body=x",
-      "gh api -X PATCH repos/o/r/pulls/5 --input body.json",
-      "gh api graphql -f query=mutation{updatePullRequest}",
-      // A wrapper prefix must not hide the shape from the pre-check: the shared `SHELL_EXEC_PREFIX`
-      // tolerates env-assignment / `command` / `env` / path prefixes but no wrapper, so the hook
-      // reads the wrapper-unwrapped head beside the raw one. Without that, the nominate-then-decide
-      // path fails open on the wrapped form of a shape the pre-check already names. The wrapper
-      // options are spelled out per wrapper, because a `timeout` duration and a `nice -n N` level
-      // are the only wrapper arguments that are not flags.
-      "timeout 300 gh pr edit 5 --body-file waiver.md",
-      "timeout 300 gh api -X PATCH repos/o/r/pulls/5 -f body=x",
-      "timeout -k 5 60 gh api -X PATCH repos/o/r/issues/5 --input body.json",
-      "FOO=1 timeout 60 gh pr edit 5 --body x",
-      "/usr/bin/timeout 60 gh api repos/o/r/pulls/5 --field body=x",
-      "sudo gh pr edit 5 --body 'text with an adr-tripwire:allow line'",
-      "sudo -n gh api -X PATCH repos/o/r/pulls/5 -f body=x",
-      // A wrapper flag's own value sits exactly where a boolean flag leaves the command, so
-      // `sudo -u root gh …` must be read through the one head past the unwrapped one.
-      "sudo -u root gh api -X PATCH repos/o/r/pulls/5 -f body=x",
-      "nice -n 5 gh pr edit 5 --body x",
-      "time -p gh api -X PATCH repos/o/r/issues/5 --field body=x",
-    ]) {
+// Each command has its own timeout budget while retaining the complete actor matrix.
+// Every `gh pr edit` body form the hook header names is pinned here — the short `-b`/`-F`
+// flags as well as the long ones — together with the two API forms beyond a plain body
+// field (an `--input` payload and a `gh api graphql` `updatePullRequest`), so the header
+// cannot drift from what the nominated predicate denies.
+for (const command of [
+  "gh pr edit 5 --body-file waiver.md",
+  "gh pr edit 5 --body 'text with an adr-tripwire:allow line'",
+  "gh pr edit 5 -b 'text with an adr-tripwire:allow line'",
+  "gh pr edit 5 -F waiver.md",
+  "gh api -X PATCH repos/o/r/pulls/5 -f body=x",
+  "gh api -X PATCH repos/o/r/issues/5 --field body=x",
+  "gh api -X PATCH repos/o/r/pulls/5 --input body.json",
+  "gh api graphql -f query=mutation{updatePullRequest}",
+  // A wrapper prefix must not hide the shape from the pre-check: the shared `SHELL_EXEC_PREFIX`
+  // tolerates env-assignment / `command` / `env` / path prefixes but no wrapper, so the hook
+  // reads the wrapper-unwrapped head beside the raw one. Without that, the nominate-then-decide
+  // path fails open on the wrapped form of a shape the pre-check already names. The wrapper
+  // options are spelled out per wrapper, because a `timeout` duration and a `nice -n N` level
+  // are the only wrapper arguments that are not flags.
+  "timeout 300 gh pr edit 5 --body-file waiver.md",
+  "timeout 300 gh api -X PATCH repos/o/r/pulls/5 -f body=x",
+  "timeout -k 5 60 gh api -X PATCH repos/o/r/issues/5 --input body.json",
+  "FOO=1 timeout 60 gh pr edit 5 --body x",
+  "/usr/bin/timeout 60 gh api repos/o/r/pulls/5 --field body=x",
+  "sudo gh pr edit 5 --body 'text with an adr-tripwire:allow line'",
+  "sudo -n gh api -X PATCH repos/o/r/pulls/5 -f body=x",
+  // A wrapper flag's own value sits exactly where a boolean flag leaves the command, so
+  // `sudo -u root gh …` must be read through the one head past the unwrapped one.
+  "sudo -u root gh api -X PATCH repos/o/r/pulls/5 -f body=x",
+  "nice -n 5 gh pr edit 5 --body x",
+  "time -p gh api -X PATCH repos/o/r/issues/5 --field body=x",
+]) {
+  test(`PR/issue body write is denied for every Claude actor: ${command}`, async () => {
+    await withManagedRepo(async (root) => {
       denyForEveryActor(root, command, /ADR-TRIPWIRE-STANDING-WAIVER/);
-    }
+    });
+  });
+}
+
+test("non-body writes and reads remain allowed by the pre-check", async () => {
+  await withManagedRepo(async (root) => {
     // Naming the shapes must not turn the pre-check into a blanket deny: a read that merely
     // mentions a body, the sanctioned launcher writer, and the wrapper prefix in front of either
     // still pass through. (A wrapped *sanctioned* command is a separate deny, owned by the
