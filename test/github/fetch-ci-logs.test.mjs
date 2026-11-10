@@ -110,6 +110,18 @@ test("fetchCiLogs: log fetch failure records an unavailable note, not a throw", 
   assert.match(result.runs[0].logTail, /log unavailable: log expired/);
 });
 
+test("fetchCiLogs: successful log tail cannot truncate another job's failure note", async () => {
+  const { run } = stubGh([
+    { match: isPrView, resp: { stdout: JSON.stringify({ headRefOid: "abc" }) } },
+    { match: isRunList, resp: { stdout: JSON.stringify([{ databaseId: 9, name: "ci", conclusion: "failure" }]) } },
+    { match: isJobs, resp: { stdout: JSON.stringify([{ jobs: [{ id: 1, conclusion: "failure" }, { id: 2, conclusion: "failure" }] }]) } },
+    { match: (a) => isLog(a) && a[1].includes("/1/"), resp: { code: 1, stderr: "log expired" } },
+    { match: (a) => isLog(a) && a[1].includes("/2/"), resp: { stdout: "line 1\nline 2\nline 3\n" } },
+  ]);
+  const result = await fetchCiLogs({ repo: "o/n", pr: 5, failedOnly: true, tail: 2 }, { run });
+  assert.equal(result.runs[0].logTail, "line 2\nline 3\n<log unavailable: log expired>");
+});
+
 test("fetchCiLogs: throws when pr view yields no head SHA", async () => {
   const { run } = stubGh([{ match: isPrView, resp: { stdout: JSON.stringify({}) } }]);
   await assert.rejects(() => fetchCiLogs({ repo: "o/n", pr: 5, failedOnly: false, tail: 10 }, { run }), /did not return headRefOid/);

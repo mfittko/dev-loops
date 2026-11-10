@@ -142,6 +142,7 @@ export async function fetchCiLogs(options, { env = process.env, ghCommand = "gh"
     if (runId === null) continue;
     const conclusion = typeof r?.conclusion === "string" ? r.conclusion.toLowerCase() : null;
     const logs = [];
+    const unavailable = [];
     try {
       const pages = await ghJson(
         ["api", `repos/${options.repo}/actions/runs/${runId}/jobs?per_page=100`, "--paginate", "--slurp"],
@@ -150,14 +151,13 @@ export async function fetchCiLogs(options, { env = process.env, ghCommand = "gh"
       for (const job of pages.flatMap((page) => page.jobs)) {
         if (conclusion === "failure" && job.conclusion !== "failure") continue;
         const result = await run(ghCommand, ["api", `repos/${options.repo}/actions/jobs/${job.id}/logs`, "--allow-escape-sequences"], env);
-        logs.push(result.code === 0
-          ? result.stdout.replace(/\r?\n$/u, "")
-          : `<log unavailable: ${result.stderr.trim() || `exit ${result.code}`}>`);
+        if (result.code === 0) logs.push(result.stdout.replace(/\r?\n$/u, ""));
+        else unavailable.push(`<log unavailable: ${result.stderr.trim() || `exit ${result.code}`}>`);
       }
     } catch (error) {
-      logs.push(`<log unavailable: ${error.message}>`);
+      unavailable.push(`<log unavailable: ${error.message}>`);
     }
-    const logTail = tailLines(logs.join("\n"), options.tail);
+    const logTail = [tailLines(logs.join("\n"), options.tail), ...unavailable].filter(Boolean).join("\n");
     out.push({
       runId,
       name: typeof r?.name === "string" ? r.name : null,
