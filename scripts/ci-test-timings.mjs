@@ -12,6 +12,39 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const object = (value) => value && typeof value === "object" && !Array.isArray(value);
 const positive = (value) => Number.isSafeInteger(value) && value > 0;
 const artifactName = (run, attempt) => `ci-timings-${run}-${attempt}`;
+const TRIAL_PROFILE = "docs/phases/six-shard-trial-profile.json";
+export const TRIAL_PROFILE_SHA256 = "e943203c753d0f289879d670425dd2f82d6f2104a885671efc8e2c00f460d688";
+const bytesDigest = (text) => createHash("sha256").update(text).digest("hex");
+
+export function trialMatrix(shards = "4") {
+  assert.ok(["4", "6"].includes(shards), "trial shards must be 4 or 6");
+  return { include: [
+    { suite: "test:docs", fetch_depth: 0 },
+    { suite: "test:workflows", fetch_depth: 1 },
+    ...Array.from({ length: Number(shards) }, (_, i) => ({ suite: "test:all", shard: `${i + 1}/${shards}`, shard_index: i + 1, fetch_depth: 0 })),
+  ] };
+}
+
+export function validateTrialInput(text, inventory, runtime) {
+  assert.equal(bytesDigest(text), TRIAL_PROFILE_SHA256, "trial profile bytes changed");
+  const profile = validateProfile(JSON.parse(text), runtime);
+  assert.deepEqual(profile.metadata.inventory, inventory, "trial inventory changed");
+  return profile;
+}
+
+export function validateTrialMeasurements(records, inventory, shards) {
+  trialMatrix(shards);
+  assert.equal(records.length, Number(shards), "incomplete trial shards");
+  const seen = new Set();
+  for (const { input, output } of records) {
+    assert.equal(bytesDigest(input), TRIAL_PROFILE_SHA256, "trial shard input changed");
+    for (const file of Object.keys(filesOf(output))) {
+      assert.ok(!seen.has(file), "duplicate trial measured file");
+      seen.add(file);
+    }
+  }
+  assert.deepEqual([...seen].sort(), inventory, "incomplete trial inventory");
+}
 
 function filesOf(profile) {
   assert.ok(profile?.version === 1 && object(profile.files), "invalid timing schema");
@@ -123,16 +156,24 @@ async function readProfile(path) {
 
 async function main(command, env = process.env) {
   if (command === "prepare") {
+    const trial = env.GITHUB_EVENT_NAME === "workflow_dispatch";
     let bootstrap;
     try { bootstrap = await readProfile(".bun-test-timings.json"); } catch { bootstrap = {}; }
-    const snapshot = await selectSnapshot({ inventory: await discoverRepositoryTests(), runtime: currentRuntime(env), bootstrap, restore: () => restore(currentRuntime(env), env) });
+    const inventory = await discoverRepositoryTests(), runtime = currentRuntime(env);
+    const snapshot = trial
+      ? validateTrialInput(await readFile(TRIAL_PROFILE, "utf8"), inventory, runtime)
+      : await selectSnapshot({ inventory, runtime, bootstrap, restore: () => restore(runtime, env) });
     const text = JSON.stringify(snapshot);
     assert.ok(Buffer.byteLength(text) <= LIMIT, "snapshot exceeds output budget");
-    await appendFile(env.GITHUB_OUTPUT, `timing_input=${text}\n`);
+    const shards = trial ? env.TRIAL_SHARDS : "4";
+    await appendFile(env.GITHUB_OUTPUT, `timing_input=${text}\nsuite_matrix=${JSON.stringify(trialMatrix(shards))}\n`);
+    if (trial) console.log(`Trial shards=${shards}, profile sha256=${TRIAL_PROFILE_SHA256}, inventory=${inventory.length}, parallelism=2, source=${snapshot.metadata.commit}`);
   } else if (command === "input") {
     const profile = JSON.parse(env.TIMING_INPUT);
     filesOf(profile);
-    await writeFile(".ci-timing-input.json", JSON.stringify(profile), { flag: "wx" });
+    const text = env.GITHUB_EVENT_NAME === "workflow_dispatch" ? await readFile(TRIAL_PROFILE, "utf8") : JSON.stringify(profile);
+    assert.deepEqual(JSON.parse(text), profile, "inconsistent shard timing input");
+    await writeFile(".ci-timing-input.json", text, { flag: "wx" });
     // Never seed the first timings path: sharded updates must contain measurements only.
     await writeFile(".ci-timing-output.json", "", { flag: "wx" });
     await rm(".ci-timing-output.json");
@@ -148,7 +189,18 @@ async function main(command, env = process.env) {
     const profile = combine(records, await context(env));
     await writeFile("profile.json", JSON.stringify(profile));
     console.log(`Publishing ${Object.keys(profile.files).length} measured files, source run ${profile.metadata.run}/${profile.metadata.attempt}`);
-  } else throw Error("Expected prepare, input, collect or merge");
+  } else if (command === "trial-verify") {
+    assert.equal(env.GITHUB_EVENT_NAME, "workflow_dispatch");
+    const inventory = await discoverRepositoryTests();
+    validateTrialInput(await readFile(TRIAL_PROFILE, "utf8"), inventory, currentRuntime(env));
+    const records = [];
+    for (const directory of await readdir("timing-shards")) records.push({
+      input: await readFile(join("timing-shards", directory, ".ci-timing-input.json"), "utf8"),
+      output: await readProfile(join("timing-shards", directory, ".ci-timing-output.json")),
+    });
+    validateTrialMeasurements(records, inventory, env.TRIAL_SHARDS);
+    console.log(`Trial complete and disjoint: ${inventory.length} files, ${env.TRIAL_SHARDS} shards, profile sha256=${TRIAL_PROFILE_SHA256}`);
+  } else throw Error("Expected prepare, input, collect, merge or trial-verify");
 }
 
 if (import.meta.main) await main(process.argv[2]);

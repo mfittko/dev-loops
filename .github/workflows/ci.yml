@@ -5,6 +5,14 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
+    inputs:
+      shards:
+        description: Native shard count for the frozen-profile trial
+        required: true
+        default: '4'
+        type: choice
+        options: ['4', '6']
 
 permissions:
   contents: read
@@ -22,6 +30,7 @@ jobs:
       presentations: ${{ steps.rendered-artifact-scope.outputs.presentations }}
       articles: ${{ steps.rendered-artifact-scope.outputs.articles }}
       timing_input: ${{ steps.timings.outputs.timing_input }}
+      suite_matrix: ${{ steps.timings.outputs.suite_matrix }}
 
     steps:
       - name: Check out repository
@@ -46,6 +55,7 @@ jobs:
         id: timings
         env:
           GH_TOKEN: ${{ github.token }}
+          TRIAL_SHARDS: ${{ inputs.shards }}
         run: bun scripts/ci-test-timings.mjs prepare
 
       - name: Determine whether inspect-run viewer smoke is required
@@ -90,31 +100,7 @@ jobs:
       TIMING_INPUT: ${{ needs.changes.outputs.timing_input }}
     strategy:
       fail-fast: false
-      matrix:
-        suite:
-          - test:docs
-          - test:workflows
-        include:
-          # Docs need the decision-record merge base; test shards need the
-          # historical producer fixture regardless of its current shard assignment.
-          - suite: test:docs
-            fetch_depth: 0
-          - suite: test:all
-            shard: 1/4
-            shard_index: 1
-            fetch_depth: 0
-          - suite: test:all
-            shard: 2/4
-            shard_index: 2
-            fetch_depth: 0
-          - suite: test:all
-            shard: 3/4
-            shard_index: 3
-            fetch_depth: 0
-          - suite: test:all
-            shard: 4/4
-            shard_index: 4
-            fetch_depth: 0
+      matrix: ${{ fromJSON(needs.changes.outputs.suite_matrix) }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -183,8 +169,8 @@ jobs:
         run: bun run ${{ matrix.suite }} --timings=.ci-timing-output.json --timings=.ci-timing-input.json --update-timings --shard=${{ matrix.shard }}
 
       - name: Upload PR timing diagnostics
-        if: matrix.shard != '' && github.event_name == 'pull_request'
-        continue-on-error: true
+        if: matrix.shard != '' && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
+        continue-on-error: ${{ github.event_name != 'workflow_dispatch' }}
         uses: actions/upload-artifact@v4
         with:
           name: ci-timing-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard_index }}
@@ -227,6 +213,25 @@ jobs:
           [ "${{ needs.viewer-smoke.result }}" = "success" ] || [ "${{ needs.viewer-smoke.result }}" = "skipped" ] || exit 1
           [ "${{ needs.deck-smoke.result }}" = "success" ] || [ "${{ needs.deck-smoke.result }}" = "skipped" ] || exit 1
           [ "${{ needs.article-smoke.result }}" = "success" ] || [ "${{ needs.article-smoke.result }}" = "skipped" ] || exit 1
+
+      - uses: actions/checkout@v5
+        if: github.event_name == 'workflow_dispatch'
+      - uses: oven-sh/setup-bun@v2
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          bun-version: 1.4.1
+      - run: bun install --frozen-lockfile
+        if: github.event_name == 'workflow_dispatch'
+      - uses: actions/download-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          pattern: ci-timing-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: timing-shards
+      - name: Require complete disjoint trial measurements and identical profile bytes
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TRIAL_SHARDS: ${{ inputs.shards }}
+        run: bun scripts/ci-test-timings.mjs trial-verify
 
   publish-timings:
     needs: [changes, verify]

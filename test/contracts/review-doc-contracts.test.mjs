@@ -10,6 +10,7 @@ import {
 } from "../imported-assets-helpers.mjs";
 import { assertRuleOwned } from "./_rule-helpers.mjs";
 import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
+import { trialMatrix } from "../../scripts/ci-test-timings.mjs";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -422,20 +423,9 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
       ? ciWorkflow.length
       : verifySuiteHeaderIndex + 1 + nextSuiteJobRelative,
   );
-  for (const suite of [
-    "test:all",
-    "test:docs",
-    "test:workflows",
-  ]) {
-    assert.match(
-      verifySuiteSection,
-      new RegExp(`^\\s*-\\s*(?:suite:\\s*)?${suite}\\s*$`, "m"),
-      `verify-suite matrix must include ${suite}`,
-    );
-  }
-  const allTestShards = [
-    ...verifySuiteSection.matchAll(/-\s+suite:\s*test:all\s*\n\s*shard:\s*(\d+\/\d+)/g),
-  ].map(([, shard]) => shard);
+  assert.match(verifySuiteSection, /matrix:\s*\$\{\{ fromJSON\(needs.changes.outputs.suite_matrix\) \}\}/);
+  assert.deepEqual([...new Set(trialMatrix().include.map((row) => row.suite))].sort(), ["test:all", "test:docs", "test:workflows"]);
+  const allTestShards = trialMatrix().include.filter((row) => row.shard).map((row) => row.shard);
   assert.deepEqual(allTestShards, ["1/4", "2/4", "3/4", "4/4"]);
   assert.match(verifySuiteSection, /BUN_TEST_PARALLELISM:\s*2/);
   assert.match(verifySuiteSection, /bun run \$\{\{\s*matrix\.suite\s*\}\} --timings=\.ci-timing-output\.json --timings=\.ci-timing-input\.json --update-timings --shard=\$\{\{\s*matrix\.shard\s*\}\}/);

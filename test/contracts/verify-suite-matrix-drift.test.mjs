@@ -1,5 +1,6 @@
 import { assert, readRepo, test } from "../imported-assets-helpers.mjs";
 import { VERIFY_SUITES } from "../../scripts/verify.mjs";
+import { trialMatrix } from "../../scripts/ci-test-timings.mjs";
 
 // Guards against the CI verify-suite matrix drifting from the test:* suites
 // that compose the canonical verifier. Adding a gating suite without
@@ -21,9 +22,8 @@ test("verify-suite matrix suites equal the test:* suites composing the canonical
     headerIndex,
     nextJobRelative === -1 ? ciWorkflow.length : headerIndex + 1 + nextJobRelative,
   );
-  const matrixSuites = new Set(
-    [...section.matchAll(/^\s*-\s*(?:suite:\s*)?(test:[\w:-]+)\s*$/gm)].map((m) => m[1]),
-  );
+  assert.match(section, /matrix:\s*\$\{\{ fromJSON\(needs.changes.outputs.suite_matrix\) \}\}/);
+  const matrixSuites = new Set(trialMatrix().include.map((row) => row.suite));
 
   const missingFromMatrix = [...verifySuites].filter((s) => !matrixSuites.has(s));
   const extraInMatrix = [...matrixSuites].filter((s) => !verifySuites.has(s));

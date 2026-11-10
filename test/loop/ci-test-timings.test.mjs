@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { parse } from "yaml";
-import { combine, digest, selectSnapshot, validateProfile, trustedRun, restore } from "../../scripts/ci-test-timings.mjs";
+import { combine, digest, selectSnapshot, validateProfile, trustedRun, restore, trialMatrix, validateTrialInput, validateTrialMeasurements } from "../../scripts/ci-test-timings.mjs";
 
 const inventory = ["a.test.mjs", "b.test.mjs", "c.test.mjs", "d.test.mjs"];
 const runtime = { bunVersion: "1.4.1", platform: "linux-x64", image: "ubuntu26", parallelism: 2, shards: 4, isolation: false };
@@ -92,21 +92,26 @@ test("restore binds real archive contents to API run, attempt, workflow and comm
 
 test("workflow preserves native inventory runs and read-only PR consumption with guarded optional publication", async () => {
   const workflow = parse(await readFile(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8"));
-  assert.deepEqual(Object.keys(workflow.on).sort(), ["pull_request", "push"]);
+  assert.deepEqual(Object.keys(workflow.on).sort(), ["pull_request", "push", "workflow_dispatch"]);
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs.shards.options, ["4", "6"]);
+  assert.equal(workflow.on.workflow_dispatch.inputs.shards.default, "4");
   assert.deepEqual(workflow.permissions, { contents: "read", actions: "read" });
   assert.equal(workflow.env.BUN_TEST_PARALLELISM, 2);
   const jobs = workflow.jobs, suite = jobs["verify-suite"];
   assert.equal(suite.needs, "changes");
   assert.equal(suite.env.BUN_TEST_PARALLELISM, 2);
-  assert.deepEqual(suite.strategy.matrix.include.filter((r) => r.shard).map((r) => [r.shard, r.shard_index]), [["1/4", 1], ["2/4", 2], ["3/4", 3], ["4/4", 4]]);
+  assert.equal(suite.strategy.matrix, "${{ fromJSON(needs.changes.outputs.suite_matrix) }}");
+  assert.deepEqual(trialMatrix().include.filter((r) => r.shard).map((r) => [r.shard, r.shard_index]), [["1/4", 1], ["2/4", 2], ["3/4", 3], ["4/4", 4]]);
+  assert.equal(jobs.changes.steps.find((s) => s.id === "timings").env.TRIAL_SHARDS, "${{ inputs.shards }}");
+  assert.ok(jobs.verify.steps.some((s) => s.run === "bun scripts/ci-test-timings.mjs trial-verify" && s.if === "github.event_name == 'workflow_dispatch'"));
   const run = suite.steps.find((s) => s.run?.includes("--update-timings"));
   assert.match(run.run, /--timings=\.ci-timing-output.json --timings=\.ci-timing-input.json --update-timings --shard=/);
   assert.equal(run.env.BUN_TEST_TIMINGS_PATH, ".ci-timing-input.json");
   assert.deepEqual(jobs["publish-timings"].needs, ["changes", "verify"]);
   const uploads = suite.steps.filter((s) => s.uses === "actions/upload-artifact@v4");
   const diagnostic = uploads.find((s) => s.with.name.startsWith("ci-timing-diagnostic-"));
-  assert.equal(diagnostic.if, "matrix.shard != '' && github.event_name == 'pull_request'");
-  assert.equal(diagnostic["continue-on-error"], true);
+  assert.equal(diagnostic.if, "matrix.shard != '' && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')");
+  assert.equal(diagnostic["continue-on-error"], "${{ github.event_name != 'workflow_dispatch' }}");
   assert.equal(diagnostic.with.name, "ci-timing-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard_index }}");
   assert.equal(diagnostic.with.path, ".ci-timing-output.json\n.ci-timing-input.json\n");
   assert.equal(diagnostic.with["include-hidden-files"], true);
@@ -121,7 +126,7 @@ test("workflow preserves native inventory runs and read-only PR consumption with
   assert.ok(jobs.verify.needs.includes("verify-suite"));
 });
 
-test("pinned native Bun fresh-first outputs partition all fixture files and never retain seeded values", async () => {
+test.each([4, 6])("pinned native Bun fresh-first outputs partition all fixture files with %i shards and never retain seeded values", async (shards) => {
   assert.equal(Bun.version, "1.4.1");
   const root = await mkdtemp(join(tmpdir(), "ci-timings-"));
   try {
@@ -130,8 +135,8 @@ test("pinned native Bun fresh-first outputs partition all fixture files and neve
     const seed = JSON.stringify({ version: 1, files: { ...Object.fromEntries(files.slice(0, 6).map((f) => [f, 100000])), "deleted.test.mjs": 999999 } });
     await writeFile(join(root, "input.json"), seed);
     const seen = [];
-    for (let shard = 1; shard <= 4; shard++) {
-      execFileSync(process.execPath, ["test", "--parallel=2", "--no-isolate", "--timeout=30000", "--timings=out.json", "--timings=input.json", "--update-timings", `--shard=${shard}/4`, ...files.map((f) => `./${f}`)], { cwd: root, stdio: "pipe" });
+    for (let shard = 1; shard <= shards; shard++) {
+      execFileSync(process.execPath, ["test", "--parallel=2", "--no-isolate", "--timeout=30000", "--timings=out.json", "--timings=input.json", "--update-timings", `--shard=${shard}/${shards}`, ...files.map((f) => `./${f}`)], { cwd: root, stdio: "pipe" });
       const output = JSON.parse(await readFile(join(root, "out.json"), "utf8"));
       seen.push(...Object.keys(output.files));
       assert.ok(Object.values(output.files).every((v) => v < 100000));
@@ -140,4 +145,27 @@ test("pinned native Bun fresh-first outputs partition all fixture files and neve
     assert.deepEqual(seen.sort(), files);
     assert.equal(await readFile(join(root, "input.json"), "utf8"), seed);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("trial freezes measured profile bytes and rejects missing, duplicate, unknown or incompatible measurements", async () => {
+  const input = await readFile(new URL("../../docs/phases/six-shard-trial-profile.json", import.meta.url), "utf8");
+  const profile = JSON.parse(input), inventory = profile.metadata.inventory;
+  assert.equal(inventory.length, 551);
+  assert.deepEqual(validateTrialInput(input, inventory, runtime), profile);
+  assert.throws(() => validateTrialInput(`${input}\n`, inventory, runtime), /bytes/);
+  assert.throws(() => validateTrialInput(input, inventory.slice(1), runtime), /inventory/);
+  assert.throws(() => validateTrialInput(input, inventory, { ...runtime, shards: 6 }), /runtime/);
+  for (const count of ["4", "6"]) {
+    const matrix = trialMatrix(count);
+    assert.equal(matrix.include.length, Number(count) + 2);
+    assert.deepEqual(matrix.include.slice(0, 2).map((r) => r.suite), ["test:docs", "test:workflows"]);
+    const records = Array.from({ length: Number(count) }, (_, i) => ({ input, output: { version: 1, files: Object.fromEntries(inventory.filter((_, n) => n % Number(count) === i).map((p) => [p, 1])) } }));
+    validateTrialMeasurements(records, inventory, count);
+    for (const mutate of [
+      (r) => r.pop(), (r) => r.push(r[0]), (r) => { r[1].output = r[0].output; },
+      (r) => { r[0].output.files = {}; }, (r) => { r[0].output.files["unknown.test.mjs"] = 1; },
+      (r) => { r[0].input += "\n"; }, (r) => { r[0].output.files[inventory[0]] = -1; },
+    ]) { const data = structuredClone(records); mutate(data); assert.throws(() => validateTrialMeasurements(data, inventory, count)); }
+  }
+  for (const count of ["2", "8", "6;echo bad", 6, ""]) assert.throws(() => trialMatrix(count));
 });
