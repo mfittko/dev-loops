@@ -29,7 +29,8 @@ test("the purpose rule owns the statement and the three reasons, and is register
 });
 
 function assertReadmePurpose(text) {
-  const paragraphs = text.trim().split(/\r?\n[ \t]*\r?\n/).map((paragraph) => paragraph.trim()).filter(Boolean);
+  const blocks = text.replace(/^( {0,3}#{1,6}(?:[ \t]+[^\r\n]*)?)\r?$/gm, "\n\n$1\n\n");
+  const paragraphs = blocks.trim().split(/\r?\n[ \t]*\r?\n/).map((paragraph) => paragraph.trim()).filter(Boolean);
   const titleIndex = paragraphs.findIndex((paragraph) => /^# [^\r\n]+$/.test(paragraph));
   assert.ok(titleIndex >= 0, "README has an H1 title");
   assert.equal(paragraphs[titleIndex + 1]?.replace(/\r?\n/g, " "), STATEMENT);
@@ -42,6 +43,9 @@ test("the README hero paragraph and the package description carry the statement"
 
 test("the README purpose check tolerates layout changes but rejects changed or misplaced text", () => {
   for (const text of [
+    `# dev-loops\n${STATEMENT}`,
+    `# dev-loops\n\n${STATEMENT}\n## More`,
+    `# dev-loops\r\n${STATEMENT}\r\n## More`,
     `\n\n# dev-loops\n\n\n${STATEMENT}\n\n## More`,
     `# dev-loops\n\n${STATEMENT.replace(" Deterministic gates", "\nDeterministic gates")}\n\nMore prose.`,
     `# dev-loops\r\n\r\n${STATEMENT}\r\n\r\nMore prose.`,
@@ -51,6 +55,8 @@ test("the README purpose check tolerates layout changes but rejects changed or m
   for (const text of [
     `# dev-loops\n\n${STATEMENT.replace("safe", "fast")}`,
     `# dev-loops\n\nOther prose.\n\n${STATEMENT}`,
+    `# dev-loops\n## More\n${STATEMENT}`,
+    `# dev-loops\n${STATEMENT}\nOther prose.`,
     `## dev-loops\n\n${STATEMENT}`,
     "# dev-loops\n\n",
     "",
