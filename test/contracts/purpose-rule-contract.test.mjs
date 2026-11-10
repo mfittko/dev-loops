@@ -28,9 +28,35 @@ test("the purpose rule owns the statement and the three reasons, and is register
   assert.ok(read("skills/docs/required-rules.json").includes(`"id": "${ID}"`));
 });
 
-test("the README hero line and the package description carry the statement", () => {
-  assert.ok(read("README.md").split("\n")[2] === STATEMENT);
+function assertReadmePurpose(text) {
+  const paragraphs = text.trim().split(/\r?\n[ \t]*\r?\n/).map((paragraph) => paragraph.trim()).filter(Boolean);
+  const titleIndex = paragraphs.findIndex((paragraph) => /^# [^\r\n]+$/.test(paragraph));
+  assert.ok(titleIndex >= 0, "README has an H1 title");
+  assert.equal(paragraphs[titleIndex + 1]?.replace(/\r?\n/g, " "), STATEMENT);
+}
+
+test("the README hero paragraph and the package description carry the statement", () => {
+  assertReadmePurpose(read("README.md"));
   assert.equal(JSON.parse(read("package.json")).description, STATEMENT);
+});
+
+test("the README purpose check tolerates layout changes but rejects changed or misplaced text", () => {
+  for (const text of [
+    `\n\n# dev-loops\n\n\n${STATEMENT}\n\n## More`,
+    `# dev-loops\n\n${STATEMENT.replace(" Deterministic gates", "\nDeterministic gates")}\n\nMore prose.`,
+    `# dev-loops\r\n\r\n${STATEMENT}\r\n\r\nMore prose.`,
+  ]) {
+    assertReadmePurpose(text);
+  }
+  for (const text of [
+    `# dev-loops\n\n${STATEMENT.replace("safe", "fast")}`,
+    `# dev-loops\n\nOther prose.\n\n${STATEMENT}`,
+    `## dev-loops\n\n${STATEMENT}`,
+    "# dev-loops\n\n",
+    "",
+  ]) {
+    assert.throws(() => assertReadmePurpose(text), assert.AssertionError);
+  }
 });
 
 test("each #2937 rule cites the purpose rule as its parent without restating it", () => {
