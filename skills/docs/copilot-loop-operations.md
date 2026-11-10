@@ -135,7 +135,7 @@ judgment cannot substitute. The
 [PR Body Skeleton](../dev-loop/templates/pr-body.md) is conformant.
 
 <!-- rule: OPS-PR-VALIDATION-STABLE-EVIDENCE -->
-`OPS-PR-VALIDATION-STABLE-EVIDENCE`: For tracker-backed PRs, the PR description's Validation section MUST record each validation command or named check together with its stable pass/fail outcome. It MUST NOT include volatile aggregate test, assertion, or asset counts; skip counts; durations; timestamps; or incidental totals unless an explicit acceptance criterion makes that exact quantity behaviorally significant. Detailed totals MUST live in the head-stamped validation and gate artifacts, where they remain bound to the exact revision that produced them.
+`OPS-PR-VALIDATION-STABLE-EVIDENCE`: For tracker-backed PRs, the PR description's Validation section MUST record each validation command or named check together with its stable pass/fail outcome. A SHA or result explicitly labelled historical is allowed. It MUST NOT include volatile aggregate test, assertion, or asset counts; skip counts; durations; timestamps; or incidental totals unless an explicit acceptance criterion makes that exact quantity behaviorally significant. A current-head SHA, a "current" or "fresh" head claim, and gate verdict or lifecycle status (for example "draft_gate clean at <sha>") MUST NOT appear in the body. These head-bound details and detailed totals MUST live in head-stamped validation artifacts and gate verdict comments. A gate requirement stated as DoD prose (for example "draft_gate and pre_approval_gate pass on the final head") is a requirement, not a status claim, and is allowed.
 
 <!-- rule: OPS-DRAFT-FIRST-PR -->
 `OPS-DRAFT-FIRST-PR`: New PRs MUST open as **draft** through `create-pr.mjs`, which
