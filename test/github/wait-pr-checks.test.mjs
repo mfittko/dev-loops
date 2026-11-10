@@ -54,6 +54,22 @@ function makeStream() {
   return { write: (s) => { chunks.push(s); }, text: () => chunks.join("") };
 }
 
+async function withPollingGh(routes, fn) {
+  const sha = JSON.parse(routes[0].stdout).headRefOid;
+  const args = [
+    ["pr", "view", "7", "--repo", "owner/repo", "--json", "headRefOid,statusCheckRollup"],
+    ["api", `repos/owner/repo/commits/${sha}/check-runs?per_page=100`],
+    ["api", `repos/owner/repo/commits/${sha}/status?per_page=100`],
+  ];
+  const responses = new Map(args.map((argv, i) => [JSON.stringify(argv), routes[i]]));
+  return fn(async (command, argv) => {
+    assert.equal(command, "gh", "unexpected executable");
+    const route = responses.get(JSON.stringify(argv));
+    assert.ok(route, `unexpected gh args: ${JSON.stringify(argv)}`);
+    return { code: route.exitCode ?? 0, stdout: route.stdout, stderr: "" };
+  });
+}
+
 const fastDeps = (env) => ({ env, ghCommand: "gh", delayImpl: async () => {}, now: () => 1_000 });
 
 test("wait-pr-checks exits 0 with status success when all checks pass", async () => {
@@ -122,10 +138,12 @@ test("wait-pr-checks caps one call at 170 s, returns pending (exit 2) with the r
   ];
   const argv = ["--repo", "owner/repo", "--pr", "7", "--poll", "10", "--timeout", "600"];
   let reissue;
-  await withGhStub(pendingRoutes, async (env) => {
+  await withPollingGh(pendingRoutes, async (runChild) => {
+    await assert.rejects(() => runChild("node", []), /unexpected executable/);
+    await assert.rejects(() => runChild("gh", ["pr", "view", "8"]), /unexpected gh args/);
     let t = 0;
     const stdout = makeStream();
-    const code = await runCli(argv, { stdout, stderr: makeStream(), env, ghCommand: "gh", now: () => t, delayImpl: async (ms) => { t += ms; } });
+    const code = await runCli(argv, { stdout, stderr: makeStream(), runChild, ghCommand: "gh", now: () => t, delayImpl: async (ms) => { t += ms; } });
     const result = JSON.parse(stdout.text());
     assert.equal(code, 2);
     assert.ok(t <= 170_000 + 10_000, `waited ${t} ms`);
@@ -137,28 +155,28 @@ test("wait-pr-checks caps one call at 170 s, returns pending (exit 2) with the r
   });
   const resumed = reissue.split(" ").slice(4);
   // A push between the calls is not absorbed: the carried baseline sees the new head.
-  await withGhStub(
+  await withPollingGh(
     [
       { match: ["pr", "view"], stdout: prView("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", ["build"]) },
       { match: ["check-runs"], stdout: checkRuns([{ status: "completed", conclusion: "success", name: "build" }]) },
       { match: ["/status"], stdout: statuses([]) },
     ],
-    async (env) => {
+    async (runChild) => {
       const stdout = makeStream();
-      const code = await runCli(resumed, { stdout, stderr: makeStream(), ...fastDeps(env) });
+      const code = await runCli(resumed, { stdout, stderr: makeStream(), ...fastDeps(), runChild });
       assert.equal(code, 2);
       assert.equal(JSON.parse(stdout.text()).status, "changed");
     },
   );
-  await withGhStub(
+  await withPollingGh(
     [
       { match: ["pr", "view"], stdout: prView("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["build"]) },
       { match: ["check-runs"], stdout: checkRuns([{ status: "completed", conclusion: "success", name: "build" }]) },
       { match: ["/status"], stdout: statuses([]) },
     ],
-    async (env) => {
+    async (runChild) => {
       const stdout = makeStream();
-      const code = await runCli(resumed, { stdout, stderr: makeStream(), ...fastDeps(env) });
+      const code = await runCli(resumed, { stdout, stderr: makeStream(), ...fastDeps(), runChild });
       assert.equal(code, 0);
       assert.equal(JSON.parse(stdout.text()).outcome, undefined);
     },
@@ -171,10 +189,10 @@ test("wait-pr-checks carries the stall start in the re-issue and the resumed cal
     { match: ["check-runs"], stdout: checkRuns([{ status: "queued", conclusion: null, name: "build" }]) },
     { match: ["/status"], stdout: statuses([]) },
   ];
-  const call = (argv, startMs) => withGhStub(queued, async (env) => {
+  const call = (argv, startMs) => withPollingGh(queued, async (runChild) => {
     let t = startMs;
     const stdout = makeStream();
-    await runCli(argv, { stdout, stderr: makeStream(), env, ghCommand: "gh", now: () => t, delayImpl: async (ms) => { t += ms; } });
+    await runCli(argv, { stdout, stderr: makeStream(), runChild, ghCommand: "gh", now: () => t, delayImpl: async (ms) => { t += ms; } });
     return JSON.parse(stdout.text());
   });
   const first = await call(["--repo", "owner/repo", "--pr", "7", "--poll", "10", "--timeout", "600"], 1_000_000);
