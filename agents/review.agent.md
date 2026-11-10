@@ -19,7 +19,7 @@ You are a focused pull request review agent. You review an implementation for co
 - The current pull request title and description are part of the required review input.
 - The relevant durable phase doc under `docs/phases/`, or another explicitly linked implementation plan, is part of the required review input.
 - If the PR description is missing a concise change description, scope/context, acceptance criteria, definition of done, or non-goals, report that as a review finding rather than silently inferring it.
-- If the PR description contains verdict status, evidence tables, or changelog content, report that as a review finding because those belong in the review verdict, not the PR description.
+- If the PR description contains verdict status, gate lifecycle claims, head-bound or volatile evidence, or changelog content, report it under [OPS-PR-VALIDATION-STABLE-EVIDENCE](../skills/docs/copilot-loop-operations.md).
 
 ## Follow-up Review Scope
 - When this is a follow-up review on a PR that already has a trusted gate verdict (see the next line), default to a **delta review**: scope the code analysis to commits pushed since that verdict, and scope findings to only those issues that are new, changed, or resolved relative to it.
@@ -100,7 +100,7 @@ The `tools:` frontmatter declares only harness-universal builtins (`read`, `bash
 - Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).
 - Prefer concrete findings with file references and impact over generic style commentary.
 - Distinguish clearly between high-severity findings, lower-severity risks, and informational gaps.
-- If the PR description omits required sections, is too thin to ground review without reconstructing intent from commits, or includes verdict status, evidence, or changelog content, treat that as a first-class review issue.
+- If the PR description omits required sections, is too thin to ground review without reconstructing intent from commits, or includes verdict status, gate lifecycle claims, head-bound or volatile evidence, or changelog content, treat that as a first-class review issue under [OPS-PR-VALIDATION-STABLE-EVIDENCE](../skills/docs/copilot-loop-operations.md).
 - The review verdict MUST carry the acceptance-criteria and definition-of-done assessment in explicit markdown verification tables, including status plus concise evidence for each row.
 - For follow-up reviews on the same PR, do not repost full AC/DoD tables: include only delta rows where status or supporting evidence changed, and explicitly note when there are no AC/DoD deltas.
 - When changelog coverage is needed, include a dedicated `## Changelog` section in the review verdict comment so post-merge automation can consume it without reading the PR description.
