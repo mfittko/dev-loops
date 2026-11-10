@@ -5154,7 +5154,17 @@ test("upsert-checkpoint-verdict CLI posts the draft_gate self-heal verdict inste
     // but matches the reported repro shape exactly.
     env.DEVLOOPS_RUN_ID = "test-run-1455-real";
 
-    const result = await runNodeHelper(scriptPath, [
+    // Check the runtime in the CLI process without replacing its ESM entry point.
+    const runtimeCheck = path.join(tempDir, "assert-node-runtime.mjs");
+    await writeFile(runtimeCheck, [
+      'import assert from "node:assert/strict";',
+      'assert.equal(process.versions.bun, undefined, "ESM linker regression must run under Node, not Bun");',
+      'assert.ok(process.versions.node, "ESM linker regression requires Node");',
+    ].join("\n"), "utf8");
+
+    const execPath = Bun.which("node");
+    assert.ok(execPath, "test environment must provide the supported Node runtime");
+    const result = await runNodeHelper("--import", [runtimeCheck, scriptPath,
       "--repo", "owner/repo",
       "--pr", "17",
       "--gate", "draft_gate",
@@ -5165,7 +5175,7 @@ test("upsert-checkpoint-verdict CLI posts the draft_gate self-heal verdict inste
       "--next-action", "mark ready for review",
       "--execution-mode", "inline_single_agent",
       "--inline-reason", "single-agent inline review (test)",
-    ], { env, cwd: tempDir });
+    ], { env, cwd: tempDir, execPath });
 
     // Pre-fix this exits 13 with "Detected unsettled top-level await" on stderr
     // and empty stdout (no comment posted). Fixed: exits 0 with the created
