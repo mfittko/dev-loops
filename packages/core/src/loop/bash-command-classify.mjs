@@ -1681,6 +1681,13 @@ export function commandContainsInlineInterpreter(command) {
   return tok.incomplete || scanInlineInterpreter(blankDataHeredocs(command, tok));
 }
 
+/** Sentence (with a leading space) for the deny reason when the cause is malformed input, else "": it names the class so the agent can fix the quoting. */
+export function inlineInterpreterDenyDetail(command) {
+  return tokenizeShellCommand(command).incomplete
+    ? " The command has an unterminated quote, $( or backtick substitution, heredoc, or substitution nesting that is too deep (incomplete tokenization), so the gate cannot tell data from code. Close the construct or write the file with the editor tool."
+    : "";
+}
+
 /**
  * Whether the quoted words of segment S are inert text. A quoted word is inert only behind a text head or a repo script runner; any other head keeps its quoted words visible (origin/main's raw split), so `git bisect run 'x; node -e y'` is still seen.
  * The head must be the bare name (no path, no env prefix) and the command must define no function, since either can rebind the name to a program that runs its quoted words.
