@@ -31,8 +31,8 @@ async function setup({ carried }) {
     git("checkout", "-q", "main"); put("docs/a.md", "changed\n"); git("add", "-A"); git("commit", "-qm", "main");
     git("checkout", "-q", "pr"); git("merge", "-q", "--no-edit", "main");
     cur = git("rev-parse", "HEAD");
-    git("update-ref", "refs/remotes/origin/main", "main");
   }
+  git("update-ref", "refs/remotes/origin/main", "main");
   // The coordination-recorded carried-heads comment (ADR 0186); a ready-path reader only reads it.
   const evidence = carried ? await computeBaseMergeCarry({ prevHead: origin, headSha: cur, baseRef: "origin/main", repoRoot: dir }) : null;
   const record = evidence && { id: 2, body: renderCarriedHeadsBody([{ gate: "draft_gate", originHead: origin, headSha: cur, decision: evidence.decision, evidenceDigest: evidenceDigest(evidence) }]) };
@@ -46,6 +46,8 @@ function router({ origin, cur, record }, ciBucket) {
     calls.push(args);
     const text = args.join(" ");
     if (args[0] === "pr" && args[1] === "checks") return { code: ciBucket === "fail" ? 1 : 0, stdout: JSON.stringify([{ bucket: ciBucket, name: "ci" }]), stderr: "" };
+    if (args[0] === "pr" && args[1] === "ready") return { code: 0, stdout: "", stderr: "" };
+    if (text.includes("pulls/7/reviews")) return { code: 0, stdout: "[]", stderr: "" };
     if (args.includes("baseRefName") && args[1] === "view") return { code: 0, stdout: JSON.stringify({ baseRefName: "main" }), stderr: "" };
     if (text.includes("issues/7/comments")) return { code: 0, stdout: JSON.stringify(trustCommentFixtures([[{ id: 1, body, created_at: "2026-01-01T00:00:00Z" }, ...(record ? [{ ...record, created_at: "2026-01-01T00:00:01Z" }] : [])]])), stderr: "" };
     if (args[0] === "api" && args[1] === "user") return { code: 0, stdout: JSON.stringify({ login: "bot" }), stderr: "" };
@@ -77,10 +79,17 @@ test("non-carried clean verdict: restore-ready and the raw pr-ready guard do not
   const s = await setup({ carried: false });
   const opts = { repo: REPO, pr: 7 };
   const a = router(s, "fail");
-  await restoreReady(opts, { env: {}, repoRoot: s.dir, runChild: a.runChild }).catch(() => {});
+  const restored = await restoreReady(opts, { env: {}, repoRoot: s.dir, runChild: a.runChild });
+  assert.equal(restored.ok, true);
+  assert.equal(restored.action, "marked_ready");
+  assert.equal(restored.headSha, s.cur);
+  assert.equal(restored.draftGateSatisfied, true);
   assert.equal(a.ciChecked(), false);
   const b = router(s, "fail");
-  await prePrReadyGate(opts, { env: {}, repoRoot: s.dir, runChild: b.runChild }).catch(() => {});
+  const guarded = await prePrReadyGate(opts, { env: {}, repoRoot: s.dir, runChild: b.runChild });
+  assert.equal(guarded.ok, true);
+  assert.equal(guarded.currentHeadSha, s.cur);
+  assert.equal(guarded.draftGateSatisfied, true);
   assert.equal(b.ciChecked(), false);
 });
 
