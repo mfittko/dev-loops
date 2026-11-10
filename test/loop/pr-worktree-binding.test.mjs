@@ -22,7 +22,7 @@ const emitter = path.join(root, "scripts/loop/emit-coordinator-work-order.mjs");
 const puller = path.join(root, "scripts/github/pull-work-order.mjs");
 const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
 
-async function fixture(fn, { directory = "tmp/worktrees/dev-loops/issue-2588" } = {}) {
+async function fixture(fn, { directory = "tmp/worktrees/dev-loops/issue-2588", prChanges = {} } = {}) {
   const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "pr-worktree-binding-")));
   const main = path.join(temp, "main");
   await mkdir(main);
@@ -35,6 +35,7 @@ async function fixture(fn, { directory = "tmp/worktrees/dev-loops/issue-2588" } 
     headRepository: { name: "r" }, headRepositoryOwner: { login: "o" },
     url: "https://github.com/o/r/pull/2848", author: { login: "mfittko" },
     assignees: [{ login: "mfittko" }], closingIssuesReferences: [], body: DEFAULT_TEST_PR_BODY,
+    ...prChanges,
   };
   const bin = path.join(temp, "bin");
   await mkdir(bin);
@@ -45,7 +46,7 @@ async function fixture(fn, { directory = "tmp/worktrees/dev-loops/issue-2588" } 
   assert.equal(startup.code, 0, startup.stderr);
   const resolved = JSON.parse(startup.stdout);
   assert.equal(resolved.selectedStrategy, "copilot_pr_followup");
-  assert.equal(resolved.draftStart.reviewGate, "draft_gate");
+  if (pr.isDraft) assert.equal(resolved.draftStart.reviewGate, "draft_gate");
   await writeFile(input, startup.stdout);
   const build = (extra = {}) => runNode(builder, ["--input", input, "--repo", "o/r"], { cwd: main, env, ...extra });
   const emit = (harness = "codex", extra = {}) => runNode(emitter, ["--input", input, "--repo", "o/r", "--harness", harness, "--entry", "direct"], { cwd: main, env, ...extra });
@@ -137,9 +138,32 @@ for (const strategy of ["ui_review", " ui_review "]) for (const state of ["first
   });
 }
 
+test("ready issue-less startup derives validated body authority and emits on every harness", async () => {
+  await fixture(async (f) => {
+    const authority = await loadRefinementArtifact({ repo: "o/r", prData: f.pr,
+      prDraft: false, prClosed: false, prMerged: false });
+    assert.equal(authority.status, "unknown");
+    assert.equal(authority.finding, null);
+    assert.equal(authority.prBodySpecValid, true);
+    assert.equal(authority._onlyEnforcedWhenDraft, false);
+    const built = await f.build();
+    assert.equal(built.code, 0, built.stderr);
+    assert.equal(JSON.parse(built.stdout).specSource, CANONICAL_SPEC_SOURCE.PR_BODY);
+    for (const harness of ["pi", "claude", "codex"]) {
+      const emitted = await f.emit(harness);
+      assert.equal(emitted.code, 0, emitted.stderr);
+      const plan = JSON.parse(await readFile(JSON.parse(emitted.stdout).planPath, "utf8"));
+      assert.equal(plan.workOrder.handoff.specSource, CANONICAL_SPEC_SOURCE.PR_BODY);
+    }
+    assert.deepEqual(JSON.parse(await readFile(f.input, "utf8")), f.resolved);
+  }, { prChanges: { isDraft: false } });
+}, 30000);
+
 for (const [label, changes, status, source] of [
   ["invalid live body", { body: "No formal scope." }, "missing", REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY],
-  ["unknown ready authority", { isDraft: false }, "unknown", undefined],
+  ["invalid ready body", { isDraft: false, body: "No formal scope." }, "unknown", REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY],
+  ["ready promoted plan", { isDraft: false, body: `${buildPlanFilePromotionMarker("docs/plans/unit.md")}\n\n${DEFAULT_TEST_PR_BODY}` }, "unknown", REFINEMENT_ARTIFACT_SPEC_SOURCE.PLAN_FILE],
+  ["ready linked issue", { isDraft: false, closingIssuesReferences: [{ number: 900 }] }, "unknown", REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE],
   ["promoted plan", { body: `${buildPlanFilePromotionMarker("docs/plans/unit.md")}\n\n${DEFAULT_TEST_PR_BODY}` }, "present", REFINEMENT_ARTIFACT_SPEC_SOURCE.PLAN_FILE],
   ["linked issue", { closingIssuesReferences: [{ number: 900 }] }, "missing", REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE],
 ]) test(`${label} cannot acquire PR-body authority from the startup snapshot`, async () => {
@@ -154,6 +178,13 @@ for (const [label, changes, status, source] of [
     assert.equal(built.code, 0, built.stderr);
     const envelope = JSON.parse(built.stdout);
     assert.equal(Object.hasOwn(envelope, "specSource"), false);
+    if (label === "invalid ready body") {
+      assert.equal(authority.prBodySpecValid, false);
+      assert.equal(authority.finding, null);
+      const emitted = await f.emit();
+      assert.notEqual(emitted.code, 0);
+      assert.match(emitted.stderr, /coordinator target names no issue number/);
+    }
     assert.equal(envelope.cwd, f.checkout);
     assert.deepEqual(envelope.target, { kind: "pr", repo: "o/r", pr: 2848 });
     assert.equal(envelope.nextAction, f.resolved.bundle.nextAction);

@@ -448,7 +448,7 @@ async function fetchIssueBody({ repo, issue }, { env = process.env, ghCommand = 
 // literal marker is how the refinement check tells a promoted plan-file PR
 // apart from an ordinary issue-less body.
 
-// Resolve the refinement artifact for a draft PR with zero linked issues,
+// Resolve the refinement artifact for a PR with zero linked issues,
 // directly from its own body. The sanctioned three-origin model
 // (artifact-authority-contract.md) backs a draft PR with a linked issue, a
 // promoted plan file, or the PR body itself as the spec-of-record; only the
@@ -532,7 +532,7 @@ async function resolveNoIssueRefinementArtifact(body, expectedIssue) {
   }
   const reason = Number.isInteger(expectedIssue)
     ? `PR body fails the tracker-backed spec-of-record validation for expected issue #${expectedIssue} (validate-pr-body-spec: ${specResult.errors.map((e) => e.code).join(", ")}).`
-    : `No usable spec: the draft PR closes no resolvable same-repo issue (no Closes/Fixes/Resolves #n reference) and names no promoted plan doc, and the PR body fails the issue-less lightweight spec-of-record validation (validate-pr-body-spec --no-issue: ${specResult.errors.map((e) => e.code).join(", ")}).`;
+    : `No usable spec: the PR closes no resolvable same-repo issue (no Closes/Fixes/Resolves #n reference) and names no promoted plan doc, and the PR body fails the issue-less lightweight spec-of-record validation (validate-pr-body-spec --no-issue: ${specResult.errors.map((e) => e.code).join(", ")}).`;
   return {
     status: "missing",
     linkedIssue: null,
@@ -588,9 +588,13 @@ async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand
 export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, prMerged, expectedIssue = null }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const linkedIssues = resolveLinkedIssuesFromPr(prData);
   if (linkedIssues.length === 0) {
-    if (prDraft) {
+    if (prDraft || (!prClosed && !prMerged)) {
       const body = typeof prData?.body === "string" ? prData.body : "";
-      return resolveNoIssueRefinementArtifact(body, Number.isInteger(expectedIssue) ? expectedIssue : null);
+      const artifact = await resolveNoIssueRefinementArtifact(body, Number.isInteger(expectedIssue) ? expectedIssue : null);
+      if (prDraft) return artifact;
+      // Ready PRs expose validated authority without re-enforcing the draft boundary.
+      return { ...artifact, status: "unknown", finding: null, _onlyEnforcedWhenDraft: false,
+        prBodySpecValid: artifact.status === "present" && artifact.specSource === REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY };
     }
     return {
       status: "unknown",

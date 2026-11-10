@@ -355,7 +355,8 @@ export async function buildHandoffEnvelopeCli(
     const refinement = await loadRefinementArtifact({ repo, prData: pr,
       prDraft: pr.isDraft === true, prClosed: pr.state === "CLOSED", prMerged: Boolean(pr.mergedAt) });
     // These enums have different domains; only the owning validator's PR-body result maps across.
-    if (refinement.status === "present" && refinement.specSource === REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY
+    if ((refinement.status === "present" || refinement.prBodySpecValid === true)
+      && refinement.specSource === REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY
       && refinement.finding === null) {
       verifiedResolverOutput = { ...resolverOutput, canonicalSpecSource: CANONICAL_SPEC_SOURCE.PR_BODY };
     }
