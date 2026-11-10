@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { parseIssueNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { editIssue as coreEditIssue } from "@dev-loops/core/github/issue-ops";
+import { assertWritableBody, editIssue as coreEditIssue } from "@dev-loops/core/github/issue-ops";
 import { detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
 import { booleanFlagValue, untickedRows } from "./edit-pr.mjs";
@@ -34,8 +34,9 @@ At least one edit:
   --add-assignee <u>            Assignee to add (repeatable)
   --remove-assignee <u>         Assignee to remove (repeatable)
   --milestone <m>               Milestone to set (empty string clears it)
-                                (--title/--body/--body-file reject empty or
-                                whitespace-only values; use --milestone "" only
+                                (--title rejects empty or whitespace-only values;
+                                --body/--body-file accept them only with
+                                --allow-empty-body; use --milestone "" only
                                 to clear the milestone)
   --state <open|closed>         Close or reopen the issue (a separate \`gh issue
                                 close\`/\`gh issue reopen\` call, run after any
@@ -45,6 +46,8 @@ At least one edit:
                                 --state closed
   --allow-untick                Allow a body that unticks or removes a checked
                                 row (CHECKLIST-SCOPE-ONE-MODEL, #2898)
+  --allow-empty-body            Allow a body that is empty or only "null" (refused by
+                                default: it is a failed read written back)
   --enforce-grill               Opt-in GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628):
                                 refuse a body that embeds grill
                                 transcript/synthesis/Q&A headings.
@@ -78,6 +81,7 @@ export function parseEditIssueCliArgs(argv) {
       reason: { type: "string" },
       "enforce-grill": { type: "boolean" },
       "allow-untick": { type: "boolean" },
+      "allow-empty-body": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -98,6 +102,7 @@ export function parseEditIssueCliArgs(argv) {
     reason: undefined,
     enforceGrill: false,
     allowUntick: false,
+    allowEmptyBody: false,
     jq: undefined,
     silent: false,
   };
@@ -129,9 +134,10 @@ export function parseEditIssueCliArgs(argv) {
       continue;
     }
     if (token.name === "body") {
-      const body = requireTokenValue(token, parseError);
-      if (body.trim().length === 0) {
-        throw parseError("--body must not be empty or whitespace-only");
+      // An empty value is left to the post-loop empty-body policy (--allow-empty-body).
+      const body = token.value;
+      if (typeof body !== "string" || body.startsWith("--")) {
+        throw parseError(`Missing value for ${token.rawName}`);
       }
       options.body = body;
       continue;
@@ -192,6 +198,10 @@ export function parseEditIssueCliArgs(argv) {
       options.enforceGrill = true;
       continue;
     }
+    if (token.name === "allow-empty-body") {
+      options.allowEmptyBody = booleanFlagValue(token.value);
+      continue;
+    }
     if (token.name === "allow-untick") {
       options.allowUntick = booleanFlagValue(token.value);
       continue;
@@ -204,6 +214,14 @@ export function parseEditIssueCliArgs(argv) {
   }
   if (options.body !== undefined && options.bodyFile !== undefined) {
     throw parseError("--body and --body-file are mutually exclusive; pass only one");
+  }
+  if (options.body !== undefined && !options.allowEmptyBody) {
+    if (options.body.trim().length === 0) throw parseError("--body must not be empty or whitespace-only");
+    try {
+      assertWritableBody(options.body, "--body");
+    } catch (error) {
+      throw parseError(error instanceof Error ? error.message : String(error));
+    }
   }
   if (options.reason !== undefined && options.state !== "closed") {
     throw parseError("--reason is only valid together with --state closed");
@@ -238,9 +256,7 @@ export async function editIssue(options, { env = process.env, ghCommand = "gh", 
     let body = options.body;
     if (body === undefined) {
       body = options.bodyFile === "-" ? readFileSync(0, "utf8") : await readFile(options.bodyFile, "utf8");
-      if (body.trim().length === 0) {
-        throw new Error(`--body-file ${options.bodyFile} is empty`);
-      }
+      assertWritableBody(body, `--body-file ${options.bodyFile}`, options.allowEmptyBody);
     }
     let baseline;
     try {
@@ -291,9 +307,7 @@ async function editWithGrillCheck(options, { env, ghCommand, run }) {
       } else {
         body = await readFile(options.bodyFile, "utf8");
       }
-      if (body.trim().length === 0) {
-        throw new Error(`--body-file ${options.bodyFile} is empty`);
-      }
+      assertWritableBody(body, `--body-file ${options.bodyFile}`, options.allowEmptyBody);
     }
     const heading = detectGrillEmbedHeading(body);
     if (heading !== null) {

@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
-import { makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { makeGhMock as makeGhMockRaw, runIdFreeEnv, runNode as runNodeHelper, trustGhEntries, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+
+// Gate-formatted fixture comments need a maintainer identity (ADR 0248).
+const makeGhMock = (entries, options) => makeGhMockRaw(trustGhEntries(entries), options);
 
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
 import { isBehindBaseMergeState, isConflictingMergeState, parseHandoffCliArgs, runBasePickupPreflight, runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
@@ -2167,6 +2170,7 @@ test("detectRecentHumanComments detects human comment after last bot comment", a
       id: 101,
       body: "Let's reconsider the approach here.",
       user: { login: "human-dev", type: "User" },
+      author_association: "MEMBER",
       created_at: "2026-06-07T10:00:00Z",
     });
 
@@ -2418,12 +2422,14 @@ test("detectRecentHumanComments detects multiple human comments after last bot",
       id: 101,
       body: "First human note.",
       user: { login: "dev-1", type: "User" },
+      author_association: "MEMBER",
       created_at: "2026-06-07T10:00:00Z",
     });
     const HUMAN2 = JSON.stringify({
       id: 102,
       body: "Second human note.",
       user: { login: "dev-2", type: "User" },
+      author_association: "MEMBER",
       created_at: "2026-06-07T11:00:00Z",
     });
 
@@ -2493,6 +2499,7 @@ test("copilot-pr-handoff runs human comment check when DEVLOOPS_RUN_ID is set", 
       id: 200,
       body: "Please stop and reconsider the approach.",
       user: { login: "human-dev", type: "User" },
+      author_association: "MEMBER",
       created_at: "2026-06-07T10:00:00Z",
     });
     const BOT_COMMENT = JSON.stringify({
@@ -2555,6 +2562,7 @@ test("copilot-pr-handoff releases runner ownership at the terminal human-checkpo
       id: 200,
       body: "Please stop and reconsider the approach.",
       user: { login: "human-dev", type: "User" },
+      author_association: "MEMBER",
       created_at: "2026-06-07T10:00:00Z",
     });
     const BOT_COMMENT = JSON.stringify({
@@ -3345,7 +3353,7 @@ async function runDraftGateResetScenario({ withDraftGate, factsFail = false, wat
         { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: prView },
       );
     }
-    const { env, ghLogPath: logPath, claimsDir } = await writeGhStubHelper(tempDir, entries, { matchMode: "claims", logCalls: true });
+    const { env, ghLogPath: logPath, claimsDir } = await writeGhStubHelper(tempDir, trustGhEntries(entries), { matchMode: "claims", logCalls: true });
     env.DEVLOOPS_RUN_ID = "";
 
     const run = await runNode(["--repo", "owner/repo", "--pr", "17", ...(watchStatus ? ["--watch-status", watchStatus] : [])], { env, cwd: convergedOnceRepoRoot });

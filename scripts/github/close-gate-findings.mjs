@@ -3,7 +3,7 @@ import { parseArgs } from "node:util";
 import { parseAllowedRefsCsv, requireTokenValue } from "../_cli-primitives.mjs";
 import { containsBareCopilotSummon, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeInline } from "./post-gate-findings.mjs";
+import { listIssueComments, resolveAuthenticatedLogin, runGhJson, escapeProse } from "./post-gate-findings.mjs";
 import {
   FINDING_MARKER_RE,
   countUnresolvedGateAuthoredThreads,
@@ -14,6 +14,7 @@ import {
   fingerprintFinding,
   isBelowInlineFloor,
   isDeferredAtRound,
+  filterTrustedRoundInputs,
   isFileableDeferral,
   listPrReviews,
   parseFindingMarker,
@@ -227,13 +228,13 @@ function extractFindingSummary(body) {
 
 export function buildMeritRationale({ body, judgeReason, judgeRationale }) {
   // Collapse any embedded double quote to a single quote: the summary is
-  // wrapped in literal double quotes below and sanitizeInline does not escape
+  // wrapped in literal double quotes below and escapeProse does not escape
   // `"` (no injection risk — cosmetic only, avoids confusing nested quotes).
-  const summary = sanitizeInline(extractFindingSummary(body)).replace(/"/g, "'");
+  const summary = escapeProse(extractFindingSummary(body)).replace(/"/g, "'");
   // The visible reason is the judge's own words, never a text derived from severity or round.
   const judgeText = [judgeReason, judgeRationale].find((t) => typeof t === "string" && t.trim().length > 0);
   const reason = judgeText
-    ? sanitizeInline(neutralizeBareIssuePrIds(judgeText.trim())).replace(/[.\s]+$/u, "")
+    ? escapeProse(neutralizeBareIssuePrIds(judgeText.trim())).replace(/[.\s]+$/u, "")
     : "the judge recorded no reason text for this disposition";
   return `Examined on merits: \"${summary}\" was reviewed against current scope and acceptance criteria; ${reason}.`;
 }
@@ -670,8 +671,8 @@ async function runEvidenceOnlyClosePass({ repo, pr, gate, headSha, round, thread
         failure(`evidence-only act thread ${thread.threadId} has no valid root commentId (${String(thread.commentId)}); left open`);
         continue;
       }
-      const summary = sanitizeInline(extractFindingSummary(thread.body)).replace(/"/g, "'");
-      const rationale = sanitizeInline(neutralizeBareIssuePrIds(judgement.rationale ?? NO_EVIDENCE_ONLY_RATIONALE_TEXT)).replace(/[.\s]+$/u, "");
+      const summary = escapeProse(extractFindingSummary(thread.body)).replace(/"/g, "'");
+      const rationale = escapeProse(neutralizeBareIssuePrIds(judgement.rationale ?? NO_EVIDENCE_ONLY_RATIONALE_TEXT)).replace(/[.\s]+$/u, "");
       const message = `${GATE_REJECT_CLOSE_REPLY_PREFIX}round ${round}, fingerprint ${marker.fp}, severity ${marker.severity}, angle ${marker.angle}): Examined on merits: "${summary}" was accepted by the judge with an evidence-only remedy, so no file change applies — ${rationale}.`;
       await replyAndMaybeResolve(
         { repo, pr, commentId: thread.commentId, threadId: thread.threadId, body: message, resolve: true, validatedSnapshot: snapshot, allowedRefs },
@@ -692,13 +693,13 @@ const NO_JUDGE_RATIONALE_TEXT = "the judge rejected this finding on its merits; 
 // citing a bare issue/PR reference would otherwise throw inside
 // replyAndMaybeResolve's own guardCommentBodyNoIssuePrIds call, leaving the
 // thread unresolved and re-deadlocking on every rerun (ADR 0088) —
-// neutralizeBareIssuePrIds runs on the raw text, before sanitizeInline, for
+// neutralizeBareIssuePrIds runs on the raw text, before escapeProse, for
 // the same reason formatDeferredFindingEntry orders them that way.
 function rejectCloseMessage({ fp, severity, angle, round, rationale, body }) {
-  const rationaleText = sanitizeInline(neutralizeBareIssuePrIds(rationale ?? NO_JUDGE_RATIONALE_TEXT));
+  const rationaleText = escapeProse(neutralizeBareIssuePrIds(rationale ?? NO_JUDGE_RATIONALE_TEXT));
   const head = `${GATE_REJECT_CLOSE_REPLY_PREFIX}round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): `;
   if (severity === "question") return `${head}this question was answered, and the judge rejected the finding — ${rationaleText}.`;
-  const summary = sanitizeInline(extractFindingSummary(body)).replace(/"/g, "'");
+  const summary = escapeProse(extractFindingSummary(body)).replace(/"/g, "'");
   return `${head}Examined on merits: "${summary}" was reviewed against current scope and acceptance criteria; the judge rejected the finding — ${rationaleText}.`;
 }
 
@@ -854,7 +855,11 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // 2. Round (gate-scoped; both verdict surfaces plus the local ledger count).
   const reviews = await listPrReviews({ repo, pr }, gh);
   const issueComments = await listIssueComments({ repo, pr }, gh);
-  const round = await resolveGateRound({ repo, pr, gate, headSha, reviews, issueComments, tmpRoot, repoRoot });
+  const round = await resolveGateRound({
+    repo, pr, gate, headSha, tmpRoot, repoRoot,
+    reviews: filterTrustedRoundInputs(reviews, login),
+    issueComments: filterTrustedRoundInputs(issueComments, login),
+  });
 
   // 3. Resolve this gate's per-gate medium fix window and inline severity
   // floor (GATE-COMMENT-INLINE-SEVERITY-FLOOR) together. loadDevLoopConfig never throws; on

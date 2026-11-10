@@ -6,6 +6,7 @@ import {
   DELTA_CHECKLIST,
   DELTA_MAX_INVOCATIONS,
   buildDeltaInput,
+  composeConvergedDraftGate,
   decideDeltaNextStep,
   deltaFixerFindings,
   deriveDeltaOutcome,
@@ -105,6 +106,11 @@ const ACT_LIST = [
     judgeRationale: "names a real failure path",
   },
 ];
+
+test("a reviewer-only sequence maps only an empty act list to an empty act set", () => {
+  assert.deepEqual(startDeltaSequence({ reviewBaselineHead: "a".repeat(40), reviewerOnly: true, actList: [] }).actItems, []);
+  assert.throws(() => startDeltaSequence({ reviewBaselineHead: "a".repeat(40), reviewerOnly: true }));
+});
 
 test("remediation scope changes the actSetId; legacy lists keep theirs", () => {
   const plain = startDeltaSequence({ reviewBaselineHead: A, actList: ACT_LIST });
@@ -270,6 +276,14 @@ describe("result schema", () => {
       const bad = result({ actionableItems: [{ ref: "act-1", status, evidence: ["e"] }, { ref: "act-2", status: "resolved", evidence: ["e"] }] });
       assert.match(validateDeltaResult(bad, { sequence: sequence() }).join("\n"), /locally_clear requires/, status);
     }
+  });
+
+  test("a locally_clear claim with an open low residue finding names the residue rule, and the placeholder states it", () => {
+    const open = result({ newFindings: [{ severity: "low", summary: "s", evidence: ["e"], residueOf: "act-1" }] });
+    const errors = validateDeltaResult(open, { sequence: sequence() }).join("\n");
+    assert.match(errors, /locally_clear requires/);
+    assert.match(errors, /PRE-PUSH-DELTA-RESIDUE/);
+    assert.match(buildDeltaInput({ sequence: sequence(), candidateHead: B }).resultShape.newFindings[0].residueOf, /PRE-PUSH-DELTA-RESIDUE/);
   });
 
   test("rejects a result bound to another baseline", () => {
@@ -625,4 +639,29 @@ test("deltaFixerFindings keeps medium-or-higher new findings and open residue, c
   assert.equal(deltaFixerFindings({ newFindings: [f({ evidence: ["x".repeat(3000)] })] })[0].evidence.length, 2000);
   assert.equal(deltaFixerFindings({ newFindings: [f({ site: "x".repeat(2001) })] })[0].site.length, 2000);
   assert.equal(deltaFixerFindings({ newFindings: [f({ severity: "high" + " ".repeat(2001) })] })[0].severity, "high");
+});
+
+describe("composeConvergedDraftGate round gate", () => {
+  const FULL_A = "a".repeat(40);
+  const FULL_B = "b".repeat(40);
+  const acts = [{ severity: "low", summary: "rename" }, { severity: "nit", summary: "typo" }];
+  const converge = (round, cap) => {
+    const actList = acts.map((a) => ({ ...ACT_LIST[0], ...a }));
+    const seq = startDeltaSequence({ reviewBaselineHead: FULL_A, actList });
+    const deltaResult = {
+      reviewBaselineHead: FULL_A, candidateHead: FULL_B, actSetId: seq.actSetId,
+      actionableItems: seq.actItems.map((item) => ({ ref: item.ref, status: "resolved", evidence: ["fixed"] })),
+      newFindings: [], widenedReads: [], outcome: "locally_clear",
+    };
+    return composeConvergedDraftGate({ gate: "draft_gate", headSha: FULL_A, round, cap, roundActItems: actList, converged: { fixerCommit: FULL_B, actList, deltaResult } });
+  };
+
+  test("a round below the cap is refused so the next full round runs", () => {
+    assert.throws(() => converge(1, 4), /applies only at the cap round or later \(round 1, cap 4\)/);
+    assert.throws(() => converge(3, 4), /round 3, cap 4/);
+  });
+
+  test("the cap round and later converge, and a disabled cap does not gate", () => {
+    for (const [round, cap] of [[4, 4], [5, 4], [1, 0]]) assert.equal(converge(round, cap).fixerCommit, FULL_B);
+  });
 });

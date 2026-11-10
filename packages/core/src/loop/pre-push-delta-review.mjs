@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 
 import { parseRepoSlug } from "../github/repo-slug.mjs";
-import { severityRank, VALID_SEVERITIES, normalizeSeverity } from "./gate-fanin.mjs";
+import { severityRank, VALID_SEVERITIES, normalizeSeverity, isPastRoundCap } from "./gate-fanin.mjs";
 import { recordedSkipReason, siteCoverageGaps } from "./fixer-disposition.mjs";
 import { sha256Hex } from "./review-dispatch-plan.mjs";
 
@@ -200,11 +200,12 @@ function nonEmptyStrings(value) {
  * Open a delta sequence for one gate round. The baseline is the head that gate
  * round reviewed and stays pinned for every invocation in the sequence; a new
  * gate round opens a new sequence.
- * @param {{ reviewBaselineHead: string, actList: unknown }} input
+ * @param {{ reviewBaselineHead: string, actList: unknown, reviewerOnly?: boolean }} input
+ * `reviewerOnly` opens the code-range clearing sequence (ADR 0255): the act list is the one derived from the cap-round ledger, or empty for a clean cap round or a chain-end baseline.
  */
-export function startDeltaSequence({ reviewBaselineHead, actList } = {}) {
+export function startDeltaSequence({ reviewBaselineHead, actList, reviewerOnly = false } = {}) {
   if (!nonEmpty(reviewBaselineHead)) throw new Error("delta sequence requires reviewBaselineHead");
-  const actItems = toDeltaActItems(actList);
+  const actItems = reviewerOnly && Array.isArray(actList) && actList.length === 0 ? [] : toDeltaActItems(actList);
   const actSetId = createHash("sha256")
     .update(JSON.stringify(actItems.map((item) => {
       const { ref, angle, severity, file, line, summary } = item;
@@ -216,7 +217,7 @@ export function startDeltaSequence({ reviewBaselineHead, actList } = {}) {
     })))
     .digest("hex")
     .slice(0, 16);
-  return Object.freeze({ reviewBaselineHead: reviewBaselineHead.trim(), actSetId, actItems });
+  return Object.freeze({ reviewBaselineHead: reviewBaselineHead.trim(), actSetId, actItems, ...(reviewerOnly ? { reviewerOnly: true } : {}) });
 }
 
 /**
@@ -260,13 +261,13 @@ export function buildDeltaInput({ sequence, candidateHead, runId, specIdentity =
       candidateHead: head,
       actSetId: sequence.actSetId,
       ...(runId ? { runId } : {}),
-      actionableItems: [{ ref: "<act item ref>", status: DELTA_ITEM_STATUSES.join("|"), evidence: ["<non-empty string>"] }],
+      actionableItems: sequence.reviewerOnly && sequence.actItems.length === 0 ? [] : [{ ref: "<act item ref>", status: DELTA_ITEM_STATUSES.join("|"), evidence: ["<non-empty string>"] }],
       newFindings: [{
         severity: [...VALID_SEVERITIES].join("|"),
         summary: "<non-empty string>",
         evidence: ["<non-empty string>"],
         // Set for a same-class site of an act item; skipReason copies the reason that input.siteCoverage records for that site.
-        residueOf: "<act item ref, optional>",
+        residueOf: "<act item ref, optional; an open residueOf finding (no skipReason) blocks locally_clear at any severity: PRE-PUSH-DELTA-RESIDUE>",
         site: "<site name in input.siteCoverage, required with skipReason>",
         skipReason: "<non-empty string, optional>",
       }],
@@ -300,10 +301,10 @@ export function deltaFixerFindings(result) {
  * @param {{ actionableItems?: Array<{status?: string}>, newFindings?: Array<{severity?: string}> }} result
  * @returns {"locally_clear"|"needs_fix"}
  */
-export function deriveDeltaOutcome(result) {
+export function deriveDeltaOutcome(result, { reviewerOnly = false } = {}) {
   const items = Array.isArray(result?.actionableItems) ? result.actionableItems : [];
   const findings = Array.isArray(result?.newFindings) ? result.newFindings : [];
-  const allResolved = items.length > 0 && items.every((item) => item?.status === "resolved");
+  const allResolved = (items.length > 0 || reviewerOnly) && items.every((item) => item?.status === "resolved");
   const blockingFinding = findings.some((f) => isOpenResidue(f) || (!nonEmpty(f?.residueOf) && severityRank(f?.severity) <= MEDIUM_RANK));
   return allResolved && !blockingFinding ? "locally_clear" : "needs_fix";
 }
@@ -372,8 +373,8 @@ export function validateDeltaResult(result, { sequence, siteCoverage = [], valid
   }
 
   if (!DELTA_OUTCOMES.includes(result.outcome)) errors.push(`outcome ${JSON.stringify(result.outcome)} is unknown`);
-  else if (result.outcome === "locally_clear" && deriveDeltaOutcome(result) !== "locally_clear") {
-    errors.push("locally_clear requires every act item resolved and no new finding of severity medium or higher");
+  else if (result.outcome === "locally_clear" && deriveDeltaOutcome(result, { reviewerOnly: sequence?.reviewerOnly === true }) !== "locally_clear") {
+    errors.push("locally_clear requires every act item resolved, no new finding of severity medium or higher, and no residueOf finding without a skipReason equal to the recorded reason, at any severity (PRE-PUSH-DELTA-RESIDUE)");
   } else if (result.outcome === "locally_clear" && !membershipOnly) {
     const open = unaddressedStaleSurfaceHits(staleSurfaceHits, { newFindings: findings ?? [], siteCoverage: validationCoverage });
     if (open.length > 0) errors.push(`PRE-PUSH-DELTA-RESULT: locally_clear leaves stale-surface hits unaddressed (a newFindings[] entry naming the file or a skipped siteCoverage[] site is required): ${open.map((h) => h.site).join(", ")}`);
@@ -401,13 +402,15 @@ const isLowNitActList = (items) => Array.isArray(items) && items.length > 0
  * A round whose open judge act items are ALL low or nit converges after one commit_only fixer pass whose
  * pre-push delta review is fresh and locally_clear. Any other act item (medium, high, question, unknown) or a
  * mixed list, an empty list, a non-draft_gate gate, or a stale or malformed delta result throws: the caller
- * keeps today's full round. No round count or cap input.
+ * keeps today's full round. Convergence applies only at the cap round or later (`round` at or past a positive `cap`);
+ * below the cap a low or nit act list goes to the fixer and the next full round runs.
  * Returns the converged marker the draft_gate comment at `headSha` records.
- * @param {{ gate?: string, headSha?: string, roundActItems?: unknown, converged?: { fixerCommit?: string, actList?: unknown, deltaResult?: any } }} input
+ * @param {{ gate?: string, headSha?: string, round?: number, cap?: number, roundActItems?: unknown, converged?: { fixerCommit?: string, actList?: unknown, deltaResult?: any } }} input
  * @returns {{ fixerCommit: string, deltaDigest: string }}
  */
-export function composeConvergedDraftGate({ gate, headSha, roundActItems, converged } = {}) {
+export function composeConvergedDraftGate({ gate, headSha, round, cap, roundActItems, converged } = {}) {
   if (gate !== "draft_gate") throw new Error(`converged verdict applies to draft_gate only, got ${JSON.stringify(gate)}`);
+  if (cap > 0 && !isPastRoundCap(round, cap)) throw new Error(`converged verdict applies only at the cap round or later (round ${round}, cap ${cap}); below the cap a low or nit act list goes to the fixer and the next full round runs`);
   if (!FULL_SHA_RE.test(headSha ?? "")) throw new Error("converged verdict requires the full reviewed head sha");
   const fixerCommit = converged?.fixerCommit;
   if (!FULL_SHA_RE.test(fixerCommit ?? "") || fixerCommit === headSha) throw new Error("converged.fixerCommit must be a full sha different from the reviewed head");

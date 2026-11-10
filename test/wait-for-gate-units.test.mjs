@@ -5,9 +5,10 @@ import { link, mkdir, open, readFile, readdir, realpath, rm, stat, symlink, utim
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
+import { resolveRepoRoot } from "../scripts/loop/_repo-root-resolver.mjs";
 import { pullReceiptPath } from "../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../cli/index.mjs";
-import { ARTIFACT_TIMEOUT_REMEDY, parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
+import { ARTIFACT_STALE_PENDING_REMEDY, ARTIFACT_STALE_REMEDY, ARTIFACT_TIMEOUT_REMEDY, main, parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
 import { captureStderr, withTempDir } from "./_helpers.mjs";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/loop/wait-for-gate-units.mjs", import.meta.url));
@@ -204,6 +205,19 @@ test("round_retired: removed plan and a newer retirement record for the gate", a
   });
 });
 
+test("a scoped body-only retirement ends the wait only for a unit it names", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]], ["h", ["b"]]]);
+    await setMtime(planPath, 100);
+    const record = path.join(root, "tmp", "retired-gate-rounds", HEAD, "round-1", "retirement.json");
+    await writeJson(record, { gate: GATE, retiredAt: new Date(200000).toISOString(), scopes: ["other"] });
+    assert.equal((await run(root, planPath, { timeoutMs: 1 })).outcome, "timeout");
+    await writeJson(record, { gate: GATE, retiredAt: new Date(200000).toISOString(), scopes: ["h"] });
+    assert.equal((await run(root, planPath, { timeoutMs: 1 })).outcome, "round_retired");
+    assert.equal((await run(root, planPath, { timeoutMs: 1, units: ["g"] })).outcome, "timeout");
+  });
+});
+
 test("a partially written retirement record is not retired yet and is re-checked", async () => {
   await withDir(async (root) => {
     const { planPath } = await seedPlan(root, [["g", ["a"]]]);
@@ -239,6 +253,19 @@ test("judge plan waits on the single judge unit with role judge", async () => {
     const done =await waitForUnits({ ...opts, ...fakeClock() });
     assert.equal(done.outcome, "all_done");
     assert.equal(done.unitCount, 1);
+  });
+});
+
+test("a scoped body-only retirement ends a judge-plan wait", async () => {
+  await withDir(async (root) => {
+    const verdict = path.join(root, "tmp", "judge", "judge-verdict.json");
+    const identity = { workOrderRef: `judge:o/r#7:${GATE}:${HEAD}:r1`, workOrderDigest: "sha256:j", executionIdentity: "r1" };
+    const planPath = path.join(root, "tmp", "judge", "judge-emit-plan.json");
+    await writeJson(planPath, { ...identity, workOrder: { roundIdentity: { gate: GATE, headSha: HEAD }, outputRefs: [verdict] } });
+    await setMtime(planPath, 100);
+    await writeJson(path.join(root, "tmp", "retired-gate-rounds", HEAD, "round-1", "retirement.json"), { gate: GATE, retiredAt: new Date(200000).toISOString(), scopes: ["h"] });
+    const opts = { judgePlan: planPath, tmpRoot: path.join(root, "tmp"), receiptTmpRoot: path.join(root, "tmp"), timeoutMs: 4000, ...fakeClock() };
+    assert.equal((await waitForUnits(opts)).outcome, "round_retired");
   });
 });
 
@@ -312,6 +339,72 @@ test("a round retired while the unit checks are in flight is round_retired, not 
   });
 });
 
+// GATE-EXEC-BOUNDED-WAIT-CAP: one call waits at most 170 s; a longer request returns pending with the re-issue command.
+async function runMain(argv, wait) {
+  const write = process.stdout.write;
+  let out = "";
+  process.stdout.write = (chunk) => { out += String(chunk); return true; };
+  try { await main(argv, { wait }); } finally { process.stdout.write = write; }
+  const code = process.exitCode;
+  process.exitCode = undefined;
+  return { result: JSON.parse(out), code };
+}
+
+test("a --timeout above the cap is capped, returns pending (exit 2) and the re-issued command resumes the wait", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    const argv = ["--emit-plan", planPath, "--tmp-root", path.join(root, "tmp"), "--timeout", "500"];
+    // The real waitForUnits runs under an injected clock, so the cap (not the stub) bounds each call.
+    const clock = fakeClock();
+    const real = (options) => waitForUnits({ ...options, receiptTmpRoot: path.join(root, "tmp"), ...clock });
+    const first = await runMain(argv, real);
+    assert.equal(clock.now(), 170000);
+    assert.equal(first.code, 2);
+    assert.equal(first.result.outcome, "pending");
+    assert.equal(first.result.remedy, undefined);
+    assert.equal(first.result.reissue, `dev-loops-run --repo-root ${resolveRepoRoot(process.cwd())} scripts/loop/wait-for-gate-units.mjs --emit-plan ${planPath} --tmp-root ${path.join(root, "tmp")} --timeout 330`);
+    // Resume: the re-issued args carry the remaining budget; it is capped again, then the last call times out for real.
+    const second = await runMain(first.result.reissue.split(" ").slice(4), real);
+    assert.equal(clock.now(), 340000);
+    assert.equal(second.result.outcome, "pending");
+    assert.equal(second.result.remainingTimeoutSeconds, 160);
+    const third = await runMain(second.result.reissue.split(" ").slice(4), real);
+    assert.equal(clock.now(), 500000);
+    assert.equal(third.result.outcome, "timeout");
+    assert.equal(third.code, 2);
+  });
+});
+
+test("the re-issue resolves relative path args against the original cwd", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    const rel = (p) => path.relative(process.cwd(), p);
+    const argv = ["--emit-plan", rel(planPath), `--tmp-root=${rel(path.join(root, "tmp"))}`, "--timeout", "500"];
+    const clock = fakeClock();
+    const real = (options) => waitForUnits({ ...options, receiptTmpRoot: path.join(root, "tmp"), ...clock });
+    const { result } = await runMain(argv, real);
+    assert.match(result.reissue, new RegExp(`--emit-plan ${planPath.replaceAll(".", "\\.")} --tmp-root=${path.join(root, "tmp").replaceAll(".", "\\.")} --timeout 330$`));
+  });
+});
+
+test("a --timeout at or under the cap and --timeout 0 stay timeout", async () => {
+  const stub = async () => ({ ok: true, outcome: "timeout", missing: [] });
+  const argv = ["--emit-plan", "a", "--tmp-root", "t"];
+  assert.equal((await runMain([...argv, "--timeout", "170"], stub)).result.outcome, "timeout");
+  assert.equal((await runMain([...argv, "--timeout", "0"], stub)).result.outcome, "timeout");
+});
+
+test("a capped --artifact wait on a stale artifact carries ARTIFACT_STALE_PENDING_REMEDY (no re-run sentence) and drops ARTIFACT_TIMEOUT_REMEDY", async () => {
+  const argv = ["--artifact", "/x/report.json", "--after", "/x/ref", "--timeout", "540"];
+  const stale = await runMain(argv, async () => ({ ok: true, outcome: "timeout", stale: true, remedy: ARTIFACT_STALE_REMEDY }));
+  assert.equal(stale.result.outcome, "pending");
+  assert.equal(stale.result.remedy, ARTIFACT_STALE_PENDING_REMEDY);
+  assert.doesNotMatch(stale.result.remedy, /re-run|units_stalled/);
+  const fresh = await runMain(argv, async () => ({ ok: true, outcome: "timeout", remedy: ARTIFACT_TIMEOUT_REMEDY }));
+  assert.equal(fresh.result.outcome, "pending");
+  assert.equal(fresh.result.remedy, undefined);
+});
+
 test("wait-for-gate-units warns on stderr for deprecated --timeout-ms", () => {
   const err = captureStderr(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout-ms", "1500"]));
   assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
@@ -352,7 +445,7 @@ test("--artifact requires an absolute --after with exit 1 and a remedy", () => {
 
 test("the artifact timeout remedy is split by hand-back type and a stale artifact gets its own branch", async () => {
   const result = await waitForUnits({ artifact: "/nonexistent/x.json", after: process.execPath, timeoutMs: 0, ...fakeClock() });
-  assert.match(result.remedy, /Delta reviewer and commit_only fixer: re-run the same command; after three consecutive timeout outcomes.*units_stalled.*Full-phase fixer: after one timeout, end your turn once.*COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK.*--timeout 0.*published report.*do not repeat the wait/);
+  assert.match(result.remedy, /Delta reviewer and commit_only fixer: re-run the original command with its original --timeout, never the last reissue; after three consecutive timeout outcomes.*units_stalled.*Full-phase fixer: after one timeout, end your turn once.*COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK.*--timeout 0.*published report.*do not repeat the wait/);
   assert.doesNotMatch(result.remedy.split("Full-phase fixer:")[1], /re-run the same command/i, "the full-phase branch carries no re-run instruction");
   await withDir(async (root) => {
     const file = path.join(root, "report.json");
@@ -364,7 +457,7 @@ test("the artifact timeout remedy is split by hand-back type and a stale artifac
     const stale = await waitForUnits({ artifact: file, after, timeoutMs: 0, ...fakeClock() });
     assert.equal(stale.stale, true);
     assert.match(stale.remedy, /predates --after.*Fixer:.*current emission.*re-emit.*new joinRef.*Delta reviewer: use a fresh --result path.*input\.patchPath as --after/);
-    assert.match(stale.remedy, /Otherwise re-run the same command; after three consecutive timeout outcomes.*units_stalled.*Full-phase fixer: follow COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK/);
+    assert.match(stale.remedy, /Otherwise re-run the original command with its original --timeout, never the last reissue; after three consecutive timeout outcomes.*units_stalled.*Full-phase fixer: follow COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK/);
   });
 });
 
@@ -405,7 +498,7 @@ test("--artifact: a JSON write with the terminal field gives all_done at once; a
     const wait = (timeoutMs = 0) => waitForUnits({ artifact: file, after, timeoutMs, ...fakeClock() });
     const absent = await wait();
     assert.equal(absent.outcome, "timeout");
-    assert.match(absent.remedy, /commit_only fixer: re-run the same command; after three consecutive timeout.*units_stalled/);
+    assert.match(absent.remedy, /commit_only fixer: re-run the original command with its original --timeout, never the last reissue; after three consecutive timeout.*units_stalled/);
     await writeFile(file, "");
     assert.equal((await wait()).outcome, "timeout", "an empty file is pending");
     await writeFile(file, "{not json");

@@ -96,7 +96,9 @@ test("work order: the emitted prompt carries no PR/issue body, diff body, or adj
     const kinds = written.artifact.requiredReads.map((r) => r.kind);
     assert.ok(kinds.includes("evidence") && kinds.includes("diff") && kinds.includes("context"), JSON.stringify(kinds));
     const evidence = await readFile(path.join(repoRoot, written.artifact.requiredReads.find((r) => r.kind === "evidence").path), "utf8");
-    assert.ok(evidence.includes(PR_BODY_MARKER) && evidence.includes(ISSUE_BODY_MARKER));
+    assert.ok(evidence.includes(ISSUE_BODY_MARKER) && !evidence.includes(PR_BODY_MARKER), "evidence carries the issue body; the PR body is its own pr-body read");
+    const prBody = await readFile(path.join(repoRoot, written.artifact.requiredReads.find((r) => r.kind === "pr-body").path), "utf8");
+    assert.ok(prBody.includes(PR_BODY_MARKER));
     const filteredDiff = await readFile(path.join(repoRoot, written.artifact.requiredReads.find((r) => r.kind === "diff").path), "utf8");
     assert.ok(filteredDiff.includes("diff --git a/src/a.mjs"));
     for (const unit of payload.units) {
@@ -319,7 +321,8 @@ test("work order: the worst case (maximal worktree path, every read kind, maxima
   const volatileBytes = Buffer.byteLength(renderBriefingVolatile({
     gate: GATE, headSha: HEAD_SHA, loggedAt: new Date().toISOString(), validationPosture: "中".repeat(VALIDATION_POSTURE_MAX_LENGTH),
     priorDispositionsRead: { ...read("prior-dispositions", ".prior-dispositions.json", true), entries: 99999999 },
-    knownFindingsRead: { ...read("known-findings", ".known-findings.json", true), entries: 99999999 }, worktreeRoot,
+    knownFindingsRead: { ...read("known-findings", `.known-findings-${"a".repeat(12)}.json`, true), entries: 99999999 },
+    prBodyRead: read("pr-body", `.pr-body-${"a".repeat(12)}.md`, true), worktreeRoot,
   }));
   const defaults = parseYaml(await readFile(path.resolve("packages/core/src/config/extension-defaults.yaml"), "utf8"));
   const longest = shippedPrompts(defaults).slice(0, 3);

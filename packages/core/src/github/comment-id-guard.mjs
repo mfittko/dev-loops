@@ -42,6 +42,8 @@
  * guard fail-closed. Keep the allowlist small and deliberate.
  */
 
+import { findOperatorOwnedLineRefusal } from "./operator-owned-lines.mjs";
+
 // Matches a bare GitHub auto-link issue/PR reference: `#<digits>`. Bound to
 // 1..9 digits to avoid absurd ids while covering the full GitHub id space.
 // A match is excluded only when it forms a well-formed HTML numeric character
@@ -178,10 +180,16 @@ function normalizeAllowedRefs(allowedRefs) {
  *   allowlist of deliberate cross-reference ids permitted to appear in the
  *   body. A plain string is treated as a comma-separated list (like a CLI
  *   `--allowed-refs` value), never character-split.
+ * @param {boolean} [opts.standingAuthorization] - clears only the operator-owned
+ *   registry entries that accept it (the Copilot `operator` marker).
+ *   `allowedRefs` never clears an operator-owned line.
  * @returns {string} the (unchanged, since no stripping) body.
  */
-export function guardCommentBodyNoIssuePrIds(body, { ref = "generated comment body", allowedRefs = [] } = {}) {
+export function guardCommentBodyNoIssuePrIds(body, { ref = "generated comment body", allowedRefs = [], standingAuthorization = false } = {}) {
   if (typeof body !== "string") return body;
+  // OPERATOR-OWNED-LINE: no sanctioned writer posts an operator-owned line.
+  const operatorRefusal = findOperatorOwnedLineRefusal(body, { standingAuthorization });
+  if (operatorRefusal !== null) throw new Error(operatorRefusal);
   const allow = new Set(normalizeAllowedRefs(allowedRefs));
   const offending = extractIssuePrIds(body).filter((id) => !allow.has(id));
   if (offending.length > 0) {

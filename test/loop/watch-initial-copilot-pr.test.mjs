@@ -9,6 +9,7 @@ import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson a
 
 import {
   parseWatchInitialCopilotPrCliArgs,
+  runCli,
   watchInitialCopilotPr,
 } from "../../scripts/loop/watch-initial-copilot-pr.mjs";
 
@@ -273,6 +274,40 @@ test("watchInitialCopilotPr bootstrap-only draft PR is a healthy wait state (not
   assert.equal(result.status, "timed_out");
   assert.equal(result.prNumber, 79);
   assert.equal(result.attempts, 1);
+});
+
+test("watchInitialCopilotPr stops at capMs (GATE-EXEC-BOUNDED-WAIT-CAP) instead of the 3600 s policy budget", async () => {
+  let t = 0;
+  const detect = async () => ({ ok: true, state: "no_linked_pr", prNumber: null, prUrl: null });
+  const result = await watchInitialCopilotPr(
+    { repo: "owner/repo", issue: 59, pollIntervalMs: 60_000, timeoutMs: 3_600_000 },
+    { detectInitialCopilotPrStateImpl: detect, delayImpl: async (ms) => { t += ms; }, nowMs: () => t, capMs: 170_000 },
+  );
+  assert.equal(result.status, "timed_out");
+  assert.ok(t <= 170_000);
+});
+
+test("runCli re-issue round trip: the pending command parses below the 3600 s floor and resumes to ready", async () => {
+  const sink = () => { let text = ""; return { write: (c) => { text += c; return true; }, text: () => text }; };
+  let t = 0;
+  const deps = (detect) => ({ detectInitialCopilotPrStateImpl: detect, delayImpl: async (ms) => { t += ms; }, nowMs: () => t });
+  const first = sink();
+  await runCli(["--repo", "owner/repo", "--issue", "59", "--timeout", "3700"], {
+    stdout: first, stderr: sink(), ...deps(async () => ({ ok: true, state: "no_linked_pr", prNumber: null, prUrl: null })),
+  });
+  const pending = JSON.parse(first.text());
+  assert.equal(pending.outcome, "pending");
+  assert.equal(pending.remainingTimeoutSeconds, 3530);
+  const argv = pending.reissue.split(" ").slice(4);
+  assert.equal(parseWatchInitialCopilotPrCliArgs(argv).timeoutMs, 3_530_000);
+  assert.throws(() => parseWatchInitialCopilotPrCliArgs(["--repo", "owner/repo", "--issue", "59", "--timeout", "3530"]), /at least 3600/);
+  const second = sink();
+  await runCli(argv, {
+    stdout: second, stderr: sink(),
+    ...deps(async () => ({ ok: true, state: "linked_pr_ready_for_followup", prNumber: 5, prUrl: "u" })),
+  });
+  assert.equal(JSON.parse(second.text()).status, "ready_for_followup");
+  process.exitCode = 0;
 });
 
 test("watchInitialCopilotPr no_linked_pr is a healthy wait state (not a failure)", async () => {

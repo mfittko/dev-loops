@@ -2,11 +2,11 @@
 
 How dev-loop work is structured depends on the harness.
 
-**Under the Claude Code harness, the dev-loop runs as a single agent that acts as a delegating
-COORDINATOR.** The agent invoked for dev-loop work runs git and PR lifecycle operations, runs the
+**Under the Claude Code harness, the main session dispatches the `dev-loops:dev-loop` coordinator
+(`dev-loop` inside the dev-loops repo itself), and the coordinator is one agent that acts as a delegating
+COORDINATOR.** The main session runs no gate, fixer or reviewer step. The coordinator runs git and PR lifecycle operations, runs the
 `dev-loops` CLI (including state-changing `gate` / `pr` / `loop` subcommands), and posts gate
-verdicts under the operating session's identity. There is no separate read-only "main agent" and
-no Pi-style main-agent→dev-loop async hop. As COORDINATOR, the dev-loop agent is read-only for
+verdicts under the operating session's identity. The main session is the main agent. It dispatches the coordinator. The opt-in `DEVLOOPS_MAIN_AGENT_READONLY` hook covers it (`agent_type: null`). As COORDINATOR, the dev-loop agent is read-only for
 TRACKED repo files (source, tests, docs) and MUST delegate every tracked-file implementation edit
 and targeted verification run to a fresh WORKER subagent (`developer`/`fixer`/`quality`/`docs`).
 The coordinator MAY still write EPHEMERAL gitignored/non-repo artifacts directly: `tmp/`, the
@@ -16,7 +16,7 @@ this boundary: opt-in via `DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open),
 enforced, it denies a tracked-file Write/Edit whose `agent_type` is `dev-loop` or `gate-coordinator`; a worker
 subagent's `agent_type` is unaffected. It is a targeted denylist, not an airtight sandbox:
 Bash-driven tracked mutations (`git commit`, `sed -i`, `> file`) stay convention-enforced, and
-the top-level/inline agent (`agent_type: null`) falls under the main-agent boundary below. On Pi, see
+the top-level/inline agent (`agent_type: null`) falls under the opt-in `DEVLOOPS_MAIN_AGENT_READONLY` hook described at the end of this section. On Pi, see
 "Guarded surface and deliberate ceilings" below for what it does and does not cover. **The coordinator also
 delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verify`/`bun test`/
 `vitest`/`npm test`/`npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/
@@ -198,7 +198,7 @@ identity for state reads and gate calls under the same assigned task. A report p
 The following is the one canonical list of run-ending cases (the "run-ending cases"). The coordinator hands
 back only at `final_approval_ready`, a stop that needs a decision, the route's own terminal
 completion, a changed route, a lockout, genuine recovery, an unavailable actor, a runtime
-constraint, or explicit operator direction. The issue-to-PR re-target caused by the unit's own draft PR is a continuation, not a changed route. When the orchestrator dispatches a replacement for one of those
+constraint, or explicit operator direction. The one other hand-back is the interim hand-back sent with a child in flight under `GATE-EXEC-HARNESS-JOIN`, which names no run-ending case. The issue-to-PR re-target caused by the unit's own draft PR is a continuation, not a changed route. When the orchestrator dispatches a replacement for one of those
 reasons, it emits the work order with
 `scripts/loop/emit-coordinator-work-order.mjs --input <startup-output path> --harness <claude|pi|codex> --entry <queue|direct>`
 and dispatches the printed `dispatchPayload` unchanged. The input is the startup-output path a
@@ -210,7 +210,7 @@ through authoritative state, not through the relay: the replacement recovers rou
 evidence and open findings by re-running the detectors at resume.
 
 A child hand-back is a **compact relay packet** only: unit identity, status, `nextAction`, evidence
-links (including the startup-output path that unit ran), and an open question if one is needed. The packet `status` names the run-ending case from the canonical list in Unit coordinator boundaries, so it is the replacement reason. On Claude Code the packet also carries the consumed relayed message under `COORDINATOR-HANDBACK-ONE-REPORT`. On Pi a hand-back sent with a child in flight also carries the child list under `GATE-EXEC-HARNESS-JOIN` in [Gate review sub-loop contract](./gate-review-sub-loop-contract.md). No
+links (including the startup-output path that unit ran), and an open question if one is needed. The packet `status` of a run-ending hand-back names the run-ending case from the canonical list in Unit coordinator boundaries, so it is the replacement reason. A hand-back sent with a child in flight that ends no run carries an interim status and names no run-ending case. On Claude Code the packet also carries the consumed relayed message under `COORDINATOR-HANDBACK-ONE-REPORT`. On Pi a hand-back sent with a child in flight also carries the child list under `GATE-EXEC-HARNESS-JOIN` in [Gate review sub-loop contract](./gate-review-sub-loop-contract.md). No
 transcript, tool output or review text. A relay is the dispatch trigger, never the replacement's
 context.
 
@@ -238,9 +238,13 @@ The rule binds the coordinator on every harness, so it stays outside the section
 - Every hand-back names the last relayed message it consumed, by first line and arrival time, or states that it consumed none.
 
 <!-- rule: MAIN-AGENT-COORDINATOR-REPORT-READ -->
-`MAIN-AGENT-COORDINATOR-REPORT-READ`: Claude Code only. When a coordinator notification says the result is "not repeated here", or the coordinator went idle without a delivered report, the orchestrator reads the last assistant message of the coordinator's output file before it resumes or re-asks it.
+`MAIN-AGENT-COORDINATOR-REPORT-READ`: The orchestrator reads a coordinator's report before it acts on it.
 
-- The orchestrator sends all decisions for one block in one message.
-- The orchestrator reads the latest hand-back before it re-instructs.
-- On the next notification of a reporter that named children in flight, read its output file before acting.
+- Claude Code: When a coordinator notification says the result is "not repeated here", or the coordinator went idle without a delivered report, the orchestrator reads the last assistant message of the coordinator's output file before it resumes or re-asks it.
+- Claude Code: The orchestrator sends all decisions for one block in one message.
+- Claude Code: The orchestrator reads the latest hand-back before it re-instructs.
+- Claude Code: On the next notification of a reporter that named children in flight, read its output file before acting.
+- Every harness: A hand-back or pause that lists children in flight and names no run-ending case is interim, whether or not it says so. It is a status, not a result. The orchestrator relays it as a status, does not re-dispatch a listed child, and waits for the reporter's next report.
+- Every harness: A report that names a run-ending case (a run-ending case from the Unit coordinator boundaries section, or a gate coordinator's terminal `units_stalled` or `round_retired` hand-back under `GATE-EXEC-HARNESS-JOIN`) is final even when it lists children. The orchestrator treats each listed child as still running. A hand-back that states it is interim under `GATE-EXEC-HARNESS-JOIN` and whose packet status names no run-ending case is interim. When its packet status names a run-ending case, the forced hand-back has ended the reporter's run, so it is final and the orchestrator waits for no further report.
+- Every harness: A second hand-back that repeats the report the orchestrator already consumed, by first line and child list, from the same coordinator with the run state unchanged, is a duplicate. This holds for interim reports too and takes precedence over the interim bullet. A report whose packet status names a run-ending case is never a duplicate of a consumed report that named none. The orchestrator reads the state, acts on nothing and relays nothing.
 

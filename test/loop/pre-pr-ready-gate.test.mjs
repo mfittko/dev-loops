@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { onTestFinished, test } from "bun:test";
-import { initSizeBudgetFixtureRepo, makeGhMock, repeatedLinesContent, runIdFreeEnv } from "../_helpers.mjs";
+import { initSizeBudgetFixtureRepo, makeGhMock, trustGhEntries, repeatedLinesContent, runIdFreeEnv } from "../_helpers.mjs";
 
 import { parsePrePrReadyGateCliArgs, prePrReadyGate } from "../../scripts/loop/pre-pr-ready-gate.mjs";
 import { verifyPolicyChangeApproval as realVerifyPolicyChangeApproval } from "../../scripts/github/_policy-change-approval.mjs";
@@ -44,7 +44,7 @@ const runNode = async (args = [], options = {}) => {
 };
 
 async function writeGhStub(tempDir, entries, options = {}) {
-  const { runChild } = makeGhMock(entries, { repeatLastOnOverflow: true, ...options });
+  const { runChild } = makeGhMock(trustGhEntries(entries), { repeatLastOnOverflow: true, ...options });
   return { env: { DEVLOOPS_RUN_ID: "", [GH_RUNNER]: runChild } };
 }
 // #1585: fetchDraftGateEvidence now also fetches the authenticated login
@@ -125,7 +125,8 @@ function makeDraftGateComment(commentSha = HEAD_SHA_SHORT, extraFields = true) {
   return {
     id: 100,
     body: lines.join("\n"),
-    author: { login: "pi-local-run" },
+    user: { login: "pi-local-run", type: "User" },
+    author_association: "MEMBER",
     createdAt: "2026-06-07T00:00:00Z",
     updated_at: "2026-06-07T00:00:00Z",
   };

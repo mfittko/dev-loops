@@ -49,17 +49,18 @@
  *     `/usr/bin/python3`) so the real tool is matched.
  *
  * Known limitations (honest):
- *   - Segment splitting is a simple top-level split on `&&`, `||`, `|`, `;` and
- *     does NOT fully parse shell quoting/substitution. A `;`/`|` inside a quoted
- *     argument can over-report (flags a harmless inner token). It catches the
+ *   - Segment splitting uses the shared `tokenizeShellCommand` (quote-aware), so a `;`/`|`
+ *     inside a quoted argument does not start a segment. A line the tokenizer cannot
+ *     close falls back to a plain top-level split on `&&`, `||`, `|`, `;`. It catches the
  *     common raw-call forms (incl. the env/wrapper/path-prefixed ones above), but
- *     deeply obfuscated calls — aliases, `eval` — may evade it. Prefer single-line, single-purpose commands in transcripts.
+ *     deeply obfuscated calls — aliases, `eval` with a variable payload — may evade it. Payload
+ *     words (the text after `eval` or a `-c` flag) and substitution segments are split too. Prefer single-line, single-purpose commands in transcripts.
  */
 import { readFileSync } from "node:fs";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
-import { scanInlineInterpreter, stripLeadingWrappers } from "@dev-loops/core/loop/bash-command-classify";
+import { isPayloadWord, scanInlineInterpreter, stripLeadingWrappers, tokenizeShellCommand } from "@dev-loops/core/loop/bash-command-classify";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]
@@ -97,12 +98,17 @@ const ALLOWED_WRITE_OPS = Object.freeze([
   /^gh\s+pr\s+ready\b/,
 ]);
 
-/** Split a command line into top-level segments on &&, ||, |, ;. */
+/**
+ * Split a command line into top-level segments with the shared tokenizer, so a separator inside a quoted argument
+ * (`--notes "11 were node -e; python3 -c denied"`) never starts a segment. A line the tokenizer cannot close
+ * (a transcript entry such as `don't merge yet`) falls back to the plain split on &&, ||, |, ;.
+ */
 function splitSegments(line) {
-  return line
-    .split(/&&|\|\||\||;/g)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  const tok = tokenizeShellCommand(line);
+  // Segments inside `$(...)`/backticks run too, so each substitution's segments are traversed like top-level ones (offsets index LINE).
+  const walk = (segments) => segments.filter((s) => s.words.length > 0).flatMap((s) => [line.slice(s.words[0].start, s.words.at(-1).end), ...s.words.filter((w, k) => isPayloadWord(s.words, k)).flatMap((w) => splitSegments(w.value)), ...s.words.flatMap((w) => w.subs.flatMap((sub) => walk(sub.segments)))]);
+  const parts = tok.incomplete ? line.split(/&&|\|\||\||;/g) : walk(tok.segments);
+  return parts.map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
 /**

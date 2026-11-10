@@ -20,6 +20,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { detectRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
+import { shellQuote } from "../lib/checkout-delegation-refusal.mjs";
 import { parseAllWorktreePaths, parseMainWorktreePath, realpathNearestExisting, resolveContainingWorktreeRoot } from "@dev-loops/core/loop/worktree-guard";
 
 // Scrub GIT_DIR/GIT_WORK_TREE for every git call in this module: an inherited
@@ -204,4 +206,37 @@ export function isOtherDevLoopsCheckout(dir, toolchainRoot = TOOLCHAIN_ROOT) {
 export function toolchainRootMismatch(repoRoot, script, { toolchainRoot = TOOLCHAIN_ROOT } = {}) {
   if (!isOtherDevLoopsCheckout(repoRoot, toolchainRoot)) return null;
   return `toolchain_root_mismatch: --repo-root ${repoRoot} is a dev-loops checkout other than this script's toolchain root ${toolchainRoot}; run \`dev-loops-run --repo-root ${repoRoot} ${script} ...\` instead`;
+}
+
+const TOOLCHAIN_PATH_RE = /^(?:scripts|packages|cli)\//u;
+const gitOut = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: gitEnvNoDirOverrides() }).trim();
+
+/**
+ * Which toolchain answers for an open self-hosting PR (ADR 0117, issue 3139): `{ root, headSha, selfHosting, refusal }`.
+ * Self-hosting means the toolchain root is a dev-loops checkout of the PR's own repository and the PR is open and changes a path under `scripts/`, `packages/` or `cli/`.
+ * `refusal` (`toolchain_head_mismatch`) is set when the PR head is neither the toolchain root's HEAD nor one of its ancestors: the PR head's toolchain is the authority, so the run must come from its worktree.
+ * `deps` are test seams: git reads of the toolchain checkout.
+ */
+export function evaluateToolchainAuthority({ repo, pr, prState, prHeadSha, changedFiles }, { toolchainRoot = TOOLCHAIN_ROOT, git = gitOut, originSlug = detectRepoSlug, worktrees = listWorktreeEntries } = {}) {
+  const none = { root: toolchainRoot, headSha: null, selfHosting: false, refusal: null };
+  if (!isDevLoopsCheckout(toolchainRoot) || String(prState ?? "").toUpperCase() !== "OPEN" || !repoSlugEquals(originSlug(toolchainRoot), repo)) return none;
+  if (!(changedFiles ?? []).some((file) => TOOLCHAIN_PATH_RE.test(file))) return none;
+  let headSha = null;
+  try {
+    // An installed package nested in a consumer repository resolves git to that repository: only a root that is its own git top level is a checkout.
+    const real = (p) => { try { return realpathSync(p); } catch { return path.resolve(p); } };
+    if (real(git(toolchainRoot, ["rev-parse", "--show-toplevel"])) !== real(toolchainRoot)) return none;
+    headSha = git(toolchainRoot, ["rev-parse", "HEAD"]);
+  } catch { return none; }
+  const result = { root: toolchainRoot, headSha, selfHosting: true, refusal: null };
+  const onHistory = () => { try { git(toolchainRoot, ["merge-base", "--is-ancestor", prHeadSha, "HEAD"]); return true; } catch { return false; } };
+  if (typeof prHeadSha !== "string" || prHeadSha === headSha || onHistory()) return result;
+  let held = [];
+  try { held = worktrees(toolchainRoot).slice(1).filter((entry) => entry.head === prHeadSha); } catch { /* no listing: name the fetch step */ }
+  const command = `scripts/loop/detect-pr-gate-coordination-state.mjs --repo ${repo} --pr ${pr}`;
+  const exit = held.length === 1
+    ? `run \`dev-loops-run --repo-root ${shellQuote(held[0].path)} ${command}\``
+    : `run \`git fetch origin\`, then run \`dev-loops-run --repo-root <worktree> ${command}\` from the worktree that holds the PR head (path rule: skills/docs/worktree-guidance.md)`;
+  result.refusal = `toolchain_head_mismatch: this PR changes the gate toolchain, and the toolchain at ${toolchainRoot} (HEAD ${headSha}) does not contain the PR head ${prHeadSha}; ADR 0117 makes the PR head's toolchain authoritative. Remedy: ${exit}.`;
+  return result;
 }

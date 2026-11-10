@@ -11,8 +11,10 @@
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { isCleanDraftVerdict } from "@dev-loops/core/loop/pr-gate-coordination";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
+import { isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
 import { commentIssue as coreCommentIssue } from "@dev-loops/core/github/issue-ops";
 import { JUDGE_DISPOSITIONS, SEVERITY_ORDER, VALID_SEVERITIES, hasLocatableShape, normalizeSeverity, resolveFindingFile } from "@dev-loops/core/loop/gate-fanin";
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -34,6 +36,7 @@ import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
+import { wrapOperatorOwnedPhrases } from "@dev-loops/core/github/operator-owned-lines";
 import { GATE_NAMES, GATE_VERDICTS } from "./_gate-names.mjs";
 
 // The one predicate for "counts as a submitted review with content": every
@@ -250,7 +253,7 @@ export function collectFingerprints(text, set) {
 
 function formatDeferredFindingEntry({ fingerprint, severity, angle, summary, refUrl }) {
   const detail = typeof summary === "string" && summary.trim().length > 0
-    ? sanitizeInline(neutralizeBareIssuePrIds(summary.trim()))
+    ? escapeProse(neutralizeBareIssuePrIds(summary.trim()))
     : (typeof refUrl === "string" && refUrl.trim().length > 0
       ? neutralizeBareIssuePrIds(refUrl.trim())
       : "(no summary recorded)");
@@ -318,7 +321,10 @@ export async function fetchListedFingerprints(
 ) {
   const fingerprints = new Set();
   const comments = await listIssueComments({ repo, pr: target }, { env, ghCommand, runChild: run });
-  for (const comment of comments) {
+  // ADR 0248: a marker comment from an untrusted author must not suppress a deferral
+  // recording; dropping it can at worst list a duplicate entry.
+  const isTrusted = await resolveTrustedEvidencePredicate(comments, { env, ghCommand, runChild: run });
+  for (const comment of comments.filter(isTrusted)) {
     // Only a deferral comment (marker on its first line) counts; a bullet in any
     // other comment on a shared issue or PR must never suppress an entry.
     if (typeof comment?.body !== "string" || !comment.body.startsWith(DEFERRED_SUMMARY_MARKER)) continue;
@@ -383,7 +389,7 @@ export async function commentDeferredFindings(
 export function renderJudgeDetail({ judgeReason, followUpIssueNumber }) {
   const target = Number.isInteger(followUpIssueNumber) && followUpIssueNumber > 0 ? ` (follow-up ${followUpIssueNumber})` : "";
   const reason = typeof judgeReason === "string" && judgeReason.trim().length > 0
-    ? ` - ${sanitizeInline(neutralizeBareIssuePrIds(judgeReason)).replace(/judge:/gi, "judge -")}`
+    ? ` - ${escapeProse(neutralizeBareIssuePrIds(judgeReason)).replace(/judge:/gi, "judge -")}`
     : "";
   return `${target}${reason}`;
 }
@@ -393,11 +399,11 @@ export function renderFindingLine({ severity, angle, summary, judgeDisposition, 
   const judgeSuffix = typeof judgeDisposition === "string" && judgeDisposition.trim().length > 0
     ? ` — judge: ${sanitizeInline(judgeDisposition)}${renderJudgeDetail({ judgeReason, followUpIssueNumber })}`
     : "";
-  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary).replace(/judge:/gi, "judge -")}${judgeSuffix}`;
+  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${escapeProse(summary).replace(/judge:/gi, "judge -")}${judgeSuffix}`;
 }
 
 function renderRecommendationLine(recommendation) {
-  return `Recommendation: ${sanitizeInline(recommendation)}`;
+  return `Recommendation: ${escapeProse(recommendation)}`;
 }
 
 function hasRecommendation(finding) {
@@ -561,7 +567,7 @@ export function renderInlineCommentBody(finding, { round }) {
   if (hiddenFields.length > 0) {
     lines.push("<details><summary>Details</summary>", "");
     for (const field of hiddenFields) {
-      const rendered = field.code ? encodeCommentDelimiters(field.text) : escapeProse(field.text);
+      const rendered = field.code ? wrapOperatorOwnedPhrases(encodeCommentDelimiters(field.text)) : escapeProse(field.text);
       const text = boundDetailsText(rendered, hiddenFields.length, { prose: !field.code });
       // Prose stays on the label line so untrusted text never starts at column 0
       // (it could otherwise forge the header parseRenderedJudgeDisposition reads).
@@ -894,7 +900,39 @@ export async function listPrReviews({ repo, pr }, { env, ghCommand, runChild }) 
       id: Number.isInteger(r.id) ? r.id : null,
       body: r.body,
       author: typeof r?.user?.login === "string" && r.user.login.length > 0 ? r.user.login : null,
+      // Trust inputs for filterTrustedRoundInputs (ADR 0248).
+      user: r?.user ?? null,
+      author_association: r?.author_association ?? null,
     }));
+}
+
+/**
+ * Keep only the reviews/comments that may feed resolveGateRound (ADR 0248): a
+ * trusted-association author (Copilot allowed) or the already-resolved viewer
+ * login. Callers hold that login, so this adds no gh call.
+ */
+export function filterTrustedRoundInputs(items, viewerLogin) {
+  return (items ?? []).filter((c) => isTrustedRestComment(c, { allowCopilot: true }) || (Boolean(viewerLogin) && c?.user?.login === viewerLogin));
+}
+
+/**
+ * The one trust predicate for raw REST comments/reviews that feed gate evidence
+ * (ADR 0248): trusted by association (maintainer or Copilot) or authored by the
+ * authenticated viewer (the gate poster's own identity, which may be a bot).
+ * The viewer lookup runs only when an untrusted candidate exists; a failed
+ * lookup trusts by association only (fail closed).
+ */
+export async function resolveTrustedEvidencePredicate(candidates, runtime) {
+  const trustedByAssociation = (c) => isTrustedRestComment(c, { allowCopilot: true });
+  let viewerLogin = null;
+  if (candidates.some((c) => !trustedByAssociation(c))) {
+    try {
+      viewerLogin = await resolveAuthenticatedLogin(runtime);
+    } catch {
+      viewerLogin = null;
+    }
+  }
+  return (c) => trustedByAssociation(c) || (viewerLogin !== null && c?.user?.login === viewerLogin);
 }
 
 /**
@@ -910,16 +948,19 @@ export async function listPrReviews({ repo, pr }, { env, ghCommand, runChild }) 
  * failed review read, while every other caller keeps the fail-open default.
  */
 export async function fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, runChild = defaultRunChild, reportSurfaces = false } = {}) {
-  const comments = await listIssueComments({ repo, pr }, { env, ghCommand, runChild });
+  const rawComments = await listIssueComments({ repo, pr }, { env, ghCommand, runChild });
   const surfaces = [];
   let reviewSurfaceRead = false;
+  let rawReviews = [];
   try {
-    const reviews = await runGhJson(prReviewsApiArgs(repo, pr), { env, ghCommand, runChild });
-    comments.push(...normalizePrReviewsPayload(reviews));
+    rawReviews = flattenPaginatedSlurp(await runGhJson(prReviewsApiArgs(repo, pr), { env, ghCommand, runChild }));
     reviewSurfaceRead = true;
   } catch {
     // Non-fatal: continue on the issue-comment stream alone.
   }
+  const isTrusted = await resolveTrustedEvidencePredicate([...rawComments, ...rawReviews], { env, ghCommand, runChild });
+  const comments = rawComments.filter(isTrusted);
+  comments.push(...normalizePrReviewsPayload(rawReviews.filter(isTrusted)));
   if (reviewSurfaceRead) surfaces.push("review");
   surfaces.push("issue_comment");
   return reportSurfaces ? { comments, surfaces } : comments;
@@ -1157,7 +1198,7 @@ export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
     && draftGateMarker.verdict === "clean" && draftGateMarker.contractComplete,
   );
   // Legacy (non-marker) draft_gate verdict.
-  const cleanEvidenceExists = Boolean(draftGate.visible && draftGate.verdict === "clean" && draftGate.headSha);
+  const cleanEvidenceExists = isCleanDraftVerdict(draftGate);
   const legacyHeadMatch = Boolean(!currentHeadClean && cleanEvidenceExists && headSha && headSha.startsWith(draftGate.headSha));
   return {
     draftGate,
@@ -1445,10 +1486,10 @@ async function listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, rep
   return { dir, filenames: entries.filter((name) => name.startsWith(prefix) && name.endsWith(".json")).sort() };
 }
 
-// A findings log is exactly `<gate>-<full sha>.json`. Sidecars (`.act-list.json`, `.judged-ledger.json`, ...)
+// A findings log is `<gate>-<full sha>.json` or a retained same-head round `<gate>-<full sha>.round-<n>.json`. Sidecars (`.act-list.json`, `.judged-ledger.json`, ...)
 // share the prefix and suffix and never count as a round.
 export function isFindingsLogName(gate, name) {
-  return name.startsWith(`${gate}-`) && /^(?:[0-9a-f]{40}|[0-9a-f]{64})\.json$/i.test(name.slice(gate.length + 1));
+  return name.startsWith(`${gate}-`) && /^(?:[0-9a-f]{40}|[0-9a-f]{64})(?:\.round-\d+)?\.json$/i.test(name.slice(gate.length + 1));
 }
 
 async function countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot }) {

@@ -8,12 +8,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { readFile, rename, rm } from "node:fs/promises";
+import { readFile, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
-import { VALID_SEVERITIES, normalizeSeverity, isPastRoundCap, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
+import { VALID_SEVERITIES, normalizeSeverity, hasSeverityText, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { EvidenceSealError, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
@@ -63,12 +63,12 @@ check-pre-push-delta --result), and any non-clearing record for the head refuses
 the PR's own head branch (gh pr view headRefName) and the --allowed-path selectors
 (default "." = the whole repository). A PR head other than --head-sha refuses.
 An --act-list-file source also refuses with verdict_not_posted until the --gate verdict review for --head-sha is posted on the PR (GATE-EXEC-POST-BEFORE-FIX; post it with dev-loops gate upsert-verdict --findings-ledger).
-A commit_only or full emission writes its sequence marker under the head's sequence lock; while a concurrent close or pull holds that lock it refuses with sequence_lock_busy (retryable: no work order was made current, re-run the same emit once the close or pull finishes).
+A commit_only or full emission writes its sequence marker under the head's sequence lock (the keyed no-commit re-emission below writes none); while a concurrent close or pull holds that lock it refuses with sequence_lock_busy (retryable: no work order was made current, re-run the same emit once the close or pull finishes).
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
 (default: the main checkout's tmp/; an explicit --tmp-root inside a linked worktree is refused) and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef }.
 joinRef is the path for gate wait-for-units --artifact (with --after <planPath>): a full-phase fixer's final-on-write report (<outputRef>.report), else the outputRef.
-Each run supersedes the previous emission for this PR. Dispatch the printed
+Each run supersedes the previous emission for this PR, except a same-head no-commit commit_only re-emission with a locally_clear --delta-result sealed for the canonical plan's execution: it writes fixer-emit-plan.<executionIdentity>.json beside the canonical plan, writes no sequence marker and prints that keyed path as planPath (a join target, never a delta --fixer-plan). Dispatch the printed
 dispatchPayload (the --harness adapter call carrying only dispatchPrompt) unchanged; an
 unsupported harness refuses. The only operator input is --operator-focus-file, a JSON file { round?: string, items?: [{ fingerprint, decision }] }
 that renders as a bounded, sanitized "Operator focus" section and is pinned by the digest (GATE-EXEC-OPERATOR-FOCUS).
@@ -81,6 +81,7 @@ Exit codes: 0 emitted, 1 refused (missing or conflicting source or authority), 2
 const FIXER_REF_RE = /^fixer:([^/\s#]+\/[^/\s#]+)#(\d+):([0-9a-f]{40}|[0-9a-f]{64}):(f(\d+)-[0-9a-f]{8})$/;
 const FIXER_PHASES = ["commit_only", "full"];
 const PLAN_FILE = "fixer-emit-plan.json";
+const keyedFixerPlanPath = (dir, executionIdentity) => path.join(dir, `fixer-emit-plan.${executionIdentity}.json`);
 // Pinned fixer contracts: the work order digest changes when one changes.
 const FIXER_CONTRACTS = ["agents/fixer.agent.md", "skills/docs/gate-review-sub-loop-contract.md", "skills/docs/validation-policy.md", "skills/docs/copilot-loop-operations.md"];
 const PACKAGE_ROOT = new URL("../../", import.meta.url);
@@ -276,7 +277,7 @@ ${JSON.stringify(workOrder, null, 2)}
   const completion = workOrder.phase === "full" && workOrder.requiredReads.some((read) => read.kind === "completion-input");
   const verifier = workOrder.phase === "full" ? `node ${shellQuote(path.join(path.dirname(path.dirname(workOrder.executionRules.contract)), "scripts/github/verify-fixer-disposition.mjs"))} --repo ${shellQuote(workOrder.target.repo)} --pr ${workOrder.target.pr} --head-sha ${completion ? workOrder.headSha : "<pushed-head-sha>"} --fixer-plan ${shellQuote(path.join(path.dirname(path.dirname(dispositionPath)), PLAN_FILE))}` : null;
   const task = workOrder.phase === "commit_only"
-    ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery.${workOrder.siteCoverage ? " Start from the \`siteCoverage\` skeleton in the work order JSON below:" : ""} Set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site. Run each siteQuery and set \`returnedSites\` to exactly the sites it returns (empty when it returns none), add each returned site missing from \`sites\`, then delete the \`FILL:\` \`noSitesReason\` when the query returned sites, else replace it with the query outcome. Keep fingerprints and \`input_form\` texts unchanged.${workOrder.handbackCheck ? " Before you hand back, run the work order's \`handbackCheck\` command from your worktree and correct the record until it exits 0 (skip it when you made no commit)." : ""}`
+    ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery.${workOrder.siteCoverage ? " Start from the \`siteCoverage\` skeleton in the work order JSON below:" : ""} Set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site. Run each siteQuery and set \`returnedSites\` to exactly the sites it returns (empty when it returns none), add each returned site missing from \`sites\`, then delete the \`FILL:\` \`noSitesReason\` when the query returned sites, else replace it with the query outcome. Keep fingerprints and \`input_form\` texts unchanged.${workOrder.handbackCheck ? ` Before you hand back, run the work order's \`handbackCheck\` command from your worktree and correct the record until it exits 0${workOrder.deltaFindings ? "" : " (skip it when you made no commit)"}.` : ""}${workOrder.deltaFindings ? " The earlier candidate commit at HEAD is your base: fix each listed task in a new commit on top of HEAD, and fix every lifecycle task." : ""}`
     : completion ? `Do not re-fix source or reclassify coverage. Keep every command's cwd at the mutation authority worktree. The authenticated completion-input preserves the original fixing commit and raw site coverage. Construction alone does not complete delivery.\n${fullPhaseSteps(workOrder, verifier, { push: `Push only the reviewed committed candidate \`${workOrder.headSha}\` to branch ${JSON.stringify(workOrder.mutationAuthority.branch)}.` })}`
     : workOrder.source === "review-body" ? reviewBodyFullTask(workOrder, verifier, dispositionPath)
     : workOrder.source === "ci-failure" ? ciFailureFullTask(workOrder, dispositionPath)
@@ -284,7 +285,7 @@ ${JSON.stringify(workOrder, null, 2)}
   return `# Fixer work order (ADR 0106)
 
 Source: the \`${workOrder.source}\` read${workOrder.gate ? ` (${workOrder.gate} act list)` : ""}. Phase: \`${workOrder.phase}\`. PR ${workOrder.target.repo}#${workOrder.target.pr} at head \`${workOrder.headSha}\`.
-${task}${workOrder.deltaFindings ? `\nDelta review findings to fix as act items:\n${workOrder.deltaFindings.map((f, i) => `${i + 1}. ${normalizeSeverity(f.severity)}: ${JSON.stringify(f.summary)} (evidence: ${JSON.stringify(f.evidence)})`).join("\n")}` : ""}
+${task}${workOrder.deltaFindings ? `\nDelta review findings to fix as act items:\n${workOrder.deltaFindings.map((f, i) => `${i + 1}. ${normalizeSeverity(f.severity)}${f.lifecycle === true ? " [lifecycle]" : ""}: ${JSON.stringify(f.summary)} (evidence: ${JSON.stringify(f.evidence)})`).join("\n")}` : ""}
 When a \`delta-result\` read is listed, follow agents/fixer.agent.md step 7 for its act-item statuses.
 Read every \`required\` entry below IN FULL before any change. If one is missing, unreadable, or its sha256 differs, stop and report which read failed.
 Mutation authority: branch ${JSON.stringify(branch)}, paths ${allowedPaths.map((p) => JSON.stringify(p)).join(", ")}. ${workOrder.executionRules.mutation}.
@@ -301,6 +302,8 @@ ${JSON.stringify(workOrder, null, 2)}
 \`\`\`
 `;
 }
+
+const itemPairs = (items) => [...new Set((Array.isArray(items) ? items : []).map((item) => `${JSON.stringify(item?.ref)}:${JSON.stringify(item?.status)}`))].sort().join("\n");
 
 // The commit_only phase commits unpushed; the delta review then decides whether `full` may push.
 // `delta` is the parsed --delta-result (act-list route); `threads` the unresolved threads (thread route).
@@ -319,8 +322,7 @@ function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidat
     if (!clears) throw new Refusal(`--phase full refused: no delta record at ${recordPath} holds a clearing nextStep for the --delta-result's act set; ${next}`);
     // The result must be the one the decision used: an earlier non-clearing result of the same sequence shares the act set
     // but not the record's item statuses, and the fixer reads those statuses (step 7 bounded_out rule).
-    const pairs = (items) => [...new Set((Array.isArray(items) ? items : []).map((item) => `${JSON.stringify(item?.ref)}:${JSON.stringify(item?.status)}`))].sort().join("\n");
-    if (pairs(delta.actionableItems) !== pairs(record.items)) {
+    if (itemPairs(delta.actionableItems) !== itemPairs(record.items)) {
       throw new Refusal(`--phase full refused: the --delta-result's item statuses differ from the delta record ${recordPath}, so it is not the result that decision used; pass the clearing result (${next})`);
     }
     if (candidateHead) {
@@ -542,17 +544,17 @@ export async function emitFixerWorkOrder({
     if (ci.headSha !== headSha) throw new Refusal(`ci file ${ciFile} is for headSha ${JSON.stringify(ci.headSha)}, not --head-sha ${headSha}; ${next}`);
     if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name.trim() !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`);
   }
-  const isActItem = (f) => f?.judgeDisposition === "act" && VALID_SEVERITIES.has(f.severity) && typeof f.summary === "string" && f.summary.trim() !== "";
+  const isActItem = (f) => f?.judgeDisposition === "act" && (gate === "draft_gate" ? hasSeverityText(f) : typeof f.severity === "string" && VALID_SEVERITIES.has(f.severity)) && typeof f.summary === "string" && f.summary.trim() !== "";
   if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
     throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
   }
-  // ADR 0188: at or past the draft_gate round cap, low and nit findings never reach the fixer (backstop for hand-built or legacy ledgers). Below the cap a low act is fixed.
+  // ADR 0188: at pre_approval_gate, low and nit findings never reach the fixer (backstop for hand-built or legacy ledgers). At the draft gate a low act is fixed in every round.
   // A nit-only list is fixable in draft round 1 only; any other round, and any gate without a round count, refuses it (the judge pass would have rejected it).
   // A deduped cluster carries every member severity in `clusterSeverities`; the guard reads those, not the representative's.
   const badCluster = actListFile ? source.parsed.find((f) => f.clusterSeverities !== undefined && !(Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 && f.clusterSeverities.every((s) => VALID_SEVERITIES.has(s)))) : undefined;
   if (badCluster) throw new WorkOrderRefusal("invalid_cluster_severities", `invalid_cluster_severities: act item ${JSON.stringify(badCluster.summary)} has clusterSeverities that is not a non-empty array of known severities; re-run judge-pass to regenerate the act list`);
   const actSeverities = actListFile ? source.parsed.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity])) : [];
-  const lowNitOnly = actSeverities.every((s) => s === "low" || s === "nit");
+  const lowNitOnly = actSeverities.every((s) => ["low", "nit"].includes(normalizeSeverity(s)));
   let capRoundHead = headSha; // the head whose ledger and posted verdict the act list belongs to (ADR 0197)
   if (actListFile && (gate === "draft_gate" || lowNitOnly)) {
     // The round state comes from the same --tmp-root as the ledger writer, judge-pass and the verdict poster.
@@ -577,29 +579,27 @@ export async function emitFixerWorkOrder({
         }
         if (baseOnly) {
           round = cap;
-          lowFixCapped = isPastRoundCap(round, cap);
           capRoundHead = fromHead;
         }
       } catch { /* an unreadable cap-round head or base fails closed: the round_cap_reached refusal below stands */ }
     }
-    // GATE-EXEC-ROUND-CAP: a round after the cap round composes blocked on any act item (a blocked ledger does not count, so a further round is again cap+1); no fixer order follows it.
+    // GATE-EXEC-ROUND-CAP: a round after the cap round is refused (a blocked ledger does not count, so a further round is again cap+1) and gets no fixer order, until a later slice of issue 3105 opens the past-cap path.
     if (cap > 0 && round > cap) {
       throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): act list ${actListFile} belongs to draft_gate round ${round}, after the cap round (cap ${cap}); the verdict is blocked and no fixer order follows it`);
     }
-    // At the cap round the current-head round can still compose blocked (a failOpen finding the judge rejected, a question-severity act item): no fixer order follows a blocked verdict. An unreadable ledger fails closed.
+    // At the cap round the current-head round can still compose blocked (a high act item without a judgeFix, a question act item, a closed finding naming a human decision): no fixer order follows a blocked verdict. An unreadable ledger fails closed.
     if (cap > 0 && round === cap) {
       const repoRoot = resolveRepoRoot(cwd);
       const ledgerFile = path.resolve(repoRoot, buildLogPath({ repo, pr, gate, headSha: capRoundHead, tmpRoot: tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }));
       if (!existsSync(ledgerFile)) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} does not exist; failing closed at the cap round`);
       const { findings: ledgerFindings } = await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): ${m}; failing closed at the cap round`) });
-      const blockers = pastCapBlockers([...ledgerFindings, ...source.parsed], { pr: Number(pr), round, cap }); // Number(pr): the CLI pr is a string; a non-integer yields NaN and fails closed in pastCapBlockers.
+      const blockers = pastCapBlockers([...ledgerFindings, ...source.parsed], { round, cap });
       if (blockers.length > 0) {
-        throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the cap round (cap ${cap}) composes blocked (${blockers.map((b) => b.item).join("; ")}); the verdict is blocked and no fixer order follows it`);
+        throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-SOFT-CAP): the cap round (cap ${cap}) composes blocked (${blockers.map((b) => b.item).join("; ")}); the verdict is blocked and no fixer order follows it`);
       }
     }
-    if (lowNitOnly && (lowFixCapped || (actSeverities.every((s) => s === "nit") && round !== 1))) {
-      const cappedAt = gate === "pre_approval_gate" ? "at pre_approval_gate" : "at or past the draft_gate round cap";
-      const where = lowFixCapped ? cappedAt : "outside draft_gate round 1";
+    if (lowNitOnly && (lowFixCapped || (actSeverities.every((s) => normalizeSeverity(s) === "nit") && round !== 1))) {
+      const where = lowFixCapped ? "at pre_approval_gate" : "outside draft_gate round 1";
       throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${actListFile} holds only low or nit items ${where}; low and nit findings no longer reach the fixer`);
     }
   }
@@ -642,15 +642,42 @@ export async function emitFixerWorkOrder({
   await capture.read(gateDeltaRecordPath(tmpRoot, headSha));
   // ADR 0235: a commit_only thread-route re-dispatch carries the delta record's findings as act items.
   // Only a record of this sequence counts: fix_and_rereview on a candidate that is the worktree HEAD. A record of a closed sequence is stale.
-  const deltaFindings = threadsFile && phase === "commit_only" && delta?.parsed?.nextStep === "fix_and_rereview" && delta.parsed.candidateHead === execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim() ? delta.parsed.findings : undefined;
+  let deltaFindings = threadsFile && phase === "commit_only" && delta?.parsed?.nextStep === "fix_and_rereview" && delta.parsed.candidateHead === execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim() ? delta.parsed.findings : undefined;
+  // Issue 2447: the act-list route reads the sealed record the same way and decides from its nextStep, never from the reviewer's stated outcome.
+  // The open work is each record finding and each not_resolved or cannot_verify act ref of the reviewer's result.
+  const actRecord = actListFile && phase === "commit_only" && delta ? readSealedGateDeltaRecord(tmpRoot, headSha) : null;
+  const worktreeHead = actListFile && phase === "commit_only" && delta ? execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim() : null;
+  // An unsealed fix_and_rereview record at HEAD is not "no record": a locally_clear reviewer result must not take the append-only path past its open lifecycle work.
+  if (actListFile && phase === "commit_only" && delta && !actRecord) {
+    let unsealed = null;
+    // A record file that exists but cannot be parsed fails closed like the handback route: its open work cannot be ruled out.
+    try { unsealed = readGateDeltaRecord(tmpRoot, headSha); } catch (error) { throw new Refusal(`delta_record_unsealed: delta record ${gateDeltaRecordPath(tmpRoot, headSha)} cannot be parsed (${error.message}); re-run the --result step to rewrite and seal the record; nothing was written`); }
+    if (unsealed?.nextStep === "fix_and_rereview" && unsealed.candidateHead === worktreeHead && unsealed.actSetId === delta.parsed.actSetId) throw new Refusal(`delta_record_unsealed: delta record ${gateDeltaRecordPath(tmpRoot, headSha)} holds fix_and_rereview at the worktree HEAD but carries no matching seal (a --result write may have crashed), so open lifecycle or residue work cannot be ruled out; re-run the --result step to rewrite and seal the record; nothing was written`);
+  }
+  // A record of another act set (a closed sequence or a replaced act list) is not open work of this one, as in the full-phase path and the handback guard.
+  const sealedAtHead = actRecord?.nextStep === "fix_and_rereview" && actRecord.candidateHead === worktreeHead && actRecord.actSetId === delta.parsed.actSetId;
+  const hasOpenWork = sealedAtHead && ((Array.isArray(actRecord.findings) && actRecord.findings.length > 0) || [...(delta.parsed.actionableItems ?? []), ...(Array.isArray(actRecord.items) ? actRecord.items : [])].some((item) => ["not_resolved", "cannot_verify"].includes(item?.status)));
+  // A locally_clear result that validation refused (a coverage gap, a stale-surface hit) seals no finding and no open act ref: it keeps the issue 3111 route below.
+  const openAtHead = sealedAtHead && (hasOpenWork || delta.parsed.outcome !== "locally_clear");
+  if (openAtHead) {
+    // The result must be the one the decision used: an earlier result of the same sequence shares the act set but not the record's statuses.
+    if (itemPairs(delta.parsed.actionableItems) !== itemPairs(actRecord.items)) throw new Refusal(`--delta-result's item statuses differ from the delta record ${gateDeltaRecordPath(tmpRoot, headSha)}, so it is not the result that decision used; pass that decision's result, or re-run the delta review (dev-loops loop pre-push-delta); nothing was written`);
+    const unresolved = (delta.parsed.actionableItems ?? []).filter((item) => ["not_resolved", "cannot_verify"].includes(item?.status))
+      .map((item) => ({ severity: "medium", summary: `act item ${item.ref} is ${item.status} at the reviewed candidate`, evidence: [].concat(item.evidence ?? []).join("; ").slice(0, 2000) || item.status }));
+    deltaFindings = [...(Array.isArray(actRecord.findings) ? actRecord.findings : []), ...unresolved];
+    if (deltaFindings.length === 0) throw new Refusal(`delta_record_no_open_task: delta record ${gateDeltaRecordPath(tmpRoot, headSha)} holds fix_and_rereview at the worktree HEAD but no open task: it lists no finding and the --delta-result has no not_resolved or cannot_verify act item; re-run the delta review (dev-loops loop pre-push-delta); nothing was written`);
+  }
   if (deltaFindings !== undefined) {
-    const sealed = readSealedGateDeltaRecord(tmpRoot, headSha);
-    if (!sealed || sha256(readFileSync(threadRecordPath)) !== delta.read.sha256) {
-      throw new Refusal(`delta record ${threadRecordPath} is not sealed for ${headSha} or differs from the pinned read, so its findings are not evidence; re-run check-pre-push-delta --result to write it`);
+    const sealed = threadsFile ? readSealedGateDeltaRecord(tmpRoot, headSha) : actRecord;
+    const recordPath = gateDeltaRecordPath(tmpRoot, headSha);
+    if (!sealed || (threadsFile && sha256(readFileSync(threadRecordPath)) !== delta.read.sha256)) {
+      throw new Refusal(`delta record ${recordPath} is not sealed for ${headSha} or differs from the pinned read, so its findings are not evidence; re-run check-pre-push-delta --result to write it`);
     }
     const text = (value) => typeof value === "string" && value.length <= 2000;
-    if (!Array.isArray(deltaFindings) || deltaFindings.length > 20 || !deltaFindings.every((f) => text(f?.severity) && VALID_SEVERITIES.has(normalizeSeverity(f.severity)) && text(f.summary) && text(f.evidence) && ["residueOf", "site"].every((key) => f[key] === undefined || text(f[key])))) {
-      throw new Refusal(`delta record findings at ${threadRecordPath} are malformed (an array of at most 20 entries of strings of at most 2000 characters: severity, summary, evidence, optional residueOf and site); re-run the thread-route delta review (dev-loops loop pre-push-delta) to rewrite the record`);
+    // The 20-entry cap bounds the record's own findings; the synthetic act-ref tasks are bounded by the act list.
+    const recordFindings = openAtHead ? actRecord.findings ?? [] : deltaFindings;
+    if (!Array.isArray(deltaFindings) || !Array.isArray(recordFindings) || recordFindings.length > 20 || !deltaFindings.every((f) => text(f?.severity) && VALID_SEVERITIES.has(normalizeSeverity(f.severity)) && text(f.summary) && text(f.evidence) && ["residueOf", "site"].every((key) => f[key] === undefined || text(f[key])))) {
+      throw new Refusal(`delta record findings at ${recordPath} are malformed (an array of at most 20 entries of strings of at most 2000 characters: severity, summary, evidence, optional residueOf and site); re-run the delta review (dev-loops loop pre-push-delta) to rewrite the record`);
     }
   }
   // A review body has no delta review route, so --phase full needs no delta record for it.
@@ -741,7 +768,7 @@ export async function emitFixerWorkOrder({
     source: source.read.kind,
     gate: actListFile ? gate : undefined,
     ...(ciFile ? { failedChecks: source.parsed.failedChecks.slice(0, 50).map((check) => check.name.slice(0, 200)), ...(source.parsed.failedChecks.length > 50 ? { failedChecksOmitted: source.parsed.failedChecks.length - 50 } : {}) } : {}),
-    ...(deltaFindings?.length ? { deltaFindings: deltaFindings.map(({ severity, summary, evidence, residueOf, site }) => ({ severity, summary, evidence, ...(residueOf === undefined ? {} : { residueOf }), ...(site === undefined ? {} : { site }) })) } : {}),
+    ...(deltaFindings?.length ? { deltaFindings: deltaFindings.map(({ severity, summary, evidence, residueOf, site, lifecycle }) => ({ severity, summary, evidence, ...(lifecycle === true ? { lifecycle: true } : {}),...(residueOf === undefined ? {} : { residueOf }), ...(site === undefined ? {} : { site }) })) } : {}),
     ...(operatorFocus ? { operatorFocus, ...operatorFocusDigestEntry(operatorFocus) } : {}),
     configSha256: sha256(JSON.stringify(config ?? {})),
     authority: { sourceDigest: jsonContentDigest(source.parsed), ...(reviewId ? { reviewId } : {}), deltaResultDigest: delta ? jsonContentDigest(delta.parsed) : undefined,
@@ -775,8 +802,20 @@ export async function emitFixerWorkOrder({
   await writeExecutionIndex(tmpRoot, identityTriple);
   const plan = { ...identityTriple, materializationHash: materializationHash(text), promptPath, dispatchPrompt, workOrder };
   // Atomic: a concurrent pull never reads a half-written plan. One plan per PR names the only current unit.
+  // Issue 3111: a same-head commit_only re-emission with a delta result is a no-commit emission after a refused delta result. It lands
+  // beside the plan, never over it, so the delta coverage the original execution bound stays authentic; it writes no sequence marker.
+  const prior = phase === "commit_only" && actListFile && delta && originalBytes ? JSON.parse(originalBytes).workOrder : null;
+  // The delta sequence is in flight when the delta result reviewed the unpushed fixing commit (its candidate is the worktree HEAD, not the baseline) and the first fixer delivered its handback.
+  // Only the refused PRE-PUSH-DELTA-RESULT case (a locally_clear result whose record holds no finding and no open act ref) is append-only; a re-dispatch with open record work is a committing second fixer and supersedes the plan.
+  const appendOnly = prior?.phase === "commit_only" && prior.source === "act-list" && prior.headSha === headSha && prior.gate === gate
+    && delta.parsed.outcome === "locally_clear" && !openAtHead
+    && delta.parsed.origin?.executionIdentity === JSON.parse(originalBytes).executionIdentity
+    && delta.parsed.candidateHead !== headSha && delta.parsed.candidateHead === gitIn(cwd, "rev-parse", "HEAD").trim()
+    && Boolean(await capture.read(prior.outputRefs?.[0]));
+  const livePlanPath = appendOnly ? keyedFixerPlanPath(dir, executionIdentity) : planPath;
   const tempPath = `${planPath}.tmp-${executionIdentity}`;
-  await capture.write(tempPath, `${JSON.stringify(plan, null, 2)}\n`);
+  // A keyed plan records its parent execution; locateFixerUnit reports it stale once the parent is superseded or closed.
+  await capture.write(tempPath, `${JSON.stringify(appendOnly ? { ...plan, parentExecutionIdentity: JSON.parse(originalBytes).executionIdentity } : plan, null, 2)}\n`);
   await capture.recheck();
   rejectOriginalRetirement();
   recheckCandidate();
@@ -792,15 +831,15 @@ export async function emitFixerWorkOrder({
       if (oldPlan) await rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr, headSha, tmpRoot });
       // PRE-PUSH-DELTA-PUSH-AUTHORITY: a full emission that skips the delta check never overwrites an ungranted commit_only sequence at this head.
       if (phase === "full" && (reviewId || ciFile) && readSequenceMarker(markerRoot, headSha)?.fullGranted === false) throw new Refusal(`a commit_only sequence is active at ${headSha} and its candidate has no delta review; a ${ciFile ? "--ci-file" : "--review-id"} full emission would grant the push of that unreviewed candidate. Run the delta review and emit the full phase of that sequence, or close it with scripts/loop/close-gate-sequence.mjs, then re-emit`);
-      await rename(tempPath, planPath);
-      writeSequenceMarker({ tmpRoot: markerRoot, baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName, execution: { executionIdentity, workOrderRef: identityTriple.workOrderRef, outputRef } });
+      await rename(tempPath, livePlanPath);
+      if (!appendOnly) writeSequenceMarker({ tmpRoot: markerRoot, baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName, execution: { executionIdentity, workOrderRef: identityTriple.workOrderRef, outputRef } });
     });
   } catch (error) {
     if (error?.code === "SEQUENCE_LOCK_BUSY") throw new WorkOrderRefusal("sequence_lock_busy", `sequence_lock_busy: ${error.message}; no work order was made current, so re-run the emit once the concurrent close or pull finishes`, true);
     throw error;
   }
   // The coordinator's gate wait-for-units --artifact path: a full-phase fixer's final-on-write report (ADR 0223), else the hand-back itself.
-  return { ...plan, planPath, joinRef: phase === "full" && !ciFile ? fixerReportPath(outputRef) : outputRef };
+  return { ...plan, planPath: livePlanPath, joinRef: phase === "full" && !ciFile ? fixerReportPath(outputRef) : outputRef };
   } finally { await capture.release(); }
 }
 
@@ -883,6 +922,18 @@ export function fixerPlanPath(ref, tmpRoot) {
   return match ? path.join(buildFixerDir({ repo: match[1], pr: match[2], tmpRoot }), PLAN_FILE) : null;
 }
 
+/** The keyed plan path (issue 3111) for a fixer ref under `tmpRoot`, or null when the ref is not a fixer ref. Never a delta `--fixer-plan`. */
+export function keyedFixerPlanPathForRef(ref, tmpRoot) {
+  const match = FIXER_REF_RE.exec(ref);
+  return match ? keyedFixerPlanPath(buildFixerDir({ repo: match[1], pr: match[2], tmpRoot }), match[4]) : null;
+}
+
+// One plan read: only an absent file is absent; invalid JSON is an integrity refusal, any other I/O error rethrows.
+const readPlanFile = (planPath) => readJson(planPath).catch((err) => {
+  if (!(err instanceof SyntaxError)) throw err;
+  throw new WorkOrderRefusal("local_materialization_integrity_failure", `fixer emit plan ${planPath} is not valid JSON; re-emit the fixer work order, never hand-repair the plan`);
+});
+
 const closedText = (executionIdentity) => `fixer execution ${executionIdentity} belongs to a gate fix sequence that was closed as abandoned`;
 /** True when a closure record exists for the execution at any head; only ENOENT means not closed. */
 const closureRecorded = async (root, heads, executionIdentity) => {
@@ -900,20 +951,24 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
   let newest = null;
   for (const tmpRoot of tmpRoots) {
     const planPath = path.join(buildFixerDir({ repo, pr, tmpRoot }), PLAN_FILE);
-    const plan = await readJson(planPath).catch((err) => {
-      if (!(err instanceof SyntaxError)) throw err;
-      throw new WorkOrderRefusal("local_materialization_integrity_failure", `fixer emit plan ${planPath} is not valid JSON; re-emit the fixer work order, never hand-repair the plan`);
-    });
+    const plan = await readPlanFile(planPath);
     if (!plan) continue;
     if (!newest || emittedAt(plan.executionIdentity) > emittedAt(newest.executionIdentity)) newest = plan;
     if (plan.workOrderRef === ref) own ??= { plan, planPath };
+  }
+  // A no-commit emission (issue 3111) lives in its own keyed plan and never supersedes the current plan.
+  let keyed = false;
+  if (!own) for (const tmpRoot of tmpRoots) {
+    const planPath = keyedFixerPlanPath(buildFixerDir({ repo, pr, tmpRoot }), executionIdentity);
+    const plan = await readPlanFile(planPath);
+    if (plan?.workOrderRef === ref) { own = { plan, planPath }; keyed = true; break; }
   }
   if (!own) {
     return newest && emittedAt(executionIdentity) <= emittedAt(newest.executionIdentity)
       ? { stale: `fixer ref ${ref} was superseded by ${newest.workOrderRef}` } : null;
   }
   const { plan, planPath } = own;
-  if (newest.workOrderRef !== ref) return { stale: `fixer ref ${ref} was superseded by ${newest.workOrderRef}` };
+  if (!keyed && newest.workOrderRef !== ref) return { stale: `fixer ref ${ref} was superseded by ${newest.workOrderRef}` };
   const order = plan.workOrder ?? {};
   if (order.operation === "complete") {
     const error = completeAdmissionError(order);
@@ -958,7 +1013,21 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
   const origin = order.completesExecution;
   const sequenceClosed = !closureOnly && await closureRecorded(closureRoot, closureHeads, executionIdentity);
   const originClosed = !closureOnly && origin && await closureRecorded(closureRoot, origin.heads, origin.executionIdentity);
-  const stale = (sequenceClosed && closedText(executionIdentity))
+  const parentId = keyed ? plan.parentExecutionIdentity : null;
+  // One current keyed unit per parent: a newer keyed plan with the same parent supersedes this one.
+  let newerKeyed = null;
+  if (keyed) for (const name of await readdir(path.dirname(planPath)).catch(() => [])) {
+    const id = /^fixer-emit-plan\.(f\d+-[0-9a-f]{8})\.json$/.exec(name)?.[1];
+    if (!id || emittedAt(id) <= emittedAt(executionIdentity)) continue;
+    // A newer sibling that does not parse fails closed: it counts as superseding, and its own locate still refuses with the integrity failure.
+    const sibling = await readPlanFile(path.join(path.dirname(planPath), name)).catch((err) => (err instanceof WorkOrderRefusal ? null : Promise.reject(err)));
+    if (!sibling || sibling.parentExecutionIdentity === parentId) newerKeyed = id;
+  }
+  const parentStale = keyed && (!parentId || newest?.executionIdentity !== parentId
+    ? `keyed fixer ref ${ref} is orphaned: its parent execution ${parentId} is no longer the current plan`
+    : newerKeyed ? `keyed fixer ref ${ref} was superseded by a newer keyed plan ${newerKeyed} for the same parent`
+    : !closureOnly && await closureRecorded(closureRoot, closureHeads, parentId) && closedText(parentId));
+  const stale = parentStale || (sequenceClosed && closedText(executionIdentity))
     || (originClosed && closedText(origin.executionIdentity))
     || (changed.length > 0 && `required fixer source(s) ${changed.join(", ")} changed or vanished since emission; re-emit against current authority`)
     || (retired && `fixer execution ${executionIdentity} belongs to a ${order.gate} round at ${headSha} retired as ${retired}`)
@@ -974,7 +1043,8 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
     stale: stale || undefined,
     closureRoot,
     closureHeads,
-    closureOrigin: origin,
+    // A keyed plan's parent is its closure origin, so admission rechecks the parent closure under the sequence lock.
+    closureOrigin: keyed && parentId ? { heads: closureHeads, executionIdentity: parentId } : origin,
   };
 }
 

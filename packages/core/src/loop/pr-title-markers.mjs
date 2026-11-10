@@ -63,13 +63,17 @@
  * marker word (`draft://`, `draft:latest`, `wip:branch`) is read as an
  * unrelated identifier, not a status claim.
  */
-function statusMarkerTester(word) {
-  const bracket = new RegExp(`(?:^|\\s)\\[\\s*${word}\\s*\\]`, "i");
-  const paren = new RegExp(`(?:^|\\s)\\(\\s*${word}\\s*\\)`, "i");
-  const colon = new RegExp(`(?:^|\\s)${word}\\s*:(?:\\s|$)`, "i");
-  const standalone = new RegExp(`^\\s*${word}\\s*$`, "i");
-  return (title) => bracket.test(title) || paren.test(title) || colon.test(title)
-    || standalone.test(title);
+function statusPatterns(word) {
+  return [
+    new RegExp(`(?:^|\\s)\\[\\s*${word}\\s*\\]`, "i"),
+    new RegExp(`(?:^|\\s)\\(\\s*${word}\\s*\\)`, "i"),
+    new RegExp(`(?:^|\\s)${word}\\s*:(?:\\s|$)`, "i"),
+    new RegExp(`^\\s*${word}\\s*$`, "i"),
+  ];
+}
+
+function matcher(label, patterns) {
+  return { label, patterns, test: (title) => patterns.some((re) => re.test(title)) };
 }
 
 /**
@@ -81,11 +85,12 @@ function statusMarkerTester(word) {
  * title.
  */
 const MARKER_MATCHERS = [
-  { label: "WIP", test: statusMarkerTester("WIP") },
-  { label: "DRAFT", test: statusMarkerTester("DRAFT") },
-  // Flexible (any) whitespace between the phrase words, case-insensitive.
-  { label: "DO NOT MERGE", test: (title) => /\bDO\s+NOT\s+MERGE\b/i.test(title) },
-  { label: "🚧", test: (title) => /🚧/u.test(title) },
+  matcher("WIP", statusPatterns("WIP")),
+  matcher("DRAFT", statusPatterns("DRAFT")),
+  // Flexible (any) whitespace between the phrase words, case-insensitive. The
+  // wrapped forms come first so stripping removes the bracket/paren/colon too.
+  matcher("DO NOT MERGE", [...statusPatterns("DO\\s+NOT\\s+MERGE"), /\bDO\s+NOT\s+MERGE\b/i]),
+  matcher("🚧", [/🚧/u]),
 ];
 
 /**
@@ -114,4 +119,27 @@ export function findBlockingTitleMarkers(title) {
     }
   }
   return matched;
+}
+
+/**
+ * Removes every blocking marker {@link findBlockingTitleMarkers} detects, using the same
+ * anchored constructions, so a component name such as `fix(draft): x` is kept.
+ *
+ * @param {unknown} title - The PR title.
+ * @returns {string} The title without markers, whitespace-collapsed and trimmed.
+ */
+export function stripBlockingTitleMarkers(title) {
+  if (typeof title !== "string") {
+    return "";
+  }
+  const patterns = MARKER_MATCHERS.flatMap((m) => m.patterns)
+    .map((re) => new RegExp(re.source, `${re.flags}g`));
+  let current = title;
+  for (let previous = null; previous !== current;) {
+    previous = current;
+    for (const re of patterns) {
+      current = current.replace(re, " ");
+    }
+  }
+  return current.replace(/\s+/g, " ").trim();
 }

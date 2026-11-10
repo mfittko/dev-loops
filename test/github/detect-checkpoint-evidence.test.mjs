@@ -23,7 +23,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { test } from "bun:test";
-import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { runIdFreeEnv, runNode as runNodeHelper, trustCommentFixtures, trustGhEntries, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
   isGateMachineArtifactBody,
@@ -68,7 +68,7 @@ const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
 });
 
 async function writeGhStub(tempDir, entries) {
-  const { env } = await writeGhStubHelper(tempDir, entries, { repeatLastOnOverflow: true });
+  const { env } = await writeGhStubHelper(tempDir, trustGhEntries(entries), { repeatLastOnOverflow: true });
   return { ...env, DEVLOOPS_RUN_ID: "" };
 }
 
@@ -397,7 +397,7 @@ test("detectCheckpointEvidence falls back to the REST API when the gh binary is 
           status: 200,
           statusText: "OK",
           headers: { get: () => null },
-          json: async () => ([
+          json: async () => trustCommentFixtures([
             {
               id: 42,
               body: [
@@ -866,6 +866,8 @@ test("detect-checkpoint-evidence fails pre-merge check when only draft gate exis
     assert.deepEqual(payload.preMergeGateCheck.failures, [
       "missing visible clean current-head pre_approval_gate comment",
     ]);
+    // The failure JSON still names the latest trusted verdict heads for a follow-up reviewer's delta bound.
+    assert.ok("headSha" in payload.draftGate && "headSha" in payload.preApprovalGate);
     assert.equal(payload.evidenceState, EVIDENCE_STATE.NOT_ESTABLISHED);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1453,9 +1455,21 @@ test("buildPreMergeGateCheck: escalate sizeOutcome with no human APPROVED review
 test("buildPreMergeGateCheck: escalate sizeOutcome with a human APPROVED review and 0 unresolved CHANGES_REQUESTED passes (AC3)", () => {
   const evidence = cleanEvidence();
   evidence.preApprovalGateMarker.sizeOutcome = "escalate";
-  evidence.reviews = [{ login: "alice", state: "APPROVED", commit_id: "abc1234" }];
+  evidence.reviews = [{ login: "alice", state: "APPROVED", commit_id: "abc1234", trusted: true }];
   const result = buildPreMergeGateCheck(evidence, 0, null);
   assert.equal(result.ok, true, JSON.stringify(result.failures));
+});
+
+test("buildPreMergeGateCheck: an unstamped APPROVED review or approve-merge comment never satisfies the size gate (ADR 0248 fail closed)", () => {
+  for (const patch of [
+    { reviews: [{ login: "alice", state: "APPROVED", commit_id: "abc1234" }] },
+    { comments: [{ login: "carol", body: "approve merge abc1234", type: "User" }] },
+  ]) {
+    const evidence = cleanEvidence();
+    evidence.preApprovalGateMarker.sizeOutcome = "escalate";
+    Object.assign(evidence, patch);
+    assert.equal(buildPreMergeGateCheck(evidence, 0, null).ok, false);
+  }
 });
 
 test("buildPreMergeGateCheck: sizeTouchesT1 true with no APPROVED review fails, even on a pass outcome (remaps sizeTouchesT1 -> touchesT1) (AC2, AC3)", () => {
@@ -1516,7 +1530,7 @@ test("buildPreMergeGateCheck: an unresolved human CHANGES_REQUESTED alongside an
 test("buildPreMergeGateCheck: a solo-owner PR clears the gate via a head-pinned \"approve merge <headSha>\" comment even with no APPROVED review (AC5)", () => {
   const evidence = cleanEvidence();
   evidence.preApprovalGateMarker.sizeOutcome = "escalate";
-  evidence.comments = [{ login: "carol", body: "approve merge abc1234", type: "User" }];
+  evidence.comments = [{ login: "carol", body: "approve merge abc1234", type: "User", trusted: true }];
   const result = buildPreMergeGateCheck(evidence, 0, null);
   assert.equal(result.ok, true, JSON.stringify(result.failures));
 });
@@ -4006,6 +4020,7 @@ test("detect-checkpoint-evidence: a head-pinned APPROVED review followed by a la
           {
             id: 900,
             user: { login: "alice", type: "User" },
+            author_association: "MEMBER",
             state: "APPROVED",
             commit_id: "abc1234",
             submitted_at: "2026-05-29T22:30:00Z",
@@ -4016,6 +4031,7 @@ test("detect-checkpoint-evidence: a head-pinned APPROVED review followed by a la
           {
             id: 901,
             user: { login: "alice", type: "User" },
+            author_association: "MEMBER",
             state: "PENDING",
             commit_id: null,
             submitted_at: null,
@@ -4086,6 +4102,7 @@ test("detect-checkpoint-evidence: a reviews-read failure blocks an escalated siz
             body: "approve merge abc1234",
             updated_at: "2026-05-29T23:00:00Z",
             user: { login: "carol", type: "User" },
+            author_association: "MEMBER",
           },
         ])}\n`,
       },
@@ -4735,7 +4752,7 @@ test("detectCheckpointEvidence carries clean gate markers from an earlier head a
         : joined.includes("/issues/") ? [comments]
           : joined.includes("/reviews") ? [[]] : null;
       if (out === null) return { code: 0, stdout: "", stderr: "" };
-      return { code: 0, stdout: JSON.stringify(out), stderr: "" };
+      return { code: 0, stdout: JSON.stringify(trustCommentFixtures(out)), stderr: "" };
     };
     const run = (extra) => detectCheckpointEvidence({ repo: "owner/repo", pr: 2819 }, { env: { GH_TOKEN: "t" }, ghCommand: "gh", runChild, cwd: dir, ...extra });
 
@@ -4755,7 +4772,15 @@ test("detectCheckpointEvidence carries clean gate markers from an earlier head a
     assert.deepEqual(recorded.map((e) => [e.gate, e.originHead, e.headSha, e.decision]).sort(), [
       ["draft_gate", headA, headB, "carry_verdict"], ["pre_approval_gate", headA, headB, "carry_verdict"],
     ]);
-    assert.equal((await run({})).draftGateMarker.carriedFrom, headA);
+    assert.equal((await run({})).draftGateMarker.carriedFrom, headA, "MEMBER-authored carried-heads record carries");
+
+    // The same record from a NONE-association stranger is dropped by the detector's carry filter (#3034 AC3).
+    const record = comments.find((c) => c.id === 99);
+    record.user = { login: "stranger", type: "User" };
+    record.author_association = "NONE";
+    const forged = await run({});
+    assert.equal(forged.draftGateMarker.carriedFrom, undefined);
+    assert.equal(forged.preApprovalGateMarker.carriedFrom, undefined);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

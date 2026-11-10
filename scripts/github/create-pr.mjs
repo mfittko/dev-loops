@@ -79,7 +79,7 @@ Behavior:
   - refuses with \`size_split_required_before_pr\` before creating when the local \`origin/<base>...<head>\` whole-PR logic LOC is at or above the resolved default-tier \`waiverLoc\` (PRE-PR-SIZE-CHECK); no override flag; an unknown size does not refuse
   - fetches only \`origin <base>\` before size and changelog checks; refuses with \`base_fetch_failed_before_pr\` on fetch failure
   - validates \`--base\` as a non-empty literal branch name before that fetch: refuses empty values, options, refspecs and revision syntax; valid branch names remain supported
-  - refuses with \`changelog_incomplete_before_pr\` (LIFECYCLE-CHANGELOG-COMPLETENESS) after size checks against the fetched base when the selected head equals checkout HEAD; skips for an unresolved origin base or a different head; no override
+  - refuses with \`changelog_incomplete_before_pr\` (LIFECYCLE-CHANGELOG-COMPLETENESS) after size checks against the fetched base when the selected head equals checkout HEAD; skips for an unresolved origin base or a different head; applies only when \`changelog.required: true\` is set in the committed HEAD \`.devloops\` config file (any loader-order name), otherwise prints a skip notice
   - after a successful create, prints one JSON line \`{"adrTripwire":...,"sizeBudget":...}\` (ADR-TRIPWIRE-EARLY-SURFACE);
     a block or unknown outcome is advisory and never refuses the already-created PR
 Examples:
@@ -627,6 +627,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   // error, a malformed-ref rejection, or an evaluator bug propagates and
   // refuses PR creation, matching how the ready boundary lets it throw.
   let resolvedHead = "HEAD";
+  const skipNotices = [];
   const baseForDiff = hasBase ? sources.base : baseDefault;
   if (typeof baseForDiff === "string" && baseForDiff.trim().length > 0) {
     const bareBase = baseForDiff.trim().replace(/^origin\//u, "");
@@ -707,6 +708,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
         if (code !== 0) {
           throw Object.assign(parseError(`LIFECYCLE-CHANGELOG-COMPLETENESS: ${diagnostics.join("; ")}`), { code: CHANGELOG_INCOMPLETE_BEFORE_PR });
         }
+        for (const line of diagnostics) if (line.startsWith("changelog completeness check skipped")) skipNotices.push(line);
       }
     }
   }
@@ -753,6 +755,8 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
       process.stderr.write(`[create-pr] FACADE-LINKED-PR-SINGLE-ARTIFACT: opening replacement PR, replacing linked PR #${guard.replaced} for issue #${closingIssue}.\n`);
     }
   }
+  // Emit the skip notice only after every later wrapper check passed, so a refusal keeps stderr JSON-only.
+  for (const line of skipNotices) process.stderr.write(`[create-pr] ${line}\n`);
   const { code, stdout } = await spawnCreatePr(ghArgs, runtime, { captureStdout: issueLess });
   // ADR-TRIPWIRE-EARLY-SURFACE: report the tripwire and size budget once the PR
   // exists. Advisory only: a block never refuses creation.

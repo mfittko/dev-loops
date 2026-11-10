@@ -7,8 +7,9 @@ import { DEFAULT_TEST_PR_BODY, runIdFreeEnv, withTempDir } from "../_helpers.mjs
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { parseUpsertCheckpointVerdictCliArgs, renderGateReviewCommentBody, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
-// GATE-EXEC-ROUND-CAP: the cap reads only the judged ledger, counts completed rounds, and past the cap a new
-// act item blocks with round_cap_reached while an all-low/nit act list converges by the low/nit rule.
+// GATE-EXEC-ROUND-CAP + GATE-EXEC-SOFT-CAP: the cap reads only the judged ledger and counts completed rounds. Past the cap
+// only a high act item without judgeFix, a question act item, or a closed finding with a named human decision blocks;
+// medium/low/nit act items and medium defer/reject never block.
 
 const HEAD = "abc1234000000000000000000000000000000000";
 const priorHeads = ["1", "2", "3"].map((c) => c.repeat(40));
@@ -184,18 +185,25 @@ test("the structured findings path posts a defer target and a reason holding an 
   }, { prefix: "dev-loops-round-cap-structured-ids-" });
 });
 
-for (const severity of ["high", "medium"]) {
-  test(`past the cap a new ${severity} act item composes blocked with round_cap_reached`, async () => {
-    await withTempDir(async (tempDir) => {
-      const out = await pastCap(tempDir, [finding(severity, "act")]);
-      assert.equal(out.error, undefined);
-      assert.equal(verdictOf(out), "blocked");
-      assert.match(out.body, /round_cap_reached/);
-      const explicit = await pastCap(tempDir, [finding(severity, "act")], { extraArgs: ["--verdict", "findings_present"] });
-      assert.match(explicit.error, /--verdict "findings_present"/);
-    }, { prefix: "dev-loops-round-cap-new-" });
-  });
-}
+test("past the cap a new high act item without judgeFix composes blocked with round_cap_reached", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await pastCap(tempDir, [finding("high", "act")]);
+    assert.equal(out.error, undefined);
+    assert.equal(verdictOf(out), "blocked");
+    assert.match(out.body, /round_cap_reached/);
+    const explicit = await pastCap(tempDir, [finding("high", "act")], { extraArgs: ["--verdict", "findings_present"] });
+    assert.match(explicit.error, /--verdict "findings_present"/);
+  }, { prefix: "dev-loops-round-cap-new-" });
+});
+
+test("past the cap a new medium act item without judgeFix keeps findings_present", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await pastCap(tempDir, [finding("medium", "act")]);
+    assert.equal(out.error, undefined);
+    assert.equal(verdictOf(out), "findings_present");
+    assert.doesNotMatch(out.body, /round_cap_reached/);
+  }, { prefix: "dev-loops-round-cap-new-medium-" });
+});
 
 test("below the cap the same new act item keeps findings_present", async () => {
   await withTempDir(async (tempDir) => {
@@ -217,11 +225,11 @@ for (const severity of ["low", "nit"]) {
   });
 }
 
-test("past the cap a mixed round (one medium, two lows) blocks", async () => {
+test("past the cap a mixed round (one medium, two lows) keeps findings_present", async () => {
   await withTempDir(async (tempDir) => {
     const out = await pastCap(tempDir, [finding("medium", "act"), { ...finding("low", "act"), summary: "a" }, { ...finding("low", "act"), summary: "b" }]);
-    assert.equal(verdictOf(out), "blocked");
-    assert.match(out.body, /round_cap_reached/);
+    assert.equal(verdictOf(out), "findings_present");
+    assert.doesNotMatch(out.body, /round_cap_reached/);
   }, { prefix: "dev-loops-round-cap-mixed-" });
 });
 
@@ -234,7 +242,6 @@ test("past the cap a low defer and a nit reject post clean", async () => {
 });
 
 for (const [name, findings] of [
-  ["a medium reject", [finding("medium", "reject")]],
   ["a high defer", [finding("high", "defer", { followUpDraft: { title: "t", body: "b" } })]],
   ["a missing disposition", [{ severity: "low", angle: "correctness", summary: "unjudged" }]],
 ]) {
@@ -262,11 +269,11 @@ test("past the cap a reasoned medium reject and a medium defer to another issue 
   }, { prefix: "dev-loops-round-cap-final-medium-" });
 });
 
-test("past the cap a medium defer to the PR itself blocks as severity_disagreement", async () => {
+test("past the cap a medium reject without a reason and a medium defer to the PR itself post clean", async () => {
   await withTempDir(async (tempDir) => {
-    const out = await pastCap(tempDir, [finding("medium", "defer", { followUpIssueNumber: 17 })], { overallVerdict: "clean" });
-    assert.equal(verdictOf(out), "blocked");
-    assert.match(out.body, /severity_disagreement/);
+    const out = await pastCap(tempDir, [finding("medium", "reject"), finding("medium", "defer", { followUpIssueNumber: 17 })], { overallVerdict: "clean" });
+    assert.equal(verdictOf(out), "clean");
+    assert.doesNotMatch(out.body, /severity_disagreement/);
   }, { prefix: "dev-loops-round-cap-self-defer-" });
 });
 
@@ -366,10 +373,11 @@ test("an inline clean draft_gate post with only --findings-summary is refused at
   assert.equal(verdictOf(await post(["--verdict", "clean", "--execution-mode", "inline_single_agent"])), "clean");
 });
 
-test("at the cap round an act item without judgeFix still blocks", async () => {
+test("at the cap round a high act item without judgeFix blocks, and with judgeFix goes to the fixer", async () => {
   await withTempDir(async (tempDir) => {
-    const out = await pastCap(tempDir, [finding("medium", "act")]);
+    const out = await pastCap(tempDir, [finding("high", "act")]);
     assert.equal(verdictOf(out), "blocked");
+    assert.equal(verdictOf(await pastCap(tempDir, [finding("high", "act", withFix)])), "findings_present");
   }, { prefix: "dev-loops-round-cap-closure-nofix-" });
 });
 

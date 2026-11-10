@@ -7,7 +7,9 @@ import { test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { buildFanoutEnforcement, EVIDENCE_STATE } from "../../scripts/github/detect-checkpoint-evidence.mjs";
-import { initGitFixture, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { initGitFixture, runIdFreeEnv, runNode as runNodeHelper, trustGhEntries, writeGhStub as writeGhStubRaw } from "../_helpers.mjs";
+
+const writeGhStubHelper = (tempDir, entries, options) => writeGhStubRaw(tempDir, trustGhEntries(entries), options);
 
 // GATE-EXEC-LOW-NIT-CONVERGENCE: the server-side gate-evidence check (--skip-fanout-ledger-check) must pass a
 // converged PR from GitHub-visible state alone. The temp dir holds no ledger, context, plan or config, so every

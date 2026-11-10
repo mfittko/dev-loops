@@ -60,6 +60,7 @@ import { fileURLToPath } from "node:url";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
+import { isTypedOrKnownGap } from "@dev-loops/core/loop/gate-no-dead-end";
 import { DISPOSITION, interpretLoopState, STATE, TRANSITIONS } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateConductorRouting, getAllowedOuterTransitions, OUTER_STATE, OUTER_TERMINAL_STATES } from "@dev-loops/core/loop/conductor-routing";
 import { interpretReviewerLoopState, REVIEWER_STATE, REVIEWER_TRANSITIONS } from "@dev-loops/core/loop/reviewer-loop-state";
@@ -623,6 +624,11 @@ const PR_GATE_COORDINATION_MACHINE = {
           PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
           PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
         ].includes(action)),
+    },
+    {
+      // Issue 3105: a report_blocked result names who decides or a command an agent can run, unless it is a known gap.
+      name: "blocked-names-decision-or-remedy",
+      check: (result) => isTypedOrKnownGap(undefined, result),
     },
   ],
 };

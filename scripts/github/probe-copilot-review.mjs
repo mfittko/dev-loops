@@ -3,7 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, parseReviewThreads } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
 import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
-import { resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { capWait, pendingFields, resolveTimeoutMs, scriptCommand } from "../lib/timeout-flag.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { isSanctionedCopilotReviewerLogin, isTrustedGraphqlComment } from "@dev-loops/core/github/comment-trust";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -31,6 +31,9 @@ Options:
                                 no fresh activity). For a quick non-watch thread/state
                                 read without entering the watch loop, pass 0 here or use
                                 'dev-loops gate capture-threads'.
+One call waits at most 170 seconds (GATE-EXEC-BOUNDED-WAIT-CAP); a longer --timeout returns
+"timeout" with outcome "pending" and a "reissue" command (carrying the internal --baseline-ids
+and the remaining --timeout); run it. --concise prints the outcome and the reissue line too.
 Output (stdout, JSON):
   { "ok": true, "status": "changed"|"timeout"|"idle", "repo": "...", "pr": N, "attempts": N,
     "newComments": [...], "newReviews": [...], "newIssueComments": [...] }
@@ -107,6 +110,7 @@ const COPILOT_ACTIVITY_QUERY = [
   "}",
 ].join("\n");
 const parseError = buildParseError(USAGE);
+const BASELINE_KINDS = ["reviewThreadComments", "reviews", "issueComments"];
 function rejectRemovedFlag(token) {
   throw parseError(
     `${token} has been removed. The poll interval is a centralized policy constant. Omit the flag.`,
@@ -123,6 +127,7 @@ export function parseWatchCliArgs(argv) {
       "timeout-ms": { type: "string" },
       concise: { type: "boolean" },
       summary: { type: "boolean" },
+      "baseline-ids": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -168,6 +173,19 @@ export function parseWatchCliArgs(argv) {
     }
     if (token.name === "concise" || token.name === "summary") {
       options.concise = true;
+      continue;
+    }
+    if (token.name === "baseline-ids") {
+      // Internal: a re-issued capped wait carries the first call's baseline activity ids.
+      try {
+        const ids = JSON.parse(requireTokenValue(token, parseError));
+        options.baseline = Object.fromEntries(BASELINE_KINDS.map((kind) => [kind, ids[kind].map((id) => {
+          if (typeof id !== "string" || id === "") throw new TypeError("baseline id must be a non-empty string");
+          return { id };
+        })]));
+      } catch {
+        throw parseError(`--baseline-ids must be a JSON object of id arrays (${BASELINE_KINDS.join(", ")})`);
+      }
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -295,13 +313,16 @@ export async function watchCopilotReview(
     delayImpl = delay,
     now = Date.now,
     ensureOwnershipImpl = ensureAsyncRunnerOwnership,
+    onBaseline = undefined,
   } = {},
 ) {
   const leaseCwd = resolveRepoRoot(process.cwd());
-  const baseline = parseCopilotActivity(await fetchGithubCopilotActivityPayload(
+  // options.baseline lets a re-issued capped wait keep the first call's baseline, so activity between calls is reported.
+  const baseline = options.baseline ?? parseCopilotActivity(await fetchGithubCopilotActivityPayload(
     { repo: options.repo, pr: options.pr },
     { env, ghCommand },
   ));
+  onBaseline?.(baseline);
   const attemptBudget = buildAttemptBudget(options.timeoutMs, options.pollIntervalMs);
   const watchStartedAtMs = now();
   for (let attempt = 1; attempt <= attemptBudget; attempt += 1) {
@@ -378,6 +399,7 @@ export function formatProbeConcise(result) {
     `Copilot probe: PR #${result.pr} (${result.repo})`,
     `  status:        ${result.status}`,
     `  attempts:      ${result.attempts}`,
+    ...(result.outcome === undefined ? [] : [`  outcome:       ${result.outcome} (${result.remainingTimeoutSeconds} s left)`, `  reissue:       ${result.reissue}`]),
     `  new threadComments: ${newComments.length}`,
     `  new reviews:        ${newReviews.length}`,
     `  new issueComments:  ${newIssueComments.length}`,
@@ -405,14 +427,23 @@ export async function runCli(
     stdout = process.stdout,
     env = process.env,
     ghCommand = "gh",
+    ...watchDeps
   } = {},
 ) {
-  const options = parseWatchCliArgs(argv);
-  if (options.help) {
+  const requested = parseWatchCliArgs(argv);
+  if (requested.help) {
     stdout.write(`${USAGE}\n`);
     return;
   }
-  const result = await watchCopilotReview(options, { env, ghCommand });
+  // GATE-EXEC-BOUNDED-WAIT-CAP: one call waits at most the cap; a longer request returns a pending result.
+  const { timeoutMs, remainingMs } = capWait(requested.timeoutMs);
+  const options = { ...requested, timeoutMs };
+  let baseline;
+  let result = await watchCopilotReview(options, { env, ghCommand, ...watchDeps, onBaseline: (b) => { baseline = b; } });
+  if (result.status === "timeout" && remainingMs > 0) {
+    const ids = Object.fromEntries(BASELINE_KINDS.map((kind) => [kind, baseline[kind].map((item) => item.id)]));
+    result = { ...result, ...pendingFields({ remainingMs, command: scriptCommand(import.meta.url), argv, carry: { "--baseline-ids": JSON.stringify(ids) } }) };
+  }
   if (options.concise && options.jq === undefined && !options.silent) {
     stdout.write(`${formatProbeConcise(result)}\n`);
     return result.ok === false ? 1 : 0;
