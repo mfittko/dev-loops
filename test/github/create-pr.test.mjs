@@ -581,7 +581,7 @@ test("create-pr --issue <n> refuses a missing closing reference before invoking 
       "--title", "Add feature",
       "--issue", "123",
       "--body", "some text without keyword",
-    ], { env });
+    ], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 1);
     const stderrPayload = JSON.parse(result.stderr);
     assert.match(stderrPayload.error, /requires a closing reference.*Closes #123/);
@@ -604,7 +604,7 @@ test("create-pr --issue <n> refuses a mismatched closing reference before invoki
       "--title", "Add feature",
       "--issue", "123",
       "--body", "Closes #999",
-    ], { env });
+    ], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 1);
     const stderrPayload = JSON.parse(result.stderr);
     assert.match(stderrPayload.error, /mismatched closing reference/);
@@ -628,7 +628,7 @@ test("create-pr --issue refuses a valueless bare --issue token (#1626)", async (
       "--title", "Add feature",
       "--body", "Closes #1",
       "--issue",
-    ], { env });
+    ], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 1);
     assert.match(JSON.parse(result.stderr).error, /--issue must be a positive integer/);
     assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
@@ -651,7 +651,7 @@ test("create-pr --issue refuses non-numeric / zero / negative values (#1626)", a
         "--title", "Add feature",
         "--body", `Closes #1`,
         "--issue", bad,
-      ], { env });
+      ], { env, cwd: tempDir, noRecord: true });
       assert.equal(result.code, 1, `expected exit 1 for --issue ${bad}`);
       assert.match(JSON.parse(result.stderr).error, /--issue must be a positive integer/);
       assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
@@ -814,7 +814,7 @@ test("create-pr --body-file with an unreadable file fails closed: nonzero exit, 
       "--head", "feature",
       "--title", "Add feature",
       "--body-file", "/nonexistent/path/pr-body.md",
-    ], { env });
+    ], { env, cwd: tempDir, noRecord: true });
 
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /ok":false/);
@@ -1128,7 +1128,7 @@ test("create-pr --help short-circuits before --issue validation (#1626)", async 
     const { env, counterPath } = await writeGhStub(tempDir, []);
     // --help with a valueless --issue must still print USAGE and exit 0,
     // not throw the --issue validation error.
-    const result = await runNode(["--help", "--issue"], { env });
+    const result = await runNode(["--help", "--issue"], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 0, `expected exit 0, got ${result.code}. stderr: ${result.stderr}`);
     assert.match(result.stdout, /Canonical PR-creation wrapper around/i);
     assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
@@ -1138,7 +1138,7 @@ test("create-pr --help short-circuits before --issue validation (#1626)", async 
 });
 
 test("create-pr --help documents draft-only behavior, default self-assign, and --ready rejection", async () => {
-  const result = await runNode(["--help"]);
+  const result = await runNode(["--help"], { noRecord: true });
 
   assert.equal(result.code, 0);
   assert.equal(result.stderr, "");
@@ -1339,7 +1339,7 @@ test("create-pr rejects --ready without invoking gh", async () => {
 
   try {
     const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
-    const result = await runNode(["--repo", "owner/repo", "--ready"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--ready"], { env, cwd: tempDir, noRecord: true });
 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
@@ -1469,7 +1469,7 @@ test("create-pr rejects a non-integer --allow-replacement-pr value before invoki
       "--title", "Add feature",
       "--body", conformantBody("Closes #85"),
       "--allow-replacement-pr", "abc",
-    ], { env });
+    ], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 1);
     assert.match(JSON.parse(result.stderr).error, /--allow-replacement-pr must be a positive integer/);
     assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
@@ -1540,7 +1540,7 @@ test("create-pr refuses a valueless bare --allow-replacement-pr token (#1629)", 
       "--title", "Add feature",
       "--body", conformantBody("Closes #85"),
       "--allow-replacement-pr",
-    ], { env });
+    ], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 1);
     assert.match(JSON.parse(result.stderr).error, /--allow-replacement-pr requires a positive integer/);
     assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
@@ -1585,7 +1585,7 @@ test("create-pr refuses a body whose closing reference disagrees with the --head
       "--head", "dl/issue-2092-body-swap",
       "--title", "Add feature",
       "--body", "Closes #2071",
-    ], { env });
+    ], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 1);
     const stderrPayload = JSON.parse(result.stderr);
     assert.match(stderrPayload.error, /CLOSING-REF-BRANCH-MISMATCH/);
@@ -1676,7 +1676,7 @@ test("create-pr refuses a space-form --allow-cross-issue value (boolean flag; fa
       "--title", "Add feature",
       "--body", conformantBody("Closes #85"),
       "--allow-cross-issue", "false",
-    ], { env });
+    ], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 1);
     const stderrPayload = JSON.parse(result.stderr);
     assert.match(stderrPayload.error, /--allow-cross-issue is a boolean flag/);
@@ -1696,7 +1696,7 @@ test("create-pr refuses a body whose SECOND closing reference disagrees, even wi
       "--head", "issue-2110",
       "--title", "Add feature",
       "--body", "Closes #2110\n\nResolves #2071",
-    ], { env });
+    ], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 1);
     const stderrPayload = JSON.parse(result.stderr);
     assert.match(stderrPayload.error, /CLOSING-REF-BRANCH-MISMATCH/);
@@ -1719,7 +1719,7 @@ test("create-pr --allow-cross-issue does NOT waive the explicit --issue path (ev
       "--title", "Add feature",
       "--body", "Closes #2110\n\nCloses #2071",
       "--allow-cross-issue",
-    ], { env });
+    ], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 1);
     const stderrPayload = JSON.parse(result.stderr);
     assert.match(stderrPayload.error, /CLOSING-REF-BRANCH-MISMATCH/);
@@ -1741,7 +1741,7 @@ test("create-pr --issue refuses a wrong SECOND closing reference even when the f
       "--head", "issue-2110",
       "--title", "Add feature",
       "--body", "Closes #2110\n\nCloses #2071",
-    ], { env });
+    ], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 1);
     const stderrPayload = JSON.parse(result.stderr);
     assert.match(stderrPayload.error, /CLOSING-REF-BRANCH-MISMATCH/);
@@ -2282,7 +2282,7 @@ test("create-pr refuses any adr-tripwire:allow line in the body before invoking 
       "--head", "feature",
       "--title", "Add feature",
       "--body", "Body\n\nadr-tripwire:allow contract doc edit\n",
-    ], { env });
+    ], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 1);
     const stderrPayload = JSON.parse(result.stderr);
     assert.match(stderrPayload.error, /ADR-TRIPWIRE-STANDING-WAIVER/);
@@ -2313,7 +2313,7 @@ for (const [label, bodyArgs, useFile] of [
         await writeFile(file, "x\nadr-tripwire:allow because\n");
         args.push(file);
       }
-      const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", ...args], { env });
+      const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", ...args], { env, cwd: tempDir, noRecord: true });
       assert.equal(result.code, 1);
       assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER/);
       assert.deepEqual(await readGhCalls(ghLogPath), []);
@@ -2329,7 +2329,7 @@ test("create-pr refuses --fill and --template (body sourced outside the wrapper)
     const { env, ghLogPath } = await writeGhStub(tempDir, []);
     for (const flag of ["--fill", "-f", "--fill-verbose", "--fill-first", "--template", "-T", "--recover", "--editor", "-e", "--web", "-w"]) {
       const extra = /fill|^-[few]$|editor|web/.test(flag) ? [flag] : [flag, "t.md"];
-      const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", ...extra], { env });
+      const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", ...extra], { env, cwd: tempDir, noRecord: true });
       assert.equal(result.code, 1);
       assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER/);
     }
@@ -2343,7 +2343,7 @@ test("create-pr refuses --recover even with --body (the saved body is never chec
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-recover-"));
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, []);
-    const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", "--body", "Closes 7", "--recover", "r.json"], { env });
+    const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", "--body", "Closes 7", "--recover", "r.json"], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 1);
     assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER.*--recover/);
     assert.deepEqual(await readGhCalls(ghLogPath), []);
@@ -2358,7 +2358,7 @@ test("create-pr refuses --body together with --body-file", async () => {
     const { env, ghLogPath } = await writeGhStub(tempDir, []);
     const file = path.join(tempDir, "w.md");
     await writeFile(file, "adr-tripwire:allow because\n");
-    const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", "--body", "Closes 7", "--body-file", file], { env });
+    const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", "--body", "Closes 7", "--body-file", file], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 1);
     assert.match(JSON.parse(result.stderr).error, /mutually exclusive/);
     assert.deepEqual(await readGhCalls(ghLogPath), []);
@@ -2373,7 +2373,7 @@ test("create-pr reads the real --body-file when a flag value starts with -b or -
     const { env, ghLogPath } = await writeGhStub(tempDir, []);
     const file = path.join(tempDir, "body.md");
     await writeFile(file, "x\nadr-tripwire:allow because\n");
-    const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "-bump deps", "--body-file", file], { env });
+    const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "-bump deps", "--body-file", file], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 1);
     assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER/);
     assert.deepEqual(await readGhCalls(ghLogPath), []);
@@ -2422,7 +2422,7 @@ test("create-pr refuses --editor and --web even with an explicit --body", async 
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, []);
     for (const flag of ["--editor", "-e", "--web", "-w"]) {
-      const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", "--body", "Closes 7", flag], { env });
+      const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", "--body", "Closes 7", flag], { env, cwd: tempDir, noRecord: true });
       assert.equal(result.code, 1);
       assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER/);
     }
