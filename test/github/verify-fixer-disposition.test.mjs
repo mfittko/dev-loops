@@ -34,10 +34,57 @@ const REPO = "owner/repo";
 const PR = 1975;
 const HEAD_SHA = "a".repeat(40);
 const FIX_SHA = "b".repeat(40);
+const initialHistories = new Map(), completionHistories = new Map(), legacyHistory = {};
+afterAll(async () => {
+  for (const history of [...initialHistories.values(), ...completionHistories.values(), legacyHistory]) {
+    await history.ready?.catch(() => {});
+    if (history.root) await rm(history.root, { recursive: true, force: true });
+  }
+});
+
+async function initPristineGitFixture(root, site = false) {
+  const text = site ? typeof site === "string" ? site : "one\ntwo\nthree\nfour\nfive\n" : null;
+  const history = initialHistories.get(text) ?? {};
+  initialHistories.set(text, history);
+  history.ready ??= (async () => {
+    history.root = await mkdtemp(path.join(os.tmpdir(), "fixer-initial-history-"));
+    initGitFixture(history.root, { branch: "issue-1" });
+    if (text) {
+      await writeFile(path.join(history.root, "site.txt"), text);
+      execFileSync("git", ["-C", history.root, "add", "site.txt"]);
+      execFileSync("git", ["-C", history.root, "commit", "-qm", "site"]);
+    }
+    history.head = execFileSync("git", ["-C", history.root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+  })();
+  await history.ready;
+  await cp(path.join(history.root, ".git"), path.join(root, ".git"), { recursive: true });
+  if (text) await writeFile(path.join(root, "site.txt"), text);
+  return history.head;
+}
+
+test("pristine fixture histories initialize simultaneously with independent Git copies", async () => {
+  for (const build of [initPristineGitFixture, completionFixture, legacyFixture]) {
+    await withRepoRoot(async (left) => withRepoRoot(async (right) => {
+      const [leftFixture, rightFixture] = await Promise.all([build(left), build(right)]);
+      const git = (root, ...args) => execFileSync("git", ["-C", root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+      const head = git(right, "rev-parse", "HEAD");
+      assert.equal(leftFixture.baseline ?? leftFixture, rightFixture.baseline ?? rightFixture);
+      assert.notEqual((await stat(path.join(left, ".git", "config"))).ino, (await stat(path.join(right, ".git", "config"))).ino);
+      git(left, "commit", "-q", "--allow-empty", "-m", "independent mutation");
+      assert.equal(git(right, "rev-parse", "HEAD"), head);
+      const histories = [...initialHistories.values(), ...completionHistories.values(), legacyHistory].filter((history) => history.root);
+      for (const history of histories) {
+        assert.equal(git(history.root, "rev-parse", "HEAD"), history.head ?? history.candidate);
+        assert.equal(existsSync(path.join(history.root, ".git", "worktrees")), false);
+        assert.equal(existsSync(path.join(history.root, "tmp")), false);
+      }
+    }));
+  }
+});
 
 for (const change of ["miss", "metadata-text", "mode", "offset", "offset-touch", "multi-hunk", "multiline", "overlap", "revert", "rename", "delete", "binary", "left", "missing", "foreign", "unknown", "merge"]) test(`C19 historical root proof: ${change}`, async () => {
   await withRepoRoot(async (root) => {
-    initGitFixture(root, { branch: "issue-1" });
+    await initPristineGitFixture(root);
     const git = (...args) => execFileSync("git", ["-C", root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
     const file = path.join(root, "site.txt"), original = "one\ntwo\nthree\nfour\nfive\n";
     const commit = async (text) => { await writeFile(file, text); git("add", "-A"); git("commit", "-qm", "site change"); return git("rev-parse", "HEAD"); };
@@ -429,8 +476,7 @@ test("bound active full missing output is typed subject evidence and resolver st
 test("emitted and pulled THREAD full binds missing output without an execution directory", async () => {
   await withRepoRoot(async (root) => {
     root = await realpath(root);
-    initGitFixture(root, { branch: "issue-1" });
-    const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+    const head = await initPristineGitFixture(root);
     const tmpRoot = path.join(root, "tmp"), threadsFile = path.join(tmpRoot, "threads.json");
     const recordPath = path.join(tmpRoot, "gate-delta", `${head}.json`);
     await mkdir(path.dirname(recordPath), { recursive: true });
@@ -460,15 +506,9 @@ test("emitted and pulled THREAD full binds missing output without an execution d
 // An emitted and pulled THREAD full plan whose pushed head is the baseline head (issue 2787 C3, C4).
 async function threadConstructFixture(root, recordOver, site = false, commitCandidate = false) {
   root = await realpath(root);
-  initGitFixture(root, { branch: "issue-1" });
-  if (site) {
-    await writeFile(path.join(root, "site.txt"), typeof site === "string" ? site : "one\ntwo\nthree\nfour\nfive\n");
-    execFileSync("git", ["-C", root, "add", "site.txt"]);
-    execFileSync("git", ["-C", root, "commit", "-qm", "site"]);
-  }
-  const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+  const head = await initPristineGitFixture(root, site);
   if (commitCandidate) execFileSync("git", ["-C", root, "commit", "-q", "--allow-empty", "-m", "fix"], { env: gitEnvNoDirOverrides() });
-  const candidate = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+  const candidate = commitCandidate ? execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim() : head;
   const tmpRoot = path.join(root, "tmp"), threadsFile = path.join(tmpRoot, "threads.json");
   const recordPath = path.join(tmpRoot, "gate-delta", `${head}.json`);
   await mkdir(path.dirname(recordPath), { recursive: true });
@@ -1903,22 +1943,24 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   if (settings.legacy) return legacyCompletionFixture(repoRoot, kind, settings);
   repoRoot = await realpath(repoRoot);
   const git = (...args) => execFileSync("git", ["-C", repoRoot, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
-  const history = settings.pristineHistory;
-  if (history?.root) {
-    await cp(path.join(history.root, ".git"), path.join(repoRoot, ".git"), { recursive: true });
-    await writeFile(path.join(repoRoot, ".gitignore"), "tmp/\n");
-  } else {
-    initGitFixture(repoRoot, { branch: "issue-1" });
-    if (settings.site) { await writeFile(path.join(repoRoot, "site.txt"), typeof settings.site === "string" ? settings.site : "one\ntwo\nthree\nfour\nfive\n"); git("add", "site.txt"); git("commit", "-qm", "site"); }
-    await writeFile(path.join(repoRoot, ".gitignore"), "tmp/\n");
-    git("add", ".gitignore");
-    git("commit", "-qm", "ignore evidence");
-    if (history) {
-      history.root = await mkdtemp(path.join(os.tmpdir(), "completion-pristine-history-"));
-      await cp(path.join(repoRoot, ".git"), path.join(history.root, ".git"), { recursive: true });
-    }
-  }
-  const baseline = git("rev-parse", "HEAD"), tmpRoot = path.join(repoRoot, "tmp");
+  const site = settings.site ? typeof settings.site === "string" ? settings.site : "one\ntwo\nthree\nfour\nfive\n" : null;
+  const history = completionHistories.get(site) ?? {};
+  completionHistories.set(site, history);
+  history.ready ??= (async () => {
+    history.root = await mkdtemp(path.join(os.tmpdir(), "completion-pristine-history-"));
+    const seedGit = (...args) => execFileSync("git", ["-C", history.root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+    initGitFixture(history.root, { branch: "issue-1" });
+    if (site) { await writeFile(path.join(history.root, "site.txt"), site); seedGit("add", "site.txt"); seedGit("commit", "-qm", "site"); }
+    await writeFile(path.join(history.root, ".gitignore"), "tmp/\n");
+    seedGit("add", ".gitignore");
+    seedGit("commit", "-qm", "ignore evidence");
+    history.head = seedGit("rev-parse", "HEAD");
+  })();
+  await history.ready;
+  await cp(path.join(history.root, ".git"), path.join(repoRoot, ".git"), { recursive: true });
+  if (site) await writeFile(path.join(repoRoot, "site.txt"), site);
+  await writeFile(path.join(repoRoot, ".gitignore"), "tmp/\n");
+  const baseline = history.head, tmpRoot = path.join(repoRoot, "tmp");
   await mkdir(tmpRoot);
   const actList = [0, 1, 2].map((index) => ({ ...ACT_LIST[0], summary: index === 2 ? "second member" : "s", siteQuery: "query", acceptedForms: [`--${index}`] }));
   for (const item of actList) item.fingerprint = fingerprintFinding(item);
@@ -2123,15 +2165,9 @@ async function legacyCompletionFixture(repoRoot, kind = "resolved", settings = {
 }
 
 describe.serial("completion review baseline corruption", () => {
-  // Only pristine history is reused; every case owns its Git directory and producer evidence.
-  const pristineHistory = {};
-  afterAll(async () => {
-    if (pristineHistory.root) await rm(pristineHistory.root, { recursive: true, force: true });
-  });
-
 for (const mode of ["normal", "check", "construct"]) for (const defect of ["sourceDigest", "deltaResultDigest", "optional", "duplicate", "length", "baseline"]) test(`completion ${mode} refuses supplied review baseline ${defect} before optional authority branches`, async () => {
   await withRepoRoot(async (root) => {
-    const f = await completionFixture(root, "resolved", { pristineHistory });
+    const f = await completionFixture(root, "resolved");
     const order = f.plan.workOrder;
     if (["sourceDigest", "deltaResultDigest"].includes(defect)) delete order.authority[defect];
     if (defect === "optional") order.requiredReads[0].required = false;
@@ -2179,17 +2215,24 @@ const LEGACY_FORMS = [
   "not_configured with missing or invalid trusted absence provenance",
 ];
 async function legacyFixture(repoRoot) {
-  initGitFixture(repoRoot, { branch: "issue-1" });
   const git = (...args) => execFileSync("git", ["-C", repoRoot, ...args], { env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined,
     GIT_CONFIG_PARAMETERS: undefined, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "grep.column", GIT_CONFIG_VALUE_0: "false" }, encoding: "utf8" });
-  const baseline = git("rev-parse", "HEAD").trim();
-  for (const [index, file] of LEGACY_FILES.entries()) {
-    await mkdir(path.dirname(path.join(repoRoot, file)), { recursive: true });
-    await writeFile(path.join(repoRoot, file), "readValidationEvidence\n".repeat(index < 11 ? 12 : 11));
-  }
-  git("add", ".");
-  git("commit", "-qm", "209 legacy query rows across 18 files");
-  const candidate = git("rev-parse", "HEAD").trim();
+  legacyHistory.ready ??= (async () => {
+    legacyHistory.root = await mkdtemp(path.join(os.tmpdir(), "fixer-legacy-history-"));
+    const seedGit = (...args) => execFileSync("git", ["-C", legacyHistory.root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+    initGitFixture(legacyHistory.root, { branch: "issue-1" });
+    for (const [index, file] of LEGACY_FILES.entries()) {
+      await mkdir(path.dirname(path.join(legacyHistory.root, file)), { recursive: true });
+      await writeFile(path.join(legacyHistory.root, file), "readValidationEvidence\n".repeat(index < 11 ? 12 : 11));
+    }
+    seedGit("add", ".");
+    seedGit("commit", "-qm", "209 legacy query rows across 18 files");
+    legacyHistory.baseline = seedGit("rev-parse", "HEAD^");
+    legacyHistory.candidate = seedGit("rev-parse", "HEAD");
+  })();
+  await legacyHistory.ready;
+  await cp(legacyHistory.root, repoRoot, { recursive: true });
+  const { baseline, candidate } = legacyHistory;
   const coverage = [{ fingerprint: ACT_FP, returnedSites: [...LEGACY_FILES], sites: [
     ...LEGACY_FORMS.map((site) => ({ site, kind: "input_form", status: "fixed", reason: "", test: "test/github/validation-evidence.test.mjs: historical input form" })),
     ...LEGACY_FILES.map((site, index) => ({ site, kind: "site", status: index ? "skipped" : "fixed", reason: index ? "shared reader; no direct edit" : "", ...index ? {} : { test: "historical reader regression" } })),

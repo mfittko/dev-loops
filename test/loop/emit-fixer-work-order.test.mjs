@@ -8,7 +8,7 @@ import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { cp, link, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { test } from "bun:test";
+import { afterAll, test } from "bun:test";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
 import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
 import { startDeltaSequence, toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
@@ -89,6 +89,28 @@ const clearingDeltaFor = (head, over = {}) => deltaResultFor(head, {
 let clock = 1_790_000_000_000;
 const nextExecution = () => `f${clock++}-0000abcd`;
 
+test("pristine emitter history initializes simultaneously with independent worktrees", async () => {
+  const fixtures = [];
+  let bothReady;
+  const ready = new Promise((resolve) => { bothReady = resolve; });
+  await Promise.all([0, 1].map((index) => withFixture(async (fixture) => {
+    git(fixture.root, "config", "fixture.owner", String(index));
+    fixtures.push(fixture);
+    if (fixtures.length === 2) bothReady();
+    await ready;
+    const { root, wt, head } = fixture;
+    assert.equal(git(root, "config", "fixture.owner"), String(index));
+    assert.equal(git(root, "rev-parse", "main"), git(wt, "rev-parse", `${head}^`));
+    assert.equal(git(wt, "show", "-s", "--format=%s", head), "c1");
+    assert.equal(git(wt, "rev-parse", `${head}^{tree}`), git(root, "rev-parse", "main^{tree}"));
+    git(wt, "commit", "-q", "--allow-empty", "-m", "independent mutation");
+    assert.equal(git(root, "rev-parse", "main"), git(initialHistory.root, "rev-parse", "main"));
+  })));
+  assert.equal(git(initialHistory.root, "rev-parse", "issue-1"), initialHistory.head);
+  assert.equal(existsSync(path.join(initialHistory.root, ".git", "worktrees")), false);
+  assert.equal(existsSync(path.join(initialHistory.root, "tmp")), false);
+});
+
 for (const route of ["ACT", "THREAD"]) test(`detector carries only a complete authenticated ${route} ancestor checkpoint`, async () => {
   const { resolveFixerDispositionInput } = await import("../../scripts/loop/detect-pr-gate-coordination-state.mjs");
   await withFixture(async ({ root, wt, head, emit, files, writeRecord, prepareFull }) => {
@@ -166,21 +188,37 @@ for (const route of ["ACT", "THREAD"]) test(`detector carries only a complete au
 
 // A main checkout on `main` (commit C0) with the PR branch issue-1 at head C1 in a
 // linked worktree, plus typed source files under the main checkout's tmp/.
+const initialHistory = {};
+afterAll(async () => {
+  await initialHistory.ready?.catch(() => {});
+  if (initialHistory.root) await rm(initialHistory.root, { recursive: true, force: true });
+});
+
 async function withFixture(fn) {
   await withTempDir(async (dir) => {
     const root = path.join(await realpath(dir), "repo");
     await mkdir(root);
-    git(root, "init", "-q", "-b", "main");
-    git(root, "config", "user.email", "t@example.com");
-    git(root, "config", "user.name", "T");
+    initialHistory.ready ??= (async () => {
+      initialHistory.root = await mkdtemp(path.join(path.dirname(dir), "emitter-initial-history-"));
+      const seed = initialHistory.root;
+      git(seed, "init", "-q", "-b", "main");
+      git(seed, "config", "user.email", "t@example.com");
+      git(seed, "config", "user.name", "T");
+      await writeFile(path.join(seed, ".gitignore"), "tmp/\n");
+      git(seed, "add", ".gitignore");
+      git(seed, "commit", "-q", "-m", "c0");
+      git(seed, "branch", "issue-1");
+      git(seed, "checkout", "-q", "issue-1");
+      git(seed, "commit", "-q", "--allow-empty", "-m", "c1");
+      initialHistory.head = git(seed, "rev-parse", "HEAD");
+      git(seed, "checkout", "-q", "main");
+    })();
+    await initialHistory.ready;
+    await cp(path.join(initialHistory.root, ".git"), path.join(root, ".git"), { recursive: true });
     await writeFile(path.join(root, ".gitignore"), "tmp/\n");
-    git(root, "add", ".gitignore");
-    git(root, "commit", "-q", "-m", "c0");
-    git(root, "branch", "issue-1");
     const wt = path.join(root, "tmp", "worktrees", "wt");
     git(root, "worktree", "add", "-q", wt, "issue-1");
-    git(wt, "commit", "-q", "--allow-empty", "-m", "c1");
-    const head = git(wt, "rev-parse", "HEAD");
+    const head = initialHistory.head;
     const src = path.join(root, "tmp", "src");
     await mkdir(src, { recursive: true });
     const files = { actList: path.join(src, "act.json"), threads: path.join(src, "threads.json"), delta: path.join(src, "delta.json") };
