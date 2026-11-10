@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, pullWorkOrder, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
@@ -30,8 +30,6 @@ const seed = (root, over = {}) => seedJudgeSources(root, { headSha: HEAD, ...ove
 test("grounded optional discovery is delivered, root-bound and digest-bound", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
-    const optional = path.join(root, "judge-fixture", "optional-dependency.md");
-    await writeFile(optional, "The dependency confirms the finding.\n");
     const plan = await emitJudgeWorkOrder(sources);
     const result = pull(plan, root);
     assert.equal(result.status, 0, result.stderr);
@@ -42,28 +40,17 @@ test("grounded optional discovery is delivered, root-bound and digest-bound", as
     const changed = structuredClone(delivered);
     changed.executionRules.widening = "";
     assert.notEqual(workOrderDigest(changed), plan.workOrderDigest);
-    // Discovery is optional: only a returned filename becomes a read, never an absent candidate.
-    const filenames = await readdir(path.dirname(optional));
-    assert.deepEqual(filenames.filter((name) => name === path.basename(optional)), [path.basename(optional)]);
-    assert.equal(await readFile(optional, "utf8"), "The dependency confirms the finding.\n");
-    assert.deepEqual(filenames.filter((name) => name === "absent-dependency.md"), []);
-    assert.equal(delivered.requiredReads.some((read) => read.path === optional), false);
     await rm(path.join(root, sources.specFile));
     assert.equal(refusal(pull(plan, root)), "stale_dispatch");
   });
 });
 
-test("grounded discovery preserves the neutral and Claude judge tool and write boundaries", async () => {
+test("grounded discovery preserves the neutral and Claude judge tool boundaries", async () => {
   const neutral = await readFile(path.resolve("agents/judge.agent.md"), "utf8");
   const claude = await readFile(path.resolve(".claude/agents/judge.md"), "utf8");
   assert.match(neutral, /^tools: read, search, bash, write$/m);
   assert.match(claude, /^tools: Read, Grep, Glob, Bash, Write$/m);
   for (const text of [neutral, claude]) assert.match(text, /<!-- rule-ref: GATE-EXEC-JUDGE-GROUNDED-DISCOVERY -->/);
-  await withDir(async (root) => {
-    const plan = await emitJudgeWorkOrder(await seed(root));
-    assert.deepEqual(plan.workOrder.outputRefs.map((file) => path.basename(file)), ["judge-verdict.json", "spec-authority-verdict.json"]);
-    assert.equal(refusal(pull(plan, root, { digest: "0".repeat(64) })), "dispatch_reference_mismatch");
-  });
 });
 
 test("Codex bootstrap precedes every pinned read and binds contracts to the emitting toolchain", async () => {

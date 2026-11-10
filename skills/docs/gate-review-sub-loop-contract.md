@@ -908,7 +908,7 @@ Because the findings ride the verdict review itself, they occupy the same post-v
 1. Name the concrete dependency or ambiguity that requires widening.
 2. Open only an exact path supplied by authenticated material or discovered through bounded filename discovery under a known existing root. Never guess filenames or directories.
 3. Resolve contract references against the emitting toolchain and application references against the authorized application worktree.
-4. Distinguish an empty optional filename search from an attempted file read that fails. When existing evidence suffices, an absent optional candidate need not trigger a read. When necessary evidence is unavailable, report that limitation and stop.
+4. Distinguish an empty optional filename search from an attempted file read that fails. When existing evidence suffices, do not read an absent optional candidate. When necessary evidence is unavailable, report that limitation and stop.
 5. Preserve every current stop on permission/classifier denial, failed reads, missing required inputs and digest mismatch, plus immutable dispatches, pull receipts, verdict validation and judge ownership of dispositions.
 
 The emitted `executionRules.widening` text is the single delivery surface in the pulled work order; its materialized bytes carry these clauses. This rule adds no tool grant, shell command or write target.

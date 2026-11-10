@@ -10,13 +10,7 @@ A judge reviewing a consumer repo selected guessed optional paths and then corre
 
 ## Decision
 
-Register `GATE-EXEC-JUDGE-GROUNDED-DISCOVERY` in the gate-review contract and carry its five clauses in the canonical judge role and emitted `executionRules.widening` text:
-
-1. Widening starts by naming the concrete dependency or ambiguity that makes it necessary.
-2. Open only an exact path supplied by authenticated material or discovered through bounded filename discovery under a known existing root. Do not guess filenames or directories.
-3. Resolve contract references against the emitting toolchain and application references against the authorized application worktree.
-4. Distinguish an empty optional filename search from an attempted file read that fails. If existing evidence suffices, an absent optional candidate need not trigger a read. If necessary evidence is unavailable, report that limitation and stop.
-5. All existing stops remain in force for permission/classifier denial, failed reads, missing required inputs and digest mismatch. Dispatch immutability, pull receipts, verdict validation and the judge's ownership of dispositions also remain intact.
+Register [GATE-EXEC-JUDGE-GROUNDED-DISCOVERY](../../skills/docs/gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525) in the gate-review contract and carry its five clauses in the canonical judge role and emitted `executionRules.widening` text. The canonical rule owns the clauses: when existing evidence suffices, do not read an absent optional candidate; when necessary evidence is unavailable, report that limitation and stop.
 
 The emitted rule text is the single delivery surface: the pulled work order carries it and tests inspect the materialized bytes. It adds no tool grant, shell command or write target. Reject a new search service or wrapper language, a denylist of guessed names, and wider permissions: each adds surface without establishing grounded path selection.
 
