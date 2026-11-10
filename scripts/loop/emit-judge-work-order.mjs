@@ -48,7 +48,7 @@ Exit codes: 0 emitted, 1 refused (missing or inconsistent source), 2 usage/IO er
 
 // ref = judge:<owner/repo>#<pr>:<gate>:<headSha>:<roundId>; executionIdentity = roundId.
 const JUDGE_REF_RE = /^judge:([^/\s#]+\/[^/\s#]+)#(\d+):([a-z_]+):([0-9a-f]{40}|[0-9a-f]{64}):(j(\d+)-[0-9a-f]+)$/;
-const JUDGE_WIDENING_RULE = "requiredReads are the default context, not a ceiling. You MAY read further code, spec, contracts or prior ledgers when a concrete dependency or ambiguity requires it";
+const JUDGE_WIDENING_RULE = "GATE-EXEC-JUDGE-GROUNDED-DISCOVERY: requiredReads are the default context, not a ceiling. Before widening, name the concrete dependency or ambiguity. Open only an exact path supplied by authenticated material or returned by bounded filename discovery under a known existing root; never guess filenames or directories. Resolve contract references against the emitting toolchain root derived from executionRules.contract, and application references against the authorized application worktree cwd. An empty optional filename search is not a failed file read: when existing evidence suffices, do not read an absent optional candidate; when necessary evidence is unavailable, report the limitation and stop. Preserve all permission/classifier-denial, failed-read, missing-required-input and digest-mismatch stops, immutable dispatches, pull receipts, verdict validation and judge ownership of dispositions";
 // Pinned judge contracts: the work order digest changes when either changes.
 const JUDGE_CONTRACTS = ["agents/judge.agent.md", "skills/docs/spec-authority-contract.md"];
 const PACKAGE_ROOT = new URL("../../", import.meta.url);
