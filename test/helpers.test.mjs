@@ -33,7 +33,7 @@ test("npm cache setup preserves explicit and writable default caches; falls back
       ...fs,
       mkdirSync() { throw new Error("fixture default unavailable"); },
       mkdtempSync() { throw new Error("fixture temp unavailable"); },
-    } }), /npm cache setup: no writable cache directory/);
+    } }), /npm cache setup: no writable cache directory .*OPS-WRITABLE-TOOL-CACHE/);
     assert.ok(calls.every(({ args }) => args.join(" ") === "config get cache"));
   });
 });

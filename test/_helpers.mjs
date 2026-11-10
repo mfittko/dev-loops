@@ -30,7 +30,7 @@ export function ensureWritableNpmCacheEnv(env, { run = execFileSync, fs = cacheF
       probe(cache);
       return { ...env, npm_config_cache: cache };
     } catch {
-      throw new Error(`npm cache setup: no writable cache directory (${defaultCache}, ${os.tmpdir()})`);
+      throw new Error(`npm cache setup: no writable cache directory (${defaultCache}, ${os.tmpdir()}) (OPS-WRITABLE-TOOL-CACHE)`);
     }
   }
 }
