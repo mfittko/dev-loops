@@ -7,8 +7,9 @@ function inspectTimingCache(profile, inventory) {
   assert.equal(profile?.version, 1);
   assert.ok(profile.files && typeof profile.files === "object" && !Array.isArray(profile.files));
   assert.ok(Object.values(profile.files).every((value) => Number.isInteger(value) && value >= 0));
-  assert.match(profile.provenance?.bunVersion ?? "", /^1\.4\./);
-  assert.ok(Number.isInteger(profile.provenance?.parallelism) && profile.provenance.parallelism > 0);
+  const runtime = profile.provenance === undefined ? profile.metadata?.runtime : profile.provenance;
+  assert.match(runtime?.bunVersion ?? "", /^1\.4\./);
+  assert.ok(Number.isInteger(runtime?.parallelism) && runtime.parallelism > 0);
   const cached = new Set(Object.keys(profile.files));
   const intended = new Set(inventory);
   return {
@@ -41,6 +42,17 @@ test("timing cache rejects incompatible schema and timing values", () => {
   assert.throws(() => inspectTimingCache({ version: 2, files: {}, provenance }, []));
   assert.throws(() => inspectTimingCache({ version: 1, files: [], provenance }, []));
   assert.throws(() => inspectTimingCache({ version: 1, files: { "test/a.test.mjs": -1 }, provenance }, []));
+});
+
+test("timing cache accepts learned runtime metadata and preserves provenance validation", () => {
+  const runtime = { bunVersion: "1.4.1", parallelism: 2 };
+  const profile = { version: 1, files: {}, metadata: { runtime } };
+  assert.deepEqual(inspectTimingCache(profile, []), { hits: [], misses: [], stale: [] });
+  for (const invalid of [null, {}, { ...runtime, bunVersion: "1.3.0" }, { ...runtime, parallelism: 0 }, { ...runtime, parallelism: 1.5 }]) {
+    assert.throws(() => inspectTimingCache({ ...profile, metadata: { runtime: invalid } }, []));
+    assert.throws(() => inspectTimingCache({ ...profile, provenance: invalid }, []));
+  }
+  assert.throws(() => inspectTimingCache({ version: 1, files: {} }, []));
 });
 
 test("successful timing refresh stamps and atomically promotes an exact profile", async () => {
