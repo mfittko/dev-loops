@@ -81,7 +81,7 @@ test("restore binds real archive contents to API run, attempt, workflow and comm
     assert.deepEqual(await restore(runtime, env, request), merged());
     assert.equal(calls.length, 5);
     assert.match(calls[1], /event=push&branch=main&status=success&per_page=1/);
-    for (const [object, key, value] of [[artifact, "expired", true], [artifact, "name", "ci-timings-34-1"], [artifact.workflow_run, "head_sha", "b".repeat(40)], [run, "run_attempt", 3], [run, "event", "pull_request"], [run, "conclusion", "failure"]]) {
+    for (const [object, key, value] of [[artifact, "expired", true], [artifact, "name", "ci-timings-34-1"], [artifact, "name", "ci-timing-diagnostic-34-2-1"], [artifact.workflow_run, "head_sha", "b".repeat(40)], [run, "run_attempt", 3], [run, "event", "pull_request"], [run, "conclusion", "failure"]]) {
       const previous = object[key]; object[key] = value;
       const snapshot = await selectSnapshot({ inventory, runtime, bootstrap: { version: 1, files: {} }, restore: () => restore(runtime, env, request), log: () => {} });
       assert.deepEqual(snapshot.files, {});
@@ -103,7 +103,17 @@ test("workflow preserves native inventory runs and read-only PR consumption with
   assert.match(run.run, /--timings=\.ci-timing-output.json --timings=\.ci-timing-input.json --update-timings --shard=/);
   assert.equal(run.env.BUN_TEST_TIMINGS_PATH, ".ci-timing-input.json");
   assert.deepEqual(jobs["publish-timings"].needs, ["changes", "verify"]);
-  for (const gate of [jobs["publish-timings"], suite.steps.find((s) => s.id === "collect-timings"), suite.steps.find((s) => s.uses === "actions/upload-artifact@v4")]) {
+  const uploads = suite.steps.filter((s) => s.uses === "actions/upload-artifact@v4");
+  const diagnostic = uploads.find((s) => s.with.name.startsWith("ci-timing-diagnostic-"));
+  assert.equal(diagnostic.if, "matrix.shard != '' && github.event_name == 'pull_request'");
+  assert.equal(diagnostic["continue-on-error"], true);
+  assert.equal(diagnostic.with.name, "ci-timing-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard_index }}");
+  assert.equal(diagnostic.with.path, ".ci-timing-output.json\n.ci-timing-input.json\n");
+  assert.equal(diagnostic.with["include-hidden-files"], true);
+  assert.equal(diagnostic.with["if-no-files-found"], "error");
+  assert.equal(diagnostic.with["retention-days"], 7);
+  assert.equal(uploads.length, 2);
+  for (const gate of [jobs["publish-timings"], suite.steps.find((s) => s.id === "collect-timings"), uploads.find((s) => s !== diagnostic)]) {
     assert.match(gate.if, /github.event_name == 'push'/);
     assert.match(gate.if, /github.ref == format\('refs\/heads\/\{0\}', github.event.repository.default_branch\)/);
   }
