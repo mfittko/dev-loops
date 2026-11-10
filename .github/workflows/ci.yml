@@ -6,6 +6,14 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+  actions: read
+
+env:
+  DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+  BUN_TEST_PARALLELISM: 2
+
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -13,6 +21,7 @@ jobs:
       inspect_run_viewer: ${{ steps.inspect-run-viewer-scope.outputs.inspect_run_viewer }}
       presentations: ${{ steps.rendered-artifact-scope.outputs.presentations }}
       articles: ${{ steps.rendered-artifact-scope.outputs.articles }}
+      timing_input: ${{ steps.timings.outputs.timing_input }}
 
     steps:
       - name: Check out repository
@@ -32,6 +41,12 @@ jobs:
 
       - name: Install workspace dependencies
         run: bun install --frozen-lockfile
+
+      - name: Select one trusted timing snapshot for every shard
+        id: timings
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bun scripts/ci-test-timings.mjs prepare
 
       - name: Determine whether inspect-run viewer smoke is required
         id: inspect-run-viewer-scope
@@ -67,10 +82,12 @@ jobs:
           GITHUB_OUTPUT="$GITHUB_OUTPUT" node scripts/loop/rendered-artifact-ci-changes.mjs .rendered-artifact-changed-files.txt
 
   verify-suite:
+    needs: changes
     name: verify-suite (${{ matrix.suite }}${{ matrix.shard && format(', shard {0}', matrix.shard) || '' }})
     runs-on: ubuntu-latest
     env:
       BUN_TEST_PARALLELISM: 2
+      TIMING_INPUT: ${{ needs.changes.outputs.timing_input }}
     strategy:
       fail-fast: false
       matrix:
@@ -84,15 +101,19 @@ jobs:
             fetch_depth: 0
           - suite: test:all
             shard: 1/4
+            shard_index: 1
             fetch_depth: 0
           - suite: test:all
             shard: 2/4
+            shard_index: 2
             fetch_depth: 0
           - suite: test:all
             shard: 3/4
+            shard_index: 3
             fetch_depth: 0
           - suite: test:all
             shard: 4/4
+            shard_index: 4
             fetch_depth: 0
     steps:
       - name: Check out repository
@@ -150,11 +171,35 @@ jobs:
           DEVLOOPS_PR_TITLE: ${{ github.event.pull_request.title }}
         run: bun run ${{ matrix.suite }}
 
+      - name: Materialize identical timing input and reserve fresh output
+        if: matrix.shard != ''
+        run: bun scripts/ci-test-timings.mjs input
+
       - name: Run ${{ matrix.suite }} shard ${{ matrix.shard }}
         if: matrix.shard != ''
         env:
           DEVLOOPS_PR_TITLE: ${{ github.event.pull_request.title }}
-        run: bun run ${{ matrix.suite }} --timings=.bun-test-timings.json --shard=${{ matrix.shard }}
+          BUN_TEST_TIMINGS_PATH: .ci-timing-input.json
+        run: bun run ${{ matrix.suite }} --timings=.ci-timing-output.json --timings=.ci-timing-input.json --update-timings --shard=${{ matrix.shard }}
+
+      - name: Bind successful shard measurements to this run
+        id: collect-timings
+        continue-on-error: true
+        if: matrix.shard != '' && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TIMING_SHARD: ${{ matrix.shard_index }}
+        run: bun scripts/ci-test-timings.mjs collect
+
+      - name: Upload successful shard measurements
+        if: steps.collect-timings.outcome == 'success' && matrix.shard != '' && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-timing-shard-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
+          path: shard.json
+          if-no-files-found: error
+          retention-days: 7
 
   verify:
     needs: [changes, verify-suite, viewer-smoke, deck-smoke, article-smoke]
@@ -169,6 +214,33 @@ jobs:
           [ "${{ needs.viewer-smoke.result }}" = "success" ] || [ "${{ needs.viewer-smoke.result }}" = "skipped" ] || exit 1
           [ "${{ needs.deck-smoke.result }}" = "success" ] || [ "${{ needs.deck-smoke.result }}" = "skipped" ] || exit 1
           [ "${{ needs.article-smoke.result }}" = "success" ] || [ "${{ needs.article-smoke.result }}" = "skipped" ] || exit 1
+
+  publish-timings:
+    needs: [changes, verify]
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      TIMING_INPUT: ${{ needs.changes.outputs.timing_input }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.1
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ci-timing-shard-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: timing-shards
+      - name: Validate complete same-run measurements
+        run: bun scripts/ci-test-timings.mjs merge
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-timings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: profile.json
+          if-no-files-found: error
+          retention-days: 30
 
   viewer-smoke:
     needs:
