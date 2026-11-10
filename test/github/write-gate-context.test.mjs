@@ -4077,6 +4077,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "pr: #80",
       "gate: draft_gate",
       "head: abc1234567890def",
+      `worktree: ${path.resolve(repoRoot)}`,
       "prefixMode: inline",
       "",
       "## Diff at reviewed head (abc1234567890def)",

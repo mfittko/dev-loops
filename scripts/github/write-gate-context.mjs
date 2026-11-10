@@ -1520,6 +1520,7 @@ function renderCapRoundResidueLines(residue) {
  *
  * @param {object} input
  * @param {string|null} [input.issueRef] — label for the linked-issue section heading (e.g. a single issue-reference label, or a comma-joined multi-issue list)
+ * @param {string|null} [input.worktreeRoot] — reviewed application checkout, independent of artifact storage
  * @param {string|null} [input.issueBody] — single-issue body, rendered under `issueRef` with no `### <label>` sub-heading. Ignored when `issueSections` is given.
  * @param {{label: string, body: string}[]|null} [input.issueSections] — per-issue bodies for a multi-issue PR (structured, never pre-joined): each renders as a renderer-emitted `### <label>` line OUTSIDE any fence, followed by that issue's OWN pickFence-sized fenced block. Takes precedence over `issueBody` when non-empty.
  * @param {string|null} [input.diffOutput] — filtered diff text, when captured; sizes the pointer (prefixMode, diffBytes), never inlined
@@ -1540,7 +1541,7 @@ function renderCapRoundResidueLines(residue) {
  * @returns {{ text: string, prefixMode: "inline"|"pointer", diffBytes: number }}
  */
 export function renderBriefingEvidence({
-  repo, pr, gate, headSha,
+  repo, pr, gate, headSha, worktreeRoot = null,
   issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null, changedFiles = [], excludedFiles = [], adjacentCode = null,
   validationResultsPath = null,
@@ -1561,6 +1562,7 @@ export function renderBriefingEvidence({
   lines.push(`pr: #${pr}`);
   lines.push(`gate: ${gate}`);
   lines.push(`head: ${headSha}`);
+  if (worktreeRoot) lines.push(`worktree: ${worktreeRoot}`);
   lines.push(`prefixMode: ${prefixMode}`);
   lines.push("");
   const hasIssueSections = Array.isArray(issueSections) && issueSections.length > 0;
@@ -3095,6 +3097,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       pr: options.pr,
       gate: options.gate,
       headSha: options.headSha,
+      worktreeRoot: path.resolve(repoRoot),
       issueRef: options.acceptanceCriteria ?? null,
       issueBody: options.issueBody ?? null,
       issueSections: options.issueSections ?? null,
