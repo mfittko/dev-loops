@@ -234,6 +234,9 @@ If the polling interval is 1 minute, do not treat silence shorter than one full 
 
 ## Codex runtime setup
 
+<!-- rule: OPS-WRITABLE-TOOL-CACHE -->
+`OPS-WRITABLE-TOOL-CACHE`: Sanctioned validation and log tooling MUST route child-tool caches deterministically without per-command agent overrides. npm smoke tests preserve an explicit cache or a writable default, and otherwise probe a temporary cache before consuming npm commands. Actions log retrieval uses the uncached per-job API. A real permission denial still stops the actor under `OPS-CODEX-RUNTIME-SETUP`; this rule grants no permission changes or denial retries.
+
 <!-- rule: OPS-CODEX-RUNTIME-SETUP -->
 `OPS-CODEX-RUNTIME-SETUP`: Codex coordinators and workers MUST apply this setup before scoped artifact writes, Git writes or targeted verification, after any mandatory startup/envelope or pull-first bootstrap. Fixers first verify and read this document from the emitting toolchain's pinned contracts. This is bounded runtime guidance, not comprehensive Codex support; it never broadens the role, branch, paths or phase authority. `operation: complete` remains delivery-only: no source edits, source validation, staging, commit or push.
 

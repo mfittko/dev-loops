@@ -1,11 +1,39 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import * as cacheFs from "node:fs";
+import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ASYNC_CONTEXT_ENV_MARKERS } from "@dev-loops/core/loop/run-context";
 import { writePrePrReviewRecord } from "../scripts/loop/_pre-pr-review-record.mjs";
 import { dispatchPromptLayoutRecordPath } from "../scripts/github/record-dispatch-prompt-layout.mjs";
+
+export function ensureWritableNpmCacheEnv(env, { run = execFileSync, fs = cacheFs } = {}) {
+  if (Object.hasOwn(env, "npm_config_cache")) return env;
+  let defaultCache = "unresolved default";
+  const probe = (cache) => {
+    const directory = path.join(cache, "_cacache", "tmp");
+    fs.mkdirSync(directory, { recursive: true });
+    const file = path.join(directory, `dev-loops-probe-${randomUUID()}`);
+    fs.writeFileSync(file, "", { flag: "wx" });
+    fs.unlinkSync(file);
+  };
+  try {
+    defaultCache = run("npm", ["config", "get", "cache"], { env, encoding: "utf8" }).trim();
+    if (!defaultCache) throw new Error("empty npm cache path");
+    probe(defaultCache);
+    return env;
+  } catch {
+    try {
+      const cache = fs.mkdtempSync(path.join(os.tmpdir(), "dev-loops-npm-cache-"));
+      probe(cache);
+      return { ...env, npm_config_cache: cache };
+    } catch {
+      throw new Error(`npm cache setup: no writable cache directory (${defaultCache}, ${os.tmpdir()})`);
+    }
+  }
+}
 
 // Bind a compact work-order reference into a dispatch-prompt record, as
 // emit-fanout-dispatch.mjs does after composing a unit (#2416).

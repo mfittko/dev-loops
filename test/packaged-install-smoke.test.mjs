@@ -16,6 +16,9 @@ import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureWritableNpmCacheEnv } from "./_helpers.mjs";
+
+const npmEnv = ensureWritableNpmCacheEnv(process.env);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -25,6 +28,7 @@ const CORE_DIR = path.join(REPO_ROOT, "packages/core");
 // packed-consumer proof cannot silently disappear during a registry outage.
 const NETWORK_FAILURE_RE = /ENOTFOUND|ETIMEDOUT|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|socket hang up|network|ERR_SOCKET|registry\.npmjs\.org.*(unreachable|timeout)/i;
 const npmRegistryProbe = spawnSync("npm", ["view", "yaml", "version"], {
+  env: npmEnv,
   encoding: "utf8",
   timeout: 15_000,
 });
@@ -45,7 +49,7 @@ test.skipIf(NPM_REGISTRY_TRANSIENTLY_UNAVAILABLE)("packaged install: every @dev-
     // than globbing (a "dev-loops-*.tgz" glob would also match
     // "dev-loops-core-*.tgz").
     const packOne = (dir) => {
-      const out = execFileSync("npm", ["pack", "--pack-destination", tmpRoot, dir], { cwd: REPO_ROOT }).toString().trim();
+      const out = execFileSync("npm", ["pack", "--pack-destination", tmpRoot, dir], { cwd: REPO_ROOT, env: npmEnv }).toString().trim();
       const lines = out.split("\n");
       return path.join(tmpRoot, lines.at(-1).trim());
     };
@@ -57,7 +61,7 @@ test.skipIf(NPM_REGISTRY_TRANSIENTLY_UNAVAILABLE)("packaged install: every @dev-
     mkdirSync(installDir);
     writeFileSync(path.join(installDir, "package.json"), JSON.stringify({ name: "packaged-install-smoke", version: "1.0.0", private: true }, null, 2));
     try {
-      execFileSync("npm", ["install", "--loglevel=error", "--no-audit", "--no-fund", "--prefer-offline", rootTarball, coreTarball], { cwd: installDir });
+      execFileSync("npm", ["install", "--loglevel=error", "--no-audit", "--no-fund", "--prefer-offline", rootTarball, coreTarball], { cwd: installDir, env: npmEnv });
     } catch (err) {
       const detail = `${err.stderr?.toString() ?? ""}${err.stdout?.toString() ?? ""}${err.message ?? ""}`;
       if (NETWORK_FAILURE_RE.test(detail)) throw new Error(`npm registry became unreachable during packaged-install smoke: ${detail.split("\n")[0]}`);
