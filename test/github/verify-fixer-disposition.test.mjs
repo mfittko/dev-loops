@@ -65,10 +65,10 @@ async function initPristineGitFixture(root, site = false) {
 test("pristine fixture histories initialize simultaneously with independent Git copies", async () => {
   for (const build of [initPristineGitFixture, completionFixture, legacyFixture]) {
     await withRepoRoot(async (left) => withRepoRoot(async (right) => {
-      await Promise.all([build(left), build(right)]);
+      const [leftFixture, rightFixture] = await Promise.all([build(left), build(right)]);
       const git = (root, ...args) => execFileSync("git", ["-C", root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
       const head = git(right, "rev-parse", "HEAD");
-      assert.equal(git(left, "rev-parse", "HEAD"), head);
+      assert.equal(leftFixture.baseline ?? leftFixture, rightFixture.baseline ?? rightFixture);
       assert.notEqual((await stat(path.join(left, ".git", "config"))).ino, (await stat(path.join(right, ".git", "config"))).ino);
       git(left, "commit", "-q", "--allow-empty", "-m", "independent mutation");
       assert.equal(git(right, "rev-parse", "HEAD"), head);
