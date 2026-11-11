@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -79,7 +79,12 @@ test("build-handoff-envelope preserves read-only review with multiple closing is
       author: { login: "someone-else" }, assignees: [], body: "Review this change.",
       closingIssuesReferences: [{ number: 7 }, { number: 8 }],
     };
-    const stub = await writeGhStub(bin, [{ stdout: JSON.stringify(pr) }], { repeatLastOnOverflow: true });
+    const expectedReads = [
+      ["pr", "view", "42", "--repo", "o/r", "--json", "author,state,mergedAt,assignees,closingIssuesReferences,body,isDraft"],
+      ["pr", "view", "42", "--repo", "o/r", "--json", "number,url,headRefName,headRefOid,headRepository,headRepositoryOwner,body,isDraft,state,mergedAt,closingIssuesReferences"],
+    ];
+    const stub = await writeGhStub(bin, expectedReads.map((assertArgs) => ({ assertArgs, stdout: JSON.stringify(pr) })),
+      { logCalls: true });
     const options = { cwd: checkout, env: { ...stub.env, ...resolverTestEnv() } };
     const startup = await runNodeHelper(path.resolve("cli/index.mjs"),
       ["loop", "startup", "--pr", "42", "--review", "--no-reconcile"], options);
@@ -93,6 +98,8 @@ test("build-handoff-envelope preserves read-only review with multiple closing is
     assert.equal(envelope.nextAction, resolved.bundle.nextAction);
     assert.ok(envelope.requiredReads.includes("skills/review/SKILL.md"));
     assert.deepEqual(envelope.target, { kind: "pr", repo: "o/r", pr: 42 });
+    assert.deepEqual((await readFile(stub.ghLogPath, "utf8")).trim().split("\n").map(JSON.parse), expectedReads);
+    assert.equal(Number(await readFile(stub.counterPath, "utf8")), expectedReads.length);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
