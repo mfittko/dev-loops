@@ -18,6 +18,7 @@ import { readFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { detectRepoSlug, normalizeRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { selectPrClosingIssue } from "@dev-loops/core/github/issue-ops";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
@@ -349,6 +350,13 @@ export async function buildHandoffEnvelopeCli(
     ?? resolveLocalWorktree(bundle, repoRoot, cwd);
   envelopeOptions.worktreeCwd = binding?.worktreeCwd;
   let verifiedResolverOutput = resolverOutput;
+  if (binding?.pr) {
+    const issue = selectPrClosingIssue(binding.pr);
+    // Live GitHub linkage is authoritative even for an older startup producer.
+    const artifact = bundle.activeArtifact ?? bundle.canonicalState?.target;
+    const boundBundle = { ...bundle, activeArtifact: { ...artifact, issue } };
+    verifiedResolverOutput = resolverOutput.bundle ? { ...resolverOutput, bundle: boundBundle } : boundBundle;
+  }
   // Only a PR binding carries the live PR facts the refinement check reads.
   if (binding?.pr && resolverOutput?.canonicalSpecSource == null && bundle?.canonicalSpecSource == null) {
     const { pr, repo } = binding;
@@ -358,7 +366,7 @@ export async function buildHandoffEnvelopeCli(
     if ((refinement.status === "present" || refinement.prBodySpecValid === true)
       && refinement.specSource === REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY
       && refinement.finding === null) {
-      verifiedResolverOutput = { ...resolverOutput, canonicalSpecSource: CANONICAL_SPEC_SOURCE.PR_BODY };
+      verifiedResolverOutput = { ...verifiedResolverOutput, canonicalSpecSource: CANONICAL_SPEC_SOURCE.PR_BODY };
     }
   }
   const envelope = buildDevLoopHandoffEnvelope(verifiedResolverOutput, settings, gateState, envelopeOptions);

@@ -328,6 +328,7 @@ For issue targets, authoritative issue↔PR linkage resolution remains part of s
 - when canonical issue state includes `linkedPr`, route selection first uses that linked PR as the authoritative routable artifact
 - when canonical issue state does **not** include `linkedPr`, status/reporting consumers must still require explicit authoritative linkage resolution before asserting there is no open linked PR
 - <!-- rule: FACADE-LINKED-PR-SINGLE-ARTIFACT --> `FACADE-LINKED-PR-SINGLE-ARTIFACT`: when authoritative linkage resolves an already-open linked PR, that PR is the only canonical active artifact for the issue during follow-up; startup/status/follow-up MUST reuse it and MUST fail closed against opening another PR until the prior state is explicitly reconciled
+  Issue and PR startup reuse the same PR route and derive ownership from its author. For coordinator startup and emission, a single GitHub `closingIssuesReferences` issue populates the existing target issue field; several closing issues refuse with the candidate list. Zero retains only the existing validated lightweight PR-body fallback. Authorized human linked drafts carry the same draft-gate continuation through either entrypoint. Lifecycle umbrella refinement keeps its existing multi-issue resolver. See ADR 0264 (`docs/decisions/0264-single-closing-issue-coordinator-startup.md`).
 
 ## Deterministic routing order
 

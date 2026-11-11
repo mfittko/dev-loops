@@ -45,7 +45,7 @@ async function fixture(fn, { directory = "tmp/worktrees/dev-loops/issue-2588", p
   const startup = await runNode(cli, ["loop", "startup", "--pr", "2848", "--no-reconcile"], { cwd: checkout, env });
   assert.equal(startup.code, 0, startup.stderr);
   const resolved = JSON.parse(startup.stdout);
-  assert.equal(resolved.selectedStrategy, "copilot_pr_followup");
+  assert.equal(resolved.selectedStrategy, "external_pr_followup");
   if (pr.isDraft) assert.equal(resolved.draftStart.reviewGate, "draft_gate");
   await writeFile(input, startup.stdout);
   const build = (extra = {}) => runNode(builder, ["--input", input, "--repo", "o/r"], { cwd: main, env, ...extra });
@@ -104,6 +104,38 @@ test("real startup, envelope, MAIN emission and CLI pull preserve the PR route f
     assert.deepEqual(JSON.parse(await readFile(f.input, "utf8")), f.resolved);
   });
 }, 30000);
+
+test("single live closing issue binds startup and every harness emission to the issue unit", async () => {
+  await fixture(async (f) => {
+    assert.equal(f.resolved.canonicalStateSummary.target.issue, 3144);
+    for (const harness of ["pi", "claude", "codex"]) {
+      const emission = await f.emit(harness);
+      assert.equal(emission.code, 0, emission.stderr);
+      const out = JSON.parse(emission.stdout);
+      const { workOrder } = JSON.parse(await readFile(out.planPath, "utf8"));
+      assert.deepEqual(workOrder.target, { kind: "pr", repo: "o/r", pr: 2848, issue: 3144 });
+      assert.ok(workOrder.allowedFiles.includes("changes/3144-*.md"));
+      assert.ok(!workOrder.allowedFiles.includes("changes/2848-*.md"));
+    }
+    // An older startup producer may omit the issue; live envelope binding repairs it.
+    delete f.resolved.bundle.activeArtifact.issue;
+    await writeFile(f.input, JSON.stringify(f.resolved));
+    const repaired = await f.emit();
+    assert.equal(repaired.code, 0, repaired.stderr);
+    const plan = JSON.parse(await readFile(JSON.parse(repaired.stdout).planPath, "utf8"));
+    assert.equal(plan.workOrder.target.issue, 3144);
+  }, { prChanges: { closingIssuesReferences: [{ number: 3144 }] } });
+}, 30000);
+
+test("multiple live closing issues refuse emission with deterministic candidates", async () => {
+  await fixture(async (f) => {
+    await f.changePr({ closingIssuesReferences: [{ number: 42 }, { number: 7 }, { number: 42 }] });
+    const emission = await f.emit();
+    assert.notEqual(emission.code, 0);
+    assert.equal(JSON.parse(emission.stdout).ok, false);
+    assert.match(emission.stdout + emission.stderr, /multiple closing issues.*#7, #42/);
+  });
+});
 
 for (const strategy of ["ui_review", " ui_review "]) for (const state of ["first review", "detached resume"]) {
   test(`UI-review startup-to-envelope preserves provisioning for ${state}${strategy === "ui_review" ? "" : " with padded strategy"}`, async () => {
@@ -186,7 +218,8 @@ for (const [label, changes, status, source] of [
       assert.match(emitted.stderr, /coordinator target names no issue number/);
     }
     assert.equal(envelope.cwd, f.checkout);
-    assert.deepEqual(envelope.target, { kind: "pr", repo: "o/r", pr: 2848 });
+    assert.deepEqual(envelope.target, { kind: "pr", repo: "o/r", pr: 2848,
+      ...(changes.closingIssuesReferences ? { issue: 900 } : {}) });
     assert.equal(envelope.nextAction, f.resolved.bundle.nextAction);
     assert.deepEqual(JSON.parse(await readFile(f.input, "utf8")), f.resolved);
   });

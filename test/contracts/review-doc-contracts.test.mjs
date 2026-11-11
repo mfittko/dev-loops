@@ -110,7 +110,7 @@ test("behavioral pin: review proceeds on a foreign-owned PR while the write/merg
     const ghStub = await writeGhStub(resolverHalfRoot, [
       {
         assertArgs: ["pr", "view", String(PR)],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: FOREIGN_ASSIGNEE }], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify({ author: { login: FOREIGN_ASSIGNEE }, state: "OPEN", mergedAt: null, assignees: [{ login: FOREIGN_ASSIGNEE }], closingIssuesReferences: [], body: "" }),
       },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
     ], { matchMode: "claims" });

@@ -1544,6 +1544,65 @@ test("local-first phase-doc intake fires no tracker artifact / Copilot call befo
   }, { prefix: "resolve-dev-loop-953-ac3-" });
 });
 
+for (const author of ["some-human-dev", "copilot-swe-agent"]) for (const assignee of ["test-viewer", "copilot-swe-agent"]) {
+  test(`linked issue and PR entrypoints converge for ${author} assigned to ${assignee}`, async () => {
+    await withTempDir(async (tempDir) => {
+      await initRepoWithOrigin(tempDir);
+      const prData = { author: { login: author }, state: "OPEN", isDraft: true,
+        assignees: [{ login: assignee }], closingIssuesReferences: [{ number: 735 }] };
+      const stub = await writeGhStubHelper(tempDir, [
+        { assertArgs: ["api", "graphql"], stdout: linkedPrGraphql(740) },
+        { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify(prData) },
+        { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify(prData) },
+        { assertArgs: ["issue", "view", "735"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
+        { assertArgs: ["issue", "view", "735"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
+        { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+        { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+      ], { matchMode: "claims" });
+      const env = { ...stub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) };
+      const fromIssue = buildAutoResolvedInput({ issue: 735, cwd: tempDir, env });
+      const fromPr = buildAutoResolvedInput({ pr: 740, cwd: tempDir, env });
+      assert.deepEqual(fromIssue, fromPr);
+      assert.equal(fromPr.currentState.target.issue, 735);
+      assert.equal(fromPr.currentState.ownership, author === "copilot-swe-agent" ? "copilot" : "external_human");
+      assert.equal(fromPr.draftStart?.reviewGate, assignee === "test-viewer" ? "draft_gate" : undefined);
+      const fromIssueResult = buildResolveDevLoopStartupResult(fromIssue, { cwd: tempDir, env });
+      const fromPrResult = buildResolveDevLoopStartupResult(fromPr, { cwd: tempDir, env });
+      assert.equal(fromPrResult.selectedStrategy, author === "copilot-swe-agent" ? "copilot_pr_followup" : "external_pr_followup");
+      assert.deepEqual(fromIssueResult, fromPrResult);
+      assert.equal(fromPrResult.draftStart?.reviewGate, assignee === "test-viewer" ? "draft_gate" : undefined);
+    });
+  });
+}
+
+for (const [facts, error] of [
+  [{ closingIssuesReferences: [{ number: 42 }, { number: 7 }, { number: 42 }] }, /multiple closing issues.*#7, #42/],
+  [{ author: null }, /author could not be read.*fail closed/],
+]) test(`PR startup refuses ambiguous or unreadable authority: ${error}`, async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const stub = await writeGhStubHelper(tempDir, [{ stdout: JSON.stringify({ state: "OPEN",
+      author: { login: "test-viewer" }, assignees: [{ login: "test-viewer" }], ...facts }) }]);
+    assert.throws(() => buildAutoResolvedInput({ pr: 740, cwd: tempDir,
+      env: { ...stub.env, ...resolverTestEnv() } }), error);
+  });
+});
+
+test("body-only closing references remain foreign-ownership guards without becoming coordinator authority", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const stub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify({ state: "OPEN",
+        author: { login: "test-viewer" }, assignees: [{ login: "test-viewer" }],
+        closingIssuesReferences: [], body: "Closes #735" }) },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+      { assertArgs: ["issue", "view", "735"], stdout: JSON.stringify({ assignees: [{ login: "foreign-dev" }] }) },
+    ], { matchMode: "claims" });
+    assert.throws(() => buildAutoResolvedInput({ pr: 740, cwd: tempDir,
+      env: { ...stub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) } }), /linked issue #735 is assigned to foreign-dev/);
+  });
+});
+
 test("buildAutoResolvedInput detects Copilot authorship from linked PR author", async () => {
   await withTempDir(async (tempDir) => {
     execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
@@ -1554,7 +1613,7 @@ test("buildAutoResolvedInput detects Copilot authorship from linked PR author", 
     // linked-PR authorship path below is reached.
     const ghStub = await writeGhStubHelper(tempDir, [
       { assertArgs: ["api", "graphql"], stdout: linkedPrGraphql(740) },
-      { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN" }) },
+      { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", assignees: [{ login: "test-viewer" }], closingIssuesReferences: [{ number: 735 }] }) },
       { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
       { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: "" }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
@@ -1581,7 +1640,7 @@ test("buildAutoResolvedInput detects external_human authorship from linked PR au
     execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
     const ghStub = await writeGhStubHelper(tempDir, [
       { assertArgs: ["api", "graphql"], stdout: linkedPrGraphql(740) },
-      { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify({ author: { login: "some-human-dev" }, state: "OPEN" }) },
+      { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify({ author: { login: "some-human-dev" }, state: "OPEN", assignees: [{ login: "test-viewer" }], closingIssuesReferences: [{ number: 735 }] }) },
       { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
       { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: "" }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
@@ -1758,7 +1817,7 @@ test("--pr assigned_to_other fails closed naming the foreign assignee", async ()
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "foreign-dev" }], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, assignees: [{ login: "foreign-dev" }], closingIssuesReferences: [], body: "" }),
       },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
     ], { matchMode: "claims" });
@@ -1798,7 +1857,7 @@ test("--pr --claim on an unassigned PR claims once and proceeds", async () => {
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
       },
       { assertArgs: ["pr", "edit", "740", "--repo", "mfittko/dev-loops", "--add-assignee", "@me"], stdout: "" },
     ], { matchMode: "claims", logCalls: true });
@@ -1818,7 +1877,7 @@ test("--pr --claim on a foreign-assigned PR still refuses and performs no write"
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "foreign-dev" }], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, assignees: [{ login: "foreign-dev" }], closingIssuesReferences: [], body: "" }),
       },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
     ], { matchMode: "claims", logCalls: true });
@@ -1863,7 +1922,7 @@ test("--claim on a viewer-assigned PR is a no-op", async () => {
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "" }),
       },
       viewerEntry,
     ], { matchMode: "claims", logCalls: true });
@@ -1879,7 +1938,7 @@ test("--pr --claim fails closed when the claim write fails", async () => {
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
       },
       { assertArgs: ["pr", "edit", "740"], exitCode: 1, stderr: "boom" },
     ], { matchMode: "claims", logCalls: true });
@@ -1896,7 +1955,7 @@ test("--pr --claim with a foreign-owned linked issue refuses before any claim wr
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [{ number: 41 }], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [{ number: 41 }], body: "" }),
       },
       { assertArgs: ["issue", "view", "41"], stdout: JSON.stringify({ assignees: [{ login: "foreign-dev" }] }) },
       viewerEntry,
@@ -1914,7 +1973,7 @@ test("--pr --claim on a closed unassigned PR does not claim", async () => {
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "CLOSED", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "CLOSED", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
       },
     ], { matchMode: "claims", logCalls: true });
     const result = await runNode(["--pr", "740", "--claim"], { cwd: tempDir, env: claimEnv(ghStub) });
@@ -1965,7 +2024,7 @@ test("--pr --claim with an unreadable linked issue refuses and performs no write
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [{ number: 41 }], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [{ number: 41 }], body: "" }),
       },
       { assertArgs: ["issue", "view", "41"], exitCode: 1, stderr: "timeout" },
       { assertArgs: ["pr", "edit", "740"], stdout: "" },
@@ -2017,7 +2076,7 @@ test("--pr --claim on a foreign PR with a foreign linked issue prints the PR for
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "foreign-dev" }], closingIssuesReferences: [{ number: 41 }], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, assignees: [{ login: "foreign-dev" }], closingIssuesReferences: [{ number: 41 }], body: "" }),
       },
       { assertArgs: ["issue", "view", "41"], stdout: JSON.stringify({ assignees: [{ login: "other-dev" }] }) },
       viewerEntry,
@@ -2035,7 +2094,7 @@ test("--pr unassigned fails closed naming the exact claim command", async () => 
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
       },
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740"], {
@@ -2058,7 +2117,7 @@ test("--pr assigned to the viewer proceeds", async () => {
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "" }),
       },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
     ], { matchMode: "claims" });
@@ -2086,7 +2145,7 @@ test("#2456: --pr on an existing draft PR routes into draft_gate instead of the 
       number: 740, url: "https://github.com/mfittko/dev-loops/pull/740",
       headRefName: "issue-2456", headRefOid: execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" }).trim(),
       headRepository: { name: "dev-loops" }, headRepositoryOwner: { login: "mfittko" },
-      state: "OPEN", isDraft: true, mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "",
+      author: { login: "copilot-swe-agent" }, state: "OPEN", isDraft: true, mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "",
     };
     const ghStub = await writeGhStubHelper(tempDir, [
       {
@@ -2143,7 +2202,7 @@ test("#2456: --pr on a non-draft, merged-draft, closed-draft, or Copilot-assigne
       const ghStub = await writeGhStubHelper(tempDir, [
         {
           assertArgs: ["pr", "view", "740"],
-          stdout: JSON.stringify({ ...pr, closingIssuesReferences: [], body: "" }),
+          stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, ...pr, closingIssuesReferences: [], body: "" }),
         },
         { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
       ], { matchMode: "claims" });
@@ -2189,7 +2248,7 @@ test("--pr --ui-review routes to the ui_review strategy end-to-end (issue #1362)
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "" }),
       },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
     ], { matchMode: "claims" });
@@ -2216,7 +2275,7 @@ test("--pr --review routes to the read-only review strategy without lifecycle ev
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "" }),
       },
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740", "--review"], {
@@ -2250,7 +2309,7 @@ test("--pr --review succeeds on foreign PR ownership without resolving the viewe
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "foreign-dev" }], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, assignees: [{ login: "foreign-dev" }], closingIssuesReferences: [], body: "" }),
       },
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740", "--review"], {
@@ -2268,7 +2327,7 @@ test("--pr --review succeeds on an unassigned PR without resolving the viewer lo
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
       },
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740", "--review"], {
@@ -2291,7 +2350,7 @@ test("--pr --ui-review succeeds on foreign PR ownership (ui_review is exempt fro
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "foreign-dev" }], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, assignees: [{ login: "foreign-dev" }], closingIssuesReferences: [], body: "" }),
       },
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740", "--ui-review"], {
@@ -2311,7 +2370,7 @@ test("--pr --ui-review succeeds on an unassigned PR (ui_review is exempt from th
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
       },
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740", "--ui-review"], {
@@ -2335,6 +2394,7 @@ test("--pr --ui-review skips the linked-issue foreign-ownership check too (issue
       {
         assertArgs: ["pr", "view", "740"],
         stdout: JSON.stringify({
+          author: { login: "copilot-swe-agent" },
           state: "OPEN",
           mergedAt: null,
           assignees: [],
@@ -2365,6 +2425,7 @@ test("--pr --review skips the linked-issue foreign-ownership check too (issue #2
       {
         assertArgs: ["pr", "view", "740"],
         stdout: JSON.stringify({
+          author: { login: "copilot-swe-agent" },
           state: "OPEN",
           mergedAt: null,
           assignees: [],
@@ -2391,7 +2452,7 @@ test("--pr assigned to copilot-swe-agent takes the unchanged copilot path, not t
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "copilot-swe-agent" }], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, assignees: [{ login: "copilot-swe-agent" }], closingIssuesReferences: [], body: "" }),
       },
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740"], {
@@ -2417,6 +2478,7 @@ test("PR assigned to copilot skips the linked-issue ownership check entirely", a
       {
         assertArgs: ["pr", "view", "740"],
         stdout: JSON.stringify({
+          author: { login: "copilot-swe-agent" },
           state: "OPEN",
           mergedAt: null,
           assignees: [{ login: "copilot-swe-agent" }],
@@ -2515,6 +2577,7 @@ test("--pr continuation fails closed when the PR's linked issue is assigned to a
       {
         assertArgs: ["pr", "view", "740"],
         stdout: JSON.stringify({
+          author: { login: "copilot-swe-agent" },
           state: "OPEN",
           mergedAt: null,
           assignees: [{ login: "test-viewer" }],
@@ -2547,6 +2610,7 @@ test("--pr continuation proceeds when the linked issue is merely unassigned (onl
       {
         assertArgs: ["pr", "view", "740"],
         stdout: JSON.stringify({
+          author: { login: "copilot-swe-agent" },
           state: "OPEN",
           mergedAt: null,
           assignees: [{ login: "test-viewer" }],
@@ -3769,6 +3833,7 @@ test("resolve-dev-loop-startup.mjs --pr end-to-end: a squash-merged PR associati
       {
         assertArgs: ["pr", "view", "9006"],
         stdout: JSON.stringify({
+          author: { login: "copilot-swe-agent" },
           state: "OPEN",
           mergedAt: null,
           mergeCommit: null,
@@ -3869,7 +3934,7 @@ test("resolve-dev-loop-startup.mjs --pr: incomplete GraphQL association paginati
       const responses = [
         {
           assertArgs: ["pr", "view", "9012"],
-          stdout: JSON.stringify({ state: "OPEN", mergedAt: null, mergeCommit: null, assignees: [], closingIssuesReferences: [], body: "" }),
+          stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN", mergedAt: null, mergeCommit: null, assignees: [], closingIssuesReferences: [], body: "" }),
         },
         ...scenario.graphResponses.map((stdout, index) => ({
           assertArgs: ["api", "graphql", `oid=${newerSha}`, ...(index > 0 ? [`after=cursor-${index}`] : [])],
@@ -3915,7 +3980,7 @@ test("startup → build-envelope CLI end-to-end: a direct-only newer commit does
     );
     const prData = {
       number: 9007, url: "https://github.com/mfittko/dev-loops/pull/9007",
-      headRefName: "issue-9007", headRefOid: directSha,
+      headRefName: "issue-9007", headRefOid: directSha, author: { login: "copilot-swe-agent" },
       headRepository: { name: "dev-loops" }, headRepositoryOwner: { login: "mfittko" },
       state: "OPEN",
       mergedAt: null,
@@ -3971,6 +4036,7 @@ test("resolve-dev-loop-startup.mjs --pr end-to-end: requireRetrospective unset m
       {
         assertArgs: ["pr", "view", "9008"],
         stdout: JSON.stringify({
+          author: { login: "copilot-swe-agent" },
           state: "OPEN",
           mergedAt: null,
           mergeCommit: null,
