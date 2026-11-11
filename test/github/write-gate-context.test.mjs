@@ -9020,6 +9020,11 @@ test("resolveCapRound counts a finished live current-head ledger as the cap roun
     assert.ok(capRound, "a clean cap round at the current head resolves");
     assert.deepEqual(capRound.residue, []);
     assert.equal(capRound.log.headSha, head);
+    // The seeded findings_present ledger keeps its open act finding: the residue lists it.
+    await writeFile(ledger, JSON.stringify(log), "utf8");
+    const withFindings = await resolveCapRound(opts, { repoRoot });
+    assert.ok(withFindings, "a findings_present cap round at the current head resolves");
+    assert.deepEqual(withFindings.residue.map((i) => [i.title, i.disposition]), [["Guard is missing", "act"]]);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -9041,6 +9046,11 @@ test("resolveCapRound does not count an unfinished or in-rewrite live current-he
       await writeFile(ledger, JSON.stringify(variant), "utf8");
       assert.equal(await resolveCapRound(opts, { repoRoot }), null, "only 3 other rounds are complete");
     }
+    // An unreadable live ledger fails closed.
+    await writeFile(ledger, "{ not json", "utf8");
+    let failedClosed = false;
+    assert.equal(await resolveCapRound(opts, { repoRoot, onFailClosed: () => { failedClosed = true; } }), null);
+    assert.equal(failedClosed, true, "an unparseable live current-head ledger calls onFailClosed");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
