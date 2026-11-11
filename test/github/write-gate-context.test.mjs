@@ -9007,6 +9007,24 @@ test("resolveCapRound treats a cap round whose persisted verdict is clean as a c
   }
 });
 
+test("resolveCapRound counts a finished live current-head ledger as the cap round (issue 3178)", async () => {
+  const { repoRoot } = await makeBaseDiffRepo();
+  try {
+    const head = "8".repeat(40);
+    const opts = { repo: "owner/repo", pr: 64, headSha: head };
+    await seedClosedRounds(repoRoot, 64, ["1".repeat(40), "2".repeat(40), "3".repeat(40), head]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-64", `draft_gate-${head}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    await writeFile(ledger, JSON.stringify({ ...log, verdict: "clean", findings: [] }), "utf8");
+    const capRound = await resolveCapRound(opts, { repoRoot });
+    assert.ok(capRound, "a clean cap round at the current head resolves");
+    assert.deepEqual(capRound.residue, []);
+    assert.equal(capRound.log.headSha, head);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolveCapRoundFixed refuses a clearing record that does not name every cap-round act item", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
@@ -10141,13 +10159,13 @@ test("resolveCapRound at the current head returns the retained round at H, never
     await writeFile(path.join(dir, `draft_gate-${head}.round-1.json`), JSON.stringify({
       repo: "owner/repo", pr: 71, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: "2026-11-05T00:00:00.000Z", findings: [],
     }), "utf8");
-    // A live ledger at H is the round being posted (the head excluded, as in the round count), so the retained round stays the cap-round authority.
+    // A finished live ledger at H counts (issue 3178), so it is the latest round at H and the cap-round authority.
     await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
       repo: "owner/repo", pr: 71, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: "2026-11-06T00:00:00.000Z", findings: [],
     }), "utf8");
     const round = await resolveCapRound({ repo: "owner/repo", pr: 71, headSha: head }, { repoRoot });
     assert.equal(round.log.headSha, head);
-    assert.equal(round.log.loggedAt, "2026-11-05T00:00:00.000Z", "the retained round, not the live ledger");
+    assert.equal(round.log.loggedAt, "2026-11-06T00:00:00.000Z", "the finished live ledger at H, not an earlier head's");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
