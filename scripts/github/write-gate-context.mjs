@@ -2180,7 +2180,7 @@ export function capRoundActList(findings, headSha) {
 export const isCleanCapRound = (capRound) => capRound?.log?.verdict === "clean" && capRoundActRefs(capRound.log.findings, capRound.log.headSha).size === 0;
 
 /**
- * The cap round of a draft_gate (ADR 0208): the last closed ledger when the completed rounds (the head being posted excluded) reached the cap and
+ * The cap round of a draft_gate (ADR 0208): the last closed ledger when the completed rounds reached the cap (the count includes a finished live ledger at the current head; an unfinished or in-rewrite ledger never counts) and
  * that ledger is `findings_present` or `clean` (ADR 0250: a clean cap round has no act ref; its `residue` holds only `capClosed` items). Returns `{ log, residue }` or null. `residue` is the cap round's act items and `capClosed` items as
  * `{ fingerprint, file, line, title, disposition }`, the input `pre_approval_gate` receives.
  * The candidate set is the closed prior rounds plus the retained rounds of the current head. A finished live ledger at the current head counts and can be the cap round
