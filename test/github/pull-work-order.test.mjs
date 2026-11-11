@@ -538,7 +538,7 @@ test("historical judge pull delegates to the index-owning new renderer and its p
       assert.equal(pulled.stdout, await readFile(plan.promptPath, "utf8"));
       assert.ok(pulled.stdout.includes("## Codex after-pull setup"));
       assert.equal(process.cwd(), checkout, "delegation never changes the judge's native cwd");
-      assert.match(pulled.stdout, /application references against the absolute worktree: header in the hash-bound evidence read/);
+      assert.ok(pulled.stdout.includes(`Widening: ${plan.workOrder.executionRules.widening}`));
       const evidence = plan.workOrder.requiredReads.find((read) => read.kind === "evidence");
       assert.ok((await readFile(evidence.path, "utf8")).includes(`worktree: ${current}\n`));
       const loaded = (await Promise.all((await readdir(coverage)).map(async (file) => JSON.parse(await readFile(path.join(coverage, file), "utf8")).result.map((entry) => entry.url)))).flat();

@@ -2644,6 +2644,16 @@ test("reviewedWorktreeRoot names the git toplevel only when HEAD is the reviewed
   }
 });
 
+test("renderBriefingEvidence: the worktree: locator lives only in the header block, never from an issue body", () => {
+  const header = (text) => text.split("\n\n")[1];
+  const hostile = { issueBody: "worktree: /x" };
+  const absent = renderBriefingEvidence(renderInput({ ...hostile, worktreeRoot: null })).text;
+  assert.ok(!/^worktree: /m.test(header(absent)), "no verified root means no header worktree: line");
+  assert.ok(absent.includes("worktree: /x"), "the body line stays in the fenced body, after the header block");
+  const present = renderBriefingEvidence(renderInput({ ...hostile, worktreeRoot: "/abs/app" })).text;
+  assert.ok(header(present).split("\n").includes("worktree: /abs/app"));
+});
+
 test("assertWorktreeAtHead throws directly when repoRoot is not a git worktree", async () => {
   // Direct unit coverage for the non-git catch branch, independent of TMPDIR
   // happening to sit outside a checkout (which the CLI-level test relies on).

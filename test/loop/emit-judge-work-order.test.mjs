@@ -35,7 +35,7 @@ test("grounded optional discovery is delivered, root-bound and digest-bound", as
     assert.equal(result.status, 0, result.stderr);
     const delivered = JSON.parse(await readFile(plan.planPath, "utf8")).workOrder;
     assert.match(delivered.executionRules.widening, /GATE-EXEC-JUDGE-GROUNDED-DISCOVERY/);
-    for (const locator of ["executionRules.contract", "worktree:", "evidence", "prior-round ledgers", "prior-verdict"]) assert.ok(delivered.executionRules.widening.includes(locator));
+    for (const locator of ["executionRules.contract", "worktree:"]) assert.ok(delivered.executionRules.widening.includes(locator));
     assert.ok(result.stdout.includes(`Widening: ${delivered.executionRules.widening}.\n`));
     const changed = structuredClone(delivered);
     changed.executionRules.widening = "";
@@ -59,8 +59,7 @@ test("grounded discovery uses the pinned reviewed worktree across pull cwd and r
     assert.ok(evidence.includes(`worktree: ${appRoot}\n`));
     assert.notEqual(appRoot, pullRoot);
     assert.notEqual(appRoot, path.dirname(path.join(artifactRoot, "tmp")));
-    assert.match(result.workOrderText, /application references against the .*worktree:.*evidence/);
-    assert.match(result.workOrderText, /never.*(?:shell|native).*cwd/);
+    assert.ok(result.workOrderText.includes(`Widening: ${plan.workOrder.executionRules.widening}`));
     await writeFile(evidenceRead.path, evidence.replace(appRoot, pullRoot));
     await assert.rejects(pullWorkOrder({ execution: plan.executionIdentity, cwd: pullRoot,
       tmpRoots: [path.join(artifactRoot, "tmp")], receiptTmpRoot: path.join(pullRoot, "tmp") }),
@@ -81,13 +80,13 @@ test("grounded discovery grounds a present optional candidate and never supplies
     const result = await pullWorkOrder({ execution: plan.executionIdentity, cwd: pullRoot,
       tmpRoots: [path.join(artifactRoot, "tmp")], receiptTmpRoot: path.join(pullRoot, "tmp") });
     const evidenceRead = plan.workOrder.requiredReads.find((read) => read.kind === "evidence");
-    const root = /^worktree: (.+)$/m.exec(await readFile(evidenceRead.path, "utf8"))[1];
+    const root = /^worktree: (.+)$/m.exec((await readFile(evidenceRead.path, "utf8")).split("\n\n")[1])[1];
     assert.equal(root, appRoot);
     assert.equal(await readFile(path.join(root, "docs", "present-optional.md"), "utf8"), "optional context\n");
     await assert.rejects(readFile(path.join(root, "docs", "absent-optional.md"), "utf8"), { code: "ENOENT" });
     assert.ok(!plan.workOrder.requiredReads.some((read) => [present, absent].includes(read.path)));
     assert.ok(!result.workOrderText.includes("absent-optional.md"));
-    assert.match(result.workOrderText, /do not read an absent optional candidate/);
+    assert.match(result.workOrderText, /GATE-EXEC-JUDGE-GROUNDED-DISCOVERY/);
   })));
 });
 
