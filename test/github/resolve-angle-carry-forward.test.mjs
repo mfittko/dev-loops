@@ -166,6 +166,17 @@ const cleanLog = {
   },
 };
 
+
+test("buildCarryForwardPlan skips the synthetic copilot-body finding", () => {
+  const log = { ...cleanLog, verdict: "findings_present", findings: [{ angle: "copilot-body", severity: "major", summary: "x" }] };
+  const plan = buildCarryForwardPlan({ log, changedFiles: ["docs/guide.md"] });
+  assert.ok(plan);
+});
+
+test("buildCarryForwardPlan still fails closed on a non-synthetic unknown angle", () => {
+  const log = { ...cleanLog, verdict: "findings_present", findings: [{ angle: "copilot-body-x", severity: "major", summary: "x" }] };
+  assert.throws(() => buildCarryForwardPlan({ log, changedFiles: ["docs/guide.md"] }), /matches no provenance\.perAngle entry/);
+});
 test("buildCarryForwardPlan carries code angles on a doc-only delta, marks provenance honestly", () => {
   const plan = buildCarryForwardPlan({ log: cleanLog, changedFiles: ["docs/guide.md"] });
   assert.equal(plan.prevHead, "aaaaaaa");
