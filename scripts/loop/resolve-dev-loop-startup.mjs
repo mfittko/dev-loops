@@ -1058,7 +1058,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
   }
   // Body-reference fallback remains a foreign-ownership guard, never unit authority.
   linkedIssueNumbers = resolveLinkedIssuesFromPr(prJson);
-  const ownership = isCopilotLogin(prJson?.author?.login) ? "copilot" : "external_human";
+  const ownership = isCopilotLogin(prJson?.author?.login?.replace?.(/^app\//i, "")) ? "copilot" : "external_human";
   const resolvedTargetPreference = targetPreference ?? resolveTargetPreference(repoRoot);
   // `--review` and `--ui-review` route the PR to their read-only strategies
   // instead of the author-derived PR follow-up path.

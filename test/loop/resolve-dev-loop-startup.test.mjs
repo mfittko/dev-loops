@@ -1544,7 +1544,8 @@ test("local-first phase-doc intake fires no tracker artifact / Copilot call befo
   }, { prefix: "resolve-dev-loop-953-ac3-" });
 });
 
-for (const author of ["some-human-dev", "copilot-swe-agent"]) for (const assignee of ["test-viewer", "copilot-swe-agent"]) {
+for (const author of ["some-human-dev", "app/other-bot", "copilot-swe-agent", "app/copilot-swe-agent"]) for (const assignee of ["test-viewer", "copilot-swe-agent"]) {
+  const copilotAuthored = author.endsWith("copilot-swe-agent");
   test(`linked issue and PR entrypoints converge for ${author} assigned to ${assignee}`, async () => {
     await withTempDir(async (tempDir) => {
       await initRepoWithOrigin(tempDir);
@@ -1564,11 +1565,11 @@ for (const author of ["some-human-dev", "copilot-swe-agent"]) for (const assigne
       const fromPr = buildAutoResolvedInput({ pr: 740, cwd: tempDir, env });
       assert.deepEqual(fromIssue, fromPr);
       assert.equal(fromPr.currentState.target.issue, 735);
-      assert.equal(fromPr.currentState.ownership, author === "copilot-swe-agent" ? "copilot" : "external_human");
+      assert.equal(fromPr.currentState.ownership, copilotAuthored ? "copilot" : "external_human");
       assert.equal(fromPr.draftStart?.reviewGate, assignee === "test-viewer" ? "draft_gate" : undefined);
       const fromIssueResult = buildResolveDevLoopStartupResult(fromIssue, { cwd: tempDir, env });
       const fromPrResult = buildResolveDevLoopStartupResult(fromPr, { cwd: tempDir, env });
-      assert.equal(fromPrResult.selectedStrategy, author === "copilot-swe-agent" ? "copilot_pr_followup" : "external_pr_followup");
+      assert.equal(fromPrResult.selectedStrategy, copilotAuthored ? "copilot_pr_followup" : "external_pr_followup");
       assert.deepEqual(fromIssueResult, fromPrResult);
       assert.equal(fromPrResult.draftStart?.reviewGate, assignee === "test-viewer" ? "draft_gate" : undefined);
     });

@@ -118,7 +118,7 @@ test("single live closing issue binds startup and every harness emission to the 
       assert.ok(!workOrder.allowedFiles.includes("changes/2848-*.md"));
     }
     // An older startup producer may omit the issue; live envelope binding repairs it.
-    delete f.resolved.bundle.activeArtifact.issue;
+    f.resolved.bundle.activeArtifact.issue = null;
     await writeFile(f.input, JSON.stringify(f.resolved));
     const repaired = await f.emit();
     assert.equal(repaired.code, 0, repaired.stderr);
@@ -127,7 +127,7 @@ test("single live closing issue binds startup and every harness emission to the 
   }, { prChanges: { closingIssuesReferences: [{ number: 3144 }] } });
 }, 30000);
 
-test("a closing issue changed between startup and emission refuses instead of retargeting", async () => {
+test("a recorded closing issue that changes or disappears between startup and emission refuses instead of retargeting", async () => {
   await fixture(async (f) => {
     for (const changed of [[{ number: 900 }], []]) {
       await f.changePr({ closingIssuesReferences: changed });
