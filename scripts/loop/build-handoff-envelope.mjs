@@ -350,7 +350,7 @@ export async function buildHandoffEnvelopeCli(
     ?? resolveLocalWorktree(bundle, repoRoot, cwd);
   envelopeOptions.worktreeCwd = binding?.worktreeCwd;
   let verifiedResolverOutput = resolverOutput;
-  if (binding?.pr) {
+  if (binding?.pr && trimmedOrNull(bundle?.selectedStrategy) !== INTERNAL_DEV_LOOP_STRATEGY.REVIEW) {
     const issue = selectPrClosingIssue(binding.pr);
     // Live GitHub linkage is authoritative even for an older startup producer.
     const artifact = bundle.activeArtifact ?? bundle.canonicalState?.target;

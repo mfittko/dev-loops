@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { runNode as runNodeHelper } from "../_helpers.mjs";
+import { initGitFixture, runGitFixture, resolverTestEnv, writeGhStub, runNode as runNodeHelper } from "../_helpers.mjs";
 
 import {
   expectedWorktreeBranchRef,
@@ -61,6 +61,42 @@ async function writeTempJson(tempDir, name, value) {
   await writeFile(filePath, `${JSON.stringify(value)}\n`, "utf8");
   return filePath;
 }
+
+test("build-handoff-envelope preserves read-only review with multiple closing issues", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "build-envelope-review-"));
+  try {
+    const repoDir = path.join(tempDir, "repo");
+    await mkdir(repoDir);
+    initGitFixture(repoDir, { branch: "main", remote: "https://github.com/o/r.git" });
+    const checkout = path.join(repoDir, "tmp/worktrees/dev-loops/pr-42");
+    runGitFixture(repoDir, ["worktree", "add", "-q", "-b", "review-target", checkout]);
+    const bin = path.join(tempDir, "bin");
+    await mkdir(bin);
+    const pr = {
+      number: 42, url: "https://github.com/o/r/pull/42", state: "OPEN", isDraft: false,
+      headRefName: "review-target", headRefOid: runGitFixture(checkout, ["rev-parse", "HEAD"]),
+      headRepository: { name: "r" }, headRepositoryOwner: { login: "o" },
+      author: { login: "someone-else" }, assignees: [], body: "Review this change.",
+      closingIssuesReferences: [{ number: 7 }, { number: 8 }],
+    };
+    const stub = await writeGhStub(bin, [{ stdout: JSON.stringify(pr) }], { repeatLastOnOverflow: true });
+    const options = { cwd: checkout, env: { ...stub.env, ...resolverTestEnv() } };
+    const startup = await runNodeHelper(path.resolve("cli/index.mjs"),
+      ["loop", "startup", "--pr", "42", "--review", "--no-reconcile"], options);
+    assert.equal(startup.code, 0, startup.stderr);
+    const resolved = JSON.parse(startup.stdout);
+    assert.equal(resolved.selectedStrategy, "review");
+    const input = await writeTempJson(tempDir, "startup.json", resolved);
+    const built = await runNode(["--input", input, "--repo", "o/r"], options);
+    assert.equal(built.code, 0, built.stderr);
+    const envelope = JSON.parse(built.stdout);
+    assert.equal(envelope.nextAction, resolved.bundle.nextAction);
+    assert.ok(envelope.requiredReads.includes("skills/review/SKILL.md"));
+    assert.deepEqual(envelope.target, { kind: "pr", repo: "o/r", pr: 42 });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Argument parsing
