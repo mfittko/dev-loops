@@ -537,6 +537,10 @@ test("historical judge pull delegates to the index-owning new renderer and its p
       assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
       assert.equal(pulled.stdout, await readFile(plan.promptPath, "utf8"));
       assert.ok(pulled.stdout.includes("## Codex after-pull setup"));
+      assert.equal(process.cwd(), checkout, "delegation never changes the judge's native cwd");
+      assert.ok(pulled.stdout.includes(`Widening: ${plan.workOrder.executionRules.widening}`));
+      const evidence = plan.workOrder.requiredReads.find((read) => read.kind === "evidence");
+      assert.ok((await readFile(evidence.path, "utf8")).includes(`worktree: ${current}\n`));
       const loaded = (await Promise.all((await readdir(coverage)).map(async (file) => JSON.parse(await readFile(path.join(coverage, file), "utf8")).result.map((entry) => entry.url)))).flat();
       for (const file of [path.join(old, "scripts/github/pull-work-order.mjs"), path.join(current, "scripts/github/pull-work-order.mjs"), path.join(current, "scripts/loop/emit-judge-work-order.mjs")]) assert.ok(loaded.includes(pathToFileURL(file).href), file);
       assert.equal((await verifyPullReceipt({ receiptTmpRoot: path.join(resolveMainWorktreeRoot(checkout), "tmp"), role: "judge", ...plan })).ok, true);

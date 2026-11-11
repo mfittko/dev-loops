@@ -14,6 +14,7 @@ import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpo
 
 import {
   assertWorktreeAtHead,
+  reviewedWorktreeRoot,
   BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
   buildGateBriefingEvidencePath,
   buildGateBriefingPrefixPath,
@@ -2627,6 +2628,30 @@ test("assertWorktreeAtHead accepts an abbreviated --head-sha matching the full w
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
+});
+
+test("reviewedWorktreeRoot names the git toplevel only when HEAD is the reviewed head", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    const sub = path.join(repoRoot, "sub");
+    await mkdir(sub);
+    const top = reviewedWorktreeRoot(headSha, { repoRoot: sub });
+    assert.equal(await realpath(top), await realpath(repoRoot), "a subdirectory cwd resolves to the toplevel");
+    assert.equal(reviewedWorktreeRoot("0".repeat(40), { repoRoot }), null, "a head mismatch names no worktree");
+    assert.equal(reviewedWorktreeRoot(headSha, { repoRoot: os.tmpdir() }), null, "a non-git root names no worktree");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("renderBriefingEvidence: the worktree: locator lives only in the header block, never from an issue body", () => {
+  const header = (text) => text.split("\n\n")[1];
+  const hostile = { issueBody: "worktree: /x" };
+  const absent = renderBriefingEvidence(renderInput({ ...hostile, worktreeRoot: null })).text;
+  assert.ok(!/^worktree: /m.test(header(absent)), "no verified root means no header worktree: line");
+  assert.ok(absent.includes("worktree: /x"), "the body line stays in the fenced body, after the header block");
+  const present = renderBriefingEvidence(renderInput({ ...hostile, worktreeRoot: "/abs/app" })).text;
+  assert.ok(header(present).split("\n").includes("worktree: /abs/app"));
 });
 
 test("assertWorktreeAtHead throws directly when repoRoot is not a git worktree", async () => {

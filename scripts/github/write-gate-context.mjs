@@ -1520,6 +1520,7 @@ function renderCapRoundResidueLines(residue) {
  *
  * @param {object} input
  * @param {string|null} [input.issueRef] — label for the linked-issue section heading (e.g. a single issue-reference label, or a comma-joined multi-issue list)
+ * @param {string|null} [input.worktreeRoot] — reviewed application checkout, independent of artifact storage
  * @param {string|null} [input.issueBody] — single-issue body, rendered under `issueRef` with no `### <label>` sub-heading. Ignored when `issueSections` is given.
  * @param {{label: string, body: string}[]|null} [input.issueSections] — per-issue bodies for a multi-issue PR (structured, never pre-joined): each renders as a renderer-emitted `### <label>` line OUTSIDE any fence, followed by that issue's OWN pickFence-sized fenced block. Takes precedence over `issueBody` when non-empty.
  * @param {string|null} [input.diffOutput] — filtered diff text, when captured; sizes the pointer (prefixMode, diffBytes), never inlined
@@ -1540,7 +1541,7 @@ function renderCapRoundResidueLines(residue) {
  * @returns {{ text: string, prefixMode: "inline"|"pointer", diffBytes: number }}
  */
 export function renderBriefingEvidence({
-  repo, pr, gate, headSha,
+  repo, pr, gate, headSha, worktreeRoot = null,
   issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null, changedFiles = [], excludedFiles = [], adjacentCode = null,
   validationResultsPath = null,
@@ -1561,6 +1562,7 @@ export function renderBriefingEvidence({
   lines.push(`pr: #${pr}`);
   lines.push(`gate: ${gate}`);
   lines.push(`head: ${headSha}`);
+  if (worktreeRoot) lines.push(`worktree: ${worktreeRoot}`);
   lines.push(`prefixMode: ${prefixMode}`);
   lines.push("");
   const hasIssueSections = Array.isArray(issueSections) && issueSections.length > 0;
@@ -3095,6 +3097,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       pr: options.pr,
       gate: options.gate,
       headSha: options.headSha,
+      worktreeRoot: reviewedWorktreeRoot(options.headSha, { repoRoot }),
       issueRef: options.acceptanceCriteria ?? null,
       issueBody: options.issueBody ?? null,
       issueSections: options.issueSections ?? null,
@@ -3889,6 +3892,7 @@ export async function readGateContext(input, { repoRoot = process.cwd() } = {}) 
  * @param {{ repoRoot: string }} opts
  */
 export function assertWorktreeAtHead(headSha, { repoRoot }) {
+  // reviewedWorktreeRoot (below) is the non-throwing sibling used by the briefing evidence.
   // Fail-closed self-guard: the abbreviation prefix-match below (declared must be a
   // prefix of the full-length HEAD) FALSE-ACCEPTS an
   // empty/too-short `headSha` (an empty string is a prefix of every HEAD). The sole
@@ -3924,6 +3928,21 @@ export function assertWorktreeAtHead(headSha, { repoRoot }) {
     throw new Error(
       `worktree HEAD ${actualHead} does not match --head-sha ${declared}: the current working directory is the WRONG worktree for this PR, so \`git diff <base>...HEAD\` would resolve the WRONG diff. cd into the worktree checked out at ${declared} and re-run.`,
     );
+  }
+}
+
+/**
+ * Absolute git toplevel of `repoRoot` when its HEAD is the reviewed head, else null.
+ * The briefing evidence names a worktree only when verified, never a bare cwd.
+ */
+export function reviewedWorktreeRoot(headSha, { repoRoot }) {
+  try {
+    const git = (...args) => execFileSync("git", args, { cwd: repoRoot, encoding: "utf8", env: gitEnvWithoutDirOverrides(), stdio: ["ignore", "pipe", "ignore"] }).trim();
+    const declared = String(headSha).trim().toLowerCase();
+    if (!/^[0-9a-f]{7,64}$/.test(declared) || !git("rev-parse", "HEAD").toLowerCase().startsWith(declared)) return null;
+    return git("rev-parse", "--show-toplevel");
+  } catch {
+    return null;
   }
 }
 

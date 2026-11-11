@@ -27,6 +27,77 @@ const pull = (plan, cwd, over = {}) => node("scripts/github/pull-work-order.mjs"
 const refusal = (result) => (assert.equal(result.status, 1, result.stderr), JSON.parse(result.stdout).refusal);
 const seed = (root, over = {}) => seedJudgeSources(root, { headSha: HEAD, ...over });
 
+test("grounded optional discovery is delivered, root-bound and digest-bound", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const plan = await emitJudgeWorkOrder(sources);
+    const result = pull(plan, root);
+    assert.equal(result.status, 0, result.stderr);
+    const delivered = JSON.parse(await readFile(plan.planPath, "utf8")).workOrder;
+    assert.match(delivered.executionRules.widening, /GATE-EXEC-JUDGE-GROUNDED-DISCOVERY/);
+    for (const locator of ["executionRules.contract", "worktree:"]) assert.ok(delivered.executionRules.widening.includes(locator));
+    assert.ok(result.stdout.includes(`Widening: ${delivered.executionRules.widening}.\n`));
+    const changed = structuredClone(delivered);
+    changed.executionRules.widening = "";
+    assert.notEqual(workOrderDigest(changed), plan.workOrderDigest);
+    await rm(path.join(root, sources.specFile));
+    assert.equal(refusal(pull(plan, root)), "stale_dispatch");
+  });
+});
+
+test("grounded discovery uses the pinned reviewed worktree across pull cwd and relocated evidence", async () => {
+  await withDir(async (pullRoot) => withDir(async (artifactRoot) => withDir(async (appRoot) => {
+    const sources = await seed(pullRoot);
+    const relocated = await seed(artifactRoot);
+    await bindEvidenceToPrBody(artifactRoot, { ...relocated, cwd: appRoot }, "Declared scope: fix the finding.\n");
+    const plan = await emitJudgeWorkOrder({ ...sources, tmpRoot: path.join(artifactRoot, "tmp") });
+    const result = await pullWorkOrder({ execution: plan.executionIdentity, cwd: pullRoot,
+      tmpRoots: [path.join(artifactRoot, "tmp")], receiptTmpRoot: path.join(pullRoot, "tmp") });
+    assert.equal(result.workOrderText, await readFile(plan.promptPath, "utf8"));
+    const evidenceRead = plan.workOrder.requiredReads.find((read) => read.kind === "evidence");
+    const evidence = await readFile(evidenceRead.path, "utf8");
+    assert.ok(evidence.includes(`worktree: ${appRoot}\n`));
+    assert.notEqual(appRoot, pullRoot);
+    assert.notEqual(appRoot, path.dirname(path.join(artifactRoot, "tmp")));
+    assert.ok(result.workOrderText.includes(`Widening: ${plan.workOrder.executionRules.widening}`));
+    await writeFile(evidenceRead.path, evidence.replace(appRoot, pullRoot));
+    await assert.rejects(pullWorkOrder({ execution: plan.executionIdentity, cwd: pullRoot,
+      tmpRoots: [path.join(artifactRoot, "tmp")], receiptTmpRoot: path.join(pullRoot, "tmp") }),
+    (err) => err.refusal === "stale_dispatch");
+  })));
+});
+
+test("grounded discovery grounds a present optional candidate and never supplies an absent one", async () => {
+  await withDir(async (pullRoot) => withDir(async (artifactRoot) => withDir(async (appRoot) => {
+    const sources = await seed(pullRoot);
+    const relocated = await seed(artifactRoot);
+    await bindEvidenceToPrBody(artifactRoot, { ...relocated, cwd: appRoot }, "Declared scope: fix the finding.\n");
+    const present = path.join(appRoot, "docs", "present-optional.md");
+    const absent = path.join(appRoot, "docs", "absent-optional.md");
+    await mkdir(path.dirname(present), { recursive: true });
+    await writeFile(present, "optional context\n");
+    const plan = await emitJudgeWorkOrder({ ...sources, tmpRoot: path.join(artifactRoot, "tmp") });
+    const result = await pullWorkOrder({ execution: plan.executionIdentity, cwd: pullRoot,
+      tmpRoots: [path.join(artifactRoot, "tmp")], receiptTmpRoot: path.join(pullRoot, "tmp") });
+    const evidenceRead = plan.workOrder.requiredReads.find((read) => read.kind === "evidence");
+    const root = /^worktree: (.+)$/m.exec((await readFile(evidenceRead.path, "utf8")).split("\n\n")[1])[1];
+    assert.equal(root, appRoot);
+    assert.equal(await readFile(path.join(root, "docs", "present-optional.md"), "utf8"), "optional context\n");
+    await assert.rejects(readFile(path.join(root, "docs", "absent-optional.md"), "utf8"), { code: "ENOENT" });
+    assert.ok(!plan.workOrder.requiredReads.some((read) => [present, absent].includes(read.path)));
+    assert.ok(!result.workOrderText.includes("absent-optional.md"));
+    assert.match(result.workOrderText, /GATE-EXEC-JUDGE-GROUNDED-DISCOVERY/);
+  })));
+});
+
+test("grounded discovery preserves the neutral and Claude judge tool boundaries", async () => {
+  const neutral = await readFile(path.resolve("agents/judge.agent.md"), "utf8");
+  const claude = await readFile(path.resolve(".claude/agents/judge.md"), "utf8");
+  assert.match(neutral, /^tools: read, search, bash, write$/m);
+  assert.match(claude, /^tools: Read, Grep, Glob, Bash, Write$/m);
+  for (const text of [neutral, claude]) assert.match(text, /<!-- rule-ref: GATE-EXEC-JUDGE-GROUNDED-DISCOVERY -->/);
+});
+
 test("Codex bootstrap precedes every pinned read and binds contracts to the emitting toolchain", async () => {
   await withDir(async (root) => {
     const plan = await emitJudgeWorkOrder(await seed(root));
