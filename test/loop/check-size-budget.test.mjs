@@ -231,6 +231,13 @@ test("runtime pins: configured tier refusal remains independent", () => {
   assert.ok(custom.reasons.some((reason) => reason.includes("configured t1/t3 pattern")));
 });
 
+test("runtime pins: tier-pattern drop and unknown source name both reasons", () => {
+  const result = computeSizeBudget({ nameStatusOutput: "M\tdocs/x.md\nM\ttools/build-runner\n", numstatOutput: numstatZ([[1, 1, "docs/x.md"], [1, 1, "tools/build-runner"]]), sizeConfig: { tiers: { t1: { patterns: ["docs/**"] } } } });
+  assert.equal(result.outcome, "block");
+  assert.ok(result.reasons.some((reason) => reason.includes("tools/build-runner")));
+  assert.ok(result.reasons.some((reason) => reason.includes("configured t1/t3 pattern")));
+});
+
 test("pass: small mixed change stays under softLoc", () => {
   const result = computeSizeBudget({
     nameStatusOutput: MIXED_NAME_STATUS,
