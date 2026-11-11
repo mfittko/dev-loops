@@ -911,8 +911,17 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       );
     }
     if (linkagePayload?.hasOpenLinkedPr) {
-      return buildAutoResolvedInput({ pr: linkagePayload.prNumber, cwd: repoRoot,
+      const fromPr = buildAutoResolvedInput({ pr: linkagePayload.prNumber, cwd: repoRoot,
         targetPreference: resolvedTargetPreference, inputSource, claim, env });
+      // The linked PR is found via timeline events; the PR route selects its
+      // own closing issue. Refuse a mismatch rather than bind another unit.
+      const boundIssue = fromPr.currentState?.target?.issue ?? null;
+      if (boundIssue !== issue) {
+        throw new Error(
+          `issue #${issue} is linked to PR #${linkagePayload.prNumber}, but that PR closes ${boundIssue === null ? "no issue" : `issue #${boundIssue}`}; fail closed — refusing to bind the coordinator to a unit the operator did not name.`,
+        );
+      }
+      return fromPr;
     }
     let issueReadiness;
     try {
@@ -1041,7 +1050,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     }
     artifactState = "open";
   }
-  if (prRead && !review && !uiReview && !prJson?.author?.login) {
+  if (!review && !uiReview && (!prRead || !prJson?.author?.login)) {
     throw new Error(`PR #${pr} author could not be read; fail closed — do not guess routing ownership.`);
   }
   const closingIssue = review || uiReview ? null : selectPrClosingIssue(prJson);

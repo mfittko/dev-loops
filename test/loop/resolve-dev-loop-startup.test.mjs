@@ -1330,12 +1330,12 @@ test("buildAutoResolvedInput fails closed (not-claimed) when the issue read fail
   }
 });
 
-test("buildAutoResolvedInput for a PR fails closed (not-claimed) when the PR read fails and defaults to unassigned", () => {
+test("buildAutoResolvedInput for a PR fails closed (author unreadable) when the PR read fails", () => {
   const tmp = stampRepoWithOrigin();
   try {
     assert.throws(
       () => buildAutoResolvedInput({ pr: 999999, cwd: tmp }),
-      /PR #999999 is not claimed by any contributor.*edit-pr\.mjs.*--pr 999999 --add-assignee @me/s,
+      /PR #999999 author could not be read.*fail closed/,
     );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -1587,6 +1587,32 @@ for (const [facts, error] of [
       env: { ...stub.env, ...resolverTestEnv() } }), error);
   });
 });
+
+test("PR startup refuses an unreadable PR on the plain path (gh pr view exits 1)", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const stub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["pr", "view", "740"], exitCode: 1, stderr: "gh: not found\n" },
+    ]);
+    assert.throws(() => buildAutoResolvedInput({ pr: 740, cwd: tempDir,
+      env: { ...stub.env, ...resolverTestEnv() } }), /author could not be read.*fail closed/);
+  });
+});
+
+for (const [closes, expected] of [[[{ number: 900 }], /closes issue #900/], [[], /closes no issue/]]) {
+  test(`--issue refuses a linked PR whose closing issue differs from the requested issue: ${expected}`, async () => {
+    await withTempDir(async (tempDir) => {
+      await initRepoWithOrigin(tempDir);
+      const stub = await writeGhStubHelper(tempDir, [
+        { assertArgs: ["api", "graphql"], stdout: linkedPrGraphql(740) },
+        { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify({ state: "OPEN",
+          author: { login: "test-viewer" }, assignees: [{ login: "test-viewer" }], closingIssuesReferences: closes }) },
+      ], { matchMode: "claims" });
+      assert.throws(() => buildAutoResolvedInput({ issue: 735, cwd: tempDir,
+        env: { ...stub.env, ...resolverTestEnv() } }), new RegExp(`issue #735.*PR #740.*${expected.source}`));
+    });
+  });
+}
 
 test("body-only closing references remain foreign-ownership guards without becoming coordinator authority", async () => {
   await withTempDir(async (tempDir) => {
@@ -1995,7 +2021,7 @@ test("--pr --claim with a failing pr view refuses and performs no write", async 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
     assert.doesNotMatch(result.stderr, /could not be claimed/);
-    assert.match(result.stderr, /--claim was not applied/);
+    assert.match(result.stderr, /author could not be read.*fail closed/);
     assert.equal(await editCalls(ghStub), 0);
   }, { prefix: "resolve-dev-loop-claim-pr-readfail-" });
 });
@@ -2241,6 +2267,23 @@ test("#2456: --input strips an injected draftStart", async () => {
     assert.doesNotMatch(parsed.nextAction, /injected/);
   }, { prefix: "resolve-dev-loop-input-draft-start-" });
 });
+
+for (const [flag, strategy] of [["--review", "review"], ["--ui-review", "ui_review"]]) {
+  test(`--pr ${flag} stays exempt from the author guard when the PR author is missing`, async () => {
+    await withTempDir(async (tempDir) => {
+      await initRepoWithOrigin(tempDir);
+      const ghStub = await writeGhStubHelper(tempDir, [
+        { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }) },
+      ], { matchMode: "claims" });
+      const result = await runNode(["--pr", "740", flag], {
+        cwd: tempDir,
+        env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
+      });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).selectedStrategy, strategy);
+    });
+  });
+}
 
 test("--pr --ui-review routes to the ui_review strategy end-to-end (issue #1362)", async () => {
   await withTempDir(async (tempDir) => {
