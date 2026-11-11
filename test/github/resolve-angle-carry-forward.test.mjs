@@ -180,18 +180,21 @@ test("buildCarryForwardPlan skips the synthetic copilot-body finding and leaves 
   assert.deepEqual(plan.mustRerun.map((m) => m.angle), ["docs"]);
 });
 
-test("buildCarryForwardPlan attributes copilot-body to a configured perAngle row of that name", () => {
+test("buildCarryForwardPlan attributes copilot-body to configured perAngle rows of that name and re-runs them as ambiguous", () => {
   const log = withFindings({
     ...cleanLog,
-    provenance: { distinctReviewers: 1, perAngle: [{ angle: "copilot-body", reviewer: "review-z" }] },
+    provenance: {
+      distinctReviewers: 2,
+      perAngle: [
+        { angle: "copilot-body", reviewer: "review-z" },
+        { angle: "copilot-body-delta-at-abc1234", reviewer: "review-z" },
+      ],
+    },
   }, [bodyFinding("copilot-body")]);
   const plan = buildCarryForwardPlan({ log, changedFiles: ["docs/guide.md"] });
-  const entry = [...plan.carried, ...plan.mustRerun].find((e) => e.angle === "copilot-body");
-  assert.ok(entry, "the configured copilot-body row is not dropped");
-  if (plan.carried.includes(entry)) {
-    assert.equal(entry.prevVerdict, "findings_present");
-    assert.equal(entry.findings.length, 1);
-  }
+  assert.deepEqual(plan.carried, []);
+  assert.deepEqual(plan.mustRerun.map((m) => m.angle).sort(), ["copilot-body", "copilot-body-delta-at-abc1234"]);
+  for (const entry of plan.mustRerun) assert.match(entry.reason, /attribution is ambiguous/);
 });
 
 test("buildCarryForwardPlan still fails closed on non-synthetic or case-drifted copilot-body angles", () => {
