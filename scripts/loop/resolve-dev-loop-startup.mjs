@@ -849,7 +849,7 @@ export function buildDraftStart({ repo, pr }) {
     nextAction: `PR #${pr} is an existing draft: a valid start target. Run the draft-start pre-flight \`${preflight}\` and follow its nextAction (\`run_draft_gate\` enters draft_gate while the PR stays draft; \`report_blocked\` reports the spec precondition and stops). The Copilot handoff's \`pr_draft\` stop belongs to the Copilot-only follow-up path and is not an abort here. Do not mark ready or request Copilot review until a clean current-head draft_gate verdict exists.`,
   };
 }
-export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, inputSource, uiReview = false, review = false, claim = false, env = process.env }) {
+export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, inputSource, uiReview = false, review = false, claim = false, expectedIssue, env = process.env }) {
   // The viewer-login memo exists to dedupe gh calls WITHIN one resolution
   // (PR + linked-issue checks); reset it per invocation so a long-lived
   // process (or test) never reuses a stale login across resolutions.
@@ -911,17 +911,10 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       );
     }
     if (linkagePayload?.hasOpenLinkedPr) {
-      const fromPr = buildAutoResolvedInput({ pr: linkagePayload.prNumber, cwd: repoRoot,
-        targetPreference: resolvedTargetPreference, inputSource, claim, env });
-      // The linked PR is found via timeline events; the PR route selects its
-      // own closing issue. Refuse a mismatch rather than bind another unit.
-      const boundIssue = fromPr.currentState?.target?.issue ?? null;
-      if (boundIssue !== issue) {
-        throw new Error(
-          `issue #${issue} is linked to PR #${linkagePayload.prNumber}, but that PR closes ${boundIssue === null ? "no issue" : `issue #${boundIssue}`}; fail closed — refusing to bind the coordinator to a unit the operator did not name.`,
-        );
-      }
-      return fromPr;
+      // The linked PR is found via timeline events; the PR route checks its
+      // own closing issue against `expectedIssue` before any claim write.
+      return buildAutoResolvedInput({ pr: linkagePayload.prNumber, cwd: repoRoot,
+        targetPreference: resolvedTargetPreference, inputSource, claim, expectedIssue: issue, env });
     }
     let issueReadiness;
     try {
@@ -1054,6 +1047,12 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     throw new Error(`PR #${pr} author could not be read; fail closed — do not guess routing ownership.`);
   }
   const closingIssue = review || uiReview ? null : selectPrClosingIssue(prJson);
+  // The --issue route names the unit; refuse a different one before any claim write.
+  if (expectedIssue !== undefined && closingIssue !== expectedIssue) {
+    throw new Error(
+      `issue #${expectedIssue} is linked to PR #${pr}, but that PR closes ${closingIssue === null ? "no issue" : `issue #${closingIssue}`}; fail closed — refusing to bind the coordinator to a unit the operator did not name.`,
+    );
+  }
   // Body-reference fallback remains a foreign-ownership guard, never unit authority.
   linkedIssueNumbers = resolveLinkedIssuesFromPr(prJson);
   const ownership = isCopilotLogin(prJson?.author?.login) ? "copilot" : "external_human";

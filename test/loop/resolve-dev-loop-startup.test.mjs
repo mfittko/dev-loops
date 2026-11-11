@@ -1612,6 +1612,20 @@ for (const [closes, expected] of [[[{ number: 900 }], /closes issue #900/], [[],
         env: { ...stub.env, ...resolverTestEnv() } }), new RegExp(`issue #735.*PR #740.*${expected.source}`));
     });
   });
+  test(`--issue --claim refuses a mismatched closing issue before any PR edit: ${expected}`, async () => {
+    await withTempDir(async (tempDir) => {
+      await initRepoWithOrigin(tempDir);
+      const stub = await writeGhStubHelper(tempDir, [
+        { assertArgs: ["api", "graphql"], stdout: linkedPrGraphql(740) },
+        { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify({ state: "OPEN",
+          author: { login: "test-viewer" }, assignees: [], closingIssuesReferences: closes }) },
+      ], { matchMode: "claims", logCalls: true });
+      assert.throws(() => buildAutoResolvedInput({ issue: 735, cwd: tempDir, claim: true,
+        env: { ...stub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) } }), new RegExp(`issue #735.*PR #740.*${expected.source}`));
+      const calls = (await readFile(stub.ghLogPath, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      assert.deepEqual(calls.filter((args) => args[0] === "pr" && args[1] === "edit"), []);
+    });
+  });
 }
 
 test("body-only closing references remain foreign-ownership guards without becoming coordinator authority", async () => {
