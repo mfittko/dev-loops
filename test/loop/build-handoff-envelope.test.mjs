@@ -62,7 +62,7 @@ async function writeTempJson(tempDir, name, value) {
   return filePath;
 }
 
-test("build-handoff-envelope preserves read-only review with multiple closing issues", async () => {
+for (const strategy of ["review", "wait_watch"]) test(`build-handoff-envelope preserves stateless ${strategy} with multiple closing issues`, async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "build-envelope-review-"));
   try {
     const repoDir = path.join(tempDir, "repo");
@@ -96,12 +96,13 @@ test("build-handoff-envelope preserves read-only review with multiple closing is
     assert.equal(startup.code, 0, startup.stderr);
     const resolved = JSON.parse(startup.stdout);
     assert.equal(resolved.selectedStrategy, "review");
+    if (strategy === "wait_watch") resolved.selectedStrategy = resolved.bundle.selectedStrategy = "wait_watch";
     const input = await writeTempJson(tempDir, "startup.json", resolved);
     const built = await runNode(["--input", input, "--repo", "o/r"], options);
     assert.equal(built.code, 0, built.stderr);
     const envelope = JSON.parse(built.stdout);
     assert.equal(envelope.nextAction, resolved.bundle.nextAction);
-    assert.ok(envelope.requiredReads.includes("skills/review/SKILL.md"));
+    if (strategy === "review") assert.ok(envelope.requiredReads.includes("skills/review/SKILL.md"));
     assert.deepEqual(envelope.target, { kind: "pr", repo: "o/r", pr: 42 });
     assert.deepEqual((await readFile(stub.ghLogPath, "utf8")).trim().split("\n").map(JSON.parse), expectedReads);
     assert.equal(Number(await readFile(stub.counterPath, "utf8")), expectedReads.length);

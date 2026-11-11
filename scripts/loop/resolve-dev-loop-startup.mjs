@@ -95,7 +95,7 @@ Optional modifier:
                  --ui-review.
   --ui-review    With --pr only: route the PR to the ui_review strategy
                  (running-app review from an isolated worktree) instead of
-                 the default continue_on_pr/copilot_pr_followup path.
+                 the default continue_on_pr path.
                  Rejected without --pr, or combined with --issue/--input/
                  --plan-file/--spike, and mutually exclusive with --review.
   --lightweight  With --issue: use the PR body as the spec-of-record
@@ -1043,7 +1043,10 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     }
     artifactState = "open";
   }
-  if (!review && !uiReview && (!prRead || !prJson?.author?.login)) {
+  if (!review && !uiReview && !prRead) {
+    throw new Error(`PR #${pr} could not be read; fail closed — do not guess routing ownership.${claim ? " --claim was not applied." : ""}`);
+  }
+  if (!review && !uiReview && !prJson?.author?.login) {
     throw new Error(`PR #${pr} author could not be read; fail closed — do not guess routing ownership.`);
   }
   const closingIssue = review || uiReview ? null : selectPrClosingIssue(prJson);

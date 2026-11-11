@@ -22,7 +22,7 @@ import { selectPrClosingIssue } from "@dev-loops/core/github/issue-ops";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
-import { buildDevLoopHandoffEnvelope, CANONICAL_SPEC_SOURCE } from "@dev-loops/core/loop/handoff-envelope";
+import { buildDevLoopHandoffEnvelope, CANONICAL_SPEC_SOURCE, STATELESS_UNIT_STRATEGIES } from "@dev-loops/core/loop/handoff-envelope";
 import { INTERNAL_DEV_LOOP_STRATEGY } from "@dev-loops/core/loop/public-dev-loop-routing-contract";
 import { trimmedOrNull } from "@dev-loops/core/loop/normalize";
 import { REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -350,10 +350,14 @@ export async function buildHandoffEnvelopeCli(
     ?? resolveLocalWorktree(bundle, repoRoot, cwd);
   envelopeOptions.worktreeCwd = binding?.worktreeCwd;
   let verifiedResolverOutput = resolverOutput;
-  if (binding?.pr && trimmedOrNull(bundle?.selectedStrategy) !== INTERNAL_DEV_LOOP_STRATEGY.REVIEW) {
+  if (binding?.pr && !STATELESS_UNIT_STRATEGIES.includes(trimmedOrNull(bundle?.selectedStrategy))) {
     const issue = selectPrClosingIssue(binding.pr);
-    // Live GitHub linkage is authoritative even for an older startup producer.
     const artifact = bundle.activeArtifact ?? bundle.canonicalState?.target;
+    // Live linkage fills an absent startup issue (older producer) but never replaces a recorded one.
+    const recorded = artifact?.issue ?? null;
+    if (recorded !== null && recorded !== issue) {
+      throw parseError(`PR closing issue changed since startup: startup recorded issue #${recorded}, live linkage is ${issue === null ? "no issue" : `issue #${issue}`}; fail closed.`);
+    }
     const boundBundle = { ...bundle, activeArtifact: { ...artifact, issue } };
     verifiedResolverOutput = resolverOutput.bundle ? { ...resolverOutput, bundle: boundBundle } : boundBundle;
   }

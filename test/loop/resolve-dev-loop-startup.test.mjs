@@ -1330,12 +1330,12 @@ test("buildAutoResolvedInput fails closed (not-claimed) when the issue read fail
   }
 });
 
-test("buildAutoResolvedInput for a PR fails closed (author unreadable) when the PR read fails", () => {
+test("buildAutoResolvedInput for a PR fails closed (PR unreadable) when the PR read fails", () => {
   const tmp = stampRepoWithOrigin();
   try {
     assert.throws(
       () => buildAutoResolvedInput({ pr: 999999, cwd: tmp }),
-      /PR #999999 author could not be read.*fail closed/,
+      /PR #999999 could not be read.*fail closed/,
     );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -1595,7 +1595,7 @@ test("PR startup refuses an unreadable PR on the plain path (gh pr view exits 1)
       { assertArgs: ["pr", "view", "740"], exitCode: 1, stderr: "gh: not found\n" },
     ]);
     assert.throws(() => buildAutoResolvedInput({ pr: 740, cwd: tempDir,
-      env: { ...stub.env, ...resolverTestEnv() } }), /author could not be read.*fail closed/);
+      env: { ...stub.env, ...resolverTestEnv() } }), /PR #740 could not be read.*fail closed/);
   });
 });
 
@@ -2035,7 +2035,7 @@ test("--pr --claim with a failing pr view refuses and performs no write", async 
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
     assert.doesNotMatch(result.stderr, /could not be claimed/);
-    assert.match(result.stderr, /author could not be read.*fail closed/);
+    assert.match(result.stderr, /could not be read.*fail closed.*--claim was not applied/);
     assert.equal(await editCalls(ghStub), 0);
   }, { prefix: "resolve-dev-loop-claim-pr-readfail-" });
 });

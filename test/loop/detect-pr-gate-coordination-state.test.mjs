@@ -326,7 +326,7 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
         finding: null,
         _onlyEnforcedWhenDraft: false,
         prBodySpecValid: false,
-        reason: "No usable spec: the PR closes no resolvable same-repo issue (no Closes/Fixes/Resolves #n reference) and names no promoted plan doc, and the PR body fails the issue-less lightweight spec-of-record validation (validate-pr-body-spec --no-issue: missing_objective, missing_in_scope, missing_explicit_non_goals, missing_open_questions, missing_acceptance_criteria, missing_definition_of_done).",
+        reason: "Refinement enforcement applies only to draft PRs; the ready PR's spec-of-record validity is reported separately (pr_body, not valid).",
       },
       carriedConvergence: null,
       copilotBodyDisposition: null,

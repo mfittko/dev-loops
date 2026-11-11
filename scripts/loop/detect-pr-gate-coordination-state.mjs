@@ -593,8 +593,9 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       const artifact = await resolveNoIssueRefinementArtifact(body, Number.isInteger(expectedIssue) ? expectedIssue : null);
       if (prDraft) return artifact;
       // Ready PRs expose validated authority without re-enforcing the draft boundary.
-      return { ...artifact, status: "unknown", finding: null, _onlyEnforcedWhenDraft: false,
-        prBodySpecValid: artifact.status === "present" && artifact.specSource === REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY };
+      const prBodySpecValid = artifact.status === "present" && artifact.specSource === REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY;
+      return { ...artifact, status: "unknown", finding: null, _onlyEnforcedWhenDraft: false, prBodySpecValid,
+        reason: `Refinement enforcement applies only to draft PRs; the ready PR's spec-of-record validity is reported separately (${artifact.specSource ?? "no spec source"}, ${artifact.status === "present" ? "valid" : "not valid"}).` };
     }
     return {
       status: "unknown",

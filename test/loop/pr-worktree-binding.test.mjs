@@ -127,6 +127,17 @@ test("single live closing issue binds startup and every harness emission to the 
   }, { prChanges: { closingIssuesReferences: [{ number: 3144 }] } });
 }, 30000);
 
+test("a closing issue changed between startup and emission refuses instead of retargeting", async () => {
+  await fixture(async (f) => {
+    for (const changed of [[{ number: 900 }], []]) {
+      await f.changePr({ closingIssuesReferences: changed });
+      const emission = await f.emit();
+      assert.notEqual(emission.code, 0);
+      assert.match(emission.stdout + emission.stderr, /closing issue changed since startup.*#3144/);
+    }
+  }, { prChanges: { closingIssuesReferences: [{ number: 3144 }] } });
+}, 30000);
+
 test("multiple live closing issues refuse emission with deterministic candidates", async () => {
   await fixture(async (f) => {
     await f.changePr({ closingIssuesReferences: [{ number: 42 }, { number: 7 }, { number: 42 }] });
@@ -177,6 +188,7 @@ test("ready issue-less startup derives validated body authority and emits on eve
     assert.equal(authority.status, "unknown");
     assert.equal(authority.finding, null);
     assert.equal(authority.prBodySpecValid, true);
+    assert.match(authority.reason, /enforcement applies only to draft PRs.*pr_body, valid/);
     assert.equal(authority._onlyEnforcedWhenDraft, false);
     const built = await f.build();
     assert.equal(built.code, 0, built.stderr);
