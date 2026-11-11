@@ -242,7 +242,12 @@ test("work order: Claude and Pi paths get identical prompt bytes and the same re
   for (const harness of ["pi", "claude"]) {
     await withTmpDir(async (repoRoot) => {
       const written = await writeRound(repoRoot, { harness });
-      perHarness.push({ prefix: await readFile(path.join(repoRoot, written.prefixPath), "utf8").then((t) => t.replaceAll(repoRoot, "<root>")), reads: written.artifact.requiredReads });
+      // The evidence bytes embed the per-run tmp root, so the sha256 values differ by run; compare everything else.
+      const strip = (t) => t.replaceAll(repoRoot, "<root>").replace(/sha256 [0-9a-f]{64}/g, "sha256 <hash>");
+      perHarness.push({
+        prefix: await readFile(path.join(repoRoot, written.prefixPath), "utf8").then(strip),
+        reads: written.artifact.requiredReads.map(({ sha256, ...r }) => ({ ...r, path: strip(r.path) })),
+      });
     });
   }
   assert.equal(perHarness[0].prefix, perHarness[1].prefix);
