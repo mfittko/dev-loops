@@ -12,7 +12,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { buildCoordinatorWorkOrder } from "@dev-loops/core/loop/coordinator-work-order";
-import { assertConfigLoaded, loadDevLoopConfig, resolveConductorDispatch } from "@dev-loops/core/config";
+import { assertConfigLoaded, loadDevLoopConfig, resolveConductorDispatch, resolveRoleModel } from "@dev-loops/core/config";
 import { workOrderDigest as digestWorkOrder } from "@dev-loops/core/loop/work-order-digest";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -69,7 +69,7 @@ export function claudeDevLoopAgentType(cwd = process.cwd(), env = process.env) {
 
 // Each adapter carries the fixed pointer and its tool's required routing fields; any other harness refuses.
 const DISPATCH_ADAPTERS = {
-  claude: (prompt, cwd) => ({ subagent_type: claudeDevLoopAgentType(cwd), description: "coordinator work order", prompt }),
+  claude: (prompt, cwd, _executionIdentity, model) => ({ subagent_type: claudeDevLoopAgentType(cwd), description: "coordinator work order", prompt, ...(model ? { model } : {}) }),
   pi: (prompt) => ({ agent: "dev-loop", task: prompt }),
   codex: (message, _cwd, executionIdentity) => {
     if (typeof executionIdentity !== "string" || !/^c\d+-[0-9a-f]{8}$/.test(executionIdentity) || /\s/.test(executionIdentity)) {
@@ -84,8 +84,8 @@ function dispatchAdapter(harness) {
   return DISPATCH_ADAPTERS[harness];
 }
 
-export function buildCoordinatorDispatchPayload({ harness, dispatchPrompt, cwd, executionIdentity, nativeOverrides = {} }) {
-  const payload = dispatchAdapter(harness)(dispatchPrompt, cwd, executionIdentity);
+export function buildCoordinatorDispatchPayload({ harness, dispatchPrompt, cwd, executionIdentity, nativeOverrides = {}, model = null }) {
+  const payload = dispatchAdapter(harness)(dispatchPrompt, cwd, executionIdentity, model);
   return harness === "codex" ? { ...payload, ...nativeOverrides } : payload;
 }
 
@@ -202,8 +202,10 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     if (Boolean(values.harness) !== Boolean(values.entry)) return fail("--harness and --entry go together", USAGE);
     if (values.harness) dispatchAdapter(values.harness); // refuse before input consumption or materialization
     if (values.entry && !ENTRIES.includes(values.entry)) throw new WorkOrderRefusal("invalid_entry", `--entry must be one of ${ENTRIES.join(", ")}, got ${values.entry}`);
-    const nativeOverrides = values.harness === "codex"
-      ? resolveConductorDispatch(assertConfigLoaded(await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) })), { harness: "codex" }).nativeOverrides : {};
+    const dispatchConfig = values.harness === "codex" || values.harness === "claude"
+      ? assertConfigLoaded(await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) })) : null;
+    const nativeOverrides = values.harness === "codex" ? resolveConductorDispatch(dispatchConfig, { harness: "codex" }).nativeOverrides : {};
+    const model = values.harness === "claude" ? resolveRoleModel(dispatchConfig.config, { role: "dev-loop", harness: "claude" }) : null;
     const envelope = await buildHandoffEnvelopeCli({ inputPath: values.input, repo: values.repo });
     const built = buildCoordinatorWorkOrder({
       envelope, allowedFiles: values["allowed-file"] ?? [],
@@ -222,7 +224,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       }
       const unit = await materializeCoordinatorWorkOrder({ workOrder, workOrderDigest, entry: values.entry, tmpRoot });
       const { workOrderRef, executionIdentity, dispatchPrompt, planPath } = unit;
-      return emitResult({ ok: true, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload: buildCoordinatorDispatchPayload({ harness: values.harness, dispatchPrompt, cwd, executionIdentity, nativeOverrides }), planPath },
+      return emitResult({ ok: true, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload: buildCoordinatorDispatchPayload({ harness: values.harness, dispatchPrompt, cwd, executionIdentity, nativeOverrides, model }), planPath },
         { jq: values.jq, silent: values.silent, fields: values.fields, stdout, stderr });
     }
     return emitResult(out, { jq: values.jq, silent: values.silent, fields: values.fields, stdout, stderr });

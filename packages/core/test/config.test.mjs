@@ -7397,6 +7397,7 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     // config; operators opt into a concrete per-harness model in .devloops.
     ["pre-push-reviewer", "opus", null],
     ["dev-loop", null, null], // inherit
+    ["gate-coordinator", null, null], // inherit
     // A critical gate angle resolves high via its `review` persona.
     ["correctness", "opus", null],
     ["renderer-security", "opus", null],
@@ -7419,6 +7420,23 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     assert.equal(resolveRoleModel(config, { role: "correctness", harness: "claude", kind: "angle" }), "opus");
     assert.equal(resolveRoleModel(config, { role: "correctness", harness: "pi", kind: "angle" }), "pi-review");
     assert.equal(resolveRoleModel(config, { role: "correctness", harness: "codex", kind: "angle" }), null);
+  });
+
+  test("a consumer low tier of sonnet reaches every low-tier role, dev-loop and gate-coordinator, and leaves review roles high", () => {
+    const config = {
+      models: {
+        tiers: { low: { claude: "sonnet" } },
+        roleTiers: { "dev-loop": "low", "gate-coordinator": "low" },
+      },
+    };
+    for (const role of ["developer", "fixer", "docs", "quality", "dev-loop", "gate-coordinator"]) {
+      assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "sonnet", role);
+      assert.equal(resolveRoleModel(config, { role, harness: "pi" }), null, `${role} on pi is unchanged`);
+    }
+    for (const role of ["review", "refiner", "pre-push-reviewer"]) {
+      assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "opus", role);
+    }
+    assert.equal(resolveRoleModel(config, { role: "correctness", harness: "claude", kind: "angle" }), "opus");
   });
 
   test("the retired pre-PR-reviewer role has no built-in tier (resolves like an unknown role)", () => {

@@ -1703,13 +1703,14 @@ test("F2: Claude, Pi and Codex initial, rebuilt and replacement payloads carry t
       const initial = JSON.parse(cli(harness).stdout);
       assert.equal(initial.ok, true, `${harness}: ${JSON.stringify(initial)}`);
       const plan = JSON.parse(await readFile(initial.planPath, "utf8"));
-      const resumed = buildFixerDispatchPayload({ harness, plan, cwd: wt });
+      const resumed = buildFixerDispatchPayload({ harness, plan, cwd: wt, model: harness === "claude" ? "opus" : null });
       const replacementOut = JSON.parse(cli(harness).stdout);
       const replacement = { plan: JSON.parse(await readFile(replacementOut.planPath, "utf8")), payload: replacementOut.dispatchPayload };
       for (const [payload, unit] of [[initial.dispatchPayload, plan], [resumed, plan], [replacement.payload, replacement.plan]]) {
-        assert.deepEqual(Object.keys(payload).sort(), (harness === "claude" ? ["subagent_type", "description"] : harness === "codex" ? ["task_name", "fork_turns"] : ["agent"]).concat(textKey).sort());
+        assert.deepEqual(Object.keys(payload).sort(), (harness === "claude" ? ["subagent_type", "description", "model"] : harness === "codex" ? ["task_name", "fork_turns"] : ["agent"]).concat(textKey).sort());
         // A consumer checkout resolves the plugin-namespaced agent; the hooks normalize it to `fixer`.
         if (harness === "claude") assert.deepEqual([payload.subagent_type, payload.description], ["dev-loops:fixer", "fixer work order"]);
+        if (harness === "claude") assert.equal(payload.model, "opus"); // zero config: the built-in low tier
         if (harness === "codex") {
           assert.equal(payload.task_name, `fixer_${unit.executionIdentity.replaceAll("-", "_")}`);
           assert.match(payload.task_name, /^[a-z0-9_]+$/);
@@ -1717,7 +1718,7 @@ test("F2: Claude, Pi and Codex initial, rebuilt and replacement payloads carry t
         }
         assert.equal(payload[textKey], buildDispatchPointer(unit));
         assert.ok(Buffer.byteLength(payload[textKey]) <= DISPATCH_POINTER_MAX_BYTES);
-        assertFixerDispatchPayload({ harness, payload, plan: unit, cwd: wt });
+        assertFixerDispatchPayload({ harness, payload, plan: unit, cwd: wt, model: harness === "claude" ? "opus" : null });
       }
       assert.deepEqual(initial.dispatchPayload, resumed);
       if (harness === "codex") {
@@ -1730,7 +1731,7 @@ test("F2: Claude, Pi and Codex initial, rebuilt and replacement payloads carry t
         }
       }
       for (const bad of [{ ...resumed, [textKey]: `${resumed[textKey]} Also refactor the parser.` }, { ...resumed, [textKey]: `Context: x. ${resumed[textKey]}` }, { ...resumed, extra: "prose" }, ...(harness === "claude" ? [{ ...resumed, description: "fix the parser" }, { ...resumed, subagent_type: "fixer" }] : [])]) {
-        assert.throws(() => assertFixerDispatchPayload({ harness, payload: bad, plan, cwd: wt }), (err) => err.refusal === "dispatch_payload_mismatch");
+        assert.throws(() => assertFixerDispatchPayload({ harness, payload: bad, plan, cwd: wt, model: harness === "claude" ? "opus" : null }), (err) => err.refusal === "dispatch_payload_mismatch");
       }
       await new Promise((resolve) => setTimeout(resolve, 2));
     }
@@ -4059,4 +4060,14 @@ test("issue 2447: a refused locally_clear result sealed by the writer with a lif
     assert.notDeepEqual(await readFile(markerPath), marker);
     assert.deepEqual(again.workOrder.deltaFindings.map((f) => f.summary), [LIFECYCLE.summary]);
   });
+});
+
+test("Claude fixer dispatch payload carries the resolved model only when non-null; Pi and Codex payloads never do", () => {
+  const plan = { executionIdentity: "f1700000000000-0a1b2c3d", dispatchPrompt: "pointer" };
+  assert.equal("model" in buildFixerDispatchPayload({ harness: "claude", plan }), false);
+  assert.equal(buildFixerDispatchPayload({ harness: "claude", plan, model: "sonnet" }).model, "sonnet");
+  for (const harness of ["pi", "codex"]) assert.equal("model" in buildFixerDispatchPayload({ harness, plan, model: "sonnet" }), false);
+  const unit = { executionIdentity: plan.executionIdentity, workOrderRef: "fixer:o/r#1:abcdef123456", workOrderDigest: `sha256:${"a".repeat(64)}` };
+  assertFixerDispatchPayload({ harness: "claude", payload: buildFixerDispatchPayload({ harness: "claude", plan: { ...plan, dispatchPrompt: buildDispatchPointer(unit) }, model: "sonnet" }), plan: unit, model: "sonnet" });
+  assert.throws(() => assertFixerDispatchPayload({ harness: "claude", payload: buildFixerDispatchPayload({ harness: "claude", plan: { ...plan, dispatchPrompt: buildDispatchPointer(unit) } }), plan: unit, model: "sonnet" }), (err) => err.refusal === "dispatch_payload_mismatch");
 });

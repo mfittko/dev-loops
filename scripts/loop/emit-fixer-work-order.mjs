@@ -12,7 +12,7 @@ import { readFile, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
-import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveRoleModel } from "@dev-loops/core/config";
 import { VALID_SEVERITIES, normalizeSeverity, hasSeverityText, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { EvidenceSealError, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
@@ -861,7 +861,7 @@ export function claudeFixerAgentType(cwd = process.cwd(), env = process.env) {
 
 // Each adapter carries the fixed pointer and its tool's required routing fields.
 const FIXER_DISPATCH_ADAPTERS = {
-  claude: (prompt, cwd) => ({ subagent_type: claudeFixerAgentType(cwd), description: "fixer work order", prompt }),
+  claude: (prompt, cwd, _executionIdentity, model) => ({ subagent_type: claudeFixerAgentType(cwd), description: "fixer work order", prompt, ...(model ? { model } : {}) }),
   pi: (prompt) => ({ agent: "fixer", task: prompt }),
   codex: (message, _cwd, executionIdentity) => {
     if (typeof executionIdentity !== "string" || !/^f\d+-[0-9a-f]{8}$/.test(executionIdentity) || executionIdentity.trim() !== executionIdentity) {
@@ -878,13 +878,13 @@ function fixerDispatchAdapter(harness) {
 }
 
 /** The harness adapter payload for a fixer dispatch; any other harness refuses (never legacy prose). */
-export function buildFixerDispatchPayload({ harness, plan, cwd = process.cwd() }) {
-  return fixerDispatchAdapter(harness)(plan.dispatchPrompt, cwd, plan.executionIdentity);
+export function buildFixerDispatchPayload({ harness, plan, cwd = process.cwd(), model = null }) {
+  return fixerDispatchAdapter(harness)(plan.dispatchPrompt, cwd, plan.executionIdentity, model);
 }
 
 /** Refuses a payload that is not exactly the harness adapter payload for the plan's pointer (same keys, same values). */
-export function assertFixerDispatchPayload({ harness, payload, plan, cwd = process.cwd() }) {
-  const expected = buildFixerDispatchPayload({ harness, plan: { executionIdentity: plan.executionIdentity, dispatchPrompt: buildDispatchPointer(plan) }, cwd });
+export function assertFixerDispatchPayload({ harness, payload, plan, cwd = process.cwd(), model = null }) {
+  const expected = buildFixerDispatchPayload({ harness, plan: { executionIdentity: plan.executionIdentity, dispatchPrompt: buildDispatchPointer(plan) }, cwd, model });
   const keys = Object.keys(expected);
   if (Object.keys(payload ?? {}).length !== keys.length || keys.some((key) => !Object.hasOwn(payload, key) || payload[key] !== expected[key])) {
     throw new WorkOrderRefusal("dispatch_payload_mismatch", `the ${harness} fixer dispatch must be ${JSON.stringify(expected)} unchanged`);
@@ -1114,7 +1114,9 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
       ...(fetchReview ? { fetchReview } : {}),
     });
     const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath, joinRef } = plan;
-    const dispatchPayload = buildFixerDispatchPayload({ harness: values.harness, plan, cwd });
+    // The Claude Agent `model` is the config-resolved fixer model; the frontmatter stays the fallback.
+    const model = values.harness === "claude" ? resolveRoleModel((await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) })).config, { role: "fixer", harness: "claude" }) : null;
+    const dispatchPayload = buildFixerDispatchPayload({ harness: values.harness, plan, cwd, model });
     return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef });
   } catch (err) {
     if (!(err instanceof Refusal || err instanceof WorkOrderRefusal || err instanceof OperatorFocusRefusal)) throw err;

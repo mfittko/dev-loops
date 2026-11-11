@@ -185,8 +185,9 @@ localImplementation:
 
 # Model tiers (skills/docs/pre-pr-review-contract.md).
 # Each tier maps to one model per harness (`claude`, `pi`). The `pi` value is
-# switchable here in `models.tiers`; no other file needs to change. The Claude
-# side is baked from built-in policy into the agent frontmatter.
+# switchable here in `models.tiers`; no other file needs to change. On Claude
+# every dispatch passes the resolved model as the Agent `model` parameter; the
+# agent frontmatter baked from built-in policy is only the fallback.
 #   low           routine roles: developer, fixer, dev-loop, gate-coordinator, docs, quality.
 #   high          review, judge, refiner and every gate angle.
 #   pre-pr-strong the pre-push reviewer.
