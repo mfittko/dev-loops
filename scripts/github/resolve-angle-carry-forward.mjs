@@ -298,7 +298,8 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
   // a KNOWN prevAngles entry via {@link baseAngleName} (a `<angle>-delta-at-...`
   // re-review entry counts toward its base angle, per gate-fanin's own coverage
   // check) case-insensitively. An unattributable finding means no angle is
-  // provably clean, so it refuses the whole plan.
+  // provably clean, so it refuses the whole plan (the one exception is the synthetic
+  // `copilot-body` finding, skipped before attribution when no perAngle row carries that name).
   if (log.findings !== undefined && !Array.isArray(log.findings)) {
     throw new Error("prior gate findings-log's findings field is not an array — cannot verify which angles are clean (fail-closed)");
   }
@@ -330,7 +331,7 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
       throw new Error("prior gate findings-log has a finding with no angle — cannot attribute it to a carried angle (fail-closed)");
     }
     // The synthetic Copilot body finding has no perAngle row by design; every other unattributable angle still fails closed.
-    if (rawAngle === COPILOT_BODY_ANGLE) continue;
+    if (rawAngle === COPILOT_BODY_ANGLE && !prevAnglesByLowerBase.has(COPILOT_BODY_ANGLE)) continue;
     const matches = prevAnglesByLowerBase.get(baseAngleName(rawAngle).toLowerCase());
     if (!matches || matches.length === 0) {
       throw new Error(`prior gate findings-log has a finding for angle ${JSON.stringify(rawAngle)}, which matches no provenance.perAngle entry — cannot prove that angle is clean (fail-closed)`);

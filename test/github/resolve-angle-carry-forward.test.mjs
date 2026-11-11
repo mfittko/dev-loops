@@ -167,16 +167,39 @@ const cleanLog = {
 };
 
 
-test("buildCarryForwardPlan skips the synthetic copilot-body finding", () => {
-  const log = { ...cleanLog, verdict: "findings_present", findings: [{ angle: "copilot-body", severity: "major", summary: "x" }] };
-  const plan = buildCarryForwardPlan({ log, changedFiles: ["docs/guide.md"] });
-  assert.ok(plan);
+const bodyFinding = (angle) => ({ angle, severity: "major", summary: "x" });
+const withFindings = (log, findings) => ({ ...log, verdict: "findings_present", findings });
+
+test("buildCarryForwardPlan skips the synthetic copilot-body finding and leaves every angle clean", () => {
+  const plan = buildCarryForwardPlan({ log: withFindings(cleanLog, [bodyFinding("copilot-body")]), changedFiles: ["docs/guide.md"] });
+  assert.deepEqual(plan.carried.map((c) => c.angle).sort(), ["correctness", "coverage"]);
+  for (const entry of plan.carried) {
+    assert.equal(entry.prevVerdict, "clean");
+    assert.equal(entry.findings.length, 0);
+  }
+  assert.deepEqual(plan.mustRerun.map((m) => m.angle), ["docs"]);
 });
 
-test("buildCarryForwardPlan still fails closed on a non-synthetic unknown angle", () => {
-  const log = { ...cleanLog, verdict: "findings_present", findings: [{ angle: "copilot-body-x", severity: "major", summary: "x" }] };
-  assert.throws(() => buildCarryForwardPlan({ log, changedFiles: ["docs/guide.md"] }), /matches no provenance\.perAngle entry/);
+test("buildCarryForwardPlan attributes copilot-body to a configured perAngle row of that name", () => {
+  const log = withFindings({
+    ...cleanLog,
+    provenance: { distinctReviewers: 1, perAngle: [{ angle: "copilot-body", reviewer: "review-z" }] },
+  }, [bodyFinding("copilot-body")]);
+  const plan = buildCarryForwardPlan({ log, changedFiles: ["docs/guide.md"] });
+  const entry = [...plan.carried, ...plan.mustRerun].find((e) => e.angle === "copilot-body");
+  assert.ok(entry, "the configured copilot-body row is not dropped");
+  if (plan.carried.includes(entry)) {
+    assert.equal(entry.prevVerdict, "findings_present");
+    assert.equal(entry.findings.length, 1);
+  }
 });
+
+test("buildCarryForwardPlan still fails closed on non-synthetic or case-drifted copilot-body angles", () => {
+  for (const angle of ["copilot-body-x", "Copilot-Body"]) {
+    assert.throws(() => buildCarryForwardPlan({ log: withFindings(cleanLog, [bodyFinding(angle)]), changedFiles: ["docs/guide.md"] }), /matches no provenance\.perAngle entry/);
+  }
+});
+
 test("buildCarryForwardPlan carries code angles on a doc-only delta, marks provenance honestly", () => {
   const plan = buildCarryForwardPlan({ log: cleanLog, changedFiles: ["docs/guide.md"] });
   assert.equal(plan.prevHead, "aaaaaaa");

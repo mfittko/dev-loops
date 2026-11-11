@@ -15,9 +15,6 @@
 // untrusted author, a fix commit not after the review commit or not in the
 // head, an unreadable comment stream, or a marker inside code or a quote all
 // leave the finding blocking. Nothing here writes a record.
-// Synthetic angle name of the judge finding built from a Copilot review body (not a gate angle).
-export const COPILOT_BODY_ANGLE = "copilot-body";
-
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import {
   classifyCopilotReviewBodyDisposition,
@@ -31,6 +28,9 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { isCommitContainedByHead } from "./_commit-containment.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
+
+// Synthetic angle name of the judge finding built from a Copilot review body (not a gate angle).
+export const COPILOT_BODY_ANGLE = "copilot-body";
 
 // File the gate detector writes the body finding to and the judge emit pins.
 export const copilotBodyJudgePath = ({ tmpRoot, repo, pr, headSha }) => {
