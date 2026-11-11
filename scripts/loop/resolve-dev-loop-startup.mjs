@@ -31,6 +31,7 @@ import {
   classifyOwnership,
   ownershipNeedsViewerLogin,
 } from "@dev-loops/core/github/ownership-helpers";
+import { selectPrClosingIssue } from "@dev-loops/core/github/issue-ops";
 import { resolveLinkedIssuesFromPr } from "./detect-pr-gate-coordination-state.mjs";
 import { configLoadFailure, countLightModeFiles, lightModeCapState, loadDevLoopConfig, normalizeToBareBranch, resolveBaseBranch, resolveIssuelessEnabled, resolveLightMode, resolveWorkflowConfig, touchesConfigSource } from "@dev-loops/core/config";
 import { detectScope, detectWorkingTreeChangedFiles } from "./detect-change-scope.mjs";
@@ -94,7 +95,7 @@ Optional modifier:
                  --ui-review.
   --ui-review    With --pr only: route the PR to the ui_review strategy
                  (running-app review from an isolated worktree) instead of
-                 the default continue_on_pr/copilot_pr_followup path.
+                 the default continue_on_pr path.
                  Rejected without --pr, or combined with --issue/--input/
                  --plan-file/--spike, and mutually exclusive with --review.
   --lightweight  With --issue: use the PR body as the spec-of-record
@@ -848,7 +849,7 @@ export function buildDraftStart({ repo, pr }) {
     nextAction: `PR #${pr} is an existing draft: a valid start target. Run the draft-start pre-flight \`${preflight}\` and follow its nextAction (\`run_draft_gate\` enters draft_gate while the PR stays draft; \`report_blocked\` reports the spec precondition and stops). The Copilot handoff's \`pr_draft\` stop belongs to the Copilot-only follow-up path and is not an abort here. Do not mark ready or request Copilot review until a clean current-head draft_gate verdict exists.`,
   };
 }
-export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, inputSource, uiReview = false, review = false, claim = false, env = process.env }) {
+export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, inputSource, uiReview = false, review = false, claim = false, expectedIssue, env = process.env }) {
   // The viewer-login memo exists to dedupe gh calls WITHIN one resolution
   // (PR + linked-issue checks); reset it per invocation so a long-lived
   // process (or test) never reuses a stale login across resolutions.
@@ -888,11 +889,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
         },
       };
     }
-    let artifactState = "not_applicable";
     const warnings = [];
-    let issueLinkageResolution = "resolved_no_open_pr";
-    let linkedPr = null;
-    let ownership = "local";
     let linkagePayload = null;
     try {
       const linkageJson = execFileSync(process.execPath, [
@@ -910,17 +907,10 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       );
     }
     if (linkagePayload?.hasOpenLinkedPr) {
-      issueLinkageResolution = "resolved_linked_pr";
-      linkedPr = linkagePayload.prNumber;
-      try {
-        const prJson = ghJson(["pr", "view", String(linkedPr), "--repo", repo, "--json", "author,state"], repoRoot, env);
-        ownership = isCopilotLogin(prJson?.author?.login) ? "copilot" : "external_human";
-        artifactState = mapGhState(prJson?.state ?? "OPEN");
-      } catch {
-        warnings.push(
-          `linkedPr authorship: using default ownership "${ownership}" for PR #${linkedPr} — gh pr view failed`,
-        );
-      }
+      // The linked PR is found via timeline events; the PR route checks its
+      // own closing issue against `expectedIssue` before any claim write.
+      return buildAutoResolvedInput({ pr: linkagePayload.prNumber, cwd: repoRoot,
+        targetPreference: resolvedTargetPreference, inputSource, claim, expectedIssue: issue, env });
     }
     let issueReadiness;
     try {
@@ -966,19 +956,16 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       intent: "start_issue_locally",
       mode: "bounded_handoff",
       targetPreference: resolvedTargetPreference,
-      artifactState,
-      issueLinkageResolution,
+      artifactState: "not_applicable",
+      issueLinkageResolution: "resolved_no_open_pr",
       issueReadiness,
       issueAssignmentState,
       loopState,
       warnings: warnings.length > 0 ? warnings : undefined,
       currentState: {
-        target: { kind: "issue", issue, pr: null, linkedPr, branch: null, phase: null },
-        ownership: ownership,
-        nextActor: ownership === "copilot"
-          ? "copilot"
-          : ownership === "external_human"
-            ? "external_human" : "local",
+        target: { kind: "issue", issue, pr: null, linkedPr: null, branch: null, phase: null },
+        ownership: "local",
+        nextActor: "local",
         status: "active",
         authorization: "authorized",
       },
@@ -1027,15 +1014,15 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
   let linkedIssueNumbers = [];
   let prDraft = false;
   let prRead = false;
+  let prJson;
   try {
-    const prJson = ghJson(
-      ["pr", "view", String(pr), "--repo", repo, "--json", "state,mergedAt,assignees,closingIssuesReferences,body,isDraft"],
+    prJson = ghJson(
+      ["pr", "view", String(pr), "--repo", repo, "--json", "author,state,mergedAt,assignees,closingIssuesReferences,body,isDraft"],
       repoRoot,
       env,
     );
     artifactState = prJson.mergedAt ? "merged" : mapGhState(prJson.state);
     prAssignees = prJson.assignees || [];
-    linkedIssueNumbers = resolveLinkedIssuesFromPr(prJson);
     prDraft = prJson.isDraft === true && artifactState === "open";
     prRead = true;
   } catch {
@@ -1049,11 +1036,25 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     }
     artifactState = "open";
   }
+  if (!review && !uiReview && !prRead) {
+    throw new Error(`PR #${pr} could not be read; fail closed — do not guess routing ownership.${claim ? " --claim was not applied." : ""}`);
+  }
+  if (!review && !uiReview && !prJson?.author?.login) {
+    throw new Error(`PR #${pr} author could not be read; fail closed — do not guess routing ownership.`);
+  }
+  const closingIssue = review || uiReview ? null : selectPrClosingIssue(prJson);
+  // The --issue route names the unit; refuse a different one before any claim write.
+  if (expectedIssue !== undefined && closingIssue !== expectedIssue) {
+    throw new Error(
+      `issue #${expectedIssue} is linked to PR #${pr}, but that PR closes ${closingIssue === null ? "no issue" : `issue #${closingIssue}`}; fail closed — refusing to bind the coordinator to a unit the operator did not name.`,
+    );
+  }
+  // Body-reference fallback remains a foreign-ownership guard, never unit authority.
+  linkedIssueNumbers = resolveLinkedIssuesFromPr(prJson);
+  const ownership = isCopilotLogin(prJson?.author?.login?.replace?.(/^app\//i, "")) ? "copilot" : "external_human";
   const resolvedTargetPreference = targetPreference ?? resolveTargetPreference(repoRoot);
   // `--review` and `--ui-review` route the PR to their read-only strategies
-  // instead of the default continue_on_pr/copilot_pr_followup path; every other
-  // field stays identical. Without either selector, the plain --pr path is
-  // byte-unchanged.
+  // instead of the author-derived PR follow-up path.
   const result = {
     intent: review ? "review_pr" : uiReview ? "review_pr_ui" : "continue_on_pr",
     mode: "bounded_handoff",
@@ -1062,9 +1063,9 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     issueLinkageResolution: "not_applicable",
     loopState: review ? "pr_review_start" : uiReview ? "pr_ui_review_start" : "pr_followup_start",
     currentState: {
-      target: { kind: "pr", issue: null, pr, linkedPr: null, branch: null, phase: null },
-      ownership: "copilot",
-      nextActor: "user",
+      target: { kind: "pr", issue: closingIssue, pr, linkedPr: null, branch: null, phase: null },
+      ownership,
+      nextActor: ownership,
       status: "active",
       authorization: "authorized",
     },
@@ -1557,7 +1558,7 @@ export function buildResolveDevLoopStartupResult(input, {
     }
   }
   // Draft-start route: only the plain PR follow-up route carries it.
-  const draftStartApplies = draftStart !== null && strategyKey === "copilot_pr_followup";
+  const draftStartApplies = draftStart !== null && ["copilot_pr_followup", "external_pr_followup"].includes(strategyKey);
   const routedBundle = { ...bundle, ...(draftStartApplies ? { nextAction: draftStart.nextAction } : {}), pendingRetrospectives };
   return {
     ok: true,
