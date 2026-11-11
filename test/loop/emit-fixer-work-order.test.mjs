@@ -3497,6 +3497,22 @@ for (const route of ["ACT", "THREAD"]) {
   });
 }
 
+test("a consumer .devloops low tier reaches the Claude fixer model on the normal and the --completion-only emission (#3133)", async () => {
+  await withFixture(async (fx) => {
+    // Excluded from git so the full emission's clean-tree check still passes.
+    await writeFile(path.resolve(fx.wt, git(fx.wt, "rev-parse", "--git-path", "info/exclude")), ".devloops.json\n");
+    await writeFile(path.join(fx.wt, ".devloops.json"), JSON.stringify({ version: 1, models: { tiers: { low: { claude: "sonnet" } } } }));
+    const normal = await fx.emit({ phase: "commit_only" });
+    assert.equal(buildFixerDispatchPayload({ harness: "claude", plan: normal, cwd: fx.wt, model: normal.fixerModel }).model, "sonnet");
+    const old = await pulledFull(fx, "ACT");
+    assert.equal(pull(old, fx.wt).status, 0);
+    const completion = await reenter(fx, "ACT");
+    assert.equal(completion.workOrder.operation, "complete");
+    assert.equal(completion.fixerModel, "sonnet");
+    assert.equal(buildFixerDispatchPayload({ harness: "claude", plan: completion, cwd: fx.wt, model: completion.fixerModel }).model, "sonnet");
+  });
+});
+
 test("issue 2787 C14: a report that predates the pull qualifies and a report that postdates it refuses", async () => {
   await withFixture(async (fx) => {
     const old = await pulledFull(fx, "THREAD");

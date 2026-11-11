@@ -69,7 +69,7 @@ It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef }.
 joinRef is the path for gate wait-for-units --artifact (with --after <planPath>): a full-phase fixer's final-on-write report (<outputRef>.report), else the outputRef.
 Each run supersedes the previous emission for this PR, except a same-head no-commit commit_only re-emission with a locally_clear --delta-result sealed for the canonical plan's execution: it writes fixer-emit-plan.<executionIdentity>.json beside the canonical plan, writes no sequence marker and prints that keyed path as planPath (a join target, never a delta --fixer-plan). Dispatch the printed
-dispatchPayload (the --harness adapter call carrying only dispatchPrompt) unchanged; an
+dispatchPayload (the --harness adapter call carrying dispatchPrompt, plus the config-resolved model on the Claude payload when non-null) unchanged; an
 unsupported harness refuses. The only operator input is --operator-focus-file, a JSON file { round?: string, items?: [{ fingerprint, decision }] }
 that renders as a bounded, sanitized "Operator focus" section and is pinned by the digest (GATE-EXEC-OPERATOR-FOCUS).
 An item decision picks among remedies its act item offers and never changes the disposition; items need an
@@ -524,8 +524,12 @@ export async function emitFixerWorkOrder({
   if (completionOnly) {
     // Every drift check runs before the first write, including the preserve step (issue 2787 C14).
     const sourceKind = actListFile ? "act-list" : "threads";
-    return await emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRoot, cwd, repo, pr, headSha, sourceKind, gate,
+    // The config is read before the first write so an invalid one refuses with nothing written; the model rides the early return too.
+    const { config: completionConfig, errors: completionErrors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });
+    if (completionErrors?.length > 0) throw new Refusal(`dev-loops config is invalid; fix it before emitting: ${completionErrors.map((e) => e?.message ?? String(e)).join("; ")}`);
+    const completion = await emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRoot, cwd, repo, pr, headSha, sourceKind, gate,
       source: await readSource(sourceKind, abs(actListFile ?? threadsFile), capture), prState: await fetchPr({ repo, pr }), executionIdentity });
+    return { ...completion, fixerModel: resolveRoleModel(completionConfig, { role: "fixer", harness: "claude" }) };
   }
   await capture.preserve(planPath, path.resolve(tmpRoot), resolveGateArtifactTmpRoot(cwd));
 

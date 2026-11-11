@@ -75,8 +75,8 @@ Conductor mode — required:
 
 Role mode — required:
   --role <name> --harness <codex|claude>
-                            Claude prints {ok, role, harness:"claude", model}; model is the Agent
-                            model alias to pass (null: pass none).
+                            Claude prints {ok, role, harness:"claude", model, configErrors}; model is
+                            the Agent model alias to pass (null: pass none).
                             Cannot be combined with --conductor, --gate or --angle.
 
 All modes — optional:
@@ -106,8 +106,8 @@ Conductor output (stdout, JSON), inherited settings (exit 0):
 Configured settings replace the corresponding null. Non-null model is emitted
 as nativeOverrides.model and non-null reasoningEffort as
 nativeOverrides.reasoning_effort; null fields are omitted from nativeOverrides.
-Role output uses the same envelope with kind:"role" and role:<name>.
-Config errors (exit 1) return the same shape with ok:false, both settings null,
+With --harness codex, role output uses the same envelope with kind:"role" and role:<name>.
+Config errors (exit 1) with --harness codex return the same shape with ok:false, both settings null,
 nativeOverrides:{}, and configErrors containing the loader's error records.
 Only exit 0 permits native dispatch. Pass nativeOverrides unchanged alongside
 the authorized task/message and fork_turns:"none"; native rejection stops the

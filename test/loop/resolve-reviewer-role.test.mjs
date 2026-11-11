@@ -538,7 +538,7 @@ test("Claude role resolver prints the Agent model per role and both entry paths 
     return [role, payload.model];
   }));
   const zero = await makeFixtureRepo();
-  const tiered = await makeFixtureRepo({ devloops: "version: 1\nmodels:\n  tiers:\n    low:\n      claude: sonnet\n" });
+  const tiered = await makeFixtureRepo({ devloops: "version: 1\nmodels:\n  tiers:\n    low:\n      claude: sonnet\n  roleTiers:\n    dev-loop: low\n    gate-coordinator: low\n" });
   try {
     const zeroModels = resolveAll(zero), tieredModels = resolveAll(tiered);
     assert.equal(zeroModels.developer, "opus");
@@ -546,6 +546,7 @@ test("Claude role resolver prints the Agent model per role and both entry paths 
     for (const role of ["docs", "quality"]) assert.equal(tieredModels[role], "sonnet");
     for (const role of ["review", "judge"]) assert.equal(tieredModels[role], zeroModels[role]);
     for (const role of ["dev-loop", "gate-coordinator"]) {
+      assert.equal(tieredModels[role], "sonnet");
       const viaLauncher = spawnSync(process.execPath, [LAUNCHER, "cli/index.mjs", "gate", "resolve-role", "--role", role, "--harness", "claude"], { cwd: tiered, encoding: "utf8", timeout: 10000 });
       assert.equal(viaLauncher.status, 0, viaLauncher.stderr);
       assert.equal(parseJson(viaLauncher.stdout).model, tieredModels[role]);
