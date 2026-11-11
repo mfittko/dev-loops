@@ -14,4 +14,4 @@ Keep classifier precedence and carry-forward unchanged. Share a fixed five-basen
 
 ## Consequences
 
-Runtime maintenance can pass size measurement without carrying stale clean verdicts. Pins cannot dilute arbitrary unknown source. No new classification category, configuration knob or waiver is introduced; existing directory and custom classification rules retain precedence.
+Runtime maintenance can pass size measurement without carrying stale clean verdicts. Pins cannot dilute arbitrary unknown source. No new classification category, configuration knob or waiver is introduced; `classifyFile` output and its directory and custom rule precedence stay unchanged, and size accounting excludes runtime-pin basenames from source counters and logic LOC regardless of category.

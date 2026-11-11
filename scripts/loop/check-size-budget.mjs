@@ -14,7 +14,9 @@
  * or `test` contribute — a file classifying as `config`/`docs`/`ci`/`asset`/`unknown`
  * (which already covers lockfiles and other generated/non-review-worthy
  * content) contributes 0, reusing the classifier's own signal rather than
- * re-deriving one. `commentOnly` is the count of a code file's changed lines
+ * re-deriving one. Per SIZE-RUNTIME-PIN-ACCOUNTING, a file whose basename is in
+ * `RUNTIME_PIN_BASENAMES` contributes 0 to source counters and `logicLoc`
+ * regardless of category. `commentOnly` is the count of a code file's changed lines
  * the comment-discipline guard's shared `isCommentLine` detector recognizes as
  * comments (the comment analogue of `testDiscount`); fail-closed, an
  * ambiguous/unparseable changed line is never a comment and stays logic.
