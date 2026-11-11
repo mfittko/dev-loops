@@ -378,7 +378,7 @@ export function computeSizeBudget({
     reasons.push(
       tierPatternDroppedToZero
         ? "a configured t1/t3 pattern matched a file that classifies outside code/test (its logic LOC would silently drop to 0); size budget cannot be computed safely — no waiver possible"
-        : `substantial unclassified/non-JS source (${Math.round(unclassifiedRatio * 100)}% of source-like changed lines); size budget cannot be computed safely — no waiver possible; files: ${unclassifiedPaths.slice(0, 5).map((file) => JSON.stringify(file)).join(", ")}${unclassifiedPaths.length > 5 ? ` +${unclassifiedPaths.length - 5} more` : ""}`,
+        : `substantial unclassified/non-JS source (${Math.round(unclassifiedRatio * 100)}% of source-like changed lines); size budget cannot be computed safely — no waiver possible (SIZE-RUNTIME-PIN-ACCOUNTING); files: ${unclassifiedPaths.slice(0, 5).map((file) => JSON.stringify(file)).join(", ")}${unclassifiedPaths.length > 5 ? ` +${unclassifiedPaths.length - 5} more` : ""}`,
     );
   }
   if (wholeLoc > absoluteHardLoc) {

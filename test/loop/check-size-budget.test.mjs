@@ -195,6 +195,7 @@ test("runtime pins: exact normalized basenames have zero accounting under existi
   }
   const result = computeSizeBudget({ nameStatusOutput: "M\truntime.node-version\n", numstatOutput: numstatZ([[1, 0, "runtime.node-version"]]) });
   assert.equal(result.outcome, "block");
+  assert.ok(result.reasons.some((reason) => /SIZE-RUNTIME-PIN-ACCOUNTING/.test(reason)));
 });
 
 test("runtime pins: cannot dilute unknown source or waive its block", () => {
