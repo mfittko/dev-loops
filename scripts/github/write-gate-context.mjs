@@ -2056,7 +2056,7 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
     // A stamped ledger that never finished (an aborted or intermediate write) is no round at any head, current or earlier.
     if (log.roundIdentity !== undefined && log.roundIdentity?.completed !== true) continue;
     if (!retained && (sha.startsWith(head) || head.startsWith(sha)) && isInRoundRewrite(log, options.roundIdentity)) continue;
-    // The live ledger ranks above every retained round of its head; retained rounds order by their number.
+    // Rounds order by loggedAt, then head, then retained number; the live ledger (Infinity) sorts last among rounds of equal loggedAt and head.
     const retainedNumber = /\.round-(\d+)\.json$/.exec(name);
     rounds.push({ sha, loggedAt: typeof log.loggedAt === "string" ? log.loggedAt : "", round: retainedNumber ? Number(retainedNumber[1]) : Infinity, log });
   }
