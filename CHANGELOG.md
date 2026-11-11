@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## 1.0.11-pre.1
+## 1.0.11
 
 ### Added
 
@@ -11,12 +11,24 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- The Bash gate deny reason names incomplete input (an unterminated quote, $( or backtick substitution, heredoc, or substitution nesting that is too deep) (#2442)
+- CI refreshes Bun shard timing weights from complete trusted default-branch runs, with a committed bootstrap fallback (#3163)
 - In-flight reports name each `joinRef`; a hand-back that lists children in flight is interim and a repeat of a consumed one is a duplicate (#1963)
 - `RELEASE-POST-RELEASE-RECURRING-STEPS` now runs prose cleanup first (#3074)
 - `scripts/docs/prose-inventory.mjs` keeps a sentence together after `vs.` and ignores an inherited `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` (#3074)
 
 ### Fixed
 
+- Issue and PR startup recover the same linked PR, closing issue, author ownership and authorized draft-gate continuation (#3144)
+- Read-only review envelopes preserve startup's exemption for PRs closing multiple issues (#3144)
+- Coordinator handoff recovers PR-body authority for ready issue-less PRs after validating their live bodies (#3144)
+- npm smoke tests use writable caches, and CI log retrieval avoids the GitHub CLI run-log cache (#3165)
+- Stable PR validation outcomes remain allowed; upgrade the dev-loops package or plugin to receive the narrowed reviewer and judge guidance in older installations (#3173)
+- Judges ground optional file reads in authenticated paths or bounded filename discovery, keeping missing-material and integrity stops intact (#3176)
+- The angle carry-forward resolver no longer fails closed on the synthetic copilot-body finding in a prior findings log (#3183)
+- Ready-path regression coverage now requires successful non-carried verdict handling without querying CI (#3072)
+- README purpose checks accept harmless paragraph layout changes while still enforcing the exact purpose statement (#3072)
+- Run the draft-gate self-heal ESM regression under Node and assert the CLI runtime so Bun cannot silently replace its Node-specific coverage (#3072)
 - One operator-owned-line registry makes every comment writer refuse the approve, waiver and Copilot operator lines (#2410)
 - Gate writers wrap an operator-owned phrase in reviewer or judge free text in a code span instead of refusing the round; the no-core gate verdict fallback keeps the refusal (#2410)
 - Pre-push delta: lifecycle refusals become findings, one docs validator list, same-candidate re-emission and handback refusal (#2447)
