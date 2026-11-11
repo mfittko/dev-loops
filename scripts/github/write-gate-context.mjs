@@ -3097,7 +3097,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       pr: options.pr,
       gate: options.gate,
       headSha: options.headSha,
-      worktreeRoot: path.resolve(repoRoot),
+      worktreeRoot: reviewedWorktreeRoot(options.headSha, { repoRoot }),
       issueRef: options.acceptanceCriteria ?? null,
       issueBody: options.issueBody ?? null,
       issueSections: options.issueSections ?? null,
@@ -3892,6 +3892,7 @@ export async function readGateContext(input, { repoRoot = process.cwd() } = {}) 
  * @param {{ repoRoot: string }} opts
  */
 export function assertWorktreeAtHead(headSha, { repoRoot }) {
+  // reviewedWorktreeRoot (below) is the non-throwing sibling used by the briefing evidence.
   // Fail-closed self-guard: the abbreviation prefix-match below (declared must be a
   // prefix of the full-length HEAD) FALSE-ACCEPTS an
   // empty/too-short `headSha` (an empty string is a prefix of every HEAD). The sole
@@ -3927,6 +3928,21 @@ export function assertWorktreeAtHead(headSha, { repoRoot }) {
     throw new Error(
       `worktree HEAD ${actualHead} does not match --head-sha ${declared}: the current working directory is the WRONG worktree for this PR, so \`git diff <base>...HEAD\` would resolve the WRONG diff. cd into the worktree checked out at ${declared} and re-run.`,
     );
+  }
+}
+
+/**
+ * Absolute git toplevel of `repoRoot` when its HEAD is the reviewed head, else null.
+ * The briefing evidence names a worktree only when verified, never a bare cwd.
+ */
+export function reviewedWorktreeRoot(headSha, { repoRoot }) {
+  try {
+    const git = (...args) => execFileSync("git", args, { cwd: repoRoot, encoding: "utf8", env: gitEnvWithoutDirOverrides(), stdio: ["ignore", "pipe", "ignore"] }).trim();
+    const declared = String(headSha).trim().toLowerCase();
+    if (!/^[0-9a-f]{7,64}$/.test(declared) || !git("rev-parse", "HEAD").toLowerCase().startsWith(declared)) return null;
+    return git("rev-parse", "--show-toplevel");
+  } catch {
+    return null;
   }
 }
 

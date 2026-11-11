@@ -14,6 +14,7 @@ import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpo
 
 import {
   assertWorktreeAtHead,
+  reviewedWorktreeRoot,
   BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
   buildGateBriefingEvidencePath,
   buildGateBriefingPrefixPath,
@@ -2629,6 +2630,20 @@ test("assertWorktreeAtHead accepts an abbreviated --head-sha matching the full w
   }
 });
 
+test("reviewedWorktreeRoot names the git toplevel only when HEAD is the reviewed head", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    const sub = path.join(repoRoot, "sub");
+    await mkdir(sub);
+    const top = reviewedWorktreeRoot(headSha, { repoRoot: sub });
+    assert.equal(await realpath(top), await realpath(repoRoot), "a subdirectory cwd resolves to the toplevel");
+    assert.equal(reviewedWorktreeRoot("0".repeat(40), { repoRoot }), null, "a head mismatch names no worktree");
+    assert.equal(reviewedWorktreeRoot(headSha, { repoRoot: os.tmpdir() }), null, "a non-git root names no worktree");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("assertWorktreeAtHead throws directly when repoRoot is not a git worktree", async () => {
   // Direct unit coverage for the non-git catch branch, independent of TMPDIR
   // happening to sit outside a checkout (which the CLI-level test relies on).
@@ -4077,7 +4092,6 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "pr: #80",
       "gate: draft_gate",
       "head: abc1234567890def",
-      `worktree: ${path.resolve(repoRoot)}`,
       "prefixMode: inline",
       "",
       "## Diff at reviewed head (abc1234567890def)",
