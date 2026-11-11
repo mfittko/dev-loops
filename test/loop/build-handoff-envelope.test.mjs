@@ -82,9 +82,14 @@ test("build-handoff-envelope preserves read-only review with multiple closing is
     const expectedReads = [
       ["pr", "view", "42", "--repo", "o/r", "--json", "author,state,mergedAt,assignees,closingIssuesReferences,body,isDraft"],
       ["pr", "view", "42", "--repo", "o/r", "--json", "number,url,headRefName,headRefOid,headRepository,headRepositoryOwner,body,isDraft,state,mergedAt,closingIssuesReferences"],
+      ["issue", "view", "7", "--repo", "o/r", "--json", "body"],
+      ["issue", "view", "8", "--repo", "o/r", "--json", "body"],
     ];
-    const stub = await writeGhStub(bin, expectedReads.map((assertArgs) => ({ assertArgs, stdout: JSON.stringify(pr) })),
-      { logCalls: true });
+    const stub = await writeGhStub(bin, [
+      ...expectedReads.map((assertArgs) => ({ assertArgs, stdout: JSON.stringify(assertArgs[0] === "pr" ? pr : { body: "" }) })),
+      // Record overflow even when the caller catches the failed operation.
+      { exitCode: 97, stderr: "unexpected extra gh call\n" },
+    ], { logCalls: true, repeatLastOnOverflow: true });
     const options = { cwd: checkout, env: { ...stub.env, ...resolverTestEnv() } };
     const startup = await runNodeHelper(path.resolve("cli/index.mjs"),
       ["loop", "startup", "--pr", "42", "--review", "--no-reconcile"], options);
