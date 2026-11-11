@@ -22,7 +22,7 @@ const emitter = path.join(root, "scripts/loop/emit-coordinator-work-order.mjs");
 const puller = path.join(root, "scripts/github/pull-work-order.mjs");
 const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
 
-async function fixture(fn, { directory = "tmp/worktrees/dev-loops/issue-2588" } = {}) {
+async function fixture(fn, { directory = "tmp/worktrees/dev-loops/issue-2588", prChanges = {} } = {}) {
   const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "pr-worktree-binding-")));
   const main = path.join(temp, "main");
   await mkdir(main);
@@ -35,6 +35,7 @@ async function fixture(fn, { directory = "tmp/worktrees/dev-loops/issue-2588" } 
     headRepository: { name: "r" }, headRepositoryOwner: { login: "o" },
     url: "https://github.com/o/r/pull/2848", author: { login: "mfittko" },
     assignees: [{ login: "mfittko" }], closingIssuesReferences: [], body: DEFAULT_TEST_PR_BODY,
+    ...prChanges,
   };
   const bin = path.join(temp, "bin");
   await mkdir(bin);
@@ -44,8 +45,8 @@ async function fixture(fn, { directory = "tmp/worktrees/dev-loops/issue-2588" } 
   const startup = await runNode(cli, ["loop", "startup", "--pr", "2848", "--no-reconcile"], { cwd: checkout, env });
   assert.equal(startup.code, 0, startup.stderr);
   const resolved = JSON.parse(startup.stdout);
-  assert.equal(resolved.selectedStrategy, "copilot_pr_followup");
-  assert.equal(resolved.draftStart.reviewGate, "draft_gate");
+  assert.equal(resolved.selectedStrategy, "external_pr_followup");
+  if (pr.isDraft) assert.equal(resolved.draftStart.reviewGate, "draft_gate");
   await writeFile(input, startup.stdout);
   const build = (extra = {}) => runNode(builder, ["--input", input, "--repo", "o/r"], { cwd: main, env, ...extra });
   const emit = (harness = "codex", extra = {}) => runNode(emitter, ["--input", input, "--repo", "o/r", "--harness", harness, "--entry", "direct"], { cwd: main, env, ...extra });
@@ -104,6 +105,52 @@ test("real startup, envelope, MAIN emission and CLI pull preserve the PR route f
   });
 }, 30000);
 
+test("single live closing issue binds startup and every harness emission to the issue unit", async () => {
+  await fixture(async (f) => {
+    assert.equal(f.resolved.canonicalStateSummary.target.issue, 3144);
+    for (const harness of ["pi", "claude", "codex"]) {
+      const emission = await f.emit(harness);
+      assert.equal(emission.code, 0, emission.stderr);
+      const out = JSON.parse(emission.stdout);
+      const { workOrder } = JSON.parse(await readFile(out.planPath, "utf8"));
+      assert.deepEqual(workOrder.target, { kind: "pr", repo: "o/r", pr: 2848, issue: 3144 });
+      assert.ok(workOrder.allowedFiles.includes("changes/3144-*.md"));
+      assert.ok(!workOrder.allowedFiles.includes("changes/2848-*.md"));
+    }
+  }, { prChanges: { closingIssuesReferences: [{ number: 3144 }] } });
+}, 30000);
+
+test("an issue linked after a null startup record refuses emission, even when assigned to someone else", async () => {
+  await fixture(async (f) => {
+    assert.equal(f.resolved.canonicalStateSummary.target.issue, null);
+    await f.changePr({ closingIssuesReferences: [{ number: 900, assignees: [{ login: "foreign-dev" }] }] });
+    const emission = await f.emit();
+    assert.notEqual(emission.code, 0);
+    assert.match(emission.stdout + emission.stderr, /closing issue changed since startup.*recorded no issue.*#900/);
+  });
+}, 30000);
+
+test("a recorded closing issue that changes or disappears between startup and emission refuses instead of retargeting", async () => {
+  await fixture(async (f) => {
+    for (const changed of [[{ number: 900 }], []]) {
+      await f.changePr({ closingIssuesReferences: changed });
+      const emission = await f.emit();
+      assert.notEqual(emission.code, 0);
+      assert.match(emission.stdout + emission.stderr, /closing issue changed since startup.*#3144/);
+    }
+  }, { prChanges: { closingIssuesReferences: [{ number: 3144 }] } });
+}, 30000);
+
+test("multiple live closing issues refuse emission with deterministic candidates", async () => {
+  await fixture(async (f) => {
+    await f.changePr({ closingIssuesReferences: [{ number: 42 }, { number: 7 }, { number: 42 }] });
+    const emission = await f.emit();
+    assert.notEqual(emission.code, 0);
+    assert.equal(JSON.parse(emission.stdout).ok, false);
+    assert.match(emission.stdout + emission.stderr, /multiple closing issues.*#7, #42/);
+  });
+});
+
 for (const strategy of ["ui_review", " ui_review "]) for (const state of ["first review", "detached resume"]) {
   test(`UI-review startup-to-envelope preserves provisioning for ${state}${strategy === "ui_review" ? "" : " with padded strategy"}`, async () => {
     await fixture(async (f) => {
@@ -137,9 +184,33 @@ for (const strategy of ["ui_review", " ui_review "]) for (const state of ["first
   });
 }
 
+test("ready issue-less startup derives validated body authority and emits on every harness", async () => {
+  await fixture(async (f) => {
+    const authority = await loadRefinementArtifact({ repo: "o/r", prData: f.pr,
+      prDraft: false, prClosed: false, prMerged: false });
+    assert.equal(authority.status, "unknown");
+    assert.equal(authority.finding, null);
+    assert.equal(authority.prBodySpecValid, true);
+    assert.match(authority.reason, /enforcement applies only to draft PRs.*pr_body, valid/);
+    assert.equal(authority._onlyEnforcedWhenDraft, false);
+    const built = await f.build();
+    assert.equal(built.code, 0, built.stderr);
+    assert.equal(JSON.parse(built.stdout).specSource, CANONICAL_SPEC_SOURCE.PR_BODY);
+    for (const harness of ["pi", "claude", "codex"]) {
+      const emitted = await f.emit(harness);
+      assert.equal(emitted.code, 0, emitted.stderr);
+      const plan = JSON.parse(await readFile(JSON.parse(emitted.stdout).planPath, "utf8"));
+      assert.equal(plan.workOrder.handoff.specSource, CANONICAL_SPEC_SOURCE.PR_BODY);
+    }
+    assert.deepEqual(JSON.parse(await readFile(f.input, "utf8")), f.resolved);
+  }, { prChanges: { isDraft: false } });
+}, 30000);
+
 for (const [label, changes, status, source] of [
   ["invalid live body", { body: "No formal scope." }, "missing", REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY],
-  ["unknown ready authority", { isDraft: false }, "unknown", undefined],
+  ["invalid ready body", { isDraft: false, body: "No formal scope." }, "unknown", REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY],
+  ["ready promoted plan", { isDraft: false, body: `${buildPlanFilePromotionMarker("docs/plans/unit.md")}\n\n${DEFAULT_TEST_PR_BODY}` }, "unknown", REFINEMENT_ARTIFACT_SPEC_SOURCE.PLAN_FILE],
+  ["ready linked issue", { isDraft: false, closingIssuesReferences: [{ number: 900 }] }, "unknown", REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE],
   ["promoted plan", { body: `${buildPlanFilePromotionMarker("docs/plans/unit.md")}\n\n${DEFAULT_TEST_PR_BODY}` }, "present", REFINEMENT_ARTIFACT_SPEC_SOURCE.PLAN_FILE],
   ["linked issue", { closingIssuesReferences: [{ number: 900 }] }, "missing", REFINEMENT_ARTIFACT_SPEC_SOURCE.LINKED_ISSUE],
 ]) test(`${label} cannot acquire PR-body authority from the startup snapshot`, async () => {
@@ -154,11 +225,20 @@ for (const [label, changes, status, source] of [
     assert.equal(built.code, 0, built.stderr);
     const envelope = JSON.parse(built.stdout);
     assert.equal(Object.hasOwn(envelope, "specSource"), false);
+    if (label === "invalid ready body") {
+      assert.equal(authority.prBodySpecValid, false);
+      assert.equal(authority.finding, null);
+      const emitted = await f.emit();
+      assert.notEqual(emitted.code, 0);
+      assert.match(emitted.stderr, /coordinator target names no issue number/);
+    }
     assert.equal(envelope.cwd, f.checkout);
-    assert.deepEqual(envelope.target, { kind: "pr", repo: "o/r", pr: 2848 });
+    assert.deepEqual(envelope.target, { kind: "pr", repo: "o/r", pr: 2848,
+      ...(changes.closingIssuesReferences ? { issue: 900 } : {}) });
     assert.equal(envelope.nextAction, f.resolved.bundle.nextAction);
     assert.deepEqual(JSON.parse(await readFile(f.input, "utf8")), f.resolved);
-  });
+    // Startup records the same closing issue, so only the authority source varies.
+  }, { prChanges: changes.closingIssuesReferences ? { closingIssuesReferences: changes.closingIssuesReferences } : {} });
 });
 
 for (const location of ["top", "bundle"]) test(`already bound ${location} authority keeps its precedence`, async () => {

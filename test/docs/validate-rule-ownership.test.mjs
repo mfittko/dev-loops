@@ -449,6 +449,22 @@ test("runtime citations with 3-letter prefixes (OPS-/ADR-) are detected and cred
   }
 });
 
+test("shared executable test helper refusals count, while test cases and fixtures do not", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> The tool MUST refuse.",
+    "skills/docs/b.md": "<!-- rule: TEST-RULE-002 --> The tool MUST refuse.",
+    "test/_helpers.mjs": "throw new Error('TEST-RULE-001: setup failed')",
+    "test/helper.test.mjs": "throw new Error('TEST-RULE-002: fixture failure')",
+    "test/fixtures/_helpers.mjs": "throw new Error('TEST-RULE-002: fixture failure')",
+  }, ["TEST-RULE-001", "TEST-RULE-002"]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.deepEqual(result.enforcement, { runtimeTotal: 2, runtimeEnforced: 1, runtimeUnenforced: 1 });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("validateRuleOwnership does not flag allowlisted non-rule tokens in runtime source", async () => {
   const dir = await fixture({
     "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The tool MUST fail closed. |",

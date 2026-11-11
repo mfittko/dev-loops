@@ -174,6 +174,42 @@ test("runtime pin stays unknown and invalidates clean angle carry-forward", () =
   assert.deepEqual(plan.mustRerun.map((entry) => entry.angle), ["correctness", "coverage", "docs"]);
 });
 
+const bodyFinding = (angle) => ({ angle, severity: "major", summary: "x" });
+const withFindings = (log, findings) => ({ ...log, verdict: "findings_present", findings });
+
+test("buildCarryForwardPlan skips the synthetic copilot-body finding and leaves every angle clean", () => {
+  const plan = buildCarryForwardPlan({ log: withFindings(cleanLog, [bodyFinding("copilot-body")]), changedFiles: ["docs/guide.md"] });
+  assert.deepEqual(plan.carried.map((c) => c.angle).sort(), ["correctness", "coverage"]);
+  for (const entry of plan.carried) {
+    assert.equal(entry.prevVerdict, "clean");
+    assert.equal(entry.findings.length, 0);
+  }
+  assert.deepEqual(plan.mustRerun.map((m) => m.angle), ["docs"]);
+});
+
+test("buildCarryForwardPlan attributes copilot-body to configured perAngle rows of that name and re-runs them as ambiguous", () => {
+  const log = withFindings({
+    ...cleanLog,
+    provenance: {
+      distinctReviewers: 2,
+      perAngle: [
+        { angle: "copilot-body", reviewer: "review-z" },
+        { angle: "copilot-body-delta-at-abc1234", reviewer: "review-z" },
+      ],
+    },
+  }, [bodyFinding("copilot-body")]);
+  const plan = buildCarryForwardPlan({ log, changedFiles: ["docs/guide.md"] });
+  assert.deepEqual(plan.carried, []);
+  assert.deepEqual(plan.mustRerun.map((m) => m.angle).sort(), ["copilot-body", "copilot-body-delta-at-abc1234"]);
+  for (const entry of plan.mustRerun) assert.match(entry.reason, /attribution is ambiguous/);
+});
+
+test("buildCarryForwardPlan still fails closed on non-synthetic or case-drifted copilot-body angles", () => {
+  for (const angle of ["copilot-body-x", "Copilot-Body"]) {
+    assert.throws(() => buildCarryForwardPlan({ log: withFindings(cleanLog, [bodyFinding(angle)]), changedFiles: ["docs/guide.md"] }), /matches no provenance\.perAngle entry/);
+  }
+});
+
 test("buildCarryForwardPlan carries code angles on a doc-only delta, marks provenance honestly", () => {
   const plan = buildCarryForwardPlan({ log: cleanLog, changedFiles: ["docs/guide.md"] });
   assert.equal(plan.prevHead, "aaaaaaa");

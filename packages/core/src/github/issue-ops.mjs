@@ -19,6 +19,17 @@ import { assertGithubWriteStubbedInTestMode } from "./test-mode-write-guard.mjs"
 
 const ISSUE_URL_NUMBER_PATTERN = /\/issues\/(\d+)(?:\D|$)/u;
 
+/** Coordinator units have at most one closing issue; lifecycle umbrellas may have several. */
+export function selectPrClosingIssue(pr) {
+  const numbers = [...new Set((pr?.closingIssuesReferences ?? [])
+    .map((issue) => issue?.number).filter((number) => Number.isInteger(number) && number > 0))]
+    .sort((a, b) => a - b);
+  if (numbers.length > 1) {
+    throw new Error(`PR has multiple closing issues; choose one coordinator unit: ${numbers.map((number) => `#${number}`).join(", ")}`);
+  }
+  return numbers[0] ?? null;
+}
+
 // ── view-issue ──────────────────────────────────────────────────────────
 
 export const VIEW_ISSUE_DEFAULT_FIELDS = "number,title,body,state,author,labels,url,createdAt,updatedAt";

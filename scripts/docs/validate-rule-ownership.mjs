@@ -42,7 +42,7 @@ const MODAL_RE = /\b(MUST NOT|SHALL NOT|SHOULD NOT|MAY NOT|MUST|SHALL|SHOULD|MAY
 // `enforcementNote` justification. `runtime` is the default for an unspecified
 // classification, so a rule can never quietly escape the enforcement ratchet.
 const ENFORCEMENT_VALUES = new Set(["doc", "runtime", "agent"]);
-const RUNTIME_ROOTS = ["scripts", "packages"];
+const RUNTIME_ROOTS = ["scripts", "packages", "test"];
 const RUNTIME_FILE_RE = /\.(mjs|cjs|js|ts|sh|json)$/;
 // Registry-ID shape used to spot enforcement citations in runtime source.
 // First segment is 3+ uppercase chars so 3-letter prefixes (OPS-, ADR-) are
@@ -192,6 +192,8 @@ export function normalizeRuleEntry(entry) {
 }
 
 export function isRuntimeSourceFile(basename, relPath) {
+  // Shared setup executes before test cases and can refuse unsafe validation.
+  if (toPosix(relPath) === "test/_helpers.mjs") return true;
   const parts = relPath.split(/[\\/]/);
   if (parts.includes("test") || parts.includes("node_modules") || parts.includes("tmp") || parts.includes("site")) return false;
   if (/\.test\./.test(basename)) return false;
@@ -248,8 +250,8 @@ async function* walkRuntime(dir) {
   }
 }
 
-// Registry-ID-shaped tokens found in non-test runtime source (scripts/,
-// packages/), tagged with the relative file they appear in and whether the
+// Registry-ID-shaped tokens found in runtime source and the shared test setup,
+// tagged with the relative file they appear in and whether the
 // occurrence is a refusal-path (enforcement error/refusal string) citation.
 // Phantom detection (unknown IDs) scans all presence; enforcement credit uses
 // `refusalPath` only (see validateRuleOwnership).
