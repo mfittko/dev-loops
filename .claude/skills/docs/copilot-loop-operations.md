@@ -135,7 +135,7 @@ judgment cannot substitute. The
 [PR Body Skeleton](../dev-loop/templates/pr-body.md) is conformant.
 
 <!-- rule: OPS-PR-VALIDATION-STABLE-EVIDENCE -->
-`OPS-PR-VALIDATION-STABLE-EVIDENCE`: For tracker-backed PRs, the PR description's Validation section MUST record each validation command or named check together with its stable pass/fail outcome. It MUST NOT include volatile aggregate test, assertion, or asset counts; skip counts; durations; timestamps; or incidental totals unless an explicit acceptance criterion makes that exact quantity behaviorally significant. Detailed totals MUST live in the head-stamped validation and gate artifacts, where they remain bound to the exact revision that produced them.
+`OPS-PR-VALIDATION-STABLE-EVIDENCE`: For tracker-backed PRs, the PR description's Validation section MUST record each validation command or named check together with its stable pass/fail outcome. A SHA or result explicitly labelled historical is allowed. It MUST NOT include volatile aggregate test, assertion, or asset counts; skip counts; durations; timestamps; or incidental totals unless an explicit acceptance criterion makes that exact quantity behaviorally significant. A current-head SHA, a "current" or "fresh" head claim, and gate verdict or lifecycle status (for example "draft_gate clean at <sha>") MUST NOT appear in the body. These head-bound details and detailed totals MUST live in head-stamped validation artifacts and gate verdict comments. A gate requirement stated as DoD prose (for example "draft_gate and pre_approval_gate pass on the final head") is a requirement, not a status claim, and is allowed.
 
 <!-- rule: OPS-DRAFT-FIRST-PR -->
 `OPS-DRAFT-FIRST-PR`: New PRs MUST open as **draft** through `create-pr.mjs`, which
@@ -233,6 +233,9 @@ Post-watch read pattern: after a probe/watch settles, do not parse its output â€
 If the polling interval is 1 minute, do not treat silence shorter than one full poll interval as suspicious, and do not configure needs-attention thresholds close to a few seconds for this loop.
 
 ## Codex runtime setup
+
+<!-- rule: OPS-WRITABLE-TOOL-CACHE -->
+`OPS-WRITABLE-TOOL-CACHE`: Sanctioned validation and log tooling MUST route child-tool caches deterministically without per-command agent overrides. npm smoke tests preserve an explicit cache or a writable default, and otherwise probe a temporary cache before consuming npm commands. Actions log retrieval uses the uncached per-job API. A real permission denial still stops the actor under `OPS-CODEX-RUNTIME-SETUP`; this rule grants no permission changes or denial retries.
 
 <!-- rule: OPS-CODEX-RUNTIME-SETUP -->
 `OPS-CODEX-RUNTIME-SETUP`: Codex coordinators and workers MUST apply this setup before scoped artifact writes, Git writes or targeted verification, after any mandatory startup/envelope or pull-first bootstrap. Fixers first verify and read this document from the emitting toolchain's pinned contracts. This is bounded runtime guidance, not comprehensive Codex support; it never broadens the role, branch, paths or phase authority. `operation: complete` remains delivery-only: no source edits, source validation, staging, commit or push.

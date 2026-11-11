@@ -10,8 +10,8 @@ const DEFAULT_TAIL_LINES = 200;
 
 const USAGE = `Usage: fetch-ci-logs.mjs --repo <owner/name> --pr <number> [--failed-only] [--tail <n>]
 Fetch the GitHub Actions CI run log tail for a PR's current head SHA. Thin wrapper
-over \`gh run list\` + \`gh run view --log\` — use this instead of an agent-level raw
-\`gh run view\` so the loop's internal-tooling record stays clean (#993). Complements
+over \`gh run list\` + Actions API job logs, avoiding the CLI run-log cache.
+Use this sanctioned wrapper for CI diagnosis (#993). Complements
 probe-ci-status.mjs, which reports failed-check NAMES; this returns the LOG tail.
 (Siblings: list-issues.mjs, comment-issue.mjs.)
 Required:
@@ -135,25 +135,29 @@ export async function fetchCiLogs(options, { env = process.env, ghCommand = "gh"
     ? runs.filter((r) => String(r?.conclusion).toLowerCase() === "failure")
     : runs;
 
-  // 3. Fetch each run's log tail. --log-failed restricts to failed steps when the
-  //    run failed; for non-failed runs it returns nothing, so fall back to --log.
+  // 3. Per-job plain text avoids gh run view's home-directory zip cache.
   const out = [];
   for (const r of selected) {
     const runId = Number.isInteger(r?.databaseId) ? r.databaseId : null;
     if (runId === null) continue;
     const conclusion = typeof r?.conclusion === "string" ? r.conclusion.toLowerCase() : null;
-    const logFlag = conclusion === "failure" ? "--log-failed" : "--log";
-    const logResult = await run(
-      ghCommand,
-      ["run", "view", String(runId), "--repo", options.repo, logFlag],
-      env,
-    );
-    // A log fetch failure for one run shouldn't abort the others (logs expire);
-    // record an empty tail with a note rather than throwing.
-    const logTail =
-      logResult.code === 0
-        ? tailLines(logResult.stdout, options.tail)
-        : `<log unavailable: ${logResult.stderr.trim() || `exit ${logResult.code}`}>`;
+    const logs = [];
+    const unavailable = [];
+    try {
+      const pages = await ghJson(
+        ["api", `repos/${options.repo}/actions/runs/${runId}/jobs?per_page=100`, "--paginate", "--slurp"],
+        { env, ghCommand, runChild: run, label: "gh api jobs" },
+      );
+      for (const job of pages.flatMap((page) => page.jobs)) {
+        if (conclusion === "failure" && job.conclusion !== "failure") continue;
+        const result = await run(ghCommand, ["api", `repos/${options.repo}/actions/jobs/${job.id}/logs`, "--allow-escape-sequences"], env);
+        if (result.code === 0) logs.push(result.stdout.replace(/\r?\n$/u, ""));
+        else unavailable.push(`<log unavailable: ${result.stderr.trim() || `exit ${result.code}`}>`);
+      }
+    } catch (error) {
+      unavailable.push(`<log unavailable: ${error.message}>`);
+    }
+    const logTail = [tailLines(logs.join("\n"), options.tail), ...unavailable].filter(Boolean).join("\n");
     out.push({
       runId,
       name: typeof r?.name === "string" ? r.name : null,

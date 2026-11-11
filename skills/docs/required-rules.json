@@ -781,6 +781,9 @@
       "enforcement": "doc"
     },
     {
+      "id": "OPS-WRITABLE-TOOL-CACHE"
+    },
+    {
       "id": "PLAN-SIZE-BAND",
       "enforcement": "runtime"
     },
