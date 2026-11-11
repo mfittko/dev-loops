@@ -353,10 +353,10 @@ export async function buildHandoffEnvelopeCli(
   if (binding?.pr && !STATELESS_UNIT_STRATEGIES.includes(trimmedOrNull(bundle?.selectedStrategy))) {
     const issue = selectPrClosingIssue(binding.pr);
     const artifact = bundle.activeArtifact ?? bundle.canonicalState?.target;
-    // Live linkage fills an absent startup issue (older producer) but never replaces a recorded one.
+    // Any difference from the startup record fails closed; no ownership check ran on a newly linked issue.
     const recorded = artifact?.issue ?? null;
-    if (recorded !== null && recorded !== issue) {
-      throw parseError(`PR closing issue changed since startup: startup recorded issue #${recorded}, live linkage is ${issue === null ? "no issue" : `issue #${issue}`}; fail closed.`);
+    if (recorded !== issue) {
+      throw parseError(`PR closing issue changed since startup: startup recorded ${recorded === null ? "no issue" : `issue #${recorded}`}, live linkage is ${issue === null ? "no issue" : `issue #${issue}`}; fail closed.`);
     }
     const boundBundle = { ...bundle, activeArtifact: { ...artifact, issue } };
     verifiedResolverOutput = resolverOutput.bundle ? { ...resolverOutput, bundle: boundBundle } : boundBundle;

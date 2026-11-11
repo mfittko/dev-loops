@@ -889,11 +889,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
         },
       };
     }
-    const artifactState = "not_applicable";
     const warnings = [];
-    const issueLinkageResolution = "resolved_no_open_pr";
-    const linkedPr = null;
-    const ownership = "local";
     let linkagePayload = null;
     try {
       const linkageJson = execFileSync(process.execPath, [
@@ -960,19 +956,16 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       intent: "start_issue_locally",
       mode: "bounded_handoff",
       targetPreference: resolvedTargetPreference,
-      artifactState,
-      issueLinkageResolution,
+      artifactState: "not_applicable",
+      issueLinkageResolution: "resolved_no_open_pr",
       issueReadiness,
       issueAssignmentState,
       loopState,
       warnings: warnings.length > 0 ? warnings : undefined,
       currentState: {
-        target: { kind: "issue", issue, pr: null, linkedPr, branch: null, phase: null },
-        ownership: ownership,
-        nextActor: ownership === "copilot"
-          ? "copilot"
-          : ownership === "external_human"
-            ? "external_human" : "local",
+        target: { kind: "issue", issue, pr: null, linkedPr: null, branch: null, phase: null },
+        ownership: "local",
+        nextActor: "local",
         status: "active",
         authorization: "authorized",
       },

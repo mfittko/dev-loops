@@ -117,14 +117,17 @@ test("single live closing issue binds startup and every harness emission to the 
       assert.ok(workOrder.allowedFiles.includes("changes/3144-*.md"));
       assert.ok(!workOrder.allowedFiles.includes("changes/2848-*.md"));
     }
-    // An older startup producer may omit the issue; live envelope binding repairs it.
-    f.resolved.bundle.activeArtifact.issue = null;
-    await writeFile(f.input, JSON.stringify(f.resolved));
-    const repaired = await f.emit();
-    assert.equal(repaired.code, 0, repaired.stderr);
-    const plan = JSON.parse(await readFile(JSON.parse(repaired.stdout).planPath, "utf8"));
-    assert.equal(plan.workOrder.target.issue, 3144);
   }, { prChanges: { closingIssuesReferences: [{ number: 3144 }] } });
+}, 30000);
+
+test("an issue linked after a null startup record refuses emission, even when assigned to someone else", async () => {
+  await fixture(async (f) => {
+    assert.equal(f.resolved.canonicalStateSummary.target.issue, null);
+    await f.changePr({ closingIssuesReferences: [{ number: 900, assignees: [{ login: "foreign-dev" }] }] });
+    const emission = await f.emit();
+    assert.notEqual(emission.code, 0);
+    assert.match(emission.stdout + emission.stderr, /closing issue changed since startup.*recorded no issue.*#900/);
+  });
 }, 30000);
 
 test("a recorded closing issue that changes or disappears between startup and emission refuses instead of retargeting", async () => {
@@ -234,7 +237,8 @@ for (const [label, changes, status, source] of [
       ...(changes.closingIssuesReferences ? { issue: 900 } : {}) });
     assert.equal(envelope.nextAction, f.resolved.bundle.nextAction);
     assert.deepEqual(JSON.parse(await readFile(f.input, "utf8")), f.resolved);
-  });
+    // Startup records the same closing issue, so only the authority source varies.
+  }, { prChanges: changes.closingIssuesReferences ? { closingIssuesReferences: changes.closingIssuesReferences } : {} });
 });
 
 for (const location of ["top", "bundle"]) test(`already bound ${location} authority keeps its precedence`, async () => {

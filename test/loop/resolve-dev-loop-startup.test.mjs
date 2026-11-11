@@ -1576,10 +1576,10 @@ for (const author of ["some-human-dev", "app/other-bot", "copilot-swe-agent", "a
   });
 }
 
-for (const [facts, error] of [
-  [{ closingIssuesReferences: [{ number: 42 }, { number: 7 }, { number: 42 }] }, /multiple closing issues.*#7, #42/],
-  [{ author: null }, /author could not be read.*fail closed/],
-]) test(`PR startup refuses ambiguous or unreadable authority: ${error}`, async () => {
+for (const [label, facts, error] of [
+  ["multiple closing issues", { closingIssuesReferences: [{ number: 42 }, { number: 7 }, { number: 42 }] }, /multiple closing issues.*#7, #42/],
+  ["missing author", { author: null }, /author could not be read.*fail closed/],
+]) test(`PR startup refuses ambiguous or unreadable authority: ${label}`, async () => {
   await withTempDir(async (tempDir) => {
     await initRepoWithOrigin(tempDir);
     const stub = await writeGhStubHelper(tempDir, [{ stdout: JSON.stringify({ state: "OPEN",
@@ -1600,8 +1600,8 @@ test("PR startup refuses an unreadable PR on the plain path (gh pr view exits 1)
   });
 });
 
-for (const [closes, expected] of [[[{ number: 900 }], /closes issue #900/], [[], /closes no issue/]]) {
-  test(`--issue refuses a linked PR whose closing issue differs from the requested issue: ${expected}`, async () => {
+for (const [label, closes, expected] of [["different issue", [{ number: 900 }], /closes issue #900/], ["no issue", [], /closes no issue/]]) {
+  test(`--issue refuses a linked PR whose closing issue differs from the requested issue: ${label}`, async () => {
     await withTempDir(async (tempDir) => {
       await initRepoWithOrigin(tempDir);
       const stub = await writeGhStubHelper(tempDir, [
