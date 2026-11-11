@@ -33,7 +33,7 @@
  */
 import { parseArgs } from "node:util";
 
-import { loadDevLoopConfig, resolveConductorDispatch, resolveRoleDispatch } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveConductorDispatch, resolveRoleDispatch, resolveRoleModel } from "@dev-loops/core/config";
 import { REVIEW_OPERATIONS, resolveOperationReviewerRole } from "@dev-loops/core/loop/review-operation";
 import { resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
 
@@ -74,7 +74,9 @@ Conductor mode — required:
                             Cannot be combined with --gate or --angle.
 
 Role mode — required:
-  --role <name> --harness codex
+  --role <name> --harness <codex|claude>
+                            Claude prints {ok, role, harness:"claude", model}; model is the Agent
+                            model alias to pass (null: pass none).
                             Cannot be combined with --conductor, --gate or --angle.
 
 All modes — optional:
@@ -159,7 +161,7 @@ export function parseResolveReviewerRoleCliArgs(argv, { env = process.env } = {}
     if ((options.conductor && options.role !== null) || options.gate !== null || options.angle !== null) throw parseError("--conductor/--role cannot be mixed with each other or --gate or --angle");
     const selector = options.conductor ? "--conductor" : "--role";
     if (options.role === "") throw parseError("--role requires a nonempty name");
-    if (options.harness !== "codex") throw parseError(`${selector} requires --harness codex`);
+    if (options.harness !== "codex" && !(options.harness === "claude" && options.role !== null)) throw parseError(`${selector} requires --harness codex${options.role !== null ? " or claude" : ""}`);
     return options;
   }
   if (!options.gate) {
@@ -180,6 +182,11 @@ export function parseResolveReviewerRoleCliArgs(argv, { env = process.env } = {}
   return options;
 }
 
+/** The Agent `model` alias a Claude dispatcher passes for a routine role; null means pass none. */
+function resolveClaudeRoleModel({ config, errors = [] }, role) {
+  return { ok: errors.length === 0, role, harness: "claude", model: errors.length ? null : resolveRoleModel(config, { role, harness: "claude" }), configErrors: errors };
+}
+
 export async function runCli(argv = process.argv.slice(2), { repoRoot = resolveRepoRoot(process.cwd()), env = process.env } = {}) {
   const options = parseResolveReviewerRoleCliArgs(argv, { env });
   if (options.help) {
@@ -187,7 +194,8 @@ export async function runCli(argv = process.argv.slice(2), { repoRoot = resolveR
     return { ok: true, help: true };
   }
   const loadResult = await loadDevLoopConfig({ repoRoot });
-  const result = options.conductor ? resolveConductorDispatch(loadResult, { harness: options.harness })
+  const result = options.role !== null && options.harness === "claude" ? resolveClaudeRoleModel(loadResult, options.role)
+    : options.conductor ? resolveConductorDispatch(loadResult, { harness: options.harness })
     : options.role !== null ? resolveRoleDispatch(loadResult, { role: options.role, harness: options.harness }) : resolveOperationReviewerRole(loadResult, {
     operation: options.gate,
     angle: options.angle,

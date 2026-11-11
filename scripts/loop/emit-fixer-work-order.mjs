@@ -839,7 +839,8 @@ export async function emitFixerWorkOrder({
     throw error;
   }
   // The coordinator's gate wait-for-units --artifact path: a full-phase fixer's final-on-write report (ADR 0223), else the hand-back itself.
-  return { ...plan, planPath: livePlanPath, joinRef: phase === "full" && !ciFile ? fixerReportPath(outputRef) : outputRef };
+  // fixerModel is returned, not persisted in the plan: the Claude Agent `model` from the config validated above.
+  return { ...plan, planPath: livePlanPath, joinRef: phase === "full" && !ciFile ? fixerReportPath(outputRef) : outputRef, fixerModel: resolveRoleModel(config, { role: "fixer", harness: "claude" }) };
   } finally { await capture.release(); }
 }
 
@@ -1113,9 +1114,9 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
       ...(fetchPr ? { fetchPr } : {}),
       ...(fetchReview ? { fetchReview } : {}),
     });
-    const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath, joinRef } = plan;
+    const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath, joinRef, fixerModel } = plan;
     // The Claude Agent `model` is the config-resolved fixer model; the frontmatter stays the fallback.
-    const model = values.harness === "claude" ? resolveRoleModel((await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) })).config, { role: "fixer", harness: "claude" }) : null;
+    const model = values.harness === "claude" ? fixerModel : null;
     const dispatchPayload = buildFixerDispatchPayload({ harness: values.harness, plan, cwd, model });
     return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef });
   } catch (err) {

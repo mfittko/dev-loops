@@ -53,7 +53,7 @@ test("dev-loop skill and main-agent contract name the coordinator as the runner"
 test("Pi wording stays: read-only main agent and async dispatch (#1086)", () => {
   const full = read("skills/docs/main-agent-contract.md");
   const start = full.indexOf("<!-- pi-only -->");
-  const end = full.indexOf("<!-- /pi-only -->", start);
+  const end = full.lastIndexOf("<!-- /pi-only -->"); // the Pi span is split around the shared Claude model-tier text
   assert.ok(start >= 0 && end > start, "pi-only markers must exist");
   const text = normalize(full.slice(start, end));
   assert.match(text, /All tracked-file mutations flow through the `dev-loop` async subagent\./);

@@ -269,3 +269,16 @@ test("committed .claude/agents/judge.md carries model opus", () => {
   const generated = readFileSync(new URL("../../../.claude/agents/judge.md", import.meta.url), "utf8");
   assert.match(generated.split("\n---\n")[0], /\nmodel: "opus"/);
 });
+
+// #3133: the Claude dispatch-model instruction must survive pi-only stripping in the Claude mirrors.
+test("Claude mirrors keep the resolved-model dispatch instruction outside pi-only blocks", () => {
+  const read = (rel) => readFileSync(new URL(`../../../${rel}`, import.meta.url), "utf8");
+  for (const rel of ["skills/docs/main-agent-contract.md", "skills/local-implementation/SKILL.md"]) {
+    const mirrored = stripPiOnlyBlocks(read(rel));
+    assert.match(mirrored, /gate resolve-role --role <name> --harness claude/, `${rel} loses the Claude model instruction`);
+    assert.match(mirrored, /Agent `model` parameter/, rel);
+  }
+  for (const rel of ["agents/dev-loop.agent.md", "agents/gate-coordinator.agent.md"]) {
+    assert.match(stripPiOnlyBlocks(read(rel)), /gate resolve-role --role [^\n]*--harness claude/, rel);
+  }
+});
