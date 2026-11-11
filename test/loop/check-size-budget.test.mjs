@@ -226,6 +226,9 @@ test("runtime pins: configured tier refusal remains independent", () => {
   assert.equal(result.outcome, "block");
   assert.equal(result.wholeLogicLoc, 0);
   assert.ok(result.reasons.some((reason) => reason.includes("configured t1/t3 pattern")));
+  const custom = computeSizeBudget({ nameStatusOutput: "M\t.node-version\n", numstatOutput: numstatZ([[50, 50, ".node-version"]]), sizeConfig: { tiers: { t1: { patterns: [".node-version"] } } }, rules: { paths: [{ pattern: "**", kind: "code" }], extensions: new Map() } });
+  assert.equal(custom.outcome, "block");
+  assert.ok(custom.reasons.some((reason) => reason.includes("configured t1/t3 pattern")));
 });
 
 test("pass: small mixed change stays under softLoc", () => {

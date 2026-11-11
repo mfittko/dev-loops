@@ -326,7 +326,7 @@ export function computeSizeBudget({
       logic = changedLines - commentLines;
     } else if (!runtimePin && category === "test") logic = testDiscount * changedLines;
     else {
-      if (changedLines > 0 && category !== "code" && category !== "test" && matchesAnyPattern(file.path, tierPatterns)) tierPatternDroppedToZero = true;
+      if (changedLines > 0 && matchesAnyPattern(file.path, tierPatterns)) tierPatternDroppedToZero = true;
       continue; // docs/config/ci/asset/unknown excluded — covers generated/lockfile content
     }
     const tier = resolveFileTier(file.path, tiers);
