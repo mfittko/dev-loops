@@ -168,6 +168,76 @@ const SIZE_CONFIG = {
   },
 };
 
+// <!-- rule-ref: SIZE-RUNTIME-PIN-ACCOUNTING -->
+test("runtime pins: four-file runtime upgrade passes without unclassified source", () => {
+  const entries = [
+    [1, 1, ".node-version"], [1, 1, "package.json"],
+    [1, 1, "README.md"], [1, 0, "changes/runtime.md"],
+  ];
+  const contents = [["24", "25"], ['{"engines":{"node":">=24"}}', '{"engines":{"node":">=25"}}'], ["Node 24", "Node 25"], [null, "- Upgrade runtime"]];
+  const diffOutput = entries.map(([, , file], i) => `diff --git a/${file} b/${file}\n--- ${i === 3 ? "/dev/null" : `a/${file}`}\n+++ b/${file}\n@@ -${i === 3 ? "0,0" : "1"} +1 @@\n${contents[i][0] === null ? "" : `-${contents[i][0]}\n`}+${contents[i][1]}\n`).join("");
+  const result = computeSizeBudget({
+    nameStatusOutput: entries.map(([, , file], i) => `${i === 3 ? "A" : "M"}\t${file}\n`).join(""),
+    numstatOutput: numstatZ(entries), diffOutput, sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(result.outcome, "pass");
+  assert.equal(result.wholeLogicLoc, 0);
+  assert.deepEqual(result.reasons, []);
+});
+
+test("runtime pins: exact normalized basenames have zero accounting under existing classify rules", () => {
+  for (const file of [".nvmrc", ".node-version", ".ruby-version", ".python-version", ".tool-versions", "services/app/.node-version", "services\\app\\.node-version", "test/.node-version"]) {
+    for (const rules of [null, { paths: [{ pattern: "**", kind: "code" }], extensions: new Map() }]) {
+      const result = computeSizeBudget({ nameStatusOutput: `M\t${file}\n`, numstatOutput: numstatZ([[100, 0, file]]), rules });
+      assert.equal(result.outcome, "pass", file);
+      assert.equal(result.wholeLogicLoc, 0, file);
+    }
+  }
+  const result = computeSizeBudget({ nameStatusOutput: "M\truntime.node-version\n", numstatOutput: numstatZ([[1, 0, "runtime.node-version"]]) });
+  assert.equal(result.outcome, "block");
+  assert.ok(result.reasons.some((reason) => /SIZE-RUNTIME-PIN-ACCOUNTING/.test(reason)));
+});
+
+test("runtime pins: cannot dilute unknown source or waive its block", () => {
+  for (const waived of [false, true]) {
+    const result = computeSizeBudget({ nameStatusOutput: "M\ttools/build-runner\nM\t.node-version\n", numstatOutput: numstatZ([[1, 0, "tools/build-runner"], [100, 0, ".node-version"]]), waived });
+    assert.equal(result.outcome, "block");
+    assert.equal(result.waivable, false);
+    assert.equal(result.waiver.defaultValid, false);
+    assert.ok(result.reasons.some((reason) => reason.includes("tools/build-runner") && !reason.includes(".node-version")));
+  }
+});
+
+test("runtime pins: unknown diagnostic lists five positive contributors and exact remainder", () => {
+  for (const count of [5, 7]) {
+    const entries = [[0, 0, "tools/empty"], [100, 0, ".nvmrc"], ...Array.from({ length: count }, (_, i) => [1, 0, `tools/runner-${i}`])];
+    const result = computeSizeBudget({ nameStatusOutput: entries.map(([, , file]) => `M\t${file}\n`).join(""), numstatOutput: numstatZ(entries) });
+    const reason = result.reasons.find((entry) => entry.includes("substantial unclassified"));
+    assert.ok(reason);
+    for (let i = 0; i < 5; i++) assert.ok(reason.includes(`tools/runner-${i}`));
+    assert.ok(!reason.includes("tools/runner-5") && !reason.includes("tools/empty") && !reason.includes(".nvmrc"));
+    assert.equal(reason.includes("+2 more"), count === 7);
+    if (count === 5) assert.ok(!reason.includes("more"));
+  }
+});
+
+test("runtime pins: configured tier refusal remains independent", () => {
+  const result = computeSizeBudget({ nameStatusOutput: "M\t.node-version\n", numstatOutput: numstatZ([[1, 1, ".node-version"]]), sizeConfig: { tiers: { t1: { patterns: [".node-version"] } } } });
+  assert.equal(result.outcome, "block");
+  assert.equal(result.wholeLogicLoc, 0);
+  assert.ok(result.reasons.some((reason) => reason.includes("configured t1/t3 pattern")));
+  const custom = computeSizeBudget({ nameStatusOutput: "M\t.node-version\n", numstatOutput: numstatZ([[50, 50, ".node-version"]]), sizeConfig: { tiers: { t1: { patterns: [".node-version"] } } }, rules: { paths: [{ pattern: "**", kind: "code" }], extensions: new Map() } });
+  assert.equal(custom.outcome, "block");
+  assert.ok(custom.reasons.some((reason) => reason.includes("configured t1/t3 pattern")));
+});
+
+test("runtime pins: tier-pattern drop and unknown source name both reasons", () => {
+  const result = computeSizeBudget({ nameStatusOutput: "M\tdocs/x.md\nM\ttools/build-runner\n", numstatOutput: numstatZ([[1, 1, "docs/x.md"], [1, 1, "tools/build-runner"]]), sizeConfig: { tiers: { t1: { patterns: ["docs/**"] } } } });
+  assert.equal(result.outcome, "block");
+  assert.ok(result.reasons.some((reason) => reason.includes("tools/build-runner")));
+  assert.ok(result.reasons.some((reason) => reason.includes("configured t1/t3 pattern")));
+});
+
 test("pass: small mixed change stays under softLoc", () => {
   const result = computeSizeBudget({
     nameStatusOutput: MIXED_NAME_STATUS,

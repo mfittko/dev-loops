@@ -14,7 +14,9 @@
  * or `test` contribute — a file classifying as `config`/`docs`/`ci`/`asset`/`unknown`
  * (which already covers lockfiles and other generated/non-review-worthy
  * content) contributes 0, reusing the classifier's own signal rather than
- * re-deriving one. `commentOnly` is the count of a code file's changed lines
+ * re-deriving one. Per SIZE-RUNTIME-PIN-ACCOUNTING, a file whose basename is in
+ * `RUNTIME_PIN_BASENAMES` contributes 0 to source counters and `logicLoc`
+ * regardless of category. `commentOnly` is the count of a code file's changed lines
  * the comment-discipline guard's shared `isCommentLine` detector recognizes as
  * comments (the comment analogue of `testDiscount`); fail-closed, an
  * ambiguous/unparseable changed line is never a comment and stays logic.
@@ -35,7 +37,7 @@ import { execFileSync } from "node:child_process";
 import { anchorBaseRef } from "../lib/anchor-base-ref.mjs";
 import { parseArgs } from "node:util";
 
-import { analyzeDiff, classifyFile, matchesGlob } from "@dev-loops/core/analysis/diff-analyzer";
+import { analyzeDiff, classifyFile, matchesGlob, RUNTIME_PIN_BASENAMES } from "@dev-loops/core/analysis/diff-analyzer";
 import { loadDevLoopConfig, resolveClassifyRules } from "@dev-loops/core/config";
 
 import { isCommentLine } from "./check-comment-discipline.mjs";
@@ -296,6 +298,7 @@ export function computeSizeBudget({
   // while wholeLogicLoc stays silently at (or near) 0.
   let sourceChangedLines = 0;
   let unclassifiedChangedLines = 0;
+  const unclassifiedPaths = [];
   // A configured t1/t3 pattern is an explicit operator signal that a path is
   // risk-slice/relaxed-tier; a matching file that classifies outside
   // code/test still drops its LOC to 0 (docs/config/ci/asset/unknown all excluded
@@ -306,14 +309,16 @@ export function computeSizeBudget({
   for (const file of files) {
     const category = classifyFile(file.path, rules);
     const changedLines = file.added + file.deleted;
-    if (category === "unknown") {
+    const runtimePin = RUNTIME_PIN_BASENAMES.has(file.path.replaceAll("\\", "/").split("/").pop());
+    if (!runtimePin && category === "unknown") {
       sourceChangedLines += changedLines;
       unclassifiedChangedLines += changedLines;
-    } else if (category === "code" || category === "test") {
+      if (changedLines > 0) unclassifiedPaths.push(file.path);
+    } else if (!runtimePin && (category === "code" || category === "test")) {
       sourceChangedLines += changedLines;
     }
     let logic = 0;
-    if (category === "code") {
+    if (!runtimePin && category === "code") {
       // Comment-aware: discount changed lines the comment-discipline detector
       // recognizes as comments, clamped to [0, changedLines] so a diff-body vs
       // numstat count skew can never produce negative logic or discount more
@@ -321,7 +326,7 @@ export function computeSizeBudget({
       // full count, so a real-code change is scored exactly as before.
       const commentLines = Math.min(commentChangedLines.get(file.path) ?? 0, changedLines);
       logic = changedLines - commentLines;
-    } else if (category === "test") logic = testDiscount * changedLines;
+    } else if (!runtimePin && category === "test") logic = testDiscount * changedLines;
     else {
       if (changedLines > 0 && matchesAnyPattern(file.path, tierPatterns)) tierPatternDroppedToZero = true;
       continue; // docs/config/ci/asset/unknown excluded — covers generated/lockfile content
@@ -372,11 +377,14 @@ export function computeSizeBudget({
   }
   if (substantiallyUnclassified) {
     outcome = "block";
-    reasons.push(
-      tierPatternDroppedToZero
-        ? "a configured t1/t3 pattern matched a file that classifies outside code/test (its logic LOC would silently drop to 0); size budget cannot be computed safely — no waiver possible"
-        : `substantial unclassified/non-JS source (${Math.round(unclassifiedRatio * 100)}% of source-like changed lines); size budget cannot be computed safely — no waiver possible`,
-    );
+    if (unclassifiedRatio > UNCLASSIFIED_BLOCK_RATIO) {
+      reasons.push(
+        `substantial unclassified/non-JS source (${Math.round(unclassifiedRatio * 100)}% of source-like changed lines); size budget cannot be computed safely — no waiver possible (SIZE-RUNTIME-PIN-ACCOUNTING); files: ${unclassifiedPaths.slice(0, 5).map((file) => JSON.stringify(file)).join(", ")}${unclassifiedPaths.length > 5 ? ` +${unclassifiedPaths.length - 5} more` : ""}`,
+      );
+    }
+    if (tierPatternDroppedToZero) {
+      reasons.push("a configured t1/t3 pattern matched a file that classifies outside code/test (its logic LOC would silently drop to 0); size budget cannot be computed safely — no waiver possible");
+    }
   }
   if (wholeLoc > absoluteHardLoc) {
     outcome = "block";
