@@ -19,7 +19,9 @@ test("ADR 0248 exists, cites ADR 0238, and the owner paragraph names ADR 0248 an
 });
 
 test("ADR 0273 exists, cites ADR 0238, and the owner paragraph names ADR 0273 and github-actions", async () => {
-  assert.match(await readRepo("docs/decisions/0273-github-actions-bot-is-a-trusted-comment-author.md"), /0238/);
+  const adr0273 = await readRepo("docs/decisions/0273-github-actions-bot-is-a-trusted-comment-author.md");
+  assert.match(adr0273, /0238/);
+  assert.match(adr0273, /0240/);
   const owner = await readRepo("skills/docs/gate-review-sub-loop-contract.md");
   const paragraph = owner.split(`<!-- rule: ${RULE} -->`)[1].split("\n")[1];
   for (const needle of ["ADR 0273", "github-actions"]) {

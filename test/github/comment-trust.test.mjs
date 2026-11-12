@@ -160,3 +160,20 @@ test("ADR 0273: the exact GitHub Actions bot is trusted with no opt-in; lookalik
   assert.equal(parsed.summary.unresolvedThreads, 1);
   assert.equal(parsed.summary.skippedUntrustedThreads, 0);
 });
+
+test("ADR 0273 review fixes: exact login with a non-Bot type is untrusted; lookalikes by association; case and suffix edges", async () => {
+  const actor = (login, type, association = "NONE", options) => isTrustedCommentAuthor({ login, type, association }, options);
+  assert.equal(actor("github-actions-fan", "User", "NONE"), false);
+  assert.equal(actor("github-actions-fan", "User", "OWNER"), true);
+  assert.equal(actor("github-actions", "User", "OWNER"), false);
+  for (const allowCopilot of [false, true]) assert.equal(actor("github-actions", "Bot", "NONE", { allowCopilot }), true, String(allowCopilot));
+  assert.equal(actor("GitHub-Actions[bot]", "Bot"), true);
+  assert.equal(actor("github-actions[bot]x", "Bot", "OWNER"), false);
+  const bot = { login: "github-actions", __typename: "Bot" };
+  const node1 = node("TA2", { ...comment("c1", "github-actions", "NONE", "Echoed finding"), author: bot });
+  assert.deepEqual(parseUnresolvedThreadBodies({ threads: [node1] }).threads[0].bodies, ["Echoed finding"]);
+  const payload = JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [node1] } } } } });
+  const { threads, skipped } = await fetchAllReviewThreadsWithSkips({ repo: "o/r", pr: 1 }, { runChild: async () => ({ code: 0, stdout: payload, stderr: "" }) });
+  assert.equal(threads.length, 1);
+  assert.deepEqual(skipped, []);
+});

@@ -24,8 +24,8 @@ export function isTrustedCommentAuthor({ login, type, association } = {}, { allo
   if (allowCopilot && SANCTIONED_COPILOT_REVIEWER.test(name) && isBot) return true;
   // ADR 0273: the GitHub Actions bot, matched exactly, is trusted on every surface with no opt-in.
   if (GITHUB_ACTIONS_BOT.test(name) && isBot) return true;
-  // Exact sanctioned login only: a human login such as `copilot-fan` is judged by association like any other.
-  if (SANCTIONED_COPILOT_REVIEWER.test(name) || isBot) return false;
+  // Exact sanctioned logins with a non-Bot type stay untrusted; a lookalike such as `copilot-fan` or `github-actions-fan` is judged by association.
+  if (SANCTIONED_COPILOT_REVIEWER.test(name) || GITHUB_ACTIONS_BOT.test(name) || isBot) return false;
   return TRUSTED_ASSOCIATIONS.has(typeof association === "string" ? association.toUpperCase() : "");
 }
 
