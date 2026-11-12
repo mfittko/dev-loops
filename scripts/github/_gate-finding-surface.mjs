@@ -1652,9 +1652,10 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
 // renderFindingLine itself, out of scope here.
 const RENDERED_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\*\s+\(`[^`\n]+`\):.* — judge: ([a-z][a-z0-9_-]*)$/mu;
 // A detail-bearing legacy line (` (follow-up N)` or ` - <reason>`) is never disposition evidence: an already-posted, unjudged summary can end in the same bytes. The inline header is unambiguous (its angles neutralize the separator), so it keeps the detail tail.
-// Header of the fixed inline layout (legacy bodies keep the suffix form above): `**<severity>** · <angles> · judge: <disposition>`.
+// Header of the fixed inline layout (legacy bodies keep the suffix form above): `**<severity>** · <angles> · judge: <disposition>[ (follow-up N)][ - <reason>][ <evidence-only label>]`.
+// The optional label is the exact text of renderEvidenceOnlyLabel and always ends the line.
 // The severity token is lowercase, so a `**Problem:**` line never matches.
-const RENDERED_HEADER_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\* · [^\n]* · judge: ([a-z][a-z0-9_-]*)(?: \(follow-up \d+\))?(?: - [^\n]*)?$/mu;
+const RENDERED_HEADER_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\* · [^\n]* · judge: ([a-z][a-z0-9_-]*)(?: \(follow-up \d+\))?(?: - [^\n]*)?(?: \(evidence only, no file change; its criterion stays unproven until the evidence lands\))?$/mu;
 
 export function parseRenderedJudgeDisposition(body) {
   const match = typeof body === "string"

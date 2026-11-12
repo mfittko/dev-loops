@@ -127,7 +127,7 @@ The ledger keeps the full text. Reviewer inline code spans survive into the thre
 backtick outside that fenced block is escaped as an entity. Findings from different angles that describe the
 same defect post as one comment. Two findings describe the same defect only when they resolve the
 same file, their lines are equal or both absent, both or neither are questions, they carry the same
-judge disposition, and their keys match. Keys match when both findings carry an equal `defectKey`,
+judge disposition and the same `remedyKind`, and their keys match. Keys match when both findings carry an equal `defectKey`,
 or when neither carries one and their normalized summaries are identical. A `defectKey` on only one
 of the two findings blocks the merge. A finding with no file never merges. The normalized summary is
 the one `fingerprintFinding` uses: lowercase, every non-alphanumeric run collapsed to one space,

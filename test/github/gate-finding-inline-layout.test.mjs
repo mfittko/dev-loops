@@ -150,6 +150,14 @@ test("parseRenderedJudgeDisposition never reads a legacy line with detail but st
   assert.equal(parseRenderedJudgeDisposition(renderInlineCommentBody({ ...holistic, ...judged }, { round: 1 })), "reject");
 });
 
+test("parseRenderedJudgeDisposition reads an inline header that carries the evidence-only label, with or without a reason", () => {
+  const evidence = { ...holistic, judgeDisposition: "act", remedyKind: "evidence_only" };
+  assert.equal(parseRenderedJudgeDisposition(renderInlineCommentBody(evidence, { round: 1 })), "act");
+  assert.equal(parseRenderedJudgeDisposition(renderInlineCommentBody({ ...evidence, judgeReason: "why" }, { round: 1 })), "act");
+  assert.equal(parseRenderedJudgeDisposition("**medium** · docs · judge: act (evidence only) trailing"), null);
+  assert.equal(parseRenderedJudgeDisposition("**Problem:** judge: act"), null);
+});
+
 test("the body-only finding line and the inline finding line render the same judge detail", () => {
   for (const judged of [{ judgeDisposition: "reject", judgeReason: "not reproducible" }, { judgeDisposition: "defer", judgeReason: "tracked elsewhere", followUpIssueNumber: 77 }]) {
     const body = renderStructuredFindings([{ angle: "a", verdict: "findings_present", findings: [{ severity: "medium", summary: "s", ...judged }] }]);
