@@ -104,7 +104,7 @@ test("the work order states the judge's allowed search commands and the Read off
     assert.match(text, /`git diff` only as a range such as `origin\/main\.\.\.HEAD` or two revisions/);
     assert.match(text, /glob characters only inside single quotes/);
     assert.match(text, /Read accepts offset and limit/);
-    assert.match(text, /Bash otherwise runs only the work-order pull and `check-judge-decision\.mjs`/);
+    assert.match(text, /On Claude Code and Pi, Bash otherwise runs only the work-order pull and `check-judge-decision\.mjs`\. The Codex after-pull setup governs Codex\./);
     assert.doesNotMatch(text, /Grep|Glob/);
   });
 });

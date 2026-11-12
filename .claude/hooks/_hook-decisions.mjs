@@ -73,7 +73,7 @@ const isRange = (a) => { const sides = a.split(/\.\.\.?/); return sides.length =
 const DIFF_NOARG_FLAG_RE = /^(?:-[pubwRMC]|-U\d+|--(?:patch|stat|numstat|shortstat|name-only|name-status|raw|summary|no-color|color|minimal|histogram|patience|check))$/;
 function isCommitDiff(line) {
   if (!line.startsWith("git diff")) return true;
-  const args = line.slice(8).trim().split(/\s+/).filter(Boolean);
+  const args = line.slice(8).replace(/['"]/g, "").trim().split(/\s+/).filter(Boolean);
   const end = args.indexOf("--");
   const front = end < 0 ? args : args.slice(0, end);
   if (front.some((a) => a.startsWith("-") && !a.includes("=") && !DIFF_NOARG_FLAG_RE.test(a))) return false;
