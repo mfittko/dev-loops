@@ -7131,18 +7131,28 @@ test("upsert-checkpoint-verdict re-posts instead of noop for a no-ledger evidenc
       structuredFindings,
       findingsSeverityCounts,
     });
-    const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
-      isDraft: true,
-      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
-      issueComments: [[{ id: 101, body: priorBody, html_url: "https://github.com/owner/repo/pull/17#issuecomment-101", updated_at: "2026-05-31T20:00:00Z" }]],
-    }));
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        issueComments: [[{ id: 101, body: priorBody, html_url: "https://github.com/owner/repo/pull/17#issuecomment-101", updated_at: "2026-05-31T20:00:00Z" }]],
+      }),
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: '{"files":[{"path":"src/index.ts"}]}\n' },
+      {
+        assertArgs: ["api", "-X", "PATCH", "repos/owner/repo/issues/comments/101", "-f"],
+        assertArgContains: ["evidence only, no file change"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+      },
+    ]);
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "findings_present", "--findings-json", findingsPath,
       "--findings-severity-counts", JSON.stringify(findingsSeverityCounts),
       "--next-action", "fix", "--execution-mode", "fanout_fanin",
     ], { env });
-    assert.notEqual(JSON.parse(result.stdout || "{}").action, "noop", result.stderr);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).action, "updated", result.stdout);
   }, { prefix: "dev-loops-upsert-evidence-only-no-noop-" });
 });
 
