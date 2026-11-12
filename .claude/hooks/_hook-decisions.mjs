@@ -47,7 +47,7 @@ const isWorkerAgentType = (agentType) =>
   typeof agentType === "string" && WORKER_AGENT_TYPES.has(agentType.startsWith("dev-loops:") ? agentType.slice("dev-loops:".length) : agentType);
 
 /**
- * The read-only judge holds Bash only to pull its work order (ADR 0106) and run its decision check. The pull command
+ * The read-only judge holds Bash only to pull its work order (ADR 0106), run its decision check and run the read-only search commands (ADR 0269). The pull command
  * is the dispatch envelope's pull line with shell-inert values, so chaining, redirection and
  * substitution cannot match.
  */
@@ -65,14 +65,15 @@ const JUDGE_SEARCH_PREFIX_RE = /^(?:grep -n|rg -n|git show|git diff)(?: |$)/;
 const JUDGE_SEARCH_DENIED_FLAG_RE = /(?:^|\s)--(?:output|ext-diff|textconv|pre|hostname-bin)(?=[=\s]|$)/;
 // `git diff` only as a commit-to-commit form (a `a..b` range or two revisions): a worktree diff refreshes the index.
 // Without `--` a second token may be a path, so each of two bare revisions must look like a revision.
-const REVISION_RE = /^(?:[0-9a-f]{7,40}|HEAD|main|origin\/[\w.\/-]+)(?:[~^]\d*)*$/;
-const RANGE_RE = /^[^.\s]\S*\.\.\.?[^.\s]\S*$/;
+const REVISION_RE = /^(?:[0-9a-f]{6,40}|HEAD|main|origin\/[\w.\/-]+)(?:[~^]\d*)*$/;
+// A range is `a..b` or `a...b` with a revision on each side, so a path such as `agents/../agents` is not a range.
+const isRange = (a) => { const sides = a.split(/\.\.\.?/); return sides.length === 2 && sides.every((s) => REVISION_RE.test(s)); };
 function isCommitDiff(line) {
   if (!line.startsWith("git diff")) return true;
   const args = line.slice(8).trim().split(/\s+/).filter(Boolean);
   const end = args.indexOf("--");
   const revs = (end < 0 ? args : args.slice(0, end)).filter((a) => !a.startsWith("-"));
-  return revs.some((a) => RANGE_RE.test(a)) || (revs.length === 2 && revs.every((a) => REVISION_RE.test(a)));
+  return revs.some(isRange) || (revs.length === 2 && revs.every((a) => REVISION_RE.test(a)));
 }
 export function isJudgeSearchLine(command) {
   if (typeof command !== "string") return false;
@@ -102,7 +103,7 @@ export const isFixerPullAttempt = (command) => typeof command === "string" && co
 /**
  * Decide whether a PreToolUse Bash command must be blocked by a dev-loop gate boundary.
  *
- * The `judge` agent (plugin-namespaced or bare) may run ONLY the sanctioned work-order pull and the decision check;
+ * The `judge` agent (plugin-namespaced or bare) may run ONLY the sanctioned work-order pull, the decision check and the read-only search commands (ADR 0269);
  * every other command, including test/build entrypoints, is denied fail-closed.
  *
  * The gated-command inventory — each command with its rationale inline at its check — lives in
@@ -166,7 +167,7 @@ export function decideBashGate({
         "Judge read-only boundary (agents/judge.agent.md, ADR 0106): the judge may run only its " +
         "dispatched `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line, " +
         "alone, with no chaining, redirection or substitution, or `dev-loops-run scripts/loop/check-judge-decision.mjs --file tmp/gate-judge/<path>.json`. Read " +
-        "files with `Read` (it accepts offset and limit), or search with read-only `grep -n`, `rg -n`, `git show` or `git diff`, with the pattern in single quotes (so `|` and `$` inside it pass), no redirection, pipe, chaining, substitution or write flag; `Read` reaches any file the search refuses; never run other shell, test or build commands.",
+        "files with `Read` (it accepts offset and limit), or search with read-only `grep -n`, `rg -n`, `git show` or `git diff`, with the pattern in single quotes (so `|` and `$` inside it pass), glob characters (`*`, `?`, `[`) only inside single quotes, `git diff` only as a range such as `origin/main...HEAD` or two revisions, no redirection, pipe, chaining, substitution or write flag; `Read` reaches any file the search refuses; never run other shell, test or build commands.",
     };
   }
   // The fixer's binding is recorded only for the exact pull line (ADR 0107), so a modified one denies with the fix.

@@ -101,6 +101,8 @@ test("the work order states the judge's allowed search commands and the Read off
     const plan = await emitJudgeWorkOrder(await seed(root));
     const text = await readFile(plan.promptPath, "utf8");
     assert.match(text, /Search with read-only `grep -n`, `rg -n`, `git show` and `git diff`/);
+    assert.match(text, /`git diff` only as a range such as `origin\/main\.\.\.HEAD` or two revisions/);
+    assert.match(text, /glob characters only inside single quotes/);
     assert.match(text, /Read accepts offset and limit/);
     assert.match(text, /Bash otherwise runs only the work-order pull and `check-judge-decision\.mjs`/);
     assert.doesNotMatch(text, /Grep|Glob/);

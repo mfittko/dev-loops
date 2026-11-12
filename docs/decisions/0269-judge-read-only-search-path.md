@@ -16,7 +16,7 @@ The judge needs to check a claim in the findings against the code. The two-comma
 
 ## Decision
 
-- On Claude Code the judge Bash gate allows `grep -n`, `rg -n`, `git show` and `git diff`. A command passes when it has no shell metacharacter outside quotes, no expansion inside double quotes and no flag that writes or runs a program. The denied flags are `--output`, `--ext-diff`, `--textconv`, `--pre` and `--hostname-bin`, matched by exact name after quote characters are removed, so `--pretty=...` and `--extended-regexp` pass.
+- On Claude Code the judge Bash gate allows `grep -n`, `rg -n`, `git show` and `git diff`. A command passes when it has no shell metacharacter outside quotes, no expansion inside double quotes and no flag that writes or runs a program. `git diff` takes a range such as `origin/main...HEAD` or two revisions, because a worktree diff refreshes the index. Glob characters go inside single quotes. The denied flags are `--output`, `--ext-diff`, `--textconv`, `--pre` and `--hostname-bin`, matched by exact name after quote characters are removed, so `--pretty=...` and `--extended-regexp` pass.
 - Every refusal names `Read` with its offset and limit and lists the allowed search commands, so the judge always has an exit.
 - The work order states the boundary for both harnesses. On Pi the judge uses its native read, grep and find tools, and the Pi gate is unchanged (#1086).
 - The work order carries a Cited rules table: each registered rule ID cited in the findings ledger, with its first text line and owning doc. Heading and HTML comment lines are skipped when taking that line.

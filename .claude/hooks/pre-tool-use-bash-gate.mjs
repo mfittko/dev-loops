@@ -23,8 +23,8 @@
  *     fixer pull line (prefix, suffix, redirect, `cd`) is denied with the exact line to run.
  *     The fixer Bash commit/push boundary is owned by issue 2534.
  *   - every command from the read-only `judge` subagent except its sanctioned work-order pull
- *     (`dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>`, ADR 0106, ADR 0115)
- *     and its decision check (`check-judge-decision.mjs`).
+ *     (`dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>`, ADR 0106, ADR 0115),
+ *     its decision check (`check-judge-decision.mjs`) and its read-only search commands (ADR 0269).
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -118,7 +118,7 @@ const isWaitTool = typeof command === "string" && commandContainsDetachedWaitToo
 // "dev-loop" or "gate-coordinator"), so the quick pre-check here only detects the command shape; the hook must not
 // short-circuit to allow before the decider applies the actor + enforceCoordinator scoping.
 const isVerifyEntrypoint = typeof command === "string" && commandContainsCodeVerificationEntrypoint(command);
-// The read-only judge may run only its work-order pull and check-judge-decision (ADR 0106); every judge command reaches the decider.
+// The read-only judge may run only its work-order pull, check-judge-decision (ADR 0106) and read-only search commands (ADR 0269); every judge command reaches the decider.
 const isJudge = normalizeAgentType(agentType) === JUDGE_AGENT_TYPE;
 // A fixer pull attempt reaches the decider, which denies any line other than the exact one.
 const isFixerPull = isFixer && isFixerPullAttempt(command);
