@@ -75,6 +75,7 @@ test("the dispatchPrompt carries a shell-runnable pull command; shell metacharac
     assert.equal(result.stdout, await readFile(unit.promptPath, "utf8"), result.stderr);
     assert.equal(unit.dispatchPrompt, `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${unit.executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`);
     for (const bad of [`${unit.executionIdentity};id`, "$(id)", "#x", "a b"]) assert.throws(() => buildDispatchPointer({ ...unit, executionIdentity: bad }), /EXECUTION_IDENTITY_RE/);
+    assert.throws(() => buildDispatchPointer({ ...unit, executionIdentity: `r${"1".repeat(500)}-abcdef12` }), /over DISPATCH_POINTER_MAX_BYTES/);
   });
 });
 
@@ -263,7 +264,7 @@ test("the pull is role-keyed: a stub second role pulls through its adapter, an u
 });
 
 // ---------------------------------------------------------------------------
-// Step 1 of ADR 0115: the pull also accepts the execution identity alone.
+// Step 2 of ADR 0115: the pull accepts the execution identity alone, the only accepted form.
 // ---------------------------------------------------------------------------
 
 test("the pull refuses the former 3-flag form with exit 2 and the usage text", async () => {
@@ -357,7 +358,7 @@ test("codeTreeSkewNote quotes the emitter root, says the identity code may diffe
   });
 });
 
-test("the pull takes one positional identity or all three flags; any other shape exits 2 with the usage text", async () => {
+test("the pull takes exactly one positional identity; any other shape, including --ref, --digest and --execution, exits 2 with the usage text", async () => {
   await withDir(async (root) => {
     const unit = await emitRound(root);
     for (const args of [[], [unit.executionIdentity, "--execution", unit.executionIdentity], ["--ref", unit.workOrderRef, "--execution", unit.executionIdentity], [unit.executionIdentity, unit.executionIdentity], [unit.executionIdentity, "--ref", ""], [unit.executionIdentity, "--digest", ""], [unit.executionIdentity, "--execution", ""]]) {

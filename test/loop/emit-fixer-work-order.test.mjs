@@ -2284,7 +2284,7 @@ test("F5: a grant binds to the agent_id that ran the pull; a replacement re-pull
       assert.equal(hook(wt, target, agentId), "deny", `${agentId} never pulled`);
     }
     // A pull line with an execution that has no index entry binds nothing and takes nothing over.
-    assert.equal(spawnSync("node", [PULL, "f1-0000dead"], { cwd: wt, encoding: "utf8", env: gitFreeEnv() }).status, 1);
+    assert.equal(pull(unit, wt, { agentId: "agent-b", execution: "f1-0000dead" }).status, 1);
     assert.equal(hook(wt, target, "agent-b"), "deny", "a refused pull binds nothing");
     assert.equal(hook(wt, target), "allow", "a wrong-execution pull never revokes the pulling fixer's grant");
     assert.equal(pull(unit, wt, { agentId: "agent-b" }).status, 0);

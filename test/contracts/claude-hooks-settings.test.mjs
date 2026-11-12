@@ -892,6 +892,16 @@ test("agent-guard hook resolves a short judge pointer through the execution inde
     assert.equal(decide(id(1)), "allow", "review-gate ref resolved through the index");
     assert.equal(decide(id(2)), "deny", "lifecycle-gate ref");
     assert.equal(decide(id(3)), "deny", "identity with no index entry");
+    // The guard refuses what the pull refuses: conflicting entries across checkouts, and a malformed entry.
+    const wt = path.join(root, "wt");
+    const added = gitFixture(["worktree", "add", "-q", "-b", "wt", wt], root);
+    assert.equal(added.status, 0, added.stderr);
+    fs.mkdirSync(path.join(wt, "tmp", "work-order-executions"), { recursive: true });
+    seed(id(4), `judge:o/r#7:review:${"a".repeat(40)}:${id(4)}`);
+    fs.writeFileSync(path.join(wt, "tmp", "work-order-executions", `${id(4)}.json`), JSON.stringify({ executionIdentity: id(4), workOrderRef: `judge:o/r#7:pre_approval_gate:${"a".repeat(40)}:${id(4)}`, workOrderDigest: "sha256:ab" }));
+    assert.equal(decide(id(4)), "deny", "conflicting entries across checkouts");
+    fs.writeFileSync(path.join(root, "tmp", "work-order-executions", `${id(5)}.json`), JSON.stringify({ executionIdentity: id(5), workOrderRef: `judge:o/r#7:review:${"a".repeat(40)}:${id(5)}` }));
+    assert.equal(decide(id(5)), "deny", "malformed entry without a digest");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

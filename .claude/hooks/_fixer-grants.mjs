@@ -46,16 +46,27 @@ export function listCheckouts(dir) {
 
 /**
  * The `workOrderRef` the execution index of any checkout of `dir`'s repository holds for `executionIdentity`
- * (ADR 0267), or null for an unknown identity or an unreadable entry.
+ * (ADR 0267), or null for an unknown identity. Mirrors the pull's resolveExecutionIndex: null as well for an
+ * identity failing EXECUTION_IDENTITY_RE and for any unreadable, malformed or conflicting entry.
  */
 export function resolveIndexedWorkOrderRef(executionIdentity, dir) {
+  if (!EXECUTION_IDENTITY_RE.test(String(executionIdentity))) return null;
+  let found = null;
   for (const { root } of listCheckouts(dir)) {
+    let text;
     try {
-      const entry = JSON.parse(readFileSync(executionIndexPath(path.join(root, "tmp"), executionIdentity), "utf8"));
-      if (entry.executionIdentity === executionIdentity && typeof entry.workOrderRef === "string") return entry.workOrderRef;
-    } catch { /* no entry in this checkout */ }
+      text = readFileSync(executionIndexPath(path.join(root, "tmp"), executionIdentity), "utf8");
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      return null;
+    }
+    let entry = null;
+    try { entry = JSON.parse(text); } catch { /* refused below */ }
+    if (entry?.executionIdentity !== executionIdentity || typeof entry.workOrderRef !== "string" || typeof entry.workOrderDigest !== "string") return null;
+    if (found && (found.workOrderRef !== entry.workOrderRef || found.workOrderDigest !== entry.workOrderDigest)) return null;
+    found ??= entry;
   }
-  return null;
+  return found?.workOrderRef ?? null;
 }
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
