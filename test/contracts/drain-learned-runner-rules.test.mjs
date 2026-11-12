@@ -163,6 +163,8 @@ test("GATE-EXEC-GATE-COORDINATOR dispatch guidance points to the issue body and 
   assert.doesNotMatch(bulletWith("GATE-EXEC-HARNESS-JOIN"), /WORKTREE-/);
   const editing = bulletWith("WORKTREE-NONINTERACTIVE-FILE-OPS");
   assert.match(editing, /`OPS-NO-INLINE-INTERPRETER`/);
+  assert.doesNotMatch(guidance.replace(/\s+/g, " "), /editing workers \(developer, fixer, docs\)/);
+  assert.match(guidance.replace(/\s+/g, " "), /a reviewer, judge or fixer gets it through its agent definition/);
   assert.doesNotMatch(editing, /HARNESS-JOIN/);
   assert.doesNotMatch(bulletWith("WORKTREE-SCRIPT-LAUNCHER-CWD"), /HARNESS-JOIN/);
 });
@@ -347,10 +349,11 @@ for (const surface of DEV_LOOP_AGENT_SURFACES) {
     assert.match(bullet("agents that dispatch children"), /`GATE-EXEC-HARNESS-JOIN`/);
     const editing = bullet("editing workers");
     assert.match(editing, /`WORKTREE-NONINTERACTIVE-FILE-OPS` and `OPS-NO-INLINE-INTERPRETER`/);
+    assert.doesNotMatch(section, /editing workers \(developer, fixer, docs\)/);
     assert.doesNotMatch(editing, /HARNESS-JOIN/);
     const runners = bullet("script runners");
     assert.match(runners, /`WORKTREE-SCRIPT-LAUNCHER-CWD`/);
-    assert.match(runners, /a reviewer or judge gets it through its agent definition/);
+    assert.match(runners, /a reviewer, judge or fixer gets it through its agent definition/);
     assert.doesNotMatch(runners, /HARNESS-JOIN/);
     assert.match(section, /A worker, reviewer, judge or fixer dispatches no children and receives no join rule\./);
     assert.match(bullet("Awaiting any wait the run depends on"), /Join rule: `GATE-EXEC-HARNESS-JOIN`\./);

@@ -117,9 +117,9 @@ It cites rules by rule ID, never by copied text, and it cites each rule only to 
 need it:
 
 - agents that dispatch children, such as the gate coordinator: `GATE-EXEC-HARNESS-JOIN`;
-- editing workers (developer, fixer, docs): `WORKTREE-NONINTERACTIVE-FILE-OPS` and
-  `OPS-NO-INLINE-INTERPRETER`;
-- script runners (any role that runs repo scripts; a reviewer or judge gets it through its agent definition):
+- editing workers (developer, docs): `WORKTREE-NONINTERACTIVE-FILE-OPS` and
+  `OPS-NO-INLINE-INTERPRETER` (a reviewer, judge or fixer gets them through its agent definition);
+- script runners (any role that runs repo scripts; a reviewer, judge or fixer gets it through its agent definition):
   `WORKTREE-SCRIPT-LAUNCHER-CWD`.
 
 A worker, reviewer, judge or fixer dispatches no children and receives no join rule.

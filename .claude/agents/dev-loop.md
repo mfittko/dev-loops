@@ -159,8 +159,8 @@ The pi-subagents skill is parent-only, so delegated subagents do not receive orc
 
 Dispatch guidance: a reviewer or judge dispatch is exactly the emitted `dispatchPrompt`. Its pulled work order carries the spec pointer, and its agent definition cites the rules it needs. A worker dispatch (developer, docs, quality) names the linked issue and states "The issue body is the spec; read it." A fixer dispatch is exactly the `dispatchPayload` that `scripts/loop/emit-fixer-work-order.mjs` prints (its pull line), never a prose brief. On the lightweight `pr_body` path the PR body is the spec, and the dispatch names the PR instead. A dispatch never restates issue-specific spec. It cites rules by rule ID, never by copied text, and cites each rule only to the roles that need it:
 - agents that dispatch children, such as a gate coordinator: `GATE-EXEC-HARNESS-JOIN`;
-- editing workers (developer, fixer, docs): `WORKTREE-NONINTERACTIVE-FILE-OPS` and `OPS-NO-INLINE-INTERPRETER`;
-- script runners (any role that runs repo scripts; a reviewer or judge gets it through its agent definition): `WORKTREE-SCRIPT-LAUNCHER-CWD`.
+- editing workers (developer, docs): `WORKTREE-NONINTERACTIVE-FILE-OPS` and `OPS-NO-INLINE-INTERPRETER` (a reviewer, judge or fixer gets them through its agent definition);
+- script runners (any role that runs repo scripts; a reviewer, judge or fixer gets it through its agent definition): `WORKTREE-SCRIPT-LAUNCHER-CWD`.
 
 A worker, reviewer, judge or fixer dispatches no children and receives no join rule.
 
