@@ -63,13 +63,16 @@ export const isJudgeDecisionCheckLine = (command) => typeof command === "string"
 // metacharacter outside quotes, no expansion inside double quotes, and no flag that writes or runs a program.
 const JUDGE_SEARCH_PREFIX_RE = /^(?:grep -n|rg -n|git show|git diff)(?: |$)/;
 const JUDGE_SEARCH_DENIED_FLAG_RE = /(?:^|\s)--(?:output|ext-diff|textconv|pre|hostname-bin)(?=[=\s]|$)/;
-// `git diff` only as a commit-to-commit form (a `..` range or two revisions before `--`): a worktree diff refreshes the index.
+// `git diff` only as a commit-to-commit form (a `a..b` range or two revisions): a worktree diff refreshes the index.
+// Without `--` a second token may be a path, so each of two bare revisions must look like a revision.
+const REVISION_RE = /^(?:[0-9a-f]{7,40}|HEAD|main|origin\/[\w.\/-]+)(?:[~^]\d*)*$/;
+const RANGE_RE = /^[^.\s]\S*\.\.\.?[^.\s]\S*$/;
 function isCommitDiff(line) {
   if (!line.startsWith("git diff")) return true;
   const args = line.slice(8).trim().split(/\s+/).filter(Boolean);
   const end = args.indexOf("--");
   const revs = (end < 0 ? args : args.slice(0, end)).filter((a) => !a.startsWith("-"));
-  return revs.some((a) => a.includes("..")) || revs.length >= 2;
+  return revs.some((a) => RANGE_RE.test(a)) || (revs.length === 2 && revs.every((a) => REVISION_RE.test(a)));
 }
 export function isJudgeSearchLine(command) {
   if (typeof command !== "string") return false;
@@ -78,7 +81,7 @@ export function isJudgeSearchLine(command) {
   let quote = null;
   for (const ch of line) {
     if (quote) { if (ch === quote) quote = null; else if (quote === '"' && (ch === "$" || ch === "`")) return false; } else if (ch === "'" || ch === '"') quote = ch;
-    else if (/[;&|<>()\\$`*?[]/.test(ch)) return false;
+    else if (/[;&|<>(){}\\$`*?[]/.test(ch)) return false;
   }
   return quote === null;
 }
