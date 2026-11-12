@@ -438,6 +438,7 @@ test("an authenticated commit_only round without a fix commit clears its sequenc
   assert.equal(result.outcome, "no_commit");
   assert.equal(result.nextStep, "push_to_gate");
   assert.equal(fs.existsSync(marker), false);
+  assert.equal(fs.existsSync(path.join(tmpRoot, "gate-delta", `${full}.json`)), false, "a no_commit closure seals no record at the baseline");
 });
 
 // The fixCommitted guard in the CLI is defensive: startDeltaSequence rejects an empty list first, so this asserts the marker survives that abort.
@@ -1301,6 +1302,17 @@ test("the invocation bound is real: a rerun at invocation 1 over a needs_fix rec
     assert.equal(clear.record.outcome, "locally_clear");
     await assert.rejects(reviewerOnlyRun(repo, { newFindings: MEDIUM }, { invocation: 3 }), /locally_clear record .* never overwritten/);
     assert.equal(JSON.parse(fs.readFileSync(path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.json`), "utf8")).outcome, "locally_clear");
+  } finally { cleanup(repo); }
+});
+
+test("AC11: after a no_commit closure (marker cleared, no record sealed) a later local commit is delta-reviewed from the same baseline", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    const marker = writeSequenceMarker({ tmpRoot: repo.tmpRoot, baselineHead: repo.baseline, branch: "issue-1" });
+    await assert.rejects(reviewerOnlyRun(repo, {}), /active sequence marker/);
+    fs.rmSync(marker);
+    const { decision } = await reviewerOnlyRun(repo, {});
+    assert.equal(decision.outcome, "locally_clear");
   } finally { cleanup(repo); }
 });
 

@@ -536,6 +536,18 @@ test("body-only: an unchanged head and a head moved by a base-only merge both po
   }, { prefix: "dev-loops-converged-bodyonly-ok-" });
 });
 
+test("body-only: a missing cap-round context refuses body_read_unrecorded, not body_unchanged", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("medium", 1)];
+    let out;
+    await withPriorRounds(3, async () => {
+      out = await post(tempDir, { findings, converged: { fixerCommit: A, actList: findings, bodyOnly: true }, root: capOnRoot, runChildOptions: { currentHead: A, liveBody: EDITED_BODY } });
+    });
+    assert.match(out.error ?? "", /^body_read_unrecorded:/);
+    assert.equal(out.puts.length, 0);
+  }, { prefix: "dev-loops-converged-bodyonly-noctx-" });
+});
+
 test("body-only: each failed narrow check refuses with its typed reason and posts nothing", async () => {
   await withTempDir(async (tempDir) => {
     const bodyItems = [finding("medium", 1)];

@@ -454,7 +454,8 @@ export function composeBodyOnlyConvergedDraftGate({ gate, headSha, round, cap, r
   if (blocked) throw new Error(`blocked_item: act item ${JSON.stringify(blocked.summary)} is high, question, fail-open or security; it needs a fix commit or an operator decision, not a body-only exit`);
   const locatable = items.find(hasLocatableShape);
   if (locatable) throw new Error(`body_item_locatable: act item ${JSON.stringify(locatable.summary)} names a file and line; it needs a fix commit and a delta review, not a body-only exit`);
-  if (!reviewedBodySha || reviewedBodySha === liveBodySha) throw new Error(`body_unchanged: the live PR body digest equals ${reviewedBodySha ? "the reviewed pr-body read" : "no recorded pr-body read"}; edit the PR body first`);
+  if (!reviewedBodySha) throw new Error(`body_read_unrecorded: no cap-round context records a pr-body read at ${headSha}, so a body edit cannot be shown; rerun write-gate-context.mjs for the cap round, or fix the items with a commit and the reviewer-only delta`);
+  if (reviewedBodySha === liveBodySha) throw new Error("body_unchanged: the live PR body digest equals the reviewed pr-body read; edit the PR body first");
   if (ownCommits !== 0) throw new Error(`own_commit_in_range: ${headSha}..${converged.fixerCommit} holds ${ownCommits} PR-own commit(s); clear them with the reviewer-only delta review instead`);
   return { fixerCommit: converged.fixerCommit, deltaDigest: sha256Hex({ bodyOnly: true, reviewedBodySha, liveBodySha, actList: converged.actList }) };
 }
