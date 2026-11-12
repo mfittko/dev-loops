@@ -257,6 +257,8 @@ test("the gate-coordinator Dispatch model rule is scoped to Claude Code in the P
   const rule = rendered.split("\n").filter((line) => line.includes("--harness claude"));
   assert.equal(rule.length, 1);
   assert.match(rule[0], /^- On Claude Code, /);
-  assert.match(rule[0], /On Pi, the rendered agent's `model` governs/);
-  assert.match(rule[0], /first angle in plan order/);
+  assert.match(rule[0], /Use the same `review` role model for all review dispatches/);
+  assert.match(rule[0], /On Pi, resolve each model with `resolveRoleModel\(config, \{ role, harness: "pi" \}\)`/);
+  assert.match(rule[0], /`kind: "angle"`/);
+  assert.match(rule[0], /only when non-null/);
 });

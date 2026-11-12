@@ -257,8 +257,8 @@ On the Claude harness a dispatching agent resolves the model at dispatch time wi
 `dispatchPayload`; every other Claude dispatch (`developer`, `docs`, `quality`, `refiner`,
 `gate-coordinator`, `review`, `judge`, the pre-push reviewer) passes it from the dispatching
 agent: the `dev-loop` agent for its own sub-delegates, the `gate-coordinator` for its review and
-judge dispatches. Review dispatch uses the model that the round's request plan records for the unit's
-angles (per-angle `model`, `tier` and `models.roleTiers` entries apply); a plan model of `inherit` means no `model` parameter. A consumer's `.devloops` tiers therefore apply with no change to installed
+judge dispatches. Every review dispatch uses the one `review` role model
+(`gate resolve-role --role review --harness claude`), with no per-angle override. A consumer's `.devloops` tiers therefore apply with no change to installed
 agent frontmatter. The Agent `model` parameter takes an alias (`sonnet`, `opus`, `haiku`,
 `fable`), so `.devloops` Claude tier values (`models.tiers.<alias>.claude`) should be aliases
 for dispatch; no code maps a full model id to an alias. The resolver also bakes the tier
