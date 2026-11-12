@@ -399,7 +399,23 @@ function fetchAndResolveBase(worktree, base, { revParse, fetchBase }) {
   try { fetchBase(base, { repoRoot }); } catch (error) { throw new Error(`reviewer-only: git fetch origin ${base} failed (${error?.message}); cannot trust the local origin/${base} ref. Run \`git fetch origin ${base}\` and rerun`); }
   try { revParse(worktree, `origin/${base}`); } catch { throw new Error(`reviewer-only: origin/${base} does not exist in ${worktree}; run \`git fetch origin ${base}\` and rerun`); }
 }
-async function reviewerOnlyBase(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base }) {
+// The PR-own commit count of baseline..head under the reviewer-only rules: non-merge commits origin/<base> lacks plus non-base-only merges.
+// The body-only converged post (ADR 0271) asks the same question, so it calls this instead of counting on its own.
+export async function countPrOwnCommits(worktree, baseline, head, base, { revParse = gitRevParse, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, fetchBase = defaultFetchOrigin, isAncestor = gitIsAncestor } = {}) {
+  fetchAndResolveBase(worktree, base, { revParse, fetchBase });
+  // A head that does not descend from the baseline (reset or force-pushed backward) has an empty baseline..head range, which must not read as "no PR-own commit".
+  if (baseline !== head && !isAncestor(worktree, baseline, head)) throw new Error(`own_commit_in_range: ${head} does not descend from the reviewed head ${baseline}; the head moved backward or sideways, so the range holds code the cap round never reviewed`);
+  const { ownCommits, resolvedMerges } = await reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base });
+  return ownCommits + resolvedMerges.length;
+}
+async function reviewerOnlyBase(worktree, baseline, head, deps) {
+  const { base } = deps;
+  const { ownCommits, resolvedPaths, resolvedMerges } = await reviewerOnlyRange(worktree, baseline, head, deps);
+  // A conflict-resolution merge is a PR-own change even with no non-merge commit of its own.
+  if (ownCommits === 0 && resolvedPaths.length === 0) throw new Error(`reviewer-only: ${baseline}..${head} holds no PR-own commit that origin/${base} lacks; there is no code range to clear. ${FIXER_REMEDY}`);
+  return { base, resolvedPaths, resolvedMerges };
+}
+async function reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base }) {
   const repoRoot = resolveRepoRoot(worktree);
 
   const ownCommits = revList(worktree, baseline, head, ["--no-merges", `^origin/${base}`]).length;
@@ -414,9 +430,7 @@ async function reviewerOnlyBase(worktree, baseline, head, { revParse, baseOnlyMe
     resolvedPaths.push(...shown.stdout.split("\0").filter(Boolean));
     resolvedMerges.push(merge);
   }
-  // A conflict-resolution merge is a PR-own change even with no non-merge commit of its own.
-  if (ownCommits === 0 && resolvedPaths.length === 0) throw new Error(`reviewer-only: ${baseline}..${head} holds no PR-own commit that origin/${base} lacks; there is no code range to clear. ${FIXER_REMEDY}`);
-  return { base, resolvedPaths, resolvedMerges };
+  return { ownCommits, resolvedPaths, resolvedMerges };
 }
 
 async function authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor, { closureOnly = false } = {}) {
@@ -471,7 +485,7 @@ async function readPrBase(fetchPr, { repo, pr }) {
 
 // Remedies the reviewer-only refusals name (each command exists in the CLI registry; the conformance walk checks it).
 // The coordinator routes the cap-round state back to extend-cap-round-chain and this tool, so no remedy here names it.
-const FIXER_REMEDY = "The cap round's open act items need a fix commit: commit it on the PR branch (the worktree HEAD is the PR head), then rerun the reviewer-only delta";
+const FIXER_REMEDY = "The cap round's open act items need a fix commit: commit it on the PR branch (the worktree HEAD is the PR head), then rerun the reviewer-only delta. When every open act item is a PR-body item (no file named), edit the PR body and post upsert-checkpoint-verdict.mjs --converged-json with { fixerCommit, actList, bodyOnly: true } instead (ADR 0271)";
 // A locally_clear record or an extension at the baseline means the act items are cleared: the next range starts at the chain end.
 const CHAIN_END_REMEDY = "The cap round's act items are already cleared: run dev-loops gate extend-cap-round-chain --repo <owner/name> --pr <n> (its refusal names the reviewer-only delta and the baseline to use)";
 const REPLACEMENT_REMEDY = "node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr <this PR number> while this PR is still open";

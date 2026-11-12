@@ -9,7 +9,7 @@ import { setDefaultTimeout, test } from "bun:test";
 import { readSequenceMarker, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 
-import { DELTA_EVIDENCE_RULE, deltaPatchPath, gitStaleSurfaceHits, parseCheckPrePushDeltaArgs, runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
+import { DELTA_EVIDENCE_RULE, countPrOwnCommits, deltaPatchPath, gitStaleSurfaceHits, parseCheckPrePushDeltaArgs, runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { A, B, C, M, boundArgs, coverageRepo } from "./_delta-coverage-fixture.mjs";
@@ -438,6 +438,7 @@ test("an authenticated commit_only round without a fix commit clears its sequenc
   assert.equal(result.outcome, "no_commit");
   assert.equal(result.nextStep, "push_to_gate");
   assert.equal(fs.existsSync(marker), false);
+  assert.equal(fs.existsSync(path.join(tmpRoot, "gate-delta", `${full}.json`)), false, "a no_commit closure seals no record at the baseline");
 });
 
 // The fixCommitted guard in the CLI is defensive: startDeltaSequence rejects an empty list first, so this asserts the marker survives that abort.
@@ -1304,6 +1305,17 @@ test("the invocation bound is real: a rerun at invocation 1 over a needs_fix rec
   } finally { cleanup(repo); }
 });
 
+test("AC11: a removed sequence marker unblocks the reviewer-only route at the same baseline", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    const marker = writeSequenceMarker({ tmpRoot: repo.tmpRoot, baselineHead: repo.baseline, branch: "issue-1" });
+    await assert.rejects(reviewerOnlyRun(repo, {}), /active sequence marker/);
+    fs.rmSync(marker);
+    const { decision } = await reviewerOnlyRun(repo, {});
+    assert.equal(decision.outcome, "locally_clear");
+  } finally { cleanup(repo); }
+});
+
 test("reviewer-only refuses an existing record with another act set, an active marker, a head equal to the baseline and a missing origin base", async () => {
   const repo = reviewerOnlyRepo();
   try {
@@ -1317,7 +1329,7 @@ test("reviewer-only refuses an existing record with another act set, an active m
     writeSequenceMarker({ tmpRoot: repo.tmpRoot, baselineHead: repo.baseline, branch: "issue-1" });
     await assert.rejects(runDeltaCli(args, seam), /active sequence marker/);
     fs.rmSync(path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.sequence`));
-    await assert.rejects(runDeltaCli(["--reviewer-only", "--repo", "owner/repo", "--pr", "70", "--baseline", repo.head, "--pr-head", repo.head, "--findings-log", capLog(repo.dir, repo.head, []), "--worktree", repo.dir, "--spec-identity", "s", "--result-path", path.join(repo.dir, "r.json")], seam), /equals the baseline/);
+    await assert.rejects(runDeltaCli(["--reviewer-only", "--repo", "owner/repo", "--pr", "70", "--baseline", repo.head, "--pr-head", repo.head, "--findings-log", capLog(repo.dir, repo.head, []), "--worktree", repo.dir, "--spec-identity", "s", "--result-path", path.join(repo.dir, "r.json")], seam), /equals the baseline.*bodyOnly: true/s);
     runGitFixture(repo.dir, ["update-ref", "-d", "refs/remotes/origin/main"]);
     await assert.rejects(runDeltaCli(args, seam), /origin\/main does not exist.*git fetch origin main/);
     await assert.rejects(runDeltaCli(args, { ...seam, fetchBase: () => { throw new Error("offline"); } }), /git fetch origin main failed/);
@@ -1329,7 +1341,7 @@ test("a reviewer-only range with no PR-own commit refuses", async () => {
   try {
     // origin/main now holds every commit of the range.
     runGitFixture(repo.dir, ["update-ref", "refs/remotes/origin/main", repo.head]);
-    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], seam), /no PR-own commit/);
+    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], seam), /no PR-own commit.*bodyOnly: true/s);
   } finally { cleanup(repo); }
 });
 
@@ -1882,4 +1894,19 @@ test("issue 2447: a locally_clear result that validation refuses seals no findin
   assert.equal(out.nextStep, "fix_and_rereview");
   const record = readGateDeltaRecord(tmpRoot, A);
   assert.equal(record.findings, undefined);
+});
+
+test("AC11: countPrOwnCommits is 0 for a base-only merge range and counts PR-own commits, with baseline and head in that order", async () => {
+  const repo = reviewerOnlyRepo();
+  const deps = { fetchBase: () => {} };
+  try {
+    assert.equal(await countPrOwnCommits(repo.dir, repo.fix, repo.head, "main", deps), 0, "fix..head holds only the base-only merge");
+    assert.equal(await countPrOwnCommits(repo.dir, repo.baseline, repo.head, "main", deps), 1, "baseline..head holds the fix commit");
+    await assert.rejects(countPrOwnCommits(repo.dir, repo.head, repo.baseline, "main", deps), /own_commit_in_range: .* does not descend/, "swapped arguments name a non-descendant head");
+    await assert.rejects(countPrOwnCommits(repo.dir, repo.baseline, repo.head, "gone", deps), /origin\/gone does not exist/);
+  } finally { cleanup(repo); }
+  const merged = reviewerOnlyRepo({ nonBaseOnlyMerge: true });
+  try {
+    assert.ok(await countPrOwnCommits(merged.dir, merged.mergeHead, merged.head, "main", deps) >= 2, "a non-base-only merge and its side commit count");
+  } finally { cleanup(merged); }
 });

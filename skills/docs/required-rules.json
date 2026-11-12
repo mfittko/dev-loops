@@ -549,6 +549,11 @@
       "enforcementNote": "Enforced by waive-adr-tripwire.mjs, which calls resolveCapRoundFixed from write-gate-context.mjs as ready-for-review.mjs does; the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
+      "id": "GATE-EXEC-NO-DEAD-END",
+      "enforcement": "runtime",
+      "enforcementNote": "Invariant: every report_blocked result carries a typed blockedOn or an agentRemedy; enforced by isTypedOrKnownGap in packages/core/src/loop/gate-no-dead-end.mjs (tests: test/loop/gate-no-dead-end.test.mjs) and the blocked-names-decision-or-remedy safetyRules predicate in scripts/docs/validate-state-machine-conformance.mjs. Enforced for the PR-body cap round by composeBodyOnlyConvergedDraftGate in packages/core/src/loop/pre-push-delta-review.mjs, which upsert-checkpoint-verdict.mjs calls for --converged-json with bodyOnly; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+    },
+    {
       "id": "GATE-EXEC-ROUND-CAP-CHAIN-EXTEND",
       "enforcement": "runtime",
       "enforcementNote": "Enforced by extend-cap-round-chain.mjs, which refuses any commit after the start of the logic range that is not docs or tests unless a sealed locally_clear pre-push delta covers it (delta_covered), and verifies the extension with resolveCapRoundFixed; the rule body in gate-review-sub-loop-contract.md owns the clauses"

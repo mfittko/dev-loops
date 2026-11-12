@@ -343,12 +343,16 @@ machine, reads absent size evidence as "human approval required", never as a sil
 A `draft_gate` comment updated by `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) renders one more line
 beyond `GATE-COMMENT-REQUIRED-FIELDS`: `**Converged:** fixer <sha> delta sha256:<digest>`. The
 `<sha>` is the full fixer commit and the digest is the sha256 of the clean pre-push delta result.
-The line appears only on a `clean` `draft_gate` comment, and it is the only case where `clean`
-stands over open judge act items (all low or nit, at the cap round or later; below the cap the poster refuses a converged post and the next full round runs). A body without the line reads back as absent
+The line appears only on a `clean` `draft_gate` comment, and it marks the two cases where `clean`
+stands over open judge act items (the first case is all low or nit, at the cap round or later; below the cap the poster refuses a converged post and the next full round runs; the second case is the `GATE-EXEC-NO-DEAD-END` body-only post below, ADR 0271). A body without the line reads back as absent
 (unchanged). A present line that does not match the format reads back as malformed, and
 `buildPreMergeGateCheck` fails closed on it. Gate coordination treats a valid line as the
 `draft_gate` marker of the fixer commit's head. The line is not merge evidence: merge still needs a
 clean current-head `pre_approval_gate`.
+
+A body-only cap round (`GATE-EXEC-NO-DEAD-END`, ADR 0271) renders the same line at the reviewed head with
+the fixer commit equal to the PR head; its digest is the sha256 of the body-only evidence (the reviewed and
+live PR-body digests and the act list), not a delta result.
 
 ## Verdict definitions
 
@@ -358,7 +362,7 @@ with the fixed meaning below:
 
 | Verdict | Meaning |
 |---|---|
-| `clean` | A fully judged round (every finding carries a judge disposition) has an empty judge act list, whatever the severities; a round with an unjudged finding keeps the fan-in verdict, so no finding at a `blockCleanOnFindingSeverities` severity may remain. `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) is the one exception |
+| `clean` | A fully judged round (every finding carries a judge disposition) has an empty judge act list, whatever the severities; a round with an unjudged finding keeps the fan-in verdict, so no finding at a `blockCleanOnFindingSeverities` severity may remain. `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) and the `GATE-EXEC-NO-DEAD-END` body-only post (ADR 0271, medium, low or nit PR-body act items that are not fail-open and not from a security angle) are the two exceptions |
 | `findings_present` | A fully judged round has a non-empty judge act list; a round with an unjudged finding has an issue at a blocking severity or a non-empty act list; fixes are required before the gate boundary can be crossed |
 | `blocked` | The gate could not complete or a hard blocker prevented a verdict |
 
