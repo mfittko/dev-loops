@@ -153,17 +153,23 @@ async function readReviewedBodySha256(options, headSha, repoRoot) {
   const id = { repo: options.repo, pr: options.pr, gate: options.gate, headSha };
   // Every root is read: a same-head earlier round under another root can hold an older digest, so disagreeing digests refuse.
   const found = new Map();
-  for (const tmpRoot of [options.contextTmpRoot, undefined, ledgerTmpRoot(options.findingsLedger)]) {
-    for (const root of resolveLedgerCheckouts(repoRoot)) {
+  // The cap round's own context sits in the reviewed worktree (the first checkout); a digest found only elsewhere is an earlier round's and never stands alone.
+  let reviewedWorktreeHasContext = false;
+  for (const [t, tmpRoot] of [options.contextTmpRoot, undefined, ledgerTmpRoot(options.findingsLedger)].entries()) {
+    for (const [i, root] of resolveLedgerCheckouts(repoRoot).entries()) {
       const file = path.resolve(root, buildGateContextPath({ ...id, tmpRoot: tmpRoot || "tmp" }));
       // A strict read: only a missing context is absent. A truncated or unreadable one refuses, so a stale same-head digest cannot stand alone.
       const context = await readGateContext({ ...id, tmpRoot }, { repoRoot: root }).catch((err) => {
         throw new Error(`body_read_unrecorded: the context ${file} cannot be read (${err instanceof Error ? err.message : String(err)}); remove or repair it, or fix the items with a commit`);
       });
       const sha = Array.isArray(context?.requiredReads) ? context.requiredReads.find((r) => r?.kind === "pr-body")?.sha256 : null;
-      if (typeof sha === "string" && sha) found.set(file, sha);
+      if (typeof sha === "string" && sha) {
+        found.set(file, sha);
+        if (i === 0 && t < 2) reviewedWorktreeHasContext = true;
+      }
     }
   }
+  if (found.size && !reviewedWorktreeHasContext) throw new Error(`body_read_unrecorded: the reviewed worktree holds no context at ${headSha}, so the cap round's reviewed body is unknown; the only digests found belong to other checkouts (${[...found.keys()].join(", ")}). Rebuild the cap round's context or fix the items with a commit`);
   if (new Set(found.values()).size > 1) throw new Error(`body_read_unrecorded: the contexts at ${headSha} record different pr-body digests, so the cap round's reviewed body is ambiguous; remove the stale context of the earlier same-head round or fix the items with a commit. Contexts: ${[...found].map(([file, sha]) => `${file} (${sha})`).join(", ")}`);
   return [...found.values()][0] ?? null;
 }

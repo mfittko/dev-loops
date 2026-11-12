@@ -623,6 +623,23 @@ test("body-only: two contexts at the reviewed head under different roots with di
   }, { prefix: "dev-loops-converged-bodyonly-ambiguous-" });
 });
 
+test("body-only: an older same-head context in another checkout never stands in for a lost cap-round context", async () => {
+  await withTempDir(async (tempDir) => {
+    const mainTmp = path.join(tempDir, "main", "tmp");
+    const staleCtx = path.join(tempDir, "main", buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(staleCtx), { recursive: true });
+    await writeFile(staleCtx, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256(DEFAULT_TEST_PR_BODY) }] }), "utf8");
+    const findings = [finding("medium", 1)];
+    const ledgerPath = path.join(mainTmp, "gate-findings", "owner-repo", "pr-17", "ledger.json");
+    let out;
+    await withPriorRounds(3, async () => {
+      out = await post(tempDir, { findings, converged: { fixerCommit: A, actList: findings, bodyOnly: true }, root: capOnRoot, ledgerPath, runChildOptions: { currentHead: A, liveBody: EDITED_BODY } });
+    }, mainTmp);
+    assert.match(out.error ?? "", /^body_read_unrecorded: the reviewed worktree holds no context/, out.error);
+    assert.equal(out.puts.length, 0);
+  }, { prefix: "dev-loops-converged-bodyonly-lostctx-" });
+});
+
 test("body-only: a malformed context beside a readable one refuses body_read_unrecorded naming the path", async () => {
   await withTempDir(async (tempDir) => {
     const mainTmp = path.join(tempDir, "main", "tmp");
