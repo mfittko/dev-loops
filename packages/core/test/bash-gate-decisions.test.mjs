@@ -658,6 +658,53 @@ test("a subagent cannot execute a standing-authorization script directly", () =>
   }
 });
 
+test("a subagent cannot reach a standing-authorization path through an unlisted runner, a quoted path or a quoted positional", () => {
+  for (const command of [
+    "npm exec dev-loops -- pr waive-adr-tripwire --pr 5",
+    "pnpm exec dev-loops pr waive-adr-tripwire --pr 5",
+    "yarn exec dev-loops pr waive-adr-tripwire --pr 5",
+    "deno run -A scripts/github/waive-adr-tripwire.mjs --pr 5",
+    "node scripts/github/comment-issue.mjs --standing-authorization --issue 5",
+    'node "/abs/cli/index.mjs" pr waive-adr-tripwire --pr 5',
+    "dev-loops-run 'cli/index.mjs' pr waive-adr-tripwire --pr 5",
+    'dev-loops-run cli/index.mjs pr "waive-adr-tripwire" --pr 5',
+    'node "/abs/scripts/github/edit-comment.mjs" --standing-authorization',
+  ]) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: "developer", command })?.ruleId, "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY", command);
+    assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, `main agent: ${command}`);
+  }
+  for (const command of [
+    "node scripts/github/comment-issue.mjs --issue 5 --body x",
+    'echo "run waive-adr-tripwire.mjs later"',
+    'echo "cli/index.mjs pr waive-adr-tripwire"',
+    'node "/abs/scripts/github/edit-comment.mjs" --comment-id 9 --body x',
+    "gh issue view 5",
+  ]) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: "developer", command }), null, command);
+  }
+});
+
+test("a graphql comment mutation sent to /graphql or the full API URL is a raw comment write", () => {
+  for (const endpoint of ["graphql", "/graphql", "https://api.github.com/graphql"]) {
+    for (const role of [null, "developer"]) {
+      denies(`gh api ${endpoint} -f query='mutation { addComment(input: {}) { clientMutationId } }'`, "OPERATOR-OWNED-LINE", { ...OR_REPO, role });
+    }
+  }
+  denies("gh api https://api.github.com/graphql -f query='mutation { updateIssueComment(input: {}) { clientMutationId } }'", "OPERATOR-OWNED-LINE");
+  denies("gh api /graphql -f query='query { viewer { login } }'", null);
+});
+
+test("a github.com issue or PR URL scopes a comment write, whatever --repo says", () => {
+  for (const command of [
+    "gh issue comment https://github.com/o/r/issues/5 -b x --repo other/x",
+    "gh pr comment https://github.com/o/r/pull/5 -b x --repo other/x",
+    "gh issue close https://github.com/o/r/issues/5 -c x --repo other/x",
+    "gh issue reopen https://github.com/o/r/issues/5 -c x --repo other/x",
+  ]) denies(command, "OPERATOR-OWNED-LINE");
+  denies("gh issue comment 5 --repo other/x -b x", null);
+  denies("gh issue comment https://github.com/other/x/issues/5 -b x", null);
+});
+
 test("a subagent may run a comment wrapper without the standing-authorization flag", () => {
   const command = "dev-loops-run scripts/github/comment-issue.mjs --repo mfittko/dev-loops --issue 5 --body x";
   assert.equal(decideBashGateDeny({ ...BASE, role: "developer", command }), null);

@@ -14,8 +14,9 @@
  *     (OPERATOR-OWNED-LINE); a subagent running a `--standing-authorization` or tripwire-waiver path is blocked
  *     (STANDING-AUTHORIZATION-MAIN-AGENT-ONLY).
  *   - raw `gh issue create|edit|comment` / `gh pr comment` — blocked from a SUBAGENT context (agent_type present);
- *     the comment verbs stay live there outside the managed repo and for a foreign repo, where the rule above does
- *     not apply. The main agent/operator retains direct issue creation and edit (#1051).
+ *     outside the managed cwd the inline deny catches a subagent comment only when `--repo` names the managed
+ *     slug, and a provably foreign repo passes. On the managed repo the rule above fires first for the comment
+ *     verbs. The main agent/operator retains direct issue creation and edit (#1051).
  *   - `git stash` — blocked outright: `refs/stash` is shared across every worktree over this
  *     repo's one `.git` directory (skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout).
  *   - `bun run verify` / `bun test` / `vitest` / `npm test` / `npm run test` / `bun run build` /

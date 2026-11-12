@@ -98,17 +98,23 @@ const CODE_SPAN_RE = /(`[^`\n]*`)/;
  * one line). Text inside a balanced code span the author wrote stays unchanged.
  */
 export function wrapOperatorOwnedPhrases(text) {
+  text = String(text);
   // The capture group puts each author span at an odd index; only the even parts are bare text.
-  const parts = String(text).split(CODE_SPAN_RE);
+  const parts = text.split(CODE_SPAN_RE);
+  // Stands in for an unpaired backtick while phrases are located: it is whitespace to the patterns,
+  // like the blank the reader applies, and it is restored afterwards wherever no phrase swallowed it.
+  const mark = [" ", " ", " ", " "].find((c) => !text.includes(c));
+  if (!mark) return text; // ponytail: text carrying every candidate marker is left unwrapped
   return parts.map((part, i) => {
     if (i % 2 === 1) return part;
-    // A bare part holds only unpaired backticks, which the reader blanks too. Blank them here so a
-    // phrase right after one still wraps and the wrap never nests a span in it.
-    let out = part.replace(/`/g, " ");
+    // A bare part holds only unpaired backticks, which the reader blanks too. A phrase right after one
+    // still wraps and the wrap never nests a span in it.
+    let out = part.replaceAll("`", mark);
     const wrap = (match) => `\`${match.replace(/\s+/g, " ")}\``;
-    // Only author spans and whitespace may sit between `approve` and the tail.
-    if (i >= 2 && /\bapprove(?:\s+|`[^`\n]*`)+$/i.test(parts.slice(0, i).join(""))) out = out.replace(APPROVAL_TAIL_RE, wrap);
+    // Only author spans and whitespace may sit between `approve` and the tail. One whitespace character
+    // per repetition keeps the test linear.
+    if (i >= 2 && /\bapprove(?:\s|`[^`\n]*`)+$/i.test(parts.slice(0, i).join(""))) out = out.replace(APPROVAL_TAIL_RE, wrap);
     for (const re of WRAP_RES) out = out.replace(re, wrap);
-    return out;
+    return out.replaceAll(mark, "`");
   }).join("");
 }

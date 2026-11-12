@@ -188,6 +188,18 @@ test("wrapOperatorOwnedPhrases leaves an existing balanced code span unchanged",
   assert.equal(wrapOperatorOwnedPhrases("`keep` approve merge `keep`"), "`keep` `approve merge` `keep`");
 });
 
+test("wrapOperatorOwnedPhrases returns author backticks unchanged when no operator-owned phrase is present", () => {
+  for (const text of ["```\ncode\n```", "```js\nconst a = `x`;\n```", "line1 `code\nspan` end", "use `foo bar", "a ``double`` span"]) {
+    assert.equal(wrapOperatorOwnedPhrases(text), text);
+  }
+});
+
+test("wrapOperatorOwnedPhrases stays linear on a long whitespace run after approve", () => {
+  const started = Date.now();
+  wrapOperatorOwnedPhrases(`| approve${" ".repeat(60)}| yes |\n\nSee \`x\` here.`);
+  assert.ok(Date.now() - started < 500);
+});
+
 test("wrapOperatorOwnedPhrases wraps a release version whole, with or without the v", () => {
   assert.equal(wrapOperatorOwnedPhrases("release v1.0.12 ships"), "`release v1.0.12` ships");
   assert.equal(wrapOperatorOwnedPhrases("release 1.0.12-pre.1 ships"), "`release 1.0.12-pre.1` ships");

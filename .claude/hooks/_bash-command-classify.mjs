@@ -963,7 +963,13 @@ export function commandContainsRawCommentWrite(command, managedSlug = null) {
       && (/\b(?:addComment|updateIssueComment)\b/.test(tail) || (/issues\/(?:\d+\/comments|comments\/\d+)/.test(tail) && /body=|--input/.test(tail))));
   if (shellWrapperTails(blankQuotedForFlags(joinLineContinuations(command))).some(hidden)) return true;
   command = unwrapCommandSegments(command);
-  const inScope = ({ explicitRepo }) => !(explicitRepo && explicitRepoProvenForeign(explicitRepo, managedSlug));
+  // gh takes the repository from a github.com issue/PR URL positional and ignores --repo then, so the URL
+  // scopes the segment; a --repo that disagrees with the URL is ambiguous and stays in scope (fail closed).
+  const inScope = ({ segment, explicitRepo }) => {
+    const url = shellWords(segment).map((w) => /^https?:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/(?:issues|pull)\/\d+/i.exec(w)).find(Boolean);
+    if (url) return (explicitRepo && explicitRepo.trim().toLowerCase() !== url[1].toLowerCase()) || !explicitRepoProvenForeign(url[1], managedSlug);
+    return !(explicitRepo && explicitRepoProvenForeign(explicitRepo, managedSlug));
+  };
   for (const subcmd of ["issue", "pr"]) {
     if (extractRepoFlagsFromGhSubcmdVerbSegments(command, subcmd, "comment", GH_GLOBAL_REPO_FLAGS).some(inScope)) return true;
     for (const verb of ["close", "reopen"]) {
@@ -977,27 +983,34 @@ export function commandContainsRawCommentWrite(command, managedSlug = null) {
   const re = new RegExp(`^(?:repos/${owner}/)?issues/(?:(?:\\d+|\\{[^}]*\\})/comments|comments/(?:\\d+|\\{[^}]*\\}))$`, "i");
   return extractGhApiEndpointSegments(command).map((e) => ({ ...e, segment: unquoteFlagTokens(e.segment) })).some(({ segment, endpoint }) => {
     // A query read from a file, stdin or a substitution cannot be inspected, so it fails closed.
-    if (endpoint && /^graphql$/i.test(endpoint)) return /\b(?:addComment|updateIssueComment)\b/.test(segment) || GRAPHQL_OPAQUE_QUERY.test(segment);
+    if (endpoint && /^graphql$/i.test(normalizeGhApiEndpoint(endpoint))) return /\b(?:addComment|updateIssueComment)\b/.test(segment) || GRAPHQL_OPAQUE_QUERY.test(segment);
     if (!endpoint || !re.test(normalizeGhApiEndpoint(endpoint).replace(/\?.*$/, ""))) return false;
     return ghApiSegmentWritesBody(segment);
   });
 }
 
+/** The words of a segment with their quotes removed: a quoted span with spaces stays one word. */
+function shellWords(text) {
+  return (text.match(/(?:"[^"]*"|'[^']*'|[^\s"'])+/g) ?? []).map((w) => w.replace(/["']/g, ""));
+}
+
 /**
- * STANDING-AUTHORIZATION-MAIN-AGENT-ONLY: a command that runs a path whose authority is a self-asserted
- * standing authorization: `waive-adr-tripwire.mjs`, `cli/index.mjs pr waive-adr-tripwire`, or
- * `comment-issue.mjs` / `edit-comment.mjs` with any `--standing-authorization` token form. The runner
- * is `dev-loops-run` (any path), `dev-loops`, `npx`, `bunx`, `node` or `bun`, behind `timeout`/`nice`/`time`-style wrapper words; a `cd <dir> &&` prefix is its own segment. A literal
- * inside `bash -c`/`eval`/`xargs` matches on the literal (fail closed).
+ * STANDING-AUTHORIZATION-MAIN-AGENT-ONLY: a command that names a path whose authority is a self-asserted
+ * standing authorization: a word ending in `waive-adr-tripwire.mjs`, a word ending in `index.mjs` or
+ * `dev-loops` followed later by the words `pr` and `waive-adr-tripwire`, or a word ending in
+ * `comment-issue.mjs` / `edit-comment.mjs` beside any `--standing-authorization` token form. The match
+ * keys on those script literals in the unquoted words of each segment, whatever runner (or none) launches
+ * them, so `npm exec`, `pnpm exec`, `deno run` and a direct `./cli/index.mjs` all match. A quoted prose
+ * mention stays one word and does not match. A literal inside `bash -c`/`eval`/`xargs` matches with its
+ * quotes dropped (fail closed).
  * @param {string} command @returns {boolean}
  */
 export function commandRunsStandingAuthorizationPath(command) {
-  const hit = (text, flagView = text) => /(?:^|[\s/])waive-adr-tripwire\.mjs(?=[\s"']|$)|(?:(?:^|[\s/])index\.mjs|(?:^|[\s/])dev-loops)\s+pr\s+waive-adr-tripwire(?=[\s"']|$)/.test(text)
-    || (/(?:^|[\s/])(?:comment-issue|edit-comment)\.mjs(?=[\s"']|$)/.test(text) && /(?:^|\s)--standing-authorization(?=[=\s"']|$)/.test(flagView));
-  if (shellWrapperTails(blankQuotedForFlags(joinLineContinuations(command))).some((t) => hit(t))) return true;
-  // A direct execution of an executable `.mjs` script (`./cli/index.mjs`, an absolute path) is a runner too.
-  const runner = new RegExp(`^${SHELL_EXEC_PREFIX}(?:(?:dev-loops-run|dev-loops|node|bun|npx|bunx)|\\S*\\.mjs)\\s`, "i");
-  return unwrapCommandSegments(command).split("\n").some((segment) => runner.test(segment) && hit(unquoteFlagTokens(segment), blankQuotedForFlags(unquoteFlagTokens(segment))));
+  const hit = (words) => words.some((w) => /(?:^|\/)waive-adr-tripwire\.mjs$/.test(w))
+    || words.some((w, k) => /(?:^|\/)(?:index\.mjs|dev-loops)$/.test(w) && words.slice(k + 1).some((x, j, rest) => x === "pr" && rest[j + 1] === "waive-adr-tripwire"))
+    || (words.some((w) => /(?:^|\/)(?:comment-issue|edit-comment)\.mjs$/.test(w)) && words.some((w) => /^--standing-authorization(?:=|$)/.test(w)));
+  if (shellWrapperTails(blankQuotedForFlags(joinLineContinuations(command))).some((t) => hit(t.replace(/["']/g, " ").split(/\s+/).filter(Boolean)))) return true;
+  return shellSegments(command).some((segment) => hit(shellWords(segment)));
 }
 
 /**
