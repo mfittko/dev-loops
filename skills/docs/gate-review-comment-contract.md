@@ -59,6 +59,10 @@ table. The third, folded, track is disposition-gated (`GATE-COMMENT-INLINE-SEVER
    marker (🔴 high · 🟠 medium · 🟡 low · ⚪ nit · 🔵 question, alongside the severity word), the
    finding's summary, its `file:line` linked to the blob at the reviewed head SHA when known, and
    its contributing angle(s) in trailing brackets.
+   A finding the judge disposed `act` with `remedyKind: evidence_only` renders the label
+   `(evidence only, no file change; its criterion stays unproven until the evidence lands)` right after
+   its judge disposition, on every findings surface (verdict body, inline thread header and the opt-in
+   findings comment).
 
 <!-- rule: GATE-COMMENT-INLINE-SEVERITY-FLOOR -->
 `GATE-COMMENT-INLINE-SEVERITY-FLOOR` (#2263, #2722): the judge's verdict decides what the verdict
@@ -123,7 +127,7 @@ The ledger keeps the full text. Reviewer inline code spans survive into the thre
 backtick outside that fenced block is escaped as an entity. Findings from different angles that describe the
 same defect post as one comment. Two findings describe the same defect only when they resolve the
 same file, their lines are equal or both absent, both or neither are questions, they carry the same
-judge disposition, and their keys match. Keys match when both findings carry an equal `defectKey`,
+judge disposition and the same `remedyKind`, and their keys match. Keys match when both findings carry an equal `defectKey`,
 or when neither carries one and their normalized summaries are identical. A `defectKey` on only one
 of the two findings blocks the merge. A finding with no file never merges. The normalized summary is
 the one `fingerprintFinding` uses: lowercase, every non-alphanumeric run collapsed to one space,
@@ -308,7 +312,7 @@ A clean `pre_approval_gate` comment does **not** retroactively replace the requi
 | **Verdict** | `clean`, `findings_present`, or `blocked` |
 | **Blocking severities** | (non-clean verdicts only) Which severity levels must be clean per gate config. Renders inside an HTML comment (`GATE-COMMENT-INLINE-SEVERITY-FLOOR`). |
 | **Findings summary** | Short truthful audit summary. Use `no issues found` only when the reviewed head needed no corrective change for that gate pass. |
-| **Next action** | One of: `stay draft and fix`, `rerun gate`, `mark ready for review`, `await final human approval`. The standalone `review` gate ignores the caller's `--next-action` and derives it from the judge act list: `fix the N item(s) this review lists`, `no change requested`, `the review could not complete; rerun it` (a `blocked` verdict) or `read the findings, none was judged`, each followed by `; this review does not approve or block the PR`. N counts distinct act items (one per cluster). |
+| **Next action** | One of: `stay draft and fix`, `rerun gate`, `mark ready for review`, `await final human approval`. A clean `draft_gate` derives `mark ready for review` and ignores the caller value. The standalone `review` gate ignores the caller's `--next-action` and derives it from the judge act list: `fix the N item(s) this review lists`, `no change requested`, `the review could not complete; rerun it` (a `blocked` verdict) or `read the findings, none was judged`, each followed by `; this review does not approve or block the PR`. N counts distinct act items (one per cluster). |
 
 ## Optional size-budget fields
 

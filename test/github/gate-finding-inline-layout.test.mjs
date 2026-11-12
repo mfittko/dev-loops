@@ -150,6 +150,14 @@ test("parseRenderedJudgeDisposition never reads a legacy line with detail but st
   assert.equal(parseRenderedJudgeDisposition(renderInlineCommentBody({ ...holistic, ...judged }, { round: 1 })), "reject");
 });
 
+test("parseRenderedJudgeDisposition reads an inline header that carries the evidence-only label, with or without a reason", () => {
+  const evidence = { ...holistic, judgeDisposition: "act", remedyKind: "evidence_only" };
+  assert.equal(parseRenderedJudgeDisposition(renderInlineCommentBody(evidence, { round: 1 })), "act");
+  assert.equal(parseRenderedJudgeDisposition(renderInlineCommentBody({ ...evidence, judgeReason: "why" }, { round: 1 })), "act");
+  assert.equal(parseRenderedJudgeDisposition("**medium** · docs · judge: act (evidence only) trailing"), null);
+  assert.equal(parseRenderedJudgeDisposition("**Problem:** judge: act"), null);
+});
+
 test("the body-only finding line and the inline finding line render the same judge detail", () => {
   for (const judged of [{ judgeDisposition: "reject", judgeReason: "not reproducible" }, { judgeDisposition: "defer", judgeReason: "tracked elsewhere", followUpIssueNumber: 77 }]) {
     const body = renderStructuredFindings([{ angle: "a", verdict: "findings_present", findings: [{ severity: "medium", summary: "s", ...judged }] }]);
@@ -343,6 +351,18 @@ test("merge: four pairs of different defects on one line stay separate", () => {
   for (const [first, second] of pairs) {
     assert.equal(mergeSameDefectFindings([{ ...holistic, summary: first }, { ...noOp, summary: second }]).length, 2, `${first} / ${second}`);
   }
+});
+
+test("merge: findings with different remedyKind stay separate, so the evidence-only label follows its own member in either order", () => {
+  const act = { ...holisticKeyed, judgeDisposition: "act" };
+  const evidence = { ...noOpKeyed, judgeDisposition: "act", remedyKind: "evidence_only" };
+  for (const pair of [[evidence, act], [act, evidence]]) {
+    const out = mergeSameDefectFindings(pair);
+    assert.equal(out.length, 2);
+    const labelled = out.filter((f) => renderInlineCommentBody(f, { round: 1 }).includes("evidence only"));
+    assert.deepEqual(labelled.map((f) => f.remedyKind), ["evidence_only"]);
+  }
+  assert.equal(mergeSameDefectFindings([evidence, { ...evidence, angle: "holistic" }]).length, 1);
 });
 
 test("merge: different defectKeys, or a key on one finding only, block an identical-summary merge", () => {
@@ -604,4 +624,17 @@ test("a backticked operator-owned phrase in a recommendation stays in its code s
   assert.ok(block.includes("`approve release v1.2.3`"), block);
   const inline = renderInlineCommentBody(finding, { round: 1 });
   assert.ok(inline.includes("`approve release v1.2.3`"), inline);
+});
+
+test("renderInlineCommentBody labels only an act finding with remedyKind evidence_only (#3197)", () => {
+  const base = { severity: "medium", angle: "docs", files: ["a.js"], line: 3, summary: "needs evidence", remedyKind: "evidence_only" };
+  assert.match(renderInlineCommentBody({ ...base, judgeDisposition: "act" }, { round: 1 }), /judge: act \(evidence only, no file change/);
+  assert.doesNotMatch(renderInlineCommentBody({ ...base, judgeDisposition: "reject" }, { round: 1 }), /evidence only/);
+});
+
+test("renderFindingLine labels an act finding with remedyKind evidence_only (#3197)", async () => {
+  const { renderFindingLine } = await import("../../scripts/github/_gate-finding-surface.mjs");
+  const base = { severity: "medium", angle: "docs", summary: "needs evidence", remedyKind: "evidence_only" };
+  assert.match(renderFindingLine({ ...base, judgeDisposition: "act" }), /evidence only, no file change/);
+  assert.doesNotMatch(renderFindingLine({ ...base, judgeDisposition: "defer" }), /evidence only/);
 });

@@ -1049,3 +1049,15 @@ test("CLI integration: fails closed with non-zero exit when gh posting fails", a
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("renderFallbackGateReviewCommentBody derives `mark ready for review` for a clean draft_gate and ignores the caller value (#3197)", () => {
+  const body = renderFallbackGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234",
+    verdict: "clean",
+    findingsSummary: "no issues found",
+    nextAction: "Request Copilot review while the PR stays draft",
+  });
+  assert.match(body, /\*\*Next action:\*\* mark ready for review/);
+  assert.doesNotMatch(body, /Copilot/);
+});

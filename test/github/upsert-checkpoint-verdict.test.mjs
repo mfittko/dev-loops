@@ -983,6 +983,59 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
   }, { prefix: "dev-loops-upsert-gate-review-create-" });
 });
 
+test("upsert-checkpoint-verdict ignores a caller next action on a clean draft_gate (#3197)", async () => {
+  await withTempDir(async (tempDir) => {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234000000000000000000000000000000000", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+      },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["**Next action:** mark ready for review"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "Request Copilot review while the PR stays draft",
+    ], { env });
+    assert.equal(result.code, 0);
+  }, { prefix: "dev-loops-upsert-gate-clean-draft-next-action-" });
+});
+
+test("renderGateReviewCommentBody marks an evidence-only act finding (#3197)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "clean",
+    findingsSummary: "no issues found",
+    nextAction: "mark ready for review",
+    nonLocatableFindings: [{ severity: "nice-to-have", summary: "evidence only note", judgeDisposition: "act", remedyKind: "evidence_only" }],
+  });
+  assert.match(body, /judge: _`act`_.*\(evidence only, no file change; its criterion stays unproven until the evidence lands\)/);
+});
+
+test("renderGateReviewCommentBody shows no evidence-only label on a rejected finding (#3197)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "clean",
+    findingsSummary: "no issues found",
+    nextAction: "mark ready for review",
+    nonLocatableFindings: [{ severity: "nice-to-have", summary: "evidence only note", judgeDisposition: "reject", remedyKind: "evidence_only" }],
+  });
+  assert.doesNotMatch(body, /no file change/);
+});
+
 // #2163: real-subprocess guard for main()'s `fields: options.fields` passthrough
 // (upsert-checkpoint-verdict.mjs:3186). writeGhStubHelper + the runNode fallback
 // spawn the ACTUAL CLI (no GH_MOCK_ENTRIES stashed, so the in-process branch above
@@ -7056,6 +7109,53 @@ test("upsert-checkpoint-verdict's noop short-circuit stays coupled to the posted
   }, { prefix: "dev-loops-upsert-digest-noop-" });
 });
 
+test("upsert-checkpoint-verdict re-posts instead of noop for a no-ledger evidence_only act finding at an unchanged digest (#3197)", async () => {
+  await withTempDir(async (tempDir) => {
+    const structuredFindings = [
+      { angle: "correctness", verdict: "clean", findings: [] },
+      { angle: "pr-description", verdict: "clean", findings: [] },
+      { angle: "holistic", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "evidence only note", judgeDisposition: "act" }] },
+    ];
+    const findingsPath = path.join(tempDir, "findings.json");
+    // The posted comment predates remedyKind; the rerun adds it without changing verdict, counts or next action.
+    const findingsWithRemedy = structuredFindings.map((e) => ({ ...e, findings: e.findings.map((f) => ({ ...f, remedyKind: "evidence_only" })) }));
+    await writeFile(findingsPath, JSON.stringify(findingsWithRemedy), "utf8");
+    const findingsSeverityCounts = { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 1 };
+    const priorBody = renderGateReviewCommentBody({
+      gate: "draft_gate",
+      headSha: "abc1234000000000000000000000000000000000",
+      verdict: "findings_present",
+      findingsSummary: "ignored in structured mode",
+      nextAction: "stay draft and fix",
+      executionMode: "fanout_fanin",
+      structuredFindings,
+      findingsSeverityCounts,
+    });
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        issueComments: [[{ id: 101, body: priorBody, html_url: "https://github.com/owner/repo/pull/17#issuecomment-101", updated_at: "2026-05-31T20:00:00Z" }]],
+      }),
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: '{"files":[{"path":"src/index.ts"}]}\n' },
+      {
+        assertArgs: ["api", "-X", "PATCH", "repos/owner/repo/issues/comments/101", "-f"],
+        assertArgContains: ["evidence only, no file change"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#issuecomment-101"}\n',
+      },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "findings_present", "--findings-json", findingsPath,
+      "--findings-severity-counts", JSON.stringify(findingsSeverityCounts),
+      "--next-action", "fix", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).action, "updated", result.stdout);
+  }, { prefix: "dev-loops-upsert-evidence-only-no-noop-" });
+});
+
 test("upsert-checkpoint-verdict records executionMode and warns on inline, stays clean on fanout", async () => {
   await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
@@ -7875,6 +7975,75 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
     // The gate-scoped round marker rides on the same body.
     assert.match(postedPayload.body, /^<!-- dev-loops:gate-findings-review draft_gate [0-9a-f]{40} round=1 -->$/m);
   }, { prefix: "dev-loops-upsert-single-surface-" });
+});
+
+test("upsert-checkpoint-verdict --findings-ledger shows the evidence-only label for an evidence_only act finding copied from --findings-json (#3197)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [BODY_FILED_FINDING]);
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "pr-description", verdict: "clean", findings: [] },
+      { angle: "scope", verdict: "clean", findings: [] },
+      { angle: "holistic", verdict: "clean", findings: [] },
+      { angle: "correctness", verdict: "clean", findings: [] },
+      { angle: "coverage", verdict: "findings_present", findings: [{ severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary, judgeDisposition: "act", remedyKind: "evidence_only" }] },
+    ]), "utf8");
+    const { runChild, calls } = makeGhMock([
+      ...singleSurfaceLeadingEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":701,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-701"}\n',
+      },
+    ]);
+    await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsJson: findingsPath,
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "fanout_fanin",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    const post = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    assert.match(JSON.parse(post.stdinText).body, /inconsistent casing in constants.*\(evidence only, no file change; its criterion stays unproven until the evidence lands\)/);
+  }, { prefix: "dev-loops-upsert-evidence-only-ledger-" });
+});
+
+test("upsert-checkpoint-verdict --findings-ledger omits the evidence-only label when a same-fingerprint act sibling needs a file change (#3197)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [BODY_FILED_FINDING]);
+    const findingsPath = path.join(tempDir, "findings.json");
+    const base = { severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary, judgeDisposition: "act" };
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "pr-description", verdict: "clean", findings: [] },
+      { angle: "scope", verdict: "clean", findings: [] },
+      { angle: "holistic", verdict: "clean", findings: [] },
+      { angle: "correctness", verdict: "clean", findings: [] },
+      { angle: "coverage", verdict: "findings_present", findings: [{ ...base, remedyKind: "evidence_only" }, { ...base }] },
+    ]), "utf8");
+    const { runChild, calls } = makeGhMock([
+      ...singleSurfaceLeadingEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":701,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-701"}\n',
+      },
+    ]);
+    await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsJson: findingsPath,
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "fanout_fanin",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    const post = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    assert.doesNotMatch(JSON.parse(post.stdinText).body, /evidence only, no file change/);
+  }, { prefix: "dev-loops-upsert-evidence-only-mixed-" });
 });
 
 // ---------------------------------------------------------------------------
@@ -12473,7 +12642,7 @@ test("deriveEffectiveNextAction derives from the act list on review, draft_gate 
   assert.equal(deriveEffectiveNextAction("findings_present", "review", [{ ...same, files: ["src/a.mjs"] }, { ...same, files: ["src/b.mjs"] }]), `fix the 2 items this review lists; ${tail}`);
   assert.equal(deriveEffectiveNextAction("findings_present", "draft_gate", act), "stay draft and fix");
   assert.equal(deriveEffectiveNextAction("findings_present", "pre_approval_gate", act), "rerun gate");
-  assert.equal(deriveEffectiveNextAction("clean", "draft_gate", []), null);
+  assert.equal(deriveEffectiveNextAction("clean", "draft_gate", []), "mark ready for review");
   assert.equal(deriveEffectiveNextAction("clean", "pre_approval_gate", []), null);
 });
 

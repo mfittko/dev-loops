@@ -29,7 +29,7 @@ import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
-import { escapeProse, listIssueComments, resolveAuthenticatedLogin, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
+import { escapeProse, listIssueComments, renderEvidenceOnlyLabel, resolveAuthenticatedLogin, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { VALID_DISPOSITIONS } from "./write-gate-findings-log.mjs";
 import {
   buildCommentableLineSet,
@@ -273,7 +273,9 @@ Required:
                                             distinguishable from "this finding is
                                             not blocking".
   --next-action <text>                      (Required except on --gate review, which derives the next
-                                            action from the judge act list and ignores any value.)
+                                            action from the judge act list and ignores any value. A clean
+                                            draft_gate still requires the flag, ignores its value and derives
+                                            "mark ready for review".)
 Optional:
   --converged-json <path>                   draft_gate low/nit convergence
                                             (GATE-EXEC-LOW-NIT-CONVERGENCE):
@@ -1153,6 +1155,7 @@ function normalizeStructuredFinding(f) {
   if (typeof f.judgeReason === "string" && f.judgeReason.trim().length > 0) {
     entry.judgeReason = f.judgeReason.trim();
   }
+  if (f.remedyKind === "evidence_only") entry.remedyKind = "evidence_only";
   if (Number.isInteger(f.followUpIssueNumber) && f.followUpIssueNumber > 0) {
     entry.followUpIssueNumber = f.followUpIssueNumber;
   }
@@ -1483,7 +1486,7 @@ function renderBodyOnlyFindingLine(finding, ctx) {
     : "";
   // Judge relevance-based disposition.
   const judgeSuffix = finding.judgeDisposition
-    ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_${renderJudgeDetail(finding)}`
+    ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_${renderJudgeDetail(finding)}${renderEvidenceOnlyLabel(finding)}`
     : "";
   const angleSuffix = finding.angle ? ` _(${sanitizeStructuredInline(finding.angle)})_` : "";
   return `- ${markerPrefix}${summary}${location}${dispositionSuffix}${judgeSuffix}${angleSuffix}`;
@@ -2568,8 +2571,9 @@ function renderGateBlockerItemsList(blockers) {
 // the tool DERIVES it rather than accepting caller prose into a machine-read
 // evidence surface. The standalone review derives it from the judge act list
 // (a judged round) and says that it neither approves nor blocks the PR. A
-// lifecycle gate returns null for a `clean` verdict (the caller's value is
-// accepted unchanged).
+// lifecycle gate returns null for a `clean` verdict only on pre_approval_gate
+// (the caller's value is accepted unchanged); a clean draft_gate derives
+// `mark ready for review`.
 export function deriveEffectiveNextAction(verdict, gate, actItems = [], unjudgedFindings = false) {
   if (gate === "review") {
     // Count distinct act items: the ledger and --findings-json can carry the same finding, and a cluster is one item.
@@ -2581,7 +2585,8 @@ export function deriveEffectiveNextAction(verdict, gate, actItems = [], unjudged
     return verdict === "clean" && !unjudgedFindings ? `no change requested; ${tail}` : `read the findings, none was judged; ${tail}`;
   }
   if (verdict !== "findings_present" && verdict !== "blocked") {
-    return null;
+    // A clean draft_gate has one legal next step; "request Copilot review while draft" is refused by request-copilot-review.mjs (suppressed_draft).
+    return gate === "draft_gate" && verdict === "clean" ? "mark ready for review" : null;
   }
   // draft_gate: the PR stays draft and fixes are required before retrying.
   // pre_approval_gate: follow-up fixes are required before final approval —
@@ -3142,6 +3147,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // Parsed and validated BEFORE the tick below, so an input this post refuses
   // never leaves ticked boxes behind.
   let structuredFindings = null;
+  // A no-ledger rerun cannot tell whether the posted comment carries the evidence-only label (the digest and counts stay equal), so it re-posts instead of noop.
+  let evidenceOnlyActNoLedger = false;
   let rawFindingsInput = null;
   if (options.findingsJson) {
     let raw;
@@ -3186,6 +3193,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ...(resolveFindingFile(f) ? { files: [resolveFindingFile(f)] } : {}),
       ...(Number.isInteger(f?.followUpIssueNumber) && f.followUpIssueNumber > 0 ? { followUpIssueNumber: f.followUpIssueNumber } : {}),
     }));
+    evidenceOnlyActNoLedger = !options.findingsLedger && flatFindings.some((f) => f.judgeDisposition === "act" && f.remedyKind === "evidence_only");
     const badDisposition = flatFindings.find((f) => f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition));
     if (badDisposition) throw new Error(`--findings-json "${options.findingsJson}" finding "[${badDisposition.severity}] ${badDisposition.summary}" carries judgeDisposition ${JSON.stringify(badDisposition.judgeDisposition)} outside ${JUDGE_DISPOSITIONS.join("/")} (fail closed; ADR 0089)`);
     // An unjudged ledger finding stays unknown unless a judged --findings-json finding covers it (same fingerprint: first file plus normalized summary).
@@ -3202,6 +3210,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       if (judged) {
         lf.judgeDisposition = judged.judgeDisposition;
         if (lf.followUpIssueNumber == null && judged.followUpIssueNumber) lf.followUpIssueNumber = judged.followUpIssueNumber;
+        // Label only when every same-fingerprint act match is evidence_only, so array order cannot hide a file-change sibling.
+        const sameMatches = flatFindings.filter((f) => f.judgeDisposition === judged.judgeDisposition && same(f));
+        if (sameMatches.every((f) => f.remedyKind === "evidence_only") && !lf.remedyKind) lf.remedyKind = "evidence_only";
       }
     }
     // Re-check after the merge: the early check saw only the ledger's own dispositions, not the ones just copied onto it.
@@ -3918,6 +3929,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     && (existing.sizeWaiverGranted ?? null) === desiredSizeWaiverGranted
     && (existing.sizeWaiverApprovedBy ?? null) === desiredSizeWaiverApprovedBy
     && unpostedFindings === 0
+    && !evidenceOnlyActNoLedger
     // ponytail: the existing summary carries no body, so the review-verdict /
     // gate-blockers lines cannot be compared. A composed checkpoint always
     // re-renders in place. A prior composed body is always `blocked`, so a
