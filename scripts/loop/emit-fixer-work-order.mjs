@@ -521,15 +521,15 @@ export async function emitFixerWorkOrder({
   const planPath = path.join(dir, PLAN_FILE);
   const originalBytes = await capture.read(planPath);
   if (phase === "commit_only" && originalBytes) await rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr, headSha, tmpRoot });
+  // The config is read before the first write so an invalid one refuses with nothing written; the model rides the completion early return too.
+  const { config, errors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });
+  if (errors?.length > 0) throw new Refusal(`dev-loops config is invalid; fix it before emitting: ${errors.map((e) => e?.message ?? String(e)).join("; ")}`);
   if (completionOnly) {
     // Every drift check runs before the first write, including the preserve step (issue 2787 C14).
     const sourceKind = actListFile ? "act-list" : "threads";
-    // The config is read before the first write so an invalid one refuses with nothing written; the model rides the early return too.
-    const { config: completionConfig, errors: completionErrors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });
-    if (completionErrors?.length > 0) throw new Refusal(`dev-loops config is invalid; fix it before emitting: ${completionErrors.map((e) => e?.message ?? String(e)).join("; ")}`);
     const completion = await emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRoot, cwd, repo, pr, headSha, sourceKind, gate,
       source: await readSource(sourceKind, abs(actListFile ?? threadsFile), capture), prState: await fetchPr({ repo, pr }), executionIdentity });
-    return { ...completion, fixerModel: resolveRoleModel(completionConfig, { role: "fixer", harness: "claude" }) };
+    return { ...completion, fixerModel: resolveRoleModel(config, { role: "fixer", harness: "claude" }) };
   }
   await capture.preserve(planPath, path.resolve(tmpRoot), resolveGateArtifactTmpRoot(cwd));
 
@@ -760,8 +760,6 @@ export async function emitFixerWorkOrder({
   }
 
   const contracts = await Promise.all(FIXER_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
-  const { config, errors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });
-  if (errors?.length > 0) throw new Refusal(`dev-loops config is invalid; fix it before emitting: ${errors.map((e) => e?.message ?? String(e)).join("; ")}`);
   const outputRef = path.join(dir, executionIdentity, "fixer-disposition.json");
   const workOrder = {
     role: "fixer",
