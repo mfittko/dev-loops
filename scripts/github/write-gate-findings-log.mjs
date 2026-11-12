@@ -508,7 +508,9 @@ export async function verifyEmitPlanProvenance(planPath, provenance, round, { re
     }
     if (unit.angles.length === 1 && group !== undefined) {
       const previous = plan.units[unitIndex - 1];
-      if (previous?.angles.length !== resolveReviewerUnitBound(plan.unitBound) || previous.group?.trim() !== group.trim()) {
+      // At a unit bound of 1 every split sub-unit is itself a full-cap singleton, so the first has no predecessor.
+      const bound = resolveReviewerUnitBound(plan.unitBound);
+      if (bound !== 1 && (previous?.angles.length !== bound || previous.group?.trim() !== group.trim())) {
         throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}] is a grouped singleton without a preceding same-group full-cap split sibling`);
       }
     }

@@ -234,6 +234,33 @@ test("verifyEmitPlanProvenance rejects multiple reviewer identities for one emit
   }
 });
 
+test("verifyEmitPlanProvenance accepts a unit-bound-1 split whose first singleton has no predecessor", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-emit-bound1-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const planPath = path.join(repoRoot, "draft.emit-plan.json");
+    await writeFile(planPath, JSON.stringify({
+      ok: true,
+      repo: "owner/repo",
+      pr: 42,
+      gate: "draft_gate",
+      headSha,
+      unitBound: 1,
+      count: 2,
+      units: [{ angles: ["scope"], group: "process" }, { angles: ["pr-description"], group: "process" }],
+    }), "utf8");
+    await verifyEmitPlanProvenance(planPath, {
+      distinctReviewers: 2,
+      perAngle: [
+        { angle: "scope", reviewer: "review-a", group: "process" },
+        { angle: "pr-description", reviewer: "review-b", group: "process" },
+      ],
+    }, { repo: "owner/repo", pr: 42, gate: "draft_gate", headSha }, { repoRoot });
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("parseWriteGateFindingsLogCliArgs accepts distinct custom ledger and context tmp roots", () => {
   const result = parseWriteGateFindingsLogCliArgs([
     "--repo", "owner/repo",
