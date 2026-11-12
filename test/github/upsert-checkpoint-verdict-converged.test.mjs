@@ -9,6 +9,8 @@ import { parseUpsertCheckpointVerdictCliArgs, upsertCheckpointVerdict } from "..
 import { startDeltaSequence } from "../../packages/core/src/loop/pre-push-delta-review.mjs";
 import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
+import { buildGateContextPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { prBodySha256 } from "../../scripts/github/write-gate-context.mjs";
 
 // GATE-EXEC-LOW-NIT-CONVERGENCE: an all-low/nit draft_gate round at head A converges after one fixer pass and a
 // clean delta review. The comment at A is updated to clean with the Converged field while the PR head is the
@@ -74,16 +76,16 @@ function convergedInput(actList, overrides = {}) {
 }
 
 // Answers every gh call; the PR head is the fixer commit and the draft_gate review lives at A.
-function makeRunChild({ puts, existingReview = true, currentHead = FIX, body = existingBody(), prState = "OPEN" }) {
+function makeRunChild({ puts, existingReview = true, currentHead = FIX, body = existingBody(), prState = "OPEN", liveBody = DEFAULT_TEST_PR_BODY, ownShas = "" }) {
   const prJson = JSON.stringify({
-    number: 17, state: prState, isDraft: true, headRefOid: currentHead, body: DEFAULT_TEST_PR_BODY,
+    number: 17, state: prState, isDraft: true, headRefOid: currentHead, baseRefName: "main", body: liveBody,
     closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
   }) + "\n";
   const reviews = existingReview
     ? [{ id: 55, state: "COMMENTED", submitted_at: "2026-10-20T10:00:00Z", body, html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-55", user: { login: "gate-bot" }, commit_id: A }]
     : [];
   return async (cmd, args = [], _env, stdin = "") => {
-    if (cmd === "git") return { code: 0, stdout: "", stderr: "" };
+    if (cmd === "git") return { code: 0, stdout: ownShas, stderr: "" };
     const a = args.join(" ");
     if (a.includes("pulls/17/reviews/55") && a.includes("PUT")) {
       puts.push(String(stdin ?? ""));
@@ -505,4 +507,48 @@ test("a converged post on a cap-fixed PR is still refused when coordination forb
       await rm(path.join(capOnRoot, "tmp", "gate-delta"), { recursive: true, force: true });
     }
   }, { prefix: "dev-loops-converged-capfixed-closed-" });
+});
+
+// ADR 0271 (GATE-EXEC-NO-DEAD-END): a cap round whose act items are all PR-body items clears with no commit.
+const EDITED_BODY = `${DEFAULT_TEST_PR_BODY}\nEdited for the cap round.`;
+async function bodyOnlyPost(tempDir, { findings, fixer = A, input = {}, reviewedBody = DEFAULT_TEST_PR_BODY, runChildOptions = {} }) {
+  const ctx = path.join(capOnRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
+  await mkdir(path.dirname(ctx), { recursive: true });
+  await writeFile(ctx, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256(reviewedBody) }] }), "utf8");
+  let out;
+  await withPriorRounds(3, async () => {
+    out = await post(tempDir, { findings, converged: { fixerCommit: fixer, actList: findings, bodyOnly: true, ...input }, root: capOnRoot, runChildOptions: { currentHead: fixer, liveBody: EDITED_BODY, ...runChildOptions } });
+  });
+  await rm(ctx, { force: true });
+  return out;
+}
+
+test("body-only: an unchanged head and a head moved by a base-only merge both post the converged record", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("medium", 1), finding("low", 2)];
+    for (const fixer of [A, FIX]) {
+      const { result, body, error } = await bodyOnlyPost(tempDir, { findings, fixer });
+      assert.equal(error, undefined);
+      assert.equal(result.action, "updated");
+      assert.match(body, /\*\*Verdict:\*\* clean/);
+      assert.match(body, new RegExp(`\\*\\*Converged:\\*\\* fixer \`${fixer}\` delta \`sha256:[a-f0-9]{64}\``));
+    }
+  }, { prefix: "dev-loops-converged-bodyonly-ok-" });
+});
+
+test("body-only: each failed narrow check refuses with its typed reason and posts nothing", async () => {
+  await withTempDir(async (tempDir) => {
+    const bodyItems = [finding("medium", 1)];
+    const cases = [
+      ["body_item_locatable", { findings: [{ ...finding("low", 1), file: "src/a.mjs", line: 3 }] }],
+      ["body_unchanged", { findings: bodyItems, reviewedBody: EDITED_BODY }],
+      ["own_commit_in_range", { findings: bodyItems, fixer: FIX, runChildOptions: { ownShas: `${"c".repeat(40)}\n` } }],
+      ["blocked_item", { findings: [finding("high", 1)] }],
+    ];
+    for (const [reason, opts] of cases) {
+      const out = await bodyOnlyPost(tempDir, opts);
+      assert.match(out.error ?? "", new RegExp(`^${reason}:`), `${reason}: ${out.error}`);
+      assert.equal(out.puts.length, 0, "nothing is posted");
+    }
+  }, { prefix: "dev-loops-converged-bodyonly-refuse-" });
 });

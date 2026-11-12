@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 
 import { parseRepoSlug } from "../github/repo-slug.mjs";
-import { severityRank, VALID_SEVERITIES, normalizeSeverity, isPastRoundCap } from "./gate-fanin.mjs";
+import { severityRank, VALID_SEVERITIES, normalizeSeverity, isPastRoundCap, hasLocatableShape } from "./gate-fanin.mjs";
 import { recordedSkipReason, siteCoverageGaps } from "./fixer-disposition.mjs";
 import { sha256Hex } from "./review-dispatch-plan.mjs";
 
@@ -430,6 +430,33 @@ export function composeConvergedDraftGate({ gate, headSha, round, cap, roundActI
   // A converged round has no unposted new finding.
   if (!Array.isArray(result.newFindings) || result.newFindings.length > 0) throw new Error("converged.deltaResult must carry no new findings");
   return { fixerCommit, deltaDigest: sha256Hex(result) };
+}
+
+const isBlockedActItem = (item) => ["high", "question"].includes(/** @type {string} */ (normalizeSeverity(item?.severity))) || item?.failOpen === true || item?.angle === "security";
+
+/**
+ * Body-only cap round (ADR 0271, GATE-EXEC-NO-DEAD-END): a cap round whose open act items are all PR-body items clears with no commit.
+ * Hard checks cover narrow facts only: every item is non-locatable (no file and line), the live PR body digest differs from the
+ * reviewed `pr-body` read, the reviewed head..fixerCommit range holds no PR-own commit, and no item blocks (high, question, fail-open, security).
+ * Whether the edit resolves an item stays with pre_approval_gate. `fixerCommit` may equal the reviewed head.
+ * Throws a typed refusal (`body_item_locatable`, `body_unchanged`, `own_commit_in_range`, `blocked_item`); returns the converged marker.
+ * @param {{ gate?: string, headSha?: string, round?: number, cap?: number, roundActItems?: any[], converged?: { fixerCommit?: string, actList?: any[] }, reviewedBodySha?: string|null, liveBodySha?: string, ownCommits?: number }} input
+ * @returns {{ fixerCommit: string, deltaDigest: string }}
+ */
+export function composeBodyOnlyConvergedDraftGate({ gate, headSha, round, cap, roundActItems, converged, reviewedBodySha, liveBodySha, ownCommits } = {}) {
+  if (gate !== "draft_gate") throw new Error(`body-only converged verdict applies to draft_gate only, got ${JSON.stringify(gate)}`);
+  if (!(cap > 0) || !isPastRoundCap(round, cap)) throw new Error(`body-only converged verdict applies only at the cap round or later (round ${round}, cap ${cap})`);
+  if (!FULL_SHA_RE.test(headSha ?? "") || !FULL_SHA_RE.test(converged?.fixerCommit ?? "")) throw new Error("body-only converged verdict requires the full reviewed head sha and fixerCommit");
+  const items = roundActItems ?? [];
+  const keys = (list) => JSON.stringify((list ?? []).map(convergedActItemKey).sort());
+  if (items.length === 0 || keys(converged?.actList) !== keys(items)) throw new Error("converged.actList must be the round's non-empty act list (same items as the posted act items)");
+  const blocked = items.find(isBlockedActItem);
+  if (blocked) throw new Error(`blocked_item: act item ${JSON.stringify(blocked.summary)} is high, question, fail-open or security; it needs a fix commit or an operator decision, not a body-only exit`);
+  const locatable = items.find(hasLocatableShape);
+  if (locatable) throw new Error(`body_item_locatable: act item ${JSON.stringify(locatable.summary)} names a file and line; it needs a fix commit and a delta review, not a body-only exit`);
+  if (!reviewedBodySha || reviewedBodySha === liveBodySha) throw new Error(`body_unchanged: the live PR body digest equals ${reviewedBodySha ? "the reviewed pr-body read" : "no recorded pr-body read"}; edit the PR body first`);
+  if (ownCommits !== 0) throw new Error(`own_commit_in_range: ${headSha}..${converged.fixerCommit} holds ${ownCommits} PR-own commit(s); clear them with the reviewer-only delta review instead`);
+  return { fixerCommit: converged.fixerCommit, deltaDigest: sha256Hex({ bodyOnly: true, reviewedBodySha, liveBodySha, actList: converged.actList }) };
 }
 
 /**

@@ -350,6 +350,10 @@ stands over open judge act items (all low or nit, at the cap round or later; bel
 `draft_gate` marker of the fixer commit's head. The line is not merge evidence: merge still needs a
 clean current-head `pre_approval_gate`.
 
+A body-only cap round (`GATE-EXEC-NO-DEAD-END`, ADR 0271) renders the same line at the reviewed head with
+the fixer commit equal to the PR head; its digest is the sha256 of the body-only evidence (the reviewed and
+live PR-body digests and the act list), not a delta result.
+
 ## Verdict definitions
 
 <!-- rule: GATE-COMMENT-VERDICT-VALUES -->

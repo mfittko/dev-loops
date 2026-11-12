@@ -1317,7 +1317,7 @@ test("reviewer-only refuses an existing record with another act set, an active m
     writeSequenceMarker({ tmpRoot: repo.tmpRoot, baselineHead: repo.baseline, branch: "issue-1" });
     await assert.rejects(runDeltaCli(args, seam), /active sequence marker/);
     fs.rmSync(path.join(repo.tmpRoot, "gate-delta", `${repo.baseline}.sequence`));
-    await assert.rejects(runDeltaCli(["--reviewer-only", "--repo", "owner/repo", "--pr", "70", "--baseline", repo.head, "--pr-head", repo.head, "--findings-log", capLog(repo.dir, repo.head, []), "--worktree", repo.dir, "--spec-identity", "s", "--result-path", path.join(repo.dir, "r.json")], seam), /equals the baseline/);
+    await assert.rejects(runDeltaCli(["--reviewer-only", "--repo", "owner/repo", "--pr", "70", "--baseline", repo.head, "--pr-head", repo.head, "--findings-log", capLog(repo.dir, repo.head, []), "--worktree", repo.dir, "--spec-identity", "s", "--result-path", path.join(repo.dir, "r.json")], seam), /equals the baseline.*bodyOnly: true/s);
     runGitFixture(repo.dir, ["update-ref", "-d", "refs/remotes/origin/main"]);
     await assert.rejects(runDeltaCli(args, seam), /origin\/main does not exist.*git fetch origin main/);
     await assert.rejects(runDeltaCli(args, { ...seam, fetchBase: () => { throw new Error("offline"); } }), /git fetch origin main failed/);
@@ -1329,7 +1329,7 @@ test("a reviewer-only range with no PR-own commit refuses", async () => {
   try {
     // origin/main now holds every commit of the range.
     runGitFixture(repo.dir, ["update-ref", "refs/remotes/origin/main", repo.head]);
-    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], seam), /no PR-own commit/);
+    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], seam), /no PR-own commit.*bodyOnly: true/s);
   } finally { cleanup(repo); }
 });
 

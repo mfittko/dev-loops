@@ -139,3 +139,12 @@ describe("gate coordination for a converged draft_gate", () => {
     assert.equal(state.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
   });
 });
+
+describe("body-only converged marker (ADR 0271)", () => {
+  test("the detector reads the converged comment at the same head and at a head moved by a base-only merge", () => {
+    assert.equal(markerAt(A, [commentBody({ converged: `fixer \`${A}\` delta \`${DIGEST}\`` })]).draft_gate.verdict, "clean");
+    const moved = markerAt(FIX, [commentBody()]).draft_gate;
+    assert.equal(moved.headSha, FIX);
+    assert.equal(moved.convergedFromHeadSha, A);
+  });
+});
