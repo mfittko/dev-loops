@@ -924,7 +924,9 @@ function ghApiSegmentWritesBody(segment) {
   // gh defaults to POST when a field is present, so only an explicit GET/HEAD makes a body field a read.
   // gh honors the LAST method flag, so `-X GET -X POST` is a write.
   const methods = [...stripQuotedLiterals(segment).matchAll(/(?:^|\s)(?:--method|-X|-m)(?:=|\s*)["']?([A-Za-z]+)/gi)];
-  if (!hasQuotePairingHazard(segment) && methods.length > 0 && /^(?:GET|HEAD)$/i.test(methods[methods.length - 1][1])) return false;
+  // Fail closed unless exactly one bare method flag exists: a quoted value (`-X "POST"`) is blanked and a repeat is ambiguous.
+  const methodFlags = [...blankQuotedForFlags(segment).matchAll(/(?:^|\s)(?:--method|-X|-m)(?:=|\s|$)/gi)];
+  if (!hasQuotePairingHazard(segment) && methods.length === 1 && methodFlags.length === 1 && /^(?:GET|HEAD)$/i.test(methods[0][1])) return false;
   // Not quote-stripped: the field is usually quoted (`-f "body=..."`), so blanking would hide it.
   return /(?:^|\s)(?:-[fF]|--(?:raw-)?field)(?:=|\s*)["']?body=/.test(segment);
 }

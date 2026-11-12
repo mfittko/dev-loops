@@ -689,6 +689,8 @@ const HARDENED_COMMENT_WRITES = [
   "gh api --method POST repos/o/r/issues/5/comments -f body=x",
   "gh api repos/o/r/issues/5/comments -X GET -X POST -f body=x",
   "gh api repos/o/r/issues/5/comments --method GET --method POST -f body=x",
+  "gh api repos/o/r/issues/5/comments -X GET -X \"POST\" -f body=x",
+  "gh api repos/o/r/issues/5/comments --method GET --method \"$M\" -f body=x",
 ];
 
 test("hardened and wrapped raw comment writes are denied with OPERATOR-OWNED-LINE", () => {
