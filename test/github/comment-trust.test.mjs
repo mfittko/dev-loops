@@ -148,3 +148,15 @@ test("the list reader marks a trust-incomplete thread trusted:false and threadsT
   const ok = { trusted: true, threadId: "T1", body: "fix", isResolved: false };
   assert.deepEqual(threadsToActList({ ok: true, repo: "o/r", pr: 1, threads: [ok, threads[0]] }, { repo: "o/r", pr: 1 }).map((item) => item.ref), ["T1"]);
 });
+
+test("ADR 0273: the exact GitHub Actions bot is trusted with no opt-in; lookalikes and a User account are judged as before", () => {
+  const actor = (login, type, association = "NONE") => isTrustedCommentAuthor({ login, type, association });
+  for (const login of ["github-actions", "github-actions[bot]"]) assert.equal(actor(login, "Bot"), true, login);
+  for (const login of ["github-actions-helper[bot]", "my-github-actions[bot]", "github-actions-x"]) assert.equal(actor(login, "Bot", "MEMBER"), false, login);
+  assert.equal(actor("github-actions", "User"), false);
+  assert.equal(isTrustedGraphqlComment({ author: { login: "github-actions", __typename: "Bot" }, authorAssociation: "NONE" }), true);
+  assert.equal(isTrustedRestComment({ user: { login: "github-actions[bot]", type: "Bot" }, author_association: "NONE" }), true);
+  const parsed = parseReviewThreads({ threads: [node("TA", { ...comment("c1", "github-actions", "NONE", "Echoed finding"), author: { login: "github-actions", __typename: "Bot" } })] });
+  assert.equal(parsed.summary.unresolvedThreads, 1);
+  assert.equal(parsed.summary.skippedUntrustedThreads, 0);
+});

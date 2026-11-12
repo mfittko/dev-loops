@@ -6,6 +6,8 @@ const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 // the [bot] suffix, and the bare `Copilot` login the REST API emits for the same Bot).
 const SANCTIONED_COPILOT_REVIEWER = /^(?:copilot-pull-request-reviewer(?:\[bot\])?|copilot)$/i;
 
+const GITHUB_ACTIONS_BOT = /^github-actions(?:\[bot\])?$/i;
+
 /** Exact match on the sanctioned Copilot reviewer login; `copilot-helper[bot]` and other lookalikes are false. */
 export function isSanctionedCopilotReviewerLogin(login) {
   return typeof login === "string" && SANCTIONED_COPILOT_REVIEWER.test(login);
@@ -20,6 +22,8 @@ export function isTrustedCommentAuthor({ login, type, association } = {}, { allo
   if (name.length === 0) return false;
   const isBot = (typeof type === "string" && type.toLowerCase() === "bot") || /\[bot\]$/i.test(name);
   if (allowCopilot && SANCTIONED_COPILOT_REVIEWER.test(name) && isBot) return true;
+  // ADR 0273: the GitHub Actions bot, matched exactly, is trusted on every surface with no opt-in.
+  if (GITHUB_ACTIONS_BOT.test(name) && isBot) return true;
   // Exact sanctioned login only: a human login such as `copilot-fan` is judged by association like any other.
   if (SANCTIONED_COPILOT_REVIEWER.test(name) || isBot) return false;
   return TRUSTED_ASSOCIATIONS.has(typeof association === "string" ? association.toUpperCase() : "");

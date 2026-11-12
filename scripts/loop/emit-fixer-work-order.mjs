@@ -36,7 +36,7 @@ import { captureParsedReviewThreads } from "../github/_review-thread-mutations.m
 import { resolveAuthenticatedLogin, runGhJson } from "../github/post-gate-findings.mjs";
 import { listRestPrReviews, normalizePrReviewsPayload, prReviewsApiArgs } from "../github/_gate-finding-surface.mjs";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
-import { isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
+import { isSanctionedCopilotReviewerLogin, isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
 import { isTrustedDispositionAuthor, resolveLatestCopilotReview } from "../github/_copilot-body-disposition.mjs";
 import { isCommitContainedByHead } from "../github/_commit-containment.mjs";
 import { selectActThreadBinding } from "../github/_fixer-act-thread-bindings.mjs";
@@ -152,7 +152,7 @@ async function loadReviewBodySnapshot({ repo, pr, reviewId, headSha, fetchReview
   const body = typeof review.body === "string" ? review.body : "";
   if (body.trim() === "") throw new Refusal(`review ${reviewId} has an empty body; feedback in inline threads goes through --threads-file`);
   const login = review.user?.login ?? "";
-  if (review.user?.type === "Bot" && isTrustedRestComment(review, { allowCopilot: true })) {
+  if (review.user?.type === "Bot" && isSanctionedCopilotReviewerLogin(login) && isTrustedRestComment(review, { allowCopilot: true })) {
     const latest = resolveLatestCopilotReview({ reviews: reviews.filter((r) => r?.user?.type === "Bot").map((r) => ({ id: r.node_id, author: { login: r.user?.login }, state: r.state, body: r.body, commit_id: r.commit_id, submitted_at: r.submitted_at })) });
     if (latest.ambiguousBlockingTie || latest.review?.id !== reviewId) throw new Refusal(`review ${reviewId} is not the latest Copilot review of ${where}${latest.review ? ` (latest: ${latest.review.id})` : ""}; a Copilot body on an earlier review is stale, so re-review the head and pass the new node id, or use --threads-file`);
     if (review.commit_id !== headSha) throw new Refusal(`Copilot review ${reviewId} is on ${review.commit_id}, not the PR head ${headSha}; a Copilot body on an older head is stale, re-review the head and pass the new node id, or use --threads-file`);
