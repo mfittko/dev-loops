@@ -757,6 +757,10 @@
       "enforcementNote": "Judging whether a runner finding is a blocker is orchestrator judgment; no script can classify it."
     },
     {
+      "id": "MAIN-AGENT-OPERATOR-QUESTION-SCOPE",
+      "enforcement": "doc"
+    },
+    {
       "id": "MAIN-CLAUDE-DISPATCH-MODEL",
       "enforcement": "agent",
       "enforcementNote": "Resolving the Claude dispatch model with gate resolve-role and passing it only when non-null is a dispatching-agent step; no script observes it."
@@ -885,7 +889,15 @@
       "enforcement": "doc"
     },
     {
+      "id": "PURPOSE-DETERMINISTIC-FIT",
+      "enforcement": "doc"
+    },
+    {
       "id": "PURPOSE-HIGHEST-SAFE-AUTONOMY",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PURPOSE-STEER-NOT-TRAP",
       "enforcement": "doc"
     },
     {

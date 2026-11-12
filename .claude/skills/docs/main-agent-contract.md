@@ -65,6 +65,16 @@ bar: `judge-pass.mjs` and `close-gate-findings.mjs` never create an issue for a 
 (see `GATE-EXEC-DEFERRAL-RECORD` in the
 [Gate review sub-loop contract](gate-review-sub-loop-contract.md)).
 
+## Questions to the operator
+
+<!-- rule: MAIN-AGENT-OPERATOR-QUESTION-SCOPE -->
+`MAIN-AGENT-OPERATOR-QUESTION-SCOPE`: Parent: `PURPOSE-HIGHEST-SAFE-AUTONOMY`. The orchestrator asks the
+operator only about operator-owned decisions: operator-owned lines, ADR acceptance the contract does not
+settle, scope departures, choices between distinct mechanisms the contracts do not settle, destructive
+actions, classifier or permission denials, an undecidable spec (`spec_cannot_decide`), and conflicting
+authoritative state. The orchestrator answers every other question from the
+contracts and its own judgement and records the source. This rule governs autonomous lane execution. An operator-invoked interactive flow (such as the loop grill) and a start-implementation confirmation keep their own questions. A coordinator or procedure stop-and-ask for human direction reaches the orchestrator first. The orchestrator applies this rule to it and asks the operator only when the question falls on the operator-owned list. ADR 0270 records this rule.
+
 ## Generic Codex dispatch
 
 Generic `collaboration.spawn_agent` does not automatically load repository role definitions. For ordinary Codex developer, refiner (including artifact-only refiners), docs and coordinator dispatches, provide verified absolute paths to the applicable role definition and [Codex runtime setup](./copilot-loop-operations.md#codex-runtime-setup) in the task. Verify both files exist in the selected source/install before dispatch; require the child to read them before scoped artifact writes, any Git write or targeted verification. Preserve the mandatory initial startup/envelope and exact pull-first protocols; this is read delivery, not new role or mutation authority. Pull-pointer coordinators and fixers retain their exact emitted payloads and learn applicable setup after their bootstrap; never append generic setup to those payloads.
