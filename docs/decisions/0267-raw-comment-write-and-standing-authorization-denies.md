@@ -1,4 +1,4 @@
-# 0266. Raw comment writes and the standing-authorization paths are denied at the Bash gate, and the grill provenance line is operator-owned
+# 0267. Raw comment writes and the standing-authorization paths are denied at the Bash gate, and the grill provenance line is operator-owned
 
 ## Status
 
