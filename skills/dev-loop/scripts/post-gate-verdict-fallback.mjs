@@ -435,7 +435,7 @@ export function renderFallbackGateReviewCommentBody({
   nextAction,
   blockCleanOnFindingSeverities,
 }) {
-  // A clean draft_gate has one legal next step (GATE-COMMENT-DRAFT-REQUIREMENTS); mirrors deriveEffectiveNextAction.
+  // A clean draft_gate has one legal next step (GATE-COMMENT-REQUIRED-FIELDS); mirrors deriveEffectiveNextAction.
   if (gate === "draft_gate" && verdict === "clean") nextAction = "mark ready for review";
   const summary = blockquoteContinuationLines(
     encodeMachineArtifactMarkerDelimiters(

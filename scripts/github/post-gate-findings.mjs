@@ -253,6 +253,13 @@ export function sanitizeCodeSpan(value) {
     .trim();
 }
 
+// Label for an act finding whose remedy is evidence, not a file change; shared by every finding renderer (GATE-COMMENT-SINGLE-SURFACE).
+export function renderEvidenceOnlyLabel({ judgeDisposition, remedyKind }) {
+  return judgeDisposition === "act" && remedyKind === "evidence_only"
+    ? " (evidence only, no file change; its criterion stays unproven until the evidence lands)"
+    : "";
+}
+
 // Sanitize free text rendered as bare prose (`summary`, `disposition`): unlike
 // sanitizeCodeSpan, it is not already inert to markdown/HTML. Composes the
 // code-span-safe base plus the neutralization bare prose still needs: raw `<`
@@ -262,13 +269,6 @@ export function sanitizeCodeSpan(value) {
 // Every neutralization is an HTML entity, never a backslash-escape, so a
 // value's own literal character can never absorb the escape and turn live
 // again. upsert-checkpoint-verdict.mjs imports this exact function.
-// Label for an act finding whose remedy is evidence, not a file change; shared by every finding renderer (GATE-COMMENT-SINGLE-SURFACE).
-export function renderEvidenceOnlyLabel({ judgeDisposition, remedyKind }) {
-  return judgeDisposition === "act" && remedyKind === "evidence_only"
-    ? " (evidence only, no file change; its criterion stays unproven until the evidence lands)"
-    : "";
-}
-
 export function sanitizeInline(value) {
   return wrapOperatorOwnedPhrases(sanitizeCodeSpan(value)
     .replace(/</g, "&lt;")
