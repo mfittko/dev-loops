@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted — 2026-11-12 ([issue 3166](https://github.com/mfittko/dev-loops/issues/3166))
 
 Amends [0095](./0095-single-wave-gate-fanout.md): the reviewer-unit angle bound of 5 becomes the default of a per-round recorded bound, and the packing and pairing text that fixes 5 reads that bound instead. Every other decision of that record stays in force, and the record stays unedited.
 
