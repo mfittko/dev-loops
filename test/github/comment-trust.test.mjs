@@ -161,7 +161,7 @@ test("ADR 0273: the exact GitHub Actions bot is trusted with no opt-in; lookalik
   assert.equal(parsed.summary.skippedUntrustedThreads, 0);
 });
 
-test("ADR 0273 review fixes: exact login with a non-Bot type is untrusted; lookalikes by association; case and suffix edges", async () => {
+test("ADR 0273: exact github-actions login with a non-Bot type is untrusted; lookalikes judged by association; case and suffix edges", async () => {
   const actor = (login, type, association = "NONE", options) => isTrustedCommentAuthor({ login, type, association }, options);
   assert.equal(actor("github-actions-fan", "User", "NONE"), false);
   assert.equal(actor("github-actions-fan", "User", "OWNER"), true);

@@ -18,6 +18,7 @@ ADR 0238 admits only maintainers and the sanctioned Copilot reviewer as comment 
 
 A workflow that runs on fork-controlled input, for example `pull_request_target` or `workflow_run`, can echo attacker-controlled text under the `github-actions` identity. That text can therefore reach these surfaces:
 
+- review threads that reach the fixer and gate angles
 - gate evidence comments
 - round inputs
 - deferral markers
@@ -28,7 +29,7 @@ Merge approval is unaffected, because `isNonHumanAuthor` (login `[bot]` suffix o
 
 ## Alternatives rejected
 
-- An opt-in flag or config list. The trusted set has no configuration surface under ADR 0238.
+- A per-caller opt-in flag. The trusted set has no per-caller switch under ADR 0238. A default-branch config allowlist is deferred to part 2 of issue 3198.
 - A prefix match on `github-actions`. A lookalike Bot would gain trust.
 
 ## Consequences
