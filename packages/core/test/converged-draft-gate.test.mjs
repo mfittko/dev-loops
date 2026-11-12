@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "bun:test";
 
-import { composeConvergedDraftGate, startDeltaSequence } from "../src/loop/pre-push-delta-review.mjs";
+import { composeBodyOnlyConvergedDraftGate, composeConvergedDraftGate, startDeltaSequence } from "../src/loop/pre-push-delta-review.mjs";
 import { sha256Hex } from "../src/loop/review-dispatch-plan.mjs";
 
 const A = "a".repeat(40);
@@ -114,5 +114,47 @@ describe("composeConvergedDraftGate", () => {
     wrongActSet.deltaResult.actSetId = "0000000000000000";
     assert.throws(() => compose(items, wrongActSet), /deltaResult is invalid/);
     assert.throws(() => compose(items, converged(items, { deltaResult: null })), /deltaResult is invalid/);
+  });
+});
+
+describe("composeBodyOnlyConvergedDraftGate", () => {
+  const bodyItem = (severity, n, extra = {}) => ({ severity, angle: "pr-description", summary: `${severity} body finding ${n}`, judgeDisposition: "act", judgeFix: "edit the body", ...extra });
+  const bodyOnly = (roundActItems, extra = {}) => composeBodyOnlyConvergedDraftGate({
+    gate: "draft_gate", headSha: A, round: 3, cap: 3, roundActItems, roundFindings: roundActItems,
+    converged: { fixerCommit: A, actList: roundActItems }, reviewedBodySha: "old", liveBodySha: "new", ownCommits: 0, ...extra,
+  });
+
+  test("a non-locatable medium list with a changed body and no own commit composes", () => {
+    const items = [bodyItem("medium", 1)];
+    assert.equal(bodyOnly(items).fixerCommit, A);
+  });
+
+  test("refuses a question, a fail-open item and a security angle, suffixed or prefixed", () => {
+    assert.throws(() => bodyOnly([bodyItem("question", 1)]), /blocked_item/);
+    assert.throws(() => bodyOnly([bodyItem("medium", 1, { failOpen: true })]), /blocked_item/);
+    for (const angle of ["security", "security-delta-at-abc", "renderer-security", "renderer-security-delta-at-abc"]) {
+      assert.throws(() => bodyOnly([bodyItem("medium", 1, { angle })]), /blocked_item/);
+    }
+  });
+
+  test("refuses a cap-round blocker among the non-act findings", () => {
+    const items = [bodyItem("medium", 1)];
+    const deferredHigh = { severity: "high", summary: "deferred high", judgeDisposition: "defer" };
+    assert.throws(() => bodyOnly(items, { roundFindings: [...items, deferredHigh] }), /blocked_item/);
+  });
+
+  test("refuses below the cap, with a non-positive cap and an actList mismatch", () => {
+    const items = [bodyItem("medium", 1)];
+    assert.throws(() => bodyOnly(items, { round: 2 }), /cap round or later/);
+    assert.throws(() => bodyOnly(items, { cap: 0 }), /cap round or later/);
+    assert.throws(() => bodyOnly(items, { converged: { fixerCommit: A, actList: [bodyItem("medium", 2)] } }), /actList/);
+  });
+
+  test("refuses a delta result and the unchanged, unrecorded and own-commit facts", () => {
+    const items = [bodyItem("medium", 1)];
+    assert.throws(() => bodyOnly(items, { converged: { fixerCommit: A, actList: items, deltaResult: {} } }), /takes no converged.deltaResult/);
+    assert.throws(() => bodyOnly(items, { liveBodySha: "old" }), /body_unchanged/);
+    assert.throws(() => bodyOnly(items, { reviewedBodySha: null }), /body_read_unrecorded/);
+    assert.throws(() => bodyOnly(items, { ownCommits: 1 }), /own_commit_in_range/);
   });
 });

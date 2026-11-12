@@ -63,6 +63,7 @@ import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
+import { countPrOwnCommits as realCountPrOwnCommits } from "../loop/check-pre-push-delta.mjs";
 import { buildValidationResultsPath, countCompletedRounds, prBodySha256, readPriorPrBodySha256, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
@@ -257,7 +258,11 @@ Optional:
                                             and no deltaResult (ADR 0271); it
                                             refuses body_item_locatable,
                                             body_unchanged, own_commit_in_range
-                                            or blocked_item. Requires --gate draft_gate and
+                                            body_read_unrecorded (no cap-round
+                                            pr-body read: fix with a commit and
+                                            check-pre-push-delta.mjs --reviewer-only),
+                                            or blocked_item. A bodyOnly input
+                                            with a deltaResult is refused. Requires --gate draft_gate and
                                             --findings-ledger, with
                                             --head-sha the reviewed head A and
                                             the PR head equal to fixerCommit.
@@ -2671,7 +2676,7 @@ export async function assertGateValidationArtifact({ repo, pr, gate, headSha, re
   );
 }
 
-export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, detectStale = detectStaleRunner } = {}) {
+export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, detectStale = detectStaleRunner, countPrOwnCommits = realCountPrOwnCommits } = {}) {
   const gh = { env, ghCommand, repoRoot, runChild };
   // Optional --spec-authority stamps the RETURNED result (this script's
   // durable verdict record — it posts no file of its own) with the pinned
@@ -2800,14 +2805,17 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     if (convergedInput.bodyOnly === true) {
       // ADR 0271: the narrow facts the body-only exit checks; the pr-body digest is the one the cap round's context recorded at A.
       const live = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "body,baseRefName"], { env, ghCommand, runChild });
-      const own = convergedInput.fixerCommit === canonicalHeadSha ? { code: 0, stdout: "" }
-        : await runChild("git", ["-C", repoRoot, "rev-list", "--no-merges", `${canonicalHeadSha}..${convergedInput.fixerCommit}`, `^origin/${live.baseRefName}`], env);
-      if (own.code !== 0) throw new Error(`--converged-json bodyOnly: cannot count PR-own commits in ${canonicalHeadSha}..${convergedInput.fixerCommit} (git rev-list failed); run \`git fetch origin\` and retry.`);
+      // The same count check-pre-push-delta.mjs uses (fetches origin/<base>, base-only-merge test, resolution merges).
+      const ownCommits = convergedInput.fixerCommit === canonicalHeadSha ? 0
+        : await countPrOwnCommits(repoRoot, canonicalHeadSha, convergedInput.fixerCommit, live.baseRefName)
+          .catch((err) => { throw new Error(`--converged-json bodyOnly: cannot count PR-own commits in ${canonicalHeadSha}..${convergedInput.fixerCommit}: ${err instanceof Error ? err.message : String(err)}`); });
       convergedMarker = composeBodyOnlyConvergedDraftGate({
         ...capacity,
+        // The ledger plus the passed findings, as for the act items: the cap-round blocking set reads the whole round.
+        roundFindings: [...(preloadedFindingsLedger.findings ?? []), ...findings.filter((f) => !(preloadedFindingsLedger.findings ?? []).includes(f))],
         reviewedBodySha: await readPriorPrBodySha256({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot }),
         liveBodySha: prBodySha256(live.body),
-        ownCommits: String(own.stdout ?? "").split("\n").filter(Boolean).length,
+        ownCommits,
       });
     } else convergedMarker = composeConvergedDraftGate(capacity);
     return [];

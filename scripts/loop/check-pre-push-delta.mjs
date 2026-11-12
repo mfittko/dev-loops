@@ -399,7 +399,21 @@ function fetchAndResolveBase(worktree, base, { revParse, fetchBase }) {
   try { fetchBase(base, { repoRoot }); } catch (error) { throw new Error(`reviewer-only: git fetch origin ${base} failed (${error?.message}); cannot trust the local origin/${base} ref. Run \`git fetch origin ${base}\` and rerun`); }
   try { revParse(worktree, `origin/${base}`); } catch { throw new Error(`reviewer-only: origin/${base} does not exist in ${worktree}; run \`git fetch origin ${base}\` and rerun`); }
 }
-async function reviewerOnlyBase(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base }) {
+// The PR-own commit count of baseline..head under the reviewer-only rules: non-merge commits origin/<base> lacks plus non-base-only merges.
+// The body-only converged post (ADR 0271) asks the same question, so it calls this instead of counting on its own.
+export async function countPrOwnCommits(worktree, baseline, head, base, { revParse = gitRevParse, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, fetchBase = defaultFetchOrigin } = {}) {
+  fetchAndResolveBase(worktree, base, { revParse, fetchBase });
+  const { ownCommits, resolvedMerges } = await reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base });
+  return ownCommits + resolvedMerges.length;
+}
+async function reviewerOnlyBase(worktree, baseline, head, deps) {
+  const { base } = deps;
+  const { ownCommits, resolvedPaths, resolvedMerges } = await reviewerOnlyRange(worktree, baseline, head, deps);
+  // A conflict-resolution merge is a PR-own change even with no non-merge commit of its own.
+  if (ownCommits === 0 && resolvedPaths.length === 0) throw new Error(`reviewer-only: ${baseline}..${head} holds no PR-own commit that origin/${base} lacks; there is no code range to clear. ${FIXER_REMEDY}`);
+  return { base, resolvedPaths, resolvedMerges };
+}
+async function reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base }) {
   const repoRoot = resolveRepoRoot(worktree);
 
   const ownCommits = revList(worktree, baseline, head, ["--no-merges", `^origin/${base}`]).length;
@@ -414,9 +428,7 @@ async function reviewerOnlyBase(worktree, baseline, head, { revParse, baseOnlyMe
     resolvedPaths.push(...shown.stdout.split("\0").filter(Boolean));
     resolvedMerges.push(merge);
   }
-  // A conflict-resolution merge is a PR-own change even with no non-merge commit of its own.
-  if (ownCommits === 0 && resolvedPaths.length === 0) throw new Error(`reviewer-only: ${baseline}..${head} holds no PR-own commit that origin/${base} lacks; there is no code range to clear. ${FIXER_REMEDY}`);
-  return { base, resolvedPaths, resolvedMerges };
+  return { ownCommits, resolvedPaths, resolvedMerges };
 }
 
 async function authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor, { closureOnly = false } = {}) {

@@ -130,6 +130,7 @@ async function post(tempDir, { findings, converged, extraArgs = [], runChildOpti
   try {
     const result = await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
       env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: root, runChild: makeRunChild({ puts, ...runChildOptions }),
+      countPrOwnCommits: async () => String(runChildOptions.ownShas ?? "").split("\n").filter(Boolean).length,
     });
     return { result, body: puts.join("\n") };
   } catch (error) {

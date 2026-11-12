@@ -551,7 +551,7 @@
     {
       "id": "GATE-EXEC-NO-DEAD-END",
       "enforcement": "runtime",
-      "enforcementNote": "Enforced for the PR-body cap round by composeBodyOnlyConvergedDraftGate in packages/core/src/loop/pre-push-delta-review.mjs, which upsert-checkpoint-verdict.mjs calls for --converged-json with bodyOnly; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+      "enforcementNote": "Invariant: every report_blocked result carries a typed blockedOn or an agentRemedy; enforced by isTypedOrKnownGap in packages/core/src/loop/gate-no-dead-end.mjs (tests: test/loop/gate-no-dead-end.test.mjs) and the blocked-names-decision-or-remedy safetyRules predicate in scripts/docs/validate-state-machine-conformance.mjs. Enforced for the PR-body cap round by composeBodyOnlyConvergedDraftGate in packages/core/src/loop/pre-push-delta-review.mjs, which upsert-checkpoint-verdict.mjs calls for --converged-json with bodyOnly; the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-ROUND-CAP-CHAIN-EXTEND",
