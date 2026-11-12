@@ -68,9 +68,9 @@ const ghStubScript = (head) => `#!/bin/sh\ncase "$*" in\n*/reviews*) printf '%s\
 const AGENT = "agent-a";
 const pullLine = (identity) => /`([^`]+)`/.exec(buildDispatchPointer(identity))[1];
 const pull = (unit, cwd, over = {}) => {
-  const identity = { workOrderRef: over.ref ?? unit.workOrderRef, workOrderDigest: over.digest ?? unit.workOrderDigest, executionIdentity: over.execution ?? unit.executionIdentity };
+  const identity = { workOrderRef: unit.workOrderRef, executionIdentity: over.execution ?? unit.executionIdentity };
   assert.equal(bash(cwd, pullLine(identity), over.agentId ?? AGENT), "allow");
-  return spawnSync("node", [PULL, "--ref", identity.workOrderRef, "--digest", identity.workOrderDigest, "--execution", identity.executionIdentity], { cwd, encoding: "utf8", env: gitFreeEnv() });
+  return spawnSync("node", [PULL, identity.executionIdentity], { cwd, encoding: "utf8", env: gitFreeEnv() });
 };
 // A real DeltaPrePushReviewResult for ACT reviewed against baseline `head`.
 const deltaResultFor = (head, over = {}) => ({
@@ -1054,7 +1054,7 @@ test("custom-root capture authenticates the canonical receipt and preserves the 
     const tmp = path.join(root, "tmp");
     const custom = path.join(path.dirname(root), "custom-tmp");
     const old = await emit({ phase: "commit_only", tmpRoot: custom });
-    const pulled = spawnSync("node", [PULL, "--ref", old.workOrderRef, "--digest", old.workOrderDigest, "--execution", old.executionIdentity, "--tmp-root", custom], { cwd: wt, encoding: "utf8", env: gitFreeEnv() });
+    const pulled = spawnSync("node", [PULL, old.executionIdentity, "--tmp-root", custom], { cwd: wt, encoding: "utf8", env: gitFreeEnv() });
     assert.equal(pulled.status, 0, pulled.stderr);
     const receipt = pullReceiptPath(tmp, old.workOrderRef);
     const original = await readFile(receipt);
@@ -1086,7 +1086,7 @@ for (const alias of ["tmp", "var"]) test.skipIf(process.platform !== "darwin")(`
     try {
       assert.ok(custom.startsWith(`/${alias}/`));
       const old = await emit({ phase: "commit_only", tmpRoot: custom });
-      const pulled = spawnSync("node", [PULL, "--ref", old.workOrderRef, "--digest", old.workOrderDigest, "--execution", old.executionIdentity, "--tmp-root", custom], { cwd: wt, encoding: "utf8", env: gitFreeEnv() });
+      const pulled = spawnSync("node", [PULL, old.executionIdentity, "--tmp-root", custom], { cwd: wt, encoding: "utf8", env: gitFreeEnv() });
       assert.equal(pulled.status, 0, pulled.stderr);
       const preserved = [old.planPath, old.promptPath, pullReceiptPath(path.join(root, "tmp"), old.workOrderRef), executionIndexPath(custom, old.executionIdentity)];
       const before = await Promise.all(preserved.map((file) => readFile(file)));
@@ -1653,7 +1653,8 @@ test("F2: dispatchPrompt is the shared envelope, fits the cap for a worst-case r
   await withFixture(async ({ emit }) => {
     const unit = await emit();
     assert.equal(unit.dispatchPrompt, buildDispatchPointer(unit));
-    assert.throws(() => buildDispatchPointer({ ...unit, executionIdentity: `${unit.executionIdentity} and also refactor the parser` }), /not shell-safe/);
+    assert.equal(unit.dispatchPrompt, `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${unit.executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`);
+    assert.throws(() => buildDispatchPointer({ ...unit, executionIdentity: `${unit.executionIdentity} and also refactor the parser` }), /EXECUTION_IDENTITY_RE/);
     // The unit's execution index entry (ADR 0115) sits under the emit plan's tmp root.
     const tmpRoot = path.resolve(path.dirname(unit.planPath), "../../..");
     assert.deepEqual(JSON.parse(await readFile(executionIndexPath(tmpRoot, unit.executionIdentity), "utf8")),
@@ -1737,7 +1738,7 @@ test("F2: Claude, Pi and Codex initial, rebuilt and replacement payloads carry t
     }
     // The dev-loops source checkout resolves its repo-local agent.
     assert.equal(buildFixerDispatchPayload({ harness: "claude", plan: {}, cwd: process.cwd() }).subagent_type, "fixer");
-    // A launcher-rendered fixer override makes the bare type the only dispatchable one.
+    // A launcher-rendered fixer override makes the bare type the only dispatchable one (ADR 0267, amends ADR 0107).
     const saved = process.env.DEVLOOPS_AGENT_OVERRIDES;
     process.env.DEVLOOPS_AGENT_OVERRIDES = "developer, fixer";
     try {
@@ -1792,20 +1793,21 @@ test("F3: the short pull line binds the grant, pulls the same bytes and writes t
   });
 });
 
-test("F3: wrong digest, execution, role or target and a malformed payload refuse by name", async () => {
+test("F3: an unknown execution, a changed payload and a malformed payload refuse by name", async () => {
   await withFixture(async ({ wt, emit }) => {
     const unit = await emit();
-    assert.equal(refusal(pull(unit, wt, { digest: "0".repeat(64) })), "dispatch_reference_mismatch");
-    assert.equal(refusal(pull(unit, wt, { ref: unit.workOrderRef.replace(`#${PR}:`, `#${PR + 1}:`) })), "dispatch_reference_mismatch");
-    assert.equal(refusal(pull(unit, wt, { execution: "f1-ffffffff" })), "dispatch_identity_mismatch");
-    assert.equal(refusal(pull(unit, wt, { ref: unit.workOrderRef.replace(/^fixer:/, "review:") })), "dispatch_reference_mismatch");
+    const unknown = spawnSync("node", [PULL, "f1-ffffffff"], { cwd: wt, encoding: "utf8", env: gitFreeEnv() });
+    assert.equal(refusal(unknown), "dispatch_reference_mismatch");
     const plan = JSON.parse(await readFile(unit.planPath, "utf8"));
     await writeFile(unit.planPath, JSON.stringify({ ...plan, workOrder: { ...plan.workOrder, mutationAuthority: { ...plan.workOrder.mutationAuthority, allowedPaths: ["src"] } } }));
     assert.equal(refusal(pull(unit, wt)), "semantic_identity_mismatch");
     const { workOrderDigest } = await import("../../scripts/github/_work-order-protocol.mjs");
     const invalid = { ...plan.workOrder, mutationAuthority: { ...plan.workOrder.mutationAuthority, allowedPaths: [] } };
     await writeFile(unit.planPath, JSON.stringify({ ...plan, workOrder: invalid, workOrderDigest: workOrderDigest(invalid) }));
-    assert.equal(refusal(pull(unit, wt, { digest: workOrderDigest(invalid) })), "invalid_work_order");
+    const tmpRoot = path.resolve(path.dirname(unit.planPath), "../../..");
+    const indexFile = executionIndexPath(tmpRoot, unit.executionIdentity);
+    await writeFile(indexFile, JSON.stringify({ ...JSON.parse(await readFile(indexFile, "utf8")), workOrderDigest: workOrderDigest(invalid) }));
+    assert.equal(refusal(pull(unit, wt)), "invalid_work_order");
   });
 });
 
@@ -2281,11 +2283,7 @@ test("F5: a grant binds to the agent_id that ran the pull; a replacement re-pull
     for (const agentId of ["agent-b", null]) {
       assert.equal(hook(wt, target, agentId), "deny", `${agentId} never pulled`);
     }
-    // A pull line with the right ref and execution but a wrong digest is refused and takes nothing over.
-    assert.equal(pull(unit, wt, { agentId: "agent-b", digest: `sha256:${"0".repeat(64)}` }).status, 1);
-    assert.equal(hook(wt, target, "agent-b"), "deny", "a refused pull binds nothing");
-    assert.equal(hook(wt, target), "allow", "a refused pull never revokes the pulling fixer's grant");
-    // The same with the right ref and digest but a wrong execution.
+    // A pull line with an execution that has no index entry binds nothing and takes nothing over.
     assert.equal(pull(unit, wt, { agentId: "agent-b", execution: "f1-0000dead" }).status, 1);
     assert.equal(hook(wt, target, "agent-b"), "deny", "a refused pull binds nothing");
     assert.equal(hook(wt, target), "allow", "a wrong-execution pull never revokes the pulling fixer's grant");

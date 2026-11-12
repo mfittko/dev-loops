@@ -74,9 +74,9 @@ test("parseFixerPullCommand resolves only an exact fixer line whose index entry 
   await withRepo(async (root) => {
     assert.deepEqual(parseFixerPullCommand(LINE, root), ENTRY);
     assert.equal(parseFixerPullCommand(`${LINE}; echo`, root), null);
-    // Step 1 keeps the 3-flag line: it binds its own values when the ref is a fixer ref.
+    // The 3-flag line is no longer sanctioned: it resolves to nothing, whatever its ref.
     const threeFlag = (ref) => `dev-loops-run scripts/github/pull-work-order.mjs --ref ${ref} --digest ${ENTRY.workOrderDigest} --execution ${ID}`;
-    assert.deepEqual(parseFixerPullCommand(threeFlag(ENTRY.workOrderRef), root), ENTRY);
+    assert.equal(parseFixerPullCommand(threeFlag(ENTRY.workOrderRef), root), null);
     assert.equal(parseFixerPullCommand(threeFlag("review:o/r#7:x"), root), null);
     assert.equal(parseFixerPullCommand("dev-loops-run scripts/github/pull-work-order.mjs f1-deadbeef", root), null, "missing index entry");
     const reviewRef = { executionIdentity: "f2-deadbeef", workOrderRef: "review:o/r#7:x", workOrderDigest: "sha256:0" };

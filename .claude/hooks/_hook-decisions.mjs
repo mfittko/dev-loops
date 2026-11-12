@@ -53,10 +53,8 @@ const isWorkerAgentType = (agentType) =>
  */
 export const JUDGE_AGENT_TYPE = "judge";
 const IDENTITY_PATTERN = EXECUTION_IDENTITY_RE.source.slice(1, -1);
-const PULL_VALUE = "[A-Za-z0-9][\\w.:/#-]*";
-// The one sanctioned pull line: the short form (ADR 0115) or the 3-flag form that step 1 still
-// emits (issue 2560 drops it).
-const PULL_LINE = `dev-loops-run scripts/github/pull-work-order\\.mjs (?:(${IDENTITY_PATTERN})|--ref (${PULL_VALUE}) --digest (${PULL_VALUE}) --execution (${PULL_VALUE}))`;
+// The one sanctioned pull line: the short form that carries the execution identity alone (ADR 0115).
+const PULL_LINE = `dev-loops-run scripts/github/pull-work-order\\.mjs (${IDENTITY_PATTERN})`;
 const SANCTIONED_WORK_ORDER_PULL_RE = new RegExp(`^${PULL_LINE}$`);
 // The judge's read-only check of its own decision file, run before it hands back.
 const JUDGE_DECISION_CHECK_RE = /^dev-loops-run scripts\/loop\/check-judge-decision\.mjs --file [\w.\/#-]*tmp\/gate-judge\/[\w.\/#-]+\.json$/;
@@ -64,13 +62,12 @@ export const isJudgeDecisionCheckLine = (command) => typeof command === "string"
 const FIXER_IDENTITY_TOKEN_RE = /\bf\d+-[0-9a-f]{8}\b/;
 
 /**
- * Of the exact trimmed sanctioned pull line: `{ executionIdentity }` for the short form,
- * `{ workOrderRef, workOrderDigest, executionIdentity }` for the 3-flag form; else null.
+ * Of the exact trimmed sanctioned pull line: `{ executionIdentity }`; else null.
  */
 export function parseSanctionedPullLine(command) {
   const match = typeof command === "string" ? SANCTIONED_WORK_ORDER_PULL_RE.exec(command.trim()) : null;
   if (!match) return null;
-  return match[1] ? { executionIdentity: match[1] } : { workOrderRef: match[2], workOrderDigest: match[3], executionIdentity: match[4] };
+  return { executionIdentity: match[1] };
 }
 
 /** True when `command` references pull-work-order and carries a fixer execution identity token, in any shell segment. */
@@ -141,7 +138,7 @@ export function decideBashGate({
       decision: "deny",
       reason:
         "Judge read-only boundary (agents/judge.agent.md, ADR 0106): the judge may run only its " +
-        "dispatched `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line (or its emitted 3-flag form), " +
+        "dispatched `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line, " +
         "alone, with no chaining, redirection or substitution, or `dev-loops-run scripts/loop/check-judge-decision.mjs --file tmp/gate-judge/<path>.json`. Read " +
         "files with `Read` (always available), plus Grep and Glob when available; never run shell, test or build commands.",
     };
@@ -153,7 +150,6 @@ export function decideBashGate({
       reason:
         "Fixer pull boundary (agents/fixer.agent.md, ADR 0107): the fixer's grant binding is recorded only for the exact " +
         `dispatched pull line. Run it again exactly as dispatched: \`dev-loops-run scripts/github/pull-work-order.mjs ${command.match(FIXER_IDENTITY_TOKEN_RE)[0]}\`, ` +
-        "or the emitted 3-flag line (`--ref`, `--digest`, `--execution`) when your dispatch carried that form, " +
         "alone, with no prefix, suffix, redirect, chaining or `cd`.",
     };
   }
@@ -567,7 +563,7 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
     decision: "deny",
     reason:
       `Fixer mutation boundary (agents/fixer.agent.md, ADR 0107): refusing to write ${JSON.stringify(targetPath)}: ${why}. ` +
-      "Run the dispatched `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line (or its emitted 3-flag form) first. " +
+      "Run the dispatched `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line first. " +
       "A fixer writes only its work order's outputRef and files under mutationAuthority.allowedPaths in a checkout of mutationAuthority.branch.",
   });
   if (typeof targetPath !== "string" || !targetPath.startsWith("/")) return deny("the target path is missing or relative");
@@ -596,20 +592,21 @@ const GATE_ROUND_CHILD_ROLES = new Set(["review", "judge"]);
 // quoting or wrapping. A prose pre-PR or delta brief may quote a token but runs no pull. ponytail: a shape gate; a ref or identity assembled from
 // shell variables at runtime evades it, and the digest-verified pull stays the integrity boundary.
 const GATE_UNIT_TOKEN_RE = new RegExp(`\\b(?:review|judge|fixer):[\\w.-]+\\/[\\w.-]+#\\d+:|\\b${IDENTITY_PATTERN}\\b`);
-// The exact `buildDispatchPointer` text (scripts/github/_work-order-protocol.mjs) around either pull line form;
-// the identity prefix or the ref prefix names the role.
+// The exact `buildDispatchPointer` text (scripts/github/_work-order-protocol.mjs) around the pull line;
+// the identity prefix names the role.
 const DISPATCH_POINTER_RE = new RegExp(`^Run \`${PULL_LINE}\`; follow its printed work order exactly\\. Exit 1: report its JSON verbatim, stop\\.$`);
 const IDENTITY_PREFIX = { review: "r", judge: "j" };
 const isDispatchPointer = (prompt, role) => {
   const match = typeof prompt === "string" && Buffer.byteLength(prompt) <= DISPATCH_POINTER_MAX_BYTES ? DISPATCH_POINTER_RE.exec(prompt) : null;
-  return Boolean(match) && (match[1] ? match[1][0] === IDENTITY_PREFIX[role] : match[2].startsWith(`${role}:`));
+  return Boolean(match) && match[1][0] === IDENTITY_PREFIX[role];
 };
 
 // The standalone `review` gate runs no gate-coordinator judge phase: the dev-loop agent itself dispatches that
-// gate's judge (skills/review/SKILL.md Phase 3.5). Only an exact emitted judge pointer whose ref names gate `review`
-// is exempt; lifecycle-gate judge dispatches stay denied.
-const isStandaloneReviewJudgePointer = (prompt) =>
-  isDispatchPointer(prompt, "judge") && /--ref judge:[^ ]+#\d+:review:/.test(prompt);
+// gate's judge (skills/review/SKILL.md Phase 3.5). Only an exact emitted judge pointer whose work-order ref names gate `review`
+// is exempt; the short pointer carries no ref, so the caller resolves it through the execution index (ADR 0267,
+// amends ADR 0179) and passes it as `judgeWorkOrderRef`. Lifecycle-gate and unresolved judge dispatches stay denied.
+const isStandaloneReviewJudgePointer = (prompt, judgeWorkOrderRef) =>
+  isDispatchPointer(prompt, "judge") && typeof judgeWorkOrderRef === "string" && /^judge:[^ ]+#\d+:review:/.test(judgeWorkOrderRef);
 
 /**
  * Decide whether a PreToolUse Agent/Task dispatch must be denied (GATE-EXEC-GATE-COORDINATOR,
@@ -623,10 +620,11 @@ const isStandaloneReviewJudgePointer = (prompt) =>
  * @param {string|null} [params.callerAgentType] - Hook payload `agent_type` of the caller.
  * @param {string|null} [params.targetAgentType] - `tool_input.subagent_type` of the dispatch.
  * @param {string|null} [params.prompt] - `tool_input.prompt` of the dispatch.
+ * @param {string|null} [params.judgeWorkOrderRef] - The judge pointer's `workOrderRef`, resolved through the execution index; absent when the identity has no entry.
  * @param {string|null} [params.agentOverrides] - `DEVLOOPS_AGENT_OVERRIDES` (comma-separated roles rendered by the launcher).
  * @returns {HookDecision}
  */
-export function decideAgentDispatch({ callerAgentType = null, targetAgentType = null, prompt = null, agentOverrides = null }) {
+export function decideAgentDispatch({ callerAgentType = null, targetAgentType = null, prompt = null, agentOverrides = null, judgeWorkOrderRef = null }) {
   // A launcher-rendered CLI agent replaces only the bare role name, so a namespaced dispatch would bypass it.
   if (typeof targetAgentType === "string" && targetAgentType.startsWith("dev-loops:") && typeof agentOverrides === "string") {
     const bare = normalizeAgentType(targetAgentType);
@@ -643,7 +641,7 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
   const target = normalizeAgentType(targetAgentType);
   const gateChild = GATE_ROUND_CHILD_ROLES.has(target);
   if (caller === DEV_LOOP_AGENT_TYPE && gateChild &&
-    ((target === "judge" && !isStandaloneReviewJudgePointer(prompt)) || (typeof prompt === "string" && /pull-work-order/.test(prompt) && GATE_UNIT_TOKEN_RE.test(prompt) && target !== "judge"))) {
+    ((target === "judge" && !isStandaloneReviewJudgePointer(prompt, judgeWorkOrderRef)) || (typeof prompt === "string" && /pull-work-order/.test(prompt) && GATE_UNIT_TOKEN_RE.test(prompt) && target !== "judge"))) {
     return {
       decision: "deny",
       reason:

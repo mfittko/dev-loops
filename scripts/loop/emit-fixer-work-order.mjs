@@ -851,6 +851,8 @@ export async function emitFixerWorkOrder({
  * (the `.claude/bin/dev-loops-run` isCheckout rule: package.json name "dev-loops" plus a
  * sibling scripts/) resolves its repo-local `fixer`; any other repo resolves the plugin
  * install's `dev-loops:fixer`. The hooks accept both through normalizeAgentType.
+ * When DEVLOOPS_AGENT_OVERRIDES lists `fixer` (a launcher-rendered fixer), the bare `fixer` is returned
+ * in every checkout and the agent guard denies `dev-loops:fixer` (ADR 0267, amends ADR 0107).
  */
 export function claudeFixerAgentType(cwd = process.cwd(), env = process.env) {
   // A launcher-rendered `fixer` replaces only the bare name; the hooks deny the namespaced type then.

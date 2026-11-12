@@ -24,11 +24,9 @@ const HEAD = "c".repeat(40);
 const GATE = "pre_approval_gate";
 
 const run = (script, args, cwd) => spawnSync("node", [path.join(SCRIPTS, script), ...args], { cwd, encoding: "utf8" });
-const pull = (unit, cwd, over = {}) => run("pull-work-order.mjs", [
-  "--ref", over.ref ?? unit.workOrderRef, "--digest", over.digest ?? unit.workOrderDigest, "--execution", over.execution ?? unit.executionIdentity,
-], cwd);
-// The short pull (ADR 0115): the execution identity alone, resolved through the execution index.
+// The pull (ADR 0115): the execution identity alone, resolved through the execution index.
 const pullShort = (execution, cwd) => run("pull-work-order.mjs", [execution], cwd);
+const pull = (unit, cwd, over = {}) => pullShort(over.execution ?? unit.executionIdentity, cwd);
 const indexPath = (root, unit) => executionIndexPath(path.join(root, "tmp"), unit.executionIdentity);
 const refusal = (result) => (assert.equal(result.status, 1, result.stderr), JSON.parse(result.stdout));
 const withDir = (fn) => withTempDir(async (dir) => fn(await realpath(dir)), { prefix: "dev-loops-pull-" });
@@ -75,16 +73,15 @@ test("the dispatchPrompt carries a shell-runnable pull command; shell metacharac
     const args = unit.dispatchPrompt.match(/`dev-loops-run scripts\/github\/pull-work-order\.mjs ([^`]+)`/)[1];
     const result = spawnSync("sh", ["-c", `node ${path.join(SCRIPTS, "pull-work-order.mjs")} ${args}`], { cwd: root, encoding: "utf8" });
     assert.equal(result.stdout, await readFile(unit.promptPath, "utf8"), result.stderr);
-    for (const bad of [`${unit.workOrderRef};id`, "$(id)", "#x", "a b"]) assert.throws(() => buildDispatchPointer({ ...unit, workOrderRef: bad }), /not shell-safe/);
+    assert.equal(unit.dispatchPrompt, `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${unit.executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`);
+    for (const bad of [`${unit.executionIdentity};id`, "$(id)", "#x", "a b"]) assert.throws(() => buildDispatchPointer({ ...unit, executionIdentity: bad }), /EXECUTION_IDENTITY_RE/);
+    assert.throws(() => buildDispatchPointer({ ...unit, executionIdentity: `r${"1".repeat(500)}-abcdef12` }), /over DISPATCH_POINTER_MAX_BYTES/);
   });
 });
 
-test("the dispatch envelope fits the cap for a worst-case sanctioned identity and throws one byte over it", () => {
+test("the dispatch envelope fits the cap for a worst-case sanctioned identity", () => {
   const worst = { workOrderRef: `review:${"o".repeat(39)}/${"r".repeat(40)}#99999:pre_approval_gate:${"f".repeat(64)}:pre-approval-gate-${"g".repeat(30)}`, workOrderDigest: "f".repeat(64), executionIdentity: "r1790000000000-abcdef12-u99" };
   assert.ok(Buffer.byteLength(buildDispatchPointer(worst)) <= DISPATCH_POINTER_MAX_BYTES);
-  const pad = DISPATCH_POINTER_MAX_BYTES - Buffer.byteLength(buildDispatchPointer({ ...worst, workOrderRef: "a" }));
-  assert.equal(Buffer.byteLength(buildDispatchPointer({ ...worst, workOrderRef: "a".repeat(1 + pad) })), DISPATCH_POINTER_MAX_BYTES);
-  assert.throws(() => buildDispatchPointer({ ...worst, workOrderRef: "a".repeat(2 + pad) }), /over DISPATCH_POINTER_MAX_BYTES/);
 });
 
 test("workOrderDigest is equal across two checkout roots whose required reads hash differently; a semantic input change changes it", async () => {
@@ -98,23 +95,18 @@ test("workOrderDigest is equal across two checkout roots whose required reads ha
   })));
 });
 
-test("a typed ref or digest is a retryable dispatch_reference_mismatch; the same unit then pulls without re-emit or retirement", async () => {
+test("an unknown execution identity is a retryable dispatch_reference_mismatch; the same unit then pulls without re-emit or retirement", async () => {
   await withDir(async (root) => {
     const unit = await emitRound(root);
     const planPath = buildGateEmitPlanPath({ repo: "o/r", pr: "7", gate: GATE, headSha: HEAD, tmpRoot: path.join(root, "tmp") });
     const planBefore = await readFile(planPath, "utf8");
-    const typoDigest = `${unit.workOrderDigest.slice(0, -1)}${unit.workOrderDigest.endsWith("0") ? "1" : "0"}`;
-    const typoRefs = [`${unit.workOrderRef}x`, unit.workOrderRef.replace(GATE, "pre_aproval_gate"), unit.workOrderRef.replace("#7:", "#0:")];
-    for (const over of [{ digest: typoDigest }, ...typoRefs.map((ref) => ({ ref }))]) {
-      const body = refusal(pull(unit, root, over));
-      assert.equal(body.refusal, "dispatch_reference_mismatch");
-      assert.equal(body.retryable, true);
-    }
+    const unknown = refusal(pull(unit, root, { execution: "r1790000000001-abcdef12-u9" }));
+    assert.equal(unknown.refusal, "dispatch_reference_mismatch");
+    assert.equal(unknown.retryable, true);
     assert.equal(existsSync(pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef)), false);
     assert.equal(pull(unit, root).status, 0);
     assert.equal(await readFile(planPath, "utf8"), planBefore);
     assert.equal(existsSync(path.join(root, "tmp", "retired-gate-rounds")), false);
-    assert.equal(refusal(pull(unit, root, { execution: `${unit.executionIdentity}9` })).refusal, "dispatch_identity_mismatch");
   });
 });
 
@@ -141,7 +133,6 @@ test("semantic mutation refuses as semantic_identity_mismatch; a materialization
     delete invalid.workOrder.executionRules.widening;
     invalid.workOrderDigest = workOrderDigest(invalid.workOrder);
     await writeFile(planPath, JSON.stringify(plan), "utf8");
-    assert.equal(refusal(pull(unit, root, { digest: invalid.workOrderDigest })).refusal, "invalid_work_order");
     const entry = JSON.parse(await readFile(indexPath(root, unit), "utf8"));
     await writeFile(indexPath(root, unit), JSON.stringify({ ...entry, workOrderDigest: invalid.workOrderDigest }), "utf8");
     assert.equal(refusal(pullShort(unit.executionIdentity, root)).refusal, "invalid_work_order");
@@ -273,10 +264,21 @@ test("the pull is role-keyed: a stub second role pulls through its adapter, an u
 });
 
 // ---------------------------------------------------------------------------
-// Step 1 of ADR 0115: the pull also accepts the execution identity alone.
+// Step 2 of ADR 0115: the pull accepts the execution identity alone, the only accepted form.
 // ---------------------------------------------------------------------------
 
-test("the short pull prints the same work order and writes the same receipt as the 3-flag pull, for a review and a judge unit", async () => {
+test("the pull refuses the former 3-flag form with exit 2 and the usage text", async () => {
+  await withDir(async (root) => {
+    const unit = await emitRound(root);
+    const result = run("pull-work-order.mjs", ["--ref", unit.workOrderRef, "--digest", unit.workOrderDigest, "--execution", unit.executionIdentity], root);
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /Usage: pull-work-order\.mjs <executionIdentity>/);
+    assert.equal(result.stdout, "");
+    assert.equal(existsSync(pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef)), false);
+  });
+});
+
+test("the short pull prints the work order and writes the receipt, for a review and a judge unit", async () => {
   await withDir(async (root) => {
     const review = await emitRound(root);
     const judge = await emitJudgeWorkOrder(await seedJudgeSources(root, { headSha: HEAD }));
@@ -286,9 +288,6 @@ test("the short pull prints the same work order and writes the same receipt as t
       assert.equal(shortPull.status, 0, shortPull.stdout + shortPull.stderr);
       assert.equal(shortPull.stdout, await readFile(unit.promptPath, "utf8"));
       const shortReceipt = JSON.parse(await readFile(receiptFile, "utf8"));
-      assert.equal(pull(unit, root).status, 0);
-      const flagReceipt = JSON.parse(await readFile(receiptFile, "utf8"));
-      assert.deepEqual({ ...shortReceipt, pulledAt: undefined }, { ...flagReceipt, pulledAt: undefined });
       const { executionIdentity, workOrderRef, workOrderDigest: digest, materializationHash: hash } = unit;
       assert.deepEqual({ executionIdentity, workOrderRef, workOrderDigest: digest, materializationHash: hash, role: workOrderRef.split(":")[0] },
         { executionIdentity: shortReceipt.executionIdentity, workOrderRef: shortReceipt.workOrderRef, workOrderDigest: shortReceipt.workOrderDigest, materializationHash: shortReceipt.materializationHash, role: shortReceipt.role });
@@ -359,10 +358,10 @@ test("codeTreeSkewNote quotes the emitter root, says the identity code may diffe
   });
 });
 
-test("the pull takes one positional identity or all three flags; any other shape exits 2 with the usage text", async () => {
+test("the pull takes exactly one positional identity; any other shape, including --ref, --digest and --execution, exits 2 with the usage text", async () => {
   await withDir(async (root) => {
     const unit = await emitRound(root);
-    for (const args of [[], [unit.executionIdentity, "--execution", unit.executionIdentity], ["--ref", unit.workOrderRef, "--execution", unit.executionIdentity], [unit.executionIdentity, unit.executionIdentity]]) {
+    for (const args of [[], [unit.executionIdentity, "--execution", unit.executionIdentity], ["--ref", unit.workOrderRef, "--execution", unit.executionIdentity], [unit.executionIdentity, unit.executionIdentity], [unit.executionIdentity, "--ref", ""], [unit.executionIdentity, "--digest", ""], [unit.executionIdentity, "--execution", ""]]) {
       const result = run("pull-work-order.mjs", args, root);
       assert.equal(result.status, 2, args.join(" "));
       assert.match(result.stderr, /Usage: pull-work-order\.mjs <executionIdentity>/);
@@ -561,11 +560,6 @@ test("self-hosting pull: from the main cwd, the pull runs the linked worktree's 
     const delegated = pullShort(DELEGATE_ID, main);
     assert.equal(delegated.status, 7, delegated.stderr);
     assert.equal(delegated.stdout, `DELEGATED ${linked} ${DELEGATE_ID} 1\n`);
-    // The 3-flag form forwards --ref, --digest and --execution verbatim.
-    const flagArgs = ["--ref", "review:o/r#7:x", "--digest", `sha256:${"0".repeat(64)}`, "--execution", DELEGATE_ID];
-    const flagged = run("pull-work-order.mjs", flagArgs, main);
-    assert.equal(flagged.status, 7, flagged.stderr);
-    assert.equal(flagged.stdout, `DELEGATED ${linked} ${flagArgs.join(" ")} 1\n`);
     // An injected receiptTmpRoot keeps the pull local, so the receipt lands where the caller pinned it.
     assert.equal(await pullMain([DELEGATE_ID], { cwd: main, receiptTmpRoot: base }), 1);
     // The marker stops a second delegation: the pull resolves locally and refuses as today.

@@ -344,6 +344,16 @@ describe("decideAgentDispatch with agent overrides", () => {
     assert.match(decision.reason, /Dispatch the bare agent type `developer`/);
   });
 
+  test("denies dev-loops:fixer with AGENT_OVERRIDE_NAMESPACED_DISPATCH when the override lists fixer, and allows it without (ADR 0267)", () => {
+    const denied = dispatch("dev-loops:fixer", "developer,fixer");
+    assert.equal(denied.decision, "deny");
+    assert.match(denied.reason, /^AGENT_OVERRIDE_NAMESPACED_DISPATCH/);
+    assert.match(denied.reason, /Dispatch the bare agent type `fixer`/);
+    assert.equal(dispatch("fixer", "developer,fixer").decision, "allow");
+    assert.equal(dispatch("dev-loops:fixer", "developer").decision, "allow");
+    assert.equal(dispatch("dev-loops:fixer", null).decision, "allow");
+  });
+
   test("allows unlisted roles, bare dispatch and an absent variable", () => {
     assert.equal(dispatch("dev-loops:refiner", "developer").decision, "allow");
     assert.equal(dispatch("developer", "developer").decision, "allow");

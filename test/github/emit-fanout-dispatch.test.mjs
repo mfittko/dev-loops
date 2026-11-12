@@ -43,7 +43,7 @@ function runEmitCli(args = [], opts = {}) {
 
 // The reviewer's first step (#2416): pull its work order with the compact reference.
 function runPullCli(unit, opts = {}) {
-  return spawnSync("node", [path.resolve("scripts/github/pull-work-order.mjs"), "--ref", unit.workOrderRef, "--digest", unit.workOrderDigest, "--execution", unit.executionIdentity], { encoding: "utf8", ...opts });
+  return spawnSync("node", [path.resolve("scripts/github/pull-work-order.mjs"), unit.executionIdentity], { encoding: "utf8", ...opts });
 }
 
 async function withTmpDir(fn) {
@@ -506,6 +506,7 @@ test("fan-in join: consolidateGateFanin consumes per-angle findings artifacts fo
 
     // Reviewers pull first; a result only counts when written after its pull.
     for (const unit of payload.units) {
+      assert.equal(unit.dispatchPrompt, `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${unit.executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`);
       const pulled = runPullCli(unit, { cwd: tmpDir });
       assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
     }

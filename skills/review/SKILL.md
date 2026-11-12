@@ -75,8 +75,8 @@ this skill dispatches the `review` agents directly.
    spawned via the plain Agent tool, NOT a general-purpose agent — per
    resolved dispatch unit (`resolveFanoutGroups`), each given only its
    compact `dispatchPrompt`: the one-line instruction to run
-   the pull CLI with concrete values (the emitted 3-flag line, or the short
-   line `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>`,
+   the pull CLI with concrete values (the line
+   `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>`,
    ADR 0115). The reviewer runs it
    and follows the pulled work order, which references the identical neutral
    evidence and carries its angle prompts — unchanged from draft/

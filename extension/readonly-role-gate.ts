@@ -9,9 +9,8 @@ import { NATIVE_PI_PARENT_SESSION_MARKER, isNativePiAsyncContext } from '@dev-lo
  * must not import the Claude hook seam, so the sanctioned pull line is rebuilt from the shared identity
  * regex; a test pins parity with the Claude gate's `parseSanctionedPullLine`.
  */
-const PULL_VALUE = '[A-Za-z0-9][\\w.:/#-]*';
 const SANCTIONED_PULL_RE = new RegExp(
-  `^dev-loops-run scripts/github/pull-work-order\\.mjs (?:${EXECUTION_IDENTITY_RE.source.slice(1, -1)}|--ref ${PULL_VALUE} --digest ${PULL_VALUE} --execution ${PULL_VALUE})$`,
+  `^dev-loops-run scripts/github/pull-work-order\\.mjs ${EXECUTION_IDENTITY_RE.source.slice(1, -1)}$`,
 );
 const parseSanctionedPullLine = (command: string) => SANCTIONED_PULL_RE.test(command.trim());
 const JUDGE_DECISION_CHECK_RE = /^dev-loops-run scripts\/loop\/check-judge-decision\.mjs --file [\w.\/#-]*tmp\/gate-judge\/[\w.\/#-]+\.json$/;

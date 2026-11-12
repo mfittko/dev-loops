@@ -26,13 +26,11 @@ export const materializationHash = sha256Hex;
 export const fixerReportPath = (outputRef) => `${outputRef}.report`;
 
 // The compact dispatch envelope, the ONLY text relayed to a worker: a self-describing pull instruction
-// (a lagging agent definition still pulls), never task prose. Values go unquoted, so each is one shell-inert word.
-// Step 1 of ADR 0115 keeps this 3-flag form; issue 2560 switches it to the execution identity alone.
-export function buildDispatchPointer({ workOrderRef, workOrderDigest: digest, executionIdentity }) {
-  const unsafe = [workOrderRef, digest, executionIdentity].find((value) => !/^[A-Za-z0-9][\w.:/#-]*$/.test(String(value)));
-  if (unsafe !== undefined) throw new Error(`dispatch envelope value ${JSON.stringify(unsafe)} is not shell-safe`);
+// (a lagging agent definition still pulls), never task prose. The execution identity is the only interpolated value and must match EXECUTION_IDENTITY_RE.
+// The pointer carries the execution identity alone (ADR 0115); the pull resolves the ref and digest through the execution index.
+export function buildDispatchPointer({ workOrderRef, executionIdentity }) {
   if (!EXECUTION_IDENTITY_RE.test(executionIdentity)) throw new Error(`execution identity ${JSON.stringify(executionIdentity)} does not match EXECUTION_IDENTITY_RE`);
-  const text = `Run \`dev-loops-run scripts/github/pull-work-order.mjs --ref ${workOrderRef} --digest ${digest} --execution ${executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`;
+  const text = `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`;
   const bytes = Buffer.byteLength(text);
   if (bytes > DISPATCH_POINTER_MAX_BYTES) throw new Error(`dispatch envelope for ${workOrderRef} is ${bytes} bytes, over DISPATCH_POINTER_MAX_BYTES ${DISPATCH_POINTER_MAX_BYTES}`);
   return text;
