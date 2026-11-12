@@ -18,7 +18,7 @@ import { isQuarantinedHead, latestQuarantineMs, logWrittenMs } from "./_gate-qua
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
-import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES, computeReviewerUnitBudget } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES, computeReviewerUnitBudget, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "../loop/_operator-focus.mjs";
 import { dispatchUnitScope, expandDispatchUnits, normalizeUnitAngles, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 
@@ -35,9 +35,9 @@ print-gates.mjs.
 
 Dispatch-unit rule: EVERY multi-angle resolveFanoutGroups unit — a CONFIGURED
 gates.fanout.groups group OR an auto-chunked leftover \`group:...\` bundle —
-shares one reviewer, and never more than REVIEWER_UNIT_MAX_ANGLES (${REVIEWER_UNIT_MAX_ANGLES}) angles
+shares one reviewer, and never more than the round's recorded unit bound (fanout.unitBound; REVIEWER_UNIT_MAX_ANGLES (${REVIEWER_UNIT_MAX_ANGLES}) when absent) angles
 per reviewer. A multi-angle unit LARGER than that cap deterministically splits
-into ordered ≤${REVIEWER_UNIT_MAX_ANGLES}-angle sub-units (\`<name>-part1\`, \`<name>-part2\`, ...) — angle
+into ordered sub-units of at most that bound (\`<name>-part1\`, \`<name>-part2\`, ...) — angle
 order preserved, nothing dropped/duplicated/merged. Only a genuine SINGLE-angle
 unit gets its own distinct singleton reviewer. This matches ADR 0048's
 grouped-dispatch-default: resolveFanoutGroups draws no dispatch-relevant
@@ -659,7 +659,8 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // shared unit is a configured group (a valid string name), a singleton uses
   // its angle as the name — so both the scope and the provenance group are
   // well-formed by construction.
-  const dispatchUnits = expandDispatchUnits(units, configuredGroupNames);
+  const unitBound = resolveReviewerUnitBound(fanout.unitBound);
+  const dispatchUnits = expandDispatchUnits(units, configuredGroupNames, unitBound);
 
   // GATE-EXEC-FANOUT-CAPACITY (emitter half): the emitted unit count is the wave
   // width the coordinator uses, so a PRESENT plan record whose EMITTED units
@@ -760,7 +761,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     }
     const unitReads = resolveUnitScopedReads(artifact, angles);
     const budgetBasis = unitBudgetBasis(artifact, angles, diffBlocks, resolveClassifyRules(config));
-    const budget = computeReviewerUnitBudget(budgetBasis);
+    const budget = computeReviewerUnitBudget({ ...budgetBasis, angles: angles.length });
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {
       await mkdir(path.dirname(suffixPath), { recursive: true });
@@ -860,7 +861,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // success emit runs after the persist, so guarding here (rather than around
   // each earlier finish call, all of which run before the persist) is the one
   // complete seam.
-  const payload = { ok: true, gate, headSha, repo, pr, pending: pendingOnly, roundId, count: emitted.length, maxConcurrent, units: emitted };
+  const payload = { ok: true, gate, headSha, repo, pr, pending: pendingOnly, roundId, count: emitted.length, maxConcurrent, ...(unitBound !== REVIEWER_UNIT_MAX_ANGLES ? { unitBound } : {}), units: emitted };
   if (carryProof !== undefined) payload.carried = carryProof;
   const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
   // Units of the prior plan whose angles all completed in this round and are not re-emitted keep their fan-in

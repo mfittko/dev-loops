@@ -22,6 +22,26 @@ export const HARNESS_VALUES = Object.freeze(["pi", "claude", "codex"]);
 /** A reviewer unit is bounded to at most this many assigned angles. */
 export const REVIEWER_UNIT_MAX_ANGLES = 5;
 
+/** No round's recorded unit bound exceeds this many angles. */
+export const REVIEWER_UNIT_COMBINED_ANGLES_LIMIT = 10;
+
+/** Extra budget for each angle of a unit above REVIEWER_UNIT_MAX_ANGLES. */
+export const REVIEWER_UNIT_BUDGET_PER_EXTRA_ANGLE = Object.freeze({ maxModelTurns: 9, maxToolCalls: 10 });
+
+/**
+ * The one policy for a round's reviewer-unit angle bound: the smaller of the
+ * requested bound and REVIEWER_UNIT_COMBINED_ANGLES_LIMIT. An absent or invalid
+ * request resolves to REVIEWER_UNIT_MAX_ANGLES, so a record that carries no
+ * bound keeps the default. Every bound consumer reads the recorded value
+ * through this function.
+ * @param {unknown} [requested]
+ * @returns {number}
+ */
+export function resolveReviewerUnitBound(requested) {
+  if (!Number.isInteger(requested) || requested < 1) return REVIEWER_UNIT_MAX_ANGLES;
+  return Math.min(requested, REVIEWER_UNIT_COMBINED_ANGLES_LIMIT);
+}
+
 /**
  * The floor execution budget for one scoped-reviewer dispatch unit: the
  * budget of a unit with no reviewed diff, and the lowest budget
@@ -52,20 +72,23 @@ export const REVIEWER_UNIT_BUDGET_PER_CHANGED_LINE = 0.002;
 /**
  * The execution budget of a reviewer unit whose scoped diff has `files` file
  * blocks and `changedLines` added plus deleted lines: the floor plus
- * ceil(PER_FILE * files + PER_CHANGED_LINE * changedLines), clamped to the cap.
- * @param {{ files: number, changedLines: number }} size
+ * ceil(PER_FILE * files + PER_CHANGED_LINE * changedLines), plus
+ * REVIEWER_UNIT_BUDGET_PER_EXTRA_ANGLE for each of `angles` above
+ * REVIEWER_UNIT_MAX_ANGLES, clamped to the cap.
+ * @param {{ files: number, changedLines: number, angles?: number }} size
  * @returns {{ maxToolCalls: number, maxModelTurns: number, maxAngles: number }}
  */
-export function computeReviewerUnitBudget({ files, changedLines } = {}) {
+export function computeReviewerUnitBudget({ files, changedLines, angles = 0 } = {}) {
   if (!isNonNegativeInteger(files) || !isNonNegativeInteger(changedLines)) {
     throw new TypeError(`computeReviewerUnitBudget requires non-negative integer files and changedLines, got ${JSON.stringify({ files, changedLines })}`);
   }
   // ponytail: toFixed drops float noise (e.g. 1.0000000000000002) before ceil.
   const extra = Math.ceil(Number((REVIEWER_UNIT_BUDGET_PER_FILE * files + REVIEWER_UNIT_BUDGET_PER_CHANGED_LINE * changedLines).toFixed(9)));
+  const extraAngles = Math.max(0, angles - REVIEWER_UNIT_MAX_ANGLES);
   return Object.freeze({
-    maxToolCalls: Math.min(REVIEWER_UNIT_BUDGET_CAP.maxToolCalls, REVIEWER_UNIT_BUDGET_FLOOR.maxToolCalls + extra),
-    maxModelTurns: Math.min(REVIEWER_UNIT_BUDGET_CAP.maxModelTurns, REVIEWER_UNIT_BUDGET_FLOOR.maxModelTurns + extra),
-    maxAngles: REVIEWER_UNIT_MAX_ANGLES,
+    maxToolCalls: Math.min(REVIEWER_UNIT_BUDGET_CAP.maxToolCalls, REVIEWER_UNIT_BUDGET_FLOOR.maxToolCalls + extra + extraAngles * REVIEWER_UNIT_BUDGET_PER_EXTRA_ANGLE.maxToolCalls),
+    maxModelTurns: Math.min(REVIEWER_UNIT_BUDGET_CAP.maxModelTurns, REVIEWER_UNIT_BUDGET_FLOOR.maxModelTurns + extra + extraAngles * REVIEWER_UNIT_BUDGET_PER_EXTRA_ANGLE.maxModelTurns),
+    maxAngles: Math.max(REVIEWER_UNIT_MAX_ANGLES, angles),
   });
 }
 
@@ -170,8 +193,9 @@ export function validateReviewerUnit(unit) {
   if (!Array.isArray(angles) || angles.length === 0) {
     throw new TypeError("unit.angles must be a non-empty array of angle names");
   }
-  if (angles.length > REVIEWER_UNIT_MAX_ANGLES) {
-    throw new TypeError(`unit.angles must not exceed ${REVIEWER_UNIT_MAX_ANGLES} angles, got ${angles.length}`);
+  const unitBound = resolveReviewerUnitBound(gateContext.unitBound);
+  if (angles.length > unitBound) {
+    throw new TypeError(`unit.angles must not exceed ${unitBound} angles, got ${angles.length}`);
   }
 
   const normalizedAngles = [];

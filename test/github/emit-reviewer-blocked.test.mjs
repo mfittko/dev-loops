@@ -274,3 +274,19 @@ test("j) the floor budget applies without the flags; one flag alone or an out-of
     assert.equal(await main([...base, "--max-model-turns", "96", "--max-tool-calls", "100"]), 2);
   });
 });
+
+test("--unit-bound accepts a packed unit above 5 angles; a partial completion blocks the unreviewed angles and cannot consolidate clean", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const angles = "a,b,c,d,e,f,g";
+    const common = ["--run", RUN, "--head-sha", HEAD_SHA, "--angles", angles, "--completed-angles", "a,b,c,d,e", "--model-turns", "10", "--tool-calls", "10"];
+    const refusedDir = path.join(tmpDir, "refused");
+    assert.equal(await main([...common, "--findings-dir", refusedDir]), 2, "a missing bound means 5, so 7 angles are refused");
+    assert.equal(await main([...common, "--findings-dir", refusedDir, "--unit-bound", "0"]), 2);
+    const findingsDir = path.join(tmpDir, "findings");
+    assert.equal(await main([...common, "--findings-dir", findingsDir, "--unit-bound", "10"]), 0);
+    const artifacts = await readArtifacts(findingsDir);
+    assert.deepEqual(artifacts.map((a) => a.angle).sort(), ["f", "g"]);
+    assert.ok(artifacts.every((a) => a.verdict === "blocked" && a.reason === "reviewer_coverage_incomplete"));
+    assert.equal(consolidateFanin({ angleResults: artifacts }).verdict, "blocked");
+  });
+});
