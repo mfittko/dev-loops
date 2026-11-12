@@ -137,6 +137,23 @@ describe("composeBodyOnlyConvergedDraftGate", () => {
     }
   });
 
+  test("accepts medium, low, nit and a capitalized medium, and refuses any other severity as blocked_item", () => {
+    for (const severity of ["medium", "low", "nit", "Medium"]) assert.equal(bodyOnly([bodyItem(severity, 1)]).fixerCommit, A, severity);
+    for (const severity of ["high", "question", "critical", "", "unknown"]) {
+      assert.throws(() => bodyOnly([bodyItem(severity, 1)]), /^Error: blocked_item/, JSON.stringify(severity));
+    }
+    const noSeverity = bodyItem("medium", 1);
+    delete noSeverity.severity;
+    assert.throws(() => bodyOnly([noSeverity]), /^Error: blocked_item/);
+  });
+
+  test("a non-array actList refuses with the actList message, not a TypeError", () => {
+    const items = [bodyItem("medium", 1)];
+    for (const actList of ["medium body finding 1", { 0: items[0] }]) {
+      assert.throws(() => bodyOnly(items, { converged: { fixerCommit: A, actList } }), /^Error: converged\.actList must be/);
+    }
+  });
+
   test("refuses a cap-round blocker among the non-act findings", () => {
     const items = [bodyItem("medium", 1)];
     const deferredHigh = { severity: "high", summary: "deferred high", judgeDisposition: "defer" };

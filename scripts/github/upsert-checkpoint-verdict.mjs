@@ -64,7 +64,7 @@ import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerd
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 import { countPrOwnCommits as realCountPrOwnCommits } from "../loop/check-pre-push-delta.mjs";
-import { buildValidationResultsPath, countCompletedRounds, prBodySha256, readPriorPrBodySha256, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
+import { buildValidationResultsPath, countCompletedRounds, buildGateContextPath, prBodySha256, readGateContext, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
 // Mapped to the GitHub create-review `event` value in
@@ -152,15 +152,20 @@ function ledgerTmpRoot(ledgerPath) {
 async function readReviewedBodySha256(options, headSha, repoRoot) {
   const id = { repo: options.repo, pr: options.pr, gate: options.gate, headSha };
   // Every root is read: a same-head earlier round under another root can hold an older digest, so disagreeing digests refuse.
-  const found = new Set();
+  const found = new Map();
   for (const tmpRoot of [options.contextTmpRoot, undefined, ledgerTmpRoot(options.findingsLedger)]) {
     for (const root of resolveLedgerCheckouts(repoRoot)) {
-      const sha = await readPriorPrBodySha256({ ...id, tmpRoot }, { repoRoot: root });
-      if (sha) found.add(sha);
+      const file = path.resolve(root, buildGateContextPath({ ...id, tmpRoot: tmpRoot || "tmp" }));
+      // A strict read: only a missing context is absent. A truncated or unreadable one refuses, so a stale same-head digest cannot stand alone.
+      const context = await readGateContext({ ...id, tmpRoot }, { repoRoot: root }).catch((err) => {
+        throw new Error(`body_read_unrecorded: the context ${file} cannot be read (${err instanceof Error ? err.message : String(err)}); remove or repair it, or fix the items with a commit`);
+      });
+      const sha = Array.isArray(context?.requiredReads) ? context.requiredReads.find((r) => r?.kind === "pr-body")?.sha256 : null;
+      if (typeof sha === "string" && sha) found.set(file, sha);
     }
   }
-  if (found.size > 1) throw new Error(`body_read_unrecorded: the contexts at ${headSha} record ${found.size} different pr-body digests, so the cap round's reviewed body is ambiguous; remove the stale context of the earlier same-head round or fix the items with a commit`);
-  return [...found][0] ?? null;
+  if (new Set(found.values()).size > 1) throw new Error(`body_read_unrecorded: the contexts at ${headSha} record different pr-body digests, so the cap round's reviewed body is ambiguous; remove the stale context of the earlier same-head round or fix the items with a commit. Contexts: ${[...found].map(([file, sha]) => `${file} (${sha})`).join(", ")}`);
+  return [...found.values()][0] ?? null;
 }
 
 const roundCapReachedError =(round, cap) => new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs and no fixer follows. After the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`; pre_approval_gate judges what remains. When every open act item is a PR-body item, edit the PR body and run \`--converged-json\` with \`{ fixerCommit, actList, bodyOnly: true }\` instead (ADR 0271).`);
@@ -2797,8 +2802,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       throw new Error(`--converged-json "${options.convergedJson}" must be a JSON object { fixerCommit, actList, deltaResult }`);
     }
   }
-  // The ONLY path that lets a clean verdict stand over open act items: a validated low/nit convergence
-  // (composeConvergedDraftGate throws on anything else). Items compare by severity and trimmed summary as a multiset: the ledger and
+  // The ONLY two paths that let a clean verdict stand over open act items: a validated low/nit convergence and the GATE-EXEC-NO-DEAD-END body-only post
+  // (composeConvergedDraftGate throws on anything else; the body-only post is checked in composeBodyOnlyConvergedDraftGate). Items compare by severity and trimmed summary as a multiset: the ledger and
   // --findings-json can carry the same finding.
   let convergedMarker = null;
   const guardedActItems = async (findings) => {
@@ -2834,7 +2839,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       composeBodyOnlyConvergedDraftGate({ ...composeInput, ownCommits: 0 });
       const ownCommits = convergedInput.fixerCommit === canonicalHeadSha ? 0
         : await countPrOwnCommits(repoRoot, canonicalHeadSha, convergedInput.fixerCommit, live.baseRefName)
-          .catch((err) => { throw new Error(`--converged-json bodyOnly: cannot count PR-own commits in ${canonicalHeadSha}..${convergedInput.fixerCommit}: ${err instanceof Error ? err.message : String(err)}`); });
+          .catch((err) => { if (err instanceof Error && err.message.startsWith("own_commit_in_range:")) throw err; throw new Error(`--converged-json bodyOnly: cannot count PR-own commits in ${canonicalHeadSha}..${convergedInput.fixerCommit}: ${err instanceof Error ? err.message : String(err)}`); });
       convergedMarker = composeBodyOnlyConvergedDraftGate({ ...composeInput, ownCommits });
     } else convergedMarker = composeConvergedDraftGate(capacity);
     return [];

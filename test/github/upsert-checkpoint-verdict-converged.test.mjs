@@ -129,7 +129,7 @@ async function post(tempDir, { findings, converged, extraArgs = [], runChildOpti
   try {
     const result = await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
       env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: root, runChild: makeRunChild({ puts, ...runChildOptions }),
-      countPrOwnCommits: async () => runChildOptions.countThrows ? Promise.reject(new Error("git fetch failed")) : String(runChildOptions.ownShas ?? "").split("\n").filter(Boolean).length,
+      countPrOwnCommits: async () => runChildOptions.countThrows ? Promise.reject(new Error(typeof runChildOptions.countThrows === "string" ? runChildOptions.countThrows : "git fetch failed")) : String(runChildOptions.ownShas ?? "").split("\n").filter(Boolean).length,
     });
     return { result, body: puts.join("\n") };
   } catch (error) {
@@ -512,14 +512,14 @@ test("a converged post on a cap-fixed PR is still refused when coordination forb
 // ADR 0271 (GATE-EXEC-NO-DEAD-END): a cap round whose act items are all PR-body items clears with no commit.
 const EDITED_BODY = `${DEFAULT_TEST_PR_BODY}\nEdited for the cap round.`;
 // ledgerTmpRoot puts the findings ledger and the prior rounds under another tmp root than the cap-round context (the main checkout versus the reviewed worktree).
-async function bodyOnlyPost(tempDir, { findings, fixer = A, input = {}, reviewedBody = DEFAULT_TEST_PR_BODY, runChildOptions = {}, ledgerTmpRoot }) {
+async function bodyOnlyPost(tempDir, { findings, actList = findings, fixer = A, input = {}, reviewedBody = DEFAULT_TEST_PR_BODY, runChildOptions = {}, ledgerTmpRoot }) {
   const ledgerPath = ledgerTmpRoot ? path.join(ledgerTmpRoot, "gate-findings", "owner-repo", "pr-17", "ledger.json") : undefined;
   const ctx = path.join(capOnRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
   await mkdir(path.dirname(ctx), { recursive: true });
   await writeFile(ctx, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256(reviewedBody) }] }), "utf8");
   let out;
   await withPriorRounds(3, async () => {
-    out = await post(tempDir, { findings, converged: { fixerCommit: fixer, actList: findings, bodyOnly: true, ...input }, root: capOnRoot, ledgerPath, runChildOptions: { currentHead: fixer, liveBody: EDITED_BODY, ...runChildOptions } });
+    out = await post(tempDir, { findings, converged: { fixerCommit: fixer, actList, bodyOnly: true, ...input }, root: capOnRoot, ledgerPath, runChildOptions: { currentHead: fixer, liveBody: EDITED_BODY, ...runChildOptions } });
   }, ledgerTmpRoot);
   await rm(ctx, { force: true });
   return out;
@@ -560,7 +560,11 @@ test("body-only: each failed narrow check refuses with its typed reason and post
       ["body_item_locatable", { findings: [{ ...finding("medium", 1), files: ["src/a.mjs"] }] }],
       ["body_unchanged", { findings: bodyItems, reviewedBody: EDITED_BODY }],
       ["own_commit_in_range", { findings: bodyItems, fixer: FIX, runChildOptions: { ownShas: `${"c".repeat(40)}\n` } }],
+      // A non-descendant fixer commit keeps its typed reason as the leading token.
+      ["own_commit_in_range", { findings: bodyItems, fixer: FIX, runChildOptions: { countThrows: `own_commit_in_range: ${FIX} does not descend from the reviewed head ${A}` } }],
       ["blocked_item", { findings: [finding("high", 1)] }],
+      // The ledger holds a deferred high next to the body item: the whole round blocks, not only the act list.
+      ["blocked_item", { findings: [finding("medium", 1), { severity: "high", angle: "correctness", summary: "deferred high", judgeDisposition: "defer" }], actList: [finding("medium", 1)] }],
       ["blocked_item", { findings: [{ ...finding("medium", 1), failOpen: true }] }],
       ["blocked_item", { findings: [{ ...finding("medium", 1), angle: "renderer-security" }] }],
     ];
@@ -613,6 +617,21 @@ test("body-only: two contexts at the reviewed head under different roots with di
     await writeFile(staleCtx, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256("an older round's body") }] }), "utf8");
     const out = await bodyOnlyPost(tempDir, { findings: [finding("medium", 1)], ledgerTmpRoot: mainTmp });
     assert.match(out.error ?? "", /^body_read_unrecorded: .*different pr-body digests/, out.error);
+    assert.ok((out.error ?? "").includes(staleCtx), "the message names the stale context path");
+    assert.ok((out.error ?? "").includes(path.join(capOnRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }))), "the message names the cap-round context path");
     assert.equal(out.puts.length, 0);
   }, { prefix: "dev-loops-converged-bodyonly-ambiguous-" });
+});
+
+test("body-only: a malformed context beside a readable one refuses body_read_unrecorded naming the path", async () => {
+  await withTempDir(async (tempDir) => {
+    const mainTmp = path.join(tempDir, "main", "tmp");
+    const badCtx = path.join(tempDir, "main", buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(badCtx), { recursive: true });
+    await writeFile(badCtx, '{"requiredReads": [', "utf8");
+    const out = await bodyOnlyPost(tempDir, { findings: [finding("medium", 1)], ledgerTmpRoot: mainTmp });
+    assert.match(out.error ?? "", /^body_read_unrecorded: the context .* cannot be read/, out.error);
+    assert.ok((out.error ?? "").includes(badCtx));
+    assert.equal(out.puts.length, 0);
+  }, { prefix: "dev-loops-converged-bodyonly-malformed-" });
 });
