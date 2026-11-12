@@ -7109,6 +7109,43 @@ test("upsert-checkpoint-verdict's noop short-circuit stays coupled to the posted
   }, { prefix: "dev-loops-upsert-digest-noop-" });
 });
 
+test("upsert-checkpoint-verdict re-posts instead of noop for a no-ledger evidence_only act finding at an unchanged digest (#3197)", async () => {
+  await withTempDir(async (tempDir) => {
+    const structuredFindings = [
+      { angle: "correctness", verdict: "clean", findings: [] },
+      { angle: "pr-description", verdict: "clean", findings: [] },
+      { angle: "holistic", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "evidence only note", judgeDisposition: "act" }] },
+    ];
+    const findingsPath = path.join(tempDir, "findings.json");
+    // The posted comment predates remedyKind; the rerun adds it without changing verdict, counts or next action.
+    const findingsWithRemedy = structuredFindings.map((e) => ({ ...e, findings: e.findings.map((f) => ({ ...f, remedyKind: "evidence_only" })) }));
+    await writeFile(findingsPath, JSON.stringify(findingsWithRemedy), "utf8");
+    const findingsSeverityCounts = { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 1 };
+    const priorBody = renderGateReviewCommentBody({
+      gate: "draft_gate",
+      headSha: "abc1234000000000000000000000000000000000",
+      verdict: "findings_present",
+      findingsSummary: "ignored in structured mode",
+      nextAction: "stay draft and fix",
+      executionMode: "fanout_fanin",
+      structuredFindings,
+      findingsSeverityCounts,
+    });
+    const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
+      isDraft: true,
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      issueComments: [[{ id: 101, body: priorBody, html_url: "https://github.com/owner/repo/pull/17#issuecomment-101", updated_at: "2026-05-31T20:00:00Z" }]],
+    }));
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "findings_present", "--findings-json", findingsPath,
+      "--findings-severity-counts", JSON.stringify(findingsSeverityCounts),
+      "--next-action", "fix", "--execution-mode", "fanout_fanin",
+    ], { env });
+    assert.notEqual(JSON.parse(result.stdout || "{}").action, "noop", result.stderr);
+  }, { prefix: "dev-loops-upsert-evidence-only-no-noop-" });
+});
+
 test("upsert-checkpoint-verdict records executionMode and warns on inline, stays clean on fanout", async () => {
   await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [

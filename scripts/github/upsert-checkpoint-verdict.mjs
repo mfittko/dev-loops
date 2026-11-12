@@ -3147,6 +3147,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // Parsed and validated BEFORE the tick below, so an input this post refuses
   // never leaves ticked boxes behind.
   let structuredFindings = null;
+  // A no-ledger rerun cannot tell whether the posted comment carries the evidence-only label (the digest and counts stay equal), so it re-posts instead of noop.
+  let evidenceOnlyActNoLedger = false;
   let rawFindingsInput = null;
   if (options.findingsJson) {
     let raw;
@@ -3191,6 +3193,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ...(resolveFindingFile(f) ? { files: [resolveFindingFile(f)] } : {}),
       ...(Number.isInteger(f?.followUpIssueNumber) && f.followUpIssueNumber > 0 ? { followUpIssueNumber: f.followUpIssueNumber } : {}),
     }));
+    evidenceOnlyActNoLedger = !options.findingsLedger && flatFindings.some((f) => f.judgeDisposition === "act" && f.remedyKind === "evidence_only");
     const badDisposition = flatFindings.find((f) => f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition));
     if (badDisposition) throw new Error(`--findings-json "${options.findingsJson}" finding "[${badDisposition.severity}] ${badDisposition.summary}" carries judgeDisposition ${JSON.stringify(badDisposition.judgeDisposition)} outside ${JUDGE_DISPOSITIONS.join("/")} (fail closed; ADR 0089)`);
     // An unjudged ledger finding stays unknown unless a judged --findings-json finding covers it (same fingerprint: first file plus normalized summary).
@@ -3926,6 +3929,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     && (existing.sizeWaiverGranted ?? null) === desiredSizeWaiverGranted
     && (existing.sizeWaiverApprovedBy ?? null) === desiredSizeWaiverApprovedBy
     && unpostedFindings === 0
+    && !evidenceOnlyActNoLedger
     // ponytail: the existing summary carries no body, so the review-verdict /
     // gate-blockers lines cannot be compared. A composed checkpoint always
     // re-renders in place. A prior composed body is always `blocked`, so a
