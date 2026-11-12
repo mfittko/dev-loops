@@ -2056,7 +2056,7 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
     // A stamped ledger that never finished (an aborted or intermediate write) is no round at any head, current or earlier.
     if (log.roundIdentity !== undefined && log.roundIdentity?.completed !== true) continue;
     if (!retained && (sha.startsWith(head) || head.startsWith(sha)) && isInRoundRewrite(log, options.roundIdentity)) continue;
-    // The live ledger ranks above every retained round of its head; retained rounds order by their number.
+    // Rounds order by loggedAt, then head, then retained number; the live ledger (Infinity) sorts last among rounds of equal loggedAt and head.
     const retainedNumber = /\.round-(\d+)\.json$/.exec(name);
     rounds.push({ sha, loggedAt: typeof log.loggedAt === "string" ? log.loggedAt : "", round: retainedNumber ? Number(retainedNumber[1]) : Infinity, log });
   }
@@ -2180,11 +2180,11 @@ export function capRoundActList(findings, headSha) {
 export const isCleanCapRound = (capRound) => capRound?.log?.verdict === "clean" && capRoundActRefs(capRound.log.findings, capRound.log.headSha).size === 0;
 
 /**
- * The cap round of a draft_gate (ADR 0208): the last closed ledger when the completed rounds (the head being posted excluded) reached the cap and
+ * The cap round of a draft_gate (ADR 0208): the last closed ledger when the completed rounds reached the cap (the count includes a finished live ledger at the current head; an unfinished or in-rewrite ledger never counts) and
  * that ledger is `findings_present` or `clean` (ADR 0250: a clean cap round has no act ref; its `residue` holds only `capClosed` items). Returns `{ log, residue }` or null. `residue` is the cap round's act items and `capClosed` items as
  * `{ fingerprint, file, line, title, disposition }`, the input `pre_approval_gate` receives.
- * The candidate set is the closed prior rounds plus the retained rounds of the current head. The live current-head ledger is the round being posted
- * (the head excluded, as in the round count), so it is never the cap-round authority and the latest retained round at the head is.
+ * The candidate set is the closed prior rounds plus the retained rounds of the current head. A finished live ledger at the current head counts and can be the cap round
+ * (a PR-body-only edit leaves the head unchanged), the same count the coordination detector uses (`includeLiveCurrentHead`).
  */
 export async function resolveCapRound(options, { repoRoot, onFailClosed = () => {} }) {
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
@@ -2192,10 +2192,10 @@ export async function resolveCapRound(options, { repoRoot, onFailClosed = () => 
   const draft = { ...options, gate: "draft_gate" };
   // The findings ledger is main-anchored: never read it from a relocated --tmp-root.
   const ledger = { ...draft, tmpRoot: undefined };
-  if (!(cap > 0) || await countCompletedRounds(ledger, { repoRoot }) - 1 < cap) return null;
+  if (!(cap > 0) || await countCompletedRounds(ledger, { repoRoot, includeLiveCurrentHead: true }) - 1 < cap) return null;
   // An unreadable ledger counts toward the cap but readClosedPriorRoundLogs drops it, so the cap-round authority could be an earlier round: fail closed.
   let unreadable = 0;
-  const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, includeRetainedCurrentHead: true, onUnreadable: () => { unreadable += 1; } })).at(-1);
+  const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, includeLiveCurrentHead: true, includeRetainedCurrentHead: true, onUnreadable: () => { unreadable += 1; } })).at(-1);
   // The persisted severity verdict can read `clean` for judge-act mediums whose posted review composes findings_present: an open act item makes the round a cap round too.
   if (unreadable > 0 || !log || (log.verdict !== "findings_present" && log.verdict !== "clean" && listOpenActItems(log.findings).length === 0)) { onFailClosed(); return null; }
   // An act item the sealed cap-round delta record marks resolved is fixed, not residue; with no verifiable record every act item stays.
