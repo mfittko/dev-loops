@@ -83,13 +83,25 @@ function isCommitDiff(line) {
   const revs = front.filter((a) => !a.startsWith("-"));
   return revs.some(isRange) || (revs.length === 2 && revs.every((a) => REVISION_RE.test(a)));
 }
+// Split on whitespace outside quotes; a token that holds a quote keeps it, so it never equals a bare switch.
+function unquotedTokens(line) {
+  const out = []; let cur = ""; let quote = null;
+  for (const ch of line) {
+    if (quote) { cur += ch; if (ch === quote) quote = null; } else if (ch === "'" || ch === '"') { quote = ch; cur += ch; } else if (/\s/.test(ch)) { if (cur) out.push(cur); cur = ""; } else cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
 export function isJudgeSearchLine(command) {
   if (typeof command !== "string") return false;
   let line = command.trim();
   const root = JUDGE_GIT_C_RE.exec(line);
   if (root) {
     // The root's own git config may name a diff.external program or a textconv driver, so a rooted command must switch both off.
-    if (root[1].includes("..") || !/ --no-ext-diff(?: |$)/.test(line) || !/ --no-textconv(?: |$)/.test(line)) return false;
+    // Both switches must be standalone unquoted tokens before any `--`: quoted text and pathspecs never reach git as switches.
+    const tokens = unquotedTokens(line);
+    const front = tokens.includes("--") ? tokens.slice(0, tokens.indexOf("--")) : tokens;
+    if (root[1].includes("..") || !front.includes("--no-ext-diff") || !front.includes("--no-textconv")) return false;
     line = `git ${line.slice(root[0].length)}`;
   }
   if (!JUDGE_SEARCH_PREFIX_RE.test(line) || hasDeniedLongFlag(line.replace(/['"]/g, "")) || /[\r\n]|\\"/.test(line) || !isCommitDiff(line)) return false;
