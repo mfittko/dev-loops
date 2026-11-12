@@ -2500,6 +2500,32 @@ test("the producer records the default unit bound of 5 on the context fanout pla
   await withTmpDir(async (repoRoot) => {
     const fanout = await seedBoundBundle(repoRoot, BOUND_ANGLES.slice(0, 6), undefined, ["pr-checklist"]);
     assert.equal(fanout.unitBound, 5);
+    const artifactPath = path.join(repoRoot, "tmp", "gate-context", "o-r", "pr-7", `${GATE}-${HEAD_SHA}.json`);
+    assert.equal(JSON.parse(await readFile(artifactPath, "utf8")).fanout.unitBound, 5);
+  });
+});
+
+test("main(): a recorded bound of 10 emits the same packed unit membership and provenance under pi, claude and codex with the unchanged maxConcurrent", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const groupAngles = BOUND_ANGLES.slice(0, 6);
+    await seedBoundBundle(repoRoot, groupAngles, 10, ["pr-checklist"]);
+    const harnessEnvs = {
+      pi: {},
+      claude: { CLAUDECODE: "1" },
+      codex: { CODEX_THREAD_ID: "thread-1" },
+    };
+    for (const [harness, extra] of Object.entries(harnessEnvs)) {
+      const env = { ...process.env };
+      delete env.CLAUDECODE;
+      delete env.CODEX_THREAD_ID;
+      const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot, env: { ...env, ...extra } });
+      assert.equal(emitted.status, 0, `${harness}: ${emitted.stderr || emitted.stdout}`);
+      const payload = JSON.parse(emitted.stdout);
+      assert.equal(payload.unitBound, 10, harness);
+      assert.deepEqual(payload.units.map((unit) => unit.angles), [groupAngles, ["pr-checklist"]], harness);
+      assert.deepEqual(payload.units.map((unit) => unit.group), ["design-solid", null], harness);
+      assert.equal(payload.maxConcurrent, 5, harness);
+    }
   });
 });
 

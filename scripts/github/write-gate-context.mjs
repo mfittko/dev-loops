@@ -35,7 +35,7 @@ import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { VERIFIED_ITEMS_ANGLES, baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves, validateAngleResult } from "@dev-loops/core/loop/gate-fanin";
 import { anchorBaseRef, normalizeBaseBranch } from "../lib/anchor-base-ref.mjs";
 import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-write-remote-freshness-guard.mjs";
-import { REVIEWER_UNIT_MAX_ANGLES, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 import { retireGateRound } from "./retire-gate-round.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -2514,7 +2514,7 @@ function normalizeCarriedAnglesArg(carriedAngles) {
  * @param {"draft"|"preApproval"} configGate
  * @param {string[]} resolvedAngles
  * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string>, carriedAngles?: Iterable<string>, env?: Record<string, string|undefined>, singleWave?: boolean }} [options] — `env` defaults to `process.env`; injectable so a caller-boundary test can pin the harness deterministically instead of depending on the ambient environment. `singleWave` (default true) enables packing and the capacity refusal; the review gate passes false.
- * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number, preflight: object, pendingGroups: { name: string, angles: string[] }[], pendingWavePlan: { name: string, angles: string[] }[][] }}
+ * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number, unitBound: number, preflight: object, pendingGroups: { name: string, angles: string[] }[], pendingWavePlan: { name: string, angles: string[] }[][] }}
  */
 export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null, env = process.env, singleWave = true } = {}) {
   // Angle-pool order, as the pairing guard re-derives it: auto-chunk
@@ -2632,8 +2632,8 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
           // so a carry-forward round is never mislabeled as all-fresh.
           const resolvedAngleCount = baseUnits.reduce((sum, unit) => sum + unit.angles.length, 0);
           const freshAngleCount = dispatchableUnits.reduce((sum, unit) => sum + unit.angles.filter((a) => !carriedKeys.has(baseAngleName(String(a)).trim().toLowerCase())).length, 0);
-          const capacity = effectiveConcurrency * REVIEWER_UNIT_MAX_ANGLES;
-          throw new Error(`GATE-EXEC-FANOUT-CAPACITY: refusing — the round resolves ${resolvedAngleCount} angles (${freshAngleCount} fresh, ${resolvedAngleCount - freshAngleCount} carried forward) in ${dispatchableUnits.length} base dispatch units that do not fit one wave of effective maxConcurrent ${effectiveConcurrency} units x ${REVIEWER_UNIT_MAX_ANGLES} angles (capacity ${capacity}); raise gates.fanout.maxConcurrent, disable angles, or rely on dynamic pruning to shrink the round`);
+          const capacity = effectiveConcurrency * unitBound;
+          throw new Error(`GATE-EXEC-FANOUT-CAPACITY: refusing — the round resolves ${resolvedAngleCount} angles (${freshAngleCount} fresh, ${resolvedAngleCount - freshAngleCount} carried forward) in ${dispatchableUnits.length} base dispatch units that do not fit one wave of effective maxConcurrent ${effectiveConcurrency} units x ${unitBound} angles (capacity ${capacity}); raise gates.fanout.maxConcurrent, disable angles, or rely on dynamic pruning to shrink the round`);
         }
         // Emit the dispatchable plan — it IS what will be dispatched, so it is
         // what the recorded membership must name. Packed base units when

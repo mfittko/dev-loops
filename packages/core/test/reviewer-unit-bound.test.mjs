@@ -527,6 +527,11 @@ describe("computeReviewerUnitBudget — per-angle step above five angles", () =>
     assert.equal(computeReviewerUnitBudget({ files: 0, changedLines: 0, angles: 6 }).maxAngles, 6);
   });
 
+  test("a non-integer or negative angles input throws TypeError, and integer 0, 5, 6 and 10 are accepted", () => {
+    for (const angles of [0, 5, 6, 10]) assert.doesNotThrow(() => computeReviewerUnitBudget({ files: 0, changedLines: 0, angles }));
+    for (const angles of [NaN, 6.5, -1, "7"]) assert.throws(() => computeReviewerUnitBudget({ files: 0, changedLines: 0, angles }), TypeError);
+  });
+
   test("ten angles reach the cap exactly at the floor, and every larger sum clamps at 95 turns and 100 tool calls", () => {
     assert.deepEqual(pair(computeReviewerUnitBudget({ files: 0, changedLines: 0, angles: 10 })), [100, 90]);
     assert.deepEqual(pair(computeReviewerUnitBudget({ files: 57, changedLines: 5116, angles: 8 })), [100, 95]);

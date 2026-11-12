@@ -797,20 +797,16 @@ async function readContextFanout({ repo, pr, gate, headSha, contextTmpRoot }, re
  * @returns {Promise<{ name: string, angles: string[] }[]|null>}
  */
 export async function readContextDispatchUnits(round, config, repoRoot) {
-  const fanout = await readContextFanout(round, repoRoot);
+  return dispatchUnitsFromFanout(await readContextFanout(round, repoRoot), config);
+}
+
+// The dispatch units of one already-read context fanout plan (null when absent).
+// The writer derives the units and the recorded unit bound (`fanout.unitBound`,
+// 5 when absent) from the one read so they always come from the same artifact.
+function dispatchUnitsFromFanout(fanout, config) {
   if (fanout === null) return null;
   const configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
   return expandDispatchUnits(fanout.groups, configuredGroupNames, fanout.unitBound).map(({ name, angles }) => ({ name, angles }));
-}
-
-/**
- * The round's recorded reviewer-unit bound from the context artifact's
- * `fanout.unitBound`; 5 when the context, the plan or the field is absent.
- * @returns {Promise<number>}
- */
-export async function readContextUnitBound(round, repoRoot) {
-  const fanout = await readContextFanout(round, repoRoot);
-  return resolveReviewerUnitBound(fanout?.unitBound);
 }
 
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
@@ -1080,8 +1076,9 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       if (err?.code === "config_load_failed") throw err;
       resolvedGroups = null;
     }
-    const dispatchUnits = await readContextDispatchUnits(options, config, repoRoot);
-    const unitBound = await readContextUnitBound(options, repoRoot);
+    const fanout = await readContextFanout(options, repoRoot);
+    const dispatchUnits = dispatchUnitsFromFanout(fanout, config);
+    const unitBound = resolveReviewerUnitBound(fanout?.unitBound);
     return parseProvenanceJson(rawProvenanceJson, resolvedGroups, dispatchUnits, unitBound);
   };
   let provenance;

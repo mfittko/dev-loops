@@ -79,8 +79,8 @@ export const REVIEWER_UNIT_BUDGET_PER_CHANGED_LINE = 0.002;
  * @returns {{ maxToolCalls: number, maxModelTurns: number, maxAngles: number }}
  */
 export function computeReviewerUnitBudget({ files, changedLines, angles = 0 } = {}) {
-  if (!isNonNegativeInteger(files) || !isNonNegativeInteger(changedLines)) {
-    throw new TypeError(`computeReviewerUnitBudget requires non-negative integer files and changedLines, got ${JSON.stringify({ files, changedLines })}`);
+  if (!isNonNegativeInteger(files) || !isNonNegativeInteger(changedLines) || !isNonNegativeInteger(angles)) {
+    throw new TypeError(`computeReviewerUnitBudget requires non-negative integer files, changedLines and angles, got ${JSON.stringify({ files, changedLines, angles })}`);
   }
   // ponytail: toFixed drops float noise (e.g. 1.0000000000000002) before ceil.
   const extra = Math.ceil(Number((REVIEWER_UNIT_BUDGET_PER_FILE * files + REVIEWER_UNIT_BUDGET_PER_CHANGED_LINE * changedLines).toFixed(9)));
