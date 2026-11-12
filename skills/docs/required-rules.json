@@ -449,6 +449,10 @@
       "id": "GATE-EXEC-JUDGE-AUTHORITY-SPLIT"
     },
     {
+      "id": "GATE-EXEC-JUDGE-GROUNDED-DISCOVERY",
+      "enforcement": "doc"
+    },
+    {
       "id": "GATE-EXEC-JUDGE-NOT-FRESH"
     },
     {

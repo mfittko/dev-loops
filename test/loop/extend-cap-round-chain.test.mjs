@@ -467,7 +467,7 @@ test("a clean cap round plus a logic commit refuses logic_commit_in_range and wr
 test("a clean cap round at the PR head writes no record, and an orphaned cap-round head still refuses baseline_orphaned", async () => {
   const { root, A } = await cleanCapFixture();
   try {
-    // At the cap-round head the round is the head being posted (no cap round yet): the clean draft_gate verdict path applies, and nothing is written.
+    // The cap round resolves at the PR head (ADR 0265): the clean draft_gate verdict path applies, nothing is written, and the tool refuses no_cap_round_chain because the cap-round head is not a strict ancestor of the head.
     const clean = await extend(root, A);
     assert.equal(clean.reason, "no_cap_round_chain");
     assert.match(clean.detail, /no covering sealed cap-round clearing chain/);

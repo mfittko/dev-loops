@@ -32,7 +32,19 @@ Your task is a compact instruction to run the pull CLI with concrete values: the
 
 The repo-script launcher form is owned by `WORKTREE-SCRIPT-LAUNCHER-CWD` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands); apply it to every script you run except the bare decision-check line.
 
+<!-- rule-ref: GATE-EXEC-JUDGE-GROUNDED-DISCOVERY -->
+Optional widening follows `GATE-EXEC-JUDGE-GROUNDED-DISCOVERY` in [Gate review sub-loop contract](../skills/docs/gate-review-sub-loop-contract.md):
+
+1. State which concrete dependency or ambiguity needs extra context before widening.
+2. Limit optional reads to exact paths in authenticated material or bounded filename discovery results under a known existing root, without inventing a filename or directory.
+3. Find the application root in the absolute `worktree:` line of the hash-bound `evidence` read header block (the key: value lines between the title's blank line and the next blank line, never a line inside a fenced body). Contract references resolve against the emitting toolchain. Use absolute application paths under that root, never native shell cwd or artifact storage: a delegated pull changes only its subprocess cwd. Resolve gate artifact references, for example prior-round ledgers, against the directory of the hash-bound findings read or of a prior-verdict required read. If that absolute locator is absent, stop before application widening and report the limitation.
+4. An empty optional filename search is distinct from an attempted file read that fails. If existing evidence suffices, do not read an absent optional candidate. If necessary evidence is unavailable, report the limitation and stop.
+5. Preserve every permission/classifier-denial, failed-read, missing-required-input and digest-mismatch stop, immutable dispatches, pull receipts, verdict validation and judge ownership of dispositions. This rule adds no tool, shell command or write target.
+
 ### Codex after-pull setup
+
+<!-- rule-ref: GATE-EXEC-JUDGE-GROUNDED-DISCOVERY -->
+Apply `GATE-EXEC-JUDGE-GROUNDED-DISCOVERY` above before every optional read; bounded filename discovery uses only the existing read/search tools and Codex read exception.
 
 The canonical pulled delivery supplies this setup before the first pinned read; never rely on a later coordinator message. Codex may use bounded direct `cat`/`sed`/`rg` to read pinned contracts/inputs and concrete dependencies permitted by the work order's widening rule. Qualify the digest tool with `command -v shasum`, then authenticate every pinned contract/source with direct `shasum -a 256`. Derive the emitting toolchain root by removing the `agents/judge.agent.md` suffix from absolute `executionRules.contract`; resolve relative `contracts[].path` only against that root, never cwd or a searched fallback. Relative contract paths/digests retain semantic identity; the locator is local material bound by the pull's rendered-byte integrity check. Read every authenticated contract and required input in full. Recover truncation with bounded ranges before proceeding.
 
