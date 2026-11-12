@@ -1006,7 +1006,7 @@ function shellWords(text) {
  */
 export function commandRunsStandingAuthorizationPath(command) {
   const hit = (words) => words.some((w) => /(?:^|\/)waive-adr-tripwire\.mjs$/.test(w))
-    || words.some((w, k) => /(?:^|\/)(?:index\.mjs|dev-loops)$/.test(w) && words.slice(k + 1).some((x, j, rest) => x === "pr" && rest[j + 1] === "waive-adr-tripwire"))
+    || words.some((w, k) => /(?:^|\/)(?:index\.mjs|dev-loops(?:@[^/]*)?)$/.test(w) && words.slice(k + 1).some((x, j, rest) => x === "pr" && rest[j + 1] === "waive-adr-tripwire"))
     || (words.some((w) => /(?:^|\/)(?:comment-issue|edit-comment)\.mjs$/.test(w)) && words.some((w) => /^--standing-authorization(?:=|$)/.test(w)));
   if (shellWrapperTails(blankQuotedForFlags(joinLineContinuations(command))).some((t) => hit(t.replace(/["']/g, " ").split(/\s+/).filter(Boolean)))) return true;
   return shellSegments(command).some((segment) => hit(shellWords(segment)));

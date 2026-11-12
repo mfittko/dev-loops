@@ -661,6 +661,9 @@ test("a subagent cannot execute a standing-authorization script directly", () =>
 test("a subagent cannot reach a standing-authorization path through an unlisted runner, a quoted path or a quoted positional", () => {
   for (const command of [
     "npm exec dev-loops -- pr waive-adr-tripwire --pr 5",
+    "npx dev-loops@latest pr waive-adr-tripwire --pr 5",
+    "bunx dev-loops@1.0.11 pr waive-adr-tripwire",
+    "npm exec dev-loops@latest -- pr waive-adr-tripwire",
     "pnpm exec dev-loops pr waive-adr-tripwire --pr 5",
     "yarn exec dev-loops pr waive-adr-tripwire --pr 5",
     "deno run -A scripts/github/waive-adr-tripwire.mjs --pr 5",
