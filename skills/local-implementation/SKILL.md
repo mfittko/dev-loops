@@ -416,7 +416,7 @@ For each delegated task:
 <!-- pi-only -->
 - resolve the subagent's model via `resolveRoleModel(config, { role, harness: "pi" })` (`role` = the delegate name, e.g. `developer`/`quality`/`docs`/`fixer`/`refiner`) and pass it at dispatch **only when non-null**; this is a routine **role** dispatch, so leave `kind` unset (a gate inspection-angle fan-out passes `kind: "angle"` instead — see the pull-request gate reviewer dispatch in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md)). Built-in Pi tiers are `null`, so this is a no-op until an operator sets `models.tiers.<alias>.pi`. See [Main-agent delegation contract](../docs/main-agent-contract.md).
 <!-- /pi-only -->
-- on Claude, resolve the subagent's model with `node <dev-loops-package-root>/cli/index.mjs gate resolve-role --role <name> --harness claude` and pass its `model` as the Agent `model` parameter (an alias such as `sonnet` or `opus`) only when non-null; the baked `model:` frontmatter is the fallback. See [Main-agent delegation contract](../docs/main-agent-contract.md#model-tier-at-dispatch-pi-and-claude).
+- on Claude, resolve the subagent's model with `node <dev-loops-package-root>/cli/index.mjs gate resolve-role --role <name> --harness claude` and pass its `model` as the Agent `model` parameter (an alias such as `sonnet` or `opus`) only when non-null (only exit 0 permits dispatch; on exit 1 or 2 stop and report the `configErrors`); the baked `model:` frontmatter is the fallback. See [Main-agent delegation contract](../docs/main-agent-contract.md#model-tier-at-dispatch-pi-and-claude).
 
 ### Status monitoring
 

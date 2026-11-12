@@ -253,7 +253,7 @@ The rule binds the coordinator on every harness, so it stays outside the section
 On the Claude harness a dispatching agent resolves the model at dispatch time with
 `dev-loops-run cli/index.mjs gate resolve-role --role <name> --harness claude`, which prints
 `{ok, role, harness: "claude", model, configErrors}`, and passes `model` as the Agent `model` parameter
-**only when non-null**. The main session does this for the initial `dev-loops:dev-loop` dispatch (`gate resolve-role --role dev-loop --harness claude`). The fixer and coordinator (`dev-loop`) emitters add it to the printed
+**only when non-null**. Only exit 0 permits dispatch; exit 1 or 2 stops the dispatch and reports the `configErrors`. The main session does this for the initial `dev-loops:dev-loop` dispatch (`gate resolve-role --role dev-loop --harness claude`). The fixer and coordinator (`dev-loop`) emitters add it to the printed
 `dispatchPayload`; every other Claude dispatch (`developer`, `docs`, `quality`, `refiner`,
 `gate-coordinator`, `review`, `judge`, the pre-push reviewer) passes it from the dispatching
 agent: the `dev-loop` agent for its own sub-delegates, the `gate-coordinator` for its review and

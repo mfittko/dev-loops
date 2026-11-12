@@ -14,6 +14,7 @@
  * The mutually exclusive conductor selector requires explicit --harness codex
  * and returns nullable settings plus omitted-if-null nativeOverrides. Only
  * exit 0 permits dispatch; see skills/docs/main-agent-contract.md.
+ * The role selector (--role <name> --harness <codex|claude>) also resolves the Claude Agent model.
  *
  * Config-only (no git, no GitHub), matching the scripts/loop/ placement of
  * pre-flight-gate / gate-coordination. ALL angle-pool/eligibility logic lives
@@ -44,10 +45,10 @@ import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: resolve-reviewer-role.mjs --gate <${REVIEW_OPERATIONS.join("|")}> --angle <name> [--harness <pi|claude|codex>]
    or: resolve-reviewer-role.mjs --conductor --harness codex
-   or: resolve-reviewer-role.mjs --role <name> --harness codex
+   or: resolve-reviewer-role.mjs --role <name> --harness <codex|claude>
 
 --conductor selects Codex conductor settings and nativeOverrides without startup.
---role selects ordinary Codex role settings. These selectors are mutually
+--role selects ordinary role settings: Codex settings, or the Claude Agent model with --harness claude. These selectors are mutually
 exclusive with each other and with --gate/--angle. Config errors refuse with exit 1.
 
 Resolve a gate angle's reviewer role for a review operation from the fully
@@ -121,8 +122,8 @@ Note: for this command, --silent's exit code always reflects \`ok\`, never the
 shared --jq/--silent composition described above).
 
 Exit codes:
-  0  ok: true  — config errors absent; conductor selected, or angle belongs to the operation's pool
-  1  ok: false — config-layer errors present, or angle does not belong to the operation's pool
+  0  ok: true  — config errors absent; conductor or role selected, or angle belongs to the operation's pool
+  1  ok: false — config-layer errors present (any selector, role mode included), or angle does not belong to the operation's pool
   2  Argument/runtime error, or invalid --jq filter`;
 
 const parseError = buildParseError(USAGE);
