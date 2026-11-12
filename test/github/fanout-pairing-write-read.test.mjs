@@ -829,6 +829,15 @@ describe("fanoutReviewerPairingError reads the recorded unit bound (packed unit 
     });
   });
 
+  test("REJECT: a recorded unitBound 10 unit whose perAngle omits mandatory holistic still fails mandatory coverage", async () => {
+    await withConfig(BOUND_DEVLOOPS, async (dir) => {
+      const units = [{ name: "u", angles: BOUND_BIG.filter((a) => a !== "holistic") }, BOUND_UNITS[1]];
+      const perAngle = boundPerAngle().filter((entry) => entry.angle !== "holistic");
+      const read = await readPacked(dir, "pre_approval_gate", { distinctReviewers: countIds(perAngle), perAngle, dispatchUnits: units, unitBound: 10 });
+      assert.match(read ?? "", /missing mandatory angle\(s\): holistic/);
+    });
+  });
+
   test("REJECT: a packed unit above 5 still fails closed for a split, foreign, duplicated or cross-unit angle, naming it", async () => {
     await withConfig(BOUND_DEVLOOPS, async (dir) => {
       const cases = [
@@ -911,6 +920,7 @@ describe("the read path trusts a ledger unitBound above 5 only when the gate-con
       const read = await readPacked(dir, "pre_approval_gate", ledger(10));
       assert.match(read ?? "", /holds 6 angles, above the 5-angle unit bound/);
       assert.match(read ?? "", /not corroborated by the gate-context artifact/);
+      assert.match(read ?? "", /reads only the default tmp root.*re-emit at the default root/);
     });
   });
 
