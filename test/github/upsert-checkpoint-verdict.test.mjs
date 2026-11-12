@@ -1021,7 +1021,7 @@ test("renderGateReviewCommentBody marks an evidence-only act finding (#3197)", (
     nextAction: "mark ready for review",
     nonLocatableFindings: [{ severity: "nice-to-have", summary: "evidence only note", judgeDisposition: "act", remedyKind: "evidence_only" }],
   });
-  assert.match(body, /judge: _`act`_.*\(evidence only, not an open act item\)/);
+  assert.match(body, /judge: _`act`_.*\(evidence only, no file change; its criterion stays unproven until the evidence lands\)/);
 });
 
 // #2163: real-subprocess guard for main()'s `fields: options.fields` passthrough
@@ -7916,6 +7916,40 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
     // The gate-scoped round marker rides on the same body.
     assert.match(postedPayload.body, /^<!-- dev-loops:gate-findings-review draft_gate [0-9a-f]{40} round=1 -->$/m);
   }, { prefix: "dev-loops-upsert-single-surface-" });
+});
+
+test("upsert-checkpoint-verdict --findings-ledger shows the evidence-only label for an evidence_only act finding copied from --findings-json (#3197)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [BODY_FILED_FINDING]);
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "pr-description", verdict: "clean", findings: [] },
+      { angle: "scope", verdict: "clean", findings: [] },
+      { angle: "holistic", verdict: "clean", findings: [] },
+      { angle: "correctness", verdict: "clean", findings: [] },
+      { angle: "coverage", verdict: "findings_present", findings: [{ severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary, judgeDisposition: "act", remedyKind: "evidence_only" }] },
+    ]), "utf8");
+    const { runChild, calls } = makeGhMock([
+      ...singleSurfaceLeadingEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":701,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-701"}\n',
+      },
+    ]);
+    await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsJson: findingsPath,
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "fanout_fanin",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    const post = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    assert.match(JSON.parse(post.stdinText).body, /inconsistent casing in constants.*\(evidence only, no file change; its criterion stays unproven until the evidence lands\)/);
+  }, { prefix: "dev-loops-upsert-evidence-only-ledger-" });
 });
 
 // ---------------------------------------------------------------------------

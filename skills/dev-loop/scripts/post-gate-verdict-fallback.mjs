@@ -15,6 +15,7 @@
 //   - no gate-coordination state validation
 //   - no blocking-severity count enforcement (caller is responsible)
 //   - no internal-only PR short-circuit
+//   - derives no next action (the caller's --next-action is rendered verbatim; a clean draft_gate must pass `mark ready for review`)
 //
 // The script always emits a stderr warning explaining that fallback mode is
 // active and the audit trail is degraded. On posting failure it fails closed

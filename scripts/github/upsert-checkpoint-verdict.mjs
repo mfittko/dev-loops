@@ -1484,7 +1484,7 @@ function renderBodyOnlyFindingLine(finding, ctx) {
     : "";
   // Judge relevance-based disposition.
   const judgeSuffix = finding.judgeDisposition
-    ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_${renderJudgeDetail(finding)}${finding.remedyKind === "evidence_only" ? " (evidence only, not an open act item)" : ""}`
+    ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_${renderJudgeDetail(finding)}${finding.remedyKind === "evidence_only" ? " (evidence only, no file change; its criterion stays unproven until the evidence lands)" : ""}`
     : "";
   const angleSuffix = finding.angle ? ` _(${sanitizeStructuredInline(finding.angle)})_` : "";
   return `- ${markerPrefix}${summary}${location}${dispositionSuffix}${judgeSuffix}${angleSuffix}`;
@@ -2569,8 +2569,9 @@ function renderGateBlockerItemsList(blockers) {
 // the tool DERIVES it rather than accepting caller prose into a machine-read
 // evidence surface. The standalone review derives it from the judge act list
 // (a judged round) and says that it neither approves nor blocks the PR. A
-// lifecycle gate returns null for a `clean` verdict (the caller's value is
-// accepted unchanged).
+// lifecycle gate returns null for a `clean` verdict only on pre_approval_gate
+// (the caller's value is accepted unchanged); a clean draft_gate derives
+// `mark ready for review`.
 export function deriveEffectiveNextAction(verdict, gate, actItems = [], unjudgedFindings = false) {
   if (gate === "review") {
     // Count distinct act items: the ledger and --findings-json can carry the same finding, and a cluster is one item.
@@ -3204,6 +3205,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       if (judged) {
         lf.judgeDisposition = judged.judgeDisposition;
         if (lf.followUpIssueNumber == null && judged.followUpIssueNumber) lf.followUpIssueNumber = judged.followUpIssueNumber;
+        if (judged.remedyKind === "evidence_only" && !lf.remedyKind) lf.remedyKind = "evidence_only";
       }
     }
     // Re-check after the merge: the early check saw only the ledger's own dispositions, not the ones just copied onto it.

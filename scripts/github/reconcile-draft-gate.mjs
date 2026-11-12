@@ -265,7 +265,7 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
       findingsSummary: draftGateConfig.requireCi
         ? "Reconciled non-draft PR — draft gate auto-reconciled (CI green)."
         : "Reconciled non-draft PR — draft gate auto-reconciled (CI optional by config).",
-      nextAction: "Mark ready for review (auto-reconciled).",
+      nextAction: "mark ready for review",
     }, { env, ghCommand, repoRoot, runChild });
   } catch (error) {
     if (draftConversion.alreadyDraft !== true) {
