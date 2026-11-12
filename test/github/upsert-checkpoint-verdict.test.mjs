@@ -7964,6 +7964,41 @@ test("upsert-checkpoint-verdict --findings-ledger shows the evidence-only label 
   }, { prefix: "dev-loops-upsert-evidence-only-ledger-" });
 });
 
+test("upsert-checkpoint-verdict --findings-ledger omits the evidence-only label when a same-fingerprint act sibling needs a file change (#3197)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [BODY_FILED_FINDING]);
+    const findingsPath = path.join(tempDir, "findings.json");
+    const base = { severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary, judgeDisposition: "act" };
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "pr-description", verdict: "clean", findings: [] },
+      { angle: "scope", verdict: "clean", findings: [] },
+      { angle: "holistic", verdict: "clean", findings: [] },
+      { angle: "correctness", verdict: "clean", findings: [] },
+      { angle: "coverage", verdict: "findings_present", findings: [{ ...base, remedyKind: "evidence_only" }, { ...base }] },
+    ]), "utf8");
+    const { runChild, calls } = makeGhMock([
+      ...singleSurfaceLeadingEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":701,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-701"}\n',
+      },
+    ]);
+    await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsJson: findingsPath,
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "fanout_fanin",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    const post = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    assert.doesNotMatch(JSON.parse(post.stdinText).body, /evidence only, no file change/);
+  }, { prefix: "dev-loops-upsert-evidence-only-mixed-" });
+});
+
 // ---------------------------------------------------------------------------
 // #2263: inlineSeverityFloor — locatable low/nit findings fold into the
 // verdict body's collapsed <details> block instead of posting inline, at the

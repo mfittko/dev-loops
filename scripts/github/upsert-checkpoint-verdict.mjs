@@ -273,8 +273,9 @@ Required:
                                             distinguishable from "this finding is
                                             not blocking".
   --next-action <text>                      (Required except on --gate review, which derives the next
-                                            action from the judge act list, and on a clean draft_gate, which derives
-                                            "mark ready for review"; both ignore any value.)
+                                            action from the judge act list and ignores any value. A clean
+                                            draft_gate still requires the flag, ignores its value and derives
+                                            "mark ready for review".)
 Optional:
   --converged-json <path>                   draft_gate low/nit convergence
                                             (GATE-EXEC-LOW-NIT-CONVERGENCE):
@@ -3206,7 +3207,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       if (judged) {
         lf.judgeDisposition = judged.judgeDisposition;
         if (lf.followUpIssueNumber == null && judged.followUpIssueNumber) lf.followUpIssueNumber = judged.followUpIssueNumber;
-        if (judged.remedyKind === "evidence_only" && !lf.remedyKind) lf.remedyKind = "evidence_only";
+        // Label only when every same-fingerprint act match is evidence_only, so array order cannot hide a file-change sibling.
+        const sameMatches = flatFindings.filter((f) => f.judgeDisposition === judged.judgeDisposition && same(f));
+        if (sameMatches.every((f) => f.remedyKind === "evidence_only") && !lf.remedyKind) lf.remedyKind = "evidence_only";
       }
     }
     // Re-check after the merge: the early check saw only the ledger's own dispositions, not the ones just copied onto it.
