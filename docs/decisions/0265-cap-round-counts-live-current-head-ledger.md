@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted — 2026-11-12 ([PR 3188](https://github.com/mfittko/dev-loops/pull/3188))
 
 Amends [ADR 0250](./0250-clean-cap-round-chain-extension.md) decision item 2. Every other decision of that record stays in force, and the record stays unedited.
 
