@@ -232,6 +232,18 @@ const OWNED_APPROVE_RELEASE_RE = /\bapprove\s+release\s+v?\d/i;
 const OWNED_WAIVER_RE = /^\s*adr-tripwire:allow(?:\s|$)/mu;
 const OWNED_OPERATOR_MARKER_RE = /<!--\s*dev-loops:copilot-body-disposition\s+review=\S+\s+head=[0-9a-fA-F]{40}\s+operator\s*-->/;
 
+// The grill provenance matcher copies detectGrillProvenance (packages/core/src/loop/refinement-grill-state.mjs):
+// a results comment, whose first non-empty line is the heading, with a bypass line.
+const OWNED_GRILL_HEADING = "## 🔬 Grill / refinement results";
+const OWNED_GRILL_BYPASS_LINE_RE = /^bypass: operator-authorized by @?([A-Za-z0-9][A-Za-z0-9-]{0,38})\s*$/i;
+
+function hasGrillBypassLine(text) {
+  const lines = text.split(/\r?\n/);
+  const first = lines.find((line) => line.trim().length > 0);
+  return first !== undefined && first.trim() === OWNED_GRILL_HEADING
+    && lines.some((line) => OWNED_GRILL_BYPASS_LINE_RE.test(line.trim()));
+}
+
 function stripNonAssertionMarkdown(body) {
   let s = String(body ?? "");
   s = s.replace(/^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*$/gm, " ");
@@ -249,6 +261,7 @@ export function findFallbackOperatorOwnedLine(body) {
   if (OWNED_APPROVE_RELEASE_RE.test(stripNonAssertionMarkdown(text))) return "`approve release v<version>`";
   if (OWNED_WAIVER_RE.test(text)) return "an `adr-tripwire:allow` line";
   if (OWNED_OPERATOR_MARKER_RE.test(text)) return "a Copilot body-disposition `operator` marker";
+  if (hasGrillBypassLine(text)) return "a grill provenance `bypass: operator-authorized by <handle>` line";
   return null;
 }
 

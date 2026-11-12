@@ -11,6 +11,7 @@
  */
 import { hasOperatorDispositionMarker, operatorMarkerWrapPattern } from "./copilot-body-disposition-marker.mjs";
 import { stripNonAssertionMarkdown } from "./non-assertion-markdown.mjs";
+import { detectGrillProvenance } from "../loop/refinement-grill-state.mjs";
 
 const APPROVE_MERGE_LINE_RE = /^[ \t>*-]*approve\s+merge(?:\s|$)/imu;
 // No `u` flag: the flags match the reader's, so U+017F and U+212A stay non-word for `\b`.
@@ -48,6 +49,13 @@ export const OPERATOR_OWNED_LINES = Object.freeze([
     standingAuthorization: true,
     refusal: refusal("a Copilot body-disposition `operator` marker", "Subagents never post it. The orchestrator posts it only through a comment wrapper with `--standing-authorization` that asserts a recorded standing operator authorization."),
   }),
+  Object.freeze({
+    id: "grill-provenance-bypass",
+    label: "a grill provenance `bypass: operator-authorized by <handle>` line",
+    matches: (body) => detectGrillProvenance([body]).bypass,
+    standingAuthorization: false,
+    refusal: refusal("a grill provenance `bypass: operator-authorized by <handle>` line", "That line records the operator's authorization to skip the grill. No agent writes it and no flag overrides this."),
+  }),
 ]);
 
 /** Refusal text of the first matching entry the flag does not clear, else null. */
@@ -73,11 +81,23 @@ const WRAP_RES = Object.freeze([
   /approve\s+release/gi,
   /adr-tripwire:allow/gi,
   operatorMarkerWrapPattern(),
+  // Last: the release reader strips a code span between `approve` and `release`, so a bare
+  // `release v<digit>` run must not survive for it to read as the approval's tail.
+  /release\s+v\d/gi,
 ]);
 
-/** `text` with every operator-owned phrase wrapped in a code span (whitespace inside it collapsed to one line). */
+const CODE_SPAN_RE = /(`[^`\n]*`)/;
+
+/**
+ * `text` with every operator-owned phrase wrapped in a code span (whitespace inside it collapsed to
+ * one line). Text inside a balanced code span the author wrote stays unchanged.
+ */
 export function wrapOperatorOwnedPhrases(text) {
-  let out = String(text);
-  for (const re of WRAP_RES) out = out.replace(re, (match) => `\`${match.replace(/\s+/g, " ")}\``);
-  return out;
+  // The capture group puts each author span at an odd index; only the even parts are bare text.
+  return String(text).split(CODE_SPAN_RE).map((part, i) => {
+    if (i % 2 === 1) return part;
+    let out = part;
+    for (const re of WRAP_RES) out = out.replace(re, (match) => `\`${match.replace(/\s+/g, " ")}\``);
+    return out;
+  }).join("");
 }

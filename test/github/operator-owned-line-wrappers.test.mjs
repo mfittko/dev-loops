@@ -16,6 +16,7 @@ const SAMPLES = {
   "approve-release": "approve release v1.2.3",
   "adr-tripwire-allow": "adr-tripwire:allow hand written reason",
   "copilot-body-disposition-operator": operatorMarker,
+  "grill-provenance-bypass": `## 🔬 Grill / refinement results\n\n${["bypass:", "operator-authorized by", "op"].join(" ")}`,
 };
 const POSTS = [
   { name: "comment-issue", run: runCommentIssue, args: ["--repo", "o/n", "--issue", "7"], ok: { stdout: "https://github.com/o/n/issues/7#issuecomment-1\n" } },

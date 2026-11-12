@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parseIssueNumber, parseAllowedRefsCsv, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parseIssueNumber, parseAllowedRefsCsv, parseStandingAuthorizationValue, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { commentIssue as coreCommentIssue, resolveCommentBody } from "@dev-loops/core/github/issue-ops";
 import { parseArgs } from "node:util";
@@ -103,7 +103,7 @@ export function parseCommentIssueCliArgs(argv) {
       continue;
     }
     if (token.name === "standing-authorization") {
-      options.standingAuthorization = token.value === undefined || /^(?:true|1)$/iu.test(String(token.value).trim());
+      options.standingAuthorization = parseStandingAuthorizationValue(token.value);
       continue;
     }
     if (token.name === "allowed-refs") {

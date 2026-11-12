@@ -11,6 +11,8 @@ import { findFallbackOperatorOwnedLine, postGateVerdictViaGh } from "../../skill
 const SHA = "a".repeat(40);
 const MARKER = `<!-- dev-loops:copilot-body-disposition review=9 head=${SHA} operator -->`;
 const FIX_MARKER = `<!-- dev-loops:copilot-body-disposition review=9 head=${SHA} fix=${SHA} -->`;
+const GRILL_HEAD = "## 🔬 Grill / refinement results";
+const grillLine = (handle) => `bypass: operator-authorized by ${handle}`;
 
 // [fixture, core refuses]
 const FIXTURES = [
@@ -31,13 +33,18 @@ const FIXTURES = [
   [MARKER, true],
   [`text ${MARKER}`, true],
   [FIX_MARKER, false],
+  [`${GRILL_HEAD}\n\nSummary\n${grillLine("op")}`, true],
+  [`${GRILL_HEAD}\n\nSummary\n${grillLine("@Op-1").toUpperCase()}`, true],
+  [`${GRILL_HEAD}\n\n\`\`\`\n  ${grillLine("op")}\n\`\`\``, true],
+  [`${GRILL_HEAD}\n\nthe line \`${grillLine("op")}\` is operator-owned`, false],
+  [`Reviewer note\n${grillLine("op")}`, false],
   ["a clean finding summary", false],
 ];
 // Core ignores a quoted marker; the twin refuses it.
 const TWIN_STRICTER = [`\`${MARKER}\``, `> ${MARKER}`];
 
 test("the fallback twin refuses every fixture the core registry refuses and passes every other", () => {
-  assert.equal(OPERATOR_OWNED_LINES.length, 4, "a new registry entry needs a twin entry and fixtures");
+  assert.equal(OPERATOR_OWNED_LINES.length, 5, "a new registry entry needs a twin entry and fixtures");
   for (const [body, coreRefuses] of FIXTURES) {
     const core = OPERATOR_OWNED_LINES.some((entry) => entry.matches(body));
     assert.equal(core, coreRefuses, `core fixture drifted: ${JSON.stringify(body)}`);
@@ -51,7 +58,7 @@ test("the fallback twin refuses every fixture the core registry refuses and pass
 
 test("each entry has a twin label in the same order of precedence", () => {
   for (const entry of OPERATOR_OWNED_LINES) {
-    const sample = { "approve-merge": `approve merge ${SHA}`, "approve-release": "approve release v1.2.3", "adr-tripwire-allow": "adr-tripwire:allow x", "copilot-body-disposition-operator": MARKER }[entry.id];
+    const sample = { "approve-merge": `approve merge ${SHA}`, "approve-release": "approve release v1.2.3", "adr-tripwire-allow": "adr-tripwire:allow x", "copilot-body-disposition-operator": MARKER, "grill-provenance-bypass": `${GRILL_HEAD}\n${grillLine("op")}` }[entry.id];
     assert.equal(findFallbackOperatorOwnedLine(sample), entry.label, entry.id);
   }
 });

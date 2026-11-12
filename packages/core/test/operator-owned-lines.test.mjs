@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { OPERATOR_OWNED_LINES, findOperatorOwnedLineRefusal } from "../src/github/operator-owned-lines.mjs";
+import { OPERATOR_OWNED_LINES, findOperatorOwnedLineRefusal, wrapOperatorOwnedPhrases } from "../src/github/operator-owned-lines.mjs";
+import { detectGrillProvenance } from "../src/loop/refinement-grill-state.mjs";
 import { guardCommentBodyNoIssuePrIds } from "../src/github/comment-id-guard.mjs";
 import { parseCopilotBodyDispositionMarker } from "../src/github/copilot-body-disposition-marker.mjs";
 import { verifyFreshHumanApproval } from "../src/loop/merge-approval.mjs";
@@ -13,12 +14,15 @@ import { extractWaiverLines } from "../../../scripts/loop/adr-waiver-markers.mjs
 const SHA = "a".repeat(40);
 const FIX = "b".repeat(40);
 const operatorMarker = (review = "9") => `<!-- dev-loops:copilot-body-disposition review=${review} head=${SHA} operator -->`;
+const GRILL_HEAD = "## 🔬 Grill / refinement results";
+const grillLine = (handle) => `bypass: operator-authorized by ${handle}`;
+const grillComment = (handle, line = grillLine(handle)) => `${GRILL_HEAD}\n\nSummary\n${line}\n`;
 const fixMarker = `<!-- dev-loops:copilot-body-disposition review=9 head=${SHA} fix=${FIX} -->`;
 
 test("registry: exact entry ids and standingAuthorization values", () => {
   assert.deepEqual(
     OPERATOR_OWNED_LINES.map((e) => [e.id, e.standingAuthorization]),
-    [["approve-merge", false], ["approve-release", false], ["adr-tripwire-allow", false], ["copilot-body-disposition-operator", true]],
+    [["approve-merge", false], ["approve-release", false], ["adr-tripwire-allow", false], ["copilot-body-disposition-operator", true], ["grill-provenance-bypass", false]],
   );
   assert.ok(Object.isFrozen(OPERATOR_OWNED_LINES));
 });
@@ -35,6 +39,7 @@ const SAMPLES = {
   "approve-release": "approve release v1.2.3",
   "adr-tripwire-allow": "adr-tripwire:allow hand written reason",
   "copilot-body-disposition-operator": operatorMarker(),
+  "grill-provenance-bypass": grillComment("@op"),
 };
 
 test("every registry entry refuses its sample, names OPERATOR-OWNED-LINE and its label, and says the human posts", () => {
@@ -151,4 +156,34 @@ test("adr-tripwire-allow: the registry line match agrees with the waiver reader 
     const entry = OPERATOR_OWNED_LINES.find((e) => e.id === "adr-tripwire-allow");
     assert.equal(entry.matches(body), extractWaiverLines(body).length > 0, JSON.stringify(body));
   }
+});
+
+test("the grill provenance entry refuses every body the reader accepts as a bypass", () => {
+  const bodies = [
+    grillComment("op"),
+    grillComment("@op"),
+    grillComment("op", grillLine("op").replace("bypass:", "BYPASS:")),
+    grillComment("op", ` ${grillLine("op")}`),
+    grillComment("op", `\`\`\`\n${grillLine("op")}\n\`\`\``),
+  ];
+  for (const body of bodies) {
+    assert.equal(detectGrillProvenance([body]).bypass, true, body);
+    assert.match(findOperatorOwnedLineRefusal(body, { standingAuthorization: true }), /grill provenance/, body);
+  }
+});
+
+test("the grill provenance entry passes a backticked mention and a body that is not a results comment", () => {
+  assert.equal(findOperatorOwnedLineRefusal(grillComment("op", `the line \`${grillLine("op")}\` is operator-owned`)), null);
+  assert.equal(findOperatorOwnedLineRefusal(`Reviewer note\n${grillLine("op")}`), null);
+});
+
+test("wrapOperatorOwnedPhrases wraps the tail of a release approval split by a code span", () => {
+  const split = "approve `x` release v1.2.3";
+  assert.notEqual(findOperatorOwnedLineRefusal(split), null, "the guard reads the split form as an approval");
+  assert.equal(findOperatorOwnedLineRefusal(wrapOperatorOwnedPhrases(split)), null);
+});
+
+test("wrapOperatorOwnedPhrases leaves an existing balanced code span unchanged", () => {
+  assert.equal(wrapOperatorOwnedPhrases("`run approve merge now`"), "`run approve merge now`");
+  assert.equal(wrapOperatorOwnedPhrases("`keep` approve merge `keep`"), "`keep` `approve merge` `keep`");
 });
