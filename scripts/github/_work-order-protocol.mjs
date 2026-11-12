@@ -26,7 +26,7 @@ export const materializationHash = sha256Hex;
 export const fixerReportPath = (outputRef) => `${outputRef}.report`;
 
 // The compact dispatch envelope, the ONLY text relayed to a worker: a self-describing pull instruction
-// (a lagging agent definition still pulls), never task prose. Values go unquoted, so each is one shell-inert word.
+// (a lagging agent definition still pulls), never task prose. The execution identity is the only interpolated value and must match EXECUTION_IDENTITY_RE.
 // The pointer carries the execution identity alone (ADR 0115); the pull resolves the ref and digest through the execution index.
 export function buildDispatchPointer({ workOrderRef, executionIdentity }) {
   if (!EXECUTION_IDENTITY_RE.test(executionIdentity)) throw new Error(`execution identity ${JSON.stringify(executionIdentity)} does not match EXECUTION_IDENTITY_RE`);

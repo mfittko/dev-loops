@@ -360,7 +360,7 @@ test("codeTreeSkewNote quotes the emitter root, says the identity code may diffe
 test("the pull takes one positional identity or all three flags; any other shape exits 2 with the usage text", async () => {
   await withDir(async (root) => {
     const unit = await emitRound(root);
-    for (const args of [[], [unit.executionIdentity, "--execution", unit.executionIdentity], ["--ref", unit.workOrderRef, "--execution", unit.executionIdentity], [unit.executionIdentity, unit.executionIdentity]]) {
+    for (const args of [[], [unit.executionIdentity, "--execution", unit.executionIdentity], ["--ref", unit.workOrderRef, "--execution", unit.executionIdentity], [unit.executionIdentity, unit.executionIdentity], [unit.executionIdentity, "--ref", ""], [unit.executionIdentity, "--digest", ""], [unit.executionIdentity, "--execution", ""]]) {
       const result = run("pull-work-order.mjs", args, root);
       assert.equal(result.status, 2, args.join(" "));
       assert.match(result.stderr, /Usage: pull-work-order\.mjs <executionIdentity>/);

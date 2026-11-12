@@ -143,7 +143,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     return 0;
   }
   // ADR 0115 step 2: only the short form (one positional) is served; the 3-flag form is refused.
-  if (positionals.length !== 1 || values.ref || values.digest || values.execution) {
+  if (positionals.length !== 1 || values.ref !== undefined || values.digest !== undefined || values.execution !== undefined) {
     process.stderr.write(`pass one <executionIdentity> and no --ref, --digest or --execution\n${USAGE}\n`);
     return 2;
   }

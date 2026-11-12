@@ -1692,6 +1692,15 @@ test("decideAgentDispatch lets the dev-loop coordinator dispatch only an emitted
   }
 });
 
+test("decideAgentDispatch denies the former 3-flag standalone-review judge pointer from the dev-loop coordinator", () => {
+  const old = `Run \`dev-loops-run scripts/github/pull-work-order.mjs --ref judge:o/r#7:review:${"a".repeat(40)}:scope --digest sha256:${"b".repeat(64)} --execution j1790000000000-abcdef12\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`;
+  for (const caller of ["dev-loop", "dev-loops:dev-loop"]) {
+    const d = decideAgentDispatch({ callerAgentType: caller, targetAgentType: "judge", prompt: old, judgeWorkOrderRef: "judge:o/r#7:review:abc123:j1790000000000-abcdef12" });
+    assert.equal(d.decision, "deny", caller);
+    assert.match(d.reason, /^GATE_COORDINATOR_REQUIRED/);
+  }
+});
+
 test("decideAgentDispatch denies a dev-loop review dispatch that carries a wrapped work-order pull", () => {
   const p = pointer("review");
   for (const caller of ["dev-loop", "dev-loops:dev-loop"]) {
