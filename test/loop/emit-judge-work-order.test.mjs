@@ -96,6 +96,37 @@ test("grounded discovery preserves the neutral and Claude judge tool boundaries"
   for (const text of [neutral, claude]) assert.match(text, /<!-- rule-ref: GATE-EXEC-JUDGE-GROUNDED-DISCOVERY -->/);
 });
 
+test("the work order states the judge's allowed search commands and the Read offset and limit (issue 3092)", async () => {
+  await withDir(async (root) => {
+    const plan = await emitJudgeWorkOrder(await seed(root));
+    const text = await readFile(plan.promptPath, "utf8");
+    assert.match(text, /Search with read-only `grep -n`, `rg -n`, `git show` and `git diff`/);
+    assert.match(text, /Read accepts offset and limit/);
+    assert.match(text, /Bash otherwise runs only the work-order pull and `check-judge-decision\.mjs`/);
+    assert.doesNotMatch(text, /Grep|Glob/);
+  });
+});
+
+test("cited rule IDs reach the judge with their text and owning doc (issue 3092)", async () => {
+  await withDir(async (root) => {
+    await mkdir(path.join(root, "judge-fixture"), { recursive: true });
+    const findingsFile = "judge-fixture/ledger.json";
+    await writeFile(path.join(root, findingsFile), JSON.stringify({ overallVerdict: "findings_present", findings: [
+      { severity: "low", summary: "violates GATE-EXEC-LOW-FIX-UNTIL-CAP and NOT-A-REGISTERED-RULE-ID and GATE-EXEC-LOW-FIX-UNTIL-CAP again" }] }));
+    const plan = await emitJudgeWorkOrder(await seed(root, { findingsFile }));
+    assert.deepEqual(plan.workOrder.citedRules.map((rule) => rule.id), ["GATE-EXEC-LOW-FIX-UNTIL-CAP"]);
+    const [rule] = plan.workOrder.citedRules;
+    assert.equal(rule.doc, "skills/docs/gate-review-sub-loop-contract.md");
+    assert.match(rule.text, /The fixer fixes a `low` at the `draft_gate` in every round/);
+    const text = await readFile(plan.promptPath, "utf8");
+    assert.match(text, /## Cited rules/);
+    assert.match(text, /\| `GATE-EXEC-LOW-FIX-UNTIL-CAP` \| skills\/docs\/gate-review-sub-loop-contract\.md \| .*The fixer fixes a `low`/);
+    const none = await emitJudgeWorkOrder(await seed(root));
+    assert.deepEqual(none.workOrder.citedRules, []);
+    assert.doesNotMatch(await readFile(none.promptPath, "utf8"), /## Cited rules/);
+  });
+});
+
 test("Codex bootstrap precedes every pinned read and binds contracts to the emitting toolchain", async () => {
   await withDir(async (root) => {
     const plan = await emitJudgeWorkOrder(await seed(root));

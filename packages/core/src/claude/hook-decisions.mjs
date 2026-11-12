@@ -58,6 +58,21 @@ const SANCTIONED_WORK_ORDER_PULL_RE = new RegExp(`^${PULL_LINE}$`);
 // The judge's read-only check of its own decision file, run before it hands back.
 const JUDGE_DECISION_CHECK_RE = /^dev-loops-run scripts\/loop\/check-judge-decision\.mjs --file [\w.\/#-]*tmp\/gate-judge\/[\w.\/#-]+\.json$/;
 export const isJudgeDecisionCheckLine = (command) => typeof command === "string" && JUDGE_DECISION_CHECK_RE.test(command.trim()) && !command.includes("..");
+// The judge's read-only search path (issue 3092): `grep -n`, `rg -n`, `git show` and `git diff` with no shell
+// metacharacter outside quotes, no expansion inside double quotes, and no flag that writes or runs a program.
+const JUDGE_SEARCH_PREFIX_RE = /^(?:grep -n|rg -n|git show|git diff)(?: |$)/;
+const JUDGE_SEARCH_DENIED_FLAG_RE = /(?:^|\s)--(?:out|ext|textc|pre|hostname)/;
+export function isJudgeSearchLine(command) {
+  if (typeof command !== "string") return false;
+  const line = command.trim();
+  if (!JUDGE_SEARCH_PREFIX_RE.test(line) || JUDGE_SEARCH_DENIED_FLAG_RE.test(line) || /[\r\n]|\\"/.test(line)) return false;
+  let quote = null;
+  for (const ch of line) {
+    if (quote) { if (ch === quote) quote = null; else if (quote === '"' && (ch === "$" || ch === "`")) return false; } else if (ch === "'" || ch === '"') quote = ch;
+    else if (/[;&|<>()\\$`]/.test(ch)) return false;
+  }
+  return quote === null;
+}
 const FIXER_IDENTITY_TOKEN_RE = /\bf\d+-[0-9a-f]{8}\b/;
 
 /**
@@ -133,13 +148,13 @@ export function decideBashGate({
     return { decision: "deny", reason: unresolve.reason };
   }
   if (normalizeAgentType(agentType) === JUDGE_AGENT_TYPE) {
-    return parseSanctionedPullLine(command) || isJudgeDecisionCheckLine(command) ? ALLOW : {
+    return parseSanctionedPullLine(command) || isJudgeDecisionCheckLine(command) || isJudgeSearchLine(command) ? ALLOW : {
       decision: "deny",
       reason:
         "Judge read-only boundary (agents/judge.agent.md, ADR 0106): the judge may run only its " +
         "dispatched `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line, " +
         "alone, with no chaining, redirection or substitution, or `dev-loops-run scripts/loop/check-judge-decision.mjs --file tmp/gate-judge/<path>.json`. Read " +
-        "files with `Read` (always available), plus Grep and Glob when available; never run shell, test or build commands.",
+        "files with `Read` (it accepts offset and limit), or search with read-only `grep -n`, `rg -n`, `git show` or `git diff`, with the pattern in single quotes (so `|` and `$` inside it pass), no redirection, pipe, chaining, substitution or write flag; `Read` reaches any file the search refuses; never run other shell, test or build commands.",
     };
   }
   // The fixer's binding is recorded only for the exact pull line (ADR 0107), so a modified one denies with the fix.
