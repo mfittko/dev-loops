@@ -965,7 +965,7 @@ export function commandContainsRawCommentWrite(command, managedSlug = null) {
   // gh takes the repository from a github.com issue/PR URL positional and ignores --repo then, so the URL
   // scopes the segment; a --repo that disagrees with the URL is ambiguous and stays in scope (fail closed).
   const inScope = ({ segment, explicitRepo }) => {
-    const url = shellWords(segment).map((w) => /^https?:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/(?:issues|pull)\/\d+/i.exec(w)).find(Boolean);
+    const url = shellWords(segment).map((w) => /^https?:\/\/(?:[^/\s]+\.)?github\.com\/([^/\s]+\/[^/\s]+)\/(?:issues|pull)\/\d+/i.exec(w)).find(Boolean);
     if (url) return (explicitRepo && explicitRepo.trim().toLowerCase() !== url[1].toLowerCase()) || !explicitRepoProvenForeign(url[1], managedSlug);
     return !(explicitRepo && explicitRepoProvenForeign(explicitRepo, managedSlug));
   };

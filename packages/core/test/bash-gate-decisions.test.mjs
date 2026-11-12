@@ -703,6 +703,7 @@ test("a github.com issue or PR URL scopes a comment write, whatever --repo says"
     "gh pr comment https://github.com/o/r/pull/5 -b x --repo other/x",
     "gh issue close https://github.com/o/r/issues/5 -c x --repo other/x",
     "gh issue reopen https://github.com/o/r/issues/5 -c x --repo other/x",
+    "gh issue comment https://www.github.com/o/r/issues/5 -b x --repo other/x",
   ]) denies(command, "OPERATOR-OWNED-LINE");
   denies("gh issue comment 5 --repo other/x -b x", null);
   denies("gh issue comment https://github.com/other/x/issues/5 -b x", null);
