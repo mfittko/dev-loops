@@ -528,7 +528,7 @@ test("cross-harness non-member also agrees on ok/exit (nonzero)", async () => {
   }
 });
 
-test("Claude role resolver prints the Agent model per role and both entry paths agree (#3133)", async () => {
+test("Claude role resolver prints the Agent model per role and the direct CLI and launcher-run CLI agree (#3133)", async () => {
   const roles = ["developer", "docs", "quality", "dev-loop", "gate-coordinator", "review", "judge"];
   const resolveAll = (dir) => Object.fromEntries(roles.map((role) => {
     const r = runCli(["--role", role, "--harness", "claude"], { cwd: dir });

@@ -2,7 +2,7 @@
 description: Continue the dev loop — the current in-progress board item, or a given issue/PR.
 argument-hint: "[issue|pr]"
 ---
-Continue a dev loop. Two forms, both handed to the `dev-loop` skill — do NOT pick an internal strategy yourself. The main session dispatches the `dev-loops:dev-loop` coordinator (`dev-loop` inside the dev-loops repo itself) to run the resolved intent. The main session runs no gate, fixer or reviewer step.
+Continue a dev loop. Two forms, both handed to the `dev-loop` skill — do NOT pick an internal strategy yourself. The main session dispatches the `dev-loops:dev-loop` coordinator (`dev-loop` inside the dev-loops repo itself) to run the resolved intent. The main session runs no gate, fixer or reviewer step. Before the initial dispatch the main session runs `dev-loops gate resolve-role --role dev-loop --harness claude` and passes the printed `model` as the Agent `model` parameter only when it is non-null.
 
 - With an argument (`$ARGUMENTS` is an issue or PR — `123`, `#123`, or a GitHub URL): run the `dev-loop` skill with the public intent `continue dev loop on $ARGUMENTS`. Resolve that artifact's authoritative state first, then route; ignore board position.
 

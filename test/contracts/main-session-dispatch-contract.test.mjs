@@ -65,3 +65,10 @@ test("old-phrase guard catches a phrase split by a line break", () => {
   const wrapped = normalize("the dev-loop runs as a single\nagent");
   assert.ok(OLD_PHRASES.some((re) => re.test(wrapped)));
 });
+
+test("initial coordinator dispatch resolves the dev-loop model first (#3133)", () => {
+  for (const rel of ["skills/dev-loop/SKILL.md", "commands/loop-start.command.md", "commands/loop-auto.command.md", "commands/loop-continue.command.md"]) {
+    assert.match(readNorm(rel), /gate resolve-role --role dev-loop --harness claude/, `${rel} must pin the resolve step`);
+  }
+  assert.match(readNorm("skills/docs/main-agent-contract.md"), /main session does this for the initial `dev-loops:dev-loop` dispatch/);
+});
