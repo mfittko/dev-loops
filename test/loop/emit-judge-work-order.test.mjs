@@ -21,9 +21,7 @@ const withDir = (fn) => withTempDir(async (dir) => fn(await realpath(dir)), { pr
 const node = (script, args, cwd, env) => spawnSync("node", [path.resolve(script), ...args], { cwd, encoding: "utf8", ...(env ? { env } : {}) });
 // The emitter's default live PR body read goes through gh; stub it with the fixture body.
 const ghEnv = async (dir, body = "Declared scope: fix the finding.\n") => (await writeGhStub(dir, [{ stdout: JSON.stringify({ body }) }], { repeatLastOnOverflow: true })).env;
-const pull = (plan, cwd, over = {}) => node("scripts/github/pull-work-order.mjs", [
-  "--ref", over.ref ?? plan.workOrderRef, "--digest", over.digest ?? plan.workOrderDigest, "--execution", over.execution ?? plan.executionIdentity,
-], cwd);
+const pull = (plan, cwd, over = {}) => node("scripts/github/pull-work-order.mjs", [over.execution ?? plan.executionIdentity], cwd);
 const refusal = (result) => (assert.equal(result.status, 1, result.stderr), JSON.parse(result.stdout).refusal);
 const seed = (root, over = {}) => seedJudgeSources(root, { headSha: HEAD, ...over });
 
@@ -197,9 +195,10 @@ test("J2: every dispatch is the fixed compact pointer under the shared cap, reus
     const plan = await emitJudgeWorkOrder(await seed(root));
     const { workOrderRef, workOrderDigest: digest, executionIdentity } = plan;
     assert.equal(plan.dispatchPrompt, buildDispatchPointer({ workOrderRef, workOrderDigest: digest, executionIdentity }));
+    assert.equal(plan.dispatchPrompt, `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${plan.executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`);
     const worst = { workOrderRef: `judge:${"o".repeat(39)}/${"r".repeat(40)}#99999:pre_approval_gate:${"f".repeat(64)}:j1790000000000-abcdef12`, workOrderDigest: "f".repeat(64), executionIdentity: "j1790000000000-abcdef12" };
     assert.ok(Buffer.byteLength(buildDispatchPointer(worst)) <= DISPATCH_POINTER_MAX_BYTES);
-    assert.throws(() => buildDispatchPointer({ ...worst, workOrderRef: `${workOrderRef} and also check X` }), /not shell-safe/);
+    assert.throws(() => buildDispatchPointer({ ...worst, executionIdentity: `${executionIdentity} and also check X` }), /EXECUTION_IDENTITY_RE/);
     assert.deepEqual(JSON.parse(await readFile(executionIndexPath(path.join(root, "tmp"), executionIdentity), "utf8")), { executionIdentity, workOrderRef, workOrderDigest: digest, emitterRoot: TOOLCHAIN_ROOT });
     const saved = JSON.parse(await readFile(plan.planPath, "utf8"));
     assert.equal(saved.dispatchPrompt, plan.dispatchPrompt);
@@ -212,13 +211,11 @@ test("J2: every dispatch is the fixed compact pointer under the shared cap, reus
   });
 });
 
-test("J3: the right identity pulls and writes a judge receipt; wrong digest, execution, role or payload refuse", async () => {
+test("J3: the right identity pulls and writes a judge receipt; unknown execution, role or payload refuse", async () => {
   await withDir(async (root) => {
     const plan = await emitJudgeWorkOrder(await seed(root));
     const receiptTmpRoot = path.join(root, "tmp");
-    assert.equal(refusal(pull(plan, root, { digest: "0".repeat(64) })), "dispatch_reference_mismatch");
-    assert.equal(refusal(pull(plan, root, { execution: `${plan.executionIdentity}9` })), "dispatch_identity_mismatch");
-    assert.equal(refusal(pull(plan, root, { ref: plan.workOrderRef.replace(/^judge:/, "review:") })), "dispatch_reference_mismatch");
+    assert.equal(refusal(pull(plan, root, { execution: "j1790000000001-abcdef12" })), "dispatch_reference_mismatch");
     assert.equal((await verifyPullReceipt({ receiptTmpRoot, role: "judge", ...plan })).reason, "receipt_missing");
     assert.equal(pull(plan, root).status, 0);
     assert.equal((await verifyPullReceipt({ receiptTmpRoot, role: "judge", ...plan })).ok, true);
@@ -226,6 +223,8 @@ test("J3: the right identity pulls and writes a judge receipt; wrong digest, exe
     // A malformed payload that still reproduces its digest refuses before adjudication.
     const { requiredReads, ...malformed } = plan.workOrder;
     await writeFile(plan.planPath, JSON.stringify({ ...plan, workOrder: malformed, workOrderDigest: workOrderDigest(malformed) }));
+    const indexFile = executionIndexPath(receiptTmpRoot, plan.executionIdentity);
+    await writeFile(indexFile, JSON.stringify({ ...JSON.parse(await readFile(indexFile, "utf8")), workOrderDigest: workOrderDigest(malformed) }));
     assert.equal(refusal(pull({ ...plan, workOrderDigest: workOrderDigest(malformed) }, root)), "invalid_work_order");
   });
 });

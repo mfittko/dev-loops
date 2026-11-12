@@ -309,7 +309,7 @@ test("C6a a coordinator pull prints the exact materialized order, writes a recei
 test("C6a the pull-work-order CLI registers the coordinator role and prints the materialized order", async () => {
   await withDirs(async (ctx) => {
     const out = (await emit(ctx, "claude", "queue")).out;
-    const pull = await runNode(path.resolve("scripts/github/pull-work-order.mjs"), ["--ref", out.workOrderRef, "--digest", out.workOrderDigest, "--execution", out.executionIdentity, "--tmp-root", ctx.tmp], { cwd: ctx.dir });
+    const pull = await runNode(path.resolve("scripts/github/pull-work-order.mjs"), [out.executionIdentity, "--tmp-root", ctx.tmp], { cwd: ctx.dir });
     assert.equal(pull.code, 0, pull.stderr);
     assert.equal(pull.stdout, await readFile(path.join(path.dirname(out.planPath), "order.md"), "utf8"));
   });

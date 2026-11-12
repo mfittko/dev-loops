@@ -84,6 +84,15 @@ test("Pi-runtime-only prose is stripped from generated assets but retained in so
   }
 });
 
+test("the generated dev-loop agent carries the fixer dispatchPayload sentence of its source", () => {
+  const generated = collectGeneratedAssets({ repoRoot }).find((a) => a.target === ".claude/agents/dev-loop.md")?.content;
+  const source = fs.readFileSync(path.join(repoRoot, "agents/dev-loop.agent.md"), "utf8");
+  const sentence = "A fixer dispatch is exactly the `dispatchPayload` that `scripts/loop/emit-fixer-work-order.mjs` prints (its pull line), never a prose brief.";
+  assert.ok(source.includes(sentence));
+  assert.ok(generated?.includes(sentence));
+  assert.equal(generated.includes("worker or fixer dispatch names the linked issue"), false);
+});
+
 test("judge fixture writes both valid verdicts with read, search, write and a pull-only shell", () => {
   const source = fs.readFileSync(path.join(repoRoot, "agents/judge.agent.md"), "utf8");
   const generated = collectGeneratedAssets({ repoRoot }).find((a) => a.target === ".claude/agents/judge.md")?.content;
@@ -91,7 +100,7 @@ test("judge fixture writes both valid verdicts with read, search, write and a pu
   assert.ok(generated);
   assert.match(generated, /^tools: Read, Grep, Glob, Bash, Write$/m);
   // Bash exists only for the work-order pull (ADR 0106); the Bash gate denies everything else.
-  const pull = "dev-loops-run scripts/github/pull-work-order.mjs --ref judge:o/r#1:draft_gate:abc:j1-aa --digest ab12 --execution j1-aa";
+  const pull = "dev-loops-run scripts/github/pull-work-order.mjs j1790000000000-abcdef12";
   assert.equal(decideBashGate({ command: pull, agentType: "judge" }).decision, "allow");
   assert.equal(decideBashGate({ command: "bun test", agentType: "judge" }).decision, "deny");
   // #2678: the denial names Read as always available; the boundary is unchanged; the pull owns the digest check.

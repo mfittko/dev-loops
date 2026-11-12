@@ -1584,8 +1584,7 @@ test("decideBashGate lets the judge run only the sanctioned work-order pull, fai
   assert.equal(decideBashGate({ command: pull, agentType: "judge" }).decision, "allow");
   assert.equal(decideBashGate({ command: ` ${pull}\n`, agentType: "dev-loops:judge" }).decision, "allow");
   const threeFlag = "dev-loops-run scripts/github/pull-work-order.mjs --ref judge:o/r#7:draft_gate:abc:j1-abcdef12 --digest ab12 --execution j1-abcdef12";
-  assert.equal(decideBashGate({ command: threeFlag, agentType: "judge" }).decision, "allow");
-  for (const command of [undefined, "ls", "bun test", `${threeFlag}; echo "EXIT $?"`, `${threeFlag} | tee x`, "node scripts/github/pull-work-order.mjs j1-abcdef12", `${pull}; echo "EXIT $?"`, `${pull} | tee x`, `${pull} \`id\``, `${pull} --tmp-root /x`]) {
+  for (const command of [undefined, "ls", threeFlag, "bun test", `${threeFlag}; echo "EXIT $?"`, `${threeFlag} | tee x`, "node scripts/github/pull-work-order.mjs j1-abcdef12", `${pull}; echo "EXIT $?"`, `${pull} | tee x`, `${pull} \`id\``, `${pull} --tmp-root /x`]) {
     const d = decideBashGate({ command, agentType: "judge" });
     assert.equal(d.decision, "deny", String(command));
     assert.match(d.reason, /`dev-loops-run scripts\/github\/pull-work-order\.mjs <executionIdentity>`/);
@@ -1595,11 +1594,9 @@ test("decideBashGate lets the judge run only the sanctioned work-order pull, fai
   assert.equal(decideBashGate({ command: "dev-loops-run scripts/github/pull-work-order.mjs f1-abcdef12; echo x", agentType: "developer" }).decision, "allow");
 });
 
-test("parseSanctionedPullLine accepts only the exact trimmed short or 3-flag pull line", () => {
+test("parseSanctionedPullLine accepts only the exact trimmed short pull line", () => {
   assert.deepEqual(parseSanctionedPullLine(" dev-loops-run scripts/github/pull-work-order.mjs r1-abcdef12-u3\n"), { executionIdentity: "r1-abcdef12-u3" });
-  assert.deepEqual(parseSanctionedPullLine("dev-loops-run scripts/github/pull-work-order.mjs --ref fixer:o/r#7:x --digest sha256:ab --execution f1-abcdef12"),
-    { workOrderRef: "fixer:o/r#7:x", workOrderDigest: "sha256:ab", executionIdentity: "f1-abcdef12" });
-  for (const command of [null, "dev-loops-run scripts/github/pull-work-order.mjs x1-abcdef12", "dev-loops-run scripts/github/pull-work-order.mjs f1-abcdef12 f2-abcdef12", "dev-loops-run scripts/github/pull-work-order.mjs f1-abcdef12;id"]) {
+  for (const command of [null, "dev-loops-run scripts/github/pull-work-order.mjs --ref fixer:o/r#7:x --digest sha256:ab --execution f1-abcdef12", "dev-loops-run scripts/github/pull-work-order.mjs x1-abcdef12", "dev-loops-run scripts/github/pull-work-order.mjs f1-abcdef12 f2-abcdef12", "dev-loops-run scripts/github/pull-work-order.mjs f1-abcdef12;id"]) {
     assert.equal(parseSanctionedPullLine(command), null, String(command));
   }
   assert.equal(isFixerPullAttempt("cd /w && dev-loops-run scripts/github/pull-work-order.mjs f1-abcdef12"), true);
@@ -1613,13 +1610,12 @@ test("decideBashGate denies a fixer pull that is not the exact sanctioned line a
   for (const agentType of ["fixer", "dev-loops:fixer"]) {
     assert.equal(decideBashGate({ command: pull, agentType }).decision, "allow");
     const threeFlag = `dev-loops-run scripts/github/pull-work-order.mjs --ref fixer:o/r#7:${"a".repeat(40)}:${id} --digest sha256:ab --execution ${id}`;
-    assert.equal(decideBashGate({ command: threeFlag, agentType }).decision, "allow");
-    for (const command of [`${pull}; echo "EXIT $?"`, `cd /tmp/worktrees/w && ${pull}`, `${pull} >/dev/null`, `node scripts/github/pull-work-order.mjs ${id}`, `${threeFlag}; echo "EXIT $?"`]) {
+    for (const command of [threeFlag, `${pull}; echo "EXIT $?"`, `cd /tmp/worktrees/w && ${pull}`, `${pull} >/dev/null`, `node scripts/github/pull-work-order.mjs ${id}`, `${threeFlag}; echo "EXIT $?"`]) {
       const d = decideBashGate({ command, agentType });
       assert.equal(d.decision, "deny", command);
       assert.ok(d.reason.includes(`\`${pull}\``), d.reason);
       assert.match(d.reason, /alone, with no prefix, suffix, redirect/);
-      assert.match(d.reason, /or the emitted 3-flag line \(`--ref`, `--digest`, `--execution`\) when your dispatch carried that form/);
+      assert.doesNotMatch(d.reason, /3-flag/);
     }
   }
   assert.equal(decideBashGate({ command: "bun test", agentType: "fixer" }).decision, "allow");
@@ -1651,7 +1647,7 @@ test("decideJudgeWriteGuard lets the judge write only its verdict files under an
 // ---------------------------------------------------------------------------
 
 const IDENTITIES = { review: "r1790000000000-abcdef12-u3", judge: "j1790000000000-abcdef12", fixer: "f1790000000000-abcdef12" };
-const pointer = (role) => buildDispatchPointer({ workOrderRef: `${role}:o/r#7:draft_gate:abc123:u1`, workOrderDigest: "ab12cd", executionIdentity: IDENTITIES[role] });
+const pointer = (role) => buildDispatchPointer({ workOrderRef: `${role}:o/r#7:draft_gate:abc123:u1`, executionIdentity: IDENTITIES[role] });
 const shortPointer = (role) => `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${IDENTITIES[role]}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`;
 const dispatch = (callerAgentType, targetAgentType, prompt = "anything") => decideAgentDispatch({ callerAgentType, targetAgentType, prompt });
 
@@ -1678,11 +1674,19 @@ test("decideAgentDispatch denies every judge dispatch from the dev-loop coordina
 });
 
 test("decideAgentDispatch lets the dev-loop coordinator dispatch only an emitted standalone review-gate judge pointer", () => {
-  const reviewJudge = buildDispatchPointer({ workOrderRef: "judge:o/r#7:review:abc123:j1790000000000-abcdef12", workOrderDigest: "ab12cd", executionIdentity: IDENTITIES.judge });
+  const reviewJudge = shortPointer("judge");
+  const REVIEW_JUDGE_REF = "judge:o/r#7:review:abc123:j1790000000000-abcdef12";
+  const dispatchJudge = (caller, prompt, judgeWorkOrderRef) => decideAgentDispatch({ callerAgentType: caller, targetAgentType: "judge", prompt, judgeWorkOrderRef });
   for (const caller of ["dev-loop", "dev-loops:dev-loop"]) {
-    assert.equal(dispatch(caller, "judge", reviewJudge).decision, "allow", caller);
+    assert.equal(dispatchJudge(caller, reviewJudge, REVIEW_JUDGE_REF).decision, "allow", caller);
     for (const prompt of [`cd /w && ${reviewJudge}`, `${reviewJudge} extra`, "Judge PR 7 review:", null]) {
-      assert.equal(dispatch(caller, "judge", prompt).decision, "deny", JSON.stringify(prompt));
+      assert.equal(dispatchJudge(caller, prompt, REVIEW_JUDGE_REF).decision, "deny", JSON.stringify(prompt));
+    }
+    // A lifecycle-gate ref and an unresolved (absent) ref stay denied.
+    for (const ref of ["judge:o/r#7:draft_gate:abc123:j1790000000000-abcdef12", null, undefined]) {
+      const d = dispatchJudge(caller, reviewJudge, ref);
+      assert.equal(d.decision, "deny", String(ref));
+      assert.match(d.reason, /^GATE_COORDINATOR_REQUIRED/);
     }
     assert.equal(dispatch(caller, "review", reviewJudge).decision, "deny", "the exemption is judge-only");
   }

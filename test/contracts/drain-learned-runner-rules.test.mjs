@@ -148,7 +148,8 @@ test("GATE-EXEC-GATE-COORDINATOR dispatch guidance points to the issue body and 
   const guidance = dispatchGuidance(await readRepo(GATE_DOC));
   assertClaims(guidance, [
     ["reviewer or judge dispatch", "exactly", "`dispatchPrompt`"],
-    ["worker or fixer dispatch", "linked issue", "The issue body is the spec; read it."],
+    ["worker dispatch (developer, docs, quality)", "linked issue", "The issue body is the spec; read it."],
+    ["fixer dispatch is exactly the `dispatchPayload`", "emit-fixer-work-order.mjs", "never a prose brief"],
     ["`pr_body`", "PR body", "spec"],
     ["never restates", "issue-specific spec"],
     ["cites rules by rule ID", "never by copied text"],
@@ -321,6 +322,13 @@ test("reviewer and judge agent definitions deliver WORKTREE-SCRIPT-LAUNCHER-CWD"
   }
 });
 
+test("the fixer agent definition and its Claude mirror cite the editing and launcher rules", async () => {
+  for (const agent of ["agents/fixer.agent.md", ".claude/agents/fixer.md"]) {
+    const content = await readRepo(agent);
+    for (const rule of ["WORKTREE-NONINTERACTIVE-FILE-OPS", "OPS-NO-INLINE-INTERPRETER", "WORKTREE-SCRIPT-LAUNCHER-CWD"]) assert.match(content, new RegExp(`\`${rule}\``), `${agent} ${rule}`);
+  }
+});
+
 function subagentDelegation(content) {
   return sectionFrom(content, "## Subagent delegation", "\n## ");
 }
@@ -329,7 +337,9 @@ for (const surface of DEV_LOOP_AGENT_SURFACES) {
   test(`${surface} Subagent delegation points to the issue body and cites rules by role`, async () => {
     const section = subagentDelegation(await readRepo(surface));
     assert.match(section, /a reviewer or judge dispatch is exactly the emitted `dispatchPrompt`\. Its pulled work order carries the spec pointer, and its agent definition cites the rules it needs\./);
-    assert.match(section, /A worker or fixer dispatch names the linked issue and states "The issue body is the spec; read it\."/);
+    assert.match(section, /A worker dispatch \(developer, docs, quality\) names the linked issue and states "The issue body is the spec; read it\."/);
+    assert.match(section, /A fixer dispatch is exactly the `dispatchPayload` that `scripts\/loop\/emit-fixer-work-order\.mjs` prints \(its pull line\), never a prose brief\./);
+    assert.doesNotMatch(section, /worker or fixer dispatch names the linked issue/);
     assert.match(section, /`pr_body` path the PR body is the spec/);
     assert.match(section, /never restates issue-specific spec/);
     assert.match(section, /cites rules by rule ID, never by copied text/);

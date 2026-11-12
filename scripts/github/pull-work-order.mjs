@@ -2,8 +2,7 @@
 /**
  * Sanctioned read-only work-order pull (ADR 0106). A
  * worker receives only a compact envelope that tells it to run this CLI with
- * its workOrderRef, workOrderDigest and executionIdentity, or its executionIdentity
- * alone (ADR 0115), to fetch and verify its own immutable work order. The only
+ * its executionIdentity alone (ADR 0115), to fetch and verify its own immutable work order. The only
  * write is the pull receipt.
  */
 import { spawnSync } from "node:child_process";
@@ -20,9 +19,9 @@ import "../loop/emit-judge-work-order.mjs"; // registers the judge role adapter
 import "../loop/emit-coordinator-work-order.mjs"; // registers the coordinator role adapter
 
 const USAGE = `Usage: pull-work-order.mjs <executionIdentity> [--tmp-root <path>]
-       pull-work-order.mjs --ref <workOrderRef> --digest <workOrderDigest> --execution <executionIdentity> [--tmp-root <path>]
-The short form resolves the executionIdentity to its workOrderRef and workOrderDigest
-through the emitter's tmp/work-order-executions/ index (ADR 0115). Both forms verify
+The executionIdentity resolves to its workOrderRef and workOrderDigest
+through the emitter's tmp/work-order-executions/ index (ADR 0115). The 3-flag form
+(--ref, --digest, --execution) is refused with exit 2. The pull verifies
 the compact reference against the role's canonical emitted unit, print
 the exact emitted work order, and write a pull receipt under the MAIN checkout's
 tmp/work-order-receipts/. The ref's "<role>:" prefix selects the role adapter; the
@@ -143,25 +142,20 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     process.stdout.write(`${USAGE}\n`);
     return 0;
   }
-  // Step 1 of ADR 0115: the short form (one positional) or the full 3-flag form, nothing in between.
-  const threeFlag = Boolean(values.ref && values.digest && values.execution) && positionals.length === 0;
-  const short = positionals.length === 1 && !values.ref && !values.digest && !values.execution;
-  if (!threeFlag && !short) {
-    process.stderr.write(`pass one <executionIdentity>, or all of --ref, --digest and --execution\n${USAGE}\n`);
+  // ADR 0115 step 2: only the short form (one positional) is served; the 3-flag form is refused.
+  if (positionals.length !== 1 || values.ref || values.digest || values.execution) {
+    process.stderr.write(`pass one <executionIdentity> and no --ref, --digest or --execution\n${USAGE}\n`);
     return 2;
   }
   const tmpRoots = values["tmp-root"] ? [path.resolve(cwd, values["tmp-root"])] : resolveLedgerCheckouts(cwd).map((root) => path.join(root, "tmp"));
   // An injected receiptTmpRoot pins where the receipt lands, which the child cannot honor: pull locally.
-  const target = receiptTmpRoot ? null : pullDelegationTarget(short ? positionals[0] : values.execution, tmpRoots);
+  const execution = positionals[0];
+  const target = receiptTmpRoot ? null : pullDelegationTarget(execution, tmpRoots);
   if (target) {
     // The child's stdout is buffered and stderr passes through; stdout and the exit code are relayed unless a fixer
     // skew refusal triggers one local retry below. The child runs under cwd `target`, so a
     // --tmp-root goes over as the absolute path this process resolved.
-    const childArgs = [
-      ...(short ? [positionals[0]] : ["--ref", values.ref, "--digest", values.digest, "--execution", values.execution]),
-      ...(values["tmp-root"] ? ["--tmp-root", tmpRoots[0]] : []),
-    ];
-    const execution = short ? positionals[0] : values.execution;
+    const childArgs = [execution, ...(values["tmp-root"] ? ["--tmp-root", tmpRoots[0]] : [])];
     const r = spawnSync(process.execPath, [path.join(target, PULL_SCRIPT), ...childArgs], { cwd: target, stdio: ["inherit", "pipe", "inherit"], encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: { ...process.env, [PULL_DELEGATED_ENV]: "1" } });
     if (r.error) process.stderr.write(`pull-work-order: delegated pull failed to start: ${r.error.message}\n`);
     // An order emitted from the main checkout can differ from the worktree's renderer: pull locally once.
@@ -172,7 +166,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   }
   try {
     const { workOrderText } = await pullWorkOrder({
-      ...(short ? { execution: positionals[0] } : { ref: values.ref, digest: values.digest, execution: values.execution }), cwd, tmpRoots,
+      execution, cwd, tmpRoots,
       receiptTmpRoot: receiptTmpRoot ?? resolveGateArtifactTmpRoot(cwd),
       rerunTmpRoot: values["tmp-root"] ? tmpRoots[0] : undefined,
     });

@@ -97,8 +97,8 @@ test("real startup, envelope, MAIN emission and CLI pull preserve the PR route f
       const pulled = await runNode(puller, [out.executionIdentity], { cwd: f.main, env: f.env });
       assert.equal(pulled.code, 0, pulled.stderr);
       assert.equal(pulled.stdout, await readFile(plan.promptPath, "utf8"));
-      const wrong = await runNode(puller, ["--ref", out.workOrderRef, "--digest", `sha256:${"0".repeat(64)}`, "--execution", out.executionIdentity], { cwd: f.main, env: f.env });
-      assert.notEqual(wrong.code, 0);
+      const threeFlag = await runNode(puller, ["--ref", out.workOrderRef, "--digest", `sha256:${"0".repeat(64)}`, "--execution", out.executionIdentity], { cwd: f.main, env: f.env });
+      assert.equal(threeFlag.code, 2);
     }
     assert.equal(existsSync(path.join(f.main, "tmp/worktrees/dev-loops/pr-2848")), false);
     assert.deepEqual(JSON.parse(await readFile(f.input, "utf8")), f.resolved);
