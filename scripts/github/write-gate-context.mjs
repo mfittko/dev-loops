@@ -2585,7 +2585,7 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // derived from the full resolved-angle grouping, NEVER from the
   // completed/carried-filtered pending set: packDispatchUnits is a pure function
   // of its input, so wave 1 and every same-head resume derive the IDENTICAL
-  // packed units and the recorded membership (readContextDispatchUnits) still
+  // packed units and the recorded membership (readContextFanout + dispatchUnitsFromFanout) still
   // admits the reviewers the completed wave was dispatched under — re-deriving
   // the grouping from a shrunk pending set re-planned a different membership and
   // refused a legitimate resume. The pending/shortfall subset is then whatever

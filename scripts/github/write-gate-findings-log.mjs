@@ -336,7 +336,7 @@ function resolveFindings(options) {
  * perAngle). Rejects malformed or self-inconsistent provenance; this raises
  * the bar but does not make provenance unforgeable (see the Pi-harness
  * subagent-tool bridge for that). `dispatchUnits` is the round's recorded
- * dispatch membership (readContextDispatchUnits); a caller-supplied
+ * dispatch membership (readContextFanout + dispatchUnitsFromFanout); a caller-supplied
  * `dispatchUnits` key in `raw` is dropped, never trusted.
  */
 export function parseProvenanceJson(raw, resolvedGroups = null, dispatchUnits = null, unitBound = undefined) {
@@ -755,6 +755,23 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity, o
   }
   return rejectFindingConflicts(findings, conflicts);
 }
+/**
+ * Read this round's dispatch membership from the keyed, worktree-local
+ * gate-context artifact (the same `tmp/gate-context/...` path
+ * write-gate-context.mjs writes by default). The findings writer's
+ * `--tmp-root` controls only the durable ledger and must not relocate this
+ * context read; `--context-tmp-root` explicitly selects a context bundle that
+ * the producer and dispatcher relocated. The context's
+ * `fanout.groups` (packed when the round needed packing) expands through the
+ * emitter's own cap-split into the `{ name, angles }` dispatch units reviewers
+ * actually shared. Returns null when no context or no fanout plan exists, so
+ * the pairing guard falls back to re-derived base units. The path is keyed by
+ * repo, PR, gate and head, as in the emitter. A present but unreadable context,
+ * or a fanout plan without a `fanout.groups` array, fails closed. A plan whose
+ * groups yield no dispatch unit (empty, or only malformed or angle-less
+ * entries) returns `[]`, which the pairing guard rejects as a shape error.
+ * @returns {Promise<object|null>} the raw fanout plan (dispatchUnitsFromFanout expands it into units)
+ */
 async function readContextFanout({ repo, pr, gate, headSha, contextTmpRoot }, repoRoot) {
   const contextPath = path.resolve(repoRoot, buildGateContextPath({
     repo,
@@ -779,27 +796,6 @@ async function readContextFanout({ repo, pr, gate, headSha, contextTmpRoot }, re
   if (context?.fanout === undefined || context?.fanout === null) return null;
   if (!Array.isArray(context.fanout.groups)) throw parseError(`gate-context artifact ${contextPath} has a fanout plan without a fanout.groups array, so its dispatch membership cannot be recorded`);
   return context.fanout;
-}
-
-/**
- * Read this round's dispatch membership from the keyed, worktree-local
- * gate-context artifact (the same `tmp/gate-context/...` path
- * write-gate-context.mjs writes by default). The findings writer's
- * `--tmp-root` controls only the durable ledger and must not relocate this
- * context read; `--context-tmp-root` explicitly selects a context bundle that
- * the producer and dispatcher relocated. The context's
- * `fanout.groups` (packed when the round needed packing) expands through the
- * emitter's own cap-split into the `{ name, angles }` dispatch units reviewers
- * actually shared. Returns null when no context or no fanout plan exists, so
- * the pairing guard falls back to re-derived base units. The path is keyed by
- * repo, PR, gate and head, as in the emitter. A present but unreadable context,
- * or a fanout plan without a `fanout.groups` array, fails closed. A plan whose
- * groups yield no dispatch unit (empty, or only malformed or angle-less
- * entries) returns `[]`, which the pairing guard rejects as a shape error.
- * @returns {Promise<{ name: string, angles: string[] }[]|null>}
- */
-export async function readContextDispatchUnits(round, config, repoRoot) {
-  return dispatchUnitsFromFanout(await readContextFanout(round, repoRoot), config);
 }
 
 // The dispatch units of one already-read context fanout plan (null when absent).
