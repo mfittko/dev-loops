@@ -13,7 +13,7 @@ import path from "node:path";
 import { describe, test } from "bun:test";
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract } from "@dev-loops/core/config";
 import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation";
-import { resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
+import { countFreshDispatchUnits, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildFanoutEnforcement, buildPreMergeGateCheck } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { expandDispatchUnits, packedUnitName } from "../../scripts/github/_dispatch-units.mjs";
@@ -240,10 +240,10 @@ const GATE_KEY = { draft_gate: "draft", pre_approval_gate: "preApproval" };
 
 // Write the keyed gate-context artifact the findings-log writer reads its
 // dispatch membership from, then write the ledger through the real writer.
-async function writePacked(dir, gate, groups, perAngle) {
+async function writePacked(dir, gate, groups, perAngle, unitBound) {
   const contextPath = path.join(dir, buildGateContextPath({ repo: "owner/repo", pr: 5, gate, headSha: HEAD_SHA }));
   await mkdir(path.dirname(contextPath), { recursive: true });
-  await writeFile(contextPath, JSON.stringify({ fanout: { groups, pendingGroups: groups } }), "utf8");
+  await writeFile(contextPath, JSON.stringify({ fanout: { groups, pendingGroups: groups, unitBound } }), "utf8");
   try {
     const result = await writeGateFindingsLog({
       repo: "owner/repo", pr: 5, gate, headSha: HEAD_SHA, verdict: "clean", findings: "[]",
@@ -764,5 +764,172 @@ describe("standalone review gate: the write-side pairing re-derivation mirrors t
         assert.equal(error, null, `${gate}: ${error ?? ""}`);
       });
     }
+  });
+});
+
+// A recorded packed unit above 5 angles: the context artifact's fanout.unitBound
+// is the one authority the writer and the read path honor; missing means 5.
+const BOUND_DEVLOOPS = [
+  "version: 1",
+  "gates:",
+  "  requireFanoutEvidence: true",
+  "  requireFanoutProvenance: true",
+  "  preApproval:",
+  "    angles:",
+  "      - name: pr-checklist",
+  "        mandatory: true",
+  "      - name: holistic",
+  "        mandatory: true",
+  "      - dry",
+  "      - kiss",
+  "      - yagni",
+  "      - deep",
+  "      - srp",
+  "  fanout:",
+  "    maxConcurrent: 2",
+  "    groups:",
+  "      - name: process",
+  "        angles: [pr-checklist]",
+  "      - name: alpha",
+  "        angles: [dry, kiss]",
+  "      - name: beta",
+  "        angles: [yagni, deep, srp]",
+  "",
+].join("\n");
+const BOUND_BIG = ["dry", "kiss", "yagni", "deep", "srp", "holistic"];
+const BOUND_UNITS = [
+  { name: packedUnitName(["alpha", "beta", "holistic"]), angles: BOUND_BIG },
+  { name: packedUnitName(["process"]), angles: ["pr-checklist"] },
+];
+const boundPerAngle = (reviewers = {}) => [
+  ...BOUND_BIG.map((angle) => ({ angle, reviewer: reviewers[angle] ?? "r-big", group: BOUND_UNITS[0].name })),
+  { angle: "pr-checklist", reviewer: "r-pr" },
+];
+
+describe("fanoutReviewerPairingError reads the recorded unit bound (packed unit above 5 angles)", () => {
+  test("ACCEPT: one shared reviewer for a recorded 6-angle unit passes the writer and the read path, and counts as one unit", async () => {
+    await withConfig(BOUND_DEVLOOPS, async (dir) => {
+      const perAngle = boundPerAngle();
+      const { error, provenance } = await writePacked(dir, "pre_approval_gate", BOUND_UNITS, perAngle, 10);
+      assert.equal(error, null);
+      assert.equal(provenance.unitBound, 10);
+      assert.equal(provenance.dispatchUnits[0].angles.length, 6);
+      assert.equal(countFreshDispatchUnits(perAngle), 2);
+      assert.equal(await readPacked(dir, "pre_approval_gate", provenance), null);
+    });
+  });
+
+  test("REJECT: the same recorded unit without a recorded bound fails both checks (missing means 5)", async () => {
+    await withConfig(BOUND_DEVLOOPS, async (dir) => {
+      const { error } = await writePacked(dir, "pre_approval_gate", BOUND_UNITS, boundPerAngle());
+      // The writer expands the context at the default bound, so the 6-angle unit records as 5 + 1 and one reviewer across both is refused.
+      assert.match(error ?? "", /does not place all of them in one group/);
+      const read = await readPacked(dir, "pre_approval_gate", { distinctReviewers: 2, perAngle: boundPerAngle(), dispatchUnits: BOUND_UNITS });
+      assert.match(read ?? "", /holds 6 angles, above the 5-angle unit bound/);
+    });
+  });
+
+  test("REJECT: a recorded unitBound 10 unit whose perAngle omits mandatory holistic still fails mandatory coverage", async () => {
+    await withConfig(BOUND_DEVLOOPS, async (dir) => {
+      const units = [{ name: "u", angles: BOUND_BIG.filter((a) => a !== "holistic") }, BOUND_UNITS[1]];
+      const perAngle = boundPerAngle().filter((entry) => entry.angle !== "holistic");
+      const read = await readPacked(dir, "pre_approval_gate", { distinctReviewers: countIds(perAngle), perAngle, dispatchUnits: units, unitBound: 10 });
+      assert.match(read ?? "", /missing mandatory angle\(s\): holistic/);
+    });
+  });
+
+  test("REJECT: a packed unit above 5 still fails closed for a split, foreign, duplicated or cross-unit angle, naming it", async () => {
+    await withConfig(BOUND_DEVLOOPS, async (dir) => {
+      const cases = [
+        ["missing", [{ name: "u", angles: BOUND_BIG.filter((a) => a !== "srp") }, BOUND_UNITS[1]], boundPerAngle(), /splits base unit yagni\+deep\+srp/],
+        ["foreign", [{ name: "u", angles: [...BOUND_BIG, "zzz-foreign"] }, BOUND_UNITS[1]], boundPerAngle(), /angle "zzz-foreign" that is not a member/],
+        ["duplicated", [BOUND_UNITS[0], { name: "dup", angles: ["dry"] }, BOUND_UNITS[1]], boundPerAngle(), /angle "dry" is recorded in more than one dispatch unit/],
+        ["cross-unit reviewer", BOUND_UNITS, boundPerAngle({ srp: "r-pr" }), /"r-pr" is recorded for fresh angles: srp, pr-checklist/],
+      ];
+      for (const [label, units, perAngle, pattern] of cases) {
+        const { error } = await writePacked(dir, "pre_approval_gate", units, perAngle, 10);
+        assert.match(error ?? "", pattern, `write: ${label}`);
+        const read = await readPacked(dir, "pre_approval_gate", { distinctReviewers: countIds(perAngle), perAngle, dispatchUnits: units, unitBound: 10 });
+        assert.match(read ?? "", pattern, `read: ${label}`);
+      }
+    });
+  });
+});
+
+// One configured group of 6 angles: one shared reviewer passes at bound 10 and fails at bound 5.
+const WIDE_DEVLOOPS = BOUND_DEVLOOPS.replace(
+  /  fanout:[\s\S]*$/,
+  [
+    "  fanout:",
+    "    maxConcurrent: 2",
+    "    groups:",
+    "      - name: wide",
+    "        angles: [pr-checklist, holistic, dry, kiss, yagni, deep]",
+    "",
+  ].join("\n"),
+);
+const WIDE_ANGLES = ["pr-checklist", "holistic", "dry", "kiss", "yagni", "deep"];
+const widePerAngle = () => [
+  ...WIDE_ANGLES.map((angle) => ({ angle, reviewer: "r-wide", group: "wide" })),
+  { angle: "srp", reviewer: "r-srp" },
+];
+
+describe("fanoutReviewerPairingError ignores a bound without recorded dispatch units", () => {
+  test("REJECT: a ledger carrying unitBound 10 and no dispatchUnits is read at the default bound", async () => {
+    await withConfig(WIDE_DEVLOOPS, async (dir) => {
+      const perAngle = widePerAngle();
+      const read = await readPacked(dir, "pre_approval_gate", { distinctReviewers: countIds(perAngle), perAngle, unitBound: 10 });
+      assert.match(read ?? "", /declares group "wide" for fresh angles/);
+    });
+  });
+});
+
+describe("the read path trusts a ledger unitBound above 5 only when the gate-context artifact records the same value", () => {
+  const ledger = (unitBound) => {
+    const perAngle = boundPerAngle();
+    return { distinctReviewers: countIds(perAngle), perAngle, dispatchUnits: BOUND_UNITS, ...(unitBound === undefined ? {} : { unitBound }) };
+  };
+  const writeContext = async (dir, unitBound) => {
+    const contextPath = path.join(dir, buildGateContextPath({ repo: "owner/repo", pr: 5, gate: "pre_approval_gate", headSha: HEAD_SHA }));
+    await mkdir(path.dirname(contextPath), { recursive: true });
+    await writeFile(contextPath, JSON.stringify({ fanout: { groups: BOUND_UNITS, pendingGroups: BOUND_UNITS, ...(unitBound === undefined ? {} : { unitBound }) } }), "utf8");
+  };
+
+  test("ACCEPT: ledger unitBound equal to the context fanout.unitBound passes", async () => {
+    await withConfig(BOUND_DEVLOOPS, async (dir) => {
+      await writeContext(dir, 10);
+      const read = await readPacked(dir, "pre_approval_gate", ledger(10));
+      assert.equal(read, null);
+      assert.doesNotMatch(read ?? "", /not corroborated by the gate-context artifact/);
+    });
+  });
+
+  test("ACCEPT: a ledger without unitBound, and a ledger unitBound 5, resolve to 5 and pass for 5-angle units", async () => {
+    await withConfig(BOUND_DEVLOOPS, async (dir) => {
+      const units = [{ name: "alpha", angles: ["dry", "kiss"] }, { name: "beta", angles: ["yagni", "deep", "srp"] }, { name: "process", angles: ["pr-checklist"] }, { name: "holistic", angles: ["holistic"] }];
+      const perAngle = units.flatMap((u, i) => u.angles.map((angle) => ({ angle, reviewer: `r${i}`, group: u.name })));
+      for (const unitBound of [undefined, 5]) {
+        const prov = { distinctReviewers: countIds(perAngle), perAngle, dispatchUnits: units, ...(unitBound === undefined ? {} : { unitBound }) };
+        assert.equal(await readPacked(dir, "pre_approval_gate", prov), null, `unitBound ${unitBound}`);
+      }
+    });
+  });
+
+  test("REJECT: ledger unitBound 10 with no gate-context fanout.unitBound fails closed at 5", async () => {
+    await withConfig(BOUND_DEVLOOPS, async (dir) => {
+      const read = await readPacked(dir, "pre_approval_gate", ledger(10));
+      assert.match(read ?? "", /holds 6 angles, above the 5-angle unit bound/);
+      assert.match(read ?? "", /not corroborated by the gate-context artifact/);
+      assert.match(read ?? "", /reads only the default tmp root.*re-emit at the default root/);
+    });
+  });
+
+  test("REJECT: ledger unitBound 10 with gate-context fanout.unitBound 5 fails closed at 5", async () => {
+    await withConfig(BOUND_DEVLOOPS, async (dir) => {
+      await writeContext(dir, 5);
+      const read = await readPacked(dir, "pre_approval_gate", ledger(10));
+      assert.match(read ?? "", /holds 6 angles, above the 5-angle unit bound/);
+      assert.match(read ?? "", /not corroborated by the gate-context artifact/);
+    });
   });
 });

@@ -33,6 +33,8 @@ import { detectMergeBaseChangedFiles } from "../loop/detect-change-scope.mjs";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { resolveCapRoundFixed } from "./write-gate-context.mjs";
+import { buildGateContextPath } from "./_gate-artifact-paths.mjs";
+import { REVIEWER_UNIT_MAX_ANGLES, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { crossCheckRoundFromReviewBodies, normalizePrReviewsPayload, resolveTrustedEvidencePredicate, parseFindingMarker, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
 import { isCapRound } from "@dev-loops/core/loop/review-round-cap";
 import { flattenPaginatedSlurp, resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
@@ -551,14 +553,18 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
           // fresh angles/groups). gate.resolvedGroups cross-checks a claimed
           // `group` against this round's actual dispatch-group resolution
           // (mode/gate:full-aware) rather than accepting any self-attested label.
-          const pairingErr = fanoutReviewerPairingError(prov.perAngle, gate.resolvedGroups, prov.dispatchUnits);
+          const pairingErr = fanoutReviewerPairingError(prov.perAngle, gate.resolvedGroups, prov.dispatchUnits, corroboratedUnitBound(prov, gate.contextUnitBound));
           if (reviewers === null || reviewers < requiredReviewers) {
             failures.push(
               `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (need provenance.distinctReviewers >= ${requiredReviewers}${requiredReviewers > FANOUT_PROVENANCE_MIN_REVIEWERS ? ` [max(${FANOUT_PROVENANCE_MIN_REVIEWERS}, ${freshUnitCount} fresh dispatch unit(s))]` : ""}, got ${reviewers === null ? "none" : reviewers}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
             );
           } else if (pairingErr !== null) {
+            const ledgerBound = resolveReviewerUnitBound(prov.unitBound);
+            const uncorroborated = prov.dispatchUnits != null && ledgerBound > REVIEWER_UNIT_MAX_ANGLES && ![gate.contextUnitBound].flat().includes(ledgerBound)
+              ? `; the ledger's unit bound ${ledgerBound} is not corroborated by the gate-context artifact, so re-run the gate-context build and emit-fanout-dispatch for this head so the ledger and artifact agree (a pruned worktree also loses the artifact, and the read path reads only the default tmp root, so for a bundle relocated with --tmp-root rebuild the gate-context artifact and re-emit at the default root)`
+              : "";
             failures.push(
-              `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (${pairingErr}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
+              `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (${pairingErr}${uncorroborated}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
             );
           }
         }
@@ -709,6 +715,39 @@ async function ledgerExistsInAny(checkouts, ledgerPath) {
   return false;
 }
 /**
+ * The pairing bound the read path trusts for a ledger. The ledger is a
+ * worktree-local file, so a recorded `unitBound` above the default counts only
+ * when the gate-context artifact at the same head records the same value;
+ * otherwise the default bound applies and the pairing check fails closed.
+ * The exit is to rebuild the gate-context artifact and re-run
+ * emit-fanout-dispatch for the head.
+ * Returns undefined (the default) for a ledger with no recorded dispatch units.
+ */
+function corroboratedUnitBound(prov, contextUnitBounds) {
+  if (prov?.dispatchUnits == null) return undefined;
+  const ledgerBound = resolveReviewerUnitBound(prov.unitBound);
+  return ledgerBound > REVIEWER_UNIT_MAX_ANGLES && ![contextUnitBounds].flat().includes(ledgerBound) ? REVIEWER_UNIT_MAX_ANGLES : ledgerBound;
+}
+/**
+ * The resolved `fanout.unitBound` of every readable gate-context artifact across
+ * the enumerated checkouts, so a stale checkout's artifact cannot shadow the
+ * one that matches the ledger. No readable artifact resolves to the default bound.
+ * Ceiling: the artifact is not tied to the ledger's own checkout, and a pruned worktree loses the artifact, so a
+ * legitimate packed ledger above 5 angles then fails closed. The read path
+ * reads only the default tmp root, so a bundle relocated with --tmp-root is
+ * never found. The exit is to rebuild the gate-context artifact and re-emit at
+ * the default root for that head.
+ */
+async function readContextUnitBoundInAny(checkouts, contextPath) {
+  const bounds = new Set();
+  for (const root of checkouts) {
+    try {
+      bounds.add(resolveReviewerUnitBound(JSON.parse(await readFile(path.resolve(root, contextPath), "utf8"))?.fanout?.unitBound));
+    } catch { /* absent or unreadable: try the next checkout */ }
+  }
+  return bounds.size > 0 ? [...bounds] : [REVIEWER_UNIT_MAX_ANGLES];
+}
+/**
  * Read the recorded fan-out `provenance` object from a ledger across the
  * enumerated checkouts. Mirrors ledgerExistsInAny's "ANY checkout satisfies"
  * semantics: prefers the FIRST checkout whose ledger provenance actually
@@ -726,7 +765,7 @@ async function ledgerExistsInAny(checkouts, ledgerPath) {
 async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
   const {
     requireProvenance = false, mandatoryAngles = [], anglePool = null, rejectForeignAngles = true,
-    config = null, gateKey = "draft_gate", hasFullLabel = false,
+    config = null, gateKey = "draft_gate", hasFullLabel = false, contextUnitBound = [REVIEWER_UNIT_MAX_ANGLES],
   } = criteria;
   const satisfies = (prov) => {
     if (provenanceConsistencyError(prov) !== null) return false;
@@ -737,7 +776,7 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
     // different fresh angle set than the worktree ledger.
     const resolvedGroups = resolveFanoutGroups(config, resolveGateAngleCatalogKey(gateKey), ledgerAngleNames(prov.perAngle, anglePool ?? []), { fullLabel: hasFullLabel });
     if (requireProvenance && prov.distinctReviewers < Math.max(FANOUT_PROVENANCE_MIN_REVIEWERS, countFreshDispatchUnits(prov.perAngle))) return false;
-    if (requireProvenance && fanoutReviewerPairingError(prov.perAngle, resolvedGroups, prov.dispatchUnits) !== null) return false;
+    if (requireProvenance && fanoutReviewerPairingError(prov.perAngle, resolvedGroups, prov.dispatchUnits, corroboratedUnitBound(prov, contextUnitBound)) !== null) return false;
     const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(prov.perAngle, { mandatoryAngles, pool: anglePool });
     if (missingMandatory.length > 0) return false;
     if (foreignAngles.length > 0 && rejectForeignAngles) return false;
@@ -1077,9 +1116,12 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
     // checkout's contract-failing ledger cannot shadow a passing one.
     const readProvenance = requireProvenance || spec.marker.executionMode === "fanout_fanin";
     const angleFields = GATE_ANGLE_CONFIG[spec.name];
+    const contextUnitBound = readProvenance
+      ? await readContextUnitBoundInAny(checkouts, buildGateContextPath({ repo, pr, gate: spec.name, headSha, tmpRoot: "tmp" }))
+      : [REVIEWER_UNIT_MAX_ANGLES];
     const provenance = readProvenance
       ? await readLedgerProvenanceInAny(checkouts, ledgerPath, {
-        requireProvenance, rejectForeignAngles, ...angleFields, config: angleConfig, gateKey: spec.name, hasFullLabel,
+        requireProvenance, rejectForeignAngles, ...angleFields, config: angleConfig, gateKey: spec.name, hasFullLabel, contextUnitBound,
       })
       : null;
     gates.push({
@@ -1090,6 +1132,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
       ledgerPath,
       ledgerExists: await ledgerExistsInAny(checkouts, ledgerPath),
       provenance,
+      contextUnitBound,
       // The dispatch units THIS ledger's own angles (fresh and carried) resolve to
       // (grouped or singleton, mode/gate:full-aware) — buildPreMergeGateCheck
       // re-validates the cardinality floor and the pairing exception against

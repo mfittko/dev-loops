@@ -35,7 +35,7 @@ import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { VERIFIED_ITEMS_ANGLES, baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves, validateAngleResult } from "@dev-loops/core/loop/gate-fanin";
 import { anchorBaseRef, normalizeBaseBranch } from "../lib/anchor-base-ref.mjs";
 import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-write-remote-freshness-guard.mjs";
-import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 import { retireGateRound } from "./retire-gate-round.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -2513,10 +2513,10 @@ function normalizeCarriedAnglesArg(carriedAngles) {
  * @param {import("@dev-loops/core/config").DevLoopConfig|null} config
  * @param {"draft"|"preApproval"} configGate
  * @param {string[]} resolvedAngles
- * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string>, carriedAngles?: Iterable<string>, env?: Record<string, string|undefined>, singleWave?: boolean }} [options] — `env` defaults to `process.env`; injectable so a caller-boundary test can pin the harness deterministically instead of depending on the ambient environment. `singleWave` (default true) enables packing and the capacity refusal; the review gate passes false.
- * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number, preflight: object, pendingGroups: { name: string, angles: string[] }[], pendingWavePlan: { name: string, angles: string[] }[][] }}
+ * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string>, carriedAngles?: Iterable<string>, env?: Record<string, string|undefined>, singleWave?: boolean, unitBound?: number }} [options] — `env` defaults to `process.env`; injectable so a caller-boundary test can pin the harness deterministically instead of depending on the ambient environment. `singleWave` (default true) enables packing and the capacity refusal; the review gate passes false. `unitBound` is the same-head context's recorded bound, kept on resume; absent means the default.
+ * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number, unitBound: number, preflight: object, pendingGroups: { name: string, angles: string[] }[], pendingWavePlan: { name: string, angles: string[] }[][] }}
  */
-export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null, env = process.env, singleWave = true } = {}) {
+export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null, env = process.env, singleWave = true, unitBound: requestedUnitBound } = {}) {
   // Angle-pool order, as the pairing guard re-derives it: auto-chunk
   // boundaries must not depend on the order the angles arrived in.
   const catalogOrder = resolveGateAngleContract(config, configGate).pool ?? [];
@@ -2585,7 +2585,7 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // derived from the full resolved-angle grouping, NEVER from the
   // completed/carried-filtered pending set: packDispatchUnits is a pure function
   // of its input, so wave 1 and every same-head resume derive the IDENTICAL
-  // packed units and the recorded membership (readContextDispatchUnits) still
+  // packed units and the recorded membership (readContextFanout + dispatchUnitsFromFanout) still
   // admits the reviewers the completed wave was dispatched under — re-deriving
   // the grouping from a shrunk pending set re-planned a different membership and
   // refused a legitimate resume. The pending/shortfall subset is then whatever
@@ -2597,9 +2597,10 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // `singleWave: false` (the standalone review gate, whose full-PR angle set
   // exceeds single-wave capacity) keeps the multi-wave plan unchanged.
   const perAngleMode = config?.gates?.fanout?.mode === "per-angle";
+  const unitBound = resolveReviewerUnitBound(requestedUnitBound);
   if (singleWave && !sequential && !perAngleMode) {
     const configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
-    const baseUnits = expandDispatchUnits(groups, configuredGroupNames);
+    const baseUnits = expandDispatchUnits(groups, configuredGroupNames, unitBound);
     if (baseUnits.length > effectiveConcurrency) {
       // The DISPATCHABLE set: the resolved units minus every group whose angles
       // are ALL carried forward — a set fixed for the whole round (proven for
@@ -2612,7 +2613,7 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
       // reviewerBudgetPreflight strips carried angles from pendingGroups, issue 2511).
       const carriedKeys = new Set(carriedAnglesList.map((a) => baseAngleName(a).trim().toLowerCase()));
       const dispatchableGroups = groups.filter((g) => !(Array.isArray(g?.angles) && g.angles.length > 0 && g.angles.every((a) => carriedKeys.has(baseAngleName(String(a)).trim().toLowerCase()))));
-      const dispatchableUnits = expandDispatchUnits(dispatchableGroups, configuredGroupNames);
+      const dispatchableUnits = expandDispatchUnits(dispatchableGroups, configuredGroupNames, unitBound);
       if (dispatchableUnits.length > 0) {
         // Pack the DISPATCHABLE set, NEVER the full resolved set. The full set
         // still holds every fully-carried base unit, so packing it and
@@ -2624,15 +2625,15 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
         // are round-stable (proven for this head), so packing them out keeps
         // this a round-stable packing input: a same-head resume re-derives the
         // IDENTICAL units (the growing COMPLETED set is still excluded).
-        const packedDispatchable = dispatchableUnits.length > effectiveConcurrency ? packDispatchUnits(dispatchableUnits, effectiveConcurrency) : null;
+        const packedDispatchable = dispatchableUnits.length > effectiveConcurrency ? packDispatchUnits(dispatchableUnits, effectiveConcurrency, unitBound) : null;
         if (dispatchableUnits.length > effectiveConcurrency && packedDispatchable === null) {
           // The dispatchable plan itself cannot fit one wave: refuse and name
           // the set actually counted (the resolved count and the fresh subset)
           // so a carry-forward round is never mislabeled as all-fresh.
           const resolvedAngleCount = baseUnits.reduce((sum, unit) => sum + unit.angles.length, 0);
           const freshAngleCount = dispatchableUnits.reduce((sum, unit) => sum + unit.angles.filter((a) => !carriedKeys.has(baseAngleName(String(a)).trim().toLowerCase())).length, 0);
-          const capacity = effectiveConcurrency * REVIEWER_UNIT_MAX_ANGLES;
-          throw new Error(`GATE-EXEC-FANOUT-CAPACITY: refusing — the round resolves ${resolvedAngleCount} angles (${freshAngleCount} fresh, ${resolvedAngleCount - freshAngleCount} carried forward) in ${dispatchableUnits.length} base dispatch units that do not fit one wave of effective maxConcurrent ${effectiveConcurrency} units x ${REVIEWER_UNIT_MAX_ANGLES} angles (capacity ${capacity}); raise gates.fanout.maxConcurrent, disable angles, or rely on dynamic pruning to shrink the round`);
+          const capacity = effectiveConcurrency * unitBound;
+          throw new Error(`GATE-EXEC-FANOUT-CAPACITY: refusing — the round resolves ${resolvedAngleCount} angles (${freshAngleCount} fresh, ${resolvedAngleCount - freshAngleCount} carried forward) in ${dispatchableUnits.length} base dispatch units that do not fit one wave of effective maxConcurrent ${effectiveConcurrency} units x ${unitBound} angles (capacity ${capacity}); raise gates.fanout.maxConcurrent, disable angles, or rely on dynamic pruning to shrink the round`);
         }
         // Emit the dispatchable plan — it IS what will be dispatched, so it is
         // what the recorded membership must name. Packed base units when
@@ -2650,11 +2651,11 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // cap-split dispatch units (each a subset of one recorded unit), never the
   // unsplit group: stripping before the split moved angles across a part boundary.
   const dispatchGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
-  const preflight = reviewerBudgetPreflight(expandDispatchUnits(groups, dispatchGroupNames), availableReviewers, { completedAngles, carriedAngles: carriedAnglesList });
+  const preflight = reviewerBudgetPreflight(expandDispatchUnits(groups, dispatchGroupNames, unitBound), availableReviewers, { completedAngles, carriedAngles: carriedAnglesList, unitBound });
   const wavePlan = scheduleFanoutWaves(groups, effectiveConcurrency);
   const pendingGroups = preflight.pendingGroups;
   const pendingWavePlan = scheduleFanoutWaves(pendingGroups, effectiveConcurrency);
-  return { groups, wavePlan, sequential, maxAnglesPerGroup, maxConcurrent, effectiveConcurrency, preflight, pendingGroups, pendingWavePlan };
+  return { groups, wavePlan, sequential, maxAnglesPerGroup, maxConcurrent, effectiveConcurrency, unitBound, preflight, pendingGroups, pendingWavePlan };
 }
 
 export function buildGateContextArtifact(options) {
@@ -3484,10 +3485,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   if (prBodyRead && options.fanoutDispatch?.pendingGroups) {
     const priorBodySha256 = options.carriedPriorBodySha256 !== undefined ? options.carriedPriorBodySha256 : await readPriorPrBodySha256(options, { repoRoot });
     // The earlier round dispatched its recorded groups (packed under its own carried set), so the in-flight check reads that membership, never this build's.
-    const priorFanout = options.carriedPriorGroups !== undefined ? { groups: options.carriedPriorGroups, preflight: { carriedAngles: options.carriedPriorCarriedAngles } } : (await readGateContext(options, { repoRoot }).catch(() => null))?.fanout;
+    const priorFanout = options.carriedPriorGroups !== undefined ? { groups: options.carriedPriorGroups, unitBound: options.carriedPriorUnitBound, preflight: { carriedAngles: options.carriedPriorCarriedAngles } } : (await readGateContext(options, { repoRoot }).catch(() => null))?.fanout;
     const priorCarriedAngles = priorFanout?.preflight?.carriedAngles ?? [];
     const priorGroups = Array.isArray(priorFanout?.groups) ? priorFanout.groups : options.fanoutDispatch.groups ?? [];
-    priorBodyState = { priorBodySha256, priorCarriedAngles, priorGroups };
+    // Groups from the current fanout take the current bound; groups from a prior context take that context's recorded bound.
+    const priorUnitBound = Array.isArray(priorFanout?.groups) ? priorFanout.unitBound : options.fanoutDispatch.unitBound;
+    priorBodyState = { priorBodySha256, priorCarriedAngles, priorGroups, priorUnitBound };
     if (priorBodySha256 !== prBodyRead.sha256) {
       const { names: liveSentinels, scanError } = await scanLiveSentinels();
       if (scanError !== null) {
@@ -3539,7 +3542,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       const keyOf = (angle) => String(angle).trim().toLowerCase();
       const pendingKeys = new Set(options.fanoutDispatch.pendingGroups.flatMap((unit) => (Array.isArray(unit?.angles) ? unit.angles : []).map(keyOf)));
       const covered = new Set();
-      for (const group of expandDispatchUnits(priorGroups, configuredGroupNames)) {
+      for (const group of expandDispatchUnits(priorGroups, configuredGroupNames, priorUnitBound)) {
         if (!Array.isArray(group?.angles)) continue;
         const unit = { ...group, angles: group.angles.filter((angle) => !priorCarried.has(keyOf(angle))) };
         unit.angles.forEach((angle) => covered.add(keyOf(angle)));
@@ -3624,7 +3627,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         // pointer/hash/plan without the failed path before publishing a marker.
         process.stderr.write(`[gate-context] full-diff capture failed (continuing without scope.diffPath): ${error.message}\n`);
         await rm(fullPath, { force: true });
-        return await writeGateContext({ ...options, diffPath: null, diffToWrite: null, carriedPrBodyBaselineSha256: prBodyBaselineSha256, ...(priorBodyState ? { carriedPriorBodySha256: priorBodyState.priorBodySha256, carriedPriorCarriedAngles: priorBodyState.priorCarriedAngles, carriedPriorGroups: priorBodyState.priorGroups } : {}) }, { repoRoot });
+        return await writeGateContext({ ...options, diffPath: null, diffToWrite: null, carriedPrBodyBaselineSha256: prBodyBaselineSha256, ...(priorBodyState ? { carriedPriorBodySha256: priorBodyState.priorBodySha256, carriedPriorCarriedAngles: priorBodyState.priorCarriedAngles, carriedPriorGroups: priorBodyState.priorGroups, carriedPriorUnitBound: priorBodyState.priorUnitBound } : {}) }, { repoRoot });
       }
     }
     if (pendingFilteredDiff) await writeFile(path.resolve(repoRoot, pendingFilteredDiff.path), pendingFilteredDiff.text, "utf8");
@@ -3818,7 +3821,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
   const angleState = await readBodyAwareAngleState({ ...input, tmpRoot, carriedAngles: input.carriedAngles ?? null }, { repoRoot });
   const completedAngles = input.completedAngles ?? angleState.completedAngles;
-  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: angleState.carriedAngles, singleWave: !isReviewGate });
+  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: angleState.carriedAngles, singleWave: !isReviewGate, unitBound: await recordedUnitBound(input, repoRoot) });
 
   const writeResult = await writeGateContext(
     {
@@ -3861,6 +3864,11 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
  * @param {{ repoRoot?: string }} [options]
  * @returns {Promise<object|null>}
  */
+/** The unit bound the same-head context artifact recorded (`fanout.unitBound`); undefined when no readable artifact records one. */
+async function recordedUnitBound(input, repoRoot) {
+  return (await readGateContext(input, { repoRoot }).catch(() => null))?.fanout?.unitBound;
+}
+
 export async function readGateContext(input, { repoRoot = process.cwd() } = {}) {
   const contextPath = buildGateContextPath({
     repo: input.repo,
@@ -4455,7 +4463,7 @@ export async function main(
       const angleState = await readBodyAwareAngleState({ ...options, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });
       const { completedAngles } = angleState;
       options.carriedAngles = angleState.carriedAngles;
-      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles, singleWave: options.gate !== "review" });
+      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles, singleWave: options.gate !== "review", unitBound: await recordedUnitBound(options, repoRoot) });
     }
     const result = await writeGateContext(options, { repoRoot });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });

@@ -6071,6 +6071,17 @@ test("#1601 resolveFanoutDispatch: auto-chunks ungrouped angles + emits a bounde
   assert.deepEqual(plan.wavePlan[0].map((u) => u.name), ["group:a+b", "group:c+d", "e"]);
 });
 
+test("resolveFanoutDispatch keeps a recorded unit bound of 10 and defaults an absent one to 5", () => {
+  const angles = ["a", "b", "c", "d", "e", "f"];
+  const config = { version: 1, gates: { fanout: { groups: [{ name: "wide", angles }] } } };
+  const kept = resolveFanoutDispatch(config, "draft", angles, { env: {}, unitBound: 10 });
+  assert.equal(kept.unitBound, 10);
+  assert.deepEqual(kept.pendingGroups.map((g) => g.angles.length), [6]);
+  const dflt = resolveFanoutDispatch(config, "draft", angles, { env: {} });
+  assert.equal(dflt.unitBound, 5);
+  assert.deepEqual(dflt.pendingGroups.map((g) => g.angles.length), [5, 1]);
+});
+
 test("#2414 resolveFanoutDispatch: units above the cap pack first-fit decreasing into one wave", () => {
   const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 2, maxConcurrent: 2 } } };
   const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d", "e"], { fullLabel: false, env: {} });
@@ -10428,6 +10439,36 @@ test("a full-diff capture failure on an unchanged-body rebuild keeps the prior b
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+for (const [label, carry] of [
+  ["the fallback branch reads the bound of the current fanout", {}],
+  ["the full-diff-failure recursion carries the prior bound", { carriedPriorGroups: [{ name: "design", angles: ["scope", "srp", "ocp", "lsp", "isp", "dip"] }], carriedPriorUnitBound: 10, carriedPriorCarriedAngles: [], carriedPriorBodySha256: null }],
+]) {
+  test(`a body-only rebuild refuses a prior bound-10 6-angle unit while it is in flight: ${label}`, async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-prior-bound-"));
+    try {
+      const angles = ["scope", "srp", "ocp", "lsp", "isp", "dip"];
+      const config = draftConfig({ dynamicAngles: false, angles, mandatoryAngles: [] });
+      config.gates.draft.angles = config.gates.draft.angles.map((entry) => ({ ...(typeof entry === "string" ? { name: entry } : entry), prompt: (entry.name ?? entry) === "scope" ? "The PR description is the contract." : "Review the diff." }));
+      config.gates.fanout = { groups: [{ name: "design", angles }] };
+      const groups = [{ name: "design", angles }];
+      const options = {
+        ...parseWriteGateContextCliArgs(["--repo", "owner/repo", "--pr", "90", "--gate", "draft_gate", "--head-sha", BODY_RERUN_SHA, "--angles", JSON.stringify(angles)]),
+        config, prBody: "Edited",
+        fanoutDispatch: { groups, pendingGroups: groups, unitBound: 10, preflight: { carriedAngles: [] } },
+        ...carry,
+      };
+      // The unit is a whole 6-angle unit at bound 10; at bound 5 it would re-split into -part1/-part2 and miss this live sentinel.
+      const sentinel = path.join(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-group-design-${BODY_RERUN_SHA}.json`);
+      await mkdir(path.dirname(sentinel), { recursive: true });
+      await writeFile(sentinel, "{}\n", "utf8");
+      await assert.rejects(writeGateContext(options, { repoRoot }), /GATE-EXEC-BODY-ONLY-RERUN.*unit draft-gate-group-design is in flight/s);
+      assert.ok(existsSync(sentinel), "the live sentinel stays");
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+}
 
 test("the sticky pr-body baseline survives a failed context write (issue 3080 AC14)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-sticky-"));

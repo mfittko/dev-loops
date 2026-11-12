@@ -15,7 +15,7 @@ import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, apply
 // JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
 // the validator's membership check so validateFindingsArray stays self-contained.
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
-import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { REVIEWER_UNIT_MAX_ANGLES, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateConfig, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { capClosedFor } from "@dev-loops/core/loop/gate-fanin";
@@ -336,10 +336,10 @@ function resolveFindings(options) {
  * perAngle). Rejects malformed or self-inconsistent provenance; this raises
  * the bar but does not make provenance unforgeable (see the Pi-harness
  * subagent-tool bridge for that). `dispatchUnits` is the round's recorded
- * dispatch membership (readContextDispatchUnits); a caller-supplied
+ * dispatch membership (readContextFanout + dispatchUnitsFromFanout); a caller-supplied
  * `dispatchUnits` key in `raw` is dropped, never trusted.
  */
-export function parseProvenanceJson(raw, resolvedGroups = null, dispatchUnits = null) {
+export function parseProvenanceJson(raw, resolvedGroups = null, dispatchUnits = null, unitBound = undefined) {
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -411,11 +411,13 @@ export function parseProvenanceJson(raw, resolvedGroups = null, dispatchUnits = 
   // see fanoutReviewerPairingError). `resolvedGroups` additionally rejects a
   // claimed group the configured table does not actually place together, and
   // `dispatchUnits` (when recorded) is the membership the reviewers shared.
-  const pairingError = fanoutReviewerPairingError(normalized.perAngle, resolvedGroups, dispatchUnits);
+  const pairingError = fanoutReviewerPairingError(normalized.perAngle, resolvedGroups, dispatchUnits, unitBound);
   if (pairingError) {
     throw parseError(`--provenance.perAngle ${pairingError}`);
   }
   if (dispatchUnits !== null) normalized.dispatchUnits = dispatchUnits;
+  const bound = resolveReviewerUnitBound(unitBound);
+  if (dispatchUnits !== null && bound !== REVIEWER_UNIT_MAX_ANGLES) normalized.unitBound = bound;
   return normalized;
 }
 /**
@@ -506,7 +508,9 @@ export async function verifyEmitPlanProvenance(planPath, provenance, round, { re
     }
     if (unit.angles.length === 1 && group !== undefined) {
       const previous = plan.units[unitIndex - 1];
-      if (previous?.angles.length !== REVIEWER_UNIT_MAX_ANGLES || previous.group?.trim() !== group.trim()) {
+      // At a unit bound of 1 every split sub-unit is itself a full-cap singleton, so the first has no predecessor.
+      const bound = resolveReviewerUnitBound(plan.unitBound);
+      if (bound !== 1 && (previous?.angles.length !== bound || previous.group?.trim() !== group.trim())) {
         throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}] is a grouped singleton without a preceding same-group full-cap split sibling`);
       }
     }
@@ -766,9 +770,9 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity, o
  * or a fanout plan without a `fanout.groups` array, fails closed. A plan whose
  * groups yield no dispatch unit (empty, or only malformed or angle-less
  * entries) returns `[]`, which the pairing guard rejects as a shape error.
- * @returns {Promise<{ name: string, angles: string[] }[]|null>}
+ * @returns {Promise<object|null>} the raw fanout plan (dispatchUnitsFromFanout expands it into units)
  */
-export async function readContextDispatchUnits({ repo, pr, gate, headSha, contextTmpRoot }, config, repoRoot) {
+async function readContextFanout({ repo, pr, gate, headSha, contextTmpRoot }, repoRoot) {
   const contextPath = path.resolve(repoRoot, buildGateContextPath({
     repo,
     pr,
@@ -791,8 +795,16 @@ export async function readContextDispatchUnits({ repo, pr, gate, headSha, contex
   }
   if (context?.fanout === undefined || context?.fanout === null) return null;
   if (!Array.isArray(context.fanout.groups)) throw parseError(`gate-context artifact ${contextPath} has a fanout plan without a fanout.groups array, so its dispatch membership cannot be recorded`);
+  return context.fanout;
+}
+
+// The dispatch units of one already-read context fanout plan (null when absent).
+// The writer derives the units and the recorded unit bound (`fanout.unitBound`,
+// 5 when absent) from the one read so they always come from the same artifact.
+function dispatchUnitsFromFanout(fanout, config) {
+  if (fanout === null) return null;
   const configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
-  return expandDispatchUnits(context.fanout.groups, configuredGroupNames).map(({ name, angles }) => ({ name, angles }));
+  return expandDispatchUnits(fanout.groups, configuredGroupNames, fanout.unitBound).map(({ name, angles }) => ({ name, angles }));
 }
 
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
@@ -1062,8 +1074,10 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       if (err?.code === "config_load_failed") throw err;
       resolvedGroups = null;
     }
-    const dispatchUnits = await readContextDispatchUnits(options, config, repoRoot);
-    return parseProvenanceJson(rawProvenanceJson, resolvedGroups, dispatchUnits);
+    const fanout = await readContextFanout(options, repoRoot);
+    const dispatchUnits = dispatchUnitsFromFanout(fanout, config);
+    const unitBound = resolveReviewerUnitBound(fanout?.unitBound);
+    return parseProvenanceJson(rawProvenanceJson, resolvedGroups, dispatchUnits, unitBound);
   };
   let provenance;
   if (faninLedger === undefined && options.provenance !== undefined) {

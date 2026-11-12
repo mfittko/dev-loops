@@ -11,7 +11,7 @@ import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, m
 import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
-import { toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { countFreshDispatchUnits, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { consolidateGateFanin, parseConsolidateFaninCliArgs } from "../../scripts/loop/consolidate-fanin.mjs";
 import { verifyEmitPlanProvenance, writeGateFindingsLog as writeGateFindingsLogRaw } from "../../scripts/github/write-gate-findings-log.mjs";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
@@ -2446,4 +2446,165 @@ test("a --pending emit tolerates a prior plan whose units hold non-objects and m
     const plan = JSON.parse(await readFile(planPath, "utf8"));
     assert.ok(plan.units.length > 0 && plan.units.every((unit) => unit !== null && typeof unit === "object" && unit.resumed !== true));
   });
+});
+
+// The recorded reviewer-unit bound (fanout.unitBound; missing means 5) governs
+// every split and pack decision, so a packed unit above 5 angles survives the
+// emitter and the emit-plan tail check.
+test("expandDispatchUnits: a recorded bound of 10 keeps a 7-angle group whole and splits 11 angles into 10 + 1", () => {
+  const configured = new Set(["backend"]);
+  const seven = ["a", "b", "c", "d", "e", "f", "g"];
+  assert.deepEqual(expandDispatchUnits([{ name: "backend", angles: seven }], configured, 10), [{ name: "backend", angles: seven, group: "backend" }]);
+  const eleven = [...seven, "h", "i", "j", "k"];
+  assert.deepEqual(expandDispatchUnits([{ name: "backend", angles: eleven }], configured, 10).map((u) => u.angles.length), [10, 1]);
+  assert.deepEqual(expandDispatchUnits([{ name: "backend", angles: seven }], configured, undefined).map((u) => u.angles.length), [5, 2]);
+  assert.deepEqual(expandDispatchUnits([{ name: "backend", angles: seven }], configured, 0).map((u) => u.angles.length), [5, 2]);
+  assert.deepEqual(expandDispatchUnits([{ name: "backend", angles: eleven }], configured, 99).map((u) => u.angles.length), [10, 1]);
+});
+
+test("packDispatchUnits: the recorded bound sets bin capacity, a missing bound means 5, and base units are never split", () => {
+  const unit = (name, count) => ({ name, angles: Array.from({ length: count }, (_, i) => `${name}${i}`) });
+  const six = [unit("x", 6), unit("y", 6), unit("z", 6)];
+  assert.equal(packDispatchUnits(six, 3, 10).length, 3);
+  assert.equal(packDispatchUnits(six, 2, 10), null);
+  assert.equal(packDispatchUnits(six, 3), null, "a 6-angle base unit does not fit the default bound of 5");
+  const elevenAngles = [unit("p", 6), unit("q", 5)];
+  const packed = packDispatchUnits([...elevenAngles], 2, 10);
+  assert.equal(packed.length, 2);
+  assert.deepEqual(packed.flatMap((u) => u.angles).sort(), elevenAngles.flatMap((u) => u.angles).sort());
+  const fits = packDispatchUnits([unit("p", 4), unit("q", 6)], 1, 10);
+  assert.equal(fits.length, 1);
+  assert.equal(fits[0].angles.length, 10);
+  assert.equal(packDispatchUnits([unit("p", 4), unit("q", 6)], 1), null);
+});
+
+const BOUND_ANGLES = ["srp", "soc", "ocp", "lsp", "isp", "dip", "dry", "kiss", "yagni", "deep", "determinism"];
+
+// Writes a real context whose one configured group holds `groupAngles`, then
+// stamps the recorded bound on the artifact's fanout plan like the producer.
+async function seedBoundBundle(repoRoot, groupAngles, unitBound, extraAngles = []) {
+  const angles = [...groupAngles, ...extraAngles];
+  await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: {
+    preApproval: { angles: [{ name: "holistic", enabled: false }] },
+    fanout: { groups: [{ name: "design-solid", angles: groupAngles }], maxAnglesPerGroup: 6 },
+  } }));
+  const { config, errors } = await loadDevLoopConfig({ repoRoot });
+  assert.deepEqual(errors, []);
+  const fanout = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), angles, {});
+  const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles)]);
+  await writeGateContext({ ...options, config, fanoutDispatch: unitBound === undefined ? fanout : { ...fanout, unitBound } }, { repoRoot });
+  return fanout;
+}
+
+test("the producer records the default unit bound of 5 on the context fanout plan", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const fanout = await seedBoundBundle(repoRoot, BOUND_ANGLES.slice(0, 6), undefined, ["pr-checklist"]);
+    assert.equal(fanout.unitBound, 5);
+    const artifactPath = path.join(repoRoot, "tmp", "gate-context", "o-r", "pr-7", `${GATE}-${HEAD_SHA}.json`);
+    assert.equal(JSON.parse(await readFile(artifactPath, "utf8")).fanout.unitBound, 5);
+  });
+});
+
+test("main(): a recorded bound of 10 emits the same packed unit membership and provenance under pi, claude and codex with the unchanged maxConcurrent", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const groupAngles = BOUND_ANGLES.slice(0, 6);
+    await seedBoundBundle(repoRoot, groupAngles, 10, ["pr-checklist"]);
+    const harnessEnvs = {
+      pi: {},
+      claude: { CLAUDECODE: "1" },
+      codex: { CODEX_THREAD_ID: "thread-1" },
+    };
+    for (const [harness, extra] of Object.entries(harnessEnvs)) {
+      const env = { ...process.env };
+      delete env.CLAUDECODE;
+      delete env.CODEX_THREAD_ID;
+      const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot, env: { ...env, ...extra } });
+      assert.equal(emitted.status, 0, `${harness}: ${emitted.stderr || emitted.stdout}`);
+      const payload = JSON.parse(emitted.stdout);
+      assert.equal(payload.unitBound, 10, harness);
+      assert.deepEqual(payload.units.map((unit) => unit.angles), [groupAngles, ["pr-checklist"]], harness);
+      assert.deepEqual(payload.units.map((unit) => unit.group), ["design-solid", null], harness);
+      assert.equal(payload.maxConcurrent, 5, harness);
+    }
+  });
+});
+
+test("main(): a recorded bound of 10 emits a 6-angle packed unit whole with the per-angle budget step, and fan-in accepts one shared reviewer", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const groupAngles = BOUND_ANGLES.slice(0, 6);
+    await seedBoundBundle(repoRoot, groupAngles, 10, ["pr-checklist"]);
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+    const payload = JSON.parse(emitted.stdout);
+    assert.equal(payload.unitBound, 10);
+    assert.equal(payload.count, 2);
+    assert.deepEqual(payload.units.map((unit) => unit.angles), [groupAngles, ["pr-checklist"]]);
+    assert.deepEqual(payload.units.map((unit) => unit.group), ["design-solid", null]);
+    // Floor 45/50 plus 9 turns and 10 calls for the one angle above 5; the one-angle unit keeps the floor.
+    assert.deepEqual([payload.units[0].budget.maxModelTurns, payload.units[0].budget.maxToolCalls], [54, 60]);
+    // maxAngles is the round's resolved bound on every unit.
+    assert.deepEqual(payload.units[1].budget, { ...REVIEWER_UNIT_BUDGET, maxAngles: 10 });
+    assert.equal(payload.units[0].workOrder.executionRules.budget.maxToolCalls, 60);
+    const tmpRoot = path.join(repoRoot, "tmp");
+    const emitPlan = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    assert.deepEqual(JSON.parse(await readFile(emitPlan, "utf8")), payload);
+    const perAngle = payload.units.flatMap((unit, index) => unit.angles.map((angle) => ({ angle, reviewer: `review-${index}`, ...(unit.group === null ? {} : { group: unit.group }) })));
+    const provenance = { distinctReviewers: 2, perAngle };
+    assert.equal(countFreshDispatchUnits(perAngle), 2, "six angles under one shared reviewer count as one unit");
+    const writeOptions = { repo: REPO, pr: Number(PR), gate: GATE, headSha: HEAD_SHA, verdict: "clean", findings: "[]", provenance: JSON.stringify(provenance), emitPlan, tmpRoot };
+    const written = await writeGateFindingsLog(writeOptions, { repoRoot });
+    assert.equal(written.log.provenance.unitBound, 10);
+    assert.deepEqual(written.log.provenance.dispatchUnits.map((unit) => unit.angles.length), [6, 1]);
+
+    // AC3: a missing, duplicated, foreign or unreported angle fails the write and names the angle.
+    const without = (angle) => ({ ...provenance, perAngle: perAngle.filter((entry) => entry.angle !== angle) });
+    await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(without("dip")) }, { repoRoot }), /angle "dip"/);
+    const foreign = { ...provenance, perAngle: [...perAngle, { angle: "zzz-foreign", reviewer: "review-0", group: "design-solid" }] };
+    await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(foreign) }, { repoRoot }), /zzz-foreign/);
+    const duplicated = { ...provenance, perAngle: [...perAngle, perAngle[0]] };
+    await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(duplicated) }, { repoRoot }), /srp/);
+  });
+});
+
+test("main(): a recorded bound of 10 emits an 11-angle group as 10 + 1 and the emit-plan tail rule reads the recorded bound", async () => {
+  await withTmpDir(async (repoRoot) => {
+    await seedBoundBundle(repoRoot, BOUND_ANGLES, 10);
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+    const payload = JSON.parse(emitted.stdout);
+    assert.deepEqual(payload.units.map((unit) => unit.angles.length), [10, 1]);
+    assert.deepEqual(payload.units.map((unit) => unit.group), ["design-solid", "design-solid"]);
+    assert.deepEqual([payload.units[0].budget.maxModelTurns, payload.units[0].budget.maxToolCalls], [90, 100]);
+    const emitPlan = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+    const provenance = { distinctReviewers: 2, perAngle: payload.units.flatMap((unit, index) => unit.angles.map((angle) => ({ angle, reviewer: `review-${index}`, group: unit.group }))) };
+    const round = { repo: REPO, pr: Number(PR), gate: GATE, headSha: HEAD_SHA };
+    await verifyEmitPlanProvenance(emitPlan, provenance, round, { repoRoot });
+    const { unitBound, ...unrecorded } = payload;
+    assert.equal(unitBound, 10);
+    await writeFile(emitPlan, JSON.stringify(unrecorded));
+    await assert.rejects(() => verifyEmitPlanProvenance(emitPlan, provenance, round, { repoRoot }), /preceding same-group full-cap split sibling/);
+  });
+});
+
+test("main(): a missing recorded bound splits the same 6-angle group at 5 and records no unitBound in the plan", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const groupAngles = BOUND_ANGLES.slice(0, 6);
+    await seedBoundBundle(repoRoot, groupAngles, undefined);
+    const artifactPath = path.join(repoRoot, "tmp", "gate-context", "o-r", "pr-7", `${GATE}-${HEAD_SHA}.json`);
+    const artifact = JSON.parse(await readFile(artifactPath, "utf8"));
+    delete artifact.fanout.unitBound;
+    await writeFile(artifactPath, JSON.stringify(artifact));
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+    const payload = JSON.parse(emitted.stdout);
+    assert.equal("unitBound" in payload, false);
+    assert.deepEqual(payload.units.map((unit) => unit.angles.length), [5, 1]);
+  });
+});
+
+test("buildAngleNamingSuffix passes --unit-bound to the blocked command only above the default bound", () => {
+  const unit = { name: "design-simplicity", angles: ["dry", "kiss"] };
+  const at10 = buildAngleNamingSuffix(unit, "pre-approval-gate-group-design-simplicity", [], [], REVIEWER_UNIT_BUDGET, null, 10);
+  assert.match(at10, /--max-tool-calls \d+ --unit-bound 10 --findings-dir/);
+  assert.doesNotMatch(buildAngleNamingSuffix(unit, "pre-approval-gate-group-design-simplicity"), /--unit-bound/);
 });
