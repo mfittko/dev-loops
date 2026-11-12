@@ -112,6 +112,7 @@
     ".claude-plugin/",
     "docs/steering-contract.md",
     "docs/refinement-grill-state-graph.md",
+    "docs/IMPLEMENTATION_WORKFLOW.md",
     "docs/articles/assets/simulator-model.mjs",
     "docs/articles/assets/simulator-overview-model.mjs",
     ".claude/.claude-plugin/",

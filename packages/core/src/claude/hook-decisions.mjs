@@ -73,7 +73,7 @@ const REVISION_RE = /^(?:[0-9a-f]{6,40}|HEAD|main|origin\/[\w.\/-]+)(?:[~^]\d*)*
 const isRange = (a) => { const sides = a.split(/\.\.\.?/); return sides.length === 2 && sides.every((s) => REVISION_RE.test(s)); };
 // A diff option outside this list must be stuck as `--opt=value`: git may take the next token as its argument (`-S HEAD..HEAD`),
 // which leaves no revision and runs an index-refreshing worktree diff.
-const DIFF_NOARG_FLAG_RE = /^(?:-[pubwRMC]|-U\d+|--(?:patch|stat|numstat|shortstat|name-only|name-status|raw|summary|no-color|color|minimal|histogram|patience|check))$/;
+const DIFF_NOARG_FLAG_RE = /^(?:-[pubwRMC]|-U\d+|--(?:no-ext-diff|no-textconv|patch|stat|numstat|shortstat|name-only|name-status|raw|summary|no-color|color|minimal|histogram|patience|check))$/;
 function isCommitDiff(line) {
   if (!line.startsWith("git diff")) return true;
   const args = line.slice(8).replace(/['"]/g, "").trim().split(/\s+/).filter(Boolean);
@@ -88,7 +88,8 @@ export function isJudgeSearchLine(command) {
   let line = command.trim();
   const root = JUDGE_GIT_C_RE.exec(line);
   if (root) {
-    if (root[1].includes("..")) return false;
+    // The root's own git config may name a diff.external program or a textconv driver, so a rooted command must switch both off.
+    if (root[1].includes("..") || !/ --no-ext-diff(?: |$)/.test(line) || !/ --no-textconv(?: |$)/.test(line)) return false;
     line = `git ${line.slice(root[0].length)}`;
   }
   if (!JUDGE_SEARCH_PREFIX_RE.test(line) || hasDeniedLongFlag(line.replace(/['"]/g, "")) || /[\r\n]|\\"/.test(line) || !isCommitDiff(line)) return false;

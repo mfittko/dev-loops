@@ -1619,7 +1619,11 @@ test("the judge search check denies abbreviated writer options and allows an abs
     "git -C /wt show --out=/tmp/x HEAD", "git -C wt show HEAD", "git -C /wt/../x show HEAD", "git -C /wt log", "git -C /wt -c core.pager=x show HEAD", "git -C /wt diff HEAD", "git -C $HOME show HEAD", "git -C /wt show HEAD > f"]) {
     assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "deny", command);
   }
-  for (const command of ["git -C /Users/me/tmp/wt show HEAD:agents/judge.agent.md", "git -C /Users/me/tmp/wt diff abc123..def456 -- x", "git -C /wt diff HEAD~1 HEAD"]) {
+  // A rooted command must carry both config-driver switches: the root's git config is untrusted.
+  for (const command of ["git -C /wt show HEAD", "git -C /wt diff HEAD~1 HEAD", "git -C /wt show --no-ext-diff HEAD", "git -C /wt diff --no-textconv HEAD~1 HEAD"]) {
+    assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "deny", command);
+  }
+  for (const command of ["git -C /Users/me/tmp/wt show --no-ext-diff --no-textconv HEAD:agents/judge.agent.md", "git -C /Users/me/tmp/wt diff --no-ext-diff --no-textconv abc123..def456 -- x", "git -C /wt diff --no-ext-diff --no-textconv HEAD~1 HEAD"]) {
     assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "allow", command);
   }
 });
