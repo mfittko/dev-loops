@@ -273,12 +273,15 @@ test("committed .claude/agents/judge.md carries model opus", () => {
 // #3133: the Claude dispatch-model instruction must survive pi-only stripping in the Claude mirrors.
 test("Claude mirrors keep the resolved-model dispatch instruction outside pi-only blocks", () => {
   const read = (rel) => readFileSync(new URL(`../../../${rel}`, import.meta.url), "utf8");
-  for (const rel of ["skills/docs/main-agent-contract.md", "skills/local-implementation/SKILL.md"]) {
+  // The owner paragraph carries the full rule text.
+  const owner = stripPiOnlyBlocks(read("skills/docs/main-agent-contract.md"));
+  assert.match(owner, /MAIN-CLAUDE-DISPATCH-MODEL/);
+  assert.match(owner, /gate resolve-role --role <name> --harness claude/);
+  assert.match(owner, /Agent `model` parameter/);
+  // Other surfaces reference the owner rule ID and keep the resolve-role command.
+  for (const rel of ["skills/local-implementation/SKILL.md", "agents/dev-loop.agent.md", "agents/gate-coordinator.agent.md"]) {
     const mirrored = stripPiOnlyBlocks(read(rel));
-    assert.match(mirrored, /gate resolve-role --role <name> --harness claude/, `${rel} loses the Claude model instruction`);
-    assert.match(mirrored, /Agent `model` parameter/, rel);
-  }
-  for (const rel of ["agents/dev-loop.agent.md", "agents/gate-coordinator.agent.md"]) {
-    assert.match(stripPiOnlyBlocks(read(rel)), /gate resolve-role --role [^\n]*--harness claude/, rel);
+    assert.match(mirrored, /MAIN-CLAUDE-DISPATCH-MODEL/, rel);
+    assert.match(mirrored, /gate resolve-role --role [^\n]*--harness claude/, rel);
   }
 });
