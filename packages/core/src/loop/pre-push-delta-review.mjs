@@ -458,7 +458,7 @@ export function composeBodyOnlyConvergedDraftGate({ gate, headSha, round, cap, r
   const capBlockers = pastCapBlockers(roundFindings ?? items, { round, cap });
   if (capBlockers.length > 0) throw new Error(`blocked_item: the cap round holds ${capBlockers.length} blocker(s) (${capBlockers.map((b) => b.item).join("; ")}); they need a fix commit or an operator decision, not a body-only exit`);
   const blocked = items.find(isBlockedActItem);
-  if (blocked) throw new Error(`blocked_item: act item ${JSON.stringify(blocked.summary)} is high, question, fail-open or security; it needs a fix commit or an operator decision, not a body-only exit`);
+  if (blocked) throw new Error(`GATE-EXEC-NO-DEAD-END blocked_item: act item ${JSON.stringify(blocked.summary)} is high, question, fail-open or security; it needs a fix commit or an operator decision, not a body-only exit`);
   const locatable = items.find(hasLocatableShape);
   if (locatable) throw new Error(`body_item_locatable: act item ${JSON.stringify(locatable.summary)} names a file and line; it needs a fix commit and a delta review, not a body-only exit`);
   if (!reviewedBodySha) throw new Error(`body_read_unrecorded: no cap-round context records a pr-body read at ${headSha}, so a body edit cannot be shown, and write-gate-context.mjs refuses a rerun at the cap head; fix the items with a commit and run the reviewer-only delta (check-pre-push-delta.mjs --reviewer-only)`);
