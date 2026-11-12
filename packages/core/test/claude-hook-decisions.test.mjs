@@ -1605,6 +1605,15 @@ test("decideBashGate lets the judge run read-only search commands and refuses wr
   assert.equal(decideBashGate({ command: "grep -n x f > out.txt", agentType: "review" }).decision, "allow");
 });
 
+test("the judge search check sees through quoted flags and matches exact option names (issue 3092)", () => {
+  for (const command of ["git diff '--output=/x'", "rg -n x '--pre=./e.sh' f", "git diff '--ext-diff'", "git show '--textconv' x", `git diff "--output=/x"`, "git diff --output", "git diff --hostname-bin x"]) {
+    assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "deny", command);
+  }
+  for (const command of ["git show --pretty=format:%H HEAD", "grep -n --extended-regexp x f", "git diff --output-indicator-new=+ HEAD"]) {
+    assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "allow", command);
+  }
+});
+
 test("the judge refusal names Read, its offset and limit and the allowed search commands, never Grep or Glob (issue 3092)", () => {
   const { reason } = decideBashGate({ command: "ls", agentType: "judge" });
   assert.match(reason, /`Read`/);

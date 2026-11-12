@@ -107,6 +107,14 @@ test("the work order states the judge's allowed search commands and the Read off
   });
 });
 
+test("the work-order search line names both harnesses (issue 3092, #1086)", async () => {
+  await withDir(async (root) => {
+    const text = await readFile((await emitJudgeWorkOrder(await seed(root))).promptPath, "utf8");
+    assert.match(text, /On Claude Code, Bash search/);
+    assert.match(text, /On Pi, use the native read, grep and find tools/);
+  });
+});
+
 test("cited rule IDs reach the judge with their text and owning doc (issue 3092)", async () => {
   await withDir(async (root) => {
     await mkdir(path.join(root, "judge-fixture"), { recursive: true });

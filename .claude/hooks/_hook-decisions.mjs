@@ -62,11 +62,11 @@ export const isJudgeDecisionCheckLine = (command) => typeof command === "string"
 // The judge's read-only search path (issue 3092): `grep -n`, `rg -n`, `git show` and `git diff` with no shell
 // metacharacter outside quotes, no expansion inside double quotes, and no flag that writes or runs a program.
 const JUDGE_SEARCH_PREFIX_RE = /^(?:grep -n|rg -n|git show|git diff)(?: |$)/;
-const JUDGE_SEARCH_DENIED_FLAG_RE = /(?:^|\s)--(?:out|ext|textc|pre|hostname)/;
+const JUDGE_SEARCH_DENIED_FLAG_RE = /(?:^|\s)--(?:output|ext-diff|textconv|pre|hostname-bin)(?=[=\s]|$)/;
 export function isJudgeSearchLine(command) {
   if (typeof command !== "string") return false;
   const line = command.trim();
-  if (!JUDGE_SEARCH_PREFIX_RE.test(line) || JUDGE_SEARCH_DENIED_FLAG_RE.test(line) || /[\r\n]|\\"/.test(line)) return false;
+  if (!JUDGE_SEARCH_PREFIX_RE.test(line) || JUDGE_SEARCH_DENIED_FLAG_RE.test(line.replace(/['"]/g, "")) || /[\r\n]|\\"/.test(line)) return false;
   let quote = null;
   for (const ch of line) {
     if (quote) { if (ch === quote) quote = null; else if (quote === '"' && (ch === "$" || ch === "`")) return false; } else if (ch === "'" || ch === '"') quote = ch;

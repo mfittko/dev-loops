@@ -36,6 +36,11 @@ async function fixture(files, requiredRules = [], optOutRules = []) {
   return dir;
 }
 
+test("extractRuleDefinitions skips heading and HTML comment lines when taking the rule text (issue 3092)", () => {
+  const [def] = extractRuleDefinitions("<!-- rule: TEST-RULE-002 -->\n<!-- note -->\n## Heading\n\nThe tool MUST pass.\n", "doc.md");
+  assert.equal(def.body, "The tool MUST pass.");
+});
+
 test("extractRuleDefinitions reads rule markers", () => {
   const defs = extractRuleDefinitions("| <!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The tool MUST pass. |", "doc.md");
   assert.deepEqual(defs.map((d) => d.id), ["TEST-RULE-001"]);
