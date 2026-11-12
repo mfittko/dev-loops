@@ -9,6 +9,7 @@ import {
   decideBashGateDeny,
   decideUnresolveOwnerDeny,
 } from "../src/loop/bash-gate-decisions.mjs";
+import { commandRunsStandingAuthorizationPath } from "../src/loop/bash-command-classify.mjs";
 
 const TARGET = "mfittko/dev-loops";
 
@@ -645,4 +646,70 @@ test("a subagent cannot run a standing-authorization path under any runner or cd
 test("a subagent may run a comment wrapper without the standing-authorization flag", () => {
   const command = "dev-loops-run scripts/github/comment-issue.mjs --repo mfittko/dev-loops --issue 5 --body x";
   assert.equal(decideBashGateDeny({ ...BASE, role: "developer", command }), null);
+});
+
+const HARDENED_COMMENT_WRITES = [
+  "gh -R o/r issue comment 5 -b x",
+  "gh --repo=o/r pr close 5 -c x",
+  "timeout 30 gh issue comment 5 --body x",
+  "timeout 30 gh api repos/o/r/issues/5/comments -f body=x",
+  "gh api repos/o/r/issues/5/comments \\\n  -f body=x",
+  "gh issue \\\n comment 5 --body x",
+  "gh pr close 5 \\\n --comment x",
+  "gh issue comment 5 --body 'see -h docs'",
+  "gh api graphql -f query=@q.graphql",
+  "gh api graphql --input q.json",
+  "gh api graphql -f query=\"$(cat q.graphql)\"",
+  "bash -c 'gh pr comment 5 --body x'",
+  "eval \"gh issue comment 5 --body x\"",
+  "echo 5 | xargs gh issue comment --body x",
+  "env GH_TOKEN=t gh issue comment 5 --body x",
+  "GH_REPO=o/r gh issue comment 5 --body x",
+  "env GH_REPO=other/repo gh issue comment 5 --body x",
+  "gh api https://api.github.com/repos/o/r/issues/5/comments -f body=x",
+  "gh api repos/{owner}/{repo}/issues/5/comments -f body=x",
+  "gh api repos/o/r/issues/5/comments -F body=x",
+  "gh api repos/o/r/issues/5/comments --field body=x",
+  "gh api repos/o/r/issues/5/comments --raw-field body=x",
+  "gh api --method POST repos/o/r/issues/5/comments -f body=x",
+];
+
+test("hardened and wrapped raw comment writes are denied with OPERATOR-OWNED-LINE", () => {
+  for (const command of HARDENED_COMMENT_WRITES) {
+    assert.equal(decideBashGateDeny({ ...OR_REPO, command })?.ruleId, "OPERATOR-OWNED-LINE", command);
+  }
+});
+
+test("wrapper-lookalike commands and a foreign repo pass the raw comment-write deny", () => {
+  for (const command of [
+    'grep -rl "gh pr comment" skills | xargs grep -n x',
+    "gh pr close 5; sh -c 'ls'",
+    "gh -R other/repo issue comment 5 -b x",
+    "gh --repo=other/repo pr close 5 -c x",
+    "GH_REPO=other/repo gh issue comment 5 --body x",
+    "gh api graphql -f query='query { viewer { login } }'",
+  ]) {
+    assert.equal(decideBashGateDeny({ ...OR_REPO, command }), null, command);
+  }
+});
+
+test("a subagent cannot run the dev-loops bin or a wrapped runner on a standing-authorization path", () => {
+  for (const command of [
+    "dev-loops pr waive-adr-tripwire --pr 5",
+    "npx dev-loops pr waive-adr-tripwire --pr 5",
+    "bunx dev-loops pr waive-adr-tripwire --pr 5",
+    "time node scripts/github/waive-adr-tripwire.mjs --pr 5",
+    "nice node scripts/github/waive-adr-tripwire.mjs --pr 5",
+    "bash -c 'node scripts/github/waive-adr-tripwire.mjs --pr 5'",
+  ]) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: "developer", command })?.ruleId, "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY", command);
+    assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, `main agent: ${command}`);
+  }
+  assert.equal(decideBashGateDeny({ ...BASE, role: "developer", command: "dev-loops pr create --title x" })?.ruleId ?? null, null);
+});
+
+test("a timeout wrapper does not hide a standing-authorization path from the classifier", () => {
+  for (const wrapper of ["timeout 30", "nohup", "nice -n 5"]) {
+    assert.equal(commandRunsStandingAuthorizationPath(`${wrapper} node scripts/github/waive-adr-tripwire.mjs --pr 5`), true, wrapper);
+  }
 });

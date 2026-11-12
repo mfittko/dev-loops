@@ -13,8 +13,9 @@
  *   - a raw comment write (`gh issue|pr comment`, `gh api` to issue comments, graphql addComment) is blocked for every actor
  *     (OPERATOR-OWNED-LINE); a subagent running a `--standing-authorization` or tripwire-waiver path is blocked
  *     (STANDING-AUTHORIZATION-MAIN-AGENT-ONLY).
- *   - raw `gh issue create` / `gh issue edit` — blocked only from a SUBAGENT
- *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
+ *   - raw `gh issue create|edit|comment` / `gh pr comment` — blocked from a SUBAGENT context (agent_type present);
+ *     the comment verbs stay live there outside the managed repo and for a foreign repo, where the rule above does
+ *     not apply. The main agent/operator retains direct issue creation and edit (#1051).
  *   - `git stash` — blocked outright: `refs/stash` is shared across every worktree over this
  *     repo's one `.git` directory (skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout).
  *   - `bun run verify` / `bun test` / `vitest` / `npm test` / `npm run test` / `bun run build` /
