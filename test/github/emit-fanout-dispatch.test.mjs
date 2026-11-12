@@ -2574,3 +2574,10 @@ test("main(): a missing recorded bound splits the same 6-angle group at 5 and re
     assert.deepEqual(payload.units.map((unit) => unit.angles.length), [5, 1]);
   });
 });
+
+test("buildAngleNamingSuffix passes --unit-bound to the blocked command only above the default bound", () => {
+  const unit = { name: "design-simplicity", angles: ["dry", "kiss"] };
+  const at10 = buildAngleNamingSuffix(unit, "pre-approval-gate-group-design-simplicity", [], [], REVIEWER_UNIT_BUDGET, null, 10);
+  assert.match(at10, /--max-tool-calls \d+ --unit-bound 10 --findings-dir/);
+  assert.doesNotMatch(buildAngleNamingSuffix(unit, "pre-approval-gate-group-design-simplicity"), /--unit-bound/);
+});

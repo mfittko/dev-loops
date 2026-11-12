@@ -533,3 +533,11 @@ describe("computeReviewerUnitBudget — per-angle step above five angles", () =>
     assert.deepEqual(pair(computeReviewerUnitBudget({ files: 1000, changedLines: 100000, angles: 10 })), [100, 95]);
   });
 });
+
+describe("enforceReviewerUnitBound reports the resolved bound as the budget angle limit", () => {
+  test("a blocked result for a bound-10 unit carries maxAngles 10, and the default carries 5", () => {
+    const blocked = (gateContext) => enforceReviewerUnitBound({ unit: baseUnit({ angles: ["a", "b"], gateContext }), consumed: { modelTurns: 5, toolCalls: 5 }, completedAngles: ["a"] });
+    assert.equal(blocked({ headSha: "abc123", unitBound: 10 }).budget.maxAngles, 10);
+    assert.equal(blocked({ headSha: "abc123" }).budget.maxAngles, 5);
+  });
+});

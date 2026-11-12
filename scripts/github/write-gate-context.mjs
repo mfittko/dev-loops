@@ -2597,9 +2597,10 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // `singleWave: false` (the standalone review gate, whose full-PR angle set
   // exceeds single-wave capacity) keeps the multi-wave plan unchanged.
   const perAngleMode = config?.gates?.fanout?.mode === "per-angle";
+  const unitBound = resolveReviewerUnitBound();
   if (singleWave && !sequential && !perAngleMode) {
     const configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
-    const baseUnits = expandDispatchUnits(groups, configuredGroupNames);
+    const baseUnits = expandDispatchUnits(groups, configuredGroupNames, unitBound);
     if (baseUnits.length > effectiveConcurrency) {
       // The DISPATCHABLE set: the resolved units minus every group whose angles
       // are ALL carried forward — a set fixed for the whole round (proven for
@@ -2612,7 +2613,7 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
       // reviewerBudgetPreflight strips carried angles from pendingGroups, issue 2511).
       const carriedKeys = new Set(carriedAnglesList.map((a) => baseAngleName(a).trim().toLowerCase()));
       const dispatchableGroups = groups.filter((g) => !(Array.isArray(g?.angles) && g.angles.length > 0 && g.angles.every((a) => carriedKeys.has(baseAngleName(String(a)).trim().toLowerCase()))));
-      const dispatchableUnits = expandDispatchUnits(dispatchableGroups, configuredGroupNames);
+      const dispatchableUnits = expandDispatchUnits(dispatchableGroups, configuredGroupNames, unitBound);
       if (dispatchableUnits.length > 0) {
         // Pack the DISPATCHABLE set, NEVER the full resolved set. The full set
         // still holds every fully-carried base unit, so packing it and
@@ -2624,7 +2625,7 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
         // are round-stable (proven for this head), so packing them out keeps
         // this a round-stable packing input: a same-head resume re-derives the
         // IDENTICAL units (the growing COMPLETED set is still excluded).
-        const packedDispatchable = dispatchableUnits.length > effectiveConcurrency ? packDispatchUnits(dispatchableUnits, effectiveConcurrency) : null;
+        const packedDispatchable = dispatchableUnits.length > effectiveConcurrency ? packDispatchUnits(dispatchableUnits, effectiveConcurrency, unitBound) : null;
         if (dispatchableUnits.length > effectiveConcurrency && packedDispatchable === null) {
           // The dispatchable plan itself cannot fit one wave: refuse and name
           // the set actually counted (the resolved count and the fresh subset)
@@ -2650,11 +2651,11 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // cap-split dispatch units (each a subset of one recorded unit), never the
   // unsplit group: stripping before the split moved angles across a part boundary.
   const dispatchGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
-  const preflight = reviewerBudgetPreflight(expandDispatchUnits(groups, dispatchGroupNames), availableReviewers, { completedAngles, carriedAngles: carriedAnglesList });
+  const preflight = reviewerBudgetPreflight(expandDispatchUnits(groups, dispatchGroupNames, unitBound), availableReviewers, { completedAngles, carriedAngles: carriedAnglesList, unitBound });
   const wavePlan = scheduleFanoutWaves(groups, effectiveConcurrency);
   const pendingGroups = preflight.pendingGroups;
   const pendingWavePlan = scheduleFanoutWaves(pendingGroups, effectiveConcurrency);
-  return { groups, wavePlan, sequential, maxAnglesPerGroup, maxConcurrent, effectiveConcurrency, unitBound: resolveReviewerUnitBound(), preflight, pendingGroups, pendingWavePlan };
+  return { groups, wavePlan, sequential, maxAnglesPerGroup, maxConcurrent, effectiveConcurrency, unitBound, preflight, pendingGroups, pendingWavePlan };
 }
 
 export function buildGateContextArtifact(options) {
@@ -3539,7 +3540,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       const keyOf = (angle) => String(angle).trim().toLowerCase();
       const pendingKeys = new Set(options.fanoutDispatch.pendingGroups.flatMap((unit) => (Array.isArray(unit?.angles) ? unit.angles : []).map(keyOf)));
       const covered = new Set();
-      for (const group of expandDispatchUnits(priorGroups, configuredGroupNames)) {
+      for (const group of expandDispatchUnits(priorGroups, configuredGroupNames, priorFanout?.unitBound)) {
         if (!Array.isArray(group?.angles)) continue;
         const unit = { ...group, angles: group.angles.filter((angle) => !priorCarried.has(keyOf(angle))) };
         unit.angles.forEach((angle) => covered.add(keyOf(angle)));

@@ -846,3 +846,13 @@ describe("fanoutReviewerPairingError reads the recorded unit bound (packed unit 
     });
   });
 });
+
+describe("fanoutReviewerPairingError ignores a bound without recorded dispatch units", () => {
+  test("REJECT: a ledger carrying unitBound 10 and no dispatchUnits is read at the default bound", async () => {
+    await withConfig(BOUND_DEVLOOPS, async (dir) => {
+      const perAngle = boundPerAngle();
+      const read = await readPacked(dir, "pre_approval_gate", { distinctReviewers: countIds(perAngle), perAngle, unitBound: 10 });
+      assert.notEqual(read, null);
+    });
+  });
+});

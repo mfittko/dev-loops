@@ -98,8 +98,8 @@ export function computeReviewerUnitBudget({ files, changedLines, angles = 0 } = 
  * @param {unknown} budget
  * @returns {{ maxToolCalls: number, maxModelTurns: number, maxAngles: number }}
  */
-function validateBudget(budget) {
-  if (budget == null) return REVIEWER_UNIT_BUDGET_FLOOR;
+function validateBudget(budget, maxAngles = REVIEWER_UNIT_MAX_ANGLES) {
+  if (budget == null) return Object.freeze({ ...REVIEWER_UNIT_BUDGET_FLOOR, maxAngles });
   if (typeof budget !== "object") {
     throw new TypeError("enforceReviewerUnitBound requires budget to be an object with maxModelTurns and maxToolCalls");
   }
@@ -109,7 +109,7 @@ function validateBudget(budget) {
       throw new TypeError(`budget.${key} must be an integer between ${REVIEWER_UNIT_BUDGET_FLOOR[key]} and ${REVIEWER_UNIT_BUDGET_CAP[key]}, got ${JSON.stringify(value)}`);
     }
   }
-  return Object.freeze({ maxModelTurns: budget.maxModelTurns, maxToolCalls: budget.maxToolCalls, maxAngles: REVIEWER_UNIT_MAX_ANGLES });
+  return Object.freeze({ maxModelTurns: budget.maxModelTurns, maxToolCalls: budget.maxToolCalls, maxAngles });
 }
 
 /**
@@ -349,7 +349,7 @@ function normalizeCompletedAngles(completedAngles) {
  *   reason, unreviewedAngles, headSha, unit, consumed, budget }` on failure.
  */
 export function enforceReviewerUnitBound({ unit, consumed, completedAngles, budget } = {}) {
-  const normalizedBudget = validateBudget(budget);
+  const normalizedBudget = validateBudget(budget, resolveReviewerUnitBound(unit?.gateContext?.unitBound));
   const normalizedUnit = validateReviewerUnit(unit);
   const normalizedConsumed = validateConsumed(consumed);
   const completedSet = normalizeCompletedAngles(completedAngles);

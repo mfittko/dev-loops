@@ -215,7 +215,7 @@ export const REVIEWER_VERIFIED_ITEMS_INSTRUCTION = "Verified items: in the findi
  *   computed budget (computeReviewerUnitBudget); the floor when absent
  * @returns {string}
  */
-export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = [], budget = REVIEWER_UNIT_BUDGET, operatorFocus = null) {
+export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = [], budget = REVIEWER_UNIT_BUDGET, operatorFocus = null, unitBound = REVIEWER_UNIT_MAX_ANGLES) {
   if (typeof scope !== "string" || scope.length === 0) {
     throw new TypeError(`buildAngleNamingSuffix requires a non-empty scope string, got ${JSON.stringify(scope)}`);
   }
@@ -247,7 +247,7 @@ Budget: at most ${budget.maxModelTurns} model turns and ${budget.maxToolCalls} t
 Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is prohibited.
 Prohibited: ${prohibited}.
 Widening: ${REVIEWER_WIDENING_RULE}.
-${verifiedItemsLine}If you exceed this budget (more than ${budget.maxModelTurns} model turns or ${budget.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --max-model-turns ${budget.maxModelTurns} --max-tool-calls ${budget.maxToolCalls} --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
+${verifiedItemsLine}If you exceed this budget (more than ${budget.maxModelTurns} model turns or ${budget.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --max-model-turns ${budget.maxModelTurns} --max-tool-calls ${budget.maxToolCalls}${unitBound !== REVIEWER_UNIT_MAX_ANGLES ? ` --unit-bound ${unitBound}` : ""} --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
   return `${header}\n\n${scopeLine}\n\n${renderOperatorFocusSection(operatorFocus)}${reads}${body}\n\n${instructions}\n\n${contract}\n`;
 }
 
@@ -765,7 +765,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {
       await mkdir(path.dirname(suffixPath), { recursive: true });
-      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus), "utf8");
+      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus, unitBound), "utf8");
     } catch (err) {
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;
