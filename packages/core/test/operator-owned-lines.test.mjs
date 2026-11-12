@@ -205,7 +205,7 @@ test("wrapOperatorOwnedPhrases keeps the newline of a non-approval release follo
 });
 
 test("wrapOperatorOwnedPhrases leaves no reader-accepted release approval unwrapped, newline included", () => {
-  for (const body of ["approve `x` release\nv1.2.3", "approve `x` release v1.2.3.", "approve `x` release\nv1.2.3-rc.1"]) {
+  for (const body of ["approve `x` release\nv1.2.3", "approve `x` release v1.2.3.", "approve `x` release\nv1.2.3-rc.1", "approve `x` `y` release\nv1.2.3", "approve `release v1.2.3"]) {
     assert.notEqual(findOperatorOwnedLineRefusal(body), null, JSON.stringify(body));
     assert.equal(findOperatorOwnedLineRefusal(wrapOperatorOwnedPhrases(body)), null, JSON.stringify(body));
   }

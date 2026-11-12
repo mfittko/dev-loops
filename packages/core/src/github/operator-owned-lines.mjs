@@ -102,9 +102,12 @@ export function wrapOperatorOwnedPhrases(text) {
   const parts = String(text).split(CODE_SPAN_RE);
   return parts.map((part, i) => {
     if (i % 2 === 1) return part;
-    let out = part;
+    // A bare part holds only unpaired backticks, which the reader blanks too. Blank them here so a
+    // phrase right after one still wraps and the wrap never nests a span in it.
+    let out = part.replace(/`/g, " ");
     const wrap = (match) => `\`${match.replace(/\s+/g, " ")}\``;
-    if (i >= 2 && /\bapprove\s+$/i.test(parts[i - 2])) out = out.replace(APPROVAL_TAIL_RE, wrap);
+    // Only author spans and whitespace may sit between `approve` and the tail.
+    if (i >= 2 && /\bapprove(?:\s+|`[^`\n]*`)+$/i.test(parts.slice(0, i).join(""))) out = out.replace(APPROVAL_TAIL_RE, wrap);
     for (const re of WRAP_RES) out = out.replace(re, wrap);
     return out;
   }).join("");
