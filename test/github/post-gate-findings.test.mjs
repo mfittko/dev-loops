@@ -1808,3 +1808,13 @@ test("postGateFindings refuses a findings body containing a raw issue/PR id (gua
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+test("renderFindingsCommentBody labels an evidence_only act finding only (#3197)", () => {
+  const findings = parseFindings(JSON.stringify([
+    { severity: "low", angle: "docs", summary: "needs evidence", judgeDisposition: "act", remedyKind: "evidence_only" },
+    { severity: "low", angle: "docs", summary: "rejected one", judgeDisposition: "reject", remedyKind: "evidence_only" },
+  ]));
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  assert.equal(body.split("(evidence only, no file change").length - 1, 1);
+  assert.match(body, /needs evidence.*judge: _act_ \(evidence only/);
+});

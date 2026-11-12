@@ -59,6 +59,10 @@ table. The third, folded, track is disposition-gated (`GATE-COMMENT-INLINE-SEVER
    marker (🔴 high · 🟠 medium · 🟡 low · ⚪ nit · 🔵 question, alongside the severity word), the
    finding's summary, its `file:line` linked to the blob at the reviewed head SHA when known, and
    its contributing angle(s) in trailing brackets.
+   A finding the judge disposed `act` with `remedyKind: evidence_only` renders the label
+   `(evidence only, no file change; its criterion stays unproven until the evidence lands)` right after
+   its judge disposition, on every findings surface (verdict body, inline thread header and the opt-in
+   findings comment).
 
 <!-- rule: GATE-COMMENT-INLINE-SEVERITY-FLOOR -->
 `GATE-COMMENT-INLINE-SEVERITY-FLOOR` (#2263, #2722): the judge's verdict decides what the verdict

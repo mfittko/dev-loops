@@ -605,3 +605,16 @@ test("a backticked operator-owned phrase in a recommendation stays in its code s
   const inline = renderInlineCommentBody(finding, { round: 1 });
   assert.ok(inline.includes("`approve release v1.2.3`"), inline);
 });
+
+test("renderInlineCommentBody labels only an act finding with remedyKind evidence_only (#3197)", () => {
+  const base = { severity: "medium", angle: "docs", files: ["a.js"], line: 3, summary: "needs evidence", remedyKind: "evidence_only" };
+  assert.match(renderInlineCommentBody({ ...base, judgeDisposition: "act" }, { round: 1 }), /judge: act \(evidence only, no file change/);
+  assert.doesNotMatch(renderInlineCommentBody({ ...base, judgeDisposition: "reject" }, { round: 1 }), /evidence only/);
+});
+
+test("renderFindingLine labels an act finding with remedyKind evidence_only (#3197)", async () => {
+  const { renderFindingLine } = await import("../../scripts/github/_gate-finding-surface.mjs");
+  const base = { severity: "medium", angle: "docs", summary: "needs evidence", remedyKind: "evidence_only" };
+  assert.match(renderFindingLine({ ...base, judgeDisposition: "act" }), /evidence only, no file change/);
+  assert.doesNotMatch(renderFindingLine({ ...base, judgeDisposition: "defer" }), /evidence only/);
+});

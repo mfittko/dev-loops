@@ -27,7 +27,7 @@ import {
   summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
-import { escapeProse, flattenPaginatedSlurp, listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
+import { escapeProse, flattenPaginatedSlurp, listIssueComments, renderEvidenceOnlyLabel, resolveAuthenticatedLogin, runGhJson, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { PROBLEM_CAP, RECOMMENDATION_CAP, cutAtSentence, normalizeFindingSummary } from "./_gate-finding-text.mjs";
 import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { carryFromPostedVerdict } from "./_carried-verdict.mjs";
@@ -394,10 +394,10 @@ export function renderJudgeDetail({ judgeReason, followUpIssueNumber }) {
   return `${target}${reason}`;
 }
 
-export function renderFindingLine({ severity, angle, summary, judgeDisposition, judgeReason, followUpIssueNumber }) {
+export function renderFindingLine({ severity, angle, summary, judgeDisposition, judgeReason, followUpIssueNumber, remedyKind }) {
   const safeSeverity = sanitizeInline(normalizeSeverity(severity));
   const judgeSuffix = typeof judgeDisposition === "string" && judgeDisposition.trim().length > 0
-    ? ` — judge: ${sanitizeInline(judgeDisposition)}${renderJudgeDetail({ judgeReason, followUpIssueNumber })}`
+    ? ` — judge: ${sanitizeInline(judgeDisposition)}${renderJudgeDetail({ judgeReason, followUpIssueNumber })}${renderEvidenceOnlyLabel({ judgeDisposition, remedyKind })}`
     : "";
   return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${escapeProse(summary).replace(/judge:/gi, "judge -")}${judgeSuffix}`;
 }
@@ -517,7 +517,7 @@ export function renderInlineCommentBody(finding, { round }) {
   }
   const angles = [...new Set(members.map((member) => neutralizeHeaderSeparator(escapeProse(member.angle))))].join(", ");
   const judge = typeof finding.judgeDisposition === "string" && finding.judgeDisposition.trim().length > 0
-    ? ` · judge: ${sanitizeInline(finding.judgeDisposition)}${renderJudgeDetail(finding)}`
+    ? ` · judge: ${sanitizeInline(finding.judgeDisposition)}${renderJudgeDetail(finding)}${renderEvidenceOnlyLabel(finding)}`
     : "";
   const lines = [...markers, `**${sanitizeInline(severity)}** · ${angles}${judge}`];
   // File and line references render as inline code right under the header.

@@ -15,7 +15,7 @@
 //   - no gate-coordination state validation
 //   - no blocking-severity count enforcement (caller is responsible)
 //   - no internal-only PR short-circuit
-//   - derives no next action (the caller's --next-action is rendered verbatim; a clean draft_gate must pass `mark ready for review`)
+//   - derives no next action except a clean draft_gate, which posts `mark ready for review` and ignores the caller's --next-action; any other value renders verbatim
 //
 // The script always emits a stderr warning explaining that fallback mode is
 // active and the audit trail is degraded. On posting failure it fails closed
@@ -434,6 +434,8 @@ export function renderFallbackGateReviewCommentBody({
   nextAction,
   blockCleanOnFindingSeverities,
 }) {
+  // A clean draft_gate has one legal next step (#3197); mirrors deriveEffectiveNextAction.
+  if (gate === "draft_gate" && verdict === "clean") nextAction = "mark ready for review";
   const summary = blockquoteContinuationLines(
     encodeMachineArtifactMarkerDelimiters(
       smartTruncate(String(findingsSummary ?? ""), MAX_FINDINGS_SUMMARY_LENGTH),

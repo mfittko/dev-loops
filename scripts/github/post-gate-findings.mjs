@@ -114,6 +114,7 @@ function validateFindingsArray(parsed, flagLabel) {
     // the judge suffix in renderFindingsCommentBody is unreachable dead code.
     if (typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0) {
       entry.judgeDisposition = f.judgeDisposition.trim();
+      if (f.remedyKind === "evidence_only") entry.remedyKind = "evidence_only";
     }
     if (typeof f.judgeRationale === "string" && f.judgeRationale.trim().length > 0) {
       entry.judgeRationale = f.judgeRationale.trim();
@@ -261,6 +262,13 @@ export function sanitizeCodeSpan(value) {
 // Every neutralization is an HTML entity, never a backslash-escape, so a
 // value's own literal character can never absorb the escape and turn live
 // again. upsert-checkpoint-verdict.mjs imports this exact function.
+// Label for an act finding whose remedy is evidence, not a file change; shared by every finding renderer (#3197).
+export function renderEvidenceOnlyLabel({ judgeDisposition, remedyKind }) {
+  return judgeDisposition === "act" && remedyKind === "evidence_only"
+    ? " (evidence only, no file change; its criterion stays unproven until the evidence lands)"
+    : "";
+}
+
 export function sanitizeInline(value) {
   return wrapOperatorOwnedPhrases(sanitizeCodeSpan(value)
     .replace(/</g, "&lt;")
@@ -381,7 +389,7 @@ export function renderFindingsCommentBody({ gate, headSha, findings, omittedCoun
       // Judge relevance-based disposition, alongside the
       // prior ledger disposition field.
       const judgeSuffix = finding.judgeDisposition
-        ? ` — judge: _${sanitizeInline(finding.judgeDisposition)}_`
+        ? ` — judge: _${sanitizeInline(finding.judgeDisposition)}_${renderEvidenceOnlyLabel(finding)}`
         : "";
       // angle renders inside a code span (backticks); summary is prose. Sanitize
       // angle with sanitizeCodeSpan too: an embedded backtick/newline would

@@ -1024,6 +1024,18 @@ test("renderGateReviewCommentBody marks an evidence-only act finding (#3197)", (
   assert.match(body, /judge: _`act`_.*\(evidence only, no file change; its criterion stays unproven until the evidence lands\)/);
 });
 
+test("renderGateReviewCommentBody shows no evidence-only label on a rejected finding (#3197)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "clean",
+    findingsSummary: "no issues found",
+    nextAction: "mark ready for review",
+    nonLocatableFindings: [{ severity: "nice-to-have", summary: "evidence only note", judgeDisposition: "reject", remedyKind: "evidence_only" }],
+  });
+  assert.doesNotMatch(body, /no file change/);
+});
+
 // #2163: real-subprocess guard for main()'s `fields: options.fields` passthrough
 // (upsert-checkpoint-verdict.mjs:3186). writeGhStubHelper + the runNode fallback
 // spawn the ACTUAL CLI (no GH_MOCK_ENTRIES stashed, so the in-process branch above
