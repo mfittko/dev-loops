@@ -66,7 +66,7 @@ test("every entry is refused with --body and --body-file, no gh call, and --allo
   }
 });
 
-test("--standing-authorization posts only the operator marker; the other three stay refused", async () => {
+test("--standing-authorization posts only the operator marker; the other four stay refused", async () => {
   for (const post of POSTS) {
     for (const entry of OPERATOR_OWNED_LINES) {
       const r = await invoke(post, ["--body", SAMPLES[entry.id], "--standing-authorization"], entry.standingAuthorization);

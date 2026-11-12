@@ -193,6 +193,9 @@ async function postSizeBudgetWaiverComment({ repo, pr, headSha, sizeBudget, reas
   const refusal = findOperatorOwnedLineRefusal(reason) ?? findOperatorOwnedLineRefusal(approvedBy);
   if (refusal) throw new Error(refusal);
   const body = renderSizeBudgetWaiverCommentBody({ headSha, sizeBudget, reason, approvedBy });
+  // The rendered body is checked again: it must not carry an operator-owned line the raw values missed.
+  const renderedRefusal = findOperatorOwnedLineRefusal(body);
+  if (renderedRefusal) throw new Error(renderedRefusal);
   const result = await runChildImpl(ghCommand, ["pr", "comment", String(pr), "--repo", repo, "--body", body], env);
   if (result.code !== 0) throw new Error(`Failed to post size-budget waiver record: ${result.stderr.trim() || `exit code ${result.code}`}`);
 }

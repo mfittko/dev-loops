@@ -187,3 +187,8 @@ test("wrapOperatorOwnedPhrases leaves an existing balanced code span unchanged",
   assert.equal(wrapOperatorOwnedPhrases("`run approve merge now`"), "`run approve merge now`");
   assert.equal(wrapOperatorOwnedPhrases("`keep` approve merge `keep`"), "`keep` `approve merge` `keep`");
 });
+
+test("wrapOperatorOwnedPhrases wraps a release version whole, with or without the v", () => {
+  assert.equal(wrapOperatorOwnedPhrases("release v1.0.12 ships"), "`release v1.0.12` ships");
+  assert.equal(wrapOperatorOwnedPhrases("release 1.0.12-pre.1 ships"), "`release 1.0.12-pre.1` ships");
+});

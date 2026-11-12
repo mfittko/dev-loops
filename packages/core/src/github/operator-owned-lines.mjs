@@ -82,8 +82,8 @@ const WRAP_RES = Object.freeze([
   /adr-tripwire:allow/gi,
   operatorMarkerWrapPattern(),
   // Last: the release reader strips a code span between `approve` and `release`, so a bare
-  // `release v<digit>` run must not survive for it to read as the approval's tail.
-  /release\s+v\d/gi,
+  // `release [v]<digit>` run must not survive for it to read as the approval's tail.
+  /release\s+v?\d[\w.-]*/gi,
 ]);
 
 const CODE_SPAN_RE = /(`[^`\n]*`)/;
