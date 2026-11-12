@@ -2129,7 +2129,7 @@ describe("recorded reviewer-unit bound in fan-in (missing means 5)", () => {
     const units = [{ name: "u", angles: six }];
     const perAngle = share(six, "r1", "u");
     assert.equal(fanoutReviewerPairingError(perAngle, [{ name: "u", angles: six }], units, 10), null);
-    assert.match(fanoutReviewerPairingError(perAngle, [{ name: "u", angles: six }], units), /holds 6 angles, above the 5-angle unit bound/);
+    assert.match(fanoutReviewerPairingError(perAngle, [{ name: "u", angles: six }], units), /holds 6 angles, above the 5-angle unit bound; re-run the round's gate-context build and emit-fanout-dispatch/);
     assert.match(fanoutReviewerPairingError(perAngle, [{ name: "u", angles: six }], units, 5), /holds 6 angles, above the 5-angle unit bound/);
   });
 

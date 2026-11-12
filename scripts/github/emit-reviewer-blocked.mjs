@@ -123,7 +123,7 @@ export async function main(argv = process.argv.slice(2), { mkdirFn = mkdir, writ
   }
   const unitBoundArg = resolveFlagValue(argv, "--unit-bound");
   if (unitBoundArg === "" || (unitBoundArg !== null && !/^[1-9]\d*$/.test(unitBoundArg))) {
-    process.stderr.write(`${formatCliError(parseError("--unit-bound must be a positive integer."))}\n`);
+    process.stderr.write(`${formatCliError(parseError("--unit-bound must be a positive integer; omit the flag for the default of 5."))}\n`);
     return 2;
   }
   const harness = resolveFlagValue(argv, "--harness");

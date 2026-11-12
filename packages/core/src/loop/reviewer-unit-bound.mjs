@@ -196,7 +196,7 @@ export function validateReviewerUnit(unit) {
   }
   const unitBound = resolveReviewerUnitBound(gateContext.unitBound);
   if (angles.length > unitBound) {
-    throw new TypeError(`unit.angles must not exceed ${unitBound} angles, got ${angles.length}`);
+    throw new TypeError(`unit.angles must not exceed ${unitBound} angles, got ${angles.length}; name gateContext.unitBound up to ${REVIEWER_UNIT_COMBINED_ANGLES_LIMIT} or split the unit`);
   }
 
   const normalizedAngles = [];

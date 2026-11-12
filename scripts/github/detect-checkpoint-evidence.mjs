@@ -559,8 +559,12 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
               `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (need provenance.distinctReviewers >= ${requiredReviewers}${requiredReviewers > FANOUT_PROVENANCE_MIN_REVIEWERS ? ` [max(${FANOUT_PROVENANCE_MIN_REVIEWERS}, ${freshUnitCount} fresh dispatch unit(s))]` : ""}, got ${reviewers === null ? "none" : reviewers}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
             );
           } else if (pairingErr !== null) {
+            const ledgerBound = resolveReviewerUnitBound(prov.unitBound);
+            const uncorroborated = prov.dispatchUnits != null && ledgerBound > REVIEWER_UNIT_MAX_ANGLES && ledgerBound !== gate.contextUnitBound
+              ? `; the ledger's unit bound ${ledgerBound} is not corroborated by the gate-context artifact, so re-run the gate-context build and emit-fanout-dispatch for this head so the ledger and artifact agree`
+              : "";
             failures.push(
-              `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (${pairingErr}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
+              `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (${pairingErr}${uncorroborated}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
             );
           }
         }
@@ -726,6 +730,8 @@ function corroboratedUnitBound(prov, contextUnitBound) {
  * The resolved `fanout.unitBound` of the gate-context artifact across the
  * enumerated checkouts: the first readable artifact wins, and an absent or
  * unreadable one resolves to the default bound.
+ * Ceiling: the artifact is not tied to the ledger's own checkout; a stale
+ * checkout's artifact can win, and the exit is to re-run the gate-context build.
  */
 async function readContextUnitBoundInAny(checkouts, contextPath) {
   for (const root of checkouts) {

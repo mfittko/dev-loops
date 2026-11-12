@@ -775,7 +775,7 @@ function dispatchUnitsShapeError(dispatchUnits) {
  */
 function recordedUnitError(unit, baseUnits, baseOf, bound) {
   const angles = unit.angles.map((a) => a.trim());
-  if (angles.length > bound) return `unit "${unit.name}" holds ${angles.length} angles, above the ${bound}-angle unit bound`;
+  if (angles.length > bound) return `unit "${unit.name}" holds ${angles.length} angles, above the ${bound}-angle unit bound; re-run the round's gate-context build and emit-fanout-dispatch for this head to regroup and record its bound`;
   // Base-name comparison on both sides: a recorded unit keyed on base angle
   // names is still a union of whole base units when the base units themselves
   // were derived from a delta-suffixed ledger spelling (and vice versa).
