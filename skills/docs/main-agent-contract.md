@@ -71,7 +71,8 @@ bar: `judge-pass.mjs` and `close-gate-findings.mjs` never create an issue for a 
 `MAIN-AGENT-OPERATOR-QUESTION-SCOPE`: Parent: `PURPOSE-HIGHEST-SAFE-AUTONOMY`. The orchestrator asks the
 operator only about operator-owned decisions: operator-owned lines, ADR acceptance the contract does not
 settle, scope departures, choices between distinct mechanisms the contracts do not settle, destructive
-actions, and classifier or permission denials. The orchestrator answers every other question from the
+actions, classifier or permission denials, an undecidable spec (`spec_cannot_decide`), and conflicting
+authoritative state. The orchestrator answers every other question from the
 contracts and its own judgement and records the source. This rule governs autonomous lane execution. An operator-invoked interactive flow (such as the loop grill) and a start-implementation confirmation keep their own questions. A coordinator or procedure stop-and-ask for human direction reaches the orchestrator first. The orchestrator applies this rule to it and asks the operator only when the question falls on the operator-owned list. ADR 0270 records this rule.
 
 ## Generic Codex dispatch
