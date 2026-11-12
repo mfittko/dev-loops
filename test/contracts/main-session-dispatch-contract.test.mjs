@@ -71,5 +71,8 @@ test("initial coordinator dispatch resolves the dev-loop model first (#3133)", (
     assert.match(readNorm(rel), /gate resolve-role --role dev-loop --harness claude/, `${rel} must pin the resolve step`);
   }
   assert.match(readNorm("skills/docs/main-agent-contract.md"), /main session does this for the initial `dev-loops:dev-loop` dispatch/);
+  for (const rel of ["skills/dev-loop/SKILL.md", "commands/loop-start.command.md", "commands/loop-auto.command.md", "commands/loop-continue.command.md", "skills/local-implementation/SKILL.md", "agents/dev-loop.agent.md", "agents/gate-coordinator.agent.md"]) {
+    assert.match(readNorm(rel), /MAIN-CLAUDE-DISPATCH-MODEL/, `${rel} must reference the owner rule ID`);
+  }
   assert.match(readNorm("skills/docs/main-agent-contract.md"), /Only exit 0 permits dispatch; exit 1 or 2 stops the dispatch/);
 });

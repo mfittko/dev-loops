@@ -3286,7 +3286,10 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
 
   // Request plan: angles partition by concrete resolved model via
   // resolveRoleModel(config, { role: angle, harness, kind: "angle" }) — the
-  // SAME dispatch-time resolution a fan-out actually dispatches on (config
+  // SAME dispatch-time resolution a Pi/Codex fan-out actually dispatches on.
+  // On Claude every review dispatch uses the one `review` role model with no
+  // per-angle override (MAIN-CLAUDE-DISPATCH-MODEL), so the plan resolves
+  // { role: "review", harness } for every angle. (config
   // override → per-angle tier → built-in tier → null=inherit), unlike
   // resolveReviewerRole's `.model`, which ignores `tier` and can merge/split
   // groups wrongly. Harness defaults to the active runtime (override via
@@ -3313,7 +3316,11 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   const pendingAngles = pendingAngleNames ? angleUniverse.filter((a) => pendingAngleNames.has(a)) : angleUniverse;
   const angleModels = pendingAngles.map((angle) => ({
     angle,
-    model: options.config ? resolveRoleModel(options.config, { role: angle, harness, kind: "angle" }) : null,
+    model: !options.config
+      ? null
+      : harness === "claude"
+        ? resolveRoleModel(options.config, { role: "review", harness })
+        : resolveRoleModel(options.config, { role: angle, harness, kind: "angle" }),
   }));
   // Harness capability, routed through the canonical 4-dimension model
   // (breakpointControl/barrierSignal/cacheTtlControl/usageTelemetry) — a

@@ -757,6 +757,11 @@
       "enforcementNote": "Judging whether a runner finding is a blocker is orchestrator judgment; no script can classify it."
     },
     {
+      "id": "MAIN-CLAUDE-DISPATCH-MODEL",
+      "enforcement": "agent",
+      "enforcementNote": "Resolving the Claude dispatch model with gate resolve-role and passing it only when non-null is a dispatching-agent step; no script observes it."
+    },
+    {
       "id": "MERGE-PRECOND-REQUIRED"
     },
     {
