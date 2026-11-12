@@ -262,7 +262,7 @@ export function sanitizeCodeSpan(value) {
 // Every neutralization is an HTML entity, never a backslash-escape, so a
 // value's own literal character can never absorb the escape and turn live
 // again. upsert-checkpoint-verdict.mjs imports this exact function.
-// Label for an act finding whose remedy is evidence, not a file change; shared by every finding renderer (GATE-COMMENT-DRAFT-REQUIREMENTS).
+// Label for an act finding whose remedy is evidence, not a file change; shared by every finding renderer (GATE-COMMENT-SINGLE-SURFACE).
 export function renderEvidenceOnlyLabel({ judgeDisposition, remedyKind }) {
   return judgeDisposition === "act" && remedyKind === "evidence_only"
     ? " (evidence only, no file change; its criterion stays unproven until the evidence lands)"
