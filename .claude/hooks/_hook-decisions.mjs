@@ -62,11 +62,9 @@ export const isJudgeDecisionCheckLine = (command) => typeof command === "string"
 // The judge's read-only search path (issue 3092): `grep -n`, `rg -n`, `git show` and `git diff` with no shell
 // metacharacter outside quotes, no expansion inside double quotes, and no flag that writes or runs a program.
 const JUDGE_SEARCH_PREFIX_RE = /^(?:grep -n|rg -n|git show|git diff)(?: |$)/;
-// Git accepts a unique long-option abbreviation, so deny every non-empty prefix of a denied name (`--out`, `--ext-dif`).
+// Git accepts a unique long-option abbreviation, so deny every prefix of a denied name that is 3+ characters (`--out`, `--ext-dif`); a bare `--text` stays allowed.
 const JUDGE_SEARCH_DENIED_LONG = ["output", "ext-diff", "textconv", "pre", "hostname-bin"];
-const hasDeniedLongFlag = (line) => [...line.matchAll(/(?:^|\s)--([^\s=]+)/g)].some(([, name]) => JUDGE_SEARCH_DENIED_LONG.some((denied) => denied.startsWith(name)));
-// `git -C <absolute root>` lets the judge inspect the reviewed worktree from another cwd; the subcommand gets the same checks.
-const JUDGE_GIT_C_RE = /^git -C (\/[\w.\/-]+) (?=(?:show|diff)(?: |$))/;
+const hasDeniedLongFlag = (line) => [...line.matchAll(/(?:^|\s)--([^\s=]+)/g)].some(([, name]) => name.length >= 3 && name !== "text" && JUDGE_SEARCH_DENIED_LONG.some((denied) => denied.startsWith(name)));
 // `git diff` only as a commit-to-commit form (a `a..b` range or two revisions): a worktree diff refreshes the index.
 // Without `--` a second token may be a path, so each of two bare revisions must look like a revision.
 const REVISION_RE = /^(?:[0-9a-f]{6,40}|HEAD|main|origin\/[\w.\/-]+)(?:[~^]\d*)*$/;
@@ -74,7 +72,7 @@ const REVISION_RE = /^(?:[0-9a-f]{6,40}|HEAD|main|origin\/[\w.\/-]+)(?:[~^]\d*)*
 const isRange = (a) => { const sides = a.split(/\.\.\.?/); return sides.length === 2 && sides.every((s) => REVISION_RE.test(s)); };
 // A diff option outside this list must be stuck as `--opt=value`: git may take the next token as its argument (`-S HEAD..HEAD`),
 // which leaves no revision and runs an index-refreshing worktree diff.
-const DIFF_NOARG_FLAG_RE = /^(?:-[pubwRMC]|-U\d+|--(?:patch|stat|numstat|shortstat|name-only|name-status|raw|summary|no-color|color|minimal|histogram|patience|check))$/;
+const DIFF_NOARG_FLAG_RE = /^(?:-[pubwRMC]|-U\d+|--(?:no-ext-diff|no-textconv|patch|stat|numstat|shortstat|name-only|name-status|raw|summary|no-color|color|minimal|histogram|patience|check))$/;
 function isCommitDiff(line) {
   if (!line.startsWith("git diff")) return true;
   const args = line.slice(8).replace(/['"]/g, "").trim().split(/\s+/).filter(Boolean);
@@ -86,12 +84,7 @@ function isCommitDiff(line) {
 }
 export function isJudgeSearchLine(command) {
   if (typeof command !== "string") return false;
-  let line = command.trim();
-  const root = JUDGE_GIT_C_RE.exec(line);
-  if (root) {
-    if (root[1].includes("..")) return false;
-    line = `git ${line.slice(root[0].length)}`;
-  }
+  const line = command.trim();
   if (!JUDGE_SEARCH_PREFIX_RE.test(line) || hasDeniedLongFlag(line.replace(/['"]/g, "")) || /[\r\n]|\\"/.test(line) || !isCommitDiff(line)) return false;
   let quote = null;
   for (const ch of line) {

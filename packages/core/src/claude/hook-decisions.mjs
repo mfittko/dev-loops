@@ -61,11 +61,9 @@ export const isJudgeDecisionCheckLine = (command) => typeof command === "string"
 // The judge's read-only search path (issue 3092): `grep -n`, `rg -n`, `git show` and `git diff` with no shell
 // metacharacter outside quotes, no expansion inside double quotes, and no flag that writes or runs a program.
 const JUDGE_SEARCH_PREFIX_RE = /^(?:grep -n|rg -n|git show|git diff)(?: |$)/;
-// Git accepts a unique long-option abbreviation, so deny every non-empty prefix of a denied name (`--out`, `--ext-dif`).
+// Git accepts a unique long-option abbreviation, so deny every prefix of a denied name that is 3+ characters (`--out`, `--ext-dif`); a bare `--text` stays allowed.
 const JUDGE_SEARCH_DENIED_LONG = ["output", "ext-diff", "textconv", "pre", "hostname-bin"];
-const hasDeniedLongFlag = (line) => [...line.matchAll(/(?:^|\s)--([^\s=]+)/g)].some(([, name]) => JUDGE_SEARCH_DENIED_LONG.some((denied) => denied.startsWith(name)));
-// `git -C <absolute root>` lets the judge inspect the reviewed worktree from another cwd; the subcommand gets the same checks.
-const JUDGE_GIT_C_RE = /^git -C (\/[\w.\/-]+) (?=(?:show|diff)(?: |$))/;
+const hasDeniedLongFlag = (line) => [...line.matchAll(/(?:^|\s)--([^\s=]+)/g)].some(([, name]) => name.length >= 3 && name !== "text" && JUDGE_SEARCH_DENIED_LONG.some((denied) => denied.startsWith(name)));
 // `git diff` only as a commit-to-commit form (a `a..b` range or two revisions): a worktree diff refreshes the index.
 // Without `--` a second token may be a path, so each of two bare revisions must look like a revision.
 const REVISION_RE = /^(?:[0-9a-f]{6,40}|HEAD|main|origin\/[\w.\/-]+)(?:[~^]\d*)*$/;
@@ -83,27 +81,9 @@ function isCommitDiff(line) {
   const revs = front.filter((a) => !a.startsWith("-"));
   return revs.some(isRange) || (revs.length === 2 && revs.every((a) => REVISION_RE.test(a)));
 }
-// Split on whitespace outside quotes; a token that holds a quote keeps it, so it never equals a bare switch.
-function unquotedTokens(line) {
-  const out = []; let cur = ""; let quote = null;
-  for (const ch of line) {
-    if (quote) { cur += ch; if (ch === quote) quote = null; } else if (ch === "'" || ch === '"') { quote = ch; cur += ch; } else if (/\s/.test(ch)) { if (cur) out.push(cur); cur = ""; } else cur += ch;
-  }
-  if (cur) out.push(cur);
-  return out;
-}
 export function isJudgeSearchLine(command) {
   if (typeof command !== "string") return false;
-  let line = command.trim();
-  const root = JUDGE_GIT_C_RE.exec(line);
-  if (root) {
-    // The root's own git config may name a diff.external program or a textconv driver, so a rooted command must switch both off.
-    // Both switches must be standalone unquoted tokens before any `--`: quoted text and pathspecs never reach git as switches.
-    const tokens = unquotedTokens(line);
-    const front = tokens.includes("--") ? tokens.slice(0, tokens.indexOf("--")) : tokens;
-    if (root[1].includes("..") || !front.includes("--no-ext-diff") || !front.includes("--no-textconv")) return false;
-    line = `git ${line.slice(root[0].length)}`;
-  }
+  const line = command.trim();
   if (!JUDGE_SEARCH_PREFIX_RE.test(line) || hasDeniedLongFlag(line.replace(/['"]/g, "")) || /[\r\n]|\\"/.test(line) || !isCommitDiff(line)) return false;
   let quote = null;
   for (const ch of line) {

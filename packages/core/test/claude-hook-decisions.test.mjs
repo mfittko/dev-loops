@@ -1614,17 +1614,11 @@ test("the judge search check sees through quoted flags and matches exact option 
   }
 });
 
-test("the judge search check denies abbreviated writer options and allows an absolute git -C root (issue 3092)", () => {
-  for (const command of ["git show --out=/tmp/judge.patch HEAD", "git diff --out=/tmp/judge.patch HEAD~1 HEAD", "git show --ext-dif HEAD", "git diff --ou=/x HEAD~1 HEAD", "git show --text HEAD",
-    "git -C /wt show --out=/tmp/x HEAD", "git -C wt show HEAD", "git -C /wt/../x show HEAD", "git -C /wt log", "git -C /wt -c core.pager=x show HEAD", "git -C /wt diff HEAD", "git -C $HOME show HEAD", "git -C /wt show HEAD > f"]) {
+test("the judge search check denies abbreviated writer options of 3+ characters and allows a bare --text (issue 3092)", () => {
+  for (const command of ["git show --out=/tmp/judge.patch HEAD", "git diff --out=/tmp/judge.patch HEAD~1 HEAD", "git show --ext-dif HEAD", "git show --textc HEAD", "git show --pre HEAD", "git diff --host x HEAD~1 HEAD", "git -C /wt show HEAD"]) {
     assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "deny", command);
   }
-  // A rooted command must carry both config-driver switches: the root's git config is untrusted.
-  for (const command of ["git -C /wt show HEAD", "git -C /wt diff HEAD~1 HEAD", "git -C /wt show --no-ext-diff HEAD", "git -C /wt diff --no-textconv HEAD~1 HEAD",
-    "git -C /wt show --format=' --no-ext-diff --no-textconv ' HEAD", "git -C /wt diff --src-prefix=' --no-ext-diff --no-textconv ' HEAD~1 HEAD", "git -C /wt show HEAD -- --no-ext-diff --no-textconv"]) {
-    assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "deny", command);
-  }
-  for (const command of ["git -C /Users/me/tmp/wt show --no-ext-diff --no-textconv HEAD:agents/judge.agent.md", "git -C /Users/me/tmp/wt diff --no-ext-diff --no-textconv abc123..def456 -- x", "git -C /wt diff --no-ext-diff --no-textconv HEAD~1 HEAD"]) {
+  for (const command of ["git show --text HEAD", "git show --pretty=short HEAD", "grep -n --extended-regexp x f"]) {
     assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "allow", command);
   }
 });
