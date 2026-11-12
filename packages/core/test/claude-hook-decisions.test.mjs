@@ -1594,6 +1594,46 @@ test("decideBashGate lets the judge run only the sanctioned work-order pull, fai
   assert.equal(decideBashGate({ command: "dev-loops-run scripts/github/pull-work-order.mjs f1-abcdef12; echo x", agentType: "developer" }).decision, "allow");
 });
 
+test("decideBashGate lets the judge run read-only search commands and refuses writers (issue 3092)", () => {
+  for (const command of ["grep -n GATE-EXEC-LOW-FIX-UNTIL-CAP skills/docs/gate-review-sub-loop-contract.md", "rg -n 'foo|bar' scripts/loop", "rg -n 'foo$' f", "grep -n 'a|b$' f", `grep -n "a\\|b" -A6 skills/docs/x.md`, "git show abc123:packages/core/src/a.mjs", "git diff abc123..def456 -- scripts/loop/x.mjs", "git diff origin/main...HEAD", "git diff origin/main HEAD", "git diff HEAD~1 HEAD -- x", "rg -n 'a*b' packages", "grep -n 'x?' file.mjs", "git show HEAD:agents/judge.agent.md"]) {
+    for (const agentType of ["judge", "dev-loops:judge"]) assert.equal(decideBashGate({ command, agentType }).decision, "allow", command);
+  }
+  for (const command of ["grep -n x f > out.txt", "grep -n x f >> out.txt", "rg -n x | tee out.txt", "grep -n x f; rm f", "grep -n x f && ls", "grep -n $(id) f", "grep -n `id` f", "grep -n \"$HOME\" f", "grep -n x$ f", "grep -n \"a`b\" f", "grep -n x f\nls",
+    "rg -n x --pre ./evil.sh", "git diff --output=out.patch", "git diff --ext-diff", "git show --textconv x", "git log -p", "git -c core.pager=x diff", "grep -rn x .", "grep -n 'unterminated f", "cat f", "sed -n 1,5p f", "grep -n x f < in", "git diff *", "rg -n x *", "grep -n x file?.mjs", "rg -n x [a-z]*", "rg -n x {--pre=./e.sh,f}", "git diff {--output=/x,a..b}", "git diff HEAD agents/judge.agent.md", "git diff", "git diff HEAD", "git diff -- agents/judge.agent.md", "git diff HEAD -- agents/judge.agent.md", "git diff agents/../agents", "git diff HEAD a/../b", "git diff ../x..y", "git diff -S HEAD..HEAD", "git diff -O HEAD..HEAD", "git diff -G HEAD..HEAD", "git diff --output-indicator-new HEAD..HEAD", "git diff -S HEAD main", "git diff '-S' HEAD..main", "git diff \"--word-diff-regex\" HEAD..HEAD", "git diff '--cached' HEAD..main", "git diff '-G' HEAD..HEAD", "git diff \"-O\" HEAD..HEAD",`grep -n "a\\"b" ;rm "c"`]) {
+    assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "deny", command);
+  }
+  assert.equal(decideBashGate({ command: "grep -n x f > out.txt", agentType: "review" }).decision, "allow");
+});
+
+test("the judge search check sees through quoted flags and matches exact option names (issue 3092)", () => {
+  for (const command of ["git diff '--output=/x'", "rg -n x '--pre=./e.sh' f", "git diff '--ext-diff'", "git show '--textconv' x", `git diff "--output=/x"`, "git diff --output", "git diff --hostname-bin x"]) {
+    assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "deny", command);
+  }
+  for (const command of ["git show --pretty=format:%H HEAD", "grep -n --extended-regexp x f", "git diff --output-indicator-new=+ abc123..def456"]) {
+    assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "allow", command);
+  }
+});
+
+test("the judge search check denies abbreviated writer options of 3+ characters and allows a bare --text (issue 3092)", () => {
+  for (const command of ["git show --out=/tmp/judge.patch HEAD", "git diff --out=/tmp/judge.patch HEAD~1 HEAD", "git show --ext-dif HEAD", "git show --textc HEAD", "git show --pre HEAD", "git diff --host x HEAD~1 HEAD", "git -C /wt show HEAD"]) {
+    assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "deny", command);
+  }
+  for (const command of ["git show --text HEAD", "git show --pretty=short HEAD", "grep -n --extended-regexp x f"]) {
+    assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "allow", command);
+  }
+});
+
+test("the judge refusal names Read, its offset and limit and the allowed search commands, never Grep or Glob (issue 3092)", () => {
+  const { reason } = decideBashGate({ command: "ls", agentType: "judge" });
+  assert.match(reason, /`Read`/);
+  assert.match(reason, /offset and limit/);
+  for (const cmd of ["grep -n", "rg -n", "git show", "git diff"]) assert.ok(reason.includes(cmd), cmd);
+  assert.match(reason, /single quotes/);
+  assert.match(reason, /`git diff` only as a range such as `origin\/main\.\.\.HEAD` or two revisions/);
+  assert.match(reason, /glob characters/);
+  assert.doesNotMatch(reason, /Grep|Glob/);
+});
+
 test("parseSanctionedPullLine accepts only the exact trimmed short pull line", () => {
   assert.deepEqual(parseSanctionedPullLine(" dev-loops-run scripts/github/pull-work-order.mjs r1-abcdef12-u3\n"), { executionIdentity: "r1-abcdef12-u3" });
   for (const command of [null, "dev-loops-run scripts/github/pull-work-order.mjs --ref fixer:o/r#7:x --digest sha256:ab --execution f1-abcdef12", "dev-loops-run scripts/github/pull-work-order.mjs x1-abcdef12", "dev-loops-run scripts/github/pull-work-order.mjs f1-abcdef12 f2-abcdef12", "dev-loops-run scripts/github/pull-work-order.mjs f1-abcdef12;id"]) {
