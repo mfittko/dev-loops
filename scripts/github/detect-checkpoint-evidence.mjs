@@ -560,7 +560,7 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
             );
           } else if (pairingErr !== null) {
             const ledgerBound = resolveReviewerUnitBound(prov.unitBound);
-            const uncorroborated = prov.dispatchUnits != null && ledgerBound > REVIEWER_UNIT_MAX_ANGLES && ledgerBound !== gate.contextUnitBound
+            const uncorroborated = prov.dispatchUnits != null && ledgerBound > REVIEWER_UNIT_MAX_ANGLES && ![gate.contextUnitBound].flat().includes(ledgerBound)
               ? `; the ledger's unit bound ${ledgerBound} is not corroborated by the gate-context artifact, so re-run the gate-context build and emit-fanout-dispatch for this head so the ledger and artifact agree (a pruned worktree also loses the artifact, and the read path reads only the default tmp root, so for a bundle relocated with --tmp-root rebuild the gate-context artifact and re-emit at the default root)`
               : "";
             failures.push(
@@ -723,29 +723,29 @@ async function ledgerExistsInAny(checkouts, ledgerPath) {
  * emit-fanout-dispatch for the head.
  * Returns undefined (the default) for a ledger with no recorded dispatch units.
  */
-function corroboratedUnitBound(prov, contextUnitBound) {
+function corroboratedUnitBound(prov, contextUnitBounds) {
   if (prov?.dispatchUnits == null) return undefined;
   const ledgerBound = resolveReviewerUnitBound(prov.unitBound);
-  return ledgerBound > REVIEWER_UNIT_MAX_ANGLES && ledgerBound !== contextUnitBound ? REVIEWER_UNIT_MAX_ANGLES : ledgerBound;
+  return ledgerBound > REVIEWER_UNIT_MAX_ANGLES && ![contextUnitBounds].flat().includes(ledgerBound) ? REVIEWER_UNIT_MAX_ANGLES : ledgerBound;
 }
 /**
- * The resolved `fanout.unitBound` of the gate-context artifact across the
- * enumerated checkouts: the first readable artifact wins, and an absent or
- * unreadable one resolves to the default bound.
- * Ceiling: the artifact is not tied to the ledger's own checkout; a stale
- * checkout's artifact can win, and a pruned worktree loses the artifact, so a
+ * The resolved `fanout.unitBound` of every readable gate-context artifact across
+ * the enumerated checkouts, so a stale checkout's artifact cannot shadow the
+ * one that matches the ledger. No readable artifact resolves to the default bound.
+ * Ceiling: the artifact is not tied to the ledger's own checkout, and a pruned worktree loses the artifact, so a
  * legitimate packed ledger above 5 angles then fails closed. The read path
  * reads only the default tmp root, so a bundle relocated with --tmp-root is
  * never found. The exit is to rebuild the gate-context artifact and re-emit at
  * the default root for that head.
  */
 async function readContextUnitBoundInAny(checkouts, contextPath) {
+  const bounds = new Set();
   for (const root of checkouts) {
     try {
-      return resolveReviewerUnitBound(JSON.parse(await readFile(path.resolve(root, contextPath), "utf8"))?.fanout?.unitBound);
+      bounds.add(resolveReviewerUnitBound(JSON.parse(await readFile(path.resolve(root, contextPath), "utf8"))?.fanout?.unitBound));
     } catch { /* absent or unreadable: try the next checkout */ }
   }
-  return REVIEWER_UNIT_MAX_ANGLES;
+  return bounds.size > 0 ? [...bounds] : [REVIEWER_UNIT_MAX_ANGLES];
 }
 /**
  * Read the recorded fan-out `provenance` object from a ledger across the
@@ -765,7 +765,7 @@ async function readContextUnitBoundInAny(checkouts, contextPath) {
 async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
   const {
     requireProvenance = false, mandatoryAngles = [], anglePool = null, rejectForeignAngles = true,
-    config = null, gateKey = "draft_gate", hasFullLabel = false, contextUnitBound = REVIEWER_UNIT_MAX_ANGLES,
+    config = null, gateKey = "draft_gate", hasFullLabel = false, contextUnitBound = [REVIEWER_UNIT_MAX_ANGLES],
   } = criteria;
   const satisfies = (prov) => {
     if (provenanceConsistencyError(prov) !== null) return false;
@@ -1118,7 +1118,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
     const angleFields = GATE_ANGLE_CONFIG[spec.name];
     const contextUnitBound = readProvenance
       ? await readContextUnitBoundInAny(checkouts, buildGateContextPath({ repo, pr, gate: spec.name, headSha, tmpRoot: "tmp" }))
-      : REVIEWER_UNIT_MAX_ANGLES;
+      : [REVIEWER_UNIT_MAX_ANGLES];
     const provenance = readProvenance
       ? await readLedgerProvenanceInAny(checkouts, ledgerPath, {
         requireProvenance, rejectForeignAngles, ...angleFields, config: angleConfig, gateKey: spec.name, hasFullLabel, contextUnitBound,

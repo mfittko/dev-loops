@@ -6071,6 +6071,17 @@ test("#1601 resolveFanoutDispatch: auto-chunks ungrouped angles + emits a bounde
   assert.deepEqual(plan.wavePlan[0].map((u) => u.name), ["group:a+b", "group:c+d", "e"]);
 });
 
+test("resolveFanoutDispatch keeps a recorded unit bound of 10 and defaults an absent one to 5", () => {
+  const angles = ["a", "b", "c", "d", "e", "f"];
+  const config = { version: 1, gates: { fanout: { groups: [{ name: "wide", angles }] } } };
+  const kept = resolveFanoutDispatch(config, "draft", angles, { env: {}, unitBound: 10 });
+  assert.equal(kept.unitBound, 10);
+  assert.deepEqual(kept.pendingGroups.map((g) => g.angles.length), [6]);
+  const dflt = resolveFanoutDispatch(config, "draft", angles, { env: {} });
+  assert.equal(dflt.unitBound, 5);
+  assert.deepEqual(dflt.pendingGroups.map((g) => g.angles.length), [5, 1]);
+});
+
 test("#2414 resolveFanoutDispatch: units above the cap pack first-fit decreasing into one wave", () => {
   const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 2, maxConcurrent: 2 } } };
   const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d", "e"], { fullLabel: false, env: {} });
