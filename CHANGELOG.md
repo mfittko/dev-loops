@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.12-pre.1
+
+### Fixed
+
+- A clean draft_gate cap round fixed by a PR-body-only edit no longer reports cap_round_unresolved (#3178)
+- Runtime-pin maintenance passes size accounting while runtime changes still invalidate clean reviews; unknown-source refusals name the affected files (#3178)
+
 ## 1.0.11
 
 ### Added
