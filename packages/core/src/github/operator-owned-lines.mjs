@@ -83,9 +83,13 @@ const WRAP_RES = Object.freeze([
   operatorMarkerWrapPattern(),
   // Last: the release reader strips a code span between `approve` and `release`, so a bare
   // `release [v]<digit>` run must not survive for it to read as the approval's tail.
-  // `\s+` stays: the reader accepts a newline between `release` and the version.
-  /\brelease\s+v?\d[\w-]*(?:\.\w[\w-]*)*/gi,
+  // Horizontal whitespace only, so ordinary text such as `release` then a numbered list line keeps its newline.
+  /(?<!`)\brelease[ \t]+v?\d[\w-]*(?:\.\w[\w-]*)*/gi,
 ]);
+
+// The reader accepts a newline between `release` and the version when `approve` precedes it, so the tail
+// of an approval split by a code span (`approve `x` release\nv1.2.3`) wraps across that newline.
+const APPROVAL_TAIL_RE = /(?<=^\s*)release\s+v?\d[\w-]*(?:\.\w[\w-]*)*/i;
 
 const CODE_SPAN_RE = /(`[^`\n]*`)/;
 
@@ -95,10 +99,13 @@ const CODE_SPAN_RE = /(`[^`\n]*`)/;
  */
 export function wrapOperatorOwnedPhrases(text) {
   // The capture group puts each author span at an odd index; only the even parts are bare text.
-  return String(text).split(CODE_SPAN_RE).map((part, i) => {
+  const parts = String(text).split(CODE_SPAN_RE);
+  return parts.map((part, i) => {
     if (i % 2 === 1) return part;
     let out = part;
-    for (const re of WRAP_RES) out = out.replace(re, (match) => `\`${match.replace(/\s+/g, " ")}\``);
+    const wrap = (match) => `\`${match.replace(/\s+/g, " ")}\``;
+    if (i >= 2 && /\bapprove\s+$/i.test(parts[i - 2])) out = out.replace(APPROVAL_TAIL_RE, wrap);
+    for (const re of WRAP_RES) out = out.replace(re, wrap);
     return out;
   }).join("");
 }

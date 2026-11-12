@@ -211,9 +211,13 @@ export function decideUnresolveOwnerDeny({ command, role }) {
  *     (STOP-HUMAN-MERGE-001). The sanctioned path is `scripts/github/merge-pr.mjs`; its gate
  *     evidence check requires a clean draft_gate transition record + current-head pre_approval_gate
  *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
- *   - raw `gh issue create` / `gh issue comment` / `gh issue edit` / `gh pr comment` — blocked ONLY
- *     from a SUBAGENT context (`role` non-null) on the managed repo. Sanctioned external writes
- *     flow through node wrappers; the MAIN AGENT / operator (role null) retains direct access.
+ *   - raw `gh issue create` / `gh issue edit` — blocked ONLY from a SUBAGENT context (`role`
+ *     non-null) on the managed repo. Sanctioned external writes flow through node wrappers; the
+ *     MAIN AGENT / operator (role null) retains direct access to these two verbs.
+ *   - raw comment writes (`gh issue|pr comment`, `--comment` on close/reopen, `gh api` comment bodies,
+ *     GraphQL comment mutations) — OPERATOR-OWNED-LINE, blocked for EVERY actor on the managed repo.
+ *   - the standing-authorization paths (`waive-adr-tripwire`, `--standing-authorization`) —
+ *     STANDING-AUTHORIZATION-MAIN-AGENT-ONLY, blocked from a SUBAGENT context only.
  *   - the actor-independent guard rules (inline interpreters, detached wait tools, `timeout`-wrapped
  *     sanctioned tools, ad-hoc sub-issue / thread-reply / Copilot-request writes, raw PR/issue body
  *     writes, `git stash`), the coordinator verify boundary, and the unresolve owner allowlist.

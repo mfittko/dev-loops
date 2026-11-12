@@ -643,6 +643,21 @@ test("a subagent cannot run a standing-authorization path under any runner or cd
   }
 });
 
+test("a subagent cannot execute a standing-authorization script directly", () => {
+  for (const command of [
+    "./cli/index.mjs pr waive-adr-tripwire --pr 5",
+    "cli/index.mjs pr waive-adr-tripwire --pr 5",
+    "/abs/cli/index.mjs pr waive-adr-tripwire --pr 5",
+    "cd /w && ./cli/index.mjs pr waive-adr-tripwire --pr 5",
+    "./scripts/github/comment-issue.mjs --standing-authorization --issue 5 --body-file f.md",
+  ]) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: "developer", command })?.ruleId, "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY", command);
+  }
+  for (const command of ["./scripts/github/comment-issue.mjs --issue 5 --body-file f.md", "./cli/index.mjs pr view 5"]) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: "developer", command }), null, command);
+  }
+});
+
 test("a subagent may run a comment wrapper without the standing-authorization flag", () => {
   const command = "dev-loops-run scripts/github/comment-issue.mjs --repo mfittko/dev-loops --issue 5 --body x";
   assert.equal(decideBashGateDeny({ ...BASE, role: "developer", command }), null);
@@ -672,6 +687,8 @@ const HARDENED_COMMENT_WRITES = [
   "gh api repos/o/r/issues/5/comments --field body=x",
   "gh api repos/o/r/issues/5/comments --raw-field body=x",
   "gh api --method POST repos/o/r/issues/5/comments -f body=x",
+  "gh api repos/o/r/issues/5/comments -X GET -X POST -f body=x",
+  "gh api repos/o/r/issues/5/comments --method GET --method POST -f body=x",
 ];
 
 test("hardened and wrapped raw comment writes are denied with OPERATOR-OWNED-LINE", () => {
@@ -688,6 +705,8 @@ test("wrapper-lookalike commands and a foreign repo pass the raw comment-write d
     "gh --repo=other/repo pr close 5 -c x",
     "GH_REPO=other/repo gh issue comment 5 --body x",
     "gh api graphql -f query='query { viewer { login } }'",
+    "gh api repos/o/r/issues/5/comments -X GET",
+    "gh api repos/o/r/issues/5/comments",
   ]) {
     assert.equal(decideBashGateDeny({ ...OR_REPO, command }), null, command);
   }

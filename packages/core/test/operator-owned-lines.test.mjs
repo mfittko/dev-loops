@@ -199,6 +199,11 @@ test("wrapOperatorOwnedPhrases wraps a release version at a word start only and 
   assert.equal(wrapOperatorOwnedPhrases("release v1.0.12"), "`release v1.0.12`");
 });
 
+test("wrapOperatorOwnedPhrases keeps the newline of a non-approval release followed by a numbered item", () => {
+  assert.equal(wrapOperatorOwnedPhrases("Cut the release\n2. Then tag it"), "Cut the release\n2. Then tag it");
+  assert.equal(wrapOperatorOwnedPhrases("approve `x` release v1.2.3"), "approve `x` `release v1.2.3`");
+});
+
 test("wrapOperatorOwnedPhrases leaves no reader-accepted release approval unwrapped, newline included", () => {
   for (const body of ["approve `x` release\nv1.2.3", "approve `x` release v1.2.3.", "approve `x` release\nv1.2.3-rc.1"]) {
     assert.notEqual(findOperatorOwnedLineRefusal(body), null, JSON.stringify(body));

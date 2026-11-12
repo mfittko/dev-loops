@@ -921,7 +921,9 @@ function ghApiSegmentWritesBody(segment) {
   // `--input` supplies the whole payload, so it is a write without a method flag (gh then POSTs).
   if (/(?:^|\s)--input(?:=|\s)/.test(blankQuotedForFlags(segment))) return true;
   // gh defaults to POST when a field is present, so only an explicit GET/HEAD makes a body field a read.
-  if (!hasQuotePairingHazard(segment) && /(?:^|\s)(?:--method|-X|-m)(?:=|\s*)["']?(?:GET|HEAD)\b/i.test(stripQuotedLiterals(segment))) return false;
+  // gh honors the LAST method flag, so `-X GET -X POST` is a write.
+  const methods = [...stripQuotedLiterals(segment).matchAll(/(?:^|\s)(?:--method|-X|-m)(?:=|\s*)["']?([A-Za-z]+)/gi)];
+  if (!hasQuotePairingHazard(segment) && methods.length > 0 && /^(?:GET|HEAD)$/i.test(methods[methods.length - 1][1])) return false;
   // Not quote-stripped: the field is usually quoted (`-f "body=..."`), so blanking would hide it.
   return /(?:^|\s)(?:-[fF]|--(?:raw-)?field)(?:=|\s*)["']?body=/.test(segment);
 }
@@ -987,10 +989,11 @@ export function commandContainsRawCommentWrite(command, managedSlug = null) {
  * @param {string} command @returns {boolean}
  */
 export function commandRunsStandingAuthorizationPath(command) {
-  const hit = (text, flagView = text) => /(?:^|[\s/])waive-adr-tripwire\.mjs(?=[\s"']|$)|(?:cli\/index\.mjs|(?:^|[\s/])dev-loops)\s+pr\s+waive-adr-tripwire(?=[\s"']|$)/.test(text)
+  const hit = (text, flagView = text) => /(?:^|[\s/])waive-adr-tripwire\.mjs(?=[\s"']|$)|(?:(?:^|[\s/])index\.mjs|(?:^|[\s/])dev-loops)\s+pr\s+waive-adr-tripwire(?=[\s"']|$)/.test(text)
     || (/(?:^|[\s/])(?:comment-issue|edit-comment)\.mjs(?=[\s"']|$)/.test(text) && /(?:^|\s)--standing-authorization(?=[=\s"']|$)/.test(flagView));
   if (shellWrapperTails(blankQuotedForFlags(joinLineContinuations(command))).some((t) => hit(t))) return true;
-  const runner = new RegExp(`^${SHELL_EXEC_PREFIX}(?:dev-loops-run|dev-loops|node|bun|npx|bunx)\\s`, "i");
+  // A direct execution of an executable `.mjs` script (`./cli/index.mjs`, an absolute path) is a runner too.
+  const runner = new RegExp(`^${SHELL_EXEC_PREFIX}(?:(?:dev-loops-run|dev-loops|node|bun|npx|bunx)|\\S*\\.mjs)\\s`, "i");
   return unwrapCommandSegments(command).split("\n").some((segment) => runner.test(segment) && hit(unquoteFlagTokens(segment), blankQuotedForFlags(unquoteFlagTokens(segment))));
 }
 
