@@ -14,6 +14,7 @@
  * The mutually exclusive conductor selector requires explicit --harness codex
  * and returns nullable settings plus omitted-if-null nativeOverrides. Only
  * exit 0 permits dispatch; see skills/docs/main-agent-contract.md.
+ * The role selector (--role <name> --harness <codex|claude>) also resolves the Claude Agent model.
  *
  * Config-only (no git, no GitHub), matching the scripts/loop/ placement of
  * pre-flight-gate / gate-coordination. ALL angle-pool/eligibility logic lives
@@ -33,7 +34,7 @@
  */
 import { parseArgs } from "node:util";
 
-import { loadDevLoopConfig, resolveConductorDispatch, resolveRoleDispatch } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveConductorDispatch, resolveRoleDispatch, resolveRoleModel } from "@dev-loops/core/config";
 import { REVIEW_OPERATIONS, resolveOperationReviewerRole } from "@dev-loops/core/loop/review-operation";
 import { resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
 
@@ -44,10 +45,10 @@ import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: resolve-reviewer-role.mjs --gate <${REVIEW_OPERATIONS.join("|")}> --angle <name> [--harness <pi|claude|codex>]
    or: resolve-reviewer-role.mjs --conductor --harness codex
-   or: resolve-reviewer-role.mjs --role <name> --harness codex
+   or: resolve-reviewer-role.mjs --role <name> --harness <codex|claude>
 
 --conductor selects Codex conductor settings and nativeOverrides without startup.
---role selects ordinary Codex role settings. These selectors are mutually
+--role selects ordinary role settings: Codex settings, or the Claude Agent model with --harness claude. These selectors are mutually
 exclusive with each other and with --gate/--angle. Config errors refuse with exit 1.
 
 Resolve a gate angle's reviewer role for a review operation from the fully
@@ -74,7 +75,9 @@ Conductor mode — required:
                             Cannot be combined with --gate or --angle.
 
 Role mode — required:
-  --role <name> --harness codex
+  --role <name> --harness <codex|claude>
+                            Claude prints {ok, role, harness:"claude", model, configErrors}; model is
+                            the Agent model alias to pass (null: pass none).
                             Cannot be combined with --conductor, --gate or --angle.
 
 All modes — optional:
@@ -104,8 +107,8 @@ Conductor output (stdout, JSON), inherited settings (exit 0):
 Configured settings replace the corresponding null. Non-null model is emitted
 as nativeOverrides.model and non-null reasoningEffort as
 nativeOverrides.reasoning_effort; null fields are omitted from nativeOverrides.
-Role output uses the same envelope with kind:"role" and role:<name>.
-Config errors (exit 1) return the same shape with ok:false, both settings null,
+With --harness codex, role output uses the same envelope with kind:"role" and role:<name>.
+Config errors (exit 1) with --harness codex return the same shape with ok:false, both settings null,
 nativeOverrides:{}, and configErrors containing the loader's error records.
 Only exit 0 permits native dispatch. Pass nativeOverrides unchanged alongside
 the authorized task/message and fork_turns:"none"; native rejection stops the
@@ -119,8 +122,8 @@ Note: for this command, --silent's exit code always reflects \`ok\`, never the
 shared --jq/--silent composition described above).
 
 Exit codes:
-  0  ok: true  — config errors absent; conductor selected, or angle belongs to the operation's pool
-  1  ok: false — config-layer errors present, or angle does not belong to the operation's pool
+  0  ok: true  — config errors absent; conductor or role selected, or angle belongs to the operation's pool
+  1  ok: false — config-layer errors present (any selector, role mode included), or angle does not belong to the operation's pool
   2  Argument/runtime error, or invalid --jq filter`;
 
 const parseError = buildParseError(USAGE);
@@ -159,7 +162,7 @@ export function parseResolveReviewerRoleCliArgs(argv, { env = process.env } = {}
     if ((options.conductor && options.role !== null) || options.gate !== null || options.angle !== null) throw parseError("--conductor/--role cannot be mixed with each other or --gate or --angle");
     const selector = options.conductor ? "--conductor" : "--role";
     if (options.role === "") throw parseError("--role requires a nonempty name");
-    if (options.harness !== "codex") throw parseError(`${selector} requires --harness codex`);
+    if (options.harness !== "codex" && !(options.harness === "claude" && options.role !== null)) throw parseError(`${selector} requires --harness codex${options.role !== null ? " or claude" : ""}`);
     return options;
   }
   if (!options.gate) {
@@ -180,6 +183,11 @@ export function parseResolveReviewerRoleCliArgs(argv, { env = process.env } = {}
   return options;
 }
 
+/** The Agent `model` alias a Claude dispatcher passes for a routine role; null means pass none. */
+function resolveClaudeRoleModel({ config, errors = [] }, role) {
+  return { ok: errors.length === 0, role, harness: "claude", model: errors.length ? null : resolveRoleModel(config, { role, harness: "claude" }), configErrors: errors };
+}
+
 export async function runCli(argv = process.argv.slice(2), { repoRoot = resolveRepoRoot(process.cwd()), env = process.env } = {}) {
   const options = parseResolveReviewerRoleCliArgs(argv, { env });
   if (options.help) {
@@ -187,7 +195,8 @@ export async function runCli(argv = process.argv.slice(2), { repoRoot = resolveR
     return { ok: true, help: true };
   }
   const loadResult = await loadDevLoopConfig({ repoRoot });
-  const result = options.conductor ? resolveConductorDispatch(loadResult, { harness: options.harness })
+  const result = options.role !== null && options.harness === "claude" ? resolveClaudeRoleModel(loadResult, options.role)
+    : options.conductor ? resolveConductorDispatch(loadResult, { harness: options.harness })
     : options.role !== null ? resolveRoleDispatch(loadResult, { role: options.role, harness: options.harness }) : resolveOperationReviewerRole(loadResult, {
     operation: options.gate,
     angle: options.angle,

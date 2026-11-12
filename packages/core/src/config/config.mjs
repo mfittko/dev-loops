@@ -57,6 +57,8 @@ const BUILTIN_ROLE_TIERS = Object.freeze({
   // harness via models.tiers/roleTiers.
   "pre-push-reviewer": "high",
   "dev-loop": "inherit",
+  // The gate coordinator also inherits by default; a `roleTiers` entry retargets it.
+  "gate-coordinator": "inherit",
 });
 
 // A tier alias's per-harness concrete model. Either harness may be a concrete
