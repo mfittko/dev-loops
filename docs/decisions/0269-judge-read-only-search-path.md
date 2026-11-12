@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted — 2026-11-12 ([PR 3195](https://github.com/mfittko/dev-loops/pull/3195))
 
 Amends [0106](./0106-workers-pull-deterministic-work-orders.md) for the judge shell boundary: the judge shell runs the pull line, the decision checker and, on Claude Code, read-only search commands. Every other decision of that record stays in force, and the record stays unedited.
 
@@ -36,3 +36,5 @@ A search wrapper script that runs the search for the judge was rejected. It adds
 - dev-loops steers and never traps: the judge searches with a bounded set of commands and every refusal names the exit.
 - The allowlist is a lexical check and a list of denied flags. A new write flag on one of the four commands needs an addition to the list.
 - The Pi judge keeps its shell-free read and search tools, so the two harnesses differ in mechanism and agree in capability.
+- Ceiling: the allowlist covers the reliable cases. A `git diff` the lexer allows may refresh the reviewed tree's `.git/index`, with no tracked content change and no program execution. A configured external diff or textconv in `.git/config` is outside the hook. dev-loops steers and never traps, and the judge keeps `Read` as the exit.
+- Evidence: the search allowlist, quoted-flag handling and `git diff` residue were exercised through three `draft_gate` review rounds and five delta reviews on PR 3195 (2026-11-12). The tests in `packages/core/test/claude-hook-decisions.test.mjs` and `test/loop/emit-judge-work-order.test.mjs` pass.
