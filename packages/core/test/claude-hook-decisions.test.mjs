@@ -1614,6 +1614,16 @@ test("the judge search check sees through quoted flags and matches exact option 
   }
 });
 
+test("the judge search check denies abbreviated writer options and allows an absolute git -C root (issue 3092)", () => {
+  for (const command of ["git show --out=/tmp/judge.patch HEAD", "git diff --out=/tmp/judge.patch HEAD~1 HEAD", "git show --ext-dif HEAD", "git diff --ou=/x HEAD~1 HEAD", "git show --text HEAD",
+    "git -C /wt show --out=/tmp/x HEAD", "git -C wt show HEAD", "git -C /wt/../x show HEAD", "git -C /wt log", "git -C /wt -c core.pager=x show HEAD", "git -C /wt diff HEAD", "git -C $HOME show HEAD", "git -C /wt show HEAD > f"]) {
+    assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "deny", command);
+  }
+  for (const command of ["git -C /Users/me/tmp/wt show HEAD:agents/judge.agent.md", "git -C /Users/me/tmp/wt diff abc123..def456 -- x", "git -C /wt diff HEAD~1 HEAD"]) {
+    assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "allow", command);
+  }
+});
+
 test("the judge refusal names Read, its offset and limit and the allowed search commands, never Grep or Glob (issue 3092)", () => {
   const { reason } = decideBashGate({ command: "ls", agentType: "judge" });
   assert.match(reason, /`Read`/);

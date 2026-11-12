@@ -62,7 +62,11 @@ export const isJudgeDecisionCheckLine = (command) => typeof command === "string"
 // The judge's read-only search path (issue 3092): `grep -n`, `rg -n`, `git show` and `git diff` with no shell
 // metacharacter outside quotes, no expansion inside double quotes, and no flag that writes or runs a program.
 const JUDGE_SEARCH_PREFIX_RE = /^(?:grep -n|rg -n|git show|git diff)(?: |$)/;
-const JUDGE_SEARCH_DENIED_FLAG_RE = /(?:^|\s)--(?:output|ext-diff|textconv|pre|hostname-bin)(?=[=\s]|$)/;
+// Git accepts a unique long-option abbreviation, so deny every non-empty prefix of a denied name (`--out`, `--ext-dif`).
+const JUDGE_SEARCH_DENIED_LONG = ["output", "ext-diff", "textconv", "pre", "hostname-bin"];
+const hasDeniedLongFlag = (line) => [...line.matchAll(/(?:^|\s)--([^\s=]+)/g)].some(([, name]) => JUDGE_SEARCH_DENIED_LONG.some((denied) => denied.startsWith(name)));
+// `git -C <absolute root>` lets the judge inspect the reviewed worktree from another cwd; the subcommand gets the same checks.
+const JUDGE_GIT_C_RE = /^git -C (\/[\w.\/-]+) (?=(?:show|diff)(?: |$))/;
 // `git diff` only as a commit-to-commit form (a `a..b` range or two revisions): a worktree diff refreshes the index.
 // Without `--` a second token may be a path, so each of two bare revisions must look like a revision.
 const REVISION_RE = /^(?:[0-9a-f]{6,40}|HEAD|main|origin\/[\w.\/-]+)(?:[~^]\d*)*$/;
@@ -82,8 +86,13 @@ function isCommitDiff(line) {
 }
 export function isJudgeSearchLine(command) {
   if (typeof command !== "string") return false;
-  const line = command.trim();
-  if (!JUDGE_SEARCH_PREFIX_RE.test(line) || JUDGE_SEARCH_DENIED_FLAG_RE.test(line.replace(/['"]/g, "")) || /[\r\n]|\\"/.test(line) || !isCommitDiff(line)) return false;
+  let line = command.trim();
+  const root = JUDGE_GIT_C_RE.exec(line);
+  if (root) {
+    if (root[1].includes("..")) return false;
+    line = `git ${line.slice(root[0].length)}`;
+  }
+  if (!JUDGE_SEARCH_PREFIX_RE.test(line) || hasDeniedLongFlag(line.replace(/['"]/g, "")) || /[\r\n]|\\"/.test(line) || !isCommitDiff(line)) return false;
   let quote = null;
   for (const ch of line) {
     if (quote) { if (ch === quote) quote = null; else if (quote === '"' && (ch === "$" || ch === "`")) return false; } else if (ch === "'" || ch === '"') quote = ch;
