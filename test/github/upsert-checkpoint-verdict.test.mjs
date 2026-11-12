@@ -983,6 +983,47 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
   }, { prefix: "dev-loops-upsert-gate-review-create-" });
 });
 
+test("upsert-checkpoint-verdict ignores a caller next action on a clean draft_gate (#3197)", async () => {
+  await withTempDir(async (tempDir) => {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234000000000000000000000000000000000", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+      },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["**Next action:** mark ready for review"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "Request Copilot review while the PR stays draft",
+    ], { env });
+    assert.equal(result.code, 0);
+  }, { prefix: "dev-loops-upsert-gate-clean-draft-next-action-" });
+});
+
+test("renderGateReviewCommentBody marks an evidence-only act finding (#3197)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "clean",
+    findingsSummary: "no issues found",
+    nextAction: "mark ready for review",
+    nonLocatableFindings: [{ severity: "nice-to-have", summary: "evidence only note", judgeDisposition: "act", remedyKind: "evidence_only" }],
+  });
+  assert.match(body, /judge: _`act`_.*\(evidence only, not an open act item\)/);
+});
+
 // #2163: real-subprocess guard for main()'s `fields: options.fields` passthrough
 // (upsert-checkpoint-verdict.mjs:3186). writeGhStubHelper + the runNode fallback
 // spawn the ACTUAL CLI (no GH_MOCK_ENTRIES stashed, so the in-process branch above
@@ -12473,7 +12514,7 @@ test("deriveEffectiveNextAction derives from the act list on review, draft_gate 
   assert.equal(deriveEffectiveNextAction("findings_present", "review", [{ ...same, files: ["src/a.mjs"] }, { ...same, files: ["src/b.mjs"] }]), `fix the 2 items this review lists; ${tail}`);
   assert.equal(deriveEffectiveNextAction("findings_present", "draft_gate", act), "stay draft and fix");
   assert.equal(deriveEffectiveNextAction("findings_present", "pre_approval_gate", act), "rerun gate");
-  assert.equal(deriveEffectiveNextAction("clean", "draft_gate", []), null);
+  assert.equal(deriveEffectiveNextAction("clean", "draft_gate", []), "mark ready for review");
   assert.equal(deriveEffectiveNextAction("clean", "pre_approval_gate", []), null);
 });
 

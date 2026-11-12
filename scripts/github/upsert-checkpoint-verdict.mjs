@@ -1153,6 +1153,7 @@ function normalizeStructuredFinding(f) {
   if (typeof f.judgeReason === "string" && f.judgeReason.trim().length > 0) {
     entry.judgeReason = f.judgeReason.trim();
   }
+  if (f.remedyKind === "evidence_only") entry.remedyKind = "evidence_only";
   if (Number.isInteger(f.followUpIssueNumber) && f.followUpIssueNumber > 0) {
     entry.followUpIssueNumber = f.followUpIssueNumber;
   }
@@ -1483,7 +1484,7 @@ function renderBodyOnlyFindingLine(finding, ctx) {
     : "";
   // Judge relevance-based disposition.
   const judgeSuffix = finding.judgeDisposition
-    ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_${renderJudgeDetail(finding)}`
+    ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_${renderJudgeDetail(finding)}${finding.remedyKind === "evidence_only" ? " (evidence only, not an open act item)" : ""}`
     : "";
   const angleSuffix = finding.angle ? ` _(${sanitizeStructuredInline(finding.angle)})_` : "";
   return `- ${markerPrefix}${summary}${location}${dispositionSuffix}${judgeSuffix}${angleSuffix}`;
@@ -2581,7 +2582,8 @@ export function deriveEffectiveNextAction(verdict, gate, actItems = [], unjudged
     return verdict === "clean" && !unjudgedFindings ? `no change requested; ${tail}` : `read the findings, none was judged; ${tail}`;
   }
   if (verdict !== "findings_present" && verdict !== "blocked") {
-    return null;
+    // A clean draft_gate has one legal next step; "request Copilot review while draft" is refused by request-copilot-review.mjs (suppressed_draft).
+    return gate === "draft_gate" && verdict === "clean" ? "mark ready for review" : null;
   }
   // draft_gate: the PR stays draft and fixes are required before retrying.
   // pre_approval_gate: follow-up fixes are required before final approval —
