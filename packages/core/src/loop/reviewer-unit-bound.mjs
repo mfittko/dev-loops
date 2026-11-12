@@ -75,10 +75,11 @@ export const REVIEWER_UNIT_BUDGET_PER_CHANGED_LINE = 0.002;
  * ceil(PER_FILE * files + PER_CHANGED_LINE * changedLines), plus
  * REVIEWER_UNIT_BUDGET_PER_EXTRA_ANGLE for each of `angles` above
  * REVIEWER_UNIT_MAX_ANGLES, clamped to the cap.
- * @param {{ files: number, changedLines: number, angles?: number }} size
+ * `maxAngles` is the round's resolved unit bound (`unitBound`, default 5), the value `enforceReviewerUnitBound` also reports.
+ * @param {{ files: number, changedLines: number, angles?: number, unitBound?: number }} size
  * @returns {{ maxToolCalls: number, maxModelTurns: number, maxAngles: number }}
  */
-export function computeReviewerUnitBudget({ files, changedLines, angles = 0 } = {}) {
+export function computeReviewerUnitBudget({ files, changedLines, angles = 0, unitBound } = {}) {
   if (!isNonNegativeInteger(files) || !isNonNegativeInteger(changedLines) || !isNonNegativeInteger(angles)) {
     throw new TypeError(`computeReviewerUnitBudget requires non-negative integer files, changedLines and angles, got ${JSON.stringify({ files, changedLines, angles })}`);
   }
@@ -88,7 +89,7 @@ export function computeReviewerUnitBudget({ files, changedLines, angles = 0 } = 
   return Object.freeze({
     maxToolCalls: Math.min(REVIEWER_UNIT_BUDGET_CAP.maxToolCalls, REVIEWER_UNIT_BUDGET_FLOOR.maxToolCalls + extra + extraAngles * REVIEWER_UNIT_BUDGET_PER_EXTRA_ANGLE.maxToolCalls),
     maxModelTurns: Math.min(REVIEWER_UNIT_BUDGET_CAP.maxModelTurns, REVIEWER_UNIT_BUDGET_FLOOR.maxModelTurns + extra + extraAngles * REVIEWER_UNIT_BUDGET_PER_EXTRA_ANGLE.maxModelTurns),
-    maxAngles: Math.max(REVIEWER_UNIT_MAX_ANGLES, angles),
+    maxAngles: resolveReviewerUnitBound(unitBound),
   });
 }
 

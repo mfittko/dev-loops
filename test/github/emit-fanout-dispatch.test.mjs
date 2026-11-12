@@ -2542,7 +2542,8 @@ test("main(): a recorded bound of 10 emits a 6-angle packed unit whole with the 
     assert.deepEqual(payload.units.map((unit) => unit.group), ["design-solid", null]);
     // Floor 45/50 plus 9 turns and 10 calls for the one angle above 5; the one-angle unit keeps the floor.
     assert.deepEqual([payload.units[0].budget.maxModelTurns, payload.units[0].budget.maxToolCalls], [54, 60]);
-    assert.deepEqual(payload.units[1].budget, { ...REVIEWER_UNIT_BUDGET });
+    // maxAngles is the round's resolved bound on every unit.
+    assert.deepEqual(payload.units[1].budget, { ...REVIEWER_UNIT_BUDGET, maxAngles: 10 });
     assert.equal(payload.units[0].workOrder.executionRules.budget.maxToolCalls, 60);
     const tmpRoot = path.join(repoRoot, "tmp");
     const emitPlan = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });

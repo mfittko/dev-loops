@@ -524,7 +524,8 @@ describe("computeReviewerUnitBudget — per-angle step above five angles", () =>
   test("each angle above 5 adds 9 model turns and 10 tool calls on top of the diff-size budget", () => {
     assert.deepEqual(pair(computeReviewerUnitBudget({ files: 0, changedLines: 0, angles: 6 })), [60, 54]);
     assert.deepEqual(pair(computeReviewerUnitBudget({ files: 6, changedLines: 150, angles: 8 })), [82, 74]);
-    assert.equal(computeReviewerUnitBudget({ files: 0, changedLines: 0, angles: 6 }).maxAngles, 6);
+    assert.equal(computeReviewerUnitBudget({ files: 0, changedLines: 0, angles: 6 }).maxAngles, 5);
+    assert.equal(computeReviewerUnitBudget({ files: 0, changedLines: 0, angles: 6, unitBound: 10 }).maxAngles, 10);
   });
 
   test("a non-integer or negative angles input throws TypeError, and integer 0, 5, 6 and 10 are accepted", () => {
@@ -544,5 +545,10 @@ describe("enforceReviewerUnitBound reports the resolved bound as the budget angl
     const blocked = (gateContext) => enforceReviewerUnitBound({ unit: baseUnit({ angles: ["a", "b"], gateContext }), consumed: { modelTurns: 5, toolCalls: 5 }, completedAngles: ["a"] });
     assert.equal(blocked({ headSha: "abc123", unitBound: 10 }).budget.maxAngles, 10);
     assert.equal(blocked({ headSha: "abc123" }).budget.maxAngles, 5);
+  });
+  test("the emit-path and enforce-path budgets agree on maxAngles for a 6-angle unit at bound 10", () => {
+    const emitted = computeReviewerUnitBudget({ files: 0, changedLines: 0, angles: 6, unitBound: 10 });
+    const enforced = enforceReviewerUnitBound({ unit: baseUnit({ angles: ["a", "b", "c", "d", "e", "f"], gateContext: { headSha: "abc123", unitBound: 10 } }), consumed: { modelTurns: 5, toolCalls: 5 }, completedAngles: ["a"] });
+    assert.equal(emitted.maxAngles, enforced.budget.maxAngles);
   });
 });

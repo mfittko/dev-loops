@@ -28,6 +28,8 @@ Fan-in treats one recorded packed unit as one reviewer. Its angles share one rev
 
 Base units derive at the round's recorded bound on the writer and the read path, so a configured group is never split below the bound. The slice 2 producer MUST derive base units at the round's recorded bound before packing, so a recorded packed unit stays a union of whole base units.
 
+`budget.maxAngles` means the round's resolved unit bound on every path. `computeReviewerUnitBudget` and `enforceReviewerUnitBound` both report it, so a 6-angle unit at bound 10 reports 10 on both. This amends [0095](./0095-single-wave-gate-fanout.md), where `REVIEWER_UNIT_BUDGET.maxAngles` is the constant 5: that value is the default of the resolved bound.
+
 This record covers the bound authority only. It adds no size tier and the producer records 5 until a later record sets another value.
 
 ## Consequences

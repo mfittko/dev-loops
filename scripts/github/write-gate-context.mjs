@@ -3485,10 +3485,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   if (prBodyRead && options.fanoutDispatch?.pendingGroups) {
     const priorBodySha256 = options.carriedPriorBodySha256 !== undefined ? options.carriedPriorBodySha256 : await readPriorPrBodySha256(options, { repoRoot });
     // The earlier round dispatched its recorded groups (packed under its own carried set), so the in-flight check reads that membership, never this build's.
-    const priorFanout = options.carriedPriorGroups !== undefined ? { groups: options.carriedPriorGroups, preflight: { carriedAngles: options.carriedPriorCarriedAngles } } : (await readGateContext(options, { repoRoot }).catch(() => null))?.fanout;
+    const priorFanout = options.carriedPriorGroups !== undefined ? { groups: options.carriedPriorGroups, unitBound: options.carriedPriorUnitBound, preflight: { carriedAngles: options.carriedPriorCarriedAngles } } : (await readGateContext(options, { repoRoot }).catch(() => null))?.fanout;
     const priorCarriedAngles = priorFanout?.preflight?.carriedAngles ?? [];
     const priorGroups = Array.isArray(priorFanout?.groups) ? priorFanout.groups : options.fanoutDispatch.groups ?? [];
-    priorBodyState = { priorBodySha256, priorCarriedAngles, priorGroups };
+    // Groups from the current fanout take the current bound; groups from a prior context take that context's recorded bound.
+    const priorUnitBound = Array.isArray(priorFanout?.groups) ? priorFanout.unitBound : options.fanoutDispatch.unitBound;
+    priorBodyState = { priorBodySha256, priorCarriedAngles, priorGroups, priorUnitBound };
     if (priorBodySha256 !== prBodyRead.sha256) {
       const { names: liveSentinels, scanError } = await scanLiveSentinels();
       if (scanError !== null) {
@@ -3540,7 +3542,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       const keyOf = (angle) => String(angle).trim().toLowerCase();
       const pendingKeys = new Set(options.fanoutDispatch.pendingGroups.flatMap((unit) => (Array.isArray(unit?.angles) ? unit.angles : []).map(keyOf)));
       const covered = new Set();
-      for (const group of expandDispatchUnits(priorGroups, configuredGroupNames, priorFanout?.unitBound)) {
+      for (const group of expandDispatchUnits(priorGroups, configuredGroupNames, priorUnitBound)) {
         if (!Array.isArray(group?.angles)) continue;
         const unit = { ...group, angles: group.angles.filter((angle) => !priorCarried.has(keyOf(angle))) };
         unit.angles.forEach((angle) => covered.add(keyOf(angle)));
@@ -3625,7 +3627,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         // pointer/hash/plan without the failed path before publishing a marker.
         process.stderr.write(`[gate-context] full-diff capture failed (continuing without scope.diffPath): ${error.message}\n`);
         await rm(fullPath, { force: true });
-        return await writeGateContext({ ...options, diffPath: null, diffToWrite: null, carriedPrBodyBaselineSha256: prBodyBaselineSha256, ...(priorBodyState ? { carriedPriorBodySha256: priorBodyState.priorBodySha256, carriedPriorCarriedAngles: priorBodyState.priorCarriedAngles, carriedPriorGroups: priorBodyState.priorGroups } : {}) }, { repoRoot });
+        return await writeGateContext({ ...options, diffPath: null, diffToWrite: null, carriedPrBodyBaselineSha256: prBodyBaselineSha256, ...(priorBodyState ? { carriedPriorBodySha256: priorBodyState.priorBodySha256, carriedPriorCarriedAngles: priorBodyState.priorCarriedAngles, carriedPriorGroups: priorBodyState.priorGroups, carriedPriorUnitBound: priorBodyState.priorUnitBound } : {}) }, { repoRoot });
       }
     }
     if (pendingFilteredDiff) await writeFile(path.resolve(repoRoot, pendingFilteredDiff.path), pendingFilteredDiff.text, "utf8");

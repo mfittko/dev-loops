@@ -761,7 +761,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     }
     const unitReads = resolveUnitScopedReads(artifact, angles);
     const budgetBasis = unitBudgetBasis(artifact, angles, diffBlocks, resolveClassifyRules(config));
-    const budget = computeReviewerUnitBudget({ ...budgetBasis, angles: angles.length });
+    const budget = computeReviewerUnitBudget({ ...budgetBasis, angles: angles.length, unitBound });
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {
       await mkdir(path.dirname(suffixPath), { recursive: true });
