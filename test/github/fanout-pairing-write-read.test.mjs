@@ -889,7 +889,9 @@ describe("the read path trusts a ledger unitBound above 5 only when the gate-con
   test("ACCEPT: ledger unitBound equal to the context fanout.unitBound passes", async () => {
     await withConfig(BOUND_DEVLOOPS, async (dir) => {
       await writeContext(dir, 10);
-      assert.equal(await readPacked(dir, "pre_approval_gate", ledger(10)), null);
+      const read = await readPacked(dir, "pre_approval_gate", ledger(10));
+      assert.equal(read, null);
+      assert.doesNotMatch(read ?? "", /not corroborated by the gate-context artifact/);
     });
   });
 
@@ -908,6 +910,7 @@ describe("the read path trusts a ledger unitBound above 5 only when the gate-con
     await withConfig(BOUND_DEVLOOPS, async (dir) => {
       const read = await readPacked(dir, "pre_approval_gate", ledger(10));
       assert.match(read ?? "", /holds 6 angles, above the 5-angle unit bound/);
+      assert.match(read ?? "", /not corroborated by the gate-context artifact/);
     });
   });
 
@@ -916,6 +919,7 @@ describe("the read path trusts a ledger unitBound above 5 only when the gate-con
       await writeContext(dir, 5);
       const read = await readPacked(dir, "pre_approval_gate", ledger(10));
       assert.match(read ?? "", /holds 6 angles, above the 5-angle unit bound/);
+      assert.match(read ?? "", /not corroborated by the gate-context artifact/);
     });
   });
 });

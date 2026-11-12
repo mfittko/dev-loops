@@ -280,7 +280,15 @@ test("--unit-bound accepts a packed unit above 5 angles; a partial completion bl
     const angles = "a,b,c,d,e,f,g";
     const common = ["--run", RUN, "--head-sha", HEAD_SHA, "--angles", angles, "--completed-angles", "a,b,c,d,e", "--model-turns", "10", "--tool-calls", "10"];
     const refusedDir = path.join(tmpDir, "refused");
-    assert.equal(await main([...common, "--findings-dir", refusedDir]), 2, "a missing bound means 5, so 7 angles are refused");
+    const realWrite = process.stderr.write;
+    let err = "";
+    process.stderr.write = (chunk) => { err += chunk; return true; };
+    try {
+      assert.equal(await main([...common, "--findings-dir", refusedDir]), 2, "a missing bound means 5, so 7 angles are refused");
+    } finally {
+      process.stderr.write = realWrite;
+    }
+    assert.match(err, /--unit-bound/);
     assert.equal(await main([...common, "--findings-dir", refusedDir, "--unit-bound", "0"]), 2);
     const findingsDir = path.join(tmpDir, "findings");
     assert.equal(await main([...common, "--findings-dir", findingsDir, "--unit-bound", "10"]), 0);

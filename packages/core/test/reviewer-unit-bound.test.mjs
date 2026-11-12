@@ -492,7 +492,7 @@ describe("resolveReviewerUnitBound — the one bound policy", () => {
 describe("validateReviewerUnit — reads the recorded bound", () => {
   const six = ["a", "b", "c", "d", "e", "f"];
   test("a missing bound keeps 5: six angles are refused", () => {
-    assert.throws(() => validateReviewerUnit(baseUnit({ angles: six })), /must not exceed 5 angles, got 6; name gateContext.unitBound up to 10 or split the unit/);
+    assert.throws(() => validateReviewerUnit(baseUnit({ angles: six })), /must not exceed 5 angles, got 6; name gateContext.unitBound \(CLI --unit-bound\) up to 10 or split the unit/);
   });
   test("a recorded bound of 10 accepts six and ten angles and refuses eleven", () => {
     const gateContext = { headSha: "abc123", unitBound: 10 };

@@ -561,7 +561,7 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
           } else if (pairingErr !== null) {
             const ledgerBound = resolveReviewerUnitBound(prov.unitBound);
             const uncorroborated = prov.dispatchUnits != null && ledgerBound > REVIEWER_UNIT_MAX_ANGLES && ledgerBound !== gate.contextUnitBound
-              ? `; the ledger's unit bound ${ledgerBound} is not corroborated by the gate-context artifact, so re-run the gate-context build and emit-fanout-dispatch for this head so the ledger and artifact agree`
+              ? `; the ledger's unit bound ${ledgerBound} is not corroborated by the gate-context artifact, so re-run the gate-context build and emit-fanout-dispatch for this head so the ledger and artifact agree (a pruned worktree also loses the artifact; rebuild it at this head)`
               : "";
             failures.push(
               `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (${pairingErr}${uncorroborated}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
@@ -719,6 +719,8 @@ async function ledgerExistsInAny(checkouts, ledgerPath) {
  * worktree-local file, so a recorded `unitBound` above the default counts only
  * when the gate-context artifact at the same head records the same value;
  * otherwise the default bound applies and the pairing check fails closed.
+ * The exit is to rebuild the gate-context artifact and re-run
+ * emit-fanout-dispatch for the head.
  * Returns undefined (the default) for a ledger with no recorded dispatch units.
  */
 function corroboratedUnitBound(prov, contextUnitBound) {
@@ -731,7 +733,9 @@ function corroboratedUnitBound(prov, contextUnitBound) {
  * enumerated checkouts: the first readable artifact wins, and an absent or
  * unreadable one resolves to the default bound.
  * Ceiling: the artifact is not tied to the ledger's own checkout; a stale
- * checkout's artifact can win, and the exit is to re-run the gate-context build.
+ * checkout's artifact can win, and a pruned worktree loses the artifact, so a
+ * legitimate packed ledger above 5 angles then fails closed. The exit is to
+ * rebuild the gate-context artifact at that head.
  */
 async function readContextUnitBoundInAny(checkouts, contextPath) {
   for (const root of checkouts) {

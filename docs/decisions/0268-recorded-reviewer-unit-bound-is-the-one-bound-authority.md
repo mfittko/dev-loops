@@ -22,6 +22,8 @@ Each round records its reviewer-unit angle bound as `fanout.unitBound` in the ga
 
 Every bound consumer reads the recorded value through that function. The emitted plan and the ledger carry `unitBound` when it differs from 5, so the emit-plan tail check and the read path see the same value. The gate-context artifact always records `fanout.unitBound`, including 5. No later stage splits a recorded packed unit back.
 
+The read path trusts a ledger `unitBound` above 5 only when the gate-context artifact at the same head records the same `fanout.unitBound`. Otherwise it resolves to 5 and fails closed with a remedy message. A pruned worktree also loses the artifact. The exit is to rebuild the gate-context artifact and re-run `emit-fanout-dispatch.mjs` for that head.
+
 A unit above 5 angles gets a per-angle budget step: 9 model turns and 10 tool calls for each angle above 5, added to the diff-size budget and clamped to the existing cap of 95 turns and 100 tool calls. The combined-unit limit is 10 angles. Ten angles and the 9-turn and 10-call step are bounded starting policy values, not measured optima.
 
 Fan-in treats one recorded packed unit as one reviewer. Its angles share one reviewer identity, `countFreshDispatchUnits` counts one unit, and no per-angle reviewer identity is fabricated. A missing, duplicated, foreign or unreported angle, and a blocked record that completes only some angles, still fail closed.

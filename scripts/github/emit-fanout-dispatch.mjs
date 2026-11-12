@@ -101,13 +101,16 @@ Optional:
                                must match the write-gate-context.mjs call).
 Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "repo": "...", "pr": "...",
-    "pending": <true|false>, "roundId": "...", "count": <n>, "maxConcurrent": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>,
+    "pending": <true|false>, "roundId": "...", "count": <n>, "maxConcurrent": <n>, "unitBound": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>,
       "budget": { "maxToolCalls": <n>, "maxModelTurns": <n>, "maxAngles": <n> }, "budgetBasis": { "scope": "none|docs-only|full", "files": <n>, "changedLines": <n> }, "promptPath": "...",
       "workOrderRef", "workOrderDigest", "materializationHash", "executionIdentity", "dispatchPrompt",
       "promptBytes": <n>, "sectionBytes": { "prefix": <n>, "volatile": <n>, "suffix": <n> },
       "workOrder": { "role", "target", "operation", "roundIdentity", "headSha", "configSha256", "assignedAngles",
         "angleInstructions": [ { "angle": "...", "persona": "...", "prompt": "..." } ],
         "requiredReads", "outputRefs", "executionRules" } } ] }
+  "unitBound" is present only when the round's recorded bound (fanout.unitBound)
+  differs from 5; its absence means 5. "budget.maxAngles" carries the round's
+  resolved unit bound.
   Wave the EMITTED units at most \`maxConcurrent\` at a time (1 when
   gates.fanout.sequential is set). Do NOT use the artifact's fanout.wavePlan to
   bound this step: that plan is computed over the UNSPLIT resolveFanoutGroups
