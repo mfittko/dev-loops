@@ -11,6 +11,7 @@
 - Use `tmp/worktrees/<issue-or-branch-slug>/` for mutating local work; keep the main checkout for inspection.
 - Always run `git fetch origin` before creating or reusing a worktree — never create from a stale `origin/main`.
 - Canonical guidance lives in `skills/docs/worktree-guidance.md`.
+- Operator principles (ADR 0270): `PURPOSE-STEER-NOT-TRAP` and `PURPOSE-DETERMINISTIC-FIT` in the [contract style guide](skills/docs/contract-style-guide.md), `MAIN-AGENT-OPERATOR-QUESTION-SCOPE` in the [main-agent contract](skills/docs/main-agent-contract.md).
 - Prefer the GitHub-first routed path for branch/PR/CI/review work; use local implementation only when explicitly requested.
 - Use the narrowest deterministic targeted check for local changes. Only `dev-loops gate resolve-validation` and `dev-loops loop validation-record` (VALIDATE-LOCAL-RECORD-PRODUCER, ADR 0170) may launch local full-repository validation. Contributors and CI use the exactly pinned Bun 1.4.1 toolchain; published packages continue to run on Node `>=24`, and npm remains the registry/pack/publish client. See [Validation Policy](skills/docs/validation-policy.md).
 - When creating GitHub issues via `gh issue create`, always include `--assignee @me` so the new artifact is self-assigned.
