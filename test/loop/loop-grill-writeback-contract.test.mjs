@@ -308,7 +308,7 @@ test("Step 1 names the operator-authorized bypass exception to the grill_clean e
   );
   assert.match(
     step1,
-    /an agent never writes it, and the final report names the exact line for the human to post/,
+    /the final report names the exact line for the operator to add to the posted results comment/,
     "Step 1 must state the final report names the line for the human",
   );
   assert.match(
@@ -405,7 +405,7 @@ test("Step 4 states a zero-gap semantic pass MUST post the results comment, and 
   );
   assert.match(
     step4,
-    /The final report of an authorized re-grill names the exact line, with the operator's handle, for the human to post/,
+    /for the operator to add to the posted results comment. The reader accepts the line only in a comment whose first non-empty line is the results heading/,
     "Step 4 must say the final report names the line",
   );
   // No instruction anywhere in the skill tells the agent to record the line.
