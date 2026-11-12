@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 
 import { parseRepoSlug } from "../github/repo-slug.mjs";
-import { severityRank, VALID_SEVERITIES, normalizeSeverity, isPastRoundCap, hasLocatableShape, baseAngleName, pastCapBlockers } from "./gate-fanin.mjs";
+import { severityRank, VALID_SEVERITIES, normalizeSeverity, isPastRoundCap, resolveFindingFile, baseAngleName, pastCapBlockers } from "./gate-fanin.mjs";
 import { recordedSkipReason, siteCoverageGaps } from "./fixer-disposition.mjs";
 import { sha256Hex } from "./review-dispatch-plan.mjs";
 
@@ -439,10 +439,10 @@ function isSecurityAngle(angle) { return /(^|-)security(-|$)/.test(baseAngleName
 
 /**
  * Body-only cap round (ADR 0271, GATE-EXEC-NO-DEAD-END): a cap round whose open act items are all PR-body items clears with no commit.
- * Hard checks cover narrow facts only: every item is non-locatable (no file and line), the live PR body digest differs from the
+ * Hard checks cover narrow facts only: every item names no file (a PR-body item), the live PR body digest differs from the
  * reviewed `pr-body` read, the reviewed head..fixerCommit range holds no PR-own commit, and no item blocks (high, question, fail-open, security).
  * Whether the edit resolves an item stays with pre_approval_gate. `fixerCommit` may equal the reviewed head.
- * Throws a typed refusal (`body_item_locatable`, `body_unchanged`, `own_commit_in_range`, `blocked_item`); returns the converged marker.
+ * Throws a typed refusal (`body_item_locatable`, `body_unchanged`, `own_commit_in_range`, `body_read_unrecorded`, `blocked_item`); returns the converged marker.
  * @param {{ gate?: string, headSha?: string, round?: number, cap?: number, roundActItems?: any[], converged?: { fixerCommit?: string, actList?: any[] }, reviewedBodySha?: string|null, liveBodySha?: string, ownCommits?: number }} input
  * @returns {{ fixerCommit: string, deltaDigest: string }}
  */
@@ -454,13 +454,13 @@ export function composeBodyOnlyConvergedDraftGate({ gate, headSha, round, cap, r
   const keys = (list) => JSON.stringify((list ?? []).map(convergedActItemKey).sort());
   if (items.length === 0 || keys(converged?.actList) !== keys(items)) throw new Error("converged.actList must be the round's non-empty act list (same items as the posted act items)");
   if (converged?.deltaResult !== undefined) throw new Error("body-only converged verdict takes no converged.deltaResult; drop bodyOnly to post a delta-reviewed convergence");
-  // The cap-round blocking set (deferred high, fail-open, missing disposition, spec change) holds for the whole round, not only its act items.
+  // The cap-round blocking set (deferred high, fail-open, missing disposition, severity disagreement) holds for the whole round, not only its act items.
   const capBlockers = pastCapBlockers(roundFindings ?? items, { round, cap });
   if (capBlockers.length > 0) throw new Error(`blocked_item: the cap round holds ${capBlockers.length} blocker(s) (${capBlockers.map((b) => b.item).join("; ")}); they need a fix commit or an operator decision, not a body-only exit`);
   const blocked = items.find(isBlockedActItem);
-  if (blocked) throw new Error(`GATE-EXEC-NO-DEAD-END blocked_item: act item ${JSON.stringify(blocked.summary)} is high, question, fail-open or security; it needs a fix commit or an operator decision, not a body-only exit`);
-  const locatable = items.find(hasLocatableShape);
-  if (locatable) throw new Error(`body_item_locatable: act item ${JSON.stringify(locatable.summary)} names a file and line; it needs a fix commit and a delta review, not a body-only exit`);
+  if (blocked) throw new Error(`blocked_item: act item ${JSON.stringify(blocked.summary)} is high, question, fail-open or security; it needs a fix commit or an operator decision, not a body-only exit (GATE-EXEC-NO-DEAD-END)`);
+  const locatable = items.find((item) => resolveFindingFile(item));
+  if (locatable) throw new Error(`body_item_locatable: act item ${JSON.stringify(locatable.summary)} names a file; it needs a fix commit and a delta review, not a body-only exit`);
   if (!reviewedBodySha) throw new Error(`body_read_unrecorded: no cap-round context records a pr-body read at ${headSha}, so a body edit cannot be shown, and write-gate-context.mjs refuses a rerun at the cap head; fix the items with a commit and run the reviewer-only delta (check-pre-push-delta.mjs --reviewer-only)`);
   if (reviewedBodySha === liveBodySha) throw new Error("body_unchanged: the live PR body digest equals the reviewed pr-body read; edit the PR body first");
   if (ownCommits !== 0) throw new Error(`own_commit_in_range: ${headSha}..${converged.fixerCommit} holds ${ownCommits} PR-own commit(s); clear them with the reviewer-only delta review instead`);

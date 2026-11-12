@@ -14,7 +14,7 @@ A cap round whose open act items are all PR-body items has no exit. The fix is a
 
 1. `upsert-checkpoint-verdict.mjs --converged-json` accepts `{ fixerCommit, actList, bodyOnly: true }` with no `deltaResult`. It posts the converged record at the reviewed head through the existing converged path. `fixerCommit` equals the current PR head, so one path covers an unchanged head and a head moved by a base-only merge. The posted comment carries the existing `**Converged:**` line, so the coordination detector needs no change. The delta digest of that line is the sha256 of the body-only evidence (the two body digests and the act list), never a fabricated delta result.
 2. The tooling checks only narrow facts (`PURPOSE-DETERMINISTIC-FIT`). Each failed check refuses with a typed reason that names the item or the fact:
-   - `body_item_locatable`: an act item names a file and a line (`hasLocatableShape`).
+   - `body_item_locatable`: an act item names a file (`resolveFindingFile`).
    - `body_unchanged`: the live PR body digest equals the `pr-body` read the cap round reviewed (ADR 0256, amended by ADR 0257).
    - `body_read_unrecorded`: no cap-round context records a `pr-body` read at the reviewed head. `write-gate-context.mjs` refuses a rerun at the cap head, so the refusal names the one exit an orchestrator can drive without the operator: fix the items with a commit and run `check-pre-push-delta.mjs --reviewer-only`. No body-only exit exists when the recorded read is lost.
    - `own_commit_in_range`: the range from the reviewed head to `fixerCommit` holds a PR-own commit (the count `check-pre-push-delta.mjs` uses).

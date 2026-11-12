@@ -9,7 +9,7 @@ import { setDefaultTimeout, test } from "bun:test";
 import { readSequenceMarker, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 
-import { DELTA_EVIDENCE_RULE, deltaPatchPath, gitStaleSurfaceHits, parseCheckPrePushDeltaArgs, runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
+import { DELTA_EVIDENCE_RULE, countPrOwnCommits, deltaPatchPath, gitStaleSurfaceHits, parseCheckPrePushDeltaArgs, runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { A, B, C, M, boundArgs, coverageRepo } from "./_delta-coverage-fixture.mjs";
@@ -1305,7 +1305,7 @@ test("the invocation bound is real: a rerun at invocation 1 over a needs_fix rec
   } finally { cleanup(repo); }
 });
 
-test("AC11: after a no_commit closure (marker cleared, no record sealed) a later local commit is delta-reviewed from the same baseline", async () => {
+test("AC11: a removed sequence marker unblocks the reviewer-only route at the same baseline", async () => {
   const repo = reviewerOnlyRepo();
   try {
     const marker = writeSequenceMarker({ tmpRoot: repo.tmpRoot, baselineHead: repo.baseline, branch: "issue-1" });
@@ -1894,4 +1894,19 @@ test("issue 2447: a locally_clear result that validation refuses seals no findin
   assert.equal(out.nextStep, "fix_and_rereview");
   const record = readGateDeltaRecord(tmpRoot, A);
   assert.equal(record.findings, undefined);
+});
+
+test("AC11: countPrOwnCommits is 0 for a base-only merge range and counts PR-own commits, with baseline and head in that order", async () => {
+  const repo = reviewerOnlyRepo();
+  const deps = { fetchBase: () => {} };
+  try {
+    assert.equal(await countPrOwnCommits(repo.dir, repo.fix, repo.head, "main", deps), 0, "fix..head holds only the base-only merge");
+    assert.equal(await countPrOwnCommits(repo.dir, repo.baseline, repo.head, "main", deps), 1, "baseline..head holds the fix commit");
+    assert.equal(await countPrOwnCommits(repo.dir, repo.head, repo.baseline, "main", deps), 0, "swapped arguments name an empty range");
+    await assert.rejects(countPrOwnCommits(repo.dir, repo.baseline, repo.head, "gone", deps), /origin\/gone does not exist/);
+  } finally { cleanup(repo); }
+  const merged = reviewerOnlyRepo({ nonBaseOnlyMerge: true });
+  try {
+    assert.ok(await countPrOwnCommits(merged.dir, merged.mergeHead, merged.head, "main", deps) >= 2, "a non-base-only merge and its side commit count");
+  } finally { cleanup(merged); }
 });
