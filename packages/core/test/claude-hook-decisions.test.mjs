@@ -1595,11 +1595,11 @@ test("decideBashGate lets the judge run only the sanctioned work-order pull, fai
 });
 
 test("decideBashGate lets the judge run read-only search commands and refuses writers (issue 3092)", () => {
-  for (const command of ["grep -n GATE-EXEC-LOW-FIX-UNTIL-CAP skills/docs/gate-review-sub-loop-contract.md", "rg -n 'foo|bar' scripts/loop", "rg -n 'foo$' f", "grep -n 'a|b$' f", `grep -n "a\\|b" -A6 skills/docs/x.md`, "git show abc123:packages/core/src/a.mjs", "git diff abc123 -- scripts/loop/x.mjs"]) {
+  for (const command of ["grep -n GATE-EXEC-LOW-FIX-UNTIL-CAP skills/docs/gate-review-sub-loop-contract.md", "rg -n 'foo|bar' scripts/loop", "rg -n 'foo$' f", "grep -n 'a|b$' f", `grep -n "a\\|b" -A6 skills/docs/x.md`, "git show abc123:packages/core/src/a.mjs", "git diff abc123..def456 -- scripts/loop/x.mjs", "git diff origin/main...HEAD", "git diff origin/main HEAD", "rg -n 'a*b' packages", "grep -n 'x?' file.mjs", "git show HEAD:agents/judge.agent.md"]) {
     for (const agentType of ["judge", "dev-loops:judge"]) assert.equal(decideBashGate({ command, agentType }).decision, "allow", command);
   }
   for (const command of ["grep -n x f > out.txt", "grep -n x f >> out.txt", "rg -n x | tee out.txt", "grep -n x f; rm f", "grep -n x f && ls", "grep -n $(id) f", "grep -n `id` f", "grep -n \"$HOME\" f", "grep -n x$ f", "grep -n \"a`b\" f", "grep -n x f\nls",
-    "rg -n x --pre ./evil.sh", "git diff --output=out.patch", "git diff --ext-diff", "git show --textconv x", "git log -p", "git -c core.pager=x diff", "grep -rn x .", "grep -n 'unterminated f", "cat f", "sed -n 1,5p f", "grep -n x f < in", `grep -n "a\\"b" ;rm "c"`]) {
+    "rg -n x --pre ./evil.sh", "git diff --output=out.patch", "git diff --ext-diff", "git show --textconv x", "git log -p", "git -c core.pager=x diff", "grep -rn x .", "grep -n 'unterminated f", "cat f", "sed -n 1,5p f", "grep -n x f < in", "git diff *", "rg -n x *", "grep -n x file?.mjs", "rg -n x [a-z]*", "git diff", "git diff HEAD", "git diff -- agents/judge.agent.md", "git diff HEAD -- agents/judge.agent.md", `grep -n "a\\"b" ;rm "c"`]) {
     assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "deny", command);
   }
   assert.equal(decideBashGate({ command: "grep -n x f > out.txt", agentType: "review" }).decision, "allow");
@@ -1609,7 +1609,7 @@ test("the judge search check sees through quoted flags and matches exact option 
   for (const command of ["git diff '--output=/x'", "rg -n x '--pre=./e.sh' f", "git diff '--ext-diff'", "git show '--textconv' x", `git diff "--output=/x"`, "git diff --output", "git diff --hostname-bin x"]) {
     assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "deny", command);
   }
-  for (const command of ["git show --pretty=format:%H HEAD", "grep -n --extended-regexp x f", "git diff --output-indicator-new=+ HEAD"]) {
+  for (const command of ["git show --pretty=format:%H HEAD", "grep -n --extended-regexp x f", "git diff --output-indicator-new=+ a..b"]) {
     assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "allow", command);
   }
 });

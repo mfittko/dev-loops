@@ -63,14 +63,22 @@ export const isJudgeDecisionCheckLine = (command) => typeof command === "string"
 // metacharacter outside quotes, no expansion inside double quotes, and no flag that writes or runs a program.
 const JUDGE_SEARCH_PREFIX_RE = /^(?:grep -n|rg -n|git show|git diff)(?: |$)/;
 const JUDGE_SEARCH_DENIED_FLAG_RE = /(?:^|\s)--(?:output|ext-diff|textconv|pre|hostname-bin)(?=[=\s]|$)/;
+// `git diff` only as a commit-to-commit form (a `..` range or two revisions before `--`): a worktree diff refreshes the index.
+function isCommitDiff(line) {
+  if (!line.startsWith("git diff")) return true;
+  const args = line.slice(8).trim().split(/\s+/).filter(Boolean);
+  const end = args.indexOf("--");
+  const revs = (end < 0 ? args : args.slice(0, end)).filter((a) => !a.startsWith("-"));
+  return revs.some((a) => a.includes("..")) || revs.length >= 2;
+}
 export function isJudgeSearchLine(command) {
   if (typeof command !== "string") return false;
   const line = command.trim();
-  if (!JUDGE_SEARCH_PREFIX_RE.test(line) || JUDGE_SEARCH_DENIED_FLAG_RE.test(line.replace(/['"]/g, "")) || /[\r\n]|\\"/.test(line)) return false;
+  if (!JUDGE_SEARCH_PREFIX_RE.test(line) || JUDGE_SEARCH_DENIED_FLAG_RE.test(line.replace(/['"]/g, "")) || /[\r\n]|\\"/.test(line) || !isCommitDiff(line)) return false;
   let quote = null;
   for (const ch of line) {
     if (quote) { if (ch === quote) quote = null; else if (quote === '"' && (ch === "$" || ch === "`")) return false; } else if (ch === "'" || ch === '"') quote = ch;
-    else if (/[;&|<>()\\$`]/.test(ch)) return false;
+    else if (/[;&|<>()\\$`*?[]/.test(ch)) return false;
   }
   return quote === null;
 }

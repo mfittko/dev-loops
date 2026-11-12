@@ -445,9 +445,9 @@ function stripFences(content) {
 }
 
 function extractRuleBody(content, markerIndex) {
-  const after = content.slice(markerIndex).replace(MARKER_RE, "").trimStart();
+  const after = content.slice(markerIndex).replace(MARKER_RE, "").replace(/<!--[\s\S]*?-->/g, "").trimStart();
   const firstLine = (after.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith("#") && !line.startsWith("<!--")) ?? "");
-  return firstLine.replace(/^`[A-Z][A-Z0-9-]*`\s*\|\s*/, "").replace(/\s+/g, " ").trim();
+  return firstLine.replace(/^`[A-Z][A-Z0-9-]*`\s*\|\s*/, "").replace(/\s*\|\s*$/, "").replace(/\s+/g, " ").trim();
 }
 
 export function extractRuleDefinitions(content, file) {

@@ -120,15 +120,18 @@ test("cited rule IDs reach the judge with their text and owning doc (issue 3092)
     await mkdir(path.join(root, "judge-fixture"), { recursive: true });
     const findingsFile = "judge-fixture/ledger.json";
     await writeFile(path.join(root, findingsFile), JSON.stringify({ overallVerdict: "findings_present", findings: [
-      { severity: "low", summary: "violates GATE-EXEC-LOW-FIX-UNTIL-CAP and NOT-A-REGISTERED-RULE-ID and GATE-EXEC-LOW-FIX-UNTIL-CAP again" }] }));
+      { severity: "low", summary: "violates STYLE-SINGLE-OWNER and GATE-EXEC-LOW-FIX-UNTIL-CAP and NOT-A-REGISTERED-RULE-ID and GATE-EXEC-LOW-FIX-UNTIL-CAP again" }] }));
     const plan = await emitJudgeWorkOrder(await seed(root, { findingsFile }));
-    assert.deepEqual(plan.workOrder.citedRules.map((rule) => rule.id), ["GATE-EXEC-LOW-FIX-UNTIL-CAP"]);
-    const [rule] = plan.workOrder.citedRules;
+    assert.deepEqual(plan.workOrder.citedRules.map((rule) => rule.id).sort(), ["GATE-EXEC-LOW-FIX-UNTIL-CAP", "STYLE-SINGLE-OWNER"]);
+    const rule = plan.workOrder.citedRules.find((r) => r.id === "GATE-EXEC-LOW-FIX-UNTIL-CAP");
     assert.equal(rule.doc, "skills/docs/gate-review-sub-loop-contract.md");
     assert.match(rule.text, /The fixer fixes a `low` at the `draft_gate` in every round/);
     const text = await readFile(plan.promptPath, "utf8");
     assert.match(text, /## Cited rules/);
     assert.match(text, /\| `GATE-EXEC-LOW-FIX-UNTIL-CAP` \| skills\/docs\/gate-review-sub-loop-contract\.md \| .*The fixer fixes a `low`/);
+    const row = text.split("\n").find((line) => line.startsWith("| `STYLE-SINGLE-OWNER`"));
+    assert.equal(row.split(/(?<!\\)\|/).length - 2, 3);
+    assert.doesNotMatch(row, /\\\|\s*\|$/);
     const none = await emitJudgeWorkOrder(await seed(root));
     assert.deepEqual(none.workOrder.citedRules, []);
     assert.doesNotMatch(await readFile(none.promptPath, "utf8"), /## Cited rules/);
