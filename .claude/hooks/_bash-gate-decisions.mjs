@@ -434,7 +434,7 @@ export function decideBashGateDeny(facts = {}) {
     return {
       ruleId: "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY",
       reason:
-        "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY: `--standing-authorization` on comment-issue.mjs or edit-comment.mjs and " +
+        "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY: denied, `--standing-authorization` on comment-issue.mjs or edit-comment.mjs and " +
         "`waive-adr-tripwire` are reserved for the main agent. A subagent never asserts a standing operator authorization. " +
         "Return the need to the dev-loop coordinator or the main agent instead.",
     };

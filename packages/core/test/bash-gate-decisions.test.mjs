@@ -92,7 +92,7 @@ const RULE_FIXTURES = [
   {
     id: "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY",
     facts: { ...BASE, role: "developer", command: "dev-loops-run scripts/github/waive-adr-tripwire.mjs --pr 5" },
-    reason: "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY: `--standing-authorization` on comment-issue.mjs or edit-comment.mjs and `waive-adr-tripwire` are reserved for the main agent. A subagent never asserts a standing operator authorization. Return the need to the dev-loop coordinator or the main agent instead.",
+    reason: "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY: denied, `--standing-authorization` on comment-issue.mjs or edit-comment.mjs and `waive-adr-tripwire` are reserved for the main agent. A subagent never asserts a standing operator authorization. Return the need to the dev-loop coordinator or the main agent instead.",
   },
   {
     id: "WORKTREE-NO-STASH",
