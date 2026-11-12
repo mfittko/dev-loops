@@ -83,8 +83,8 @@ export const FLAGS_THAT_TAKE_VALUE = new Set(["-r", "--repo"]);
  */
 const SHELL_SEGMENT_SEPARATOR = /\s*(?:&&|\|\||;|\||(?<!(?<!\\)[<>])&(?!>)|\n|\r)\s*/;
 
-/** A backslash-newline continues one command line: join it so the separator regex does not split a command in two. */
-const joinLineContinuations = (command) => command.replace(/\\\r?\n/g, " ");
+/** An odd-length backslash run before a newline continues the line; an even run is escaped backslashes. */
+const joinLineContinuations = (command) => command.replace(/(?<!\\)((?:\\\\)*)\\\r?\n/g, "$1 ");
 
 /**
  * Strip a single balanced surrounding quote pair (`'…'` or `"…"`) from a shell arg value.
@@ -334,6 +334,8 @@ function ghPrVerbRegex(verb) {
 
 /** Whether a verb remainder carries `--help`/`-h` outside a quoted literal (a `-h` inside a body is text). */
 function remainderAsksForHelp(remainder) {
+  // Fail closed: a quote or backslash can hide the flag in a body that spans lines or escapes a quote.
+  if (/['"\\]/.test(remainder)) return false;
   return blankQuotedForFlags(remainder).split(/\s+/).some((a) => a.toLowerCase() === "--help" || a.toLowerCase() === "-h");
 }
 
@@ -924,15 +926,12 @@ function ghApiSegmentWritesBody(segment) {
   return /(?:^|\s)(?:-[fF]|--(?:raw-)?field)(?:=|\s*)["']?body=/.test(segment);
 }
 
-/** Wrapper words dropped before matching a raw write: `timeout`, `nice`, `time`, `nohup`, ... (`env` stays: its `GH_REPO=` is read). */
-const UNWRAP_HEAD = /^(?:g?timeout|sudo|xargs|time|nice|nohup|stdbuf|setsid|ionice|busybox)\s/;
-
 /** Join line continuations and reduce every segment to its real command head, keeping leading `NAME=value` assignments. */
 function unwrapCommandSegments(command) {
   return shellSegments(command).map((segment) => {
     const assigns = new RegExp(`^${ENV_ASSIGNMENT_RUN}`).exec(segment)[0];
     const rest = segment.slice(assigns.length);
-    return UNWRAP_HEAD.test(rest) ? assigns + stripLeadingWrappers(rest) : segment;
+    return assigns + stripLeadingWrappers(rest);
   }).join("\n");
 }
 
@@ -942,7 +941,7 @@ function shellWrapperTails(command) {
 }
 
 /** A `gh api graphql` call whose query text is not in the command line (`@file`, `--input`, command substitution). */
-const GRAPHQL_OPAQUE_QUERY = /(?:^|\s)--input(?:=|\s)|\bquery=["']?@|\$\(|`/;
+const GRAPHQL_OPAQUE_QUERY = /(?:^|\s)--input(?:=|\s)|(?:^|[\s="'fF])query=["']?(?:@|\$|`)/;
 
 /**
  * OPERATOR-OWNED-LINE (raw comment-write half): a raw comment write on the managed repo that bypasses
@@ -954,10 +953,10 @@ const GRAPHQL_OPAQUE_QUERY = /(?:^|\s)--input(?:=|\s)|\bquery=["']?@|\$\(|`/;
  * @param {string} command @param {string|null} [managedSlug] @returns {boolean}
  */
 export function commandContainsRawCommentWrite(command, managedSlug = null) {
-  const hidden = (tail) => /\bgh\s+(?:issue|pr)\s+comment\b/.test(tail) || /\bgh\s+(?:issue|pr)\s+(?:close|reopen)\b[^\n]*\s(?:--comment|-c)\b/.test(tail)
+  const hidden = (tail) => new RegExp(`\\bgh\\s+${GH_GLOBAL_REPO_FLAGS}(?:issue|pr)\\s+comment\\b`).test(tail) || new RegExp(`\\bgh\\s+${GH_GLOBAL_REPO_FLAGS}(?:issue|pr)\\s+(?:close|reopen)\\b[^\\n]*\\s(?:--comment|-c)\\b`).test(tail)
     || (/\bgh\s+api\b/.test(tail)
       && (/\b(?:addComment|updateIssueComment)\b/.test(tail) || (/issues\/(?:\d+\/comments|comments\/\d+)/.test(tail) && /body=|--input/.test(tail))));
-  if (shellWrapperTails(joinLineContinuations(command)).some(hidden)) return true;
+  if (shellWrapperTails(blankQuotedForFlags(joinLineContinuations(command))).some(hidden)) return true;
   command = unwrapCommandSegments(command);
   const inScope = ({ explicitRepo }) => !(explicitRepo && explicitRepoProvenForeign(explicitRepo, managedSlug));
   for (const subcmd of ["issue", "pr"]) {
@@ -988,11 +987,11 @@ export function commandContainsRawCommentWrite(command, managedSlug = null) {
  * @param {string} command @returns {boolean}
  */
 export function commandRunsStandingAuthorizationPath(command) {
-  const hit = (text) => /(?:^|[\s/])waive-adr-tripwire\.mjs(?=[\s"']|$)|(?:cli\/index\.mjs|(?:^|\s)dev-loops)\s+pr\s+waive-adr-tripwire(?=[\s"']|$)/.test(text)
-    || (/(?:^|[\s/])(?:comment-issue|edit-comment)\.mjs(?=[\s"']|$)/.test(text) && /(?:^|\s)--standing-authorization(?=[=\s"']|$)/.test(text));
-  if (shellWrapperTails(joinLineContinuations(command)).some(hit)) return true;
+  const hit = (text, flagView = text) => /(?:^|[\s/])waive-adr-tripwire\.mjs(?=[\s"']|$)|(?:cli\/index\.mjs|(?:^|[\s/])dev-loops)\s+pr\s+waive-adr-tripwire(?=[\s"']|$)/.test(text)
+    || (/(?:^|[\s/])(?:comment-issue|edit-comment)\.mjs(?=[\s"']|$)/.test(text) && /(?:^|\s)--standing-authorization(?=[=\s"']|$)/.test(flagView));
+  if (shellWrapperTails(blankQuotedForFlags(joinLineContinuations(command))).some((t) => hit(t))) return true;
   const runner = new RegExp(`^${SHELL_EXEC_PREFIX}(?:dev-loops-run|dev-loops|node|bun|npx|bunx)\\s`, "i");
-  return unwrapCommandSegments(command).split("\n").some((segment) => runner.test(segment) && hit(unquoteFlagTokens(segment)));
+  return unwrapCommandSegments(command).split("\n").some((segment) => runner.test(segment) && hit(unquoteFlagTokens(segment), blankQuotedForFlags(unquoteFlagTokens(segment))));
 }
 
 /**

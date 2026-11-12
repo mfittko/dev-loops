@@ -9,7 +9,7 @@ import {
   decideBashGateDeny,
   decideUnresolveOwnerDeny,
 } from "../src/loop/bash-gate-decisions.mjs";
-import { commandRunsStandingAuthorizationPath } from "../src/loop/bash-command-classify.mjs";
+import { commandContainsGhPrMerge, commandContainsGitStash, commandRunsStandingAuthorizationPath } from "../src/loop/bash-command-classify.mjs";
 
 const TARGET = "mfittko/dev-loops";
 
@@ -712,4 +712,42 @@ test("a timeout wrapper does not hide a standing-authorization path from the cla
   for (const wrapper of ["timeout 30", "nohup", "nice -n 5"]) {
     assert.equal(commandRunsStandingAuthorizationPath(`${wrapper} node scripts/github/waive-adr-tripwire.mjs --pr 5`), true, wrapper);
   }
+});
+
+const denies = (command, ruleId, ctx = OR_REPO) => assert.equal(decideBashGateDeny({ ...ctx, command })?.ruleId ?? null, ruleId, command);
+
+test("an escaped backslash before a newline is not a line continuation", () => {
+  assert.equal(commandContainsGhPrMerge("echo x\\\\\ngh pr merge 5"), true);
+  assert.equal(commandContainsGitStash("echo x\\\\\ngit stash"), true);
+  assert.equal(commandContainsGhPrMerge("gh pr \\\nmerge 5"), true);
+  denies("echo x\\\\\ngh issue comment 5 --body x", "OPERATOR-OWNED-LINE");
+});
+
+test("-h in a multi-line or escaped-quote body does not exempt a comment write", () => {
+  for (const command of ['gh issue comment 5 --body "fix the -h flag\nmore"', 'gh issue comment 5 --body "say \\"hi\\" -h"']) denies(command, "OPERATOR-OWNED-LINE");
+  assert.equal(decideBashGateDeny({ ...OR_REPO, command: "gh issue comment 5 --help" }), null);
+});
+
+test("a global repo flag does not hide a comment write inside a shell wrapper", () => {
+  for (const command of ["bash -c 'gh -R o/r issue comment 5 -b x'", "eval \"gh --repo=o/r pr comment 5 -b x\"", "echo 5 | xargs gh -R o/r issue comment --body x"]) denies(command, "OPERATOR-OWNED-LINE");
+});
+
+test("quoted prose naming a wrapper or a standing-authorization path is not a deny", () => {
+  denies('dev-loops-run scripts/github/comment-issue.mjs --issue 5 --body "pipe ids to xargs, then gh issue comment"', null);
+  const note = 'dev-loops-run scripts/github/comment-issue.mjs --issue 5 --body "use --standing-authorization with comment-issue.mjs"';
+  denies(note, null, { ...BASE, role: "developer" });
+  denies("sh -c 'gh issue comment 5 --body x'", "OPERATOR-OWNED-LINE");
+  denies("sh -c 'node scripts/github/waive-adr-tripwire.mjs --pr 5'", "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY", { ...BASE, role: "developer" });
+});
+
+test("a graphql query is opaque only when its field value is a file, substitution or variable", () => {
+  for (const command of ["gh api graphql -Fquery=@q.graphql", 'gh api graphql -f query="$Q"', "gh api graphql -f query=$Q", "gh api graphql -f query=`cat q`"]) denies(command, "OPERATOR-OWNED-LINE");
+  denies("gh api graphql -f query='query($n:Int!){viewer{login}}' -F n=$(cat n)", null);
+});
+
+test("the dev-loops bin by path and a path-prefixed timeout wrapper are caught", () => {
+  for (const command of ["./node_modules/.bin/dev-loops pr waive-adr-tripwire --pr 5", "/usr/local/bin/dev-loops pr waive-adr-tripwire --pr 5"]) {
+    denies(command, "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY", { ...BASE, role: "developer" });
+  }
+  for (const command of ["/usr/bin/timeout 5 gh issue comment 5 --body x", "command timeout 5 gh issue comment 5 --body x", "env timeout 5 gh issue comment 5 --body x"]) denies(command, "OPERATOR-OWNED-LINE");
 });

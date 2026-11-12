@@ -83,7 +83,8 @@ const WRAP_RES = Object.freeze([
   operatorMarkerWrapPattern(),
   // Last: the release reader strips a code span between `approve` and `release`, so a bare
   // `release [v]<digit>` run must not survive for it to read as the approval's tail.
-  /release\s+v?\d[\w.-]*/gi,
+  // `\s+` stays: the reader accepts a newline between `release` and the version.
+  /\brelease\s+v?\d[\w-]*(?:\.\w[\w-]*)*/gi,
 ]);
 
 const CODE_SPAN_RE = /(`[^`\n]*`)/;

@@ -192,3 +192,16 @@ test("wrapOperatorOwnedPhrases wraps a release version whole, with or without th
   assert.equal(wrapOperatorOwnedPhrases("release v1.0.12 ships"), "`release v1.0.12` ships");
   assert.equal(wrapOperatorOwnedPhrases("release 1.0.12-pre.1 ships"), "`release 1.0.12-pre.1` ships");
 });
+
+test("wrapOperatorOwnedPhrases wraps a release version at a word start only and stops before a sentence-final period", () => {
+  assert.equal(wrapOperatorOwnedPhrases("prerelease 2 ships"), "prerelease 2 ships");
+  assert.equal(wrapOperatorOwnedPhrases("we cut release v1.0.12."), "we cut `release v1.0.12`.");
+  assert.equal(wrapOperatorOwnedPhrases("release v1.0.12"), "`release v1.0.12`");
+});
+
+test("wrapOperatorOwnedPhrases leaves no reader-accepted release approval unwrapped, newline included", () => {
+  for (const body of ["approve `x` release\nv1.2.3", "approve `x` release v1.2.3.", "approve `x` release\nv1.2.3-rc.1"]) {
+    assert.notEqual(findOperatorOwnedLineRefusal(body), null, JSON.stringify(body));
+    assert.equal(findOperatorOwnedLineRefusal(wrapOperatorOwnedPhrases(body)), null, JSON.stringify(body));
+  }
+});
