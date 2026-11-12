@@ -251,3 +251,12 @@ test("the dev-loop agent reads only the gate coordinator's typed round result", 
   const content = await readRepo("agents/dev-loop.agent.md");
   assert.match(content, /The coordinator reads only the gate coordinator's typed round result, as `GATE-EXEC-GATE-COORDINATOR` lists it\./);
 });
+
+test("the gate-coordinator Dispatch model rule is scoped to Claude Code in the Pi render", async () => {
+  const rendered = renderPiAgent(await readRepo(GATE_COORDINATOR_AGENT));
+  const rule = rendered.split("\n").filter((line) => line.includes("--harness claude"));
+  assert.equal(rule.length, 1);
+  assert.match(rule[0], /^- On Claude Code, /);
+  assert.match(rule[0], /On Pi, the rendered agent's `model` governs/);
+  assert.match(rule[0], /first angle in plan order/);
+});
