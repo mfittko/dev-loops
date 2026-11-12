@@ -52,10 +52,10 @@ test("dev-loop skill and main-agent contract name the coordinator as the runner"
 
 test("Pi wording stays: read-only main agent and async dispatch (#1086)", () => {
   const full = read("skills/docs/main-agent-contract.md");
-  const start = full.indexOf("<!-- pi-only -->");
-  const end = full.lastIndexOf("<!-- /pi-only -->"); // the Pi span is split around the shared Claude model-tier text
-  assert.ok(start >= 0 && end > start, "pi-only markers must exist");
-  const text = normalize(full.slice(start, end));
+  // Only the text inside each pi-only open/close pair counts: the shared Claude-visible text between pairs must not satisfy the guard.
+  const blocks = [...full.matchAll(/<!-- pi-only -->([\s\S]*?)<!-- \/pi-only -->/g)].map((m) => m[1]);
+  assert.ok(blocks.length > 0, "pi-only markers must exist");
+  const text = normalize(blocks.join("\n"));
   assert.match(text, /All tracked-file mutations flow through the `dev-loop` async subagent\./);
   assert.match(text, /## Async dispatch posture \(Pi\)/);
   assert.match(text, /Delegate to the `dev-loop` agent \(async, with worktree cwd\)/);
