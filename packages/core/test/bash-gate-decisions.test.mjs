@@ -84,6 +84,16 @@ const RULE_FIXTURES = [
     reason: "ADR-TRIPWIRE-STANDING-WAIVER: raw `gh pr edit` body writes and `gh api` body writes to pulls/<n> or issues/<n> are blocked. Edit a PR body through the launcher (`dev-loops-run cli/index.mjs pr edit`), which refuses a hand-written adr-tripwire:allow line. Edit an issue body through `dev-loops-run cli/index.mjs issue edit`. Write the ADR tripwire waiver only through the launcher (`dev-loops-run cli/index.mjs pr waive-adr-tripwire`), which needs a standing authorization on the default branch.",
   },
   {
+    id: "OPERATOR-OWNED-LINE",
+    facts: { ...BASE, command: "gh issue comment 5 --body hi" },
+    reason: "OPERATOR-OWNED-LINE: raw comment writes (`gh issue|pr comment`, `gh issue|pr close|reopen --comment`, `gh api` body writes to issues/<n>/comments or issues/comments/<id>, graphql addComment/updateIssueComment) are blocked for every actor, because the sanctioned wrappers are the only path that refuses an operator-owned line. Post a comment through `dev-loops-run scripts/github/comment-issue.mjs`, edit one through `dev-loops-run scripts/github/edit-comment.mjs`, or write a gate comment through the gate writers. The human posts an operator-owned line.",
+  },
+  {
+    id: "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY",
+    facts: { ...BASE, role: "developer", command: "dev-loops-run scripts/github/waive-adr-tripwire.mjs --pr 5" },
+    reason: "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY: `--standing-authorization` on comment-issue.mjs or edit-comment.mjs and `waive-adr-tripwire` are reserved for the main agent. A subagent never asserts a standing operator authorization. Return the need to the dev-loop coordinator or the main agent instead.",
+  },
+  {
     id: "WORKTREE-NO-STASH",
     facts: { ...BASE, command: "git stash" },
     reason: "git stash blocked: refs/stash is shared across every worktree over this repo's one .git directory, so a stash can pop into a different worktree. Use `git diff` (or `git diff --staged`), save changes to a patch file, or use a separate scratch worktree instead of stashing.",
@@ -178,7 +188,7 @@ const INLINE_FIXTURES = [
   },
   {
     name: "subagent ad-hoc external write",
-    facts: { ...BASE, role: "developer", command: "gh issue comment 5 --body hi" },
+    facts: { ...BASE, role: "developer", command: "gh issue edit 5 --title hi" },
     reason: "Ad-hoc GitHub issue/PR creation, comments, and edits from a subagent are blocked. Use the sanctioned node wrappers instead — gate-verdict comments via scripts/github/upsert-checkpoint-verdict.mjs, review-thread replies via scripts/github/reply-resolve*.mjs, board sync, issue comments via scripts/github/comment-issue.mjs, or issue-body edits via scripts/github/edit-issue.mjs. Direct `gh issue create` is reserved for the main agent / operator.",
   },
 ];
@@ -267,8 +277,22 @@ const ORDER_PAIRS = [
   },
   {
     earlier: "ADR-TRIPWIRE-STANDING-WAIVER",
+    later: "OPERATOR-OWNED-LINE",
+    command: "gh pr edit 5 --body hello && gh issue comment 5 --body hi",
+    laterOnly: "gh issue comment 5 --body hi",
+  },
+  {
+    earlier: "OPERATOR-OWNED-LINE",
+    later: "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY",
+    facts: { ...BASE, role: "developer" },
+    command: "gh issue comment 5 --body hi && dev-loops-run scripts/github/waive-adr-tripwire.mjs --pr 5",
+    laterOnly: "dev-loops-run scripts/github/waive-adr-tripwire.mjs --pr 5",
+  },
+  {
+    earlier: "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY",
     later: "WORKTREE-NO-STASH",
-    command: "gh pr edit 5 --body hello && git stash",
+    facts: { ...BASE, role: "developer" },
+    command: "dev-loops-run scripts/github/waive-adr-tripwire.mjs --pr 5 && git stash",
     laterOnly: "git stash",
   },
   {
@@ -325,8 +349,8 @@ const INLINE_ORDER_PAIRS = [
   {
     name: "subagent ad-hoc external write",
     facts: { ...BASE, role: "developer", humanMergeOnly: true },
-    above: { id: "WORKTREE-NO-STASH", command: "git stash && gh issue comment 5 --body hi" },
-    below: { id: "STOP-HUMAN-MERGE-001", command: "gh issue comment 5 --body hi && gh pr merge 5" },
+    above: { id: "WORKTREE-NO-STASH", command: "git stash && gh issue edit 5 --title hi" },
+    below: { id: "STOP-HUMAN-MERGE-001", command: "gh issue edit 5 --title hi && gh pr merge 5" },
   },
 ];
 
@@ -555,4 +579,70 @@ test("a readyGate probe whose `error` is an empty string is refused naming ready
   assert.ok(decision, "an empty `error` must deny instead of degrading to 'not probed'");
   assert.equal(decision.ruleId, null);
   assert.match(decision.reason, /supplied no valid readyGate fact/);
+});
+
+const OR_REPO = { ...BASE, repoSlug: "o/r", managedRepoSlug: "o/r" };
+const RAW_COMMENT_WRITES = [
+  "gh issue comment 5 --body x",
+  "gh pr comment 5 --body x",
+  "gh issue close 5 --comment x",
+  "gh issue reopen 5 -c x",
+  "gh pr close 5 -c x",
+  "gh pr reopen 5 --comment x",
+  "gh api repos/o/r/issues/5/comments -f body=x",
+  "gh api -X PATCH repos/o/r/issues/comments/9 -f body=x",
+  "gh api repos/o/r/issues/5/comments --input f.json",
+  "gh api graphql -f query='mutation { addComment(input: {}) { clientMutationId } }'",
+  "gh api graphql -f query='mutation { updateIssueComment(input: {}) { clientMutationId } }'",
+];
+
+test("a raw comment write is denied for every actor with OPERATOR-OWNED-LINE", () => {
+  for (const command of RAW_COMMENT_WRITES) {
+    for (const role of [null, "developer", "dev-loop"]) {
+      const decision = decideBashGateDeny({ ...OR_REPO, role, command });
+      assert.equal(decision?.ruleId, "OPERATOR-OWNED-LINE", `${role}: ${command}`);
+    }
+  }
+});
+
+test("reads, foreign repos, comment-free closes and the wrappers pass the raw comment-write deny", () => {
+  for (const command of [
+    "gh api repos/o/r/issues/5/comments",
+    "gh api -X GET repos/o/r/issues/5/comments -f body=x",
+    "gh issue comment 5 --repo other/repo --body x",
+    "gh issue close 5",
+    "gh pr close 5 --repo o/r",
+    "dev-loops-run scripts/github/comment-issue.mjs --repo mfittko/dev-loops --issue 5 --body x",
+    "dev-loops-run scripts/github/edit-comment.mjs --repo mfittko/dev-loops --comment-id 9 --body x",
+  ]) {
+    assert.equal(decideBashGateDeny({ ...OR_REPO, command }), null, command);
+  }
+});
+
+test("a /copilot summon keeps COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY", () => {
+  assert.equal(decideBashGateDeny({ ...BASE, command: 'gh pr comment 5 --body "/copilot"' }).ruleId, "COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY");
+});
+
+const RUNNERS = [".claude/bin/dev-loops-run", "dev-loops-run", "node", "bun"];
+const STANDING_PATHS = [
+  "scripts/github/waive-adr-tripwire.mjs --pr 5",
+  "cli/index.mjs pr waive-adr-tripwire --pr 5",
+  ...["comment-issue", "edit-comment"].flatMap((name) =>
+    ["--standing-authorization", "--standing-authorization=true", "--standing-authorization=false"].map((flag) => `scripts/github/${name}.mjs ${flag} --body x`)),
+];
+
+test("a subagent cannot run a standing-authorization path under any runner or cd prefix", () => {
+  for (const runner of RUNNERS) {
+    for (const rest of STANDING_PATHS) {
+      for (const command of [`${runner} ${rest}`, `cd /w && ${runner} ${rest}`]) {
+        assert.equal(decideBashGateDeny({ ...BASE, role: "developer", command })?.ruleId, "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY", command);
+        assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, `main agent: ${command}`);
+      }
+    }
+  }
+});
+
+test("a subagent may run a comment wrapper without the standing-authorization flag", () => {
+  const command = "dev-loops-run scripts/github/comment-issue.mjs --repo mfittko/dev-loops --issue 5 --body x";
+  assert.equal(decideBashGateDeny({ ...BASE, role: "developer", command }), null);
 });

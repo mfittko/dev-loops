@@ -42,6 +42,8 @@ import {
   commandContainsCopilotSummonComment,
   commandContainsRawPrBodyEdit,
   commandContainsRawPrBodyApiWrite,
+  commandContainsRawCommentWrite,
+  commandRunsStandingAuthorizationPath,
   commandContainsDetachedWaitTool,
   commandContainsTimeoutWrappedSanctionedTool,
   commandContainsInlineInterpreter,
@@ -128,6 +130,8 @@ export const BASH_GATE_RULES = Object.freeze([
   "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER",
   "COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY",
   "ADR-TRIPWIRE-STANDING-WAIVER",
+  "OPERATOR-OWNED-LINE",
+  "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY",
   "WORKTREE-NO-STASH",
   "STOP-HUMAN-MERGE-001",
   "OPS-DRAFT-FIRST-PR",
@@ -403,6 +407,36 @@ export function decideBashGateDeny(facts = {}) {
         "through `dev-loops-run cli/index.mjs issue edit`. Write the ADR " +
         "tripwire waiver only through the launcher (`dev-loops-run cli/index.mjs pr waive-adr-tripwire`), " +
         "which needs a standing authorization on the default branch.",
+    };
+  }
+
+  // OPERATOR-OWNED-LINE (raw comment-write half): the operator and the agents share one GitHub
+  // credential, so every wrapper refuses an operator-owned line, and a raw comment write is the
+  // path around them. Actor-independent, the main agent included. Runs before the subagent inline
+  // external-write deny so the comment verbs carry the registered ID for every actor.
+  if (inManagedRepo && commandContainsRawCommentWrite(command, managedSlug)) {
+    return {
+      ruleId: "OPERATOR-OWNED-LINE",
+      reason:
+        "OPERATOR-OWNED-LINE: raw comment writes (`gh issue|pr comment`, `gh issue|pr close|reopen --comment`, " +
+        "`gh api` body writes to issues/<n>/comments or issues/comments/<id>, graphql addComment/updateIssueComment) " +
+        "are blocked for every actor, because the sanctioned wrappers are the only path that refuses an operator-owned line. " +
+        "Post a comment through `dev-loops-run scripts/github/comment-issue.mjs`, edit one through " +
+        "`dev-loops-run scripts/github/edit-comment.mjs`, or write a gate comment through the gate writers. " +
+        "The human posts an operator-owned line.",
+    };
+  }
+
+  // STANDING-AUTHORIZATION-MAIN-AGENT-ONLY: the paths whose authority is a self-asserted standing
+  // authorization (`--standing-authorization`, the ADR tripwire waiver) belong to the main agent.
+  // Any subagent role is denied; merge-pr.mjs is a separate rule.
+  if (typeof role === "string" && commandRunsStandingAuthorizationPath(command)) {
+    return {
+      ruleId: "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY",
+      reason:
+        "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY: `--standing-authorization` on comment-issue.mjs or edit-comment.mjs and " +
+        "`waive-adr-tripwire` are reserved for the main agent. A subagent never asserts a standing operator authorization. " +
+        "Return the need to the dev-loop coordinator or the main agent instead.",
     };
   }
 

@@ -902,13 +902,68 @@ export function commandContainsRawPrBodyApiWrite(command, managedSlug = null) {
   return extractGhApiEndpointSegments(command).map((e) => ({ ...e, segment: unquoteFlagTokens(e.segment) })).some(({ segment, endpoint }) => {
     if (endpoint && /^graphql$/i.test(endpoint)) return /updatePullRequest/.test(segment);
     if (!endpoint || !re.test(normalizeGhApiEndpoint(endpoint).replace(/\?.*$/, ""))) return false;
-    // `--input` supplies the whole payload, so it is a write without a method flag (gh then POSTs).
-    if (/(?:^|\s)--input(?:=|\s)/.test(blankQuotedForFlags(segment))) return true;
-    // gh defaults to POST when a field is present, so only an explicit GET/HEAD makes a body field a read.
-    if (!hasQuotePairingHazard(segment) && /(?:^|\s)(?:--method|-X|-m)(?:=|\s*)["']?(?:GET|HEAD)\b/i.test(stripQuotedLiterals(segment))) return false;
-    // Not quote-stripped: the field is usually quoted (`-f "body=..."`), so blanking would hide it.
-    return /(?:^|\s)(?:-[fF]|--(?:raw-)?field)(?:=|\s*)["']?body=/.test(segment);
+    return ghApiSegmentWritesBody(segment);
   });
+}
+
+/** Whether a `gh api` segment sends a body: `--input`, or a `body` field unless the method is an explicit GET/HEAD. */
+function ghApiSegmentWritesBody(segment) {
+  // `--input` supplies the whole payload, so it is a write without a method flag (gh then POSTs).
+  if (/(?:^|\s)--input(?:=|\s)/.test(blankQuotedForFlags(segment))) return true;
+  // gh defaults to POST when a field is present, so only an explicit GET/HEAD makes a body field a read.
+  if (!hasQuotePairingHazard(segment) && /(?:^|\s)(?:--method|-X|-m)(?:=|\s*)["']?(?:GET|HEAD)\b/i.test(stripQuotedLiterals(segment))) return false;
+  // Not quote-stripped: the field is usually quoted (`-f "body=..."`), so blanking would hide it.
+  return /(?:^|\s)(?:-[fF]|--(?:raw-)?field)(?:=|\s*)["']?body=/.test(segment);
+}
+
+/**
+ * OPERATOR-OWNED-LINE (raw comment-write half): a raw comment write on the managed repo that bypasses
+ * every sanctioned wrapper's refusal. Matches `gh issue|pr comment`, `gh issue|pr close|reopen` with
+ * `--comment`/`-c`, a `gh api` body write or `--input` to `issues/<n>/comments` or `issues/comments/<id>`,
+ * and a `gh api graphql` call carrying an `addComment` or `updateIssueComment` mutation. A GET, a
+ * provably foreign `--repo`, and the node wrappers never match. A `gh` literal inside
+ * `bash -c`/`eval`/`xargs` is denied on the literal itself (fail closed).
+ * @param {string} command @param {string|null} [managedSlug] @returns {boolean}
+ */
+export function commandContainsRawCommentWrite(command, managedSlug = null) {
+  if (SHELL_WRAPPER_RE.test(command)) {
+    if (/\bgh\s+(?:issue|pr)\s+comment\b/.test(command) || /\bgh\s+(?:issue|pr)\s+(?:close|reopen)\b[^\n]*\s(?:--comment|-c)\b/.test(command)) return true;
+    if (/\bgh\s+api\b/.test(command)
+      && (/\b(?:addComment|updateIssueComment)\b/.test(command) || (/issues\/(?:\d+\/comments|comments\/\d+)/.test(command) && /body=|--input/.test(command)))) return true;
+  }
+  const inScope = ({ explicitRepo }) => !(explicitRepo && explicitRepoProvenForeign(explicitRepo, managedSlug));
+  for (const subcmd of ["issue", "pr"]) {
+    if (extractRepoFlagsFromGhSubcmdVerbSegments(command, subcmd, "comment").some(inScope)) return true;
+    for (const verb of ["close", "reopen"]) {
+      const re = ghSubcmdVerbRegex(subcmd, verb);
+      const hit = extractRepoFlagsFromGhSubcmdVerbSegments(command, subcmd, verb).some((seg) =>
+        inScope(seg) && /(?:^|\s)(?:--comment|-c)(?=[=\s]|\S|$)/.test(blankQuotedForFlags(unquoteFlagTokens(seg.segment).replace(re, " "))));
+      if (hit) return true;
+    }
+  }
+  const owner = managedSlug ? `(?:${managedSlug.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}|\\{owner\\}/\\{repo\\})` : "[^/]+/[^/]+";
+  const re = new RegExp(`^(?:repos/${owner}/)?issues/(?:(?:\\d+|\\{[^}]*\\})/comments|comments/(?:\\d+|\\{[^}]*\\}))$`, "i");
+  return extractGhApiEndpointSegments(command).map((e) => ({ ...e, segment: unquoteFlagTokens(e.segment) })).some(({ segment, endpoint }) => {
+    if (endpoint && /^graphql$/i.test(endpoint)) return /\b(?:addComment|updateIssueComment)\b/.test(segment);
+    if (!endpoint || !re.test(normalizeGhApiEndpoint(endpoint).replace(/\?.*$/, ""))) return false;
+    return ghApiSegmentWritesBody(segment);
+  });
+}
+
+/**
+ * STANDING-AUTHORIZATION-MAIN-AGENT-ONLY: a command that runs a path whose authority is a self-asserted
+ * standing authorization: `waive-adr-tripwire.mjs`, `cli/index.mjs pr waive-adr-tripwire`, or
+ * `comment-issue.mjs` / `edit-comment.mjs` with any `--standing-authorization` token form. The runner
+ * is `dev-loops-run` (any path), `node` or `bun`; a `cd <dir> &&` prefix is its own segment. A literal
+ * inside `bash -c`/`eval`/`xargs` matches on the literal (fail closed).
+ * @param {string} command @returns {boolean}
+ */
+export function commandRunsStandingAuthorizationPath(command) {
+  const hit = (text) => /(?:^|[\s/])waive-adr-tripwire\.mjs(?=[\s"']|$)|cli\/index\.mjs\s+pr\s+waive-adr-tripwire(?=[\s"']|$)/.test(text)
+    || (/(?:^|[\s/])(?:comment-issue|edit-comment)\.mjs(?=[\s"']|$)/.test(text) && /(?:^|\s)--standing-authorization(?=[=\s"']|$)/.test(text));
+  if (SHELL_WRAPPER_RE.test(command) && hit(command)) return true;
+  const runner = new RegExp(`^${SHELL_EXEC_PREFIX}(?:dev-loops-run|node|bun)\\s`, "i");
+  return shellSegments(command).some((segment) => runner.test(segment) && hit(unquoteFlagTokens(segment)));
 }
 
 /**
