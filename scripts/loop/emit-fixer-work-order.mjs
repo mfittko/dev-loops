@@ -36,7 +36,7 @@ import { captureParsedReviewThreads } from "../github/_review-thread-mutations.m
 import { resolveAuthenticatedLogin, runGhJson } from "../github/post-gate-findings.mjs";
 import { listRestPrReviews, normalizePrReviewsPayload, prReviewsApiArgs } from "../github/_gate-finding-surface.mjs";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
-import { isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
+import { isSanctionedCopilotReviewerLogin, isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
 import { isTrustedDispositionAuthor, resolveLatestCopilotReview } from "../github/_copilot-body-disposition.mjs";
 import { isCommitContainedByHead } from "../github/_commit-containment.mjs";
 import { selectActThreadBinding } from "../github/_fixer-act-thread-bindings.mjs";
@@ -142,6 +142,8 @@ const defaultFetchReview = ({ repo, pr, runtime }) => listRestPrReviews({ repo, 
  * The review-body source: the one review `reviewId` (a node id), checked for state, body, author trust and head binding.
  * Returns the snapshot the work order pins. Throws Refusal; the remedy is in each message.
  */
+const isBotType = (user) => String(user?.type ?? "").toLowerCase() === "bot";
+
 async function loadReviewBodySnapshot({ repo, pr, reviewId, headSha, fetchReview, runtime }) {
   const reviews = await fetchReview({ repo, pr, runtime });
   if (!Array.isArray(reviews)) throw new Refusal(`the review list of ${repo}#${pr} is not an array; re-run, or pass the feedback as --threads-file`);
@@ -152,12 +154,12 @@ async function loadReviewBodySnapshot({ repo, pr, reviewId, headSha, fetchReview
   const body = typeof review.body === "string" ? review.body : "";
   if (body.trim() === "") throw new Refusal(`review ${reviewId} has an empty body; feedback in inline threads goes through --threads-file`);
   const login = review.user?.login ?? "";
-  if (review.user?.type === "Bot" && isTrustedRestComment(review, { allowCopilot: true })) {
-    const latest = resolveLatestCopilotReview({ reviews: reviews.filter((r) => r?.user?.type === "Bot").map((r) => ({ id: r.node_id, author: { login: r.user?.login }, state: r.state, body: r.body, commit_id: r.commit_id, submitted_at: r.submitted_at })) });
+  if (isBotType(review.user) && isSanctionedCopilotReviewerLogin(login) && isTrustedRestComment(review, { allowCopilot: true })) {
+    const latest = resolveLatestCopilotReview({ reviews: reviews.filter((r) => isBotType(r?.user)).map((r) => ({ id: r.node_id, author: { login: r.user?.login }, state: r.state, body: r.body, commit_id: r.commit_id, submitted_at: r.submitted_at })) });
     if (latest.ambiguousBlockingTie || latest.review?.id !== reviewId) throw new Refusal(`review ${reviewId} is not the latest Copilot review of ${where}${latest.review ? ` (latest: ${latest.review.id})` : ""}; a Copilot body on an earlier review is stale, so re-review the head and pass the new node id, or use --threads-file`);
     if (review.commit_id !== headSha) throw new Refusal(`Copilot review ${reviewId} is on ${review.commit_id}, not the PR head ${headSha}; a Copilot body on an older head is stale, re-review the head and pass the new node id, or use --threads-file`);
   } else {
-    if (review.user?.type === "Bot" || /\[bot\]$/i.test(login)) throw new Refusal(`review ${reviewId} is by the bot ${login}; only a trusted human or the Copilot reviewer is a fixer source; pass a review by one of them, or use --threads-file`);
+    if (isBotType(review.user) || /\[bot\]$/i.test(login)) throw new Refusal(`review ${reviewId} is by the bot ${login}; only a trusted human or the Copilot reviewer is a fixer source; pass a review by one of them, or use --threads-file`);
     if (!isTrustedDispositionAuthor(review)) throw new Refusal(`review ${reviewId} is by ${login || "an unknown author"} with association ${review.author_association}; only an OWNER, MEMBER or COLLABORATOR review is a fixer source; pass such a review's node id, or use --threads-file`);
     if (typeof review.commit_id !== "string") throw new Refusal(`review ${reviewId} has no commit_id; re-review the head and pass the new node id, or use --threads-file`);
     const contained = await isCommitContainedByHead({ repo, commitSha: review.commit_id, headSha }, runtime);
