@@ -151,13 +151,16 @@ function ledgerTmpRoot(ledgerPath) {
 // while the ledger sits under the main checkout's tmp/, so every checkout's tmp/ and --context-tmp-root come first and the ledger root is the fallback.
 async function readReviewedBodySha256(options, headSha, repoRoot) {
   const id = { repo: options.repo, pr: options.pr, gate: options.gate, headSha };
+  // Every root is read: a same-head earlier round under another root can hold an older digest, so disagreeing digests refuse.
+  const found = new Set();
   for (const tmpRoot of [options.contextTmpRoot, undefined, ledgerTmpRoot(options.findingsLedger)]) {
     for (const root of resolveLedgerCheckouts(repoRoot)) {
       const sha = await readPriorPrBodySha256({ ...id, tmpRoot }, { repoRoot: root });
-      if (sha) return sha;
+      if (sha) found.add(sha);
     }
   }
-  return null;
+  if (found.size > 1) throw new Error(`body_read_unrecorded: the contexts at ${headSha} record ${found.size} different pr-body digests, so the cap round's reviewed body is ambiguous; remove the stale context of the earlier same-head round or fix the items with a commit`);
+  return [...found][0] ?? null;
 }
 
 const roundCapReachedError =(round, cap) => new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs and no fixer follows. After the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`; pre_approval_gate judges what remains. When every open act item is a PR-body item, edit the PR body and run \`--converged-json\` with \`{ fixerCommit, actList, bodyOnly: true }\` instead (ADR 0271).`);
@@ -2820,17 +2823,19 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       // ADR 0271: the narrow facts the body-only exit checks; the pr-body digest is the one the cap round's context recorded at A.
       const live = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "body,baseRefName"], { env, ghCommand, runChild });
       // The same count check-pre-push-delta.mjs uses (fetches origin/<base>, base-only-merge test, resolution merges).
-      const ownCommits = convergedInput.fixerCommit === canonicalHeadSha ? 0
-        : await countPrOwnCommits(repoRoot, canonicalHeadSha, convergedInput.fixerCommit, live.baseRefName)
-          .catch((err) => { throw new Error(`--converged-json bodyOnly: cannot count PR-own commits in ${canonicalHeadSha}..${convergedInput.fixerCommit}: ${err instanceof Error ? err.message : String(err)}`); });
-      convergedMarker = composeBodyOnlyConvergedDraftGate({
+      const composeInput = {
         ...capacity,
         // The ledger plus the passed findings, as for the act items: the cap-round blocking set reads the whole round.
         roundFindings: [...(preloadedFindingsLedger.findings ?? []), ...findings.filter((f) => !(preloadedFindingsLedger.findings ?? []).includes(f))],
         reviewedBodySha: await readReviewedBodySha256(options, canonicalHeadSha, repoRoot),
         liveBodySha: prBodySha256(live.body),
-        ownCommits,
-      });
+      };
+      // The pure checks run first so a typed refusal wins over a git failure in the count below.
+      composeBodyOnlyConvergedDraftGate({ ...composeInput, ownCommits: 0 });
+      const ownCommits = convergedInput.fixerCommit === canonicalHeadSha ? 0
+        : await countPrOwnCommits(repoRoot, canonicalHeadSha, convergedInput.fixerCommit, live.baseRefName)
+          .catch((err) => { throw new Error(`--converged-json bodyOnly: cannot count PR-own commits in ${canonicalHeadSha}..${convergedInput.fixerCommit}: ${err instanceof Error ? err.message : String(err)}`); });
+      convergedMarker = composeBodyOnlyConvergedDraftGate({ ...composeInput, ownCommits });
     } else convergedMarker = composeConvergedDraftGate(capacity);
     return [];
   };

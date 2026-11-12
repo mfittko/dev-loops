@@ -1902,7 +1902,7 @@ test("AC11: countPrOwnCommits is 0 for a base-only merge range and counts PR-own
   try {
     assert.equal(await countPrOwnCommits(repo.dir, repo.fix, repo.head, "main", deps), 0, "fix..head holds only the base-only merge");
     assert.equal(await countPrOwnCommits(repo.dir, repo.baseline, repo.head, "main", deps), 1, "baseline..head holds the fix commit");
-    assert.equal(await countPrOwnCommits(repo.dir, repo.head, repo.baseline, "main", deps), 0, "swapped arguments name an empty range");
+    await assert.rejects(countPrOwnCommits(repo.dir, repo.head, repo.baseline, "main", deps), /own_commit_in_range: .* does not descend/, "swapped arguments name a non-descendant head");
     await assert.rejects(countPrOwnCommits(repo.dir, repo.baseline, repo.head, "gone", deps), /origin\/gone does not exist/);
   } finally { cleanup(repo); }
   const merged = reviewerOnlyRepo({ nonBaseOnlyMerge: true });

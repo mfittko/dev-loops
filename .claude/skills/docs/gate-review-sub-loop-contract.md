@@ -878,7 +878,7 @@ Consolidation:
   severity floor. The posted review verdict of a judged round
   depends only on the judge act list (ADR 0089 as amended, `GATE-COMMENT-VERDICT-VALUES`):
   - `clean`: the judge act list is empty, whatever the severities (except
-    `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) converges an all-low/nit act list to `clean` at the cap round or later)
+    `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) converges an all-low/nit act list to `clean` at the cap round or later, and the `GATE-EXEC-NO-DEAD-END` body-only post (ADR 0271) clears non-high, non-question PR-body act items of any other severity at the cap round)
   - `findings_present`: the judge act list is not empty
   - `blocked`: the gate could not complete or a hard blocker prevented a verdict
 

@@ -401,8 +401,10 @@ function fetchAndResolveBase(worktree, base, { revParse, fetchBase }) {
 }
 // The PR-own commit count of baseline..head under the reviewer-only rules: non-merge commits origin/<base> lacks plus non-base-only merges.
 // The body-only converged post (ADR 0271) asks the same question, so it calls this instead of counting on its own.
-export async function countPrOwnCommits(worktree, baseline, head, base, { revParse = gitRevParse, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, fetchBase = defaultFetchOrigin } = {}) {
+export async function countPrOwnCommits(worktree, baseline, head, base, { revParse = gitRevParse, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, fetchBase = defaultFetchOrigin, isAncestor = gitIsAncestor } = {}) {
   fetchAndResolveBase(worktree, base, { revParse, fetchBase });
+  // A head that does not descend from the baseline (reset or force-pushed backward) has an empty baseline..head range, which must not read as "no PR-own commit".
+  if (baseline !== head && !isAncestor(worktree, baseline, head)) throw new Error(`own_commit_in_range: ${head} does not descend from the reviewed head ${baseline}; the head moved backward or sideways, so the range holds code the cap round never reviewed`);
   const { ownCommits, resolvedMerges } = await reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base });
   return ownCommits + resolvedMerges.length;
 }

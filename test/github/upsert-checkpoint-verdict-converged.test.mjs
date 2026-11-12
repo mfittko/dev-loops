@@ -129,7 +129,7 @@ async function post(tempDir, { findings, converged, extraArgs = [], runChildOpti
   try {
     const result = await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
       env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: root, runChild: makeRunChild({ puts, ...runChildOptions }),
-      countPrOwnCommits: async () => String(runChildOptions.ownShas ?? "").split("\n").filter(Boolean).length,
+      countPrOwnCommits: async () => runChildOptions.countThrows ? Promise.reject(new Error("git fetch failed")) : String(runChildOptions.ownShas ?? "").split("\n").filter(Boolean).length,
     });
     return { result, body: puts.join("\n") };
   } catch (error) {
@@ -594,4 +594,25 @@ test("body-only: the pr-body read is found when the ledger and the cap-round con
     assert.equal(error, undefined);
     assert.equal(result.action, "updated");
   }, { prefix: "dev-loops-converged-bodyonly-roots-" });
+});
+
+test("body-only: a throwing own-commit count never hides a typed refusal of the pure checks", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await bodyOnlyPost(tempDir, { findings: [finding("high", 1)], fixer: FIX, runChildOptions: { countThrows: true } });
+    assert.match(out.error ?? "", /^blocked_item:/, out.error);
+    const counted = await bodyOnlyPost(tempDir, { findings: [finding("medium", 1)], fixer: FIX, runChildOptions: { countThrows: true } });
+    assert.match(counted.error ?? "", /^--converged-json bodyOnly: cannot count PR-own commits/, counted.error);
+  }, { prefix: "dev-loops-converged-bodyonly-lazy-" });
+});
+
+test("body-only: two contexts at the reviewed head under different roots with different pr-body digests refuse body_read_unrecorded", async () => {
+  await withTempDir(async (tempDir) => {
+    const mainTmp = path.join(tempDir, "main", "tmp");
+    const staleCtx = path.join(tempDir, "main", buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(staleCtx), { recursive: true });
+    await writeFile(staleCtx, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256("an older round's body") }] }), "utf8");
+    const out = await bodyOnlyPost(tempDir, { findings: [finding("medium", 1)], ledgerTmpRoot: mainTmp });
+    assert.match(out.error ?? "", /^body_read_unrecorded: .*different pr-body digests/, out.error);
+    assert.equal(out.puts.length, 0);
+  }, { prefix: "dev-loops-converged-bodyonly-ambiguous-" });
 });
