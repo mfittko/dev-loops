@@ -441,7 +441,7 @@ function isSecurityAngle(angle) { return /(^|-)security(-|$)/.test(baseAngleName
 /**
  * Body-only cap round (ADR 0271, GATE-EXEC-NO-DEAD-END): a cap round whose open act items are all PR-body items clears with no commit.
  * Hard checks cover narrow facts only: every item names no file (a PR-body item), the live PR body digest differs from the
- * reviewed `pr-body` read, the reviewed head..fixerCommit range holds no PR-own commit, and no item blocks (high, question, fail-open, security).
+ * reviewed `pr-body` read, the reviewed head..fixerCommit range holds no PR-own commit, and no item blocks (high, question, fail-open, security, missing or unknown severity).
  * Whether the edit resolves an item stays with pre_approval_gate. `fixerCommit` may equal the reviewed head.
  * Throws a typed refusal (`body_item_locatable`, `body_unchanged`, `own_commit_in_range`, `body_read_unrecorded`, `blocked_item`); returns the converged marker.
  * @param {{ gate?: string, headSha?: string, round?: number, cap?: number, roundActItems?: any[], converged?: { fixerCommit?: string, actList?: any[] }, reviewedBodySha?: string|null, liveBodySha?: string, ownCommits?: number }} input

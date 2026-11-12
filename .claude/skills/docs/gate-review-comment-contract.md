@@ -362,7 +362,7 @@ with the fixed meaning below:
 
 | Verdict | Meaning |
 |---|---|
-| `clean` | A fully judged round (every finding carries a judge disposition) has an empty judge act list, whatever the severities; a round with an unjudged finding keeps the fan-in verdict, so no finding at a `blockCleanOnFindingSeverities` severity may remain. `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) and the `GATE-EXEC-NO-DEAD-END` body-only post (ADR 0271, non-high, non-question PR-body act items of any severity) are the two exceptions |
+| `clean` | A fully judged round (every finding carries a judge disposition) has an empty judge act list, whatever the severities; a round with an unjudged finding keeps the fan-in verdict, so no finding at a `blockCleanOnFindingSeverities` severity may remain. `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) and the `GATE-EXEC-NO-DEAD-END` body-only post (ADR 0271, medium, low or nit PR-body act items that are not fail-open and not from a security angle) are the two exceptions |
 | `findings_present` | A fully judged round has a non-empty judge act list; a round with an unjudged finding has an issue at a blocking severity or a non-empty act list; fixes are required before the gate boundary can be crossed |
 | `blocked` | The gate could not complete or a hard blocker prevented a verdict |
 
