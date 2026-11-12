@@ -824,6 +824,9 @@
       "enforcement": "runtime"
     },
     {
+      "id": "SIZE-RUNTIME-PIN-ACCOUNTING"
+    },
+    {
       "id": "PRE-PR-STALE-SURFACE-SWEEP",
       "enforcement": "runtime"
     },

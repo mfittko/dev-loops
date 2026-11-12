@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
+import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 
 import {
   buildCarryForwardPlan,
@@ -166,6 +167,12 @@ const cleanLog = {
   },
 };
 
+test("runtime pin stays unknown and invalidates clean angle carry-forward", () => {
+  assert.equal(classifyFile(".node-version"), "unknown");
+  const plan = buildCarryForwardPlan({ log: cleanLog, changedFiles: [".node-version"] });
+  assert.deepEqual(plan.carried, []);
+  assert.deepEqual(plan.mustRerun.map((entry) => entry.angle), ["correctness", "coverage", "docs"]);
+});
 
 const bodyFinding = (angle) => ({ angle, severity: "major", summary: "x" });
 const withFindings = (log, findings) => ({ ...log, verdict: "findings_present", findings });
