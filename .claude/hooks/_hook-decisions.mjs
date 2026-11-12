@@ -68,11 +68,16 @@ const JUDGE_SEARCH_DENIED_FLAG_RE = /(?:^|\s)--(?:output|ext-diff|textconv|pre|h
 const REVISION_RE = /^(?:[0-9a-f]{6,40}|HEAD|main|origin\/[\w.\/-]+)(?:[~^]\d*)*$/;
 // A range is `a..b` or `a...b` with a revision on each side, so a path such as `agents/../agents` is not a range.
 const isRange = (a) => { const sides = a.split(/\.\.\.?/); return sides.length === 2 && sides.every((s) => REVISION_RE.test(s)); };
+// A diff option outside this list must be stuck as `--opt=value`: git may take the next token as its argument (`-S HEAD..HEAD`),
+// which leaves no revision and runs an index-refreshing worktree diff.
+const DIFF_NOARG_FLAG_RE = /^(?:-[pubwRMC]|-U\d+|--(?:patch|stat|numstat|shortstat|name-only|name-status|raw|summary|no-color|color|minimal|histogram|patience|check))$/;
 function isCommitDiff(line) {
   if (!line.startsWith("git diff")) return true;
   const args = line.slice(8).trim().split(/\s+/).filter(Boolean);
   const end = args.indexOf("--");
-  const revs = (end < 0 ? args : args.slice(0, end)).filter((a) => !a.startsWith("-"));
+  const front = end < 0 ? args : args.slice(0, end);
+  if (front.some((a) => a.startsWith("-") && !a.includes("=") && !DIFF_NOARG_FLAG_RE.test(a))) return false;
+  const revs = front.filter((a) => !a.startsWith("-"));
   return revs.some(isRange) || (revs.length === 2 && revs.every((a) => REVISION_RE.test(a)));
 }
 export function isJudgeSearchLine(command) {
