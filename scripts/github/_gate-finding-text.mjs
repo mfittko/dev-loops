@@ -114,6 +114,7 @@ export function normalizeFindingSummary(summary) {
 //   2. their lines are equal, or both lines are absent,
 //   3. they are both questions or both non-questions,
 //   4. they carry the same judgeDisposition (both absent counts as the same),
+//      and the same remedyKind (so the evidence-only label never depends on member order),
 //   5. both carry an equal defectKey, or neither carries one and their
 //      normalized summaries are identical. A key on one finding only blocks it.
 // The rule is conservative: a missed merge only costs an extra thread.
@@ -128,6 +129,7 @@ export function isSameDefect(a, b) {
   if (typeof a.summary !== "string" || !a.summary.trim() || typeof b.summary !== "string" || !b.summary.trim()) return false;
   if ((a.severity === "question") !== (b.severity === "question")) return false;
   if ((a.judgeDisposition ?? null) !== (b.judgeDisposition ?? null)) return false;
+  if ((a.remedyKind ?? null) !== (b.remedyKind ?? null)) return false;
   if (hasDefectKey(a) || hasDefectKey(b)) return a.defectKey === b.defectKey;
   return normalizeFindingSummary(a.summary) === normalizeFindingSummary(b.summary);
 }

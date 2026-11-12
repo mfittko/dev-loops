@@ -62,7 +62,8 @@ Required:
   --findings-file <path>                    Read summary from file (preserves
                                             newlines; takes precedence when
                                             both are provided)
-  --next-action <text>
+  --next-action <text>                      (Required. A clean draft_gate still requires the flag, ignores
+                                            its value and posts "mark ready for review".)
 Optional:
   --gate <draft_gate|pre_approval_gate>     Defaults to draft_gate
   --gh-command <path>                       Defaults to "gh"

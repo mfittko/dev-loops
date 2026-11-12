@@ -345,6 +345,18 @@ test("merge: four pairs of different defects on one line stay separate", () => {
   }
 });
 
+test("merge: findings with different remedyKind stay separate, so the evidence-only label follows its own member in either order", () => {
+  const act = { ...holisticKeyed, judgeDisposition: "act" };
+  const evidence = { ...noOpKeyed, judgeDisposition: "act", remedyKind: "evidence_only" };
+  for (const pair of [[evidence, act], [act, evidence]]) {
+    const out = mergeSameDefectFindings(pair);
+    assert.equal(out.length, 2);
+    const labelled = out.filter((f) => renderInlineCommentBody(f, { round: 1 }).includes("evidence only"));
+    assert.deepEqual(labelled.map((f) => f.remedyKind), ["evidence_only"]);
+  }
+  assert.equal(mergeSameDefectFindings([evidence, { ...evidence, angle: "holistic" }]).length, 1);
+});
+
 test("merge: different defectKeys, or a key on one finding only, block an identical-summary merge", () => {
   assert.equal(mergeSameDefectFindings([{ ...holistic, defectKey: "AC-1" }, { ...noOp, summary: holistic.summary, defectKey: "AC-2" }]).length, 2);
   assert.equal(mergeSameDefectFindings([{ ...holistic, defectKey: "AC-1" }, { ...noOp, summary: holistic.summary }]).length, 2);
