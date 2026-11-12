@@ -374,3 +374,16 @@ test("C6b the dev-loop agent reports the startup-output path in its hand-back", 
   const agent = readFileSync(path.resolve("agents/dev-loop.agent.md"), "utf8");
   assert.match(agent, /report that startup-output path in your hand-back/);
 });
+
+test("Claude coordinator dispatch carries the dev-loop model resolved from the consumer .devloops; zero config adds none", async () => {
+  await withDirs(async (ctx) => {
+    const zero = (await emit(ctx, "claude", "direct")).out;
+    assert.equal("model" in zero.dispatchPayload, false);
+    await writeFile(path.join(ctx.dir, ".devloops"), JSON.stringify({ version: 1, models: { tiers: { low: { claude: "sonnet" } }, roleTiers: { "dev-loop": "low" } } }));
+    const { result, out } = await emit(ctx, "claude", "direct");
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(out.dispatchPayload.model, "sonnet");
+    assert.equal(out.workOrderDigest, zero.workOrderDigest);
+    for (const harness of ["pi", "codex"]) assert.equal("model" in (await emit(ctx, harness, "direct")).out.dispatchPayload, false);
+  });
+});

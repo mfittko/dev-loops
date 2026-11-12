@@ -12,7 +12,7 @@ import { readFile, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
-import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveRoleModel } from "@dev-loops/core/config";
 import { VALID_SEVERITIES, normalizeSeverity, hasSeverityText, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { EvidenceSealError, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
@@ -69,7 +69,7 @@ It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef }.
 joinRef is the path for gate wait-for-units --artifact (with --after <planPath>): a full-phase fixer's final-on-write report (<outputRef>.report), else the outputRef.
 Each run supersedes the previous emission for this PR, except a same-head no-commit commit_only re-emission with a locally_clear --delta-result sealed for the canonical plan's execution: it writes fixer-emit-plan.<executionIdentity>.json beside the canonical plan, writes no sequence marker and prints that keyed path as planPath (a join target, never a delta --fixer-plan). Dispatch the printed
-dispatchPayload (the --harness adapter call carrying only dispatchPrompt) unchanged; an
+dispatchPayload (the --harness adapter call carrying dispatchPrompt, plus the config-resolved model on the Claude payload when non-null) unchanged; an
 unsupported harness refuses. The only operator input is --operator-focus-file, a JSON file { round?: string, items?: [{ fingerprint, decision }] }
 that renders as a bounded, sanitized "Operator focus" section and is pinned by the digest (GATE-EXEC-OPERATOR-FOCUS).
 An item decision picks among remedies its act item offers and never changes the disposition; items need an
@@ -521,11 +521,15 @@ export async function emitFixerWorkOrder({
   const planPath = path.join(dir, PLAN_FILE);
   const originalBytes = await capture.read(planPath);
   if (phase === "commit_only" && originalBytes) await rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr, headSha, tmpRoot });
+  // The config is read before the first write so an invalid one refuses with nothing written; the model rides the completion early return too.
+  const { config, errors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });
+  if (errors?.length > 0) throw new Refusal(`dev-loops config is invalid; fix it before emitting: ${errors.map((e) => e?.message ?? String(e)).join("; ")}`);
   if (completionOnly) {
     // Every drift check runs before the first write, including the preserve step (issue 2787 C14).
     const sourceKind = actListFile ? "act-list" : "threads";
-    return await emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRoot, cwd, repo, pr, headSha, sourceKind, gate,
+    const completion = await emitCompletionOnly({ capture, planPath, originalBytes, dir, tmpRoot, cwd, repo, pr, headSha, sourceKind, gate,
       source: await readSource(sourceKind, abs(actListFile ?? threadsFile), capture), prState: await fetchPr({ repo, pr }), executionIdentity });
+    return { ...completion, fixerModel: resolveRoleModel(config, { role: "fixer", harness: "claude" }) };
   }
   await capture.preserve(planPath, path.resolve(tmpRoot), resolveGateArtifactTmpRoot(cwd));
 
@@ -756,8 +760,6 @@ export async function emitFixerWorkOrder({
   }
 
   const contracts = await Promise.all(FIXER_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
-  const { config, errors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });
-  if (errors?.length > 0) throw new Refusal(`dev-loops config is invalid; fix it before emitting: ${errors.map((e) => e?.message ?? String(e)).join("; ")}`);
   const outputRef = path.join(dir, executionIdentity, "fixer-disposition.json");
   const workOrder = {
     role: "fixer",
@@ -839,7 +841,8 @@ export async function emitFixerWorkOrder({
     throw error;
   }
   // The coordinator's gate wait-for-units --artifact path: a full-phase fixer's final-on-write report (ADR 0223), else the hand-back itself.
-  return { ...plan, planPath: livePlanPath, joinRef: phase === "full" && !ciFile ? fixerReportPath(outputRef) : outputRef };
+  // fixerModel is returned, not persisted in the plan: the Claude Agent `model` from the config validated above.
+  return { ...plan, planPath: livePlanPath, joinRef: phase === "full" && !ciFile ? fixerReportPath(outputRef) : outputRef, fixerModel: resolveRoleModel(config, { role: "fixer", harness: "claude" }) };
   } finally { await capture.release(); }
 }
 
@@ -861,7 +864,7 @@ export function claudeFixerAgentType(cwd = process.cwd(), env = process.env) {
 
 // Each adapter carries the fixed pointer and its tool's required routing fields.
 const FIXER_DISPATCH_ADAPTERS = {
-  claude: (prompt, cwd) => ({ subagent_type: claudeFixerAgentType(cwd), description: "fixer work order", prompt }),
+  claude: (prompt, cwd, _executionIdentity, model) => ({ subagent_type: claudeFixerAgentType(cwd), description: "fixer work order", prompt, ...(model ? { model } : {}) }),
   pi: (prompt) => ({ agent: "fixer", task: prompt }),
   codex: (message, _cwd, executionIdentity) => {
     if (typeof executionIdentity !== "string" || !/^f\d+-[0-9a-f]{8}$/.test(executionIdentity) || executionIdentity.trim() !== executionIdentity) {
@@ -878,13 +881,13 @@ function fixerDispatchAdapter(harness) {
 }
 
 /** The harness adapter payload for a fixer dispatch; any other harness refuses (never legacy prose). */
-export function buildFixerDispatchPayload({ harness, plan, cwd = process.cwd() }) {
-  return fixerDispatchAdapter(harness)(plan.dispatchPrompt, cwd, plan.executionIdentity);
+export function buildFixerDispatchPayload({ harness, plan, cwd = process.cwd(), model = null }) {
+  return fixerDispatchAdapter(harness)(plan.dispatchPrompt, cwd, plan.executionIdentity, model);
 }
 
 /** Refuses a payload that is not exactly the harness adapter payload for the plan's pointer (same keys, same values). */
-export function assertFixerDispatchPayload({ harness, payload, plan, cwd = process.cwd() }) {
-  const expected = buildFixerDispatchPayload({ harness, plan: { executionIdentity: plan.executionIdentity, dispatchPrompt: buildDispatchPointer(plan) }, cwd });
+export function assertFixerDispatchPayload({ harness, payload, plan, cwd = process.cwd(), model = null }) {
+  const expected = buildFixerDispatchPayload({ harness, plan: { executionIdentity: plan.executionIdentity, dispatchPrompt: buildDispatchPointer(plan) }, cwd, model });
   const keys = Object.keys(expected);
   if (Object.keys(payload ?? {}).length !== keys.length || keys.some((key) => !Object.hasOwn(payload, key) || payload[key] !== expected[key])) {
     throw new WorkOrderRefusal("dispatch_payload_mismatch", `the ${harness} fixer dispatch must be ${JSON.stringify(expected)} unchanged`);
@@ -1113,8 +1116,10 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
       ...(fetchPr ? { fetchPr } : {}),
       ...(fetchReview ? { fetchReview } : {}),
     });
-    const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath, joinRef } = plan;
-    const dispatchPayload = buildFixerDispatchPayload({ harness: values.harness, plan, cwd });
+    const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath, joinRef, fixerModel } = plan;
+    // The Claude Agent `model` is the config-resolved fixer model; the frontmatter stays the fallback.
+    const model = values.harness === "claude" ? fixerModel : null;
+    const dispatchPayload = buildFixerDispatchPayload({ harness: values.harness, plan, cwd, model });
     return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef });
   } catch (err) {
     if (!(err instanceof Refusal || err instanceof WorkOrderRefusal || err instanceof OperatorFocusRefusal)) throw err;

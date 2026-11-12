@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "bun:test";
 
-import { DevLoopConfigSchema, FileConfigSchema, resolveExtraToolsGuidance, resolveRoleExtraTools } from "../src/config/config.mjs";
+import { DevLoopConfigSchema, FileConfigSchema, resolveExtraToolsGuidance, resolveRoleExtraTools, resolveRoleModel } from "../src/config/config.mjs";
 import { buildAgentOverrides, buildClaudeLaunch, buildHeadlessClaudeInvocation, detectSessionMcpServers } from "../src/claude/headless-entry.mjs";
 import { decideAgentDispatch } from "../src/claude/hook-decisions.mjs";
 
@@ -360,4 +360,22 @@ test("extension README documents extraTools next to models.roleTiers", async () 
   for (const text of ["mcp__<server>", "extraToolsGuidance", "## Session MCP tool guidance", "CLAUDE_CONFIG_DIR", "Detection limit", "Requires dev-loops 1.0.6 or later", "Provisioning does not index", "dev-loops loop claude-launch", ".claude/settings.local.json", "classifier may still deny", "Worktree freshness limit"]) {
     assert.ok(readme.includes(text), text);
   }
+});
+
+describe("one model per role across claude-launch and non-launch entry paths", () => {
+  const config = {
+    version: 1,
+    extraTools: { developer: ["mcp__codebase-memory"] },
+    models: { tiers: { low: { claude: "sonnet" } }, roleTiers: { developer: "low", "dev-loop": "low", "gate-coordinator": "low" } },
+  };
+
+  test("launch overrides and dispatch-time resolution agree; dev-loop and gate-coordinator are not rendered but resolve the same way", () => {
+    const overrides = buildAgentOverrides(config, repoRoot);
+    assert.equal(overrides.developer.model, resolveRoleModel(config, { role: "developer", harness: "claude" }));
+    assert.equal(overrides.developer.model, "sonnet");
+    for (const role of ["dev-loop", "gate-coordinator"]) {
+      assert.equal(role in overrides, false);
+      assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "sonnet", role);
+    }
+  });
 });

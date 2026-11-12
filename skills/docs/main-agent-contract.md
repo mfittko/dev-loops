@@ -305,8 +305,10 @@ because "the user said yes," not because it is running from a worktree.
   See [Delegation contract](../local-implementation/SKILL.md#delegation-contract).
 - On Claude Code a gate coordinator's completion notification is the join signal for its round and is never dismissed as a repeat (`GATE-EXEC-HARNESS-JOIN` in [Gate Review Sub-Loop Contract](gate-review-sub-loop-contract.md)).
 
-## Model tier at dispatch (Pi)
+<!-- /pi-only -->
+## Model tier at dispatch (Pi and Claude)
 
+<!-- pi-only -->
 When dispatching a subagent, resolve its model with
 `resolveRoleModel(config, { role, harness: "pi" })` from `@dev-loops/core/config`
 (`role` = the subagent/angle name, e.g. `developer`, `refiner`, `review`, or a
@@ -320,11 +322,29 @@ on the low tier, planning (`refiner`) and critical review (the `review` role and
 fan-out review angles) on the high tier, and lets the conductor (`dev-loop`) inherit.
 Built-in Pi tiers are `null`, so with zero config dispatch passes no model override.
 Operators opt in by setting concrete Pi ids under `models.tiers.<alias>.pi` (and may
-retune `models.roleTiers` / `models.roles`) in `.devloops`. On the Claude harness the same
-resolver bakes the tier into each agent's `model:` frontmatter at asset-generation time
-(`harness: "claude"`). A Claude-only `claudeModel` key in canonical agent frontmatter
+retune `models.roleTiers` / `models.roles`) in `.devloops`.
+<!-- /pi-only -->
+<!-- rule: MAIN-CLAUDE-DISPATCH-MODEL -->
+`MAIN-CLAUDE-DISPATCH-MODEL`: On the Claude harness a dispatching agent resolves the model at dispatch time with
+`node <dev-loops-package-root>/cli/index.mjs gate resolve-role --role <name> --harness claude`, which prints
+`{ok, role, harness: "claude", model, configErrors}`, and passes `model` as the Agent `model` parameter
+**only when non-null**. Only exit 0 permits dispatch; exit 1 or 2 stops the dispatch and reports the `configErrors`. The main session does this for the initial `dev-loops:dev-loop` dispatch (`gate resolve-role --role dev-loop --harness claude`). The fixer and coordinator (`dev-loop`) emitters add it to the printed
+`dispatchPayload`; every other Claude dispatch (`developer`, `docs`, `quality`, `refiner`,
+`gate-coordinator`, `review`, `judge`, the pre-push reviewer) passes it from the dispatching
+agent: the `dev-loop` agent for its own sub-delegates, the `gate-coordinator` for its review and
+judge dispatches. Every review dispatch uses the one `review` role model
+(`gate resolve-role --role review --harness claude`), with no per-angle override. A consumer's `.devloops` tiers therefore apply with no change to installed
+agent frontmatter. The Agent `model` parameter takes an alias (`sonnet`, `opus`, `haiku`,
+`fable`), so `.devloops` Claude tier values (`models.tiers.<alias>.claude`) should be aliases
+for dispatch; no code maps a full model id to an alias. The resolver also bakes the tier
+into each agent's `model:` frontmatter at asset-generation time; that value is the fallback when
+dispatch passes no model. A Claude-only `claudeModel` key in canonical agent frontmatter
 is the fallback when the resolver inherits (the judge uses it to pin the strong tier);
-`models.roles` and `models.roleTiers` still win.
+`models.roles` and `models.roleTiers` still win. `dev-loop` and `gate-coordinator` inherit with
+zero config and take a model when `models.roleTiers` (or `models.roles`) names them; `claude-launch`
+and a session started without it resolve the same model for both through the same command.
+Review roles stay on the high tier.
+<!-- pi-only -->
 
 ## Boundary examples
 

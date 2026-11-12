@@ -3900,7 +3900,7 @@ for (const failure of ["plan", "volatile", "live-sentinel", "write"]) {
       const config = { gates: { draft: { angles: [{ name: "docs", scope: "docs-only" }], dynamic: { subtractive: false } } } };
       const input = {
         repo: "owner/repo", pr: 76, gate: "draft_gate", headSha: "abc1234567890",
-        config, harness: "claude", acceptanceCriteria: "#1", issueBody: "original body",
+        config, harness: "pi", acceptanceCriteria: "#1", issueBody: "original body",
         diff: { nameStatusOutput: "M\tdocs/example.md\n", diffOutput: "diff --git a/docs/example.md b/docs/example.md\n+original\n" },
       };
       const first = await buildGateContext(input, { repoRoot });
@@ -4033,7 +4033,7 @@ test("writeGateContext failure-ordering: a config-reachable buildAngleRequestGro
     const baseArgs = [
       "--repo", "owner/repo", "--pr", "91", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
-      "--harness", "claude",
+      "--harness", "pi",
       "--angles", '["docs"]',
     ];
     // Establish a real, valid artifact set at this head first, so the
@@ -6673,7 +6673,7 @@ test("main(): the --angles path resolves the request plan's models from an on-di
     await main([
       "--repo", "owner/repo", "--pr", "58", "--gate", "draft_gate",
       "--head-sha", headSha,
-      "--harness", "claude",
+      "--harness", "pi",
       "--angles", '["correctness","docs"]',
     ], { repoRoot, run: stubGhRun });
 
@@ -6707,7 +6707,7 @@ test("buildGateContext threads input.config into the persisted request plan's re
     const result = await buildGateContext(
       {
         config,
-        harness: "claude",
+        harness: "pi",
         gate: "draft_gate",
         diff: DOCS_ONLY_DIFF,
         repo: "owner/repo",
@@ -7019,7 +7019,7 @@ test("writeGateContext request-plan partitions angles by concrete resolved model
     const options = parseWriteGateContextCliArgs([
       "--repo", "owner/repo", "--pr", "82", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
-      "--harness", "claude",
+      "--harness", "pi",
       "--angles", '["correctness","security","docs"]',
     ]);
     options.config = angleModelConfig();
@@ -7054,6 +7054,27 @@ test("writeGateContext request-plan resolves a bare no-override angle to its dis
 
     assert.equal(result.requestPlan.requestGroups.length, 1);
     assert.equal(result.requestPlan.requestGroups[0].model, "opus");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("Claude plan records the review role model despite an angle roleTiers override; Pi keeps the per-angle model", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-claude-review-"));
+  try {
+    for (const [harness, expectedModel] of [["claude", "opus"], ["pi", "pi-low"]]) {
+      const options = parseWriteGateContextCliArgs([
+        "--repo", "owner/repo", "--pr", "87", "--gate", "draft_gate",
+        "--head-sha", "abc1234567891", "--angles", '["correctness"]',
+        "--harness", harness,
+      ]);
+      options.config = {
+        models: { tiers: { low: { claude: "sonnet", pi: "pi-low" }, high: { claude: "opus", pi: "pi-high" } } },
+        gates: { draft: { angles: [{ name: "correctness", tier: "low" }] } },
+      };
+      const result = await writeGateContext(options, { repoRoot });
+      assert.equal(result.requestPlan.requestGroups[0].model, expectedModel, harness);
+    }
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -7180,13 +7201,13 @@ test("writeGateContext request-plan honors a per-angle tier override (harness-aw
     const options = parseWriteGateContextCliArgs([
       "--repo", "owner/repo", "--pr", "87", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
-      "--harness", "claude",
+      "--harness", "pi",
       "--angles", '["docs"]',
     ]);
-    // Built-in low and high are both opus on claude; a distinct low id makes
-    // the per-angle tier override observable.
+    // Built-in Pi tiers are null; a concrete low id makes the per-angle tier
+    // override observable.
     options.config = {
-      models: { tiers: { low: { claude: "sonnet" } } },
+      models: { tiers: { low: { pi: "sonnet" } } },
       gates: { draft: { angles: [{ name: "docs", tier: "low" }] } },
     };
     const result = await writeGateContext(options, { repoRoot });

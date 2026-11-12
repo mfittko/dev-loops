@@ -527,3 +527,33 @@ test("cross-harness non-member also agrees on ok/exit (nonzero)", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("Claude role resolver prints the Agent model per role and the direct CLI and launcher-run CLI agree (#3133)", async () => {
+  const roles = ["developer", "docs", "quality", "dev-loop", "gate-coordinator", "review", "judge"];
+  const resolveAll = (dir) => Object.fromEntries(roles.map((role) => {
+    const r = runCli(["--role", role, "--harness", "claude"], { cwd: dir });
+    assert.equal(r.status, 0, r.stderr);
+    const payload = parseJson(r.stdout);
+    assert.deepEqual({ ok: payload.ok, role: payload.role, harness: payload.harness, configErrors: payload.configErrors }, { ok: true, role, harness: "claude", configErrors: [] });
+    return [role, payload.model];
+  }));
+  const zero = await makeFixtureRepo();
+  const tiered = await makeFixtureRepo({ devloops: "version: 1\nmodels:\n  tiers:\n    low:\n      claude: sonnet\n  roleTiers:\n    dev-loop: low\n    gate-coordinator: low\n" });
+  try {
+    const zeroModels = resolveAll(zero), tieredModels = resolveAll(tiered);
+    assert.equal(zeroModels.developer, "opus");
+    assert.equal(tieredModels.developer, "sonnet");
+    for (const role of ["docs", "quality"]) assert.equal(tieredModels[role], "sonnet");
+    for (const role of ["review", "judge"]) assert.equal(tieredModels[role], zeroModels[role]);
+    for (const role of ["dev-loop", "gate-coordinator"]) {
+      assert.equal(tieredModels[role], "sonnet");
+      const viaLauncher = spawnSync(process.execPath, [LAUNCHER, "cli/index.mjs", "gate", "resolve-role", "--role", role, "--harness", "claude"], { cwd: tiered, encoding: "utf8", timeout: 10000 });
+      assert.equal(viaLauncher.status, 0, viaLauncher.stderr);
+      assert.equal(parseJson(viaLauncher.stdout).model, tieredModels[role]);
+    }
+    assert.equal(runCli(["--conductor", "--harness", "claude"], { cwd: zero }).status, 2);
+  } finally {
+    await rm(zero, { recursive: true, force: true });
+    await rm(tiered, { recursive: true, force: true });
+  }
+});
