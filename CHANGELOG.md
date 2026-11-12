@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.12-pre.2
+
+### Added
+
+- A cap round of only PR-body act items clears with no commit through `--converged-json` with `bodyOnly: true`; refusals name the exit (#3105)
+
+### Changed
+
+- Work-order emitters write the short pull pointer, and the 3-flag form is refused; re-emit in-flight rounds after upgrading (#2560)
+- Claude Code judge searches read-only with `grep -n`, `rg -n`, `git show` and commit-to-commit `git diff`; its refusal names these; its work order carries cited rule text (#3092)
+- Reviewer-unit bound consumers read one recorded per-round bound (missing means 5) and accept a recorded packed unit above five angles, with a per-angle budget step (#3166)
+- Review threads from the exact `github-actions` bot are now trusted and reach the fixer; repos whose workflows echo fork text into comments should read ADR 0273 (#3198)
+
+### Fixed
+
+- Claude Code dispatch passes the model that `.devloops` sets for each role tier, so low-tier roles stop running on Opus (#3133)
+- A clean draft_gate verdict names `mark ready for review` as its next action, not a Copilot request refused on a draft PR; evidence-only act findings render labelled on every findings surface (#3197)
+
 ## 1.0.12-pre.1
 
 ### Fixed
