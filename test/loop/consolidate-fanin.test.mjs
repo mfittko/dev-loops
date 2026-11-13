@@ -18,10 +18,11 @@ import {
 import { execFileSync } from "node:child_process";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { retireGateRound } from "../../scripts/github/retire-gate-round.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { normalizeStructuredFindings, renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
-import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
+import { checkFanoutAngleCoverage, ledgerAngleNames } from "@dev-loops/core/loop/gate-fanin";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { buildCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, renderBriefingPointerLine, sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -4986,4 +4987,139 @@ test("#2526: a withheld over-budget round with --out at the keyed ledger is refu
     await assert.rejects(() => consolidateGateFanin({ ...options, out: keyed(root) }), /--out resolves to a ledger target/);
     assert.equal(JSON.parse(await readFile(keyed(root), "utf8")).findings.length, 25 * 30);
   });
+});
+
+// GATE-EXEC-ROUTED-RESIDUE-INPUT (#2971): operator-routed residue enters fan-in as a declared angle.
+test("consolidateGateFanin records operator-focus residue under operator-routed-residue and its provenance entry", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    (dir) => withTempDir(async (planDir) => {
+      const planPath = await writeEmitPlan(planDir, matchingEmitPlan());
+      await writeEmitPlanReceipt(planDir);
+      await writeEmitPlanLayoutRecord(planDir);
+      const focusFile = path.join(planDir, "focus.json");
+      await writeFile(focusFile, JSON.stringify({ residue: [{ summary: "leftover <b>nit</b>", severity: "low", file: "src/a.mjs", line: 4 }] }), "utf8");
+      const base = { findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, tmpRoot: planDir, receiptTmpRoot: planDir };
+      const plain = await consolidateGateFanin(base);
+      assert.equal(plain.findings.length, 0);
+      const result = await consolidateGateFanin({ ...base, operatorFocusFile: focusFile });
+      assert.equal(result.findings.length, 1);
+      assert.equal(result.findings[0].angle, "operator-routed-residue");
+      assert.equal(result.findings[0].summary, "leftover bnit/b");
+      const ledger = JSON.parse(await readSealed(buildGateFaninLedgerPath({ repo: "o/r", pr: "7", gate: "review", headSha: EMIT_HEAD, tmpRoot: planDir })));
+      const entry = ledger.provenance.perAngle.find((e) => e.angle === "operator-routed-residue");
+      assert.equal(entry.source, "operator-focus");
+      assert.match(entry.operatorFocusDigest, /^[0-9a-f]{64}$/);
+      assert.equal(ledger.provenance.perAngle.length, 2);
+    }),
+  );
+});
+
+test("consolidateGateFanin refuses residue items outside the focus schema", async () => {
+  await withFindingsDir({ "a.json": { angle: "a", verdict: "clean", findings: [] } }, (dir) => withTempDir(async (tmp) => {
+    const focusFile = path.join(tmp, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ residue: [{ summary: "s", extra: 1 }] }), "utf8");
+    await assert.rejects(() => consolidateGateFanin({ findingsDir: dir, operatorFocusFile: focusFile }), /GATE-EXEC-OPERATOR-FOCUS/);
+  }));
+});
+
+// GATE-EXEC-ROUTED-RESIDUE-INPUT (#2971): durable write, carry-forward integrity and reserved-angle refusals.
+test("residue round trips: fan-in ledger, findings-log write, carry-forward integrity and the judge's ledger read (#2971)", async () => {
+  const units = [unitOf(["scope"], null, "r1-u0"), unitOf(["coverage"], null, "r1-u1"), unitOf(["pr-description"], null, "r1-u2")];
+  await withProvenanceRound({ units, fanout: "    mode: per-angle" }, async ({ root, base, ledgerOut }) => {
+    const focusFile = path.join(root, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ residue: [{ summary: "leftover nit", severity: "low" }] }), "utf8");
+    await consolidateGateFanin({ ...base, ledgerOut, operatorFocusFile: focusFile });
+    const ledger = JSON.parse(await readFile(ledgerOut, "utf8"));
+    const written = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: PROV_HEAD, verdict: ledger.overallVerdict, executionMode: "fanout_fanin",
+      findingsFile: ledgerOut, emitPlan: base.emitPlan, tmpRoot: path.join(root, "ledgers"),
+    }, { repoRoot: root });
+    const entry = written.log.provenance.perAngle.find((e) => e.angle === "operator-routed-residue");
+    assert.equal(entry.source, "operator-focus");
+    assert.match(entry.operatorFocusDigest, /^[0-9a-f]{64}$/);
+    assert.ok(written.log.findings.some((f) => f.angle === "operator-routed-residue"));
+    const plan = buildCarryForwardPlan({ log: written.log, changedFiles: [] });
+    assert.ok(plan.mustRerun.some((m) => m.angle === "operator-routed-residue"));
+    // The judge work order pins the sealed ledger it reads; the residue finding is in those bytes.
+    const keyed = buildGateFaninLedgerPath({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: PROV_HEAD, tmpRoot: root });
+    assert.ok(JSON.parse(await readSealed(keyed)).findings.some((f) => f.angle === "operator-routed-residue"));
+  });
+});
+
+test("residue round trips under grouped fan-out: the residue angle never joins a dispatch unit, in the write or the merge-evidence read (#2971)", async () => {
+  const fanout = "    groups:\n      - name: sc\n        angles: [scope, coverage]\n      - name: pd\n        angles: [pr-description]";
+  const units = [unitOf(["scope", "coverage"], "sc", "r1-u0"), unitOf(["pr-description"], null, "r1-u1")];
+  await withProvenanceRound({ units, fanout }, async ({ root, base, ledgerOut }) => {
+    const focusFile = path.join(root, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ residue: [{ summary: "leftover nit" }] }), "utf8");
+    await consolidateGateFanin({ ...base, ledgerOut, operatorFocusFile: focusFile });
+    const ledger = JSON.parse(await readFile(ledgerOut, "utf8"));
+    assert.equal(ledger.findings.find((f) => f.angle === "operator-routed-residue").severity, "medium");
+    const written = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: PROV_HEAD, verdict: ledger.overallVerdict, executionMode: "fanout_fanin",
+      findingsFile: ledgerOut, emitPlan: base.emitPlan, tmpRoot: path.join(root, "ledgers"),
+    }, { repoRoot: root });
+    assert.equal(written.ok, true);
+    assert.ok(written.log.provenance.perAngle.some((e) => e.angle === "operator-routed-residue"));
+    // detect-checkpoint-evidence and the findings-log write both derive their groups from ledgerAngleNames.
+    assert.deepEqual(ledgerAngleNames(written.log.provenance.perAngle, ["scope", "coverage", "pr-description"]), ["scope", "coverage", "pr-description"]);
+  });
+});
+
+test("consolidateGateFanin resolves a relative --operator-focus-file against --repo-root, not the cwd (#2971)", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    (dir) => withTempDir(async (planDir) => {
+      const planPath = await writeEmitPlan(planDir, matchingEmitPlan());
+      await writeEmitPlanReceipt(planDir);
+      await writeEmitPlanLayoutRecord(planDir);
+      await writeFile(path.join(planDir, "focus.json"), JSON.stringify({ residue: [{ summary: "from repo root" }] }), "utf8");
+      const result = await consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, tmpRoot: planDir, receiptTmpRoot: planDir, repoRoot: planDir, operatorFocusFile: "focus.json" });
+      assert.equal(result.findings.length, 1);
+      assert.equal(result.findings[0].summary, "from repo root");
+    }),
+  );
+});
+
+test("residue round trips on a zero-unit all-carried plan: the carry proof exempts the residue finding (#2971)", async () => {
+  await withTempDir(async (root) => {
+    await writeFile(path.join(root, ".devloops"), "version: 1\ngates:\n  draft:\n    angles:\n      - coverage\n      - name: pr-description\n        enabled: false\n      - name: holistic\n        enabled: false\n", "utf8");
+    const gate = "draft_gate";
+    const dir = path.join(root, "findings");
+    await mkdir(dir, { recursive: true });
+    const entry = { angle: "coverage", carriedFromHead: PRIOR_HEAD, reviewer: "rev-x", prevVerdict: "clean", reason: "unchanged", model: "m1", dispatchId: "d1" };
+    const planPath = await writeEmitPlan(root, { ok: true, gate, headSha: PROV_HEAD, repo: "owner/repo", pr: 42, pending: true, count: 0, units: [], carried: [entry] });
+    const focusFile = path.join(root, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ residue: [{ summary: "leftover nit", severity: "low" }] }), "utf8");
+    const ledgerOut = path.join(root, "out", "ledger.json");
+    const result = await consolidateGateFanin({
+      findingsDir: dir, emitPlan: planPath, gate, headSha: PROV_HEAD, tmpRoot: root, receiptTmpRoot: root, repoRoot: root,
+      repo: "owner/repo", pr: "42", carriedAngles: ["coverage"], carryForwardPlan: [entry], resolvedAngles: ["coverage"], ledgerOut, operatorFocusFile: focusFile,
+    });
+    assert.equal(result.ok, true);
+    const ledger = JSON.parse(await readFile(ledgerOut, "utf8"));
+    const written = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate, headSha: PROV_HEAD, verdict: ledger.overallVerdict, executionMode: "fanout_fanin",
+      findingsFile: ledgerOut, emitPlan: planPath, tmpRoot: path.join(root, "ledgers"),
+    }, { repoRoot: root });
+    assert.equal(written.ok, true);
+    assert.ok(written.log.findings.some((f) => f.angle === "operator-routed-residue"));
+    assert.equal(written.log.provenance.perAngle.find((e) => e.angle === "operator-routed-residue").source, "operator-focus");
+  });
+});
+
+test("fan-in refuses the reserved residue angle in a findings artifact or --carried-angles, residue without --emit-plan, and an unknown residue severity (#2971)", async () => {
+  await withFindingsDir({ "r.json": { angle: "operator-routed-residue", verdict: "clean", findings: [] } }, (dir) => assert.rejects(() => consolidateGateFanin({ findingsDir: dir }), /reserved for operator-focus residue/));
+  await withFindingsDir({ "r.json": { angle: "Operator-Routed-Residue", verdict: "clean", findings: [] } }, (dir) => assert.rejects(() => consolidateGateFanin({ findingsDir: dir }), /reserved for operator-focus residue/));
+  await withFindingsDir({ "r.json": { angle: "operator-routed-residue-delta-at-abc1234", verdict: "clean", findings: [] } }, (dir) => assert.rejects(() => consolidateGateFanin({ findingsDir: dir }), /reserved for operator-focus residue/));
+  assert.throws(() => parseConsolidateFaninCliArgs(["--findings-dir", "d", "--gate", "review", "--carry-forward-plan", "[]", "--carried-angles", "[\"Operator-Routed-Residue\"]"]), /reserved angle/);
+  assert.throws(() => parseConsolidateFaninCliArgs(["--findings-dir", "d", "--gate", "review", "--carry-forward-plan", "[]", "--carried-angles", "[\"operator-routed-residue-delta-at-abc1234\"]"]), /reserved angle/);
+  await withFindingsDir({ "a.json": { angle: "a", verdict: "clean", findings: [] } }, (dir) => withTempDir(async (tmp) => {
+    const focusFile = path.join(tmp, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ residue: [{ summary: "s" }] }), "utf8");
+    await assert.rejects(() => consolidateGateFanin({ findingsDir: dir, operatorFocusFile: focusFile }), /requires --emit-plan/);
+    await writeFile(focusFile, JSON.stringify({ residue: [{ summary: "s", severity: "bogus" }] }), "utf8");
+    await assert.rejects(() => consolidateGateFanin({ findingsDir: dir, operatorFocusFile: focusFile }), /GATE-EXEC-OPERATOR-FOCUS.*severity/);
+  }));
 });

@@ -87,3 +87,22 @@ test("path-leading focus text changes the work-order digest (shared canonicalize
   assert.notEqual(workOrderDigest(order("/src/a: check resolution")), workOrderDigest(order("/src/b: check resolution")));
   assert.deepEqual(operatorFocusDigestEntry(null), {});
 });
+
+test("residue is accepted only with allowResidue, sanitized and bounded (GATE-EXEC-ROUTED-RESIDUE-INPUT)", () => {
+  const raw = { residue: [{ summary: "a\u0007 <b>", severity: "low", file: "f.mjs", line: 3 }] };
+  assert.throws(() => normalizeOperatorFocus(raw), OperatorFocusRefusal);
+  assert.deepEqual(normalizeOperatorFocus(raw, { allowResidue: true }).residue, [{ summary: "a b", severity: "low", file: "f.mjs", line: 3 }]);
+  const bad = (residue) => assert.throws(() => normalizeOperatorFocus({ residue }, { allowResidue: true }), OperatorFocusRefusal);
+  bad([{ summary: "x".repeat(501) }]);
+  bad([{ summary: "s", other: 1 }]);
+  bad([{ summary: "s", line: 0 }]);
+  bad([{ summary: "s", line: 1.5 }]);
+  bad([{ summary: "s", line: "3" }]);
+  bad({ summary: "s" });
+  bad([null]);
+  bad(Array.from({ length: 21 }, () => ({ summary: "s" })));
+  assert.notEqual(
+    operatorFocusDigestEntry(normalizeOperatorFocus({ residue: [{ summary: "a" }] }, { allowResidue: true })).operatorFocusDigest,
+    operatorFocusDigestEntry(normalizeOperatorFocus({ residue: [{ summary: "b" }] }, { allowResidue: true })).operatorFocusDigest,
+  );
+});
