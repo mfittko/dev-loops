@@ -10,8 +10,13 @@
  *   - `gh pr merge` — blocked outright; use scripts/github/merge-pr.mjs. Its gate evidence check
  *     requires a clean draft_gate transition record + current-head pre_approval_gate
  *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
- *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
- *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
+ *   - a raw comment write (`gh issue|pr comment`, `gh api` to issue comments, graphql addComment) is blocked for every actor
+ *     (OPERATOR-OWNED-LINE); a subagent running a `--standing-authorization` or tripwire-waiver path is blocked
+ *     (STANDING-AUTHORIZATION-MAIN-AGENT-ONLY).
+ *   - raw `gh issue create|edit|comment` / `gh pr comment` — blocked from a SUBAGENT context (agent_type present);
+ *     outside the managed cwd the inline deny catches a subagent comment only when `--repo` names the managed
+ *     slug, and a provably foreign repo passes. On the managed repo the rule above fires first for the comment
+ *     verbs. The main agent/operator retains direct issue creation and edit (#1051).
  *   - `git stash` — blocked outright: `refs/stash` is shared across every worktree over this
  *     repo's one `.git` directory (skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout).
  *   - `bun run verify` / `bun test` / `vitest` / `npm test` / `npm run test` / `bun run build` /
@@ -45,6 +50,8 @@ import {
   commandContainsGraphqlResolveReviewThread,
   commandContainsCopilotRequestBypass,
   commandContainsCopilotSummonComment,
+  commandContainsRawCommentWrite,
+  commandRunsStandingAuthorizationPath,
   commandContainsDetachedWaitTool,
   commandContainsCodeVerificationEntrypoint,
   extractPrNumberFromGhPrReadyAnywhere,
@@ -114,6 +121,10 @@ const isReplyResolve =
 const isRequestApi = typeof command === "string" && commandContainsCopilotRequestBypass(command, managedRepoSlug);
 const isCopilotSummon = typeof command === "string" && commandContainsCopilotSummonComment(command);
 const isWaitTool = typeof command === "string" && commandContainsDetachedWaitTool(command);
+// Raw comment writes and the standing-authorization paths (OPERATOR-OWNED-LINE, STANDING-AUTHORIZATION-MAIN-AGENT-ONLY)
+// are scoped and actor-checked inside the decider.
+const isCommentWrite = typeof command === "string" && commandContainsRawCommentWrite(command, managedRepoSlug);
+const isStandingAuth = typeof command === "string" && commandRunsStandingAuthorizationPath(command);
 // COORDINATOR-VERIFY-BOUNDARY (#2082) — actor-scoped inside decideBashGate (agentType is
 // "dev-loop" or "gate-coordinator"), so the quick pre-check here only detects the command shape; the hook must not
 // short-circuit to allow before the decider applies the actor + enforceCoordinator scoping.
@@ -127,7 +138,7 @@ const isUnresolve = isUnresolveInvocation(command);
 if (
   !isReady && !isMerge && !isCreate && !isExternalWrite && !isStash &&
   !isInline && !isSubIssue && !isReplyResolve && !isRequestApi && !isCopilotSummon && !isWaitTool &&
-  !isVerifyEntrypoint && !isJudge && !isFixerPull && !isUnresolve
+  !isVerifyEntrypoint && !isJudge && !isFixerPull && !isUnresolve && !isCommentWrite && !isStandingAuth
 ) {
   emitAllow();
 }

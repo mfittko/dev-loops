@@ -159,3 +159,34 @@ test("escapeProse keeps a wrapped operator phrase from fusing with an adjacent m
   const b = escapeProse("``<img src=x>``approve merge");
   assert.equal(b, "``<img src=x>`` `approve merge`");
 });
+
+test("a release approval split by a code span renders non-asserting through every wrap path", () => {
+  const split = "approve `x` release v1.2.3";
+  assert.notEqual(findOperatorOwnedLineRefusal(split), null, "the guard reads the split form as an approval");
+  for (const render of [wrapOperatorOwnedPhrases, escapeProse, sanitizeInline]) {
+    const out = render(split);
+    assert.equal(findOperatorOwnedLineRefusal(out), null, `${render.name}: ${out}`);
+    assert.equal(anyAsserts(out), false, `${render.name}: ${out}`);
+  }
+});
+
+test("the wrap leaves an author code span unchanged, also through --inline-reason", () => {
+  const span = "`run approve merge now`";
+  assert.equal(wrapOperatorOwnedPhrases(span), span);
+  const parsed = parseUpsertCheckpointVerdictCliArgs([
+    "--repo", "o/r", "--pr", "17", "--gate", "draft_gate", "--head-sha", SHA, "--verdict", "findings_present",
+    "--findings-summary", "s", "--next-action", "n", "--inline-reason", span,
+  ]);
+  assert.equal(parsed.inlineReason, span);
+});
+
+test("a gate surface body that quotes the grill provenance line in reviewer text still posts", () => {
+  const quoted = `## 🔬 Grill / refinement results\n\n${["bypass:", "operator-authorized by", "op"].join(" ")}`;
+  const finding = { severity: "low", angle: "docs", summary: `The skill records:\n${quoted}`, judgeDisposition: "defer", judgeReason: quoted };
+  const line = renderFindingLine(finding);
+  const { body } = renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings: parseFindings(JSON.stringify([{ ...finding, recommendation: "r" }])) });
+  for (const out of [line, body]) {
+    assert.ok(out.includes("Grill / refinement results"), "the reviewer text reaches the body");
+    passesGuard(out);
+  }
+});

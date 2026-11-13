@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
-import { parsePositiveInteger, parseAllowedRefsCsv, requireTokenValue, resolveBodyOrFile, runChild } from "../_cli-primitives.mjs";
+import { parsePositiveInteger, parseAllowedRefsCsv, parseStandingAuthorizationValue, requireTokenValue, resolveBodyOrFile, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -101,7 +101,7 @@ export function parseEditCommentCliArgs(argv) {
       continue;
     }
     if (token.name === "standing-authorization") {
-      options.standingAuthorization = token.value === undefined || /^(?:true|1)$/iu.test(String(token.value).trim());
+      options.standingAuthorization = parseStandingAuthorizationValue(token.value);
       continue;
     }
     if (token.name === "allowed-refs") {

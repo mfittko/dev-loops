@@ -33,7 +33,7 @@ T1-slice waiver additionally requires --approved-by <human> naming a human
 approver (an unwaivable block — absoluteHardLoc, config errors, ambiguous, or
 substantially-unclassified — is never waivable, no matter these flags).
 The waiver comment record also refuses an operator-owned line (OPERATOR-OWNED-LINE)
-through the registry; --reason is sanitized inline, so it cannot form one.
+through the registry. A --reason or --approved-by value that holds one is refused before any comment is posted.
 
 For a tracker-backed PR (one or more closing issue references), also enforces
 the PR-description contract on the PR's own body (Acceptance criteria +
@@ -189,9 +189,13 @@ function renderSizeBudgetWaiverCommentBody({ headSha, sizeBudget, reason, approv
 }
 
 async function postSizeBudgetWaiverComment({ repo, pr, headSha, sizeBudget, reason, approvedBy }, { env, ghCommand, runChild: runChildImpl }) {
-  const body = renderSizeBudgetWaiverCommentBody({ headSha, sizeBudget, reason, approvedBy });
-  const refusal = findOperatorOwnedLineRefusal(body);
+  // The raw values are checked first: sanitizeInline wraps a bare phrase, so the rendered body cannot refuse.
+  const refusal = findOperatorOwnedLineRefusal(reason) ?? findOperatorOwnedLineRefusal(approvedBy);
   if (refusal) throw new Error(refusal);
+  const body = renderSizeBudgetWaiverCommentBody({ headSha, sizeBudget, reason, approvedBy });
+  // The rendered body is checked again: it must not carry an operator-owned line the raw values missed.
+  const renderedRefusal = findOperatorOwnedLineRefusal(body);
+  if (renderedRefusal) throw new Error(renderedRefusal);
   const result = await runChildImpl(ghCommand, ["pr", "comment", String(pr), "--repo", repo, "--body", body], env);
   if (result.code !== 0) throw new Error(`Failed to post size-budget waiver record: ${result.stderr.trim() || `exit code ${result.code}`}`);
 }

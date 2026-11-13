@@ -84,6 +84,9 @@ export const FLAGS_THAT_TAKE_VALUE = new Set(["-r", "--repo"]);
  */
 const SHELL_SEGMENT_SEPARATOR = /\s*(?:&&|\|\||;|\||(?<!(?<!\\)[<>])&(?!>)|\n|\r)\s*/;
 
+/** An odd-length backslash run before a newline continues the line; an even run is escaped backslashes. */
+const joinLineContinuations = (command) => command.replace(/(?<!\\)((?:\\\\)*)\\\r?\n/g, "$1 ");
+
 /**
  * Strip a single balanced surrounding quote pair (`'…'` or `"…"`) from a shell arg value.
  * A repo flag value may reach us quoted (`--repo 'owner/name'`); the scope check compares against
@@ -209,7 +212,7 @@ function isGitMergeCompletionCommand(segment) {
 
 /** @param {string} command @returns {boolean} */
 export function isMergeCapableCommand(command) {
-  const normalized = command.trim();
+  const normalized = joinLineContinuations(command).trim();
   if (!normalized) {
     return false;
   }
@@ -220,12 +223,12 @@ export function isMergeCapableCommand(command) {
 
 /** @param {string} command @returns {string} */
 export function firstShellSegment(command) {
-  return command.trim().split(SHELL_SEGMENT_SEPARATOR)[0]?.trim() ?? "";
+  return joinLineContinuations(command).trim().split(SHELL_SEGMENT_SEPARATOR)[0]?.trim() ?? "";
 }
 
 /** Split a compound shell command into its individual segments. */
 function shellSegments(command) {
-  return command.trim().split(SHELL_SEGMENT_SEPARATOR).map((s) => s.trim()).filter(Boolean);
+  return joinLineContinuations(command).trim().split(SHELL_SEGMENT_SEPARATOR).map((s) => s.trim()).filter(Boolean);
 }
 
 /** A run of leading `NAME=value` env assignments. */
@@ -293,8 +296,8 @@ export function verificationCommandSegments(command) {
  * requirement means node-wrapper commands (`node scripts/github/comment-issue.mjs …`) never
  * match — their first token is `node`, not `gh`.
  */
-function ghSubcmdVerbRegex(subcmd, verb) {
-  return new RegExp(`^${SHELL_EXEC_PREFIX}gh\\s+${subcmd}\\s+${verb}(?:\\s|$)`, "i");
+function ghSubcmdVerbRegex(subcmd, verb, globalFlags = "") {
+  return new RegExp(`^${SHELL_EXEC_PREFIX}gh\\s+${globalFlags}${subcmd}\\s+${verb}(?:\\s|$)`, "i");
 }
 
 /**
@@ -320,7 +323,7 @@ const GIT_GLOBAL_OPTION_RUN =
  */
 export function commandContainsGitStash(command) {
   const re = new RegExp(`^${SHELL_EXEC_PREFIX}git\\s+${GIT_GLOBAL_OPTION_RUN}stash(?:\\s|$)`, "i");
-  return command
+  return joinLineContinuations(command)
     .split(SHELL_SEGMENT_SEPARATOR)
     .some((segment) => re.test(segment.trim()));
 }
@@ -328,6 +331,13 @@ export function commandContainsGitStash(command) {
 /** Build the `gh pr <verb>` prefix matcher — delegates to the generic subcmd matcher (DRY). */
 function ghPrVerbRegex(verb) {
   return ghSubcmdVerbRegex("pr", verb);
+}
+
+/** Whether a verb remainder carries `--help`/`-h` outside a quoted literal (a `-h` inside a body is text). */
+function remainderAsksForHelp(remainder) {
+  // Fail closed: a quote or backslash can hide the flag in a body that spans lines or escapes a quote.
+  if (/['"\\]/.test(remainder)) return false;
+  return blankQuotedForFlags(remainder).split(/\s+/).some((a) => a.toLowerCase() === "--help" || a.toLowerCase() === "-h");
 }
 
 /**
@@ -340,8 +350,7 @@ function findGhSubcmdVerbSegment(command, subcmd, verb) {
     if (!re.test(segment)) continue;
     const remainder = segment.replace(re, "").trim();
     if (!remainder) return segment;
-    const args = remainder.split(/\s+/).map((a) => a.toLowerCase());
-    if (!args.includes("--help") && !args.includes("-h")) return segment;
+    if (!remainderAsksForHelp(remainder)) return segment;
   }
   return null;
 }
@@ -350,9 +359,13 @@ function findGhSubcmdVerbSegment(command, subcmd, verb) {
  * Extract the `--repo`/`-R` flag value from an already-isolated `gh <subcmd> <verb>` segment.
  * @param {string} segment @param {string} subcmd @param {string} verb @returns {string|null}
  */
-function extractRepoFlagFromSubcmdSegment(segment, subcmd, verb) {
-  const re = ghSubcmdVerbRegex(subcmd, verb);
-  if (!segment || !re.test(segment)) return null;
+function extractRepoFlagFromSubcmdSegment(segment, subcmd, verb, globalFlags = "") {
+  const re = ghSubcmdVerbRegex(subcmd, verb, globalFlags);
+  const head = segment ? re.exec(segment) : null;
+  if (!head) return null;
+  // A repo flag in the global position (`gh -R o/r issue comment`) is read from the matched prefix.
+  const global = /(?:^|\s)(?:--repo|-R)(?:=|\s+)(\S+)|(?:^|\s)-R(\S+)/.exec(head[0]);
+  if (global) return stripSurroundingQuotes(global[1] ?? global[2]);
   const remainder = segment.replace(re, "").trim();
   if (!remainder) return null;
   const tokens = remainder.split(/\s+/);
@@ -376,17 +389,14 @@ function extractRepoFlagFromSubcmdSegment(segment, subcmd, verb) {
  * @param {string} command @param {string} subcmd @param {string} verb
  * @returns {{ segment: string, explicitRepo: string|null }[]}
  */
-function extractRepoFlagsFromGhSubcmdVerbSegments(command, subcmd, verb) {
-  const re = ghSubcmdVerbRegex(subcmd, verb);
+function extractRepoFlagsFromGhSubcmdVerbSegments(command, subcmd, verb, globalFlags = "") {
+  const re = ghSubcmdVerbRegex(subcmd, verb, globalFlags);
   const out = [];
   for (const segment of shellSegments(command)) {
     if (!re.test(segment)) continue;
     const remainder = segment.replace(re, "").trim();
-    if (remainder) {
-      const args = remainder.split(/\s+/).map((a) => a.toLowerCase());
-      if (args.includes("--help") || args.includes("-h")) continue;
-    }
-    out.push({ segment, explicitRepo: extractRepoFlagFromSubcmdSegment(segment, subcmd, verb) });
+    if (remainder && remainderAsksForHelp(remainder)) continue;
+    out.push({ segment, explicitRepo: extractRepoFlagFromSubcmdSegment(segment, subcmd, verb, globalFlags) });
   }
   return out;
 }
@@ -903,13 +913,104 @@ export function commandContainsRawPrBodyApiWrite(command, managedSlug = null) {
   return extractGhApiEndpointSegments(command).map((e) => ({ ...e, segment: unquoteFlagTokens(e.segment) })).some(({ segment, endpoint }) => {
     if (endpoint && /^graphql$/i.test(endpoint)) return /updatePullRequest/.test(segment);
     if (!endpoint || !re.test(normalizeGhApiEndpoint(endpoint).replace(/\?.*$/, ""))) return false;
-    // `--input` supplies the whole payload, so it is a write without a method flag (gh then POSTs).
-    if (/(?:^|\s)--input(?:=|\s)/.test(blankQuotedForFlags(segment))) return true;
-    // gh defaults to POST when a field is present, so only an explicit GET/HEAD makes a body field a read.
-    if (!hasQuotePairingHazard(segment) && /(?:^|\s)(?:--method|-X|-m)(?:=|\s*)["']?(?:GET|HEAD)\b/i.test(stripQuotedLiterals(segment))) return false;
-    // Not quote-stripped: the field is usually quoted (`-f "body=..."`), so blanking would hide it.
-    return /(?:^|\s)(?:-[fF]|--(?:raw-)?field)(?:=|\s*)["']?body=/.test(segment);
+    return ghApiSegmentWritesBody(segment);
   });
+}
+
+/** Whether a `gh api` segment sends a body: `--input`, or a `body` field unless the method is an explicit GET/HEAD. */
+function ghApiSegmentWritesBody(segment) {
+  // `--input` supplies the whole payload, so it is a write without a method flag (gh then POSTs).
+  if (/(?:^|\s)--input(?:=|\s)/.test(blankQuotedForFlags(segment))) return true;
+  // gh defaults to POST when a field is present, so only an explicit GET/HEAD makes a body field a read.
+  // gh honors the LAST method flag, so `-X GET -X POST` is a write.
+  const methods = [...stripQuotedLiterals(segment).matchAll(/(?:^|\s)(?:--method|-X|-m)(?:=|\s*)["']?([A-Za-z]+)/gi)];
+  // Fail closed unless exactly one bare method flag exists: a quoted value (`-X "POST"`) is blanked and a repeat is ambiguous.
+  const methodFlags = [...blankQuotedForFlags(segment).matchAll(/(?:^|\s)(?:--method|-X|-m)(?:=|\s|$)/gi)];
+  if (!hasQuotePairingHazard(segment) && methods.length === 1 && methodFlags.length === 1 && /^(?:GET|HEAD)$/i.test(methods[0][1])) return false;
+  // Not quote-stripped: the field is usually quoted (`-f "body=..."`), so blanking would hide it.
+  return /(?:^|\s)(?:-[fF]|--(?:raw-)?field)(?:=|\s*)["']?body=/.test(segment);
+}
+
+/** Join line continuations and reduce every segment to its real command head, keeping leading `NAME=value` assignments. */
+function unwrapCommandSegments(command) {
+  return shellSegments(command).map((segment) => {
+    const assigns = new RegExp(`^${ENV_ASSIGNMENT_RUN}`).exec(segment)[0];
+    const rest = segment.slice(assigns.length);
+    return assigns + stripLeadingWrappers(rest);
+  }).join("\n");
+}
+
+/** The text after each shell wrapper word (`sh -c`, `eval`, `xargs`): where a command hidden from segment inspection sits. */
+function shellWrapperTails(command) {
+  return [...command.matchAll(new RegExp(SHELL_WRAPPER_RE.source, "g"))].map((m) => command.slice(m.index + m[0].length));
+}
+
+/** A `gh api graphql` call whose query text is not in the command line (`@file`, `--input`, command substitution). */
+const GRAPHQL_OPAQUE_QUERY = /(?:^|\s)--input(?:=|\s)|(?:^|[\s="'fF])query=["']?(?:@|\$|`)/;
+
+/**
+ * OPERATOR-OWNED-LINE (raw comment-write half): a raw comment write on the managed repo that bypasses
+ * every sanctioned wrapper's refusal. Matches `gh issue|pr comment`, `gh issue|pr close|reopen` with
+ * `--comment`/`-c`, a `gh api` body write or `--input` to `issues/<n>/comments` or `issues/comments/<id>`,
+ * and a `gh api graphql` call carrying an `addComment` or `updateIssueComment` mutation. A GET, a
+ * provably foreign `--repo`, and the node wrappers never match. A `gh` literal inside
+ * `bash -c`/`eval`/`xargs` is denied on the literal itself (fail closed).
+ * @param {string} command @param {string|null} [managedSlug] @returns {boolean}
+ */
+export function commandContainsRawCommentWrite(command, managedSlug = null) {
+  const hidden = (tail) => new RegExp(`\\bgh\\s+${GH_GLOBAL_REPO_FLAGS}(?:issue|pr)\\s+comment\\b`).test(tail) || new RegExp(`\\bgh\\s+${GH_GLOBAL_REPO_FLAGS}(?:issue|pr)\\s+(?:close|reopen)\\b[^\\n]*\\s(?:--comment|-c)\\b`).test(tail)
+    || (/\bgh\s+api\b/.test(tail)
+      && (/\b(?:addComment|updateIssueComment)\b/.test(tail) || (/issues\/(?:\d+\/comments|comments\/\d+)/.test(tail) && /body=|--input/.test(tail))));
+  if (shellWrapperTails(blankQuotedForFlags(joinLineContinuations(command))).some(hidden)) return true;
+  command = unwrapCommandSegments(command);
+  // gh takes the repository from a github.com issue/PR URL positional and ignores --repo then, so the URL
+  // scopes the segment; a --repo that disagrees with the URL is ambiguous and stays in scope (fail closed).
+  const inScope = ({ segment, explicitRepo }) => {
+    const url = shellWords(segment).map((w) => /^https?:\/\/(?:[^/\s]+\.)?github\.com\/([^/\s]+\/[^/\s]+)\/(?:issues|pull)\/\d+/i.exec(w)).find(Boolean);
+    if (url) return (explicitRepo && explicitRepo.trim().toLowerCase() !== url[1].toLowerCase()) || !explicitRepoProvenForeign(url[1], managedSlug);
+    return !(explicitRepo && explicitRepoProvenForeign(explicitRepo, managedSlug));
+  };
+  for (const subcmd of ["issue", "pr"]) {
+    if (extractRepoFlagsFromGhSubcmdVerbSegments(command, subcmd, "comment", GH_GLOBAL_REPO_FLAGS).some(inScope)) return true;
+    for (const verb of ["close", "reopen"]) {
+      const re = ghSubcmdVerbRegex(subcmd, verb, GH_GLOBAL_REPO_FLAGS);
+      const hit = extractRepoFlagsFromGhSubcmdVerbSegments(command, subcmd, verb, GH_GLOBAL_REPO_FLAGS).some((seg) =>
+        inScope(seg) && /(?:^|\s)(?:--comment|-c)(?=[=\s]|\S|$)/.test(blankQuotedForFlags(unquoteFlagTokens(seg.segment).replace(re, " "))));
+      if (hit) return true;
+    }
+  }
+  const owner = managedSlug ? `(?:${managedSlug.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}|\\{owner\\}/\\{repo\\})` : "[^/]+/[^/]+";
+  const re = new RegExp(`^(?:repos/${owner}/)?issues/(?:(?:\\d+|\\{[^}]*\\})/comments|comments/(?:\\d+|\\{[^}]*\\}))$`, "i");
+  return extractGhApiEndpointSegments(command).map((e) => ({ ...e, segment: unquoteFlagTokens(e.segment) })).some(({ segment, endpoint }) => {
+    // A query read from a file, stdin or a substitution cannot be inspected, so it fails closed.
+    if (endpoint && /^graphql$/i.test(normalizeGhApiEndpoint(endpoint))) return /\b(?:addComment|updateIssueComment)\b/.test(segment) || GRAPHQL_OPAQUE_QUERY.test(segment);
+    if (!endpoint || !re.test(normalizeGhApiEndpoint(endpoint).replace(/\?.*$/, ""))) return false;
+    return ghApiSegmentWritesBody(segment);
+  });
+}
+
+/** The words of a segment with their quotes removed: a quoted span with spaces stays one word. */
+function shellWords(text) {
+  return (text.match(/(?:"[^"]*"|'[^']*'|[^\s"'])+/g) ?? []).map((w) => w.replace(/["']/g, ""));
+}
+
+/**
+ * STANDING-AUTHORIZATION-MAIN-AGENT-ONLY: a command that names a path whose authority is a self-asserted
+ * standing authorization: a word ending in `waive-adr-tripwire.mjs`, a word ending in `index.mjs` or
+ * `dev-loops` followed later by the words `pr` and `waive-adr-tripwire`, or a word ending in
+ * `comment-issue.mjs` / `edit-comment.mjs` beside any `--standing-authorization` token form. The match
+ * keys on those script literals in the unquoted words of each segment, whatever runner (or none) launches
+ * them, so `npm exec`, `pnpm exec`, `deno run` and a direct `./cli/index.mjs` all match. A quoted prose
+ * mention stays one word and does not match. A literal inside `bash -c`/`eval`/`xargs` matches with its
+ * quotes dropped (fail closed).
+ * @param {string} command @returns {boolean}
+ */
+export function commandRunsStandingAuthorizationPath(command) {
+  const hit = (words) => words.some((w) => /(?:^|\/)waive-adr-tripwire\.mjs$/.test(w))
+    || words.some((w, k) => /(?:^|\/)(?:index\.mjs|dev-loops(?:@[^/]*)?)$/.test(w) && words.slice(k + 1).some((x, j, rest) => x === "pr" && rest[j + 1] === "waive-adr-tripwire"))
+    || (words.some((w) => /(?:^|\/)(?:comment-issue|edit-comment)\.mjs$/.test(w)) && words.some((w) => /^--standing-authorization(?:=|$)/.test(w)));
+  if (shellWrapperTails(blankQuotedForFlags(joinLineContinuations(command))).some((t) => hit(t.replace(/["']/g, " ").split(/\s+/).filter(Boolean)))) return true;
+  return shellSegments(command).some((segment) => hit(shellWords(segment)));
 }
 
 /**

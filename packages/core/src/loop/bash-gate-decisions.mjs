@@ -41,6 +41,8 @@ import {
   commandContainsCopilotSummonComment,
   commandContainsRawPrBodyEdit,
   commandContainsRawPrBodyApiWrite,
+  commandContainsRawCommentWrite,
+  commandRunsStandingAuthorizationPath,
   commandContainsDetachedWaitTool,
   commandContainsTimeoutWrappedSanctionedTool,
   commandContainsInlineInterpreter,
@@ -127,6 +129,8 @@ export const BASH_GATE_RULES = Object.freeze([
   "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER",
   "COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY",
   "ADR-TRIPWIRE-STANDING-WAIVER",
+  "OPERATOR-OWNED-LINE",
+  "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY",
   "WORKTREE-NO-STASH",
   "STOP-HUMAN-MERGE-001",
   "OPS-DRAFT-FIRST-PR",
@@ -206,9 +210,14 @@ export function decideUnresolveOwnerDeny({ command, role }) {
  *     (STOP-HUMAN-MERGE-001). The sanctioned path is `scripts/github/merge-pr.mjs`; its gate
  *     evidence check requires a clean draft_gate transition record + current-head pre_approval_gate
  *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
- *   - raw `gh issue create` / `gh issue comment` / `gh issue edit` / `gh pr comment` — blocked ONLY
- *     from a SUBAGENT context (`role` non-null) on the managed repo. Sanctioned external writes
- *     flow through node wrappers; the MAIN AGENT / operator (role null) retains direct access.
+ *   - raw `gh issue create` / `gh issue edit` / `gh issue comment` / `gh pr comment` — blocked ONLY from a
+ *     SUBAGENT context (`role` non-null) on the managed repo. Sanctioned external writes flow through node
+ *     wrappers; the MAIN AGENT / operator (role null) retains direct access to these verbs. OPERATOR-OWNED-LINE
+ *     fires first for the comment verbs on the managed repo.
+ *   - raw comment writes (`gh issue|pr comment`, `--comment` on close/reopen, `gh api` comment bodies,
+ *     GraphQL comment mutations) — OPERATOR-OWNED-LINE, blocked for EVERY actor on the managed repo.
+ *   - the standing-authorization paths (`waive-adr-tripwire`, `--standing-authorization`) —
+ *     STANDING-AUTHORIZATION-MAIN-AGENT-ONLY, blocked from a SUBAGENT context only.
  *   - the actor-independent guard rules (inline interpreters, detached wait tools, `timeout`-wrapped
  *     sanctioned tools, ad-hoc sub-issue / thread-reply / Copilot-request writes, raw PR/issue body
  *     writes, `git stash`), the coordinator verify boundary, and the unresolve owner allowlist.
@@ -402,6 +411,36 @@ export function decideBashGateDeny(facts = {}) {
         "through `dev-loops-run cli/index.mjs issue edit`. Write the ADR " +
         "tripwire waiver only through the launcher (`dev-loops-run cli/index.mjs pr waive-adr-tripwire`), " +
         "which needs a standing authorization on the default branch.",
+    };
+  }
+
+  // OPERATOR-OWNED-LINE (raw comment-write half): the operator and the agents share one GitHub
+  // credential, so every wrapper refuses an operator-owned line, and a raw comment write is the
+  // path around them. Actor-independent, the main agent included. Runs before the subagent inline
+  // external-write deny so the comment verbs carry the registered ID for every actor.
+  if (inManagedRepo && commandContainsRawCommentWrite(command, managedSlug)) {
+    return {
+      ruleId: "OPERATOR-OWNED-LINE",
+      reason:
+        "OPERATOR-OWNED-LINE: raw comment writes (`gh issue|pr comment`, `gh issue|pr close|reopen --comment`, " +
+        "`gh api` body writes to issues/<n>/comments or issues/comments/<id>, graphql addComment/updateIssueComment) " +
+        "are blocked for every actor, because the sanctioned wrappers are the only path that refuses an operator-owned line. " +
+        "Post a comment through `dev-loops-run scripts/github/comment-issue.mjs`, edit one through " +
+        "`dev-loops-run scripts/github/edit-comment.mjs`, or write a gate comment through the gate writers. " +
+        "The human posts an operator-owned line.",
+    };
+  }
+
+  // STANDING-AUTHORIZATION-MAIN-AGENT-ONLY: the paths whose authority is a self-asserted standing
+  // authorization (`--standing-authorization`, the ADR tripwire waiver) belong to the main agent.
+  // Any subagent role is denied; merge-pr.mjs is a separate rule.
+  if (typeof role === "string" && commandRunsStandingAuthorizationPath(command)) {
+    return {
+      ruleId: "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY",
+      reason:
+        "STANDING-AUTHORIZATION-MAIN-AGENT-ONLY: denied, `--standing-authorization` on comment-issue.mjs or edit-comment.mjs and " +
+        "`waive-adr-tripwire` are reserved for the main agent. A subagent never asserts a standing operator authorization. " +
+        "Return the need to the dev-loop coordinator or the main agent instead.",
     };
   }
 

@@ -247,8 +247,8 @@ test("Step 4 and the Output artifact format pin the results comment's exact requ
   }
   assert.match(
     step4,
-    /Any `source:` and `bypass:` line comes immediately AFTER that first line/,
-    "Step 4 must state that source:/bypass: lines follow the title, never precede it",
+    /Any `source:` line comes immediately AFTER that first line/,
+    "Step 4 must state that the source: line follows the title, never precedes it",
   );
 });
 
@@ -303,8 +303,13 @@ test("Step 1 names the operator-authorized bypass exception to the grill_clean e
   );
   assert.match(
     step1,
-    /run Steps 2–4 anyway, and the results comment records the `bypass: operator-authorized by <handle>` line per Step 4/,
-    "Step 1 must state the bypassed run proceeds through Steps 2-4 and records the bypass line",
+    /run Steps 2–4 anyway and post the results comment without the `bypass: operator-authorized by <handle>` line/,
+    "Step 1 must state the bypassed run proceeds through Steps 2-4 and posts the comment without the line",
+  );
+  assert.match(
+    step1,
+    /the final report names the exact line for the operator to add to the posted results comment/,
+    "Step 1 must state the final report names the line for the human",
   );
   assert.match(
     step1,
@@ -395,9 +400,17 @@ test("Step 4 states a zero-gap semantic pass MUST post the results comment, and 
   );
   assert.match(
     step4,
-    /`bypass: operator-authorized by <handle>` line/,
-    "Step 4 must document the recorded bypass line format",
+    /posts the results comment without the `bypass: operator-authorized by <handle>` line/,
+    "Step 4 must say the authorized re-grill posts the results comment without the line",
   );
+  assert.match(
+    step4,
+    /for the operator to add to the posted results comment. The reader accepts the line only in a comment whose first non-empty line is the results heading/,
+    "Step 4 must say the final report names the line",
+  );
+  // No instruction anywhere in the skill tells the agent to record the line.
+  assert.doesNotMatch(skill, /\b(?:records?|recording|writes?|posts?|adds?) (?:a |the )?`bypass:/i, "the skill must not tell the agent to record the line");
+  assert.doesNotMatch(skill, /^bypass:/im, "no skill line may open with the provenance line");
 });
 
 test("GRILL-SPEC-LINT: Step 2 runs spec-lint and Step 5 refuses grill-clean over an open finding", () => {

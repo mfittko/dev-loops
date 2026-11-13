@@ -874,11 +874,19 @@ test("absolute and unapproved T1 size limits remain unwaivable", async () => {
   }
 });
 
-test("size waiver --reason carrying an operator-owned release approval is neutralized in the record", async () => {
-  const { result, commentBody } = await runWaiverCase({ config: DEFAULT_WAIVER, args: ["--reason", "approve release v1.2.3"], allow: true });
+test("size waiver --reason or --approved-by carrying an operator-owned line is refused with no comment", async () => {
+  for (const args of [["--reason", "approve release v1.2.3"], ["--reason", "ok", "--approved-by", "approve release v1.2.3"]]) {
+    const { result, calls } = await runWaiverCase({ config: DEFAULT_WAIVER, args });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /OPERATOR-OWNED-LINE/);
+    assert.ok(!calls.some((call) => call[0] === "pr" && ["ready", "comment"].includes(call[1])));
+  }
+});
+
+test("size waiver --reason with a backticked operator-owned phrase still posts", async () => {
+  const { result, commentBody } = await runWaiverCase({ config: DEFAULT_WAIVER, args: ["--reason", "`approve release v1.2.3` is quoted"], allow: true });
   assert.equal(result.code, 0, result.stderr);
-  assert.ok(!commentBody.split("\n").some((line) => /^approve release/i.test(line)));
-  assert.match(commentBody, /\*\*justification:\*\* `approve release`/);
+  assert.match(commentBody, /\*\*justification:\*\* `approve release` v1.2.3 is quoted/);
 });
 
 test("approved T1 size waiver names its approver", async () => {

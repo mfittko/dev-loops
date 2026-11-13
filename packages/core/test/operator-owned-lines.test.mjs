@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { OPERATOR_OWNED_LINES, findOperatorOwnedLineRefusal } from "../src/github/operator-owned-lines.mjs";
+import { OPERATOR_OWNED_LINES, findOperatorOwnedLineRefusal, wrapOperatorOwnedPhrases } from "../src/github/operator-owned-lines.mjs";
+import { detectGrillProvenance } from "../src/loop/refinement-grill-state.mjs";
 import { guardCommentBodyNoIssuePrIds } from "../src/github/comment-id-guard.mjs";
 import { parseCopilotBodyDispositionMarker } from "../src/github/copilot-body-disposition-marker.mjs";
 import { verifyFreshHumanApproval } from "../src/loop/merge-approval.mjs";
@@ -13,12 +14,15 @@ import { extractWaiverLines } from "../../../scripts/loop/adr-waiver-markers.mjs
 const SHA = "a".repeat(40);
 const FIX = "b".repeat(40);
 const operatorMarker = (review = "9") => `<!-- dev-loops:copilot-body-disposition review=${review} head=${SHA} operator -->`;
+const GRILL_HEAD = "## 🔬 Grill / refinement results";
+const grillLine = (handle) => `bypass: operator-authorized by ${handle}`;
+const grillComment = (handle, line = grillLine(handle)) => `${GRILL_HEAD}\n\nSummary\n${line}\n`;
 const fixMarker = `<!-- dev-loops:copilot-body-disposition review=9 head=${SHA} fix=${FIX} -->`;
 
 test("registry: exact entry ids and standingAuthorization values", () => {
   assert.deepEqual(
     OPERATOR_OWNED_LINES.map((e) => [e.id, e.standingAuthorization]),
-    [["approve-merge", false], ["approve-release", false], ["adr-tripwire-allow", false], ["copilot-body-disposition-operator", true]],
+    [["approve-merge", false], ["approve-release", false], ["adr-tripwire-allow", false], ["copilot-body-disposition-operator", true], ["grill-provenance-bypass", false]],
   );
   assert.ok(Object.isFrozen(OPERATOR_OWNED_LINES));
 });
@@ -35,6 +39,7 @@ const SAMPLES = {
   "approve-release": "approve release v1.2.3",
   "adr-tripwire-allow": "adr-tripwire:allow hand written reason",
   "copilot-body-disposition-operator": operatorMarker(),
+  "grill-provenance-bypass": grillComment("@op"),
 };
 
 test("every registry entry refuses its sample, names OPERATOR-OWNED-LINE and its label, and says the human posts", () => {
@@ -150,5 +155,70 @@ test("adr-tripwire-allow: the registry line match agrees with the waiver reader 
   for (const body of samples) {
     const entry = OPERATOR_OWNED_LINES.find((e) => e.id === "adr-tripwire-allow");
     assert.equal(entry.matches(body), extractWaiverLines(body).length > 0, JSON.stringify(body));
+  }
+});
+
+test("the grill provenance entry refuses every body the reader accepts as a bypass", () => {
+  const bodies = [
+    grillComment("op"),
+    grillComment("@op"),
+    grillComment("op", grillLine("op").replace("bypass:", "BYPASS:")),
+    grillComment("op", ` ${grillLine("op")}`),
+    grillComment("op", `\`\`\`\n${grillLine("op")}\n\`\`\``),
+  ];
+  for (const body of bodies) {
+    assert.equal(detectGrillProvenance([body]).bypass, true, body);
+    assert.match(findOperatorOwnedLineRefusal(body, { standingAuthorization: true }), /grill provenance/, body);
+  }
+});
+
+test("the grill provenance entry passes a backticked mention and a body that is not a results comment", () => {
+  assert.equal(findOperatorOwnedLineRefusal(grillComment("op", `the line \`${grillLine("op")}\` is operator-owned`)), null);
+  assert.equal(findOperatorOwnedLineRefusal(`Reviewer note\n${grillLine("op")}`), null);
+});
+
+test("wrapOperatorOwnedPhrases wraps the tail of a release approval split by a code span", () => {
+  const split = "approve `x` release v1.2.3";
+  assert.notEqual(findOperatorOwnedLineRefusal(split), null, "the guard reads the split form as an approval");
+  assert.equal(findOperatorOwnedLineRefusal(wrapOperatorOwnedPhrases(split)), null);
+});
+
+test("wrapOperatorOwnedPhrases leaves an existing balanced code span unchanged", () => {
+  assert.equal(wrapOperatorOwnedPhrases("`run approve merge now`"), "`run approve merge now`");
+  assert.equal(wrapOperatorOwnedPhrases("`keep` approve merge `keep`"), "`keep` `approve merge` `keep`");
+});
+
+test("wrapOperatorOwnedPhrases returns author backticks unchanged when no operator-owned phrase is present", () => {
+  for (const text of ["```\ncode\n```", "```js\nconst a = `x`;\n```", "line1 `code\nspan` end", "use `foo bar", "a ``double`` span"]) {
+    assert.equal(wrapOperatorOwnedPhrases(text), text);
+  }
+});
+
+test("wrapOperatorOwnedPhrases stays linear on a long whitespace run after approve", () => {
+  const started = Date.now();
+  wrapOperatorOwnedPhrases(`| approve${" ".repeat(60)}| yes |\n\nSee \`x\` here.`);
+  assert.ok(Date.now() - started < 500);
+});
+
+test("wrapOperatorOwnedPhrases wraps a release version whole, with or without the v", () => {
+  assert.equal(wrapOperatorOwnedPhrases("release v1.0.12 ships"), "`release v1.0.12` ships");
+  assert.equal(wrapOperatorOwnedPhrases("release 1.0.12-pre.1 ships"), "`release 1.0.12-pre.1` ships");
+});
+
+test("wrapOperatorOwnedPhrases wraps a release version at a word start only and stops before a sentence-final period", () => {
+  assert.equal(wrapOperatorOwnedPhrases("prerelease 2 ships"), "prerelease 2 ships");
+  assert.equal(wrapOperatorOwnedPhrases("we cut release v1.0.12."), "we cut `release v1.0.12`.");
+  assert.equal(wrapOperatorOwnedPhrases("release v1.0.12"), "`release v1.0.12`");
+});
+
+test("wrapOperatorOwnedPhrases keeps the newline of a non-approval release followed by a numbered item", () => {
+  assert.equal(wrapOperatorOwnedPhrases("Cut the release\n2. Then tag it"), "Cut the release\n2. Then tag it");
+  assert.equal(wrapOperatorOwnedPhrases("approve `x` release v1.2.3"), "approve `x` `release v1.2.3`");
+});
+
+test("wrapOperatorOwnedPhrases leaves no reader-accepted release approval unwrapped, newline included", () => {
+  for (const body of ["approve `x` release\nv1.2.3", "approve `x` release v1.2.3.", "approve `x` release\nv1.2.3-rc.1", "approve `x` `y` release\nv1.2.3", "approve `release v1.2.3"]) {
+    assert.notEqual(findOperatorOwnedLineRefusal(body), null, JSON.stringify(body));
+    assert.equal(findOperatorOwnedLineRefusal(wrapOperatorOwnedPhrases(body)), null, JSON.stringify(body));
   }
 });
