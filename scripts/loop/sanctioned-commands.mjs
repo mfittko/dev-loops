@@ -91,7 +91,7 @@ export const SANCTIONED_COMMANDS = Object.freeze({
   // sanctioned wrapper (scripts/github/merge-pr.mjs --human-approved-by <login>);
   // raw `gh pr merge` is forbidden (RAW-GH-PR-MERGE-BYPASS in anti-patterns.md).
   orchestratorOwned: Object.freeze([
-    "pr merge via scripts/github/merge-pr.mjs --human-approved-by <login> (raw gh pr merge forbidden)",
+    "pr merge via scripts/github/merge-pr.mjs --human-approved-by <login> (raw gh pr merge forbidden; `--check` is allowed for every actor and the Bash gate denies the merge to any subagent)",
     "board status transitions (move-queue-item / sync-item-status.mjs; current batch model)",
     "board-item removal via scripts/projects/remove-queue-item.mjs (undo of a wrong queue add only; raw deleteProjectV2Item forbidden)",
     "ADR tripwire waiver via scripts/github/waive-adr-tripwire.mjs (the only writer of an adr-tripwire:allow line; edit-pr.mjs and create-pr.mjs refuse a hand-written one)",
