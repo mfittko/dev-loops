@@ -64,7 +64,7 @@ test("runCli: a clean staged diff exits 0 with no hits", async () => {
 // exitCode into the test runner itself regardless of which assertions pass.
 test("runCli (spawned): a staged literal credential blocks and NEVER echoes the value in the payload", async () => {
   const dir = await initRepo();
-  const credentialValue = join("ghp_", "B".repeat(20), "c2");
+  const credentialValue = join("ghp_", "B".repeat(34), "c2");
   try {
     await writeFile(path.join(dir, "config.sh"), `export TOKEN="${credentialValue}"\n`);
     git(dir, ["add", "config.sh"]);
@@ -75,7 +75,7 @@ test("runCli (spawned): a staged literal credential blocks and NEVER echoes the 
     assert.equal(parsed.error, "secret_scan_hit");
     assert.equal(parsed.hits.length, 1);
     assert.equal(parsed.hits[0].file, "config.sh");
-    assert.equal(parsed.hits[0].detectorClass, "literal-credential");
+    assert.equal(parsed.hits[0].ruleId, "@secretlint/secretlint-rule-github");
     assert.ok(!result.stdout.includes(credentialValue), "stdout must never contain the matched value");
     assert.ok(!result.stderr.includes(credentialValue), "stderr must never contain the matched value");
   } finally {

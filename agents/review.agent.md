@@ -92,6 +92,7 @@ The `tools:` frontmatter declares only harness-universal builtins (`read`, `bash
 - Run those configured angle-focused passes in fresh context and in parallel when practical.
 - If parallel execution is impractical (for example due to tooling or resource constraints), still cover all configured angles and explicitly record the limitation in the review verdict output.
 - Security and compliance: flag unsafe secret handling, auth or permission regressions, insecure defaults, unsafe command execution, data exposure, or workflow risks.
+- Secret leaks: check the diff for a prefixless secret (a credential value with no provider prefix, such as a hex signing key) and for a secret value written to a log, a file or a workflow output. The `secret_scan` merge precondition covers only the provider formats of its rule library, so this judgement is the only check for these cases. Report a real leak as a `high` finding; it blocks through the judge flow. Do not report a public value that carries a same-line `secret-scan:allow <reason>` marker.
 - Merge readiness: identify missing tests (only those admissible under [VALIDATE-COVERAGE-ADMISSION](../skills/docs/validation-policy.md)), missing docs, missing rollout notes, verdict gaps, changelog gaps, or PR description gaps that would block confident review.
 
 ## Expectations

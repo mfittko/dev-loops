@@ -53,6 +53,7 @@ function makeRuntime(detectEvidence) {
       isAncestor: () => true,
       detectOriginSlug: () => "mfittko/dev-loops",
       evaluateAdrTripwire: async () => ({ outcome: "pass" }),
+      readMergeDiff: () => "",
       loadConfig: async () => ({ config: { autonomy: { humanMergeOnly: false }, refinement: { maxCopilotRounds: 0 } }, errors: [] }),
       cwd: process.cwd(),
       // No-op post-merge steps: the real ones would fast-forward and prune the test checkout.

@@ -96,11 +96,11 @@ test("pre-commit hook e2e: a clean staged diff commits normally", async () => {
 
 test("pre-commit hook e2e: a planted literal credential is blocked by the REAL hook, value never echoed", async () => {
   const dir = await repoFixtureWithScanner();
-  const credentialValue = join("ghp_", "C".repeat(20), "d3");
+  const credentialValue = join("ghp_", "C".repeat(34), "d3");
   try {
     const result = commitAttempt(dir, "config.sh", `export TOKEN="${credentialValue}"\n`);
     assert.equal(result.blocked, true, "expected the planted credential to block the commit");
-    assert.match(result.stderr, /literal-credential/);
+    assert.match(result.stderr, /secretlint-rule-github/);
     assert.match(result.stderr, /config\.sh/);
     assert.ok(!result.stdout.includes(credentialValue), "stdout must never contain the matched value");
     assert.ok(!result.stderr.includes(credentialValue), "stderr must never contain the matched value");
@@ -113,7 +113,7 @@ test("pre-commit hook e2e: a planted literal credential is blocked by the REAL h
 
 test(`pre-commit hook e2e: ${GUARD_OVERRIDE_ENV}=1 does NOT bypass the secret scan (only the default-branch guard)`, async () => {
   const dir = await repoFixtureWithScanner();
-  const credentialValue = join("ghp_", "D".repeat(20), "e4");
+  const credentialValue = join("ghp_", "D".repeat(34), "e4");
   try {
     const result = commitAttempt(dir, "config.sh", `export TOKEN="${credentialValue}"\n`, { [GUARD_OVERRIDE_ENV]: "1" });
     assert.equal(result.blocked, true, "the release override must never silence a secret-scan hit");

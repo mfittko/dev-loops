@@ -1,275 +1,51 @@
 /**
- * Fail-closed secret scan over the ADDED lines of a unified git diff.
+ * Secret scan over the ADDED lines of a unified git diff.
  *
- * No external dependency (no gitleaks/trufflehog): this module is a small,
- * self-contained detector set, deliberately kept auditable rather than
- * outsourced. It is deterministic and side-effect free — it never reads or
- * writes anything itself; callers (the CLI, the git hook) supply the diff
- * text and act on the result.
+ * Detection runs through the maintained `@secretlint/core` engine with the
+ * `@secretlint/secretlint-rule-preset-recommend` rule set (provider token
+ * formats, private keys, basic-auth URLs, ...). This module is a thin adapter:
+ * it owns the diff parsing, the allow marker and the finding shape, and it adds
+ * no detector of its own. The fuzzy part (a prefixless secret, a secret value
+ * written to a log or file) is judged by the gate reviewer, not here.
  *
- * Three detector classes (see DETECTOR_CLASSES):
- *  - literal-credential: a known provider token PREFIX (ghp_, xoxb-, AKIA...,
- *    a PEM private-key header, ...), literal OR base64-encoded.
- *  - high-entropy: a long single-token run whose Shannon entropy is above a
- *    tuned threshold — catches a credential with no recognized prefix.
- *  - sink-pattern: a secret-NAMED variable (*TOKEN*, *SECRET*, ...) and an
- *    output sink (echo/printf/tee/base64/redirect/workflow `::` directive)
- *    on the SAME line — no literal secret value has to be present in the diff
- *    for this to fire; it is what catches a secret-named var piped into a
- *    logged/echoed stream.
+ * Enforcement split: the merge gate (`scripts/github/merge-pr.mjs`,
+ * precondition `secret_scan`) blocks fail-closed; the local pre-commit hook is
+ * the early signal and warns (issue 1858 moves it from blocking to warning).
+ * A blocking false positive costs an agent loop a stopped pass, an extra
+ * dispatch and a reworded line, so no home-built heuristic sits in a blocking
+ * path.
  *
- * A finding NEVER carries the matched value — only file/line/detector-class
- * and a canned, value-free reason string. A secret, once flagged, is treated
- * as unrecoverable: there is no "show me the match" affordance anywhere in
- * this module.
+ * A finding never carries the matched value: only file, line, rule id and a
+ * canned reason.
  *
- * Allowlisting: an inline `secret-scan:allow` marker plus a trailing reason
- * (comment syntax is irrelevant — this is a plain substring test) on the SAME
- * line exempts that one line from every detector. There is no global disable
- * and no central baseline file — every exemption is visible in the diff it
- * exempts.
+ * Allowlisting: a `secret-scan:allow <reason>` marker on the SAME line
+ * exempts that one line from every rule. A marker without a reason exempts
+ * nothing. There is no global disable and no central baseline file.
  */
-
-export const DETECTOR_CLASSES = Object.freeze({
-  LITERAL_CREDENTIAL: "literal-credential",
-  HIGH_ENTROPY: "high-entropy",
-  SINK_PATTERN: "sink-pattern",
-});
+import { lintSource } from "@secretlint/core";
+import { creator as recommendedPreset } from "@secretlint/secretlint-rule-preset-recommend";
 
 export const ALLOW_MARKER = "secret-scan:allow";
 const ALLOW_RE = /secret-scan:allow\s+(\S.*?)\s*$/u;
 
-/**
- * Known provider token/credential PREFIX formats. Each pattern requires the
- * full token shape (prefix + a plausible body length), not just the prefix
- * alone — a bare mention of a prefix constant (as in this module's own
- * source) is short of the required body length and never self-matches.
- */
-const LITERAL_PATTERNS = [
-  { name: "github-pat-classic", re: /\bghp_[A-Za-z0-9]{20,}\b/ },
-  { name: "github-pat-fine-grained", re: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/ },
-  { name: "github-oauth-token", re: /\bgho_[A-Za-z0-9]{20,}\b/ },
-  { name: "github-user-to-server-token", re: /\bghu_[A-Za-z0-9]{20,}\b/ },
-  { name: "github-server-to-server-token", re: /\bghs_[A-Za-z0-9]{20,}\b/ },
-  { name: "github-refresh-token", re: /\bghr_[A-Za-z0-9]{20,}\b/ },
-  { name: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/ },
-  { name: "aws-access-key-id", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
-  { name: "pem-private-key", re: /-----BEGIN [A-Z0-9]+(?: [A-Z0-9]+)* PRIVATE KEY-----/ },
-];
-
-/** True when `text` matches any known literal credential prefix format. */
-function matchLiteralPattern(text) {
-  for (const pattern of LITERAL_PATTERNS) {
-    if (pattern.re.test(text)) return pattern.name;
-  }
-  return null;
-}
-
-// A base64-shaped run long enough to plausibly carry an encoded credential.
-// `g` (global) so every candidate run on the line is checked, not just the
-// first.
-const BASE64_CANDIDATE_RE = /[A-Za-z0-9+/]{20,}={0,2}/gu;
+// The preset default skips a bare AWS access key id; enableIDScanRule turns it on.
+const SECRETLINT_CONFIG = {
+  rules: [{
+    id: recommendedPreset.meta.id,
+    rule: recommendedPreset,
+    rules: [{ id: "@secretlint/secretlint-rule-aws", options: { enableIDScanRule: true } }],
+  }],
+};
 
 /**
- * Whether `text` contains a base64-shaped substring that DECODES to a known
- * literal credential format — the "value stored encoded" case a plain
- * literal-prefix scan over the RAW diff text would miss.
- */
-function matchBase64Credential(text) {
-  const candidates = text.match(BASE64_CANDIDATE_RE) ?? [];
-  for (const candidate of candidates) {
-    let decoded;
-    try {
-      decoded = Buffer.from(candidate, "base64").toString("utf8");
-    } catch {
-      continue;
-    }
-    const hit = matchLiteralPattern(decoded);
-    if (hit) return hit;
-  }
-  return null;
-}
-
-/**
- * Shannon entropy in bits/character. Pure math, no I/O — exported so the
- * threshold this module tunes is independently testable.
- * @param {string} str
- * @returns {number}
- */
-export function shannonEntropy(str) {
-  if (str.length === 0) return 0;
-  const counts = new Map();
-  for (const ch of str) counts.set(ch, (counts.get(ch) ?? 0) + 1);
-  let entropy = 0;
-  for (const count of counts.values()) {
-    const p = count / str.length;
-    entropy -= p * Math.log2(p);
-  }
-  return entropy;
-}
-
-// A candidate is a single unbroken run (no whitespace, no `=`) of the
-// characters a token/secret literal is typically made of. `=` is
-// deliberately EXCLUDED from the run (unlike the base64-candidate pattern
-// above, which keeps it for trailing padding): an ordinary `KEY=value`
-// shell/env assignment is otherwise read as one inflated, higher-entropy
-// candidate spanning both sides of the `=` — splitting there scores the key
-// and the value separately, each far more likely to fall under the length or
-// digit/letter floor below on its own. Tuned length/threshold: 20 chars is
-// short enough to catch a real secret, long enough that ordinary identifiers
-// rarely reach it; 4.3 bits/char sits between plain lowercase English (~4.0
-// max, usually much lower) and true base64/hex randomness (~4.5-6). Both
-// digit AND letter are required so a long plain word (no digits) never
-// qualifies — false positives here cost only an allowlist line; a missed
-// real secret costs a leak, so the length/threshold pair leans toward
-// catching more, not fewer.
-const ENTROPY_CANDIDATE_RE = /[A-Za-z0-9+/_.-]{20,}/gu;
-const ENTROPY_MIN_LENGTH = 20;
-const ENTROPY_THRESHOLD = 4.3;
-
-function hasHighEntropyToken(text) {
-  // Path-shaped runs: split a run at `/` only when it looks like a path (contains `/`
-  // and ends in a file extension) so each segment is scored alone, and skip
-  // timestamped migration file names (`20240101123456_add_x.rb`). Other runs,
-  // including random secrets containing `/` with no file extension, are scored whole.
-  // Trailing `.` (sentence-final punctuation) is stripped so the anchored checks see the bare name.
-  const candidates = (text.match(ENTROPY_CANDIDATE_RE) ?? [])
-    .map((run) => run.replace(/\.+$/u, ""))
-    .flatMap((run) =>
-    run.includes("/") && /\.[A-Za-z][A-Za-z0-9]{0,9}$/u.test(run) ? run.split("/") : [run],
-  );
-  for (const candidate of candidates) {
-    if (candidate.length < ENTROPY_MIN_LENGTH) continue;
-    if (/^\d{8,14}_[a-z0-9_]+\.[a-z]+$/u.test(candidate)) continue;
-    if (!/[0-9]/.test(candidate) || !/[A-Za-z]/.test(candidate)) continue;
-    if (shannonEntropy(candidate) >= ENTROPY_THRESHOLD) return true;
-  }
-  return false;
-}
-
-// A variable/env-key NAME that reads as a secret. Substring match for
-// TOKEN/SECRET/PASSWORD(/PASSWD) (`API_TOKEN`, `authToken`, `DB_PASSWORD`,
-// ...), suffix match for `_PAT`/`_KEY` (deliberately a suffix, not a
-// substring — "_KEY" alone would otherwise fire on ordinary words like
-// "keyboard"), plus the literal incident-motivating name. Tested per
-// IDENTIFIER, not per whole line — see hasSecretNamedIdentifier.
-const SECRET_KEYWORD_RE = /(?:TOKEN|SECRET|PASSWORD|PASSWD)|_PAT$|_KEY$/iu;
-const IDENTIFIER_RE = /[A-Za-z_][A-Za-z0-9_]*/gu;
-
-/**
- * True when `identifier` (an already-extracted `[A-Za-z_][A-Za-z0-9_]*` run)
- * is SHAPED like a real variable/env-key name rather than a plain English
- * word that merely contains a secret keyword as a substring: it has an
- * underscore (snake_case / SCREAMING_SNAKE env-var shape, e.g.
- * `GITHUB_TOKEN`, `foo_api_key`), mixes upper and lower case
- * (camelCase/PascalCase, e.g. `authToken`), or is entirely uppercase letters
- * (a bare ALL-CAPS identifier, e.g. `SECRET` used standalone). A plain
- * single-case word with no underscore — "token", "secretary", "tokenize" —
- * is not identifier-shaped, even though it may contain a secret keyword as a
- * substring: "token-economical" and a bare "token" in prose don't qualify.
- */
-function isIdentifierShaped(identifier) {
-  if (identifier.includes("_")) return true;
-  const hasUpper = /[A-Z]/u.test(identifier);
-  const hasLower = /[a-z]/u.test(identifier);
-  if (hasUpper && hasLower) return true; // camelCase / PascalCase
-  return hasUpper && !hasLower; // bare ALL-CAPS identifier (e.g. `SECRET`)
-}
-
-function hasSecretNamedIdentifier(text) {
-  for (const identifier of text.match(IDENTIFIER_RE) ?? []) {
-    if (identifier.toUpperCase() === "BUNDLE_GITHUB__COM") return true;
-    if (SECRET_KEYWORD_RE.test(identifier) && isIdentifierShaped(identifier)) return true;
-  }
-  return false;
-}
-
-// An angle-bracket PLACEHOLDER or generic type — `<owner/name>`, `<x>`, a
-// `Map` of two type parameters where the second is a credential-named type —
-// whose trailing angle bracket is not a shell redirect. The content charset
-// is deliberately narrow (identifier/path-ish chars only: letters, digits,
-// `_ , . / : -` and interior spaces) and must both START and END on an
-// identifier/path char (never on a space): this is what keeps a REAL
-// redirect pair like `<input.txt >output.txt` (space right before the
-// trailing bracket) from being misread as one placeholder spanning both —
-// the bracket-strip below would otherwise swallow a genuine redirect target.
-// Applied in a loop so nested placeholders (two levels of generic type
-// parameters) are fully stripped, innermost first.
-const ANGLE_PLACEHOLDER_RE = /<[A-Za-z0-9_](?:[A-Za-z0-9_ ,./:-]*[A-Za-z0-9_.])?>/gu;
-
-function stripAnglePlaceholders(text) {
-  let stripped = text;
-  let previous;
-  do {
-    previous = stripped;
-    stripped = stripped.replace(ANGLE_PLACEHOLDER_RE, "");
-  } while (stripped !== previous);
-  return stripped;
-}
-
-// Output sinks named in the motivating incident: echo/printf/tee, base64
-// (encode-then-emit), a `>`/`>>` redirect, and a GitHub Actions workflow
-// `::directive::`. This is deliberately a same-line, no-literal-value-
-// required class, so a variable name reaching a sink is enough on its own.
-// A workflow mask directive next to the sink call does not change the
-// verdict: masking only redacts what CI's log renderer shows LATER, so a
-// value still reaches this stream unmasked, and the flow is still a hit.
-// The redirect branch excludes `=>`/`->`/`>=` (lookbehind/lookahead around the
-// bare `>`/`>>`) — those are an arrow function or a comparison in ordinary
-// source, not a shell redirect, and would otherwise fire on nearly any JS/TS
-// line that also happens to name a *TOKEN*/*SECRET*/... variable — and
-// requires a plausible target to follow (`> file`, `>>out.log`,
-// `>/dev/null`), never a bare `>` with nothing after it. Run against the
-// angle-placeholder-stripped text (see stripAnglePlaceholders) so a `>` that
-// merely closes a `<owner/name>` placeholder or a `Map<string, AuthToken>`
-// generic is never read as a redirect.
-const SINK_RE = /\b(?:echo|printf|tee|base64)\b|(?<![=-])>{1,2}(?!=)(?=\s*\S)|::[A-Za-z][\w-]*::/u;
-
-function hasSecretNameToSinkFlow(text) {
-  return hasSecretNamedIdentifier(text) && SINK_RE.test(stripAnglePlaceholders(text));
-}
-
-/**
- * The reason a matched line is allowlisted, or `null` when it is not. Any
- * comment syntax works (`#`, `//`, `<!--`, ...): this is a plain substring
- * test, not a language-aware parse — the `secret-scan:allow` marker plus a
- * trailing reason exempts the ONE line it appears on, nothing else.
+ * The reason a line is allowlisted, or `null` when it is not. Any comment
+ * syntax works: this is a plain substring test.
  * @param {string} text
  * @returns {string|null}
  */
 export function allowlistReason(text) {
   const match = ALLOW_RE.exec(text);
   return match ? match[1] : null;
-}
-
-/**
- * Scan one added line's text against all three detector classes.
- * @param {string} text
- * @returns {{ detectorClass: string, reason: string }[]}
- */
-export function scanLineText(text) {
-  if (allowlistReason(text) !== null) return [];
-  const findings = [];
-  const literal = matchLiteralPattern(text) ?? matchBase64Credential(text);
-  if (literal) {
-    findings.push({
-      detectorClass: DETECTOR_CLASSES.LITERAL_CREDENTIAL,
-      reason: `matches known credential format (${literal})`,
-    });
-  }
-  if (hasHighEntropyToken(text)) {
-    findings.push({
-      detectorClass: DETECTOR_CLASSES.HIGH_ENTROPY,
-      reason: "high-entropy token-shaped literal",
-    });
-  }
-  if (hasSecretNameToSinkFlow(text)) {
-    findings.push({
-      detectorClass: DETECTOR_CLASSES.SINK_PATTERN,
-      reason: "secret-named variable flows into an output sink on this line",
-    });
-  }
-  return findings;
 }
 
 /**
@@ -290,7 +66,7 @@ export function parseAddedLines(diffText) {
   // `--- `-shaped content) is added/removed CONTENT, never a header. Gate the
   // header checks on hunk position (`inHunk`), not a naive prefix test alone,
   // so a planted credential on a line whose content happens to start with
-  // `+ ` can never be misread as a header and skipped from every detector.
+  // `+ ` can never be misread as a header and skipped.
   let inHunk = false;
   for (const rawLine of diffText.split("\n")) {
     if (rawLine.startsWith("diff --git ")) {
@@ -324,41 +100,25 @@ export function parseAddedLines(diffText) {
 }
 
 /**
- * Scan a full unified diff. Findings never carry the matched substring —
- * only file/line/detectorClass/reason.
+ * Scan a full unified diff. The added lines of each file are linted as one
+ * source, so a multi-line credential (a PEM block) is still seen whole.
+ * Throws when the library fails; callers treat a throw as a refusal.
  * @param {string} diffText
- * @returns {{ ok: boolean, findings: { file: string, line: number, detectorClass: string, reason: string }[] }}
+ * @returns {Promise<{ ok: boolean, findings: { file: string|null, line: number, ruleId: string, reason: string }[] }>}
  */
-// The committed `.claude/package-lock.json` is, like `bun.lock`, a fully
-// machine-generated lockfile whose every token derives from public npm registry metadata
-// (Subresource Integrity digests, `resolved` tarball URLs, and long hyphenated per-platform
-// package names from its real transitive tree) — none of it is a secret by construction.
-// Unlike bun.lock's narrow tuple shape, an npm v3 lock spreads those long tokens across many
-// distinct field shapes, so rather than enumerate every
-// field individually the HIGH_ENTROPY detector is skipped for this one generated file; the
-// literal-credential and sink-pattern detectors still run over every line unchanged, so a real
-// credential shape landing here is still caught.
-const HIGH_ENTROPY_EXEMPT_FILES = new Set([".claude/package-lock.json"]);
-
-export function scanDiffText(diffText) {
+export async function scanDiffText(diffText) {
+  const byFile = Map.groupBy(parseAddedLines(diffText), (entry) => entry.file);
   const findings = [];
-  for (const entry of parseAddedLines(diffText)) {
-    // Bun's generated text lock ends registry dependency tuples with a public
-    // Subresource Integrity digest. Ignore only that exact generated field in
-    // bun.lock; the same high-entropy value in source, another file, or another
-    // position on the lock line remains visible to every detector.
-    const text = entry.file === "bun.lock"
-      ? entry.text
-        .replace(/, "sha(?:256|384|512)-[A-Za-z0-9+/]+={0,2}"\],?$/u, ", \"<registry-integrity>\"]")
-        // Bun expands this dependency's published platform package family in
-        // both tuple keys and optional-dependency metadata. Several legitimate
-        // names cross the generic entropy threshold despite containing no value.
-        .replace(/@mariozechner\/clipboard-[a-z0-9-]+/gu, "<clipboard-platform-package>")
-      : entry.text;
-    const skipHighEntropy = HIGH_ENTROPY_EXEMPT_FILES.has(entry.file ?? "");
-    for (const hit of scanLineText(text)) {
-      if (skipHighEntropy && hit.detectorClass === DETECTOR_CLASSES.HIGH_ENTROPY) continue;
-      findings.push({ file: entry.file, line: entry.line, ...hit });
+  for (const [file, entries] of byFile) {
+    const result = await lintSource({
+      source: { filePath: file ?? "unknown", content: entries.map((e) => e.text).join("\n"), contentType: "text" },
+      options: { config: SECRETLINT_CONFIG, maskSecrets: true, noPhysicFilePath: true },
+    });
+    for (const message of result.messages) {
+      // An unmappable location falls back to the first line so a hit is never dropped.
+      const entry = entries[(message.loc?.start?.line ?? 1) - 1] ?? entries[0];
+      if (allowlistReason(entry.text) !== null) continue;
+      findings.push({ file, line: entry.line, ruleId: message.ruleId, reason: `matches secretlint rule ${message.ruleId} (${message.messageId})` });
     }
   }
   return { ok: findings.length === 0, findings };
