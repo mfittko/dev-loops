@@ -3,14 +3,16 @@ import { test } from "bun:test";
 
 import * as head from "../src/loop/bash-command-classify.mjs";
 import * as main from "../../../test/fixtures/bash-command-classify.origin-main.mjs";
+import { readFileSync } from "node:fs";
 import { INLINE_DENY_ROWS } from "../../../test/fixtures/bash-command-classify.inline-deny-rows.mjs";
+import { INLINE_INTERPRETER_FORMS } from "../../../test/fixtures/inline-interpreter-forms.mjs";
 
 /**
- * Differential fail-open guard (#2442).
+ * Differential fail-open guard (#2442, decision 2).
  * `test/fixtures/bash-command-classify.origin-main.mjs` is a frozen copy of the classifier at origin/main
- * `47fd3a4fd`. For every corpus row and every predicate: a row the frozen copy denies is denied by the
- * head unless it is listed in `INTENDED_REMOVALS` (slice 2: lockout fixes, each with a reason, generated from rows that
- * are data by construction), and a row the frozen copy allows but the head denies must be listed in `SLICE1_FAIL_CLOSED_FLIPS`.
+ * `99bb8b3ce`, the slice 1 branch point. Over the corpus plus every row of the shared fixture table:
+ * a row the frozen copy's `commandContainsInlineInterpreter` denies and the head allows must be a fixture row
+ * marked `ceiling: true`; the other five predicates keep every decision.
  */
 
 const MANAGED_SLUG = "mfittko/dev-loops";
@@ -86,34 +88,28 @@ const HEREDOC_BODY_WRAPPERS = [
   (f) => `git commit -m "$(cat <<'EOF'\n${f}\nEOF\n)"`,
 ];
 
-/** Quote-pairing hazards the old regex mispaired; the head must not allow any of them where the frozen copy denies. */
+/** Quote-pairing hazard shapes the old regex mispaired: corpus rows for every predicate. */
 const HAZARD_LOOP = "while true; do gh pr view 5; sleep 5; done";
-const LOOP_PREDICATES = ["commandContainsDetachedWaitTool", "commandIsSleepPollLoop"];
-/** Marks a hazard shape whose loop sits inside quotes (data): its allowed rows are intended removals. The other shapes hold a real loop and must stay denied. */
-const DATA = "data";
-/** Each shape lists the only predicates whose frozen-allow/head-deny flip it may exempt, and optionally `DATA`. */
 const HAZARD_SHAPES = [
-  [(f) => `# it's\necho '${f}'`, LOOP_PREDICATES, "apostrophe in a # comment: the regex paired it across lines and blanked the loop; the stripper now blanks nothing", DATA],
-  [(f) => `echo "a \\" ; ${f}"`, LOOP_PREDICATES, "escaped quote: the regex mispaired the quotes; the stripper now blanks nothing", DATA],
-  [(f) => `echo $'a\\' ; ${f} '`, LOOP_PREDICATES, "escaped quote in an ANSI-C string: the regex mispaired the quotes; the stripper now blanks nothing", DATA],
-  [(f) => `cat <<'EOF'\nit's\nEOF\necho '${f}'`, LOOP_PREDICATES, "quote in a heredoc body: the regex paired it with later quotes; the stripper now blanks nothing", DATA],
-  [(f) => `echo it\\'s; echo '${f}'`, LOOP_PREDICATES, "escaped apostrophe: the regex mispaired the quotes; the stripper now blanks nothing", DATA],
-  [() => "while :; do `true '`; 'sleep' 5; gh pr view 5; done", LOOP_PREDICATES, "apostrophe inside a backtick span: the regex mispaired the quotes; the stripper now blanks nothing"],
-  [() => "echo \\` ; while :; do `true '`; 'sleep' 5; gh pr view 5; done", LOOP_PREDICATES, "escaped backtick before a backtick span holding an apostrophe: the regex mispaired the quotes; the stripper now blanks nothing"],
-  // wrapped in a double-quoted --notes/-m, the lone backtick opens an unterminated substitution, so the inline-interpreter scan also fails closed
-  [() => "# `\nwhile :; do `true '`; 'sleep' 5; gh pr view 5; done", [...LOOP_PREDICATES, "commandContainsInlineInterpreter"], "backtick in a # comment followed by a backtick span holding an apostrophe: the stripper now blanks nothing"],
-  [() => "echo '`' \"'\" ; while :; do `true '`; 'sleep' 5; gh pr view 5; done", [...LOOP_PREDICATES, "commandContainsInlineInterpreter"], "quoted backtick and apostrophe before a backtick span holding an apostrophe: the stripper now blanks nothing"],
-  [() => 'while [ ! -f tmp/d ]; do echo "a \\"; sleep 2"; done', ["commandContainsDetachedWaitTool", "commandIsFileMarkerPollLoop"], "escaped quote inside a double-quoted word: the regex mispaired the quotes; the stripper now blanks nothing", DATA],
-  [() => "gh api repos/mfittko/dev-loops/pulls/5 -f body=x it\\'s -X GET 'y'", [], "escaped apostrophe: the stripper blanks nothing (no predicate flips)"],
-  [() => "gh pr edit 5 --title it\\'s --repo other/x 'y' --body z", ["commandContainsRawPrBodyEdit"], "escaped apostrophe: the stripper blanks nothing, so the flag-looking text stays visible"],
-  // wrapped in a quoted --notes/-m, the inner quote re-pairs and leaves an unterminated substitution, so the inline-interpreter scan also fails closed
-  [(f) => `echo "$(echo "'")" ; echo '${f}'`, [...LOOP_PREDICATES, "commandContainsInlineInterpreter"], "double-quoted $(...) holding a nested apostrophe: the regex paired the inner apostrophe with a later one; the stripper now blanks nothing", DATA],
-  [() => `gh pr edit 5 --title "$(echo "'")" --add-label 'x --body y'`, ["commandContainsInlineInterpreter"], "double-quoted $(...) holding a nested apostrophe inside a quoted wrapper leaves an unterminated substitution: the inline-interpreter scan fails closed (the PR-body edit is denied by both copies)"],
-  [(f) => 'echo "`echo "\'"`" ; echo \'' + f + "'", LOOP_PREDICATES, "double-quoted backtick span holding a nested apostrophe: the stripper now blanks nothing", DATA],
-  [(f) => "echo `echo \"'\" '`; echo '" + f + "'", LOOP_PREDICATES, "top-level backtick span holding interleaved even-count quotes: the regex paired a span quote with a later one; the stripper now blanks nothing", DATA],
+  (f) => `# it's\necho '${f}'`,
+  (f) => `echo "a \\" ; ${f}"`,
+  (f) => `echo $'a\\' ; ${f} '`,
+  (f) => `cat <<'EOF'\nit's\nEOF\necho '${f}'`,
+  (f) => `echo it\\'s; echo '${f}'`,
+  () => "while :; do `true '`; 'sleep' 5; gh pr view 5; done",
+  () => "echo \\` ; while :; do `true '`; 'sleep' 5; gh pr view 5; done",
+  () => "# `\nwhile :; do `true '`; 'sleep' 5; gh pr view 5; done",
+  () => "echo '`' \"'\" ; while :; do `true '`; 'sleep' 5; gh pr view 5; done",
+  () => 'while [ ! -f tmp/d ]; do echo "a \\"; sleep 2"; done',
+  () => "gh api repos/mfittko/dev-loops/pulls/5 -f body=x it\\'s -X GET 'y'",
+  () => "gh pr edit 5 --title it\\'s --repo other/x 'y' --body z",
+  (f) => `echo "$(echo "'")" ; echo '${f}'`,
+  () => `gh pr edit 5 --title "$(echo "'")" --add-label 'x --body y'`,
+  (f) => 'echo "`echo "\'"`" ; echo \'' + f + "'",
+  (f) => "echo `echo \"'\" '`; echo '" + f + "'",
 ];
 const hazardRowsOf = (shape) => [shape(HAZARD_LOOP), ...[...LIVE_WRAPPERS, ...QUOTED_WRAPPERS].map((wrap) => wrap(shape(HAZARD_LOOP)))];
-const HAZARD_ROWS = [...new Set(HAZARD_SHAPES.flatMap(([shape]) => hazardRowsOf(shape)))];
+const HAZARD_ROWS = [...new Set(HAZARD_SHAPES.flatMap((shape) => hazardRowsOf(shape)))];
 /** A `#N` inside quoted data is not a comment: the head must match the frozen copy on these rows. */
 const QUOTED_HASH_ROWS = [
   'gh pr edit 5 --repo other/x --body "Closes #12"',
@@ -251,51 +247,11 @@ const ARITH_SHIFT_ROWS = ["echo $((1<<2))", "echo $(( 1 << 2 ))", "x=$((a<<b)); 
 /** A chained command or a non-cat/tee heredoc host keeps a quoted-delimiter body visible: a backticked mention in it is now denied. */
 const CHAINED_HEREDOC_ROWS = ["git add -A && git commit -m \"$(cat <<'EOF'\nfix: refuse `node -e`\nEOF\n)\"", "node scripts/github/comment-issue.mjs 5 --body-file - <<'EOF'\nfix: refuse `node -e`\nEOF"];
 const rowKey = (name, cmd) => `${name}: ${JSON.stringify(cmd)}`;
-/**
- * Rows the frozen copy allows and the head denies on purpose (fail-closed, slice 1). Key: `<predicate>: <JSON command>`.
- * Each entry carries a one-line reason.
- */
-const SLICE1_FAIL_CLOSED_FLIPS = new Map();
-{
-  const flip = (name, reason, cmd) => SLICE1_FAIL_CLOSED_FLIPS.set(rowKey(name, cmd), reason);
-  const POLL = 'while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done';
-  const R_HEREDOC = "heredoc body never reaches a delimiter line (the trailing line is not EOF): incomplete, so the rest stays executable text";
-  const R_UNCLOSED = "unterminated $( substitution: incomplete, so commandContainsInlineInterpreter fails closed";
-  const R_COMMENT = "apostrophe in a # comment: the regex paired it across lines and blanked the loop; the tokenizer skips the comment";
-  const R_ESCAPE = 'escaped \\" inside a double-quoted word: the regex paired the quotes wrongly and blanked the loop; the tokenizer keeps the loop visible';
-  flip("commandContainsRawPrBodyEdit", "trailing # comment with an apostrophe is a quote-pairing hazard: the stripper blanks nothing, so the flag-looking text in the quoted title stays visible", "gh pr edit 5 --title 'a --body b' # it's");
-  flip("commandContainsInlineInterpreter", R_UNCLOSED, 'echo "$(gh pr view 5');
-  flip("commandContainsInlineInterpreter", "gh is no heredoc text host: its quoted cat heredoc body stays visible (host exemption is git commit only)", EOF_PAREN_ROW);
-  flip("commandContainsInlineInterpreter", "chained command: only a single segment makes a heredoc body data, so the backticked mention stays visible", CHAINED_HEREDOC_ROWS[0]);
-  flip("commandContainsInlineInterpreter", "comment-issue.mjs is no cat/tee host: its --body-file - heredoc body stays visible", CHAINED_HEREDOC_ROWS[1]);
-  for (const sep of SEPARATORS) {
-    for (const f of ["cat > src/a.mjs <<'EOF'", "cat > tmp/r.mjs <<'EOF' && node tmp/r.mjs"]) flip("commandContainsInlineInterpreter", R_HEREDOC, `${sep}${f}\necho done`);
-  }
-  for (const f of ["cat > src/a.mjs <<'EOF'", "cat > tmp/r.mjs <<'EOF' && node tmp/r.mjs"]) flip("commandContainsInlineInterpreter", R_HEREDOC, `# can't\n${f}\n# don't`);
-  const wrapComment = (f) => `# can't\n${f}\n# don't`;
-  for (const f of ["while ! gh pr view 5; do sleep 5; done", "until gh pr checks 5; do sleep 5; done", "while [ ! -f tmp/done ]; do sleep 2; done"]) flip("commandContainsDetachedWaitTool", R_COMMENT, wrapComment(f));
-  for (const f of ["while ! gh pr view 5; do sleep 5; done", "until gh pr checks 5; do sleep 5; done"]) flip("commandIsSleepPollLoop", R_COMMENT, wrapComment(f));
-  flip("commandIsFileMarkerPollLoop", R_COMMENT, wrapComment("while [ ! -f tmp/done ]; do sleep 2; done"));
-  for (const name of ["commandContainsDetachedWaitTool", "commandIsSleepPollLoop"]) {
-    for (const loop of [POLL, POLL.replace("$(gh pr view 5)", "`gh pr view 5`")]) {
-      flip(name, R_ESCAPE, `echo "a \\" b"; ${loop}`);
-      flip(name, "the poll predicates use origin/main's coarse stripper: a quoted heredoc body is a quote-pairing hazard, so the commit message heredoc stays visible", `git commit -m "$(cat <<'EOF'\n${loop}\nEOF\n)"`);
-    }
-  }
-}
-/**
- * Slice 2 intended removals (issue 2442): rows the frozen copy denies and the head allows, each with a reason. Key: `<predicate>: <JSON command>`.
- * Only the interpreter and wait predicates may appear: the PR-body predicates keep every decision.
- */
-const INTENDED_REMOVALS = new Map();
-const REMOVAL_PREDICATES = ["commandContainsInlineInterpreter", "commandContainsDetachedWaitTool", "commandIsSleepPollLoop", "commandIsFileMarkerPollLoop"];
-const R_QUOTE_WRAP = "the form sits in a quoted --notes/-m/echo argument: quoted text is inert data (item 9)";
-const R_HEREDOC_WRAP = "the form is the body of a cat/tee heredoc (quoted delimiter) written to a temp path: the body is data (item 8)";
-const R_HAZARD_DATA = "the loop sits in quotes next to a quote-pairing hazard (comment apostrophe, escaped quote, heredoc quote): the tokenizer pairs the quotes correctly, so the loop is data";
-const PINNED_REMOVAL_COUNTS = { [R_QUOTE_WRAP]: 3, [R_HEREDOC_WRAP]: 30 }; // rows removed per reason; re-pinned: the poll predicates use origin/main's stripper, so the hazard-data reason removes no row (R_HAZARD_DATA stays as the guard that such rows are denied)
+/** The only rows whose inline-interpreter decision may flip from deny to allow (decision 2). */
+const CEILING_ROWS = new Set(INLINE_INTERPRETER_FORMS.filter((row) => row.ceiling).map((row) => row.command));
 
 function buildCorpus() {
-  const corpus = new Set([...RESIDUE_SHAPES,...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW, ...ARITH_SHIFT_ROWS, ...CHAINED_HEREDOC_ROWS]);
+  const corpus = new Set([...RESIDUE_SHAPES, ...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW, ...ARITH_SHIFT_ROWS, ...CHAINED_HEREDOC_ROWS, ...INLINE_INTERPRETER_FORMS.map((row) => row.command)]);
   const forms = [...INLINE_FORMS, ...WAIT_FORMS, ...PR_BODY_FORMS];
   for (const f of forms) {
     for (const sep of SEPARATORS) for (const suf of SUFFIXES) corpus.add(`${sep}${f}${suf}`);
@@ -315,7 +271,6 @@ function buildCorpus() {
 const slug = (fn) => (command) => fn(command, MANAGED_SLUG);
 /** @type {Array<[string, (c: string) => boolean, (c: string) => boolean]>} */
 const PREDICATES = [
-  ["commandContainsInlineInterpreter", main.commandContainsInlineInterpreter, head.commandContainsInlineInterpreter],
   ["commandContainsDetachedWaitTool", main.commandContainsDetachedWaitTool, head.commandContainsDetachedWaitTool],
   ["commandIsSleepPollLoop", main.commandIsSleepPollLoop, head.commandIsSleepPollLoop],
   ["commandIsFileMarkerPollLoop", main.commandIsFileMarkerPollLoop, head.commandIsFileMarkerPollLoop],
@@ -323,125 +278,28 @@ const PREDICATES = [
   ["commandContainsRawPrBodyApiWrite", slug(main.commandContainsRawPrBodyApiWrite), slug(head.commandContainsRawPrBodyApiWrite)],
 ];
 
-// INTENDED_REMOVALS: every (predicate, row) the frozen copy denies and the head allows, from rows that are data by construction.
-{
-  const removeIf = (row, reason) => {
-    for (const [name, mainFn, headFn] of PREDICATES) if (REMOVAL_PREDICATES.includes(name) && mainFn(row) && !headFn(row)) INTENDED_REMOVALS.set(rowKey(name, row), reason);
-  };
-  const inner = [...INLINE_FORMS, ...WAIT_FORMS, ...HAZARD_SHAPES.map(([shape]) => shape(HAZARD_LOOP))];
-  for (const row of inner) {
-    for (const wrap of QUOTED_WRAPPERS) removeIf(wrap(row), R_QUOTE_WRAP);
-    for (const wrap of HEREDOC_BODY_WRAPPERS) removeIf(wrap(row), R_HEREDOC_WRAP);
-  }
-  for (const [shape, , , flag] of HAZARD_SHAPES) if (flag === DATA) for (const row of hazardRowsOf(shape)) removeIf(row, R_HAZARD_DATA);
-}
+test("differential: the oracle header names its origin/main commit", () => {
+  const oracle = readFileSync(new URL("../../../test/fixtures/bash-command-classify.origin-main.mjs", import.meta.url), "utf8");
+  assert.match(oracle.split("\n").slice(0, 4).join("\n"), /origin\/main commit 99bb8b3ce[\s\S]*git show 99bb8b3ce:packages\/core\/src\/loop\/bash-command-classify\.mjs/);
+});
 
-// One SLICE1_FAIL_CLOSED_FLIPS entry per (predicate, row) a hazard shape actually flips, carrying the shape's reason.
-const GENERATED_FLIPS = new Set();
-for (const [shape, targets, reason] of HAZARD_SHAPES) {
-  for (const row of hazardRowsOf(shape)) {
-    for (const [name, mainFn, headFn] of PREDICATES) {
-      if (targets.includes(name) && !mainFn(row) && headFn(row)) {
-        SLICE1_FAIL_CLOSED_FLIPS.set(rowKey(name, row), reason);
-        GENERATED_FLIPS.add(rowKey(name, row));
-      }
-    }
-  }
-}
-
-test("differential: every row origin/main denies and the head allows is a listed intended removal, and every removal is real", () => {
+test("differential: every row origin/main's inline-interpreter gate denies and the head allows is a fixture ceiling row", () => {
   const corpus = buildCorpus();
   assert.ok(corpus.length > 1000);
-  const regressions = [];
-  const seen = new Set();
-  for (const [name, mainFn, headFn] of PREDICATES) {
-    for (const cmd of corpus) {
-      if (!mainFn(cmd) || headFn(cmd)) continue;
-      const key = rowKey(name, cmd);
-      seen.add(key);
-      if (!INTENDED_REMOVALS.has(key)) regressions.push(key);
-    }
-  }
-  assert.deepEqual(regressions, []);
-  assert.ok(INTENDED_REMOVALS.size > 0);
-  for (const reason of INTENDED_REMOVALS.values()) assert.ok(reason.length > 0);
-  for (const key of INTENDED_REMOVALS.keys()) assert.ok(REMOVAL_PREDICATES.some((name) => key.startsWith(`${name}: `)), key);
+  const unlisted = corpus.filter((cmd) => main.commandContainsInlineInterpreter(cmd) && !head.commandContainsInlineInterpreter(cmd) && !CEILING_ROWS.has(cmd));
+  if (unlisted.length > 0) console.log(`unlisted flips (JSON, head verdict):\n${unlisted.map((cmd) => `${JSON.stringify(cmd)} // ${head.inlineInterpreterVerdict(cmd)}`).join("\n")}`);
+  assert.deepEqual(unlisted.map((cmd) => rowKey("commandContainsInlineInterpreter", cmd)), []);
 });
 
-// Pinned so a head that newly allows a row (the removal set is derived from the head's own output) fails here: raise the count only with a reviewed reason.
-test("differential: the intended-removal set has the pinned size per reason", () => {
-  const counts = {};
-  for (const reason of INTENDED_REMOVALS.values()) counts[reason] = (counts[reason] ?? 0) + 1;
-  assert.deepEqual(counts, PINNED_REMOVAL_COUNTS);
+test("differential: the gh PR-body, wait and poll predicates keep every origin/main decision", () => {
+  const flips = [];
+  for (const cmd of buildCorpus()) for (const [name, mainFn, headFn] of PREDICATES) if (mainFn(cmd) !== headFn(cmd)) flips.push(rowKey(name, cmd));
+  assert.deepEqual(flips, []);
 });
 
-test("differential: a frozen-allow/head-deny row is listed in SLICE1_FAIL_CLOSED_FLIPS (hazard shapes generate their entries), and every entry is a real flip", () => {
-  const corpus = buildCorpus();
-  const seen = new Set();
-  const unlisted = [];
-  for (const [name, mainFn, headFn] of PREDICATES) {
-    for (const cmd of corpus) {
-      if (!mainFn(cmd) && headFn(cmd)) {
-        const key = rowKey(name, cmd);
-        seen.add(key);
-        if (!SLICE1_FAIL_CLOSED_FLIPS.has(key)) unlisted.push(key);
-      }
-    }
-  }
-  assert.deepEqual(unlisted, []);
-  for (const [shape, targets, , flag] of HAZARD_SHAPES) {
-    if (flag === DATA) continue; // data shapes are intended removals, not fail-closed flips
-    for (const name of targets) assert.ok(hazardRowsOf(shape).some((cmd) => GENERATED_FLIPS.has(rowKey(name, cmd))), `hazard shape targets ${name} but flips no row: ${JSON.stringify(shape(HAZARD_LOOP))}`);
-  }
-  assert.deepEqual([...SLICE1_FAIL_CLOSED_FLIPS.keys()].filter((k) => !seen.has(k)), []);
-  for (const reason of SLICE1_FAIL_CLOSED_FLIPS.values()) assert.ok(reason.length > 0);
-});
-
-test("differential: quoted #N and CRLF heredoc rows keep the frozen decision on every predicate", () => {
-  for (const cmd of QUOTED_HASH_ROWS) {
-    for (const [name, mainFn, headFn] of PREDICATES) assert.equal(headFn(cmd), mainFn(cmd), rowKey(name, cmd));
-  }
-});
-
-test("differential: both the frozen copy and the head deny the four PR #2741 residue shapes", () => {
+test("differential: the four PR #2741 residue shapes stay denied by origin/main and are ceiling cases at the head", () => {
   for (const cmd of RESIDUE_SHAPES) {
     assert.equal(main.commandContainsInlineInterpreter(cmd), true, `main ${JSON.stringify(cmd)}`);
-    assert.equal(head.commandContainsInlineInterpreter(cmd), true, `head ${JSON.stringify(cmd)}`);
-  }
-});
-
-test("differential: the salvaged deny rows are denied by the head", () => {
-  const live = SALVAGED_DENY_ROWS.filter((cmd) => PREDICATES.some(([, mainFn]) => mainFn(cmd)));
-  assert.ok(live.length >= 10);
-  for (const cmd of live) assert.ok(PREDICATES.some(([, , headFn]) => headFn(cmd)), JSON.stringify(cmd));
-});
-
-test("differential: the PR-body predicates keep their decisions on quoted --body, quoted --repo and --input rows", () => {
-  const edit = [
-    ['gh pr edit 5 --body "x y"', true],
-    ["gh pr edit 5 --repo 'mfittko/dev-loops' --body-file f", true],
-    ['gh pr edit 5 --repo "other/repo" --body "x"', true], // a quoted --repo value is blanked, so the foreign-repo pass-through does not apply (fail closed)
-    ["gh pr edit 5 --repo other/repo --body x", false],
-    ["gh pr edit 5 --title 'a --body b'", false],
-  ];
-  for (const [cmd, want] of edit) {
-    assert.equal(main.commandContainsRawPrBodyEdit(cmd, MANAGED_SLUG), want, `main ${cmd}`);
-    assert.equal(head.commandContainsRawPrBodyEdit(cmd, MANAGED_SLUG), want, `head ${cmd}`);
-  }
-  const api = [
-    ["gh api repos/mfittko/dev-loops/pulls/5 -X PATCH --input body.json", true],
-    ["gh api repos/mfittko/dev-loops/pulls/5 -X PATCH --input 'tmp/body.json'", true],
-    ["gh api repos/mfittko/dev-loops/pulls/5 --method GET -f body=x", false],
-  ];
-  for (const [cmd, want] of api) {
-    assert.equal(main.commandContainsRawPrBodyApiWrite(cmd, MANAGED_SLUG), want, `main ${cmd}`);
-    assert.equal(head.commandContainsRawPrBodyApiWrite(cmd, MANAGED_SLUG), want, `head ${cmd}`);
-  }
-});
-
-test("differential: inert quoted wait text and a ${HOME} heredoc body stay allowed by the head", () => {
-  for (const cmd of ['echo "detect-copilot-loop-state.mjs & more"', "cat > tmp/f <<'EOF'\nnode scripts/loop/detect-copilot-loop-state.mjs &\nEOF", "node scripts/loop/x.mjs --notes 'probe-copilot-review.mjs & more'", "cat <<EOF\nhome is ${HOME}\nEOF", "cat > tmp/f <<EOF\nplain text\nEOF"]) {
-    assert.equal(head.commandContainsDetachedWaitTool(cmd), false, cmd);
-    assert.equal(head.commandContainsInlineInterpreter(cmd), false, cmd);
+    assert.equal(head.inlineInterpreterVerdict(cmd), "ceiling", `head ${JSON.stringify(cmd)}`);
   }
 });

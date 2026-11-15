@@ -44,7 +44,6 @@ import {
   commandContainsDetachedWaitTool,
   commandContainsTimeoutWrappedSanctionedTool,
   commandContainsInlineInterpreter,
-  inlineInterpreterDenyDetail,
   commandContainsCodeVerificationEntrypoint,
 } from "./bash-command-classify.mjs";
 
@@ -295,18 +294,17 @@ export function decideBashGateDeny(facts = {}) {
   const managedSlug = (managedRepoSlug ?? "").trim().toLowerCase() || null;
   const inManagedRepo = deriveInManagedRepo({ inManagedContext, managedRepoSlug, repoSlug });
 
-  // OPS-NO-INLINE-INTERPRETER: inline interpreters (`node -e`/`--eval`/`-p`, `python3 -c`,
-  // `bun -e`/`--eval`/`-p`/`--print`/`bun -`, heredocs fed to node/python/bun) are barred actor-independently on the target repo — the rule bars
-  // "Coordinator and agent flows"; sanctioned output parsing uses `--jq`/`--silent`, never an
-  // inline interpreter.
+  // OPS-NO-INLINE-INTERPRETER: the closed-list forms (issue 2442 item 10) in the unquoted words of a
+  // completely tokenized segment are barred actor-independently on the target repo. Ceiling cases
+  // are allowed with no added output; check-retro-tooling reports them after the fact.
   if (inManagedRepo && commandContainsInlineInterpreter(command)) {
     return {
       ruleId: "OPS-NO-INLINE-INTERPRETER",
       reason:
-        "OPS-NO-INLINE-INTERPRETER: inline interpreters (node -e/--eval/-p, python3 -c, bun -e/--eval/-p/--print, bun -, " +
-        "heredoc to node/python/bun) are barred in the dev-loop flow. Parse tool output via --jq/--silent and mutate " +
-        "files via the editor/patch tools or a --jq-composed --body-file, never an inline interpreter." +
-        inlineInterpreterDenyDetail(command),
+        "OPS-NO-INLINE-INTERPRETER: the dev-loop flow bars four forms: inline code or a stdin heredoc to node, bun, python, " +
+        "perl or ruby; an in-place sed, perl, ruby or awk edit; a cat/tee heredoc write outside a temp path; and running a " +
+        "file written by a heredoc in the same command. Write and edit files with the editor tools (Write/Edit under Claude " +
+        "Code, write/edit under Pi), and parse tool output via --jq/--silent.",
     };
   }
 

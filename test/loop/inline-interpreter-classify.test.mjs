@@ -3,8 +3,8 @@ import { test } from "bun:test";
 import { commandContainsInlineInterpreter } from "@dev-loops/core/loop/bash-command-classify";
 import { decideBashGate } from "@dev-loops/core/claude/hook-decisions";
 
-// OPS-NO-INLINE-INTERPRETER verdict table. perl/ruby/deno are outside the pinned toolchain and
-// are recorded as deliberately uncovered (false).
+// OPS-NO-INLINE-INTERPRETER verdict table (#2442): perl and ruby are covered, deno stays uncovered (false).
+// A `-` stdin script with no heredoc, a pipe into an interpreter and a heredoc body are ceiling cases (allowed).
 const CASES = [
   ["node -e 'x'", true],
   ["node --eval 'x'", true],
@@ -28,7 +28,7 @@ const CASES = [
   ["node 'script.mjs'", false],
   ["bun run build", false],
   ["bun script.ts", false],
-  ["bun -", true],
+  ["bun -", false],
   ["bun <<EOF", true],
   ["bun - <<EOF", true],
   ["FOO=1 /usr/local/bin/bun -e 'x'", true],
@@ -38,14 +38,14 @@ const CASES = [
   ["bun run --bun - <<EOF", true],
   ["bun run --silent - <<EOF", true],
   ["bun run --smol - <<EOF", true],
-  ["bun run --silent -", true],
-  ["bun run --bun -", true],
+  ["bun run --silent -", false],
+  ["bun run --bun -", false],
   ["bun run -e 'x'", true],
   ["bun run --eval 'x'", true],
   ["bun run -p 1", true],
   ["bun run --print=1", true],
-  ["bun run -", true],
-  ["echo x | bun run -", true],
+  ["bun run -", false],
+  ["echo x | bun run -", false],
   ["bun --console-depth 3 -e 'x'", true],
   ["bun --inspect-wait app.ts -p 3000", false],
   ["bun run test", false],
@@ -65,12 +65,12 @@ const CASES = [
   ["bun run --silent typecheck -p tsconfig.json", false],
   ["bun run --bun typecheck -p tsconfig.json", false],
   ["bun --silent typecheck -p tsconfig.json", false],
-  ["perl -e 'x'", false],
-  ["ruby -e 'x'", false],
+  ["perl -e 'x'", true],
+  ["ruby -e 'x'", true],
   ["deno eval 'x'", false],
-  ["gh pr comment 1 --body-file - <<'EOF'\nthe hook refuses cat <<EOF then `node -e 1`\nEOF", true],
-  ["gh issue comment 1 --body-file - <<'EOF'\nsee `python3 -c x`\n```\ncat <<X\nhi\nX\n```\nEOF", true],
-  ["git commit -F - <<'EOF'\nfix: refuse `node -e`\n\nmention: python3 - <<EOF\nEOF", true],
+  ["gh pr comment 1 --body-file - <<'EOF'\nthe hook refuses cat <<EOF then `node -e 1`\nEOF", false],
+  ["gh issue comment 1 --body-file - <<'EOF'\nsee `python3 -c x`\n```\ncat <<X\nhi\nX\n```\nEOF", false],
+  ["git commit -F - <<'EOF'\nfix: refuse `node -e`\n\nmention: python3 - <<EOF\nEOF", false],
 ];
 
 test("inline interpreter verdict table", () => {
@@ -81,8 +81,8 @@ test("inline interpreter verdict table", () => {
 
 const GATE = (command) => decideBashGate({ command, inManagedContext: true });
 
-test("nested heredoc and ANSI-C quoted words fail closed (#2943 slice 2)", () => {
-  assert.equal(commandContainsInlineInterpreter("cat <<B <<'A'\n$(python3 -c x)\nB\nA"), true);
+test("a nested heredoc body is a ceiling case, and ANSI-C quoted flag values are read (#2943 slice 2)", () => {
+  assert.equal(commandContainsInlineInterpreter("cat <<B <<'A'\n$(python3 -c x)\nB\nA"), false);
   for (const [bin, opt, flag] of [["node", "--title", "-e"], ["python", "-W", "-c"], ["python3", "-W", "-c"], ["bun", "--cwd", "-e"]]) {
     const verdict = GATE(`${bin} ${opt} $'a\\' b' ${flag} x`);
     assert.equal(verdict.decision, "deny", bin);
