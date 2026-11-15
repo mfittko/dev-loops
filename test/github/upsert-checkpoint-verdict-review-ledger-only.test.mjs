@@ -17,7 +17,7 @@ test("#3199: draft_gate and pre_approval_gate still require a findings input", (
 });
 
 test("#3199: --gate review without any findings input is still refused", () => {
-  const noLedger = ["--execution-mode", "fanout_fanin", "--repo", "owner/repo", "--pr", "7", "--head-sha", HEAD, "--gate", "review"];
+  const noLedger = ["--execution-mode", "fanout_fanin", "--repo", "owner/repo", "--pr", "7", "--head-sha", HEAD, "--gate", "review", "--verdict", "clean"];
   assert.throws(() => parseUpsertCheckpointVerdictCliArgs(noLedger), /requires --repo/);
 });
 
