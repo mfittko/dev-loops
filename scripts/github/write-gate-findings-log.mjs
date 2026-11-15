@@ -923,7 +923,9 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       if (name !== `${ledgerStem}.json` && !(name.startsWith(`${ledgerStem}.round-`) && name.endsWith(".json"))) continue;
       try {
         const identity = JSON.parse(await readSealed(path.join(ledgerDir, name))).roundIdentity;
-        if (identity?.completed === true && typeof identity.judgeExecution === "string") consumedJudges.add(identity.judgeExecution);
+        // A ledger of the current emit-plan round does not consume its own judge: a rewrite of this round must still pass --judge-verdict.
+        const sameRound = planRoundId !== null && identity?.roundId === planRoundId;
+        if (!sameRound && identity?.completed === true && typeof identity.judgeExecution === "string") consumedJudges.add(identity.judgeExecution);
       } catch { /* an unreadable ledger binds no judge; retention refuses a tampered live ledger later */ }
     }
     // A judge execution emitted at or before the newest consumed one is superseded by it (each run supersedes the previous), so its late verdict is skipped too.

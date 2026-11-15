@@ -3389,6 +3389,31 @@ test("3105: with no emit plan a superseded judge verdict older than the consumed
   }
 });
 
+test("3105: rewriting the current emit-plan round without --judge-verdict still refuses judge_verdict_required", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judge-same-round-"));
+  try {
+    const headSha = "f3".repeat(20);
+    const contextDir = path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-51");
+    await mkdir(contextDir, { recursive: true });
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.emit-plan.json`), JSON.stringify({ ok: true, repo: "owner/repo", pr: 51, gate: "draft_gate", headSha, roundId: "r2000-aa", count: 2, units: [{ angles: ["pr-description"], group: null }, { angles: ["holistic"], group: null }] }), "utf8");
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.fanin-ledger.json`), JSON.stringify({ overallVerdict: "clean", findings: [], provenance: { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "review-a" }, { angle: "holistic", reviewer: "review-b" }] } }), "utf8");
+    const judgeDir =path.resolve(repoRoot, buildGateArtifactPath({ repo: "owner/repo", pr: 51, gate: "draft_gate", headSha, tmpRoot: path.join(repoRoot, "tmp"), dir: "gate-judge" }), "j3000-cc");
+    await mkdir(judgeDir, { recursive: true });
+    await writeFile(path.join(path.dirname(judgeDir), "judge-emit-plan.json"), JSON.stringify(judgePlanFor({ pr: 51, headSha, gate: "draft_gate", roundId: "j3000-cc" })), "utf8");
+    const judgeVerdict = path.join(judgeDir, "judge-verdict.json");
+    await writeFile(judgeVerdict, JSON.stringify({
+      headSha,
+      scopeDrift: { verdict: "within_scope", rationale: "matches the briefed AC set", driftedAreas: [] },
+      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fixes AC-1", criterion: "AC-1" }],
+    }), "utf8");
+    const base = { repo: "owner/repo", pr: 51, gate: "draft_gate", headSha, findings: JSON.stringify([{ severity: "medium", angle: "holistic", summary: "s" }]) };
+    assert.equal((await writeGateFindingsLog({ ...base, judgeVerdict }, { repoRoot })).ok, true);
+    await assert.rejects(() => writeGateFindingsLog(base, { repoRoot }), (err) => err.message.startsWith("judge_verdict_required:"), "the round's own judge is not consumed by its own ledger");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // --- AC1 (issue 2008 / ADR-0061): optional --spec-authority stamping ---
 
 test("writeGateFindingsLog: --spec-authority stamps the log; absent is a byte-identical no-op", async () => {
