@@ -63,11 +63,14 @@ import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
 import { inlineInterpreterVerdict, isPayloadWord, stripLeadingWrappers, tokenizeShellCommand } from "@dev-loops/core/loop/bash-command-classify";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
+const MAX_JOIN_LINES = 200;
+
 const USAGE = `Usage: node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]
 
 Reads a newline-delimited transcript of agent shell commands (from --transcript
-or stdin) and reports agent-level raw gh/python/node -e calls (internal-tooling-only
-rule, issue #982).
+or stdin) and reports agent-level raw gh and python calls (internal-tooling-only
+rule, issue #982), plus every OPS-NO-INLINE-INTERPRETER form and ceiling case as
+inline-interpreter.
 
 Options:
   --transcript <path>   File of newline-delimited commands (default: read stdin)
@@ -168,7 +171,8 @@ export function analyzeTranscript(transcript) {
     // shortcut: a line that never closes stays a single entry, but a later unpaired apostrophe can close it and absorb the lines between; upgrade to a delimited transcript format if that misfires.
     const tok = tokenizeShellCommand(line);
     if (tok.incomplete || tok.segments.some((s) => s.heredocs.length > 0)) {
-      for (let j = i + 1; j < lines.length; j++) {
+      // the join window is capped so an unclosed line costs a bounded number of re-tokenizations
+      for (let j = i + 1; j < Math.min(lines.length, i + MAX_JOIN_LINES); j++) {
         const joined = lines.slice(i, j + 1).join("\n").trim();
         if (!tokenizeShellCommand(joined).incomplete) { line = joined; i = j; break; }
       }
