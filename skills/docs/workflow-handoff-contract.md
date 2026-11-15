@@ -233,8 +233,8 @@ interface HandoffEnvelope {
   cwd: string | null;
   worktreeRequired: boolean;
 
-  // issue 2532: the deterministic points at which THIS unit coordinator reports status and continues;
-  // it hands back only at a real stop. Target+strategy derived, so it is
+  // issue 2532: the deterministic points at which THIS unit coordinator reports status and continues at draft_pr_opened;
+  // it hands back at gate_verdict_posted under COORDINATOR-ROUND-BOUNDARY-HANDBACK. Target+strategy derived, so it is
   // byte-stable; absent on a terminal reconciliation envelope (its stopRules are terminal).
   unitBoundaries?: {
     reportAfter: Array<"draft_pr_opened" | "gate_verdict_posted">;
