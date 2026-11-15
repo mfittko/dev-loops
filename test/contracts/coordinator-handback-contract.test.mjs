@@ -57,6 +57,18 @@ test("AC3 the validator refuses a hand-back with a running worker or a missing f
   }
   assert.equal(validateCoordinatorHandback({ ...good, workerRunning: "no" }).refusal, "missing_fields");
   assert.equal(validateCoordinatorHandback(null).refusal, "missing_fields");
+  for (const bad of [{ pr: 0 }, { pr: "7" }, { head: "  " }, { head: "main" }, { head: "HEAD" }, { head: "" }, { head: HEAD.slice(0, 7) }, { head: HEAD.toUpperCase() }, { head: ` ${HEAD} ` }, { nextAction: "" }]) {
+    assert.equal(validateCoordinatorHandback({ ...good, ...bad }).refusal, "missing_fields", JSON.stringify(bad));
+  }
+  assert.deepEqual(validateCoordinatorHandback({ ...good, head: "a".repeat(64) }), { ok: true });
+});
+
+test("AC1 the Unit coordinator boundaries paragraph scopes continue to draft_pr_opened and the rule orders validator before claim release", async () => {
+  const content = await readRepo(MAIN);
+  assert.doesNotMatch(content, /A report point never forces a successor/);
+  assert.match(content, /The `draft_pr_opened` report point never forces a successor/);
+  assert.doesNotMatch(content, /draft PR creation or a verdict/);
+  assert.match(await rule(), /run `validate-coordinator-handback\.mjs`, release the runner claim[^\n]*only after exit 0, then hand back/);
 });
 
 test("AC4 the hand-back releases the runner claim so a fresh coordinator can claim", async () => {

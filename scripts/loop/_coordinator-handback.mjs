@@ -1,7 +1,7 @@
 // Typed coordinator hand-back check (COORDINATOR-ROUND-BOUNDARY-HANDBACK, issue 3069).
 const FIELD_CHECKS = {
   pr: (v) => Number.isInteger(v) && v > 0,
-  head: (v) => typeof v === "string" && v.trim() !== "",
+  head: (v) => typeof v === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(v),
   nextAction: (v) => typeof v === "string" && v.trim() !== "",
   workerRunning: (v) => typeof v === "boolean",
 };

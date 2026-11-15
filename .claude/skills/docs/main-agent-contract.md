@@ -198,12 +198,12 @@ of the installed binary. No watchdog, harness patch or durable-sleep experiment 
 One coordinator may run a whole cycle. The boundary list is tooling-emitted: the handoff envelope
 carries `unitBoundaries` (`reportAfter` + `resume`, derived from the target and route; see
 [Workflow Handoff Contract](workflow-handoff-contract.md#envelope-schema)). `reportAfter` is an
-ordered list of **report points**. At each listed report point it reaches, in order, the coordinator
+ordered list of **report points**. At the `draft_pr_opened` report point, the coordinator
 records status through existing evidence (PR comment or gate ledger), re-resolves authoritative
-state with `unitBoundaries.resume` and **continues**. Re-resolving is a read of current state through
+state with `unitBoundaries.resume` and **continues**. At `gate_verdict_posted` it hands back under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`. Re-resolving is a read of current state through
 the resume identity. A pull-dispatched coordinator keeps the pulled work order as its digest-pinned
-authority and builds no new envelope. After draft PR creation or a verdict, it adopts the new PR
-identity for state reads and gate calls under the same assigned task. A report point never forces a successor. The end of a gate round and the end of a fix pass are run-ending cases under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`, so the coordinator does not continue past them.
+authority and builds no new envelope. After draft PR creation, it adopts the new PR
+identity for state reads and gate calls under the same assigned task. The `draft_pr_opened` report point never forces a successor. The end of a gate round and the end of a fix pass are run-ending cases under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`, so the coordinator does not continue past them.
 
 The following is the one canonical list of run-ending cases (the "run-ending cases"). The coordinator hands
 back only at `final_approval_ready`, the end of a gate round, the end of a fix pass, a stop that needs a decision, the route's own terminal
@@ -252,8 +252,8 @@ The rule binds the coordinator on every harness, so it stays outside the section
 
 - A gate round ends when the coordinator records the round's verdict. A fix pass ends after a draft or pre_approval fixer pass with its delta review, its push and its CI wait.
 - The hand-back is the run's one `SubagentHandback` report under `COORDINATOR-HANDBACK-ONE-REPORT`. Its packet carries four typed fields: `pr` (the PR number), `head` (the PR head SHA), `nextAction` (the next action from `loop gate-coordination`) and `workerRunning` (true while any worker the coordinator dispatched still runs).
-- A coordinator never hands back while a worker it dispatched runs. `validateCoordinatorHandback` in `scripts/loop/_coordinator-handback.mjs` refuses a hand-back with `workerRunning: true` (`worker_running`) and a hand-back with a missing or invalid field (`missing_fields`). Before the hand-back, the coordinator writes the packet to a file and runs `dev-loops-run scripts/loop/validate-coordinator-handback.mjs --packet <path>`. On exit 1 it fixes the refusal and runs the check again; it never hands back a refused packet.
-- The coordinator releases its runner claim before every hand-back under `RUNNER-HANDOFF-TEARDOWN`.
+- A coordinator never sends a round-boundary or fix-pass hand-back while a worker it dispatched runs; the interim hand-back under `GATE-EXEC-HARNESS-JOIN` is unchanged. `validateCoordinatorHandback` in `scripts/loop/_coordinator-handback.mjs` refuses a hand-back with `workerRunning: true` (`worker_running`) and a hand-back with a missing or invalid field (`missing_fields`). Before the hand-back, the coordinator writes the packet to a file and runs `dev-loops-run scripts/loop/validate-coordinator-handback.mjs --packet <path>`. Exit 1 means a refusal or an unreadable packet. On exit 1 it fixes the cause and runs the check again; it never hands back a refused packet.
+- The order before a hand-back is fixed: join every dispatched worker, run `validate-coordinator-handback.mjs`, release the runner claim under `RUNNER-HANDOFF-TEARDOWN` only after exit 0, then hand back. A coordinator releases its runner claim before every hand-back.
 - The orchestrator dispatches a fresh coordinator for the next step with `scripts/loop/emit-coordinator-work-order.mjs`. The fresh coordinator re-resolves state with `loop startup --pr <n>` and `loop gate-coordination`. Its brief names the PR and the bounds and carries no head SHA, ledger path or other state copy. The brief text is unchanged: the work order cites this rule under `ruleReferences.stateDerivation`, and the coordinator follows that reference to derive state.
 - `COORDINATOR-CONTINUITY-SOFT-CAP` stays advisory.
 
