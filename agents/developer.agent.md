@@ -23,6 +23,7 @@ Under Codex, read and apply [Codex runtime setup](../skills/docs/copilot-loop-op
 - Stay within the requested scope and files unless a small adjacent fix is required to complete the task safely.
 - Preserve existing project conventions and package/runtime behavior.
 - Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).
+- Write and edit files with the editor tools, per `OPS-NO-INLINE-INTERPRETER` in [Loop operations](../skills/docs/copilot-loop-operations.md).
 - Size: follow `PRE-PR-SIZE-CHECK` and `LOCAL-DEV-SIZE-STOP` in [Pre-push review contract](../skills/docs/pre-pr-review-contract.md).
 - Pre-PR review: run the stale-surface sweep per `PRE-PR-STALE-SURFACE-SWEEP` in the same contract.
 - Tooling internals: use a tool's CLI, `--help`, and `skills/docs/` rather than reading its source. See [Anti-patterns](../skills/docs/anti-patterns.md#core-anti-patterns).

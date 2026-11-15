@@ -209,17 +209,17 @@ as an `allowedWriteOp`. This legacy classification does not authorize it:
 `gh label create` (`scripts/github/create-label.mjs`), are NOT allowlisted, so a raw
 agent-level call is flagged. None of these findings block anything.
 
-**Inline-interpreter check item:** the raw-call scan below records
-inline `node` (`-e`/`--eval`/`-p`, stdin `-`, heredoc)/`python3 -c`/heredoc calls, the class barred by `OPS-NO-INLINE-INTERPRETER` in
-[Copilot loop operations](copilot-loop-operations.md), as `rawCallViolations` entries under
-`RETRO-ADVISORY-NEVER-GATE`.
+**Inline-interpreter check item:** the raw-call scan below records every
+form the Bash gate denies under `OPS-NO-INLINE-INTERPRETER` in
+[Copilot loop operations](copilot-loop-operations.md), and every ceiling case the gate allows, as `inline-interpreter` `rawCallViolations` entries under
+`RETRO-ADVISORY-NEVER-GATE`. The `inline-interpreter` tool shares its parser (`inlineInterpreterVerdict` in `@dev-loops/core/loop/bash-command-classify`) with the gate.
 
 ### Deterministic verifier (findings-producer)
 
 `node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]` reads a
 newline-delimited transcript of the shell commands the agent ran (one top-level
 command per line, via `--transcript` or stdin) and reports agent-level raw
-`gh`/`python`/`python3`/inline `node` (`-e`/`--eval`/`-p`, stdin `-`, heredoc) calls. It is a **findings-producer**:
+`gh`/`python`/`python3` calls and every `inline-interpreter` form or ceiling case of `OPS-NO-INLINE-INTERPRETER`. It is a **findings-producer**:
 its JSON output (`{ ok, internalToolingOnly, rawCallViolations, allowedWriteOps }`)
 is returned to the conductor via the envelope's `retrospectiveFindings` field (normalized
 to `{ internalToolingOnly, rawCallViolations, allowedWriteOps }`). It is **not** written to a
@@ -230,9 +230,7 @@ are found, `0` when clean, `2` for unreadable input (a stdin or `--transcript` f
 
 Matching rules: a tool name at the start of a command segment (start of line, or after
 `&&`/`||`/`|`/`;`), after the verifier strips `NAME=value` prefixes, a leading wrapper binary
-from `{sudo, env, xargs, time, nice, command}`, and a path prefix; `node` is a violation only
-for the `OPS-NO-INLINE-INTERPRETER` forms (`-e`/`--eval`/`-p`, stdin `-`, heredoc). A `node` or `python`/`python3` inline form inside `$(...)` or backticks is also a violation, reported with the `node inline`, `python3` or `python` label. It does NOT fully parse shell quoting or substitution, so prefer
-single-line, single-purpose commands in transcripts.
+from `{sudo, env, xargs, time, nice, command}`, and a path prefix. An `inline-interpreter` entry is one whole command (continuation lines of a multi-line command are joined) that the gate denies or allows as a ceiling case; the parser is the gate's `sh-syntax` parse (ADR 0276), so quoting and substitution are read exactly.
 
 ## Cycle scoping — a checkpoint discharges exactly one qualifying completion
 

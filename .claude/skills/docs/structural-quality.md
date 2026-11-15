@@ -9,6 +9,9 @@ Canonical owner for structural quality standards across all workflow families.
 - **YAGNI**: Don't add speculative features, compatibility shims, or unused abstractions
 - **Strict TypeScript**: No `any`, no implicit coercion, explicit return types
 
+<!-- rule: DESIGN-GUARD-CLASSIFIER-STRUCTURAL -->
+`DESIGN-GUARD-CLASSIFIER-STRUCTURAL`: a Bash-gate classifier MUST decide an allow or an inertness case by structure (token and segment shape, from a parser), never by a list of command or word names. No case main denied is allowed, except the ambiguous-input ceiling cases listed in the shared fixture table. A PR that relaxes a classifier names the structural rule in its body.
+
 <!-- rule: DESIGN-SIMPLEST-FIRST -->
 `DESIGN-SIMPLEST-FIRST`: before any code, the planner MUST state the simplest design that meets every AC row, name the heavier alternatives it rejects and why, and compare the slice cost with the cost of the problem it fixes. Every input, flag, branch and abstraction MUST trace to an AC row. The issue body and each slice carry this as a `## Simplest design` section. A speculative input, flag, branch or abstraction with no AC row is removed before the first push.
 

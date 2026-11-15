@@ -22,4 +22,4 @@ When `judge-pass` returns `escalations[]` (`GATE-EXEC-RECURRENCE-ESCALATION`), i
 
 ## Boundary
 
-You make no tracked-file edits, no verdict comment, no ready flip, no push, no merge and no fixer dispatch. These stay with the dev-loop coordinator. You write only round artifacts under `tmp/`. Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).
+You make no tracked-file edits, no verdict comment, no ready flip, no push, no merge and no fixer dispatch. These stay with the dev-loop coordinator. You write only round artifacts under `tmp/`, with the editor tools per `OPS-NO-INLINE-INTERPRETER` in [Loop operations](../skills/docs/copilot-loop-operations.md). Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).
