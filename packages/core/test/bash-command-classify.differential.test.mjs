@@ -260,7 +260,9 @@ function buildCorpus() {
   const heads = ["node", "bun", "python3", "perl", "ruby", "sed", "awk", "NODE", "Python3", "PERL"];
   const flags = ["-e", "-p", "-c", "-i", "-pi", "-ne", "-i.bak", "--eval", "--in-place", "-r", "-M", "-I", "-W", "-C", "-X", "-", "-E", "-iinplace", "--"];
   const markers = ["", "x", "'x'", '"x"', "<<EOF", "<<'EOF'", "- <<EOF", "tool.mjs", "0<<EOF", "0<<'EOF'", "- 0<<EOF"];
-  for (const h of heads) for (const fl of flags) for (const m of markers) {
+  // a `<<<` here-string followed by the head's own code flag: origin/main denied any here-string to an interpreter, and the head reads the flag after it
+  const hereFlag = (h) => (/^python/i.test(h) ? "-c" : /^(?:sed|awk)$/.test(h) ? "-i" : "-e");
+  for (const h of heads) for (const fl of flags) for (const m of [...markers, ...(fl === "-" ? [] : [`<<< x ${hereFlag(h)} y`, `<<<'' ${hereFlag(h)} y`])]) {
     corpus.add(`${h} ${fl} ${m}`.trim());
     corpus.add(`${h} ${fl} lib ${fl === "-r" || fl === "-I" || fl === "-M" ? "-e" : "-c"} ${m}`.trim());
     corpus.add(`echo a; ${h} ${fl} ${m}; echo b`);

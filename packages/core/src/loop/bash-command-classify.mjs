@@ -1658,30 +1658,32 @@ function interpreterFlag(head, t) {
 
 /**
  * The closed-list form of an interpreter segment (ARGS are the words after the head): "code", "inplace", "heredoc"
- * (a stdin heredoc after any flags), "herestring" (a `<<<` stdin script), "dash" (a `-` stdin script with no heredoc), "stdin" (no script: the interpreter
+ * (a stdin heredoc after any flags), "herestring" (a `<<<` stdin script and no other form), "dash" (a `-` stdin script with no heredoc), "stdin" (no script: the interpreter
  * reads stdin) or null (a script runs).
  */
 function interpreterForm(head, args) {
+  let herestring = false;
   for (let k = 0; k < args.length; k++) {
     const { value: t, op } = args[k];
     if (op === "<<") return "heredoc";
-    if (op) return "herestring"; // a `<<<` here-string is the stdin script: a payload the gate does not read (ceiling)
+    // a `<<<` here-string is a stdin payload the gate does not read (ceiling); skip its word and keep scanning for `-e`/`-c`
+    if (op) { herestring = true; k++; continue; }
     if (/^\d+$/.test(t) && args[k + 1]?.op && args[k + 1].start === args[k].end) continue; // an attached fd prefix (`0<<EOF`)
     const skip = redirectionSkip(t);
     if (skip) { k += skip - 1; continue; }
     if (t === "-") return args.slice(k + 1).some((w) => w.op === "<<") ? "heredoc" : "dash"; // later words are script arguments
     if (head === "bun" && t === "run") continue;
-    if (!t.startsWith("-")) return null;
+    if (!t.startsWith("-")) return herestring ? "herestring" : null;
     if (t === "--") continue; // origin/main keeps scanning past `--`, so `node -- -e x` stays denied
     const flag = interpreterFlag(head, t);
     if (flag === "code" || flag === "inplace") return flag;
-    if (flag === "stop") return null;
+    if (flag === "stop") return herestring ? "herestring" : null;
     const next = args[k + 1];
     if (flag === "value" && !next?.op) k++; // an operator word is never a flag value
     // shortcut: a relative path value after an unlisted path-valued `--flag` reads as the script (allow), as on origin/main; list such a flag.
     if (flag === "long" && next && !next.op && !next.value.startsWith("-") && !redirectionSkip(next.value) && !SCRIPT_WORD_RE.test(next.value)) k++;
   }
-  return "stdin";
+  return herestring ? "herestring" : "stdin";
 }
 
 /** Whether `sed`/`gsed` ARGS edit in place (`-i`, `-i.bak`, a cluster holding `i`, `--in-place`). */
@@ -1713,6 +1715,8 @@ function awkInPlace(args) {
   }
   return false;
 }
+
+const DEVICE_TARGETS = new Set(["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"]);
 
 /** A temp path: it has a `tmp/` segment, the last `tmp/` is not followed by `worktrees`, and it has no `..` and no variable. */
 function isTempPath(path) {
@@ -1748,8 +1752,8 @@ function segmentsHaveInterpreterForm(segments) {
     const isWritten = (w) => !!w && !w.op && written.includes(w.value.replace(/^\.\//, ""));
     if (isWritten(tail[0]) || (FILE_RUNNER_HEAD_RE.test(head) && args.some(isWritten))) return true;
     if (!/^(?:cat|tee)$/.test(head) || seg.heredocs.length === 0) return false;
-    // a heredoc delimiter is no tee operand; a device (`/dev/null`) is no file write
-    const targets = writeTargets({ ...seg, words: tail.filter((_w, k) => tail[k - 1]?.op !== "<<") }).filter((t) => !t.startsWith("/dev/"));
+    // a heredoc delimiter is no tee operand; only an exact device name is no file write (`/dev/shm/x`, `/dev/../x`, `/dev/fd/3` are writes)
+    const targets = writeTargets({ ...seg, words: tail.filter((_w, k) => tail[k - 1]?.op !== "<<") }).filter((t) => !DEVICE_TARGETS.has(t));
     written.push(...targets);
     return targets.some((t) => !isTempPath(t));
   }));

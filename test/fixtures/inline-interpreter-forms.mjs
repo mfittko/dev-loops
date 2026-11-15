@@ -104,6 +104,15 @@ export const INLINE_INTERPRETER_FORMS = [
   deny("python3 -I 0<<EOF\nx\nEOF"),
   deny("node 0<<EOF\nx\nEOF"),
   deny("bun 0<<'EOF'\nx\nEOF"),
+  // a flag after a `<<<` here-string is still read
+  deny("node <<< x -e y"),
+  deny("python3 <<< x -c y"),
+  deny("python3 <<<'' -c y"),
+  deny("perl <<< x -e y"),
+  // only an exact device name is no file write
+  deny("cat > /dev/shm/x.mjs <<'EOF'\nx\nEOF\nnode /dev/shm/x.mjs"),
+  deny("cat > /dev/../x <<'EOF'\nx\nEOF"),
+  deny("cat > /dev/fd/3 <<'EOF'\nx\nEOF"),
 
   // inert input: allowed and not reported
   allow("cat > tmp/f <<'EOF'\nnode -e 'x'\nEOF"),
