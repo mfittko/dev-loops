@@ -34,6 +34,7 @@ test("AC1 the run-ending list names the gate-round end and the fix-pass end", as
   assert.match(text, /`COORDINATOR-CONTINUITY-SOFT-CAP` stays advisory/);
   assert.match(text, /compact relay packet, which still carries `status` and the startup-output path/);
   assert.match(text, /runs `loop startup --pr <n>` before the hand-back and names that output/);
+  assert.match(text, /runs the fix pass on that act list before it takes `nextAction`/);
 });
 
 test("AC1 the rule is registered and ADR 0181 carries the amendment note", async () => {
@@ -59,7 +60,7 @@ test("AC3 the validator refuses a hand-back with a running worker or a missing f
   }
   assert.equal(validateCoordinatorHandback({ ...good, workerRunning: "no" }).refusal, "missing_fields");
   assert.equal(validateCoordinatorHandback(null).refusal, "missing_fields");
-  for (const bad of [{ pr: 0 }, { pr: "7" }, { head: "  " }, { head: "main" }, { head: "HEAD" }, { head: "" }, { head: HEAD.slice(0, 7) }, { head: HEAD.toUpperCase() }, { head: ` ${HEAD} ` }, { nextAction: "" }]) {
+  for (const bad of [{ pr: 0 }, { pr: "7" }, { head: "  " }, { head: "main" }, { head: "HEAD" }, { head: "" }, { head: HEAD.slice(0, 7) }, { head: HEAD.toUpperCase() }, { head: ` ${HEAD} ` }, { nextAction: "" }, { nextAction: "   " }]) {
     assert.equal(validateCoordinatorHandback({ ...good, ...bad }).refusal, "missing_fields", JSON.stringify(bad));
   }
   assert.deepEqual(validateCoordinatorHandback({ ...good, head: "a".repeat(64) }), { ok: true });
