@@ -174,6 +174,8 @@ export const INLINE_INTERPRETER_FORMS = [
   ceiling("cat <<'E' | node\nx\nE"),
   ceiling("node -e 'x"),
   ceiling("X=`node -e 1`"),
+  ceiling("X=$(python3 -c x)"),
+  ceiling("X=$(python -c x)"),
   ceiling("eval 'python3 -c x'"),
   ceiling("bash <<< 'x; node -e y'"),
   ceiling("bash <<'EOF'\nnode -e x\nEOF"),

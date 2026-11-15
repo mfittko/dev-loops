@@ -156,7 +156,7 @@ const DELETED_TABLE_ROWS = [
   "cat <<'EOF'\nEOF\nX=$(python3 -c x)\ncat <<'EOF'\nhi\nEOF", "cat <<EOF\nEOF\nX=$(python3 -c x)", "echo \"<<'EOF'\"\n$(python3 -c x)\nEOF", "# <<'EOF'\n$(python3 -c x)\nEOF",
   "cat <<'A'\n\"\nA\necho \"<<'EOF'\"\n$(python3 -c x)\nEOF", "cat <<A\n\"\nA\necho \"<<'EOF'\"\n$(python3 -c x)\nEOF", "X=$'\\'' $(python3 -c x) $'\\'''",
   "cat <<EOF-X\n# $(python3 -c y)\nEOF-X", "cat <<<'x'\necho $(python3 -c y)\nx", "cat <<<\"x\"\necho $(python3 -c y)\nx", "cat <<<'x'\necho `node -e 1`\nx", "cat <<A <<B\nx\nA\ndon't\n$(python3 -c y)\nit's\nB",
-  "node -e \"x\" /opt/python/bin", "gh pr ready 5 $(node -e 1) --body python", "python3 script.py $(node -e 1)", "node -e 1 $(python3 script.py)", "X=/opt/python/bin python3 -c x",
+  "node -e \"x\" /opt/python3/bin", "X=$(python3 -c x)", "X=$(python -c x)", "gh pr ready 5 $(node -e 1) --body python", "python3 script.py $(node -e 1)", "node -e 1 $(python3 script.py)", "X=/opt/python/bin python3 -c x",
   "NODE_OPTIONS=x node -e 'x'", "/usr/bin/python3 -c 'x'",
   "cat <<B <<'A'\n$(python3 -c x)\nB\nA", "bun -e 'x'", "bun --eval 'x'", "bun -p '1'", "bun --print '1'", "bun '-e' x", "bun \"--eval\" x", "bun \\-e x", "bun '-p' x", "bun '-' <<EOF", "node '-e' x",
   "bun -", "bun <<EOF", "bun - <<EOF", "FOO=1 /usr/local/bin/bun -e 'x'", "env bun --cwd /w -e 'x'", "bun --env-file .env -r ./pre.ts -p '1'", "bun run - <<EOF", "bun run --bun - <<EOF", "bun run --silent - <<EOF", "bun run --smol - <<EOF",
