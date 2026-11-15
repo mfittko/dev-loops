@@ -1618,11 +1618,17 @@ export function stripLeadingWrappers(segment) {
 /** Interpreter heads covered by OPS-NO-INLINE-INTERPRETER (issue 2442 item 10). `deno` stays uncovered. */
 const INTERPRETER_HEAD_RE = /^(?:node|bun|python3?|perl|ruby)$/;
 /** Heads that run a file: a heredoc-written file run by one of them in the same command is denied. */
-const FILE_RUNNER_HEAD_RE = /^(?:node|bun|python3?|perl|ruby|sh|bash|zsh)$/;
+const FILE_RUNNER_HEAD_RE = /^(?:node|bun|python3?|perl|ruby|sh|bash|zsh|\.|source)$/;
 /** Reserved words that can precede the command head of a segment (`for x in a; do node -e y; done`). */
 const RESERVED_HEAD_WORDS = new Set(["do", "then", "else", "elif", "if", "while", "until", "{", "(", "!"]);
-/** node/bun flags whose next word is the flag's value, never the script. */
-const NODE_VALUE_FLAGS = new Set(["-r", "-C", "--require", "--import", "--loader", "--experimental-loader", "--conditions", "--cwd", "--env-file", "--env-file-if-exists", "--input-type", "--title", "--preload", "--config", "--define", "--tsconfig-override", "--console-depth"]);
+/** node and bun flags whose next word is the flag's value, never the script (the origin/main 99bb8b3ce lists). */
+const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "--input-type", "--title", "--disable-warning", "--watch-path", "--redirect-warnings", "--env-file-if-exists", "--test-reporter", "--report-dir", "--diagnostic-dir", "--cpu-prof-dir", "--heap-prof-dir", "--snapshot-blob", "--test-reporter-destination", "--localstorage-file", "--openssl-config", "--icu-data-dir", "--tls-keylog", "--experimental-config-file", "--experimental-sea-config", "--trace-event-file-pattern"]);
+const BUN_VALUE_FLAGS = new Set(["--cwd", "--env-file", "-r", "--preload", "--require", "--import", "-c", "--config", "--tsconfig-override", "--define", "-d", "--loader", "-l", "--port", "--conditions", "--console-depth"]);
+/** node and bun long flags known to be boolean: the word after one is the script. Any other `--flag` takes a value (the refusing direction). */
+const NODE_BOOLEAN_FLAGS = new Set(["--no-warnings", "--no-deprecation", "--trace-warnings", "--trace-deprecation", "--trace-uncaught", "--enable-source-maps", "--experimental-vm-modules", "--experimental-strip-types", "--experimental-transform-types", "--experimental-detect-module", "--experimental-require-module", "--experimental-websocket", "--experimental-sqlite", "--experimental-permission", "--permission", "--watch", "--expose-gc", "--abort-on-uncaught-exception", "--pending-deprecation", "--throw-deprecation", "--no-experimental-fetch"]);
+const BUN_BOOLEAN_FLAGS = new Set(["--silent", "--bun", "--watch", "--hot", "--smol", "--no-install", "--if-present", "--no-clear-screen"]);
+/** A word that is the script after an unlisted `--flag`: it has a script extension or is path-like. */
+const SCRIPT_WORD_RE = /\.(?:[cm]?js|[cm]?ts)$|^\.|^[^/]+\//;
 // A redirection token (`2>&1`, `2>/dev/null`, `>out`, `&>x`) is not the script path. Returns how many tokens to skip: 0 (not a redirection), 1, or 2 (operator alone, its target is the next token).
 const REDIRECTION_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)/;
 const REDIRECTION_OPERATOR_ONLY_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)$/;
@@ -1630,11 +1636,16 @@ const redirectionSkip = (t) => (!t.includes("<<") && REDIRECTION_RE.test(t) ? (R
 
 /**
  * Classify one interpreter flag word: "code" (inline code), "inplace" (in-place edit), "value" (the next word is
- * its value), "stop" (python `-m`: the module takes the rest) or null (a plain flag).
+ * its value), "long" (an unlisted node/bun `--flag`: the next word is its value unless it reads as the script), "stop"
+ * (python `-m`: the module takes the rest) or null (a plain flag).
  */
 function interpreterFlag(head, t) {
-  if (head === "node" || head === "bun") return /^-[ep]|^--(?:eval|print)(?:=|$)/.test(t) ? "code" : NODE_VALUE_FLAGS.has(t) ? "value" : null;
-  if (head.startsWith("python")) return /^-[BEIOPRSUVbdhiqsuvx]*c/.test(t) ? "code" : /^-[BEIOPRSUVbdhiqsuvx]*m/.test(t) ? "stop" : /^-[BEIOPRSUVbdhiqsuvx]*[WX]$/.test(t) ? "value" : null;
+  if (head === "node" || head === "bun") {
+    if (/^-[ep]|^--(?:eval|print)(?:=|$)/.test(t)) return "code";
+    if ((head === "node" ? NODE_VALUE_FLAGS : BUN_VALUE_FLAGS).has(t)) return "value";
+    return t.startsWith("--") && !t.includes("=") && !(head === "node" ? NODE_BOOLEAN_FLAGS : BUN_BOOLEAN_FLAGS).has(t) ? "long" : null;
+  }
+  if (head.startsWith("python")) return /^-[BEIOPRSUVbdhiqsuvx]*c/.test(t) ? "code" : /^-[BEIOPRSUVbdhiqsuvx]*m/.test(t) ? "stop" : /^-[BEIOPRSUVbdhiqsuvx]*[WX]$|^--check-hash-based-pycs$/.test(t) ? "value" : null;
   if (t.startsWith("--")) return null;
   // perl and ruby: walk the short-flag cluster; a letter that takes an argument ends it
   const argLetters = head === "perl" ? "IMmxdD" : "IrCEFKxWT";
@@ -1664,8 +1675,10 @@ function interpreterForm(head, args) {
     const flag = interpreterFlag(head, t);
     if (flag === "code" || flag === "inplace") return flag;
     if (flag === "stop") return null;
-    // shortcut: an unlisted flag is read as boolean, so its value is read as the script (allow); list a value flag that hides a form.
-    if (flag === "value" && !args[k + 1]?.op) k++; // an operator word is never a flag value
+    const next = args[k + 1];
+    if (flag === "value" && !next?.op) k++; // an operator word is never a flag value
+    // shortcut: a relative path value after an unlisted path-valued `--flag` reads as the script (allow), as on origin/main; list such a flag.
+    if (flag === "long" && next && !next.op && !next.value.startsWith("-") && !redirectionSkip(next.value) && !SCRIPT_WORD_RE.test(next.value)) k++;
   }
   return "stdin";
 }
@@ -1730,7 +1743,8 @@ function segmentsHaveInterpreterForm(segments) {
   return segments.some((seg) => segmentCommands(seg).some(({ head, args, tail }) => {
     if (INTERPRETER_HEAD_RE.test(head) && ["code", "inplace", "heredoc"].includes(interpreterForm(head, args))) return true;
     if ((/^g?sed$/.test(head) && sedInPlace(args)) || (/^g?awk$/.test(head) && awkInPlace(args))) return true;
-    if (FILE_RUNNER_HEAD_RE.test(head) && args.some((w) => !w.op && written.includes(w.value.replace(/^\.\//, "")))) return true;
+    const isWritten = (w) => !!w && !w.op && written.includes(w.value.replace(/^\.\//, ""));
+    if (isWritten(tail[0]) || (FILE_RUNNER_HEAD_RE.test(head) && args.some(isWritten))) return true;
     if (!/^(?:cat|tee)$/.test(head) || seg.heredocs.length === 0) return false;
     const targets = writeTargets({ ...seg, words: tail.filter((_w, k) => tail[k - 1]?.op !== "<<") }); // a heredoc delimiter is no tee operand
     written.push(...targets);
@@ -1752,7 +1766,8 @@ function inertQuoteSegment(tok, s) {
 /**
  * Whether the segments of TOK hold a closed-list form in a context the gate does not read (the ceiling): a `$(...)` substitution,
  * a `-c`/`eval`/here-string payload, a heredoc body that is not data (`dataHeredocs`), a pipe into an interpreter that reads stdin,
- * or a quoted word in a segment whose quoted text is not inert (`inertQuoteSegment`). Report-only: it never denies.
+ * or a form after a separator inside a quoted word in a segment whose quoted text is not inert (`inertQuoteSegment`); origin/main's raw split
+ * saw only those. Report-only: it never denies.
  */
 function segmentsHaveCeilingForm(tok, segments = tok.segments, data = new Set(dataHeredocs(tok.segments))) {
   return segments.some((seg, i) => {
@@ -1761,7 +1776,7 @@ function segmentsHaveCeilingForm(tok, segments = tok.segments, data = new Set(da
     if (seg.heredocs.some((h) => !data.has(h) && inlineInterpreterVerdict(h.body) !== "allow")) return true;
     const inert = segments === tok.segments && inertQuoteSegment(tok, seg);
     return seg.words.some((w, k) => w.subs.some((sub) => segmentsHaveInterpreterForm(sub.segments) || segmentsHaveCeilingForm(tok, sub.segments, data)) ||
-      (isPayloadWord(seg.words, k) ? inlineInterpreterVerdict(w.value) !== "allow" : !inert && (w.single || w.double || w.ansi) && segmentsHaveInterpreterForm(tokenizeShellCommand(w.value).segments)));
+      (isPayloadWord(seg.words, k) ? inlineInterpreterVerdict(w.value) !== "allow" : !inert && (w.single || w.double || w.ansi) && segmentsHaveInterpreterForm(tokenizeShellCommand(w.value).segments.slice(1))));
   });
 }
 
