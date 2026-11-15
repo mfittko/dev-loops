@@ -25,6 +25,15 @@ test("every verdict-table row origin/main denied and the head allows is a fixtur
   assert.ok(qualifying > 0, "no verdict-table row qualified");
 });
 
+test("a deeply nested eval substitution returns within a fixed bound", () => {
+  const depth = 30;
+  const command = `gh pr merge 5 --admin; ${'eval "$('.repeat(depth)}echo x${')"'.repeat(depth)}`;
+  const start = Date.now();
+  commandContainsInlineInterpreter(command);
+  inlineInterpreterVerdict(command);
+  assert.ok(Date.now() - start < 2000);
+});
+
 const GATE = (command) => decideBashGate({ command, inManagedContext: true });
 
 test("ANSI-C quoted flag values are read (#2943 slice 2)", () => {

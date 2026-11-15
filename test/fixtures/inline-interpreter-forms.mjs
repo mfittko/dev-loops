@@ -160,6 +160,31 @@ export const INLINE_INTERPRETER_FORMS = [
   allow("cat > tmp/post.md <<'EOF'\nhello\nEOF\nbash scripts/post.sh tmp/post.md"),
   allow("cat > tmp/d.json <<'EOF'\n{}\nEOF\npython3 tools/x.py tmp/d.json"),
   allow("perl script.pl -i"),
+  allow("perl -w script.pl"),
+  allow("perl -I lib script.pl"),
+  allow("ruby -rjson script.rb"),
+  allow("ruby -I lib script.rb"),
+  allow("perl -Cio script.pl"),
+  allow("perl -CSE script.pl"),
+  allow("perl -Fi script.pl"),
+  deny("perl -C -e x"),
+  // a backslash-newline continuation is removed by bash: it hides no head, flag or run path
+  allow("node \\\n scripts/x.mjs"),
+  allow("X=1 \\\n node scripts/x.mjs"),
+  deny("X=1 \\\n node -e x"),
+  deny("sudo \\\n node -e x"),
+  deny("env \\\n node -e x"),
+  deny("time \\\n node -e x"),
+  deny("echo a && \\\n node -e x"),
+  deny("for p in a; do \\\n node -e x; done"),
+  deny("X=1 Y=2 \\\n python3 -c x"),
+  deny("perl \\\n -pi -e s/a/b/ f"),
+  deny("cat > tmp/r.sh <<'EOF'\nx\nEOF\nbash \\\n tmp/r.sh"),
+  // a redirect of another fd than 1 is no heredoc write
+  allow("cat <<EOF 2>err.log\nx\nEOF"),
+  allow("cat <<EOF >tmp/a 2>build.log\nx\nEOF"),
+  deny("cat <<EOF >src/a.mjs 2>tmp/e.log\nx\nEOF"),
+  deny("cat > packages/a.mjs <<'EOF'\nx\nEOF"),
   allow("deno eval x"),
   allow("echo x | node scripts/x.mjs"),
   allow("git commit -m 'sed -i is denied'"),
@@ -185,6 +210,8 @@ export const INLINE_INTERPRETER_FORMS = [
   ceiling("node 0<<< 'x'"),
   // origin/main denied this; the head reads the here-string as a stdin payload (ceiling), reported by check-retro-tooling (operator decision 2)
   ceiling("node <<< x script.js"),
+  // origin/main denied these pipe, dash and here-string variants; the head reads the stdin payload (ceiling, operator decision 2)
+  ...["echo x | python3 -", "printf x | node -", "node - < f.js", "python3 - < f.py", "bun - < f.ts", "python3 -<<<x", "node - <<< x", "cat <<EOF | python3 -\nx\nEOF"].map(ceiling),
 
   // ceiling rows of the verdict table (test/loop/inline-interpreter-classify.test.mjs): origin/main 99bb8b3ce denied each one
   ...[
