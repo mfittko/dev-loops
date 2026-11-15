@@ -1679,7 +1679,7 @@ function interpreterForm(head, args, out = {}) {
     if (flag === "code" || flag === "inplace") return flag;
     if (flag === "stop") return herestring ? "herestring" : null;
     const next = args[k + 1];
-    if (flag === "value" && !next?.op) k++; // an operator word is never a flag value
+    if (flag === "value" && !next?.op) { if (out.loaded && /^(?:-r|--require|--import|--loader|--experimental-loader|--preload)$/.test(t)) out.loaded.push(next); k++; } // an operator word is never a flag value; a preload flag value is code that runs
     // shortcut: a relative path value after an unlisted path-valued `--flag` reads as the script (allow), as on origin/main; list such a flag.
     if (flag === "long" && next && !next.op && !next.value.startsWith("-") && !redirectionSkip(next.value) && !SCRIPT_WORD_RE.test(next.value)) k++;
   }
@@ -1752,11 +1752,22 @@ function segmentsHaveInterpreterForm(segments) {
     if ((/^g?sed$/.test(head) && sedInPlace(args)) || (/^g?awk$/.test(head) && awkInPlace(args))) return true;
     const isWritten = (w) => !!w && !w.op && written.includes(w.value.replace(/^\.\//, ""));
     // only the script word of a runner runs the file; a written file later in the args is data (`node s.mjs --body-file tmp/b.md`)
-    const script = {};
-    if (FILE_RUNNER_HEAD_RE.test(head)) { if (INTERPRETER_HEAD_RE.test(head)) interpreterForm(head, args, script); else script.script = args.find((w) => !w.op && !w.value.startsWith("-")); }
-    if (isWritten(tail[0]) || isWritten(script.script)) return true;
-    // a tee that receives a pipe from a heredoc-owning segment is the heredoc write
-    const pipedHeredoc = head === "tee" && segments[i - 1]?.pipedOut && segments[i - 1].heredocs.length > 0;
+    const script = { loaded: [] };
+    if (FILE_RUNNER_HEAD_RE.test(head)) {
+      if (INTERPRETER_HEAD_RE.test(head)) interpreterForm(head, args, script);
+      else { // sh/bash/zsh: skip `-o`/`-O`/`+o`/`+O` option values and `+x` words
+        for (let k = 0; k < args.length; k++) {
+          const w = args[k];
+          if (w.op) continue;
+          if (/^[-+][oO]$/.test(w.value)) { k++; continue; }
+          if (!/^[-+]/.test(w.value)) { script.script = w; break; }
+        }
+      }
+    }
+    if (isWritten(tail[0]) || isWritten(script.script) || script.loaded.some(isWritten)) return true;
+    // a tee that receives a pipe from a cat heredoc segment is the heredoc write (other heads write their own output, not the heredoc)
+    const prev = segments[i - 1];
+    const pipedHeredoc = head === "tee" && prev?.pipedOut && prev.heredocs.length > 0 && segmentCommands(prev).some((c) => c.head === "cat");
     if (!/^(?:cat|tee)$/.test(head) || (seg.heredocs.length === 0 && !pipedHeredoc)) return false;
     // a heredoc delimiter is no tee operand; only an exact device name is no file write (`/dev/shm/x`, `/dev/../x`, `/dev/fd/3` are writes)
     const targets = writeTargets({ ...seg, words: tail.filter((_w, k) => tail[k - 1]?.op !== "<<") }).filter((t) => !DEVICE_TARGETS.has(t));
