@@ -3,7 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, parseReviewThreads } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
 import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
-import { capWait, pendingFields, resolveTimeoutMs, scriptCommand } from "../lib/timeout-flag.mjs";
+import { WAIT_CAP_MS, capWait, pendingFields, resolveTimeoutMs, scriptCommand } from "../lib/timeout-flag.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { isSanctionedCopilotReviewerLogin, isTrustedGraphqlComment } from "@dev-loops/core/github/comment-trust";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -31,7 +31,7 @@ Options:
                                 no fresh activity). For a quick non-watch thread/state
                                 read without entering the watch loop, pass 0 here or use
                                 'dev-loops gate capture-threads'.
-One call waits at most 170 seconds (GATE-EXEC-BOUNDED-WAIT-CAP); a longer --timeout returns
+One call waits at most ${WAIT_CAP_MS / 1000} seconds (GATE-EXEC-BOUNDED-WAIT-CAP); a longer --timeout returns
 "timeout" with outcome "pending" and a "reissue" command (carrying the internal --baseline-ids
 and the remaining --timeout); run it. --concise prints the outcome and the reissue line too.
 Output (stdout, JSON):

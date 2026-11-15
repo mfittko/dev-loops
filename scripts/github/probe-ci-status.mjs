@@ -5,7 +5,7 @@ import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
-import { capWait, parseBaselineSha, pendingFields, resolveTimeoutMs, scriptCommand } from "../lib/timeout-flag.mjs";
+import { WAIT_CAP_MS, capWait, parseBaselineSha, pendingFields, resolveTimeoutMs, scriptCommand } from "../lib/timeout-flag.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import {
   normalizeHeadScopedCiContract,
@@ -34,7 +34,7 @@ Optional:
   --timeout-ms <n>              Deprecated alias for --timeout (milliseconds); warns on stderr.
                                 Passing both flags fails closed.
   --poll-interval-ms <n>        Delay between polls (default 60000)
-One call waits at most 170 seconds (GATE-EXEC-BOUNDED-WAIT-CAP); a longer --timeout returns
+One call waits at most ${WAIT_CAP_MS / 1000} seconds (GATE-EXEC-BOUNDED-WAIT-CAP); a longer --timeout returns
 "timeout" with outcome "pending" and a "reissue" command (carrying the internal
 --baseline-sha and --stall-started-at-ms plus the remaining --timeout); run it.
 Output (stdout, JSON):
