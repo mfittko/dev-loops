@@ -873,7 +873,7 @@ test("F1: bootstrap teaches permitted reads and immediate denial stop before ver
       assert.match(delivery, /subject to normal approval review/);
       assert.match(delivery, /never broadens.*branch, paths or phase/);
       assert.match(delivery, /staging, staged secret scan and commit as three separate tool invocations; inspect each native exit before the next/);
-      assert.match(delivery, /A failed stage permits no scan or commit; a scanner error stops the actor\. Each scanner hit is a candidate/);
+      assert.match(delivery, /A failed stage permits no scan or commit; a scanner error stops the actor and hands back `blocker: secret_scan_error`.* Each scanner hit is a candidate/);
       assert.match(delivery, /ordinary command-input error or executed failing test is not automatically a permission\/classifier denial/);
       assert.match(delivery, /supported recovery only if there was no real denial/);
     }
