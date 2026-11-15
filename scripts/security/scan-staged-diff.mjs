@@ -17,7 +17,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 const USAGE = `Usage: scan-staged-diff.mjs
 Fail-closed secret scan over the ADDED lines of the currently staged git
 diff (\`git diff --cached\` in the current working directory). On a hit,
-reports only file/line/detector-class per finding — NEVER the matched value.
+reports only file/line/rule id per finding — NEVER the matched value.
 
 ${JQ_OUTPUT_USAGE}`;
 
@@ -46,8 +46,8 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   const options = parseScanStagedDiffCliArgs(argv);
   if (options.help) { stdout.write(`${USAGE}\n`); return { ok: true, help: true }; }
 
-  const { stdout: diffText } = await runCommand(gitCommand, ["diff", "--cached", "--no-color"], { cwd, env });
-  const result = scanDiffText(diffText);
+  const { stdout: diffText } = await runCommand(gitCommand, ["diff", "--cached", "--no-color", "-U1000000"], { cwd, env });
+  const result = await scanDiffText(diffText);
   const payload = result.ok
     ? { ok: true, hits: [] }
     : { ok: false, error: "secret_scan_hit", hits: result.findings };

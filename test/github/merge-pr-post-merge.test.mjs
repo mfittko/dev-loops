@@ -89,6 +89,7 @@ function makeRuntime(repo, { prView = {}, mergeCode = 0, postMergeState = "MERGE
     isAncestor: () => true,
     detectOriginSlug: () => "mfittko/dev-loops",
     evaluateAdrTripwire: async () => ({ outcome: "pass" }),
+    readMergeDiff: () => "",
     loadConfig: async () => ({ config: { autonomy: { humanMergeOnly: false }, refinement: { maxCopilotRounds: 0 } }, errors: [] }),
   };
   if (postMergeSteps) runtime.postMergeSteps = postMergeSteps;

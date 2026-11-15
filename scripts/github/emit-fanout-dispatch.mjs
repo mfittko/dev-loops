@@ -247,7 +247,7 @@ export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unit
     : "";
   const contract = `## Bounded reviewer contract
 Budget: at most ${budget.maxModelTurns} model turns and ${budget.maxToolCalls} tool calls for this unit, computed from the size of the diff blocks in this unit's scope (doc and unparsed-path blocks for a docs-only unit, every block otherwise), plus 9 model turns and 10 tool calls for each angle above 5, clamped at 95 and 100.
-Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is prohibited.
+Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is prohibited. The one exception: also apply the Secret leaks check of the review agent's Review Focus (a prefixless secret in the diff, or a secret value written to a log, a file or a workflow output); it is never an unassigned angle.
 Prohibited: ${prohibited}.
 Widening: ${REVIEWER_WIDENING_RULE}.
 ${verifiedItemsLine}If you exceed this budget (more than ${budget.maxModelTurns} model turns or ${budget.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --max-model-turns ${budget.maxModelTurns} --max-tool-calls ${budget.maxToolCalls}${unitBound !== REVIEWER_UNIT_MAX_ANGLES ? ` --unit-bound ${unitBound}` : ""} --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;

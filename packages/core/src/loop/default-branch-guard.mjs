@@ -111,13 +111,7 @@ export function renderGuardHook(hookName, defaultBranches = null, explicitBranch
   // "{ok:true,hits:[]}" success payload (a hit's diagnostics go to STDERR,
   // per the CLI's own `payload.ok ? stdout : stderr` split above) — silenced
   // here so a normal commit prints no JSON noise, while a blocked commit's
-  // stderr (file/line/detector-class) still reaches the developer untouched.
-  // Shell var deliberately named "scan_cli" rather than e.g. "secret_scanner":
-  // this repo's own pre-commit hook (below) runs a heuristic sink-pattern
-  // detector that fires on a credential-shaped variable name feeding any
-  // stdout redirect, even one that discards output; naming it around a
-  // scanner CLI path rather than a credential keeps this file's own diff
-  // clean through its own hook.
+  // stderr (file/line/rule id) still reaches the developer untouched.
   const secretScanBlock = hookName === "pre-commit"
     ? `scan_cli="scripts/security/scan-staged-diff.mjs"
 if [ -f "$scan_cli" ]; then

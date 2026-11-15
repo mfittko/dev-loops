@@ -802,6 +802,7 @@ async function runMerge(fixture, { threads = [], delta = DOCS_DELTA, prOwn = del
       isAncestor: () => true,
       detectOriginSlug: () => REPO,
       evaluateAdrTripwire: async () => ({ outcome: "pass" }),
+      readMergeDiff: () => "",
       loadConfig: async () => ({ config: { refinement: { maxCopilotRounds: 5, requireCopilotConvergenceAtLatestHead: strict } }, errors: [] }),
       detectInternalOnlyPr: async () => ({ ok: true, internalOnly: false, files: [] }),
       cwd: process.cwd(),
