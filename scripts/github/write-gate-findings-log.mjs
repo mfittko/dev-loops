@@ -912,6 +912,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // A judged round must be written with its verdict: a write without --judge-verdict while a judge execution's verdict sits on disk would persist the unjudged severity verdict.
   if (!options.judgeVerdict && options.gate !== "review") {
     const judgeRoots = [...new Set([options.contextTmpRoot, options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot), path.join(repoRoot, "tmp")].filter(Boolean))];
+    // Both ids embed their emission time (r<ms>-, j<ms>-): a judge emitted before this fan-out round belongs to an earlier same-head round.
+    const roundEmittedMs = Number(/^r(\d+)-/.exec(planRoundId ?? "")?.[1]) || 0;
     for (const root of judgeRoots) {
       const judgeDir = path.resolve(repoRoot, buildGateArtifactPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: root, dir: "gate-judge" }));
       let entries = [];
@@ -920,7 +922,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       } catch (error) {
         if (error?.code !== "ENOENT") throw error;
       }
-      for (const entry of entries.filter((name) => /^j\d+-[0-9a-f]+$/.test(name))) {
+      for (const entry of entries.filter((name) => Number(/^j(\d+)-[0-9a-f]+$/.exec(name)?.[1]) > roundEmittedMs)) {
         const found = path.join(judgeDir, entry, "judge-verdict.json");
         if (await exists(found)) throw parseError(`judge_verdict_required: a judge verdict exists at ${found}; pass --judge-verdict ${found} so the log carries the judged verdict`);
       }

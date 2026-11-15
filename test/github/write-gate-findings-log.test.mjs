@@ -3217,6 +3217,30 @@ test("3105: a write without --judge-verdict refuses judge_verdict_required when 
   }
 });
 
+test("3105: a judge verdict of an earlier same-head round does not block the next round's pre-judge write", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judge-earlier-round-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const contextDir = path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-49");
+    await mkdir(contextDir, { recursive: true });
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.emit-plan.json`), JSON.stringify({ ok: true, repo: "owner/repo", pr: 49, gate: "draft_gate", headSha, roundId: "r2000-aa", count: 2, units: [{ angles: ["pr-description"], group: null }, { angles: ["holistic"], group: null }] }), "utf8");
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.fanin-ledger.json`), JSON.stringify({ overallVerdict: "findings_present", findings: [], provenance: { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "review-a" }, { angle: "holistic", reviewer: "review-b" }] } }), "utf8");
+    const judgeVerdictAt = async (roundId) => {
+      const dir = path.resolve(buildGateArtifactPath({ repo: "owner/repo", pr: 49, gate: "draft_gate", headSha, tmpRoot: path.join(repoRoot, "tmp"), dir: "gate-judge" }), roundId);
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, "judge-verdict.json"), "{}", "utf8");
+      return path.join(dir, "judge-verdict.json");
+    };
+    const write = () => writeGateFindingsLog({ repo: "owner/repo", pr: 49, gate: "draft_gate", headSha, findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "s" }]) }, { repoRoot });
+    await judgeVerdictAt("j1000-ab");
+    assert.equal((await write()).ok, true, "a judge emitted before this round's fan-out plan is ignored");
+    const current = await judgeVerdictAt("j3000-cd");
+    await assert.rejects(write(), (err) => err.message.startsWith("judge_verdict_required:") && err.message.includes(current));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // --- AC1 (issue 2008 / ADR-0061): optional --spec-authority stamping ---
 
 test("writeGateFindingsLog: --spec-authority stamps the log; absent is a byte-identical no-op", async () => {
