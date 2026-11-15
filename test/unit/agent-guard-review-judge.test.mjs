@@ -10,7 +10,7 @@ const ID = "j1790000000000-abcdef12";
 const POINTER = `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${ID}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`;
 
 const runGuard = (cwd, agentType, prompt) => {
-  const r = spawnSync("node", [GUARD], { cwd, encoding: "utf8", input: JSON.stringify({ agent_type: agentType, cwd, tool_input: { subagent_type: "dev-loops:judge", prompt } }) });
+  const r = spawnSync("node", [GUARD], { cwd, encoding: "utf8", env: { ...process.env, DEVLOOPS_AGENT_OVERRIDES: undefined }, input: JSON.stringify({ agent_type: agentType, cwd, tool_input: { subagent_type: "dev-loops:judge", prompt } }) });
   assert.equal(r.error, undefined);
   assert.equal(r.status, 0);
   return r.stdout.trim() ? JSON.parse(r.stdout).hookSpecificOutput : { permissionDecision: "allow" };
