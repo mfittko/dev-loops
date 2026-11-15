@@ -78,14 +78,17 @@ every mapped wrapper exists on disk and fails closed if one is renamed/removed.
 
 ## Unit coordinator boundaries (issue 2532, amended by issues 2955 and 3069)
 
-A coordinator continues past a report point. The end of a gate round and the end of a fix pass are run-ending cases under `COORDINATOR-ROUND-BOUNDARY-HANDBACK` in the main-agent contract. `unitBoundaries` tells it where to report, so no orchestrator
-brief has to restate the boundary:
+A coordinator continues past the `draft_pr_opened` report point. The end of a gate round and the
+end of a fix pass are run-ending cases under `COORDINATOR-ROUND-BOUNDARY-HANDBACK` in the
+[main-agent contract](main-agent-contract.md), so the coordinator hands back there and does not
+continue. `unitBoundaries` tells the coordinator where to report, so no orchestrator brief has to
+restate the boundary:
 
 - `reportAfter` lists the deterministic report points for this route, in order, from the closed
   set `draft_pr_opened` (a unit that owns no PR yet, so opening the draft PR is its report point) and
   `gate_verdict_posted` (a unit that posts a gate verdict of its own reports after it).
   **The list is ordered and each point is reported when reached**: a unit that carries both reports at the draft PR it opens and continues,
-  and reports at the verdict boundary once the unit runs its gate round already owning that PR.
+  and reports and hands back at the verdict boundary once the unit runs its gate round already owning that PR.
   The validator refuses a list that reverses that order, so the draft PR is always reported first.
   It also refuses a set that contradicts the envelope's own target (`deriveTarget`), in both
   directions: a target that owns no PR must carry `draft_pr_opened` first, because opening that
@@ -96,7 +99,7 @@ brief has to restate the boundary:
   `gate_verdict_posted` as a recorded naming approximation
   (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`): `final_approval` runs a gate round
   but posts no verdict of its own. An `issue_intake` unit reports at `draft_pr_opened`, continues on
-  the PR route, and then reports at `gate_verdict_posted`, in order.
+  the PR route, and then reports at `gate_verdict_posted` and hands back, in order.
 - `resume` names the authoritative re-resolution a replacement coordinator runs (`kind: loop_startup` plus
   whichever of the target's `issue`, `pr`, `branch` and `phase` values are set). It is **not** an
   exclusive selector, and no XOR or precedence rule applies to it: `deriveUnitBoundaries` copies
