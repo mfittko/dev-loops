@@ -180,6 +180,7 @@ export const INLINE_INTERPRETER_FORMS = [
   deny("X=1 Y=2 \\\n python3 -c x"),
   deny("perl \\\n -pi -e s/a/b/ f"),
   deny("cat > tmp/r.sh <<'EOF'\nx\nEOF\nbash \\\n tmp/r.sh"),
+  ceiling("X=1 \\\n watch 'node -e x'"),
   // a redirect of another fd than 1 is no heredoc write
   allow("cat <<EOF 2>err.log\nx\nEOF"),
   allow("cat <<EOF >tmp/a 2>build.log\nx\nEOF"),

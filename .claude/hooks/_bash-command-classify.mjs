@@ -1009,16 +1009,18 @@ const EXEC_FLAG_RE = /^(?:-[a-z]*c[a-z]*|--command)$/i;
 const ENV_ASSIGNMENT_WORD_RE = /^[A-Za-z_]\w*=/;
 /** Programs that only read their text (`-c` counts or selects bytes, a here-string is stdin data, an operand is a file name). */
 const TEXT_CONSUMER_RE = /^(?:echo|printf|grep|rg|wc|cat|tee|head|tail|cut|sort|uniq|tr|od|jq|read)$/;
+/** A backslash-newline continuation is an empty unquoted word: bash removes it, so it is no head, flag or script word. */
+const isContinuationWord = (w) => !w.op && w.value === "" && !w.single && !w.double && !w.ansi;
 /** Basename of the program that receives a segment's input and arguments: the first word after env assignments and `env`/`command`/`exec` launchers with their flags. ponytail: `env -u NAME sh` reads NAME as the head. */
 function receiverOf(words) {
-  const w = words.filter((x) => !x.op && !ENV_ASSIGNMENT_WORD_RE.test(x.raw));
+  const w = words.filter((x) => !x.op && !ENV_ASSIGNMENT_WORD_RE.test(x.raw) && !isContinuationWord(x));
   let i = 0;
   while (/^(?:env|command|exec)$/.test(w[i]?.value.split("/").pop() ?? "")) for (i++; w[i]?.value.startsWith("-"); i++);
   return w[i]?.value.split("/").pop() ?? "";
 }
 /** Index of the first payload word of a segment: every word after `eval` or a `-c`-containing short-flag cluster (origin/main's coarse rule) is executable text. Also every argument of `watch`/`trap`, and the value of `git -x`/`--exec`. A TEXT_CONSUMER_RE head has no payload (`-c` counts bytes, `eval` is an argument). */
 const payloadFrom = (words) => {
-  const hi = words.findIndex((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op);
+  const hi = words.findIndex((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op && !isContinuationWord(w));
   const base = receiverOf(words);
   const run = words.findIndex((w, i) => i >= hi && (i === hi || /^(?:sudo|timeout|nice|nohup|env|exec|command)$/.test(base)) && /^(?:watch|trap)$/.test(w.value.split("/").pop()));
   if (run >= 0) return run + 1; // every argument of `watch`/`trap` (also behind a wrapper) is command text the shell runs
@@ -1731,8 +1733,7 @@ function isTempPath(path) {
 
 /** The readings of SEG as `{ head, args, tail }`: the words from its command head on (after leading reserved words, a leading `(`, env assignments and wrappers), and the head's basename. */
 function segmentCommands(seg) {
-  // a backslash-newline continuation is an empty unquoted word: bash removes it, so it is no head, flag or script word
-  let words = seg.words.filter((w) => w.op || w.value !== "" || w.single || w.double || w.ansi);
+  let words = seg.words.filter((w) => !isContinuationWord(w));
   while (words.length && !words[0].op && RESERVED_HEAD_WORDS.has(words[0].value)) words = words.slice(1);
   // The prefix strippers work on text: encode each word as one space-free token so the remaining word count maps back to WORDS
   const text = words.map((w, k) => (k === 0 ? w.value.replace(/^\(+/, "") : w.value).replace(/\s/g, "\u0001") || "\u0001").join(" ");
