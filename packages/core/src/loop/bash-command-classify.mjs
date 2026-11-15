@@ -1752,7 +1752,7 @@ function segmentsHaveInterpreterForm(segments) {
   return segments.some((seg, i) => segmentCommands(seg).some(({ head, args, tail }) => {
     if (INTERPRETER_HEAD_RE.test(head) && ["code", "inplace", "heredoc"].includes(interpreterForm(head, args))) return true;
     if ((/^g?sed$/.test(head) && sedInPlace(args)) || (/^g?awk$/.test(head) && awkInPlace(args))) return true;
-    const isWritten = (w) => !!w && !w.op && written.includes(w.value.replace(/^\.\//, ""));
+    const isWritten = (w) => !!w && !w.op && written.includes(w.value.replace(/^\.\//, "").toLowerCase()); // lowercased like the head: a case-insensitive file system runs `TMP/L.SH` as the written `tmp/l.sh`
     // only the script word of a runner runs the file; a written file later in the args is data (`node s.mjs --body-file tmp/b.md`)
     const script = { loaded: [] };
     if (FILE_RUNNER_HEAD_RE.test(head)) {
@@ -1773,7 +1773,7 @@ function segmentsHaveInterpreterForm(segments) {
     if (!/^(?:cat|tee)$/.test(head) || (seg.heredocs.length === 0 && !pipedHeredoc)) return false;
     // a heredoc delimiter is no tee operand; only an exact device name is no file write (`/dev/shm/x`, `/dev/../x`, `/dev/fd/3` are writes)
     const targets = writeTargets({ ...seg, words: tail.filter((_w, k) => tail[k - 1]?.op !== "<<") }).filter((t) => !DEVICE_TARGETS.has(t));
-    written.push(...targets);
+    written.push(...targets.map((t) => t.toLowerCase()));
     return targets.some((t) => !isTempPath(t));
   }));
 }
@@ -1799,7 +1799,8 @@ function segmentsHaveCeilingForm(tok, segments = tok.segments, data = new Set(da
   return segments.some((seg, i) => {
     const forms = segmentCommands(seg).map(({ head, args }) => (INTERPRETER_HEAD_RE.test(head) ? interpreterForm(head, args) : null));
     if (forms.includes("dash") || forms.includes("herestring") || (forms.includes("stdin") && segments[i - 1]?.pipedOut)) return true;
-    if (seg.heredocs.some((h) => !data.has(h) && inlineInterpreterVerdict(h.body) !== "allow")) return true;
+    // an unquoted-delimiter body is literal text to bash except `$(`/backtick: blank quotes and `#` (as origin/main did) so they cannot open a quote or comment over a substitution
+    if (seg.heredocs.some((h) => !data.has(h) && inlineInterpreterVerdict(h.quoted ? h.body : h.body.replace(/\\\n/g, "").replace(/['"#]/g, " ")) !== "allow")) return true;
     const inert = segments === tok.segments && inertQuoteSegment(tok, seg);
     return seg.words.some((w, k) => w.subs.some((sub) => segmentsHaveInterpreterForm(sub.segments) || segmentsHaveCeilingForm(tok, sub.segments, data)) ||
       (isPayloadWord(seg.words, k) ? inlineInterpreterVerdict(w.value) !== "allow" : !inert && (w.single || w.double || w.ansi) && segmentsHaveInterpreterForm(tokenizeShellCommand(w.value).segments.slice(1))));
