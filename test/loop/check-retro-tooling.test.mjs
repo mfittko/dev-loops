@@ -310,3 +310,9 @@ test("retro splitter traverses command substitution (#2442)", () => {
   assert.match(analyzeTranscript('echo "$(true; gh pr list)"').violations[0], /^gh:/);
   assert.match(analyzeTranscript('echo "$(true; python3 script.py)"').violations[0], /^python3:/);
 });
+
+test("an unclosed line joins at most 200 lines and is reported (join cap)", () => {
+  const { violations } = analyzeTranscript(['echo "$(gh pr view 1', ...Array.from({ length: 400 }, () => "ls")].join("\n"));
+  assert.ok(violations.some((v) => v.startsWith("inline-interpreter: echo")));
+  assert.ok(violations.every((v) => v.split("\n").length <= 200));
+});

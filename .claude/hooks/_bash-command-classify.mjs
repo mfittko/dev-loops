@@ -1662,7 +1662,7 @@ function interpreterFlag(head, t) {
  * (a stdin heredoc after any flags), "herestring" (a `<<<` stdin script and no other form), "dash" (a `-` stdin script with no heredoc), "stdin" (no script: the interpreter
  * reads stdin) or null (a script runs).
  */
-function interpreterForm(head, args) {
+function interpreterForm(head, args, out = {}) {
   let herestring = false;
   for (let k = 0; k < args.length; k++) {
     const { value: t, op } = args[k];
@@ -1674,7 +1674,7 @@ function interpreterForm(head, args) {
     if (skip) { k += skip - 1; continue; }
     if (t === "-") return args.slice(k + 1).some((w) => w.op === "<<") ? "heredoc" : "dash"; // later words are script arguments
     if (head === "bun" && t === "run") continue;
-    if (!t.startsWith("-")) return herestring ? "herestring" : null;
+    if (!t.startsWith("-")) { out.script = args[k]; return herestring ? "herestring" : null; }
     if (t === "--") continue; // origin/main keeps scanning past `--`, so `node -- -e x` stays denied
     const flag = interpreterFlag(head, t);
     if (flag === "code" || flag === "inplace") return flag;
@@ -1711,7 +1711,8 @@ function awkInPlace(args) {
     const t = args[k].value;
     if (args[k].op) { k++; continue; }
     if (/^(?:-i|--include=)inplace(?:\.awk)?$/.test(t) || ((t === "-i" || t === "--include") && INPLACE.test(args[k + 1]?.value ?? ""))) return true;
-    if (/^(?:-[ifvF]|--(?:include|file|assign|field-separator))$/.test(t)) { k++; continue; }
+    if (/^(?:-[ifvFe]|--(?:include|file|assign|field-separator|source))$/.test(t)) { k++; continue; }
+    if (/^--source=/.test(t)) continue;
     if (!t.startsWith("-") || t === "--") return false; // the program text: later words are operands
   }
   return false;
@@ -1732,7 +1733,7 @@ function segmentCommands(seg) {
   // The prefix strippers work on text: encode each word as one space-free token so the remaining word count maps back to WORDS
   const text = words.map((w, k) => (k === 0 ? w.value.replace(/^\(+/, "") : w.value).replace(/\s/g, "\u0001") || "\u0001").join(" ");
   // Two readings, as on origin/main: stripLeadingWrappers adds sudo/xargs/timeout; SHELL_EXEC_PREFIX keeps the env option forms (`env -i node`).
-  return [stripLeadingWrappers(text), text.slice(new RegExp(`^${SHELL_EXEC_PREFIX}`).exec(text)[0].length)].map((rest) => {
+  return [stripLeadingWrappers(text), text.slice(new RegExp(`^${SHELL_EXEC_PREFIX}`, "i").exec(text)[0].length)].map((rest) => {
     const tokens = rest.split(" ").filter(Boolean);
     const tail = words.slice(words.length - tokens.length);
     // lowercased: a case-insensitive file system runs `NODE` as node
@@ -1747,12 +1748,17 @@ function segmentCommands(seg) {
  */
 function segmentsHaveInterpreterForm(segments) {
   const written = [];
-  return segments.some((seg) => segmentCommands(seg).some(({ head, args, tail }) => {
+  return segments.some((seg, i) => segmentCommands(seg).some(({ head, args, tail }) => {
     if (INTERPRETER_HEAD_RE.test(head) && ["code", "inplace", "heredoc"].includes(interpreterForm(head, args))) return true;
     if ((/^g?sed$/.test(head) && sedInPlace(args)) || (/^g?awk$/.test(head) && awkInPlace(args))) return true;
     const isWritten = (w) => !!w && !w.op && written.includes(w.value.replace(/^\.\//, ""));
-    if (isWritten(tail[0]) || (FILE_RUNNER_HEAD_RE.test(head) && args.some(isWritten))) return true;
-    if (!/^(?:cat|tee)$/.test(head) || seg.heredocs.length === 0) return false;
+    // only the script word of a runner runs the file; a written file later in the args is data (`node s.mjs --body-file tmp/b.md`)
+    const script = {};
+    if (FILE_RUNNER_HEAD_RE.test(head)) { if (INTERPRETER_HEAD_RE.test(head)) interpreterForm(head, args, script); else script.script = args.find((w) => !w.op && !w.value.startsWith("-")); }
+    if (isWritten(tail[0]) || isWritten(script.script)) return true;
+    // a tee that receives a pipe from a heredoc-owning segment is the heredoc write
+    const pipedHeredoc = head === "tee" && segments[i - 1]?.pipedOut && segments[i - 1].heredocs.length > 0;
+    if (!/^(?:cat|tee)$/.test(head) || (seg.heredocs.length === 0 && !pipedHeredoc)) return false;
     // a heredoc delimiter is no tee operand; only an exact device name is no file write (`/dev/shm/x`, `/dev/../x`, `/dev/fd/3` are writes)
     const targets = writeTargets({ ...seg, words: tail.filter((_w, k) => tail[k - 1]?.op !== "<<") }).filter((t) => !DEVICE_TARGETS.has(t));
     written.push(...targets);
