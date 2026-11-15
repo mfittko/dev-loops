@@ -1,8 +1,9 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { mergePr, parseMergePrCliArgs, main, defaultIsAncestor, defaultFetchPrHead, buildDetectEvidenceArgv, defaultPostMergeComment } from "../../scripts/github/merge-pr.mjs";
+import { mergePr, parseMergePrCliArgs, main, defaultReadMergeDiff, defaultIsAncestor, defaultFetchPrHead, buildDetectEvidenceArgv, defaultPostMergeComment } from "../../scripts/github/merge-pr.mjs";
 import { runChild } from "../../scripts/_cli-primitives.mjs";
 import { captureStream } from "../_helpers.mjs";
+import { scanDiffText } from "@dev-loops/core/security/secret-scan";
 
 const HEAD = "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
 const MERGE_COMMIT = "aaaa1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
@@ -209,6 +210,31 @@ test("secret_scan fails closed when the diff read or scan throws", async () => {
   runtime.readMergeDiff = () => { throw new Error("git diff exploded"); };
   await assert.rejects(() => mergePr(baseOptions(), runtime), /secret_scan \(the secret scan could not run: git diff exploded; remove the credential/);
   assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("secret_scan fails closed when the scan itself throws", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
+  runtime.readMergeDiff = () => 42; // a non-string makes scanDiffText throw
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /secret_scan \(the secret scan could not run: [\s\S]*remove the credential and rotate it, or add a same-line "secret-scan:allow <reason>" marker/);
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("defaultReadMergeDiff reads base...head from real git, including a NUL-bearing file, and the scan reports it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "merge-diff-"));
+  try {
+    runGitFixture(dir, ["init", "-q", "-b", "main"]);
+    runGitFixture(dir, ["config", "user.email", "test@example.com"]);
+    runGitFixture(dir, ["config", "user.name", "Test"]);
+    runGitFixture(dir, ["commit", "-q", "--allow-empty", "-m", "base"]);
+    runGitFixture(dir, ["checkout", "-q", "-b", "feature"]);
+    writeFileSync(join(dir, "s.txt"), `x\0y\nT="${SCAN_TOKEN}"\n`);
+    runGitFixture(dir, ["add", "s.txt"]);
+    runGitFixture(dir, ["commit", "-q", "-m", "head"]);
+    const head = runGitFixture(dir, ["rev-parse", "HEAD"]);
+    const result = await scanDiffText(defaultReadMergeDiff({ base: "main", head, repoRoot: dir }));
+    assert.equal(result.ok, false);
+    assert.ok(result.findings.some((f) => f.file === "s.txt"), JSON.stringify(result.findings));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("secret_scan passes a clean diff and an allow-marked public value, and the merge proceeds", async () => {
