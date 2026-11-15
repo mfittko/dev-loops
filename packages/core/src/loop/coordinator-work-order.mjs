@@ -25,6 +25,8 @@ export const RULE_REFERENCES = {
     "skills/docs/validation-policy.md#VALIDATE-TARGETED-FIRST",
   ],
   adrCandidateRevalidation: ["skills/docs/decision-record-contract.md#ADR-PATH-NUMBERING"],
+  // The order carries no head SHA or ledger path: state comes from loop startup and gate-coordination.
+  stateDerivation: ["skills/docs/main-agent-contract.md#COORDINATOR-ROUND-BOUNDARY-HANDBACK"],
   guardFailure: { onFailure: "stop_and_report", rules: [`${WORKTREE_DOC}#WORKTREE-COMMIT-MSG-GUARD`, `${WORKTREE_DOC}#WORKTREE-DEFAULT-BRANCH-GUARD`, `${WORKTREE_DOC}#WORKTREE-WRONG-CHECKOUT-GUARD`] },
 };
 
