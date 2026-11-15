@@ -148,8 +148,8 @@
   },
   "homepage": "https://github.com/mfittko/dev-loops#readme",
   "dependencies": {
-    "@secretlint/core": "^14.0.0",
-    "@secretlint/secretlint-rule-preset-recommend": "^13.1.0",
+    "@secretlint/core": "14.0.0",
+    "@secretlint/secretlint-rule-preset-recommend": "13.1.0",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
