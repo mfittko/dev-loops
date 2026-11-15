@@ -145,12 +145,38 @@ test("no .claude/hooks script imports an unresolvable bare package (#843)", () =
       const resolvable = spec.startsWith("node:") || spec.startsWith("./") || spec.startsWith("../");
       if (!resolvable) offenders.push(`${file} → ${spec}`);
     }
+    // `require("x")` and `createRequire(url)("x")` load a package at run time and crash the hook the same way (ADR 0276).
+    for (const match of body.matchAll(/\brequire\(\s*["']([^"']+)["']\s*\)|\bcreateRequire\([^)]*\)\(\s*["']([^"']+)["']\s*\)/g)) {
+      const spec = match[1] ?? match[2];
+      if (!(spec.startsWith("node:") || spec.startsWith("./") || spec.startsWith("../"))) offenders.push(`${file} → ${spec}`);
+    }
   }
   assert.deepEqual(
     offenders,
     [],
     `Bundled hooks must only import node: builtins or relative paths (no node_modules in the plugin):\n${offenders.join("\n")}`,
   );
+});
+
+test("an installed plugin without node_modules parses and denies: the vendored sh-syntax carries the hook (ADR 0276)", () => {
+  const plugin = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-hooks-"));
+  try {
+    fs.cpSync(hooksDir, path.join(plugin, "hooks"), { recursive: true });
+    assert.equal(fs.existsSync(path.join(plugin, "node_modules")), false);
+    const run = (command) => spawnSync("node", [path.join(plugin, "hooks", "pre-tool-use-bash-gate.mjs")], {
+      input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: repoRoot }),
+      encoding: "utf8",
+      cwd: plugin,
+    });
+    const denied = run("node -e x");
+    assert.equal(denied.status, 0, denied.stderr);
+    assert.match(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecisionReason, /OPS-NO-INLINE-INTERPRETER/);
+    const allowed = run("cat > tmp/f <<'EOF'\nnode -e 'x'\nEOF");
+    assert.equal(allowed.status, 0, allowed.stderr);
+    assert.equal(allowed.stdout.trim(), "");
+  } finally {
+    fs.rmSync(plugin, { recursive: true, force: true });
+  }
 });
 
 test("package.json files allowlist ships the plugin hooks", () => {
