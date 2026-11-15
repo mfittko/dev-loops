@@ -79,6 +79,7 @@ describe("resolveFanoutSizeTier eligibility (AC4, AC5)", () => {
     ["changed_files_unavailable", TIERED, "draft", { changedFiles: null }],
     ["risk_path_touch", TIERED, "draft", { changedFiles: ["packages/core/src/config/config.mjs"] }],
     ["config_source_touch", TIERED, "draft", { changedFiles: [".devloops"] }],
+    ["unclassifiable_diff", TIERED, "draft", { changedFiles: ["docs/a.md", "mystery.zzz"] }],
   ]) {
     test(`${reason} keeps existing grouping (${gate})`, () => {
       const result = apply(over, config, gate);
@@ -103,6 +104,14 @@ describe("tier packing in resolveFanoutDispatch (AC1, AC4, AC6, AC7, AC9)", () =
       });
     }
   }
+
+  test("an escalated round keeps existing grouping with the escalated reason", () => {
+    const angles = POOL.slice(0, 9);
+    const baseline = dispatch(withFanout({ sizeTiers: undefined }), "draft", angles, piEnv());
+    const plan = dispatch(TIERED, "draft", angles, piEnv(), { escalated: true });
+    assert.deepEqual(plan.groups, baseline.groups);
+    assert.deepEqual(plan.sizeTier.reasons, ["escalated"]);
+  });
 
   test("without the key the plan carries no sizeTier record and today's grouping", () => {
     const config = withFanout({ sizeTiers: undefined });

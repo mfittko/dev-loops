@@ -7422,6 +7422,14 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     assert.equal(resolveRoleModel(config, { role: "correctness", harness: "codex", kind: "angle" }), null);
   });
 
+  test("a Claude angle falls back to the repo review override before the built-in tier", () => {
+    const angle = (models, harness = "claude", name = "correctness") => resolveRoleModel({ models }, { role: name, harness, kind: "angle" });
+    assert.equal(angle({ roleTiers: { review: "low" }, tiers: { low: { claude: "sonnet" } } }), "sonnet");
+    assert.equal(angle({ roles: { review: "haiku" } }), "haiku");
+    assert.equal(angle({ roles: { review: "haiku" } }, "pi"), "haiku");
+    assert.equal(angle({}, "pi"), null);
+  });
+
   test("a consumer low tier of sonnet reaches every low-tier role, dev-loop and gate-coordinator, and leaves review roles high", () => {
     const config = {
       models: {

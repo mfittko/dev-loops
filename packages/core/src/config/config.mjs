@@ -1389,7 +1389,10 @@ export function resolveRoleModel(config, { role, harness, kind } = {}) {
   if (kind === "angle") {
     const entry = findAngleEntry(config, role);
     if (typeof entry?.model === "string" && entry.model.length > 0) return entry.model;
-    const tierAlias = entry?.tier ?? BUILTIN_ROLE_TIERS.review;
+    // The repo-level review override (models.roles.review / models.roleTiers.review) is the angle default.
+    const reviewConcrete = config?.models?.roles?.review;
+    if (entry?.tier === undefined && typeof reviewConcrete === "string" && reviewConcrete.trim().length > 0) return reviewConcrete.trim();
+    const tierAlias = entry?.tier ?? config?.models?.roleTiers?.review ?? BUILTIN_ROLE_TIERS.review;
     return resolveTierMapping(config, tierAlias, harness);
   }
 
@@ -2851,7 +2854,7 @@ export function resolveMaxAnglesPerGroup(config) {
  * names the reason, which keeps existing grouping: unconfigured key, per-angle
  * mode, a gate other than draft/preApproval, `gate:full` label, light-mode
  * escalation, size evidence that is missing, non-`pass` or not T1-clean,
- * unreadable changed files, a risk-path or config-source touch, a wLoC above the
+ * unreadable changed files, a risk-path or config-source touch, an unclassifiable file, a wLoC above the
  * last tier, then the selected tier's optional `maxFiles`. Reuses the
  * proportionality predicates; adds none.
  * @param {DevLoopConfig|null} config
@@ -2875,7 +2878,9 @@ export function resolveFanoutSizeTier(config, gate, { sizeOutcome, changedFiles,
   if (!Array.isArray(changedFiles) || changedFiles.length === 0) return none("changed_files_unavailable");
   if (touchesRiskPath(changedFiles, config?.localImplementation?.lightMode?.riskPaths)) return none("risk_path_touch");
   if (touchesConfigSource(changedFiles)) return none("config_source_touch");
-  const tier = tiers.find((t) => loc <= t.maxWholeLogicLoc);
+  const rules = resolveClassifyRules(config);
+  if (changedFiles.some((f) => classifyFile(f, rules) === "unknown")) return none("unclassifiable_diff");
+  const tier =tiers.find((t) => loc <= t.maxWholeLogicLoc);
   if (!tier) return none("above_size_tiers");
   if (typeof tier.maxFiles === "number" && countLightModeFiles(config, changedFiles) > tier.maxFiles) return none("over_tier_max_files");
   return { tier, reason: "size_tier_applied" };
