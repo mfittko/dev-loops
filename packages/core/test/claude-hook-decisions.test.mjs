@@ -1947,13 +1947,18 @@ test("decideAgentDispatch (#3199): a dev-loop judge pointer with a trailing newl
 test("decideAgentDispatch (#3199): deny reasons carry a bounded diagnostic", () => {
   const unindexed = decideAgentDispatch({ callerAgentType: "dev-loop", targetAgentType: "judge", prompt: shortPointer("judge"), judgeWorkOrderRef: null });
   assert.match(unindexed.reason, /^GATE_COORDINATOR_REQUIRED/);
-  assert.match(unindexed.reason, /received \d+ bytes; pointer shape after trim: match; execution identity not resolved/);
+  assert.match(unindexed.reason, /received \d+ bytes \(cap \d+\); pointer shape after trim: match; execution identity not resolved/);
   const lifecycle = decideAgentDispatch({ callerAgentType: "dev-loop", targetAgentType: "judge", prompt: shortPointer("judge"), judgeWorkOrderRef: "judge:o/r#7:draft_gate:abc123:j1790000000000-abcdef12" });
   assert.match(lifecycle.reason, /resolved to gate draft_gate/);
   const long = "x".repeat(500);
   const d = dispatch("gate-coordinator", "review", long);
   assert.match(d.reason, /^GATE_DISPATCH_NOT_VERBATIM/);
-  assert.match(d.reason, /received 500 bytes; pointer shape after trim: no match/);
+  assert.match(d.reason, /received 500 bytes \(cap \d+\); pointer shape after trim: no match/);
   assert.ok(d.reason.includes(JSON.stringify("x".repeat(120))));
   assert.ok(!d.reason.includes("x".repeat(121)));
+});
+
+test("decideAgentDispatch (#3199): the diagnostic reports the byte cap separately from the trimmed shape", () => {
+  const d = dispatch("gate-coordinator", "review", `${shortPointer("review")}${" ".repeat(500)}`);
+  assert.match(d.reason, /received \d+ bytes \(cap 499\); pointer shape after trim: match/);
 });

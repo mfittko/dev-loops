@@ -3066,6 +3066,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // The angle checks, tick and recorded marker all key on options.executionMode, so a ledger-declared
     // fan-out is promoted onto it rather than enforced only for this local check.
     promoteLedgerFanout(options, preloadedFindingsLedger);
+    // A ledger-only review post has no --findings-summary: derive a counts digest from the ledger.
+    if (options.gate === "review" && !options.findingsSummary) {
+      const n = (preloadedFindingsLedger.findings ?? []).length;
+      options.findingsSummary = `${n} ${n === 1 ? "finding" : "findings"} from the findings ledger.`;
+    }
     const fanout = (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin";
     if (options.gate !== "review" && fanout) {
       unjudgedLedgerFindings = (preloadedFindingsLedger.findings ?? []).filter((f) => !f?.judgeDisposition);

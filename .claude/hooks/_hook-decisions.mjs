@@ -646,7 +646,9 @@ const isStandaloneReviewJudgePointer = (prompt, judgeWorkOrderRef) =>
 // Deny-reason diagnostic: which check failed, never more than 120 prompt characters (JSON-escaped).
 const dispatchDiagnostic = (prompt, role, judgeWorkOrderRef) => {
   const text = typeof prompt === "string" ? prompt : "";
-  const parts = [`received ${Buffer.byteLength(text)} bytes`, `pointer shape after trim: ${isDispatchPointer(prompt, role) ? "match" : "no match"}`];
+  const bytes = Buffer.byteLength(text);
+  const shape = DISPATCH_POINTER_RE.exec(text.trim());
+  const parts = [`received ${bytes} bytes (cap ${DISPATCH_POINTER_MAX_BYTES})`, `pointer shape after trim: ${shape && shape[1][0] === IDENTITY_PREFIX[role] ? "match" : "no match"}`];
   if (role === "judge") {
     const gate = typeof judgeWorkOrderRef === "string" ? /^judge:[^ ]+#\d+:([a-z_]+):/.exec(judgeWorkOrderRef)?.[1] : null;
     parts.push(gate ? `execution index resolved to gate ${gate}` : "execution identity not resolved through the execution index");
@@ -710,6 +712,6 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
     decision: "deny",
     reason:
       `GATE_DISPATCH_NOT_VERBATIM: GATE-EXEC-GATE-COORDINATOR denied this \`${target}\` dispatch: the prompt is not an emitted \`${target}:\` dispatchPrompt. ` +
-      "Relay the emitter's dispatchPrompt byte for byte, with no added prose, no `cd` wrapper and no extra flags. A same-head retry recovers through GATE-EXEC-ROUND-RETIREMENT and a fresh round." + dispatchDiagnostic(prompt, target, judgeWorkOrderRef),
+      "Relay the emitter's dispatchPrompt byte for byte (surrounding whitespace is ignored), with no added prose, no `cd` wrapper and no extra flags. A same-head retry recovers through GATE-EXEC-ROUND-RETIREMENT and a fresh round." + dispatchDiagnostic(prompt, target, judgeWorkOrderRef),
   };
 }
