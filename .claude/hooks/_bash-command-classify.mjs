@@ -1650,6 +1650,7 @@ function interpreterFlag(head, t) {
   // perl and ruby: walk the short-flag cluster; a letter that takes an argument ends it
   const argLetters = head === "perl" ? "IMmxdD" : "IrCEFKxWT";
   for (let k = 1; k < t.length; k++) {
+    if (head === "perl" && "CF".includes(t[k])) return null; // -C and -F take an attached value (`-Cio`, `-Fi`): its letters are no `e`/`i` flags
     if (argLetters.includes(t[k])) return k === t.length - 1 && "IMmrCEFK".includes(t[k]) ? "value" : null;
     if (t[k] === "e" || (head === "perl" && t[k] === "E")) return "code";
     if (t[k] === "i") return "inplace";
@@ -1730,7 +1731,8 @@ function isTempPath(path) {
 
 /** The readings of SEG as `{ head, args, tail }`: the words from its command head on (after leading reserved words, a leading `(`, env assignments and wrappers), and the head's basename. */
 function segmentCommands(seg) {
-  let words = seg.words;
+  // a backslash-newline continuation is an empty unquoted word: bash removes it, so it is no head, flag or script word
+  let words = seg.words.filter((w) => w.op || w.value !== "" || w.single || w.double || w.ansi);
   while (words.length && !words[0].op && RESERVED_HEAD_WORDS.has(words[0].value)) words = words.slice(1);
   // The prefix strippers work on text: encode each word as one space-free token so the remaining word count maps back to WORDS
   const text = words.map((w, k) => (k === 0 ? w.value.replace(/^\(+/, "") : w.value).replace(/\s/g, "\u0001") || "\u0001").join(" ");
@@ -1773,7 +1775,14 @@ function segmentsHaveInterpreterForm(segments) {
     const pipedHeredoc = head === "tee" && prev?.pipedOut && prev.heredocs.length > 0 && segmentCommands(prev).some((c) => c.head === "cat");
     if (!/^(?:cat|tee)$/.test(head) || (seg.heredocs.length === 0 && !pipedHeredoc)) return false;
     // a heredoc delimiter is no tee operand; only an exact device name is no file write (`/dev/shm/x`, `/dev/../x`, `/dev/fd/3` are writes)
-    const targets = writeTargets({ ...seg, words: tail.filter((_w, k) => tail[k - 1]?.op !== "<<") }).filter((t) => !DEVICE_TARGETS.has(t));
+    const heredocWords = [];
+    for (let k = 0; k < tail.length; k++) {
+      if (tail[k - 1]?.op === "<<") continue;
+      const err = !tail[k].op && /^(?:[02-9]|\d\d+)(?:>>?|<>)(.*)$/s.exec(tail[k].value); // a redirect of another fd than 1 (`2>err.log`) is no heredoc write
+      if (err) { if (!err[1]) k++; continue; }
+      heredocWords.push(tail[k]);
+    }
+    const targets = writeTargets({ ...seg, words: heredocWords }).filter((t) => !DEVICE_TARGETS.has(t));
     written.push(...targets.map((t) => t.toLowerCase()));
     return targets.some((t) => !isTempPath(t));
   }));
@@ -1803,9 +1812,16 @@ function segmentsHaveCeilingForm(tok, segments = tok.segments, data = new Set(da
     // an unquoted-delimiter body is literal text to bash except `$(`/backtick: blank quotes and `#` (as origin/main did) so they cannot open a quote or comment over a substitution
     if (seg.heredocs.some((h) => !data.has(h) && inlineInterpreterVerdict(h.quoted ? h.body : h.body.replace(/\\\n/g, "").replace(/['"#]/g, " ")) !== "allow")) return true;
     const inert = segments === tok.segments && inertQuoteSegment(tok, seg);
-    return seg.words.some((w, k) => w.subs.some((sub) => segmentsHaveInterpreterForm(sub.segments) || segmentsHaveCeilingForm(tok, sub.segments, data)) ||
-      (isPayloadWord(seg.words, k) ? inlineInterpreterVerdict(w.value) !== "allow" : !inert && (w.single || w.double || w.ansi) && segmentsHaveInterpreterForm(tokenizeShellCommand(w.value).segments.slice(1))));
+    // a payload word's verdict already scans its substitutions: scanning them here too would double the work per nesting level
+    return seg.words.some((w, k) => isPayloadWord(seg.words, k) ? inlineInterpreterVerdict(w.value) !== "allow" :
+      w.subs.some((sub) => segmentsHaveInterpreterForm(sub.segments) || segmentsHaveCeilingForm(tok, sub.segments, data)) ||
+      (!inert && (w.single || w.double || w.ansi) && segmentsHaveInterpreterForm(tokenizeShellCommand(w.value).segments.slice(1))));
   });
+}
+
+/** The deny part of the verdict: a closed-list form in a segment that TOK reads completely (its words end before the first unclosed opener; an unterminated heredoc body leaves the words of its own segment complete). */
+function tokenHasDeny(tok) {
+  return segmentsHaveInterpreterForm(tok.segments.filter((s) => !tok.incomplete || s.words.every((w) => w.end <= tok.incompleteAt) || s.heredocs.some((h) => h.start === tok.incompleteAt)));
 }
 
 /**
@@ -1816,9 +1832,7 @@ function segmentsHaveCeilingForm(tok, segments = tok.segments, data = new Set(da
  */
 export function inlineInterpreterVerdict(command) {
   const tok = tokenizeShellCommand(command);
-  // A segment is read completely when its words end before the first unclosed opener; an unterminated heredoc body leaves the words of its own segment complete.
-  const complete = tok.segments.filter((s) => !tok.incomplete || s.words.every((w) => w.end <= tok.incompleteAt) || s.heredocs.some((h) => h.start === tok.incompleteAt));
-  if (segmentsHaveInterpreterForm(complete)) return "deny";
+  if (tokenHasDeny(tok)) return "deny";
   if (tok.incomplete || tok.ticks.some((t) => inlineInterpreterVerdict(t.slice(1, -1).replace(/\\([`$\\])/g, "$1")) !== "allow")) return "ceiling"; // bash unescapes \` \$ \\ in a backtick body
   return segmentsHaveCeilingForm(tok) ? "ceiling" : "allow";
 }
@@ -1828,7 +1842,7 @@ export function inlineInterpreterVerdict(command) {
  * @param {string} command @returns {boolean}
  */
 export function commandContainsInlineInterpreter(command) {
-  return inlineInterpreterVerdict(command) === "deny";
+  return tokenHasDeny(tokenizeShellCommand(command)); // the hook needs the deny bit only: skip the report-only ceiling scan
 }
 
 /**
