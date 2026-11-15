@@ -1034,7 +1034,7 @@ const segmentHead = (seg) => rawHead(seg).split("/").pop();
 const REDIRECT_RE = /^\d*(?:&>>?|<>|>>?&?)\|?(.*)$/s;
 /** Words a `cat`/`tee` segment writes to: the word after any `>`, `>>`, `>|`, `>&`, `&>`, `&>>` or `<>` operator, an attached `>file`, and every `tee` operand. `>&2`/`>&-` duplicate a descriptor and write no file. */
 function writeTargets(seg) {
-  const targets = seg.words.map((w, k) => { const attached = REDIRECT_RE.exec(w.value); return attached ? attached[1] || seg.words[k + 1]?.value : segmentHead(seg) === "tee" && k > 0 && !w.op && !w.value.startsWith("-") ? w.value : null; });
+  const targets = seg.words.map((w, k) => { const attached = REDIRECT_RE.exec(w.value); return attached ? attached[1] || seg.words[k + 1]?.value : segmentHead(seg).toLowerCase() === "tee" && k > 0 && !w.op && !w.value.startsWith("-") ? w.value : null; });
   return targets.filter((t) => t && !/^\d+$|^-$/.test(t)).map((t) => t.replace(/^\.\//, ""));
 }
 
