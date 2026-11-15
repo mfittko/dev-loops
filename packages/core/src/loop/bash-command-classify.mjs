@@ -1670,7 +1670,8 @@ function interpreterForm(head, args) {
     if (skip) { k += skip - 1; continue; }
     if (t === "-") return args.slice(k + 1).some((w) => w.op === "<<") ? "heredoc" : "dash"; // later words are script arguments
     if (head === "bun" && t === "run") continue;
-    if (!t.startsWith("-") || t === "--") return null;
+    if (!t.startsWith("-")) return null;
+    if (t === "--") continue; // origin/main keeps scanning past `--`, so `node -- -e x` stays denied
     const flag = interpreterFlag(head, t);
     if (flag === "code" || flag === "inplace") return flag;
     if (flag === "stop") return null;
