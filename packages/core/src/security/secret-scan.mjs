@@ -8,9 +8,10 @@
  * no detector of its own. The fuzzy part (a prefixless secret, a secret value
  * written to a log or file) is judged by the gate reviewer, not here.
  *
- * Enforcement split: the merge gate (`scripts/github/merge-pr.mjs`,
- * precondition `secret_scan`) blocks fail-closed; the local pre-commit hook is
- * the early signal and warns (issue 1858 moves it from blocking to warning).
+ * Enforcement split: warn locally, block at merge. The merge gate
+ * (`scripts/github/merge-pr.mjs`, precondition `secret_scan`) blocks
+ * fail-closed. The local pre-commit hook is the early signal and still exits
+ * non-zero on a hit until the hook switch to a warning lands.
  * A blocking false positive costs an agent loop a stopped pass, an extra
  * dispatch and a reworded line, so no home-built heuristic sits in a blocking
  * path.
