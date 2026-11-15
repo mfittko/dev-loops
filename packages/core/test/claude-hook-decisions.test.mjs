@@ -1801,9 +1801,6 @@ test("decideAgentDispatch denies a gate-coordinator relay that is not the emitte
   for (const prompt of [
     `Review PR 7 carefully.\n${p}`,
     `${p}\nAlso check the tests.`,
-    `${p} `,
-    `${p}\n`,
-    `${p}\r\n`,
     `cd /tmp/worktrees/pr-7 && ${p}`,
     pointer("judge"),
     `${p} --same-head-retry`,
@@ -1817,7 +1814,6 @@ test("decideAgentDispatch denies a gate-coordinator relay that is not the emitte
   assert.equal(dispatch("gate-coordinator", "judge", pointer("review")).decision, "deny");
   assert.equal(dispatch("gate-coordinator", "judge", shortPointer("review")).decision, "deny");
   assert.equal(dispatch("gate-coordinator", "judge", shortPointer("fixer")).decision, "deny");
-  assert.equal(dispatch("gate-coordinator", "review", `${shortPointer("review")} `).decision, "deny");
   for (const pointerText of [p, shortPointer("review")]) {
     const padded = pointerText.replace("r1790000000000", `r1${"0".repeat(DISPATCH_POINTER_MAX_BYTES)}`);
     const d = dispatch("gate-coordinator", "review", padded);
@@ -1930,4 +1926,34 @@ test("decideBashGate denies a timeout wrapper in front of a sanctioned command a
     assert.equal(gate("dev-loops-run scripts/github/wait-pr-checks.mjs --repo mfittko/dev-loops --pr 5 --timeout 300", agentType).decision, "allow");
   }
   assert.equal(decideBashGate({ command: "timeout 300 dev-loops-run scripts/github/merge-pr.mjs", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision, "allow");
+});
+
+test("decideAgentDispatch (#3199): a gate-coordinator relay ignores leading and trailing whitespace only", () => {
+  for (const target of ["review", "judge"]) {
+    for (const wrap of [(p) => p, (p) => `${p}\n`, (p) => `${p} `, (p) => `${p}\r\n`, (p) => ` ${p}`]) {
+      assert.equal(dispatch("gate-coordinator", target, wrap(pointer(target))).decision, "allow", `${target} ${JSON.stringify(wrap("x"))}`);
+    }
+    const d = dispatch("gate-coordinator", target, `Context line\n${pointer(target)}`);
+    assert.equal(d.decision, "deny");
+    assert.match(d.reason, /^GATE_DISPATCH_NOT_VERBATIM/);
+  }
+});
+
+test("decideAgentDispatch (#3199): a dev-loop judge pointer with a trailing newline is allowed for a review-gate ref", () => {
+  const ref = "judge:o/r#7:review:abc123:j1790000000000-abcdef12";
+  assert.equal(decideAgentDispatch({ callerAgentType: "dev-loop", targetAgentType: "judge", prompt: `${shortPointer("judge")}\n`, judgeWorkOrderRef: ref }).decision, "allow");
+});
+
+test("decideAgentDispatch (#3199): deny reasons carry a bounded diagnostic", () => {
+  const unindexed = decideAgentDispatch({ callerAgentType: "dev-loop", targetAgentType: "judge", prompt: shortPointer("judge"), judgeWorkOrderRef: null });
+  assert.match(unindexed.reason, /^GATE_COORDINATOR_REQUIRED/);
+  assert.match(unindexed.reason, /received \d+ bytes; pointer shape after trim: match; execution identity not resolved/);
+  const lifecycle = decideAgentDispatch({ callerAgentType: "dev-loop", targetAgentType: "judge", prompt: shortPointer("judge"), judgeWorkOrderRef: "judge:o/r#7:draft_gate:abc123:j1790000000000-abcdef12" });
+  assert.match(lifecycle.reason, /resolved to gate draft_gate/);
+  const long = "x".repeat(500);
+  const d = dispatch("gate-coordinator", "review", long);
+  assert.match(d.reason, /^GATE_DISPATCH_NOT_VERBATIM/);
+  assert.match(d.reason, /received 500 bytes; pointer shape after trim: no match/);
+  assert.ok(d.reason.includes(JSON.stringify("x".repeat(120))));
+  assert.ok(!d.reason.includes("x".repeat(121)));
 });
