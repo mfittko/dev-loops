@@ -983,8 +983,8 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   }
   const missing = ["repo", "pr", "headSha", "verdict", "findingsSummary", ...(options.gate === "review" ? [] : ["nextAction"])]
     .filter((key) => options[key] === undefined);
-  // --findings-file and --findings-json each provide the findings body, so either
-  // satisfies the findingsSummary requirement.
+  // --findings-file and --findings-json (and --findings-ledger on --gate review)
+  // each provide the findings body, so any of them satisfies the findingsSummary requirement.
   if (options.findingsFile || options.findingsJson || (options.gate === "review" && options.findingsLedger)) {
     const fsIdx = missing.indexOf("findingsSummary");
     if (fsIdx !== -1) missing.splice(fsIdx, 1);
@@ -1002,7 +1002,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     if (vIdx !== -1) missing.splice(vIdx, 1);
   }
   if (missing.length > 0) {
-    throw parseError("upsert-checkpoint-verdict requires --repo, --pr, --head-sha, --verdict (or --findings-ledger carrying the consolidator's overallVerdict), --findings-summary (or --findings-file or --findings-json), and --next-action (except on --gate review)");
+    throw parseError("upsert-checkpoint-verdict requires --repo, --pr, --head-sha, --verdict (or --findings-ledger carrying the consolidator's overallVerdict), --findings-summary (or --findings-file or --findings-json, or --findings-ledger on --gate review), and --next-action (except on --gate review)");
   }
   if (options.convergedJson && (options.gate !== "draft_gate" || !["clean", undefined].includes(options.verdict))) {
     throw parseError("--converged-json requires --gate draft_gate and --verdict clean (or omitted)");

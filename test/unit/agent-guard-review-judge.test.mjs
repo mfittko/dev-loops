@@ -11,6 +11,8 @@ const POINTER = `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${ID}\`;
 
 const runGuard = (cwd, agentType, prompt) => {
   const r = spawnSync("node", [GUARD], { cwd, encoding: "utf8", input: JSON.stringify({ agent_type: agentType, cwd, tool_input: { subagent_type: "dev-loops:judge", prompt } }) });
+  assert.equal(r.error, undefined);
+  assert.equal(r.status, 0);
   return r.stdout.trim() ? JSON.parse(r.stdout).hookSpecificOutput : { permissionDecision: "allow" };
 };
 
