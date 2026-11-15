@@ -146,3 +146,10 @@ test("AC3 validate-handback exits 0 on a valid packet and 1 on a refusal", async
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("AC1 the soft-cap bullet points at the run-ending cases and the fix-pass end owns the converged post", async () => {
+  const content = await readRepo(MAIN);
+  assert.match(content, /Fresh dispatch stays for reviewer and judge isolation and for the run-ending cases in Unit coordinator boundaries\./);
+  assert.doesNotMatch(content, /Fresh dispatch stays for reviewer and judge isolation, genuine recovery/);
+  assert.match(content, /eligible under `GATE-EXEC-LOW-NIT-CONVERGENCE`, the fix pass ends only after the `--converged-json` post/);
+});

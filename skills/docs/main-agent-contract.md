@@ -230,7 +230,7 @@ context.
 - Crossing 150K never stops, relaunches or blocks a coordinator, a gate, completion or merge.
 - Staying below 150K is not an acceptance prerequisite.
 - To reduce traffic, use smaller reads, concise tool output and evidence reuse. Delegate heavy reading to narrow subagents.
-- Fresh dispatch stays for reviewer and judge isolation, genuine recovery, an unavailable actor, a runtime constraint and explicit operator direction.
+- Fresh dispatch stays for reviewer and judge isolation and for the run-ending cases in Unit coordinator boundaries.
 - On a Codex root, allow at most 10% empty wakeups, measured against root turns rather than wait duration.
 - A missing or ambiguous native measurement is reported as unknown, never zero.
 
@@ -250,7 +250,7 @@ The rule binds the coordinator on every harness, so it stays outside the section
 <!-- rule: COORDINATOR-ROUND-BOUNDARY-HANDBACK -->
 `COORDINATOR-ROUND-BOUNDARY-HANDBACK`: A unit coordinator hands back at the end of every gate round and at the end of every fix pass. It never continues into the next round. Issue 3069 amends ADR 0181 with these two run-ending cases.
 
-- A gate round ends when the coordinator records the round's verdict. A fix pass ends after a draft or pre_approval fixer pass with its delta review, its push and its CI wait.
+- A gate round ends when the coordinator records the round's verdict. A fix pass ends after a draft or pre_approval fixer pass with its delta review, its push and its CI wait. On a round that is eligible under `GATE-EXEC-LOW-NIT-CONVERGENCE`, the fix pass ends only after the `--converged-json` post.
 - The hand-back is the run's one `SubagentHandback` report under `COORDINATOR-HANDBACK-ONE-REPORT`. Its packet adds four typed fields to the compact relay packet, which still carries `status` and the startup-output path. The `status` names the run-ending case (`gate_round_end` or `fix_pass_end`). The four typed fields are: `pr` (the PR number), `head` (the PR head SHA), `nextAction` (the next action from `loop gate-coordination`) and `workerRunning` (true while any worker the coordinator dispatched still runs).
 - A coordinator never sends a round-boundary or fix-pass hand-back while a worker it dispatched runs; the interim hand-back under `GATE-EXEC-HARNESS-JOIN` is unchanged. `validateCoordinatorHandback` in `scripts/loop/_coordinator-handback.mjs` refuses a hand-back with `workerRunning: true` (`worker_running`) and a hand-back with a missing or invalid field (`missing_fields`). Before the hand-back, the coordinator writes the packet to a file and runs `dev-loops-run scripts/loop/validate-coordinator-handback.mjs --packet <path>`. Exit 1 means a refusal or an unreadable packet. On exit 1 it fixes the cause and runs the check again; it never hands back a refused packet.
 - The order before a hand-back is fixed: join every dispatched worker, run `validate-coordinator-handback.mjs`, release the runner claim under `RUNNER-HANDOFF-TEARDOWN` only after exit 0, then hand back. A coordinator releases its runner claim before every run-ending hand-back.
