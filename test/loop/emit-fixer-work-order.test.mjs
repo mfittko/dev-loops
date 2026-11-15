@@ -1933,8 +1933,9 @@ function assertFullPhaseSteps(text, { push }) {
   assert.ok(timeout > 0 && timeout <= 600, `delivery wait --timeout ${timeout} must stay at or under 600`);
   assert.doesNotMatch(text, /--timeout 900/);
   assert.match(text, /If it prints `outcome: "pending"` \(exit 2\), run its `reissue` command unchanged in the foreground and repeat until the outcome is no longer pending\. If it exits 2 with any other outcome, run it exactly once more\./);
-  assert.match(text, /run the wait again and never read raw `gh pr checks`, because only the wait excludes `gate-evidence`/);
-  assert.doesNotMatch(text, /(?:run|read|use) (?:raw )?`gh pr checks`(?!,)/);
+  const sanctioned = "run the wait again and never read raw `gh pr checks` or run `gh run watch`, because only the wait excludes `gate-evidence`";
+  assert.ok(text.includes(sanctioned));
+  assert.doesNotMatch(text.replace(sanctioned, ""), /gh pr checks|gh run watch/);
   assert.match(text, /reports `stuck` or `changed`, or exits 1 with an error, resolve no thread, run no verifier step, and hand back `ci_pending` \(`ci_unknown` when the checks cannot be read\)/);
   assert.doesNotMatch(text, /repeat while it reports/);
   assert.match(text, /If step 5 refuses the report as hand-written, rm only this execution's refused outputRef and its corresponding stale `<outputRef>\.constructed` marker, then re-run step 4\./);
@@ -3199,7 +3200,7 @@ test("issue 2787 C11: --ci-file emits a ci-failure order that names the failing 
     assert.match(text, /wait-pr-checks\.mjs[^`]* --timeout 540`/);
     assert.doesNotMatch(text, /--timeout 900/);
     assert.match(text, /If it prints `outcome: "pending"` \(exit 2\), run its `reissue` command unchanged in the foreground/);
-    assert.match(text, /never read raw `gh pr checks`/);
+    assert.match(text, /never read raw `gh pr checks` or run `gh run watch`/);
     assert.match(text, /hand back `ci_failed` with the failing check names/);
     assert.match(text, /\{ "headSha": "<full pushed SHA>" \}/);
     assert.match(text, /Edit and Write tools/);
