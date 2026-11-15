@@ -15,11 +15,14 @@ test("inline interpreter verdict table", () => {
 
 test("every verdict-table row origin/main denied and the head allows is a fixture ceiling row (#2442 decision 2)", () => {
   const ceilings = new Set(INLINE_INTERPRETER_FORMS.filter((row) => row.ceiling).map((row) => row.command));
+  let qualifying = 0;
   for (const [command, expected] of INLINE_INTERPRETER_VERDICT_CASES) {
     if (expected || !main.commandContainsInlineInterpreter(command)) continue;
+    qualifying++;
     assert.ok(ceilings.has(command), command);
     assert.equal(inlineInterpreterVerdict(command), "ceiling", command);
   }
+  assert.ok(qualifying > 0, "no verdict-table row qualified");
 });
 
 const GATE = (command) => decideBashGate({ command, inManagedContext: true });
