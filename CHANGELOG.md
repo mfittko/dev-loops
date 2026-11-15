@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.12-pre.3
+
+### Changed
+
+- The generated pre-commit hook prints secret-scan candidates to stderr and no longer blocks the commit; the merge gate's `secret_scan` precondition blocks (#1858)
+- The secret scan uses `@secretlint/core` instead of home-built heuristics, and `merge-pr.mjs` refuses a merge whose diff adds a detected secret (#1858)
+- `scanDiffText` from `@dev-loops/core/security/secret-scan` is now async and returns a Promise (#1858)
+- Findings and `scan-staged-diff.mjs` `hits[]` entries carry `ruleId` instead of `detectorClass`, and `file` and `line` can be null (#1858)
+- `scanLineText`, `shannonEntropy` and `DETECTOR_CLASSES` are removed from `@dev-loops/core/security/secret-scan` (#1858)
+- A unit coordinator hands back at the end of every gate round and every fix pass, and a fresh coordinator re-resolves state for the next step (#3069)
+- A judged findings log persists `findings_present` over an open act item; a write without `--judge-verdict` refuses while a round has an unconsumed judge verdict (#3105)
+
+### Fixed
+
+- The review-route judge dispatch is no longer denied for a prompt with surrounding whitespace; deny reasons now show a diagnostic, and a review post accepts a findings ledger alone (#3199)
+
 ## 1.0.12-pre.2
 
 ### Added
