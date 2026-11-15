@@ -1178,6 +1178,7 @@
           "properties": {
             "sizeTiers": {
               "description": "Opt-in ordered size tiers (strictly ascending maxWholeLogicLoc) that pack more angles per review unit for small changes on draft_gate and pre_approval_gate. Absent keeps existing grouping. Rejected together with mode: per-angle.",
+              "minItems": 1,
               "type": "array",
               "items": {
                 "type": "object",
@@ -1189,9 +1190,9 @@
                   },
                   "maxAnglesPerUnit": {
                     "type": "integer",
-                    "minimum": 1,
+                    "minimum": 5,
                     "maximum": 10,
-                    "description": "Max angles per packed dispatch unit for a round in this tier (1 to 10)."
+                    "description": "Max angles per packed dispatch unit for a round in this tier (5 to 10)."
                   },
                   "maxFiles": {
                     "description": "Optional non-doc file-count ceiling (countLightModeFiles); a round above it keeps existing grouping. Absent means no file-count limit; localImplementation.lightMode.maxFiles is never reused.",

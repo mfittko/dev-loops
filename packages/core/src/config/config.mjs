@@ -9,7 +9,7 @@ import { z } from "zod";
 import { classifyFile, compileClassifyRules, isDevLoopConfigSourcePath } from "../analysis/diff-analyzer.mjs";
 import { ChangeCategory, resolveDynamicAngles } from "../analysis/change-classifier.mjs";
 import { isClaudeHarness } from "../loop/run-context.mjs";
-import { REVIEWER_UNIT_COMBINED_ANGLES_LIMIT } from "../loop/reviewer-unit-bound.mjs";
+import { REVIEWER_UNIT_COMBINED_ANGLES_LIMIT, REVIEWER_UNIT_MAX_ANGLES } from "../loop/reviewer-unit-bound.mjs";
 import { trimmedOrNull } from "../loop/normalize.mjs";
 import { matchesDiffExcludeGlob } from "../loop/review-dispatch-plan.mjs";
 
@@ -436,12 +436,12 @@ const FanoutGroup = z.strictObject({
 // most maxAnglesPerUnit angles (resolveFanoutSizeTier, ADR 0278).
 const FanoutSizeTier = z.strictObject({
   maxWholeLogicLoc: z.number().int().min(0).describe("Weighted whole logic LOC ceiling of this tier: the round uses the first tier whose ceiling is at or above its wholeLogicLoc."),
-  maxAnglesPerUnit: z.number().int().min(1).max(REVIEWER_UNIT_COMBINED_ANGLES_LIMIT).describe(`Max angles per packed dispatch unit for a round in this tier (1 to ${REVIEWER_UNIT_COMBINED_ANGLES_LIMIT}).`),
+  maxAnglesPerUnit: z.number().int().min(REVIEWER_UNIT_MAX_ANGLES).max(REVIEWER_UNIT_COMBINED_ANGLES_LIMIT).describe(`Max angles per packed dispatch unit for a round in this tier (${REVIEWER_UNIT_MAX_ANGLES} to ${REVIEWER_UNIT_COMBINED_ANGLES_LIMIT}).`),
   maxFiles: z.number().int().min(0).optional().describe("Optional non-doc file-count ceiling (countLightModeFiles); a round above it keeps existing grouping. Absent means no file-count limit; localImplementation.lightMode.maxFiles is never reused."),
 });
 
 const FanoutConfig = z.strictObject({
-  sizeTiers: z.array(FanoutSizeTier).optional().describe("Opt-in ordered size tiers (strictly ascending maxWholeLogicLoc) that pack more angles per review unit for small changes on draft_gate and pre_approval_gate. Absent keeps existing grouping. Rejected together with mode: per-angle."),
+  sizeTiers: z.array(FanoutSizeTier).min(1).optional().describe("Opt-in ordered size tiers (strictly ascending maxWholeLogicLoc) that pack more angles per review unit for small changes on draft_gate and pre_approval_gate. Absent keeps existing grouping. Rejected together with mode: per-angle."),
   mode: z.enum(["grouped", "per-angle"]).default("grouped").describe("Angle dispatch mode: grouped batches related angles onto one reviewer each (default); per-angle bypasses the configured-groups table and emits one singleton unit per angle (the original full-scrutiny shape). per-angle is equivalent to maxAnglesPerGroup: 1 in dispatch unit size ONLY when no configured multi-angle group matches a resolved angle; otherwise per-angle bypasses configured groups while maxAnglesPerGroup: 1 honors them (matched first, never split)."),
   groups: z.array(FanoutGroup).optional().describe("Static named angle groups consulted in grouped mode. An angle absent from every group joins the auto-chunked leftover pool (chunked into units of ≤maxAnglesPerGroup)."),
   maxAnglesPerGroup: z.number().int().min(1).default(5).describe("Max angles per auto-chunked dispatch unit for leftover ungrouped angles (default 5, min 1). Configured groups are matched first and never split by this knob; mode: per-angle bypasses the table entirely (one singleton per angle)."),
@@ -1364,10 +1364,13 @@ export function resolveReviewerRole(config, angle) {
  * `null` (inherit → pass no model override).
  *
  * Precedence:
- *   1. `kind: "angle"` (gate review dispatch): the angle's own `model`, else its
+ *   1. `kind: "angle"` (gate review dispatch): the angle's own `model` (Pi only;
+ *      the string is harness-specific, so Claude ignores it), else its
  *      `tier`, else (Claude only) the repo's `models.roles.review` or
  *      `models.roleTiers.review`, else the built-in `review` tier; Pi and Codex
- *      are unchanged and skip the repo review fallback — so a gate review runs at review
+ *      skip the repo review fallback. `models.roles[angle]` and `models.roleTiers[angle]`
+ *      are never read on this path; per-angle overrides live on `gates.<gate>.angles[]`
+ *      (`model`, `tier`) — so a gate review runs at review
  *      quality even when the angle name collides with a routine role (e.g. the
  *      `docs` angle resolves high via `review`, not the `docs` writer's low tier).
  *   2. `kind: "role"`/absent (routine subagent): `models.roles[role]`, else
@@ -1390,7 +1393,8 @@ export function resolveRoleModel(config, { role, harness, kind } = {}) {
 
   if (kind === "angle") {
     const entry = findAngleEntry(config, role);
-    if (typeof entry?.model === "string" && entry.model.length > 0) return entry.model;
+    // A concrete angle model is a harness-specific string (e.g. a gpt-* id on Pi), so Claude honors only the angle's tier.
+    if (harness === "pi" && typeof entry?.model === "string" && entry.model.length > 0) return entry.model;
     // Claude only: the repo-level review override (models.roles.review / models.roleTiers.review) is the angle default.
     const reviewConcrete = harness === "claude" ? config?.models?.roles?.review : undefined;
     if (entry?.tier === undefined && typeof reviewConcrete === "string" && reviewConcrete.trim().length > 0) return reviewConcrete.trim();

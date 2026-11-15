@@ -20,10 +20,19 @@ const piEnv = () => {
   return env;
 };
 
+const codexEnv = () => {
+  const env = { ...process.env, CODEX_THREAD_ID: "codex-thread-1" };
+  delete env.CLAUDECODE;
+  return env;
+};
+
 const TIER = { maxWholeLogicLoc: 40, maxAnglesPerUnit: 10 };
 const SIZE = (wholeLogicLoc, extra = {}) => ({ outcome: "pass", wholeLogicLoc, tierLogicLoc: { t1: 0 }, ...extra });
 const FILES = ["docs/guide.md", "test/a.test.mjs"];
-const withFanout = (fanout, config = REPO_CONFIG) => ({ ...config, gates: { ...config.gates, fanout: { ...config.gates.fanout, ...fanout } } });
+// Light mode off: a light-eligible round is treated as escalated, which the escalation tests opt into.
+const BASE_CONFIG = { ...REPO_CONFIG, localImplementation: { ...REPO_CONFIG.localImplementation, lightMode: { ...REPO_CONFIG.localImplementation?.lightMode, enabled: false } } };
+const LIGHT_CONFIG = { ...REPO_CONFIG, localImplementation: { ...REPO_CONFIG.localImplementation, lightMode: { enabled: true, maxFiles: 3, maxLines: 200 } } };
+const withFanout = (fanout, config = BASE_CONFIG) => ({ ...config, gates: { ...config.gates, fanout: { ...config.gates.fanout, ...fanout } } });
 const POOL = resolveGateAngleContract(REPO_CONFIG, "draft").pool;
 const TIERED = withFanout({ sizeTiers: [TIER] });
 const facts = (over = {}) => ({ sizeOutcome: SIZE(30), changedFiles: FILES, ...over });
@@ -32,6 +41,7 @@ const units = (plan) => expandDispatchUnits(plan.pendingGroups, new Set(), plan.
 
 describe("gates.fanout.sizeTiers schema (AC4, AC1)", () => {
   const parse = (fanout) => DevLoopConfigSchema.safeParse({ version: 1, gates: { fanout } });
+  test("accepts a maxAnglesPerUnit of 5", () => assert.equal(parse({ sizeTiers: [{ maxWholeLogicLoc: 40, maxAnglesPerUnit: 5 }] }).success, true));
   test("accepts ordered tiers with an optional maxFiles", () => {
     assert.equal(parse({ sizeTiers: [TIER, { maxWholeLogicLoc: 80, maxAnglesPerUnit: 6, maxFiles: 3 }] }).success, true);
   });
@@ -42,6 +52,8 @@ describe("gates.fanout.sizeTiers schema (AC4, AC1)", () => {
     ["a non-integer maxWholeLogicLoc", { sizeTiers: [{ maxWholeLogicLoc: 40.5, maxAnglesPerUnit: 5 }] }],
     ["a non-integer maxAnglesPerUnit", { sizeTiers: [{ maxWholeLogicLoc: 40, maxAnglesPerUnit: 2.5 }] }],
     ["a maxAnglesPerUnit above 10", { sizeTiers: [{ maxWholeLogicLoc: 40, maxAnglesPerUnit: 11 }] }],
+    ["a maxAnglesPerUnit of 4", { sizeTiers: [{ maxWholeLogicLoc: 40, maxAnglesPerUnit: 4 }] }],
+    ["an empty sizeTiers list", { sizeTiers: [] }],
   ]) {
     test(`rejects ${label}`, () => assert.equal(parse(fanout).success, false));
   }
@@ -91,7 +103,7 @@ describe("resolveFanoutSizeTier eligibility (AC4, AC5)", () => {
 
 describe("tier packing in resolveFanoutDispatch (AC1, AC4, AC6, AC7, AC9)", () => {
   for (const gate of ["draft", "preApproval"]) {
-    for (const [harness, env] of [["claude", claudeEnv], ["pi", piEnv]]) {
+    for (const [harness, env] of [["claude", claudeEnv], ["pi", piEnv], ["codex", codexEnv]]) {
       test(`${gate} (${harness}): a same-model set above five angles is one packed unit with the same membership`, () => {
         const angles = resolveGateAngleContract(REPO_CONFIG, gate).pool.slice(0, 9);
         const plan = dispatch(TIERED, gate, angles, env());
@@ -105,12 +117,65 @@ describe("tier packing in resolveFanoutDispatch (AC1, AC4, AC6, AC7, AC9)", () =
     }
   }
 
-  test("an escalated round keeps existing grouping with the escalated reason", () => {
+  test("a light-eligible round (reachable only through an inline escalation) keeps existing grouping with the escalated reason, no flag needed", () => {
+    const angles = POOL.slice(0, 9);
+    const baseline = dispatch(withFanout({ sizeTiers: undefined }, LIGHT_CONFIG), "draft", angles, piEnv());
+    const plan = dispatch(withFanout({ sizeTiers: [TIER] }, LIGHT_CONFIG), "draft", angles, piEnv());
+    assert.deepEqual(plan.groups, baseline.groups);
+    assert.equal(plan.unitBound, 5);
+    assert.deepEqual(plan.sizeTier.reasons, ["escalated"]);
+  });
+
+  test("an explicit harness override drives the model partition, not the env harness", () => {
+    const config = withFanout({ sizeTiers: [TIER], groups: [{ name: "lowg", angles: POOL.slice(0, 2) }, { name: "highg", angles: POOL.slice(2, 4) }] });
+    const tiered = { ...config, gates: { ...config.gates, draft: { ...config.gates.draft, angles: [...POOL.slice(0, 2).map((name) => ({ name, tier: "low" })), ...config.gates.draft.angles] } } };
+    const angles = POOL.slice(0, 4);
+    assert.equal(dispatch(tiered, "draft", angles, piEnv(), { harness: "claude" }).groups.length, 2, "claude partitions by the angle tier");
+    assert.equal(dispatch(tiered, "draft", angles, codexEnv()).groups.length, 1, "the Codex env harness inherits every angle");
+  });
+
+  test("a round whose every dispatchable group is carried keeps existing grouping with no_dispatchable_units", () => {
+    const angles = ["correctness", "coverage"];
+    const baseline = dispatch(withFanout({ sizeTiers: undefined }), "draft", angles, piEnv(), { carriedAngles: angles });
+    const plan = dispatch(TIERED, "draft", angles, piEnv(), { carriedAngles: angles });
+    assert.deepEqual(plan.groups, baseline.groups);
+    assert.equal(plan.unitBound, 5);
+    assert.equal(plan.sizeTier.tier, null);
+    assert.deepEqual(plan.sizeTier.reasons, ["no_dispatchable_units"]);
+  });
+
+  test("a tiered pack above the effective maxConcurrent is discarded with over_concurrency and the capacity path runs", () => {
+    const groups = [0, 1, 2].map((i) => ({ name: `g${i}`, angles: POOL.slice(i * 6, i * 6 + 6) }));
+    const config = withFanout({ sizeTiers: [TIER], groups, maxConcurrent: 2 });
+    assert.throws(() => dispatch(config, "draft", POOL.slice(0, 18), piEnv()), /GATE-EXEC-FANOUT-CAPACITY/);
+    // Two model partitions pack to two units, above maxConcurrent 1, while the existing path fits the four angles in one unit.
+    const split = withFanout({ sizeTiers: [TIER], maxConcurrent: 1, groups: [{ name: "lowg", angles: POOL.slice(0, 2) }, { name: "highg", angles: POOL.slice(2, 4) }] });
+    const tiered = { ...split, gates: { ...split.gates, draft: { ...split.gates.draft, angles: [...POOL.slice(0, 2).map((name) => ({ name, tier: "low" })), ...split.gates.draft.angles] } } };
+    const plan = dispatch(tiered, "draft", POOL.slice(0, 4), claudeEnv());
+    assert.deepEqual(plan.sizeTier.reasons, ["over_concurrency"]);
+    assert.equal(plan.sizeTier.tier, null);
+    assert.equal(plan.unitBound, 5);
+    assert.equal(plan.groups.length, 1);
+  });
+
+  test("a recorded bound above the default is dropped when no tier applies on this build", () => {
     const angles = POOL.slice(0, 9);
     const baseline = dispatch(withFanout({ sizeTiers: undefined }), "draft", angles, piEnv());
-    const plan = dispatch(TIERED, "draft", angles, piEnv(), { escalated: true });
+    const plan = dispatch(TIERED, "draft", angles, piEnv(), { unitBound: 10, sizeOutcome: SIZE(41) });
+    assert.equal(plan.unitBound, 5);
     assert.deepEqual(plan.groups, baseline.groups);
-    assert.deepEqual(plan.sizeTier.reasons, ["escalated"]);
+  });
+
+  test("a same-head rebuild without size evidence reuses the recorded applied tier", () => {
+    const angles = POOL.slice(0, 9);
+    const first = dispatch(TIERED, "draft", angles, piEnv());
+    const rebuilt = dispatch(TIERED, "draft", angles, piEnv(), { sizeOutcome: null, unitBound: first.unitBound, recordedSizeTier: first.sizeTier });
+    assert.deepEqual(rebuilt.groups, first.groups);
+    assert.equal(rebuilt.unitBound, 10);
+    assert.deepEqual(rebuilt.sizeTier.reasons, ["size_tier_applied"]);
+    assert.equal(rebuilt.sizeTier.wholeLogicLoc, 30);
+    const excluded = dispatch(TIERED, "draft", angles, piEnv(), { sizeOutcome: SIZE(41), recordedSizeTier: first.sizeTier });
+    assert.deepEqual(excluded.sizeTier.reasons, ["above_size_tiers"], "an explicit exclusion re-derives");
   });
 
   test("without the key the plan carries no sizeTier record and today's grouping", () => {
