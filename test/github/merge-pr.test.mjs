@@ -1,4 +1,4 @@
-import { test } from "bun:test";
+import { test, mock } from "bun:test";
 import assert from "node:assert/strict";
 import { mergePr, parseMergePrCliArgs, main, defaultReadMergeDiff, defaultIsAncestor, defaultFetchPrHead, buildDetectEvidenceArgv, defaultPostMergeComment } from "../../scripts/github/merge-pr.mjs";
 import { runChild } from "../../scripts/_cli-primitives.mjs";
@@ -203,6 +203,24 @@ test("secret_scan refuses a credential that origin/<base>...<head> adds, naming 
   assert.ok(!JSON.stringify(error.mergePrFailure).includes(SCAN_TOKEN) && !error.message.includes(SCAN_TOKEN));
   assert.deepEqual(read, [{ base: "origin/main", head: HEAD }]);
   assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("secret_scan refuses a library hit with no mappable line, even beside an allow marker, and renders it as line unknown", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
+  // The only added line carries a valid allow marker; the library hit has no loc, so no marker can apply.
+  runtime.readMergeDiff = () => secretDiff("T=1 # secret-scan:allow public fixture");
+  const specifier = "../../packages/core/node_modules/@secretlint/core/module/index.js";
+  const secretlint = await import(specifier);
+  const real = secretlint.lintSource;
+  mock.module(specifier, () => ({ ...secretlint, lintSource: async () => ({ messages: [{ ruleId: "@secretlint/secretlint-rule-github", messageId: "GITHUB_TOKEN" }] }) }));
+  try {
+    const error = await mergePr(baseOptions(), runtime).catch((e) => e);
+    assert.match(error.message, /secret_scan \(secret scan hit in origin\/main\.\.\..*cfg\.sh:line unknown @secretlint\/secretlint-rule-github/);
+    assert.ok(!error.message.includes("null"));
+    assert.equal(mergeCalls(calls).length, 0);
+  } finally {
+    mock.module(specifier, () => ({ ...secretlint, lintSource: real }));
+  }
 });
 
 test("secret_scan fails closed when the diff read throws", async () => {

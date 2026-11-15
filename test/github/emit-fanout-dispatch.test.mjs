@@ -1856,6 +1856,12 @@ test("buildAngleNamingSuffix names angles and carries their supplied instruction
   assert.match(group, /one findings artifact PER ANGLE/);
 });
 
+test("buildAngleNamingSuffix names the Secret leaks check as an exception to the unassigned-angle prohibition for a unit without a security angle", () => {
+  const suffix = buildAngleNamingSuffix({ name: "coverage", angles: ["coverage"] }, "draft-gate-coverage");
+  assert.match(suffix, /reviewing an unassigned angle is prohibited\. The one exception: also apply the Secret leaks check/);
+  assert.match(suffix, /it is never an unassigned angle/);
+});
+
 test("buildAngleNamingSuffix requires the file-write tool for single-angle and grouped units and keeps the blocked invocation (#2510)", () => {
   const single = buildAngleNamingSuffix({ name: "acceptance-criteria", angles: ["acceptance-criteria"] }, "pre-approval-gate-acceptance-criteria");
   const group = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] }, "pre-approval-gate-group-design-simplicity");

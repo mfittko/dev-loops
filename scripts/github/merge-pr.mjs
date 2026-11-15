@@ -509,7 +509,7 @@ async function resolveSecretScanRefusal({ baseRefName, headSha, repoRoot, readMe
   try {
     const result = await scanDiffText(await readMergeDiff({ base: `origin/${baseRefName}`, head: headSha, repoRoot }));
     if (result.ok) return null;
-    const hits = result.findings.map((f) => `${f.file}:${f.line} ${f.ruleId}`).join(", ");
+    const hits = result.findings.map((f) => `${f.file}:${f.line ?? "line unknown"} ${f.ruleId}`).join(", ");
     return `secret scan hit in origin/${baseRefName}...${headSha}: ${hits}; ${SECRET_SCAN_EXITS}`;
   } catch (error) {
     return `the secret scan could not run: ${error instanceof Error ? error.message : String(error)}; ${SECRET_SCAN_EXITS}`;
