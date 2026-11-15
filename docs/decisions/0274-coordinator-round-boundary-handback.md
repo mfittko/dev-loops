@@ -12,7 +12,7 @@ ADR 0220 let a unit coordinator continue past a report point. A long run then ca
 
 ## Decision
 
-A unit coordinator hands back at the end of every gate round and at the end of every fix pass (`COORDINATOR-ROUND-BOUNDARY-HANDBACK` in `skills/docs/main-agent-contract.md`). It never continues into the next round. The hand-back is a typed packet, and a fresh coordinator re-resolves state from GitHub. The 150K soft cap from ADR 0181 stays advisory.
+A unit coordinator hands back at the end of every gate round and at the end of every fix pass (`COORDINATOR-ROUND-BOUNDARY-HANDBACK` in `skills/docs/main-agent-contract.md`). The coordinator starts no later round. The hand-back is a typed packet, and a fresh coordinator re-resolves state from GitHub. The 150K soft cap from ADR 0181 stays advisory.
 
 ## Consequences
 
