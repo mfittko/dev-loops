@@ -1676,6 +1676,8 @@ function interpreterForm(head, args, out = {}) {
     if (head === "bun" && t === "run") continue;
     if (!t.startsWith("-")) { out.script = args[k]; return herestring ? "herestring" : null; }
     if (t === "--") continue; // origin/main keeps scanning past `--`, so `node -- -e x` stays denied
+    const attached = out.loaded && /^--(?:require|import|loader|experimental-loader|preload)=(.+)$/.exec(t);
+    if (attached) out.loaded.push({ value: attached[1] }); // an attached preload value is code that runs too
     const flag = interpreterFlag(head, t);
     if (flag === "code" || flag === "inplace") return flag;
     if (flag === "stop") return herestring ? "herestring" : null;
@@ -1760,7 +1762,7 @@ function segmentsHaveInterpreterForm(segments) {
         for (let k = 0; k < args.length; k++) {
           const w = args[k];
           if (w.op) continue;
-          if (/^[-+][oO]$/.test(w.value)) { k++; continue; }
+          if (/^[-+][A-Za-z]*[oO]$/.test(w.value)) { k++; continue; } // a cluster ending in o (`-euo pipefail`) takes the next word as its value
           if (!/^[-+]/.test(w.value)) { script.script = w; break; }
         }
       }
