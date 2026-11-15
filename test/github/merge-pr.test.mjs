@@ -205,7 +205,7 @@ test("secret_scan refuses a credential that origin/<base>...<head> adds, naming 
   assert.equal(mergeCalls(calls).length, 0);
 });
 
-test("secret_scan fails closed when the diff read or scan throws", async () => {
+test("secret_scan fails closed when the diff read throws", async () => {
   const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
   runtime.readMergeDiff = () => { throw new Error("git diff exploded"); };
   await assert.rejects(() => mergePr(baseOptions(), runtime), /secret_scan \(the secret scan could not run: git diff exploded; remove the credential/);

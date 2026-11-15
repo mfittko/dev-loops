@@ -109,21 +109,24 @@ export function parseAddedLines(diffText) {
  * source, so a multi-line credential (a PEM block) is still seen whole.
  * Throws when the library fails; callers treat a throw as a refusal.
  * @param {string} diffText
- * @returns {Promise<{ ok: boolean, findings: { file: string|null, line: number, ruleId: string, reason: string }[] }>}
+ * @returns {Promise<{ ok: boolean, findings: { file: string|null, line: number|null, ruleId: string, reason: string }[] }>}
  */
 export async function scanDiffText(diffText) {
   const byFile = Map.groupBy(parseAddedLines(diffText), (entry) => entry.file);
   const findings = [];
   for (const [file, entries] of byFile) {
+    // secretlint also breaks lines on a lone CR, U+2028 (\p{Zl}) and U+2029
+    // (\p{Zp}); a length-preserving space keeps its line N equal to entries[N - 1].
+    const content = entries.map((e) => e.text.replace(/[\r\p{Zl}\p{Zp}]/gu, " ")).join("\n");
     const result = await lintSource({
-      source: { filePath: file ?? "unknown", content: entries.map((e) => e.text).join("\n"), contentType: "text" },
+      source: { filePath: file ?? "unknown", content, contentType: "text" },
       options: { config: SECRETLINT_CONFIG, maskSecrets: true, noPhysicFilePath: true },
     });
     for (const message of result.messages) {
-      // An unmappable location falls back to the first line so a hit is never dropped.
-      const entry = entries[(message.loc?.start?.line ?? 1) - 1] ?? entries[0];
-      if (allowlistReason(entry.text) !== null) continue;
-      findings.push({ file, line: entry.line, ruleId: message.ruleId, reason: `matches secretlint rule ${message.ruleId} (${message.messageId})` });
+      const entry = entries[(message.loc?.start?.line ?? 0) - 1];
+      // An unmappable location is still reported, and no allow marker applies to it.
+      if (entry && allowlistReason(entry.text) !== null) continue;
+      findings.push({ file, line: entry?.line ?? null, ruleId: message.ruleId, reason: `matches secretlint rule ${message.ruleId} (${message.messageId})` });
     }
   }
   return { ok: findings.length === 0, findings };

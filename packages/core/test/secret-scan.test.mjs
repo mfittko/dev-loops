@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "bun:test";
+import { test } from "node:test";
 
 import { ALLOW_MARKER, allowlistReason, parseAddedLines, scanDiffText } from "../src/security/secret-scan.mjs";
 
@@ -180,3 +180,21 @@ test("scanDiffText: hits in two files keep their own file and line", async () =>
 test("scanDiffText: a clean diff (no findings) reports ok: true", async () => {
   assert.deepEqual(await scanDiffText(addedDiff("README.md", ["# Hello, world"])), { ok: true, findings: [] });
 });
+
+// secretlint breaks lines on a lone CR, U+2028 and U+2029; the diff splits on LF only.
+for (const [name, separator] of [["a lone CR", "\r"], ["U+2028", String.fromCharCode(0x2028)], ["U+2029", String.fromCharCode(0x2029)]]) {
+  test(`scanDiffText: ${name} inside an added line keeps the hit on the credential line`, async () => {
+    const result = await scanDiffText(addedDiff("a.mjs", [`a${separator}b`, `const t = "${MARKER_TOKEN}";`]));
+    assert.deepEqual(result.findings.map((f) => [f.file, f.line]), [["a.mjs", 2]]);
+  });
+
+  test(`scanDiffText: ${name} before a credential does not let a marker on the next line drop it`, async () => {
+    const result = await scanDiffText(addedDiff("a.mjs", [`a${separator}b`, `const t = "${MARKER_TOKEN}";`, `// ${ALLOW_MARKER} public test fixture`]));
+    assert.deepEqual(result.findings.map((f) => [f.file, f.line]), [["a.mjs", 2]]);
+  });
+
+  test(`scanDiffText: ${name} before an allow-marked credential line still honours the marker`, async () => {
+    const result = await scanDiffText(addedDiff("a.mjs", [`a${separator}b`, `const t = "${MARKER_TOKEN}"; // ${ALLOW_MARKER} public test fixture`]));
+    assert.deepEqual(result, { ok: true, findings: [] });
+  });
+}
