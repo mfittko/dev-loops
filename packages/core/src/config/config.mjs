@@ -1365,7 +1365,9 @@ export function resolveReviewerRole(config, angle) {
  *
  * Precedence:
  *   1. `kind: "angle"` (gate review dispatch): the angle's own `model`, else its
- *      `tier`, else the built-in `review` tier — so a gate review runs at review
+ *      `tier`, else (Claude only) the repo's `models.roles.review` or
+ *      `models.roleTiers.review`, else the built-in `review` tier; Pi and Codex
+ *      are unchanged and skip the repo review fallback — so a gate review runs at review
  *      quality even when the angle name collides with a routine role (e.g. the
  *      `docs` angle resolves high via `review`, not the `docs` writer's low tier).
  *   2. `kind: "role"`/absent (routine subagent): `models.roles[role]`, else
@@ -1389,10 +1391,10 @@ export function resolveRoleModel(config, { role, harness, kind } = {}) {
   if (kind === "angle") {
     const entry = findAngleEntry(config, role);
     if (typeof entry?.model === "string" && entry.model.length > 0) return entry.model;
-    // The repo-level review override (models.roles.review / models.roleTiers.review) is the angle default.
-    const reviewConcrete = config?.models?.roles?.review;
+    // Claude only: the repo-level review override (models.roles.review / models.roleTiers.review) is the angle default.
+    const reviewConcrete = harness === "claude" ? config?.models?.roles?.review : undefined;
     if (entry?.tier === undefined && typeof reviewConcrete === "string" && reviewConcrete.trim().length > 0) return reviewConcrete.trim();
-    const tierAlias = entry?.tier ?? config?.models?.roleTiers?.review ?? BUILTIN_ROLE_TIERS.review;
+    const tierAlias = entry?.tier ?? (harness === "claude" ? config?.models?.roleTiers?.review : undefined) ?? BUILTIN_ROLE_TIERS.review;
     return resolveTierMapping(config, tierAlias, harness);
   }
 
@@ -2880,7 +2882,7 @@ export function resolveFanoutSizeTier(config, gate, { sizeOutcome, changedFiles,
   if (touchesConfigSource(changedFiles)) return none("config_source_touch");
   const rules = resolveClassifyRules(config);
   if (changedFiles.some((f) => classifyFile(f, rules) === "unknown")) return none("unclassifiable_diff");
-  const tier =tiers.find((t) => loc <= t.maxWholeLogicLoc);
+  const tier = tiers.find((t) => loc <= t.maxWholeLogicLoc);
   if (!tier) return none("above_size_tiers");
   if (typeof tier.maxFiles === "number" && countLightModeFiles(config, changedFiles) > tier.maxFiles) return none("over_tier_max_files");
   return { tier, reason: "size_tier_applied" };

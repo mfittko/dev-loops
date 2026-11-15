@@ -7426,7 +7426,7 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     const angle = (models, harness = "claude", name = "correctness") => resolveRoleModel({ models }, { role: name, harness, kind: "angle" });
     assert.equal(angle({ roleTiers: { review: "low" }, tiers: { low: { claude: "sonnet" } } }), "sonnet");
     assert.equal(angle({ roles: { review: "haiku" } }), "haiku");
-    assert.equal(angle({ roles: { review: "haiku" } }, "pi"), "haiku");
+    assert.equal(angle({ roles: { review: "haiku" } }, "pi"), null);
     assert.equal(angle({}, "pi"), null);
   });
 
