@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { ALLOW_MARKER, allowlistReason, parseAddedLines, scanDiffText } from "../src/security/secret-scan.mjs";
+import { ALLOW_MARKER, allowlistReason, parseAddedLines, parseDiffLines, scanDiffText } from "../src/security/secret-scan.mjs";
 
 // Fixture credentials are assembled from fragments at runtime so this file's
 // own committed diff carries no whole credential for the scanner to flag.
@@ -149,6 +149,26 @@ test("parseAddedLines: tracks new-file line numbers, skips removed lines, advanc
   assert.deepEqual(parseAddedLines(diff), [
     { file: "f.txt", line: 2, text: "added line one" },
     { file: "f.txt", line: 3, text: "added line two" },
+  ]);
+});
+
+test("parseDiffLines: the next file's header lines are not context of the previous file", () => {
+  const diff = [
+    "diff --git a/a.txt b/a.txt",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -1 +1,2 @@",
+    " keep",
+    "+add",
+    "diff --git a/old.txt b/new.txt",
+    "similarity index 90%",
+    "rename from old.txt",
+    "rename to new.txt",
+    "index 0000000..1111111 100644",
+  ].join("\n");
+  assert.deepEqual(parseDiffLines(diff), [
+    { file: "a.txt", line: 1, text: "keep", added: false },
+    { file: "a.txt", line: 2, text: "add", added: true },
   ]);
 });
 
