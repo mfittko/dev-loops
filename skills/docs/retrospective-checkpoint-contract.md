@@ -230,8 +230,9 @@ are found, `0` when clean, `2` for unreadable input (a stdin or `--transcript` f
 
 Matching rules: a tool name at the start of a command segment (start of line, or after
 `&&`/`||`/`|`/`;`), after the verifier strips `NAME=value` prefixes, a leading wrapper binary
-from `{sudo, env, xargs, time, nice, command}`, and a path prefix; `node` is a violation only
-for the `OPS-NO-INLINE-INTERPRETER` forms (`-e`/`--eval`/`-p`, stdin `-`, heredoc). A `node` or `python`/`python3` inline form inside `$(...)` or backticks is also a violation, reported with the `node inline`, `python3` or `python` label. It does NOT fully parse shell quoting or substitution, so prefer
+from `{sudo, env, xargs, time, nice, command}`, and a path prefix. A command is reported once with
+the `inline-interpreter` tool when the Bash gate denies it under `OPS-NO-INLINE-INTERPRETER` or
+allows it as a ceiling case, from the shared `inlineInterpreterVerdict`. It does NOT fully parse shell quoting or substitution, so prefer
 single-line, single-purpose commands in transcripts.
 
 ## Cycle scoping — a checkpoint discharges exactly one qualifying completion
