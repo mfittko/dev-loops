@@ -89,7 +89,7 @@ omits the field entirely rather than sending an empty list, and the validator re
 `reportAfter`. One entry is a **recorded naming approximation**: `final_approval` runs a gate round but posts
 no verdict of its own, and still carries `gate_verdict_posted`
 (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`). An `issue_intake` unit reports at
-`draft_pr_opened`, continues on the PR route, and then reports at `gate_verdict_posted`, in order.
+`draft_pr_opened`, continues on the PR route, and then hands back at `gate_verdict_posted` under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`.
 
 Hand back only at the run-ending cases in Unit coordinator boundaries of the
 [Main-agent contract](../skills/docs/main-agent-contract.md): `final_approval_ready`, the end of a
