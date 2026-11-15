@@ -498,7 +498,7 @@ async function resolveAdrTripwireRefusal({ options, baseRefName, body, headSha, 
 }
 
 export function defaultReadMergeDiff({ base, head, repoRoot }) {
-  return execFileSync("git", ["diff", "--no-color", `${base}...${head}`], { cwd: repoRoot, env: scrubGitEnv(process.env), encoding: "utf8", maxBuffer: 512 * 1024 * 1024 });
+  return execFileSync("git", ["diff", "--no-color", "--no-ext-diff", "--no-textconv", `${base}...${head}`], { cwd: repoRoot, env: scrubGitEnv(process.env), encoding: "utf8", maxBuffer: 512 * 1024 * 1024 });
 }
 
 const SECRET_SCAN_EXITS = 'remove the credential and rotate it, or add a same-line "secret-scan:allow <reason>" marker for a public value';

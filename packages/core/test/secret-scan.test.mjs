@@ -118,6 +118,11 @@ test("AC4: an allow marker without a reason exempts nothing", async () => {
   assert.ok(!JSON.stringify(result).includes(MARKER_TOKEN));
 });
 
+test("AC4: a secretlint-disable comment exempts nothing (the allow marker is the only exemption)", async () => {
+  const result = await scanDiffText(addedDiff("a.sh", ["# secretlint-disable", `T="${MARKER_TOKEN}"`]));
+  assert.deepEqual(result.findings.map((f) => f.line), [2]);
+});
+
 test("AC4: a marker on another line exempts nothing", async () => {
   const result = await scanDiffText(addedDiff("a.mjs", [`// ${ALLOW_MARKER} public test fixture`, `const t = "${MARKER_TOKEN}";`]));
   assert.equal(result.findings.length, 1);

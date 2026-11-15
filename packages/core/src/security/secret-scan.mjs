@@ -29,11 +29,16 @@ export const ALLOW_MARKER = "secret-scan:allow";
 const ALLOW_RE = /secret-scan:allow\s+(\S.*?)\s*$/u;
 
 // The preset default skips a bare AWS access key id; enableIDScanRule turns it on.
+// filter-comments is disabled: its `secretlint-disable` comments would be a
+// reason-free, multi-line exemption beside the same-line allow marker.
 const SECRETLINT_CONFIG = {
   rules: [{
     id: recommendedPreset.meta.id,
     rule: recommendedPreset,
-    rules: [{ id: "@secretlint/secretlint-rule-aws", options: { enableIDScanRule: true } }],
+    rules: [
+      { id: "@secretlint/secretlint-rule-aws", options: { enableIDScanRule: true } },
+      { id: "@secretlint/secretlint-rule-filter-comments", disabled: true },
+    ],
   }],
 };
 
