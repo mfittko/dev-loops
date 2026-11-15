@@ -10,6 +10,7 @@ import { startDeltaSequence } from "../../packages/core/src/loop/pre-push-delta-
 import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { buildGateContextPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { prBodySha256 } from "../../scripts/github/write-gate-context.mjs";
 
 // GATE-EXEC-LOW-NIT-CONVERGENCE: an all-low/nit draft_gate round at head A converges after one fixer pass and a
@@ -242,6 +243,27 @@ test("at round count cap+1 a converged post is accepted and a non-converged post
       await rm(dir, { recursive: true, force: true });
     }
   }, { prefix: "dev-loops-converged-capon-n1-" });
+});
+
+test("3105: a judged log with a medium act item derives findings_present with no --verdict", async () => {
+  await withTempDir(async (tempDir) => {
+    const judgeVerdict = path.join(tempDir, "judge-verdict.json");
+    await writeFile(judgeVerdict, JSON.stringify({
+      headSha: A,
+      scopeDrift: { verdict: "within_scope", rationale: "in scope", driftedAreas: [] },
+      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fixes AC-1", criterion: "AC-1" }],
+    }), "utf8");
+    const written = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, verdict: "clean", judgeVerdict, tmpRoot: tempDir,
+      findings: JSON.stringify({ overallVerdict: "clean", findings: [{ severity: "medium", angle: "correctness", summary: "edge case" }] }),
+    });
+    const log = JSON.parse(await readFile(written.path, "utf8"));
+    assert.equal(log.overallVerdict, "findings_present");
+    const { result, body, error } = await post(tempDir, { findings: log.findings, overallVerdict: log.overallVerdict, runChildOptions: { currentHead: A } });
+    assert.equal(error, undefined);
+    assert.equal(result.action, "updated");
+    assert.match(body, /\*\*Verdict:\*\* findings_present/);
+  }, { prefix: "dev-loops-judged-log-verdict-" });
 });
 
 test("without --converged-json the same all-low/nit act list still refuses clean", async () => {

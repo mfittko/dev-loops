@@ -3030,7 +3030,7 @@ test("writeGateFindingsLog accepts a clean wrapper with non-blocking judge-act f
     assert.equal(result.ok, true);
     const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-2243", `draft_gate-${headSha}.json`);
     const parsed = JSON.parse(await readFile(fullPath, "utf8"));
-    assert.equal(parsed.verdict, "clean");
+    assert.equal(parsed.verdict, "findings_present", "the caller's matching clean is accepted; the log persists the judged verdict (issue 3105 AC26)");
     assert.equal(parsed.findings[0].judgeDisposition, "act");
     assert.equal(parsed.findings[1].judgeDisposition, "act");
   } finally {
@@ -3166,6 +3166,52 @@ test("#1745: writeGateFindingsLog with wrapper overallVerdict + --judge-verdict:
       /ENOENT/,
       "a contradicting pair must not write a ledger before failing, even with --judge-verdict attached",
     );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// AC25/AC26 (issue 3105): the log carries the judged verdict, and a post-judge write cannot omit the verdict.
+test("3105: a judged medium act item persists findings_present over a clean fan-in verdict", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judged-verdict-"));
+  try {
+    const headSha = "e5".repeat(20);
+    const judgeVerdictPath = path.join(tmpDir, "judge-verdict.json");
+    await writeFile(judgeVerdictPath, JSON.stringify({
+      headSha,
+      scopeDrift: { verdict: "within_scope", rationale: "matches the briefed AC set", driftedAreas: [] },
+      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fixes AC-1", criterion: "AC-1" }],
+    }), "utf8");
+    const result = await writeGateFindingsLog({
+      repo: "o/n", pr: 23, gate: "draft_gate", headSha, verdict: "clean", judgeVerdict: judgeVerdictPath, tmpRoot: tmpDir,
+      findings: JSON.stringify({ overallVerdict: "clean", findings: [{ severity: "medium", angle: "correctness", summary: "edge case" }] }),
+    });
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(parsed.findings[0].judgeDisposition, "act");
+    assert.equal(parsed.overallVerdict, "findings_present");
+    assert.equal(parsed.verdict, "findings_present");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("3105: a write without --judge-verdict refuses judge_verdict_required when the round has a judge verdict, and writes when it has none", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judge-required-"));
+  try {
+    const headSha = "f6".repeat(20);
+    const base = { repo: "o/n", pr: 24, gate: "draft_gate", headSha, verdict: "clean", tmpRoot: tmpDir, findings: JSON.stringify([]) };
+    const written = await writeGateFindingsLog(base);
+    assert.equal(written.ok, true);
+    const judgeDir = path.resolve(buildGateArtifactPath({ repo: "o/n", pr: 24, gate: "draft_gate", headSha, tmpRoot: tmpDir, dir: "gate-judge" }), "j1-abc123");
+    await mkdir(judgeDir, { recursive: true });
+    const verdictPath = path.join(judgeDir, "judge-verdict.json");
+    await writeFile(verdictPath, "{}", "utf8");
+    await assert.rejects(() => writeGateFindingsLog(base), (err) => {
+      assert.match(err.message, /^judge_verdict_required:/);
+      assert.ok(err.message.includes(verdictPath));
+      assert.match(err.message, /--judge-verdict/);
+      return true;
+    });
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -3752,8 +3798,9 @@ test("writeGateFindingsLog raises the verdict from the input severity of an acte
     }, { repoRoot: tmpDir });
     const written = JSON.parse(await readFile(result.path, "utf8"));
     assert.equal(written.findings.find((f) => f.angle === "copilot-body").severity, "medium", "the act was promoted");
-    assert.equal(written.verdict, "clean");
-    assert.equal(written.overallVerdict, "clean");
+    // The open act item makes the judged log findings_present (issue 3105 AC26), whatever the input severity.
+    assert.equal(written.verdict, "findings_present");
+    assert.equal(written.overallVerdict, "findings_present");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

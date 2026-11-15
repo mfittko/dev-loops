@@ -11,7 +11,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, assertNoProjectedForbiddenDefer, neverDeferredSeverity, UNJUDGED_DISPOSITION, checkFanoutAngleCoverage, fanoutReviewerPairingError, ledgerAngleNames, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveFindingFile, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
+import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, assertNoProjectedForbiddenDefer, neverDeferredSeverity, UNJUDGED_DISPOSITION, checkFanoutAngleCoverage, fanoutReviewerPairingError, listOpenActItems, ledgerAngleNames, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveFindingFile, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 // JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
 // the validator's membership check so validateFindingsArray stays self-contained.
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
@@ -86,6 +86,9 @@ Optional:
                                  verdict is validated against that identity, and each finding_conflicts finding is
                                  written as judgeDisposition reject (ADR 0089). An invalid or mismatched sibling
                                  FAILS CLOSED; an absent one changes nothing.
+                                 After a judge pass the log's verdict is findings_present whenever an act item is open (blocked
+                                 stays blocked). A non-review write without this flag refuses judge_verdict_required when a
+                                 j<id>/judge-verdict.json exists for the round.
   --tmp-root <path>              Root tmp directory. Default: the MAIN worktree's tmp/
                                  — the ledger is anchored at the primary git
                                  worktree so the merge (running from the main checkout)
@@ -906,6 +909,23 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   };
   let roundCap;
   const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, roundIdentity, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot, includeLiveCurrentHead: true }));
+  // A judged round must be written with its verdict: a write without --judge-verdict while a judge execution's verdict sits on disk would persist the unjudged severity verdict.
+  if (!options.judgeVerdict && options.gate !== "review") {
+    const judgeRoots = [...new Set([options.contextTmpRoot, options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot), path.join(repoRoot, "tmp")].filter(Boolean))];
+    for (const root of judgeRoots) {
+      const judgeDir = path.resolve(repoRoot, buildGateArtifactPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: root, dir: "gate-judge" }));
+      let entries = [];
+      try {
+        entries = await readdir(judgeDir);
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+      for (const entry of entries.filter((name) => /^j\d+-[0-9a-f]+$/.test(name))) {
+        const found = path.join(judgeDir, entry, "judge-verdict.json");
+        if (await exists(found)) throw parseError(`judge_verdict_required: a judge verdict exists at ${found}; pass --judge-verdict ${found} so the log carries the judged verdict`);
+      }
+    }
+  }
   // The writer resolves the round before it retains the live same-head ledger, so it counts that ledger itself, but only when retention will keep it (the shared isInRoundRewrite predicate): every later reader counts it as the retained round.
   if (options.judgeVerdict) {
     const judgePath = path.resolve(repoRoot, options.judgeVerdict);
@@ -1027,16 +1047,14 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     normalizedOverallVerdict = verdict;
     // Fail closed on a caller-passed --verdict that contradicts the
     // consolidator's computed verdict (GATE-COMMENT-VERDICT-VALUES).
-    // The judge only enriches findings with act/defer/reject dispositions —
-    // it never revises the ledger's severity verdict, which may be clean with
-    // non-blocking act items; the posted review verdict is composed with the
-    // act list (ADR 0089) — so this comparison runs the same
-    // with or without --judge-verdict. A --judge-verdict run can still fail
+    // The comparison is against the consolidator's severity verdict and runs the same
+    // with or without --judge-verdict; a judged round then persists findings_present
+    // whenever the act list is non-empty (below). A --judge-verdict run can still fail
     // earlier: an unreadable, malformed, or incomplete-coverage judge
     // artifact throws its own error before this contradiction check runs.
     if (callerVerdict !== null && callerVerdict !== normalizedOverallVerdict) {
       throw parseError(
-        `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict (the severity verdict), which judge dispositions from --judge-verdict never alter; the posted review verdict is composed with the judge act list (ADR 0089)`,
+        `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict (the severity verdict); a --judge-verdict run with open act items persists findings_present (ADR 0089)`,
       );
     }
   }
@@ -1049,6 +1067,11 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     const severities = copilotActedSeverities;
     persistedVerdict = raiseVerdictForActedCopilotBlock(persistedVerdict, severities, blocking);
     if (normalizedOverallVerdict !== undefined) normalizedOverallVerdict = raiseVerdictForActedCopilotBlock(normalizedOverallVerdict, severities, blocking);
+  }
+  // After a judge pass an open act item makes the persisted verdict findings_present (ADR 0089); blocked stays blocked.
+  if (options.judgeVerdict && persistedVerdict !== "blocked" && listOpenActItems(findings).length > 0) {
+    persistedVerdict = "findings_present";
+    if (normalizedOverallVerdict !== undefined && normalizedOverallVerdict !== "blocked") normalizedOverallVerdict = "findings_present";
   }
   // Resolve + validate a candidate provenance JSON STRING through the exact
   // same path an explicit --provenance takes: resolve this round's dispatch

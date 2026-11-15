@@ -381,8 +381,11 @@ Enforcement at write time and post time:
   `--findings`/`--findings-file` wrapper's `overallVerdict`. The
   check is the same whether or not `--judge-verdict` was supplied: the judge only adds
   `act`/`defer`/`reject` dispositions
-  ([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525))
-  and never revises `overallVerdict`.
+  ([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525)).
+  After a judge pass the log's `overallVerdict` and `verdict` are `findings_present` whenever the
+  judge act list is non-empty (`blocked` stays `blocked`), so every verdict derived from the log is
+  `findings_present`. A non-review write without `--judge-verdict` refuses `judge_verdict_required`
+  while a `j<id>/judge-verdict.json` exists for the round.
 - `upsert-checkpoint-verdict.mjs` composes the ledger's `overallVerdict` with its open judge act
   items (ADR 0089) for the same head and gate (#1616), so a non-empty act list yields
   `findings_present` (except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168), for both ledger cases). A fully judged round takes its verdict from the act list alone, and a round with an unjudged finding keeps the fan-in severity verdict. It derives the verdict by default (passing no `--verdict` is valid),
