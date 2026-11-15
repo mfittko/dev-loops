@@ -81,6 +81,7 @@ export const INLINE_INTERPRETER_FORMS = [
   deny("cat > packages/a.mjs <<'EOF'\nx\nEOF"),
   deny("cat >> src/a.mjs <<EOF\nx\nEOF"),
   deny("tee src/a.mjs <<'EOF'\nx\nEOF"),
+  deny("TEE src/a.mjs <<'EOF'\nx\nEOF"),
   deny("cat > tmp/worktrees/x/src/a.mjs <<'EOF'\nx\nEOF"),
   deny("cat > tmp/../src/a.mjs <<'EOF'\nx\nEOF"),
   deny("cat > $F <<'EOF'\nx\nEOF"),
@@ -164,6 +165,8 @@ export const INLINE_INTERPRETER_FORMS = [
   ceiling("git rebase -ix 'true; node -e y' HEAD~1"),
   ceiling("python3 <<< 'x'"),
   ceiling("node 0<<< 'x'"),
+  // origin/main denied this; the head reads the here-string as a stdin payload (ceiling), reported by check-retro-tooling (operator decision 2)
+  ceiling("node <<< x script.js"),
 
   // ceiling rows of the verdict table (test/loop/inline-interpreter-classify.test.mjs): origin/main 99bb8b3ce denied each one
   ...[
