@@ -1932,7 +1932,7 @@ function assertFullPhaseSteps(text, { push }) {
   const timeout = Number(/wait-pr-checks\.mjs[^`]* --timeout (\d+)`/.exec(text)[1]);
   assert.ok(timeout > 0 && timeout <= 600, `delivery wait --timeout ${timeout} must stay at or under 600`);
   assert.doesNotMatch(text, /--timeout 900/);
-  assert.match(text, /If it prints `outcome: "pending"` \(exit 2\), run its `reissue` command unchanged in the foreground and repeat until the outcome is no longer pending\. If it exits 2 with any other outcome, run it exactly once more\./);
+  assert.match(text, /If it prints `outcome: "pending"` \(exit 2\), run its `reissue` command unchanged in the foreground and repeat until the outcome is no longer pending\. If it exits 2 with any outcome other than pending, run the original step 3 wait command exactly once more in the foreground\./);
   const sanctioned = "run the last printed `reissue` command (or the original wait command when none was printed) in the foreground and never read raw `gh pr checks` or run `gh run watch`, because only the wait excludes `gate-evidence`";
   assert.ok(text.includes(sanctioned));
   assert.match(text, /moves a wait to the background, run the last printed `reissue` command/);

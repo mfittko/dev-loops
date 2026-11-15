@@ -203,7 +203,7 @@ const REVIEW_BODY_EDIT_RULE = "Edit rule: write file content only with the Edit 
 // Under the 600 s DEV-LOOP-PROBE-TIMEOUT-CEILING; wait-pr-checks caps each call at WAIT_CAP_MS and returns `pending` (issue 3099).
 const DELIVERY_WAIT_SECONDS = 540;
 // Step 3 wait rules shared by the ci-failure order and the numbered full-phase steps.
-const WAIT_STEP_RULES = "If it prints `outcome: \"pending\"` (exit 2), run its `reissue` command unchanged in the foreground and repeat until the outcome is no longer pending. If it exits 2 with any other outcome, run it exactly once more. If the harness moves a wait to the background, run the last printed `reissue` command (or the original wait command when none was printed) in the foreground and never read raw `gh pr checks` or run `gh run watch`, because only the wait excludes `gate-evidence`.";
+const WAIT_STEP_RULES = "If it prints `outcome: \"pending\"` (exit 2), run its `reissue` command unchanged in the foreground and repeat until the outcome is no longer pending. If it exits 2 with any outcome other than pending, run the original step 3 wait command exactly once more in the foreground. If the harness moves a wait to the background, run the last printed `reissue` command (or the original wait command when none was printed) in the foreground and never read raw `gh pr checks` or run `gh run watch`, because only the wait excludes `gate-evidence`.";
 
 // The branch and wait-pr-checks command shared by every numbered full-phase order.
 function branchAndWait(workOrder) {
