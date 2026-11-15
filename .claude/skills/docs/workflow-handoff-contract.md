@@ -76,9 +76,9 @@ duplicate the map into prose — reference the module.
 A contract test (`test/contracts/sanctioned-commands-exist.test.mjs`) asserts
 every mapped wrapper exists on disk and fails closed if one is renamed/removed.
 
-## Unit coordinator boundaries (issue 2532, amended by issue 2955)
+## Unit coordinator boundaries (issue 2532, amended by issues 2955 and 3069)
 
-A coordinator continues past a report point. `unitBoundaries` tells it where to report, so no orchestrator
+A coordinator continues past a report point. The end of a gate round and the end of a fix pass are run-ending cases under `COORDINATOR-ROUND-BOUNDARY-HANDBACK` in the main-agent contract. `unitBoundaries` tells it where to report, so no orchestrator
 brief has to restate the boundary:
 
 - `reportAfter` lists the deterministic report points for this route, in order, from the closed
