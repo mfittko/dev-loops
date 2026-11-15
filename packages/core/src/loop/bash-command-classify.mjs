@@ -1658,14 +1658,15 @@ function interpreterFlag(head, t) {
 
 /**
  * The closed-list form of an interpreter segment (ARGS are the words after the head): "code", "inplace", "heredoc"
- * (a stdin heredoc after any flags), "dash" (a `-` stdin script with no heredoc), "stdin" (no script: the interpreter
+ * (a stdin heredoc after any flags), "herestring" (a `<<<` stdin script), "dash" (a `-` stdin script with no heredoc), "stdin" (no script: the interpreter
  * reads stdin) or null (a script runs).
  */
 function interpreterForm(head, args) {
   for (let k = 0; k < args.length; k++) {
     const { value: t, op } = args[k];
     if (op === "<<") return "heredoc";
-    if (op) { k++; continue; } // a `<<<` here-string is a payload (ceiling): skip its word
+    if (op) return "herestring"; // a `<<<` here-string is the stdin script: a payload the gate does not read (ceiling)
+    if (/^\d+$/.test(t) && args[k + 1]?.op && args[k + 1].start === args[k].end) continue; // an attached fd prefix (`0<<EOF`)
     const skip = redirectionSkip(t);
     if (skip) { k += skip - 1; continue; }
     if (t === "-") return args.slice(k + 1).some((w) => w.op === "<<") ? "heredoc" : "dash"; // later words are script arguments
@@ -1729,7 +1730,8 @@ function segmentCommands(seg) {
   return [stripLeadingWrappers(text), text.slice(new RegExp(`^${SHELL_EXEC_PREFIX}`).exec(text)[0].length)].map((rest) => {
     const tokens = rest.split(" ").filter(Boolean);
     const tail = words.slice(words.length - tokens.length);
-    return { head: (tokens[0] ?? "").replace(/\u0001/g, " ").split("/").pop(), args: tail.slice(1), tail };
+    // lowercased: a case-insensitive file system runs `NODE` as node
+    return { head: (tokens[0] ?? "").replace(/\u0001/g, " ").split("/").pop().toLowerCase(), args: tail.slice(1), tail };
   });
 }
 
@@ -1746,7 +1748,8 @@ function segmentsHaveInterpreterForm(segments) {
     const isWritten = (w) => !!w && !w.op && written.includes(w.value.replace(/^\.\//, ""));
     if (isWritten(tail[0]) || (FILE_RUNNER_HEAD_RE.test(head) && args.some(isWritten))) return true;
     if (!/^(?:cat|tee)$/.test(head) || seg.heredocs.length === 0) return false;
-    const targets = writeTargets({ ...seg, words: tail.filter((_w, k) => tail[k - 1]?.op !== "<<") }); // a heredoc delimiter is no tee operand
+    // a heredoc delimiter is no tee operand; a device (`/dev/null`) is no file write
+    const targets = writeTargets({ ...seg, words: tail.filter((_w, k) => tail[k - 1]?.op !== "<<") }).filter((t) => !t.startsWith("/dev/"));
     written.push(...targets);
     return targets.some((t) => !isTempPath(t));
   }));
@@ -1772,7 +1775,7 @@ function inertQuoteSegment(tok, s) {
 function segmentsHaveCeilingForm(tok, segments = tok.segments, data = new Set(dataHeredocs(tok.segments))) {
   return segments.some((seg, i) => {
     const forms = segmentCommands(seg).map(({ head, args }) => (INTERPRETER_HEAD_RE.test(head) ? interpreterForm(head, args) : null));
-    if (forms.includes("dash") || (forms.includes("stdin") && segments[i - 1]?.pipedOut)) return true;
+    if (forms.includes("dash") || forms.includes("herestring") || (forms.includes("stdin") && segments[i - 1]?.pipedOut)) return true;
     if (seg.heredocs.some((h) => !data.has(h) && inlineInterpreterVerdict(h.body) !== "allow")) return true;
     const inert = segments === tok.segments && inertQuoteSegment(tok, seg);
     return seg.words.some((w, k) => w.subs.some((sub) => segmentsHaveInterpreterForm(sub.segments) || segmentsHaveCeilingForm(tok, sub.segments, data)) ||

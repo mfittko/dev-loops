@@ -151,7 +151,7 @@ export function analyzeCommand(command) {
 }
 
 /**
- * Analyze a transcript of newline-delimited shell commands.
+ * Analyze a transcript of newline-delimited shell commands. Lines that continue an incomplete command are joined to it.
  *
  * @param {string} transcript
  * @returns {{ violations: string[], allowedWriteOps: string[], internalToolingOnly: boolean }}
@@ -160,9 +160,19 @@ export function analyzeTranscript(transcript) {
   const violations = [];
   const allowedWriteOps = [];
   const lines = String(transcript ?? "").split(/\r?\n/);
-  for (const raw of lines) {
-    const line = raw.trim();
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i].trim();
     if (line.length === 0 || line.startsWith("#")) continue;
+    // A multi-line command (a heredoc body, a quoted message across lines) is one entry: join lines until the tokenizer reads it completely.
+    // One line never holds a heredoc body, so a heredoc operator opens a multi-line command too.
+    // shortcut: a line that never closes stays a single entry, but a later unpaired apostrophe can close it and absorb the lines between; upgrade to a delimited transcript format if that misfires.
+    const tok = tokenizeShellCommand(line);
+    if (tok.incomplete || tok.segments.some((s) => s.heredocs.length > 0)) {
+      for (let j = i + 1; j < lines.length; j++) {
+        const joined = lines.slice(i, j + 1).join("\n").trim();
+        if (!tokenizeShellCommand(joined).incomplete) { line = joined; i = j; break; }
+      }
+    }
     const result = analyzeCommand(line);
     violations.push(...result.violations);
     allowedWriteOps.push(...result.allowedWriteOps);

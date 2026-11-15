@@ -5,7 +5,7 @@ import * as head from "../src/loop/bash-command-classify.mjs";
 import * as main from "../../../test/fixtures/bash-command-classify.origin-main.mjs";
 import { readFileSync } from "node:fs";
 import { INLINE_DENY_ROWS } from "../../../test/fixtures/bash-command-classify.inline-deny-rows.mjs";
-import { INLINE_INTERPRETER_FORMS } from "../../../test/fixtures/inline-interpreter-forms.mjs";
+import { INLINE_INTERPRETER_FORMS, INLINE_INTERPRETER_VERDICT_CASES } from "../../../test/fixtures/inline-interpreter-forms.mjs";
 
 /**
  * Differential fail-open guard (#2442, decision 2).
@@ -251,15 +251,15 @@ const rowKey = (name, cmd) => `${name}: ${JSON.stringify(cmd)}`;
 const CEILING_ROWS = new Set(INLINE_INTERPRETER_FORMS.filter((row) => row.ceiling).map((row) => row.command));
 
 function buildCorpus() {
-  const corpus = new Set([...RESIDUE_SHAPES, ...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW, ...ARITH_SHIFT_ROWS, ...CHAINED_HEREDOC_ROWS, ...INLINE_INTERPRETER_FORMS.map((row) => row.command)]);
+  const corpus = new Set([...RESIDUE_SHAPES, ...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW, ...ARITH_SHIFT_ROWS, ...CHAINED_HEREDOC_ROWS, ...INLINE_INTERPRETER_FORMS.map((row) => row.command), ...INLINE_INTERPRETER_VERDICT_CASES.map(([cmd]) => cmd)]);
   const forms = [...INLINE_FORMS, ...WAIT_FORMS, ...PR_BODY_FORMS];
   for (const f of forms) {
     for (const sep of SEPARATORS) for (const suf of SUFFIXES) corpus.add(`${sep}${f}${suf}`);
     for (const wrap of [...LIVE_WRAPPERS, ...QUOTED_WRAPPERS, ...HEREDOC_BODY_WRAPPERS]) corpus.add(wrap(f));
   }
-  const heads = ["node", "bun", "python3", "perl", "ruby", "sed", "awk"];
+  const heads = ["node", "bun", "python3", "perl", "ruby", "sed", "awk", "NODE", "Python3", "PERL"];
   const flags = ["-e", "-p", "-c", "-i", "-pi", "-ne", "-i.bak", "--eval", "--in-place", "-r", "-M", "-I", "-W", "-C", "-X", "-", "-E", "-iinplace", "--"];
-  const markers = ["", "x", "'x'", '"x"', "<<EOF", "<<'EOF'", "- <<EOF", "tool.mjs"];
+  const markers = ["", "x", "'x'", '"x"', "<<EOF", "<<'EOF'", "- <<EOF", "tool.mjs", "0<<EOF", "0<<'EOF'", "- 0<<EOF"];
   for (const h of heads) for (const fl of flags) for (const m of markers) {
     corpus.add(`${h} ${fl} ${m}`.trim());
     corpus.add(`${h} ${fl} lib ${fl === "-r" || fl === "-I" || fl === "-M" ? "-e" : "-c"} ${m}`.trim());
