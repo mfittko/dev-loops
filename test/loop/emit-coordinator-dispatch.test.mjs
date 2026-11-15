@@ -316,7 +316,7 @@ test("C6a the pull-work-order CLI registers the coordinator role and prints the 
 });
 
 test("C9 every cited rule owner exists as a rule marker in its document", () => {
-  const cited = [...RULE_REFERENCES.operationalRules, ...RULE_REFERENCES.adrCandidateRevalidation, ...RULE_REFERENCES.guardFailure.rules];
+  const cited = [...RULE_REFERENCES.operationalRules, ...RULE_REFERENCES.adrCandidateRevalidation, ...RULE_REFERENCES.stateDerivation, ...RULE_REFERENCES.guardFailure.rules];
   for (const ref of cited) {
     const [doc, rule] = ref.split("#");
     assert.ok(readFileSync(doc, "utf8").includes(`<!-- rule: ${rule} -->`), ref);

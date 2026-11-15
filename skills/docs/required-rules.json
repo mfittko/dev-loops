@@ -103,12 +103,17 @@
     {
       "id": "COORDINATOR-CONTINUITY-SOFT-CAP",
       "enforcement": "agent",
-      "enforcementNote": "Whether a coordinator continues past a report point or the 150K advisory diagnostic is coordinator judgment; no script classifies it."
+      "enforcementNote": "Whether the 150K advisory diagnostic applies is coordinator judgment; no script classifies it."
     },
     {
       "id": "COORDINATOR-HANDBACK-ONE-REPORT",
       "enforcement": "agent",
       "enforcementNote": "Whether a turn end is a pause is coordinator judgment; no hook classifies it."
+    },
+    {
+      "id": "COORDINATOR-ROUND-BOUNDARY-HANDBACK",
+      "enforcement": "agent",
+      "enforcementNote": "The coordinator runs validate-coordinator-handback on a self-attested packet; no hook verifies the workerRunning flag or the claim release."
     },
     {
       "id": "COORDINATOR-SINGLE-CHILD-JOIN",
