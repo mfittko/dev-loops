@@ -3241,6 +3241,79 @@ test("3105: a judge verdict of an earlier same-head round does not block the nex
   }
 });
 
+test("3105: the judged composition keeps blocked, ignores evidence_only act items", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judged-branches-"));
+  try {
+    const cases = [
+      { name: "blocked", overallVerdict: "blocked", finding: { severity: "high", angle: "correctness", summary: "s" }, extra: {}, expected: "blocked" },
+      { name: "evidence_only", overallVerdict: "clean", finding: { severity: "medium", angle: "correctness", summary: "s", remedyKind: "evidence_only" }, extra: {}, expected: "clean" },
+    ];
+    for (const [i, c] of cases.entries()) {
+      const headSha = String(i + 1).repeat(40);
+      const judgeVerdictPath = path.join(tmpDir, `judge-verdict-${i}.json`);
+      await writeFile(judgeVerdictPath, JSON.stringify({
+        headSha,
+        scopeDrift: { verdict: "within_scope", rationale: "matches the briefed AC set", driftedAreas: [] },
+        dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fixes AC-1", criterion: "AC-1", ...c.extra }],
+      }), "utf8");
+      const result = await writeGateFindingsLog({
+        repo: "o/n", pr: 25, gate: "draft_gate", headSha, verdict: c.overallVerdict, judgeVerdict: judgeVerdictPath, tmpRoot: tmpDir,
+        findings: JSON.stringify({ overallVerdict: c.overallVerdict, findings: [c.finding] }),
+      });
+      const parsed = JSON.parse(await readFile(result.path, "utf8"));
+      assert.equal(parsed.verdict, c.expected, `${c.name}: verdict`);
+      assert.equal(parsed.overallVerdict, c.expected, `${c.name}: overallVerdict`);
+    }
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("3105: the judge_verdict_required guard exempts the review gate and a judge directory without a verdict", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judge-exempt-"));
+  try {
+    const headSha = "a7".repeat(20);
+    const judgeDirOf = (gate, id) => path.resolve(buildGateArtifactPath({ repo: "o/n", pr: 26, gate, headSha, tmpRoot: tmpDir, dir: "gate-judge" }), id);
+    const write = (gate) => writeGateFindingsLog({ repo: "o/n", pr: 26, gate, headSha, verdict: "clean", tmpRoot: tmpDir, findings: JSON.stringify([]) });
+    await mkdir(judgeDirOf("draft_gate", "j1-abc123"), { recursive: true });
+    assert.equal((await write("draft_gate")).ok, true, "a judge still running (no judge-verdict.json) does not refuse");
+    await mkdir(judgeDirOf("review", "j1-abc123"), { recursive: true });
+    await writeFile(path.join(judgeDirOf("review", "j1-abc123"), "judge-verdict.json"), "{}", "utf8");
+    assert.equal((await write("review")).ok, true, "the review gate is exempt beside a judge verdict");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("3105: with no emit plan a consumed same-head judge does not block the next round, and the refusal names the latest judge verdict", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judge-consumed-"));
+  try {
+    const headSha = "b8".repeat(20);
+    const judgeDir = (id) => path.resolve(buildGateArtifactPath({ repo: "owner/repo", pr: 27, gate: "draft_gate", headSha, tmpRoot: tmpDir, dir: "gate-judge" }), id);
+    const verdictAt = async (id, body) => {
+      await mkdir(judgeDir(id), { recursive: true });
+      await writeFile(path.join(path.dirname(judgeDir(id)), "judge-emit-plan.json"), JSON.stringify(judgePlanFor({ pr: 27, headSha, gate: "draft_gate", roundId: id })), "utf8");
+      const file = path.join(judgeDir(id), "judge-verdict.json");
+      await writeFile(file, JSON.stringify(body), "utf8");
+      return file;
+    };
+    const round1 = await verdictAt("j1000-aa", {
+      headSha,
+      scopeDrift: { verdict: "within_scope", rationale: "matches the briefed AC set", driftedAreas: [] },
+      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fixes AC-1", criterion: "AC-1" }],
+    });
+    const base = { repo: "owner/repo", pr: 27, gate: "draft_gate", headSha, verdict: "clean", tmpRoot: tmpDir, findings: JSON.stringify([{ severity: "medium", angle: "correctness", summary: "s" }]) };
+    assert.equal((await writeGateFindingsLog({ ...base, judgeVerdict: round1 })).ok, true);
+    assert.equal((await writeGateFindingsLog(base)).ok, true, "the consumed round-1 judge does not refuse the same-head round 2");
+    // Two unconsumed judges: the refusal names the later one whatever the readdir order.
+    await verdictAt("j2000-bb", {});
+    const latest = await verdictAt("j3000-cc", {});
+    await assert.rejects(() => writeGateFindingsLog({ ...base, findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "s2" }]) }), (err) => err.message.startsWith("judge_verdict_required:") && err.message.includes(latest));
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 // --- AC1 (issue 2008 / ADR-0061): optional --spec-authority stamping ---
 
 test("writeGateFindingsLog: --spec-authority stamps the log; absent is a byte-identical no-op", async () => {

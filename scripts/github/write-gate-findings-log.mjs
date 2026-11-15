@@ -914,6 +914,19 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     const judgeRoots = [...new Set([options.contextTmpRoot, options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot), path.join(repoRoot, "tmp")].filter(Boolean))];
     // Both ids embed their emission time (r<ms>-, j<ms>-): a judge emitted before this fan-out round belongs to an earlier same-head round.
     const roundEmittedMs = Number(/^r(\d+)-/.exec(planRoundId ?? "")?.[1]) || 0;
+    // Without an emit plan roundEmittedMs is 0: a judge execution that the live or a retained same-head ledger already stamps as completed was consumed by an earlier round, so it is skipped.
+    const consumedJudges = new Set();
+    const ledgerDir = path.dirname(fullPath);
+    const ledgerStem = path.basename(fullPath, ".json");
+    for (const name of await readdir(ledgerDir).catch(() => [])) {
+      if (name !== `${ledgerStem}.json` && !(name.startsWith(`${ledgerStem}.round-`) && name.endsWith(".json"))) continue;
+      try {
+        const identity = JSON.parse(await readSealed(path.join(ledgerDir, name))).roundIdentity;
+        if (identity?.completed === true && typeof identity.judgeExecution === "string") consumedJudges.add(identity.judgeExecution);
+      } catch { /* an unreadable ledger binds no judge; retention refuses a tampered live ledger later */ }
+    }
+    // Both ids embed their emission time: order the candidates by it, then id, so the refusal names the latest judge verdict (never a superseded one in readdir order).
+    const candidates = [];
     for (const root of judgeRoots) {
       const judgeDir = path.resolve(repoRoot, buildGateArtifactPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: root, dir: "gate-judge" }));
       let entries = [];
@@ -922,11 +935,14 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       } catch (error) {
         if (error?.code !== "ENOENT") throw error;
       }
-      for (const entry of entries.filter((name) => Number(/^j(\d+)-[0-9a-f]+$/.exec(name)?.[1]) > roundEmittedMs)) {
+      for (const entry of entries.filter((name) => Number(/^j(\d+)-[0-9a-f]+$/.exec(name)?.[1]) > roundEmittedMs && !consumedJudges.has(name))) {
         const found = path.join(judgeDir, entry, "judge-verdict.json");
-        if (await exists(found)) throw parseError(`judge_verdict_required: a judge verdict exists at ${found}; pass --judge-verdict ${found} so the log carries the judged verdict`);
+        if (await exists(found)) candidates.push({ ms: Number(/^j(\d+)-/.exec(entry)[1]), entry, found });
       }
     }
+    candidates.sort((a, b) => a.ms - b.ms || (a.entry < b.entry ? -1 : a.entry > b.entry ? 1 : 0));
+    const latest = candidates.at(-1);
+    if (latest) throw parseError(`judge_verdict_required: a judge verdict exists at ${latest.found}; pass --judge-verdict ${latest.found} so the log carries the judged verdict`);
   }
   // The writer resolves the round before it retains the live same-head ledger, so it counts that ledger itself, but only when retention will keep it (the shared isInRoundRewrite predicate): every later reader counts it as the retained round.
   if (options.judgeVerdict) {
@@ -1056,7 +1072,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     // artifact throws its own error before this contradiction check runs.
     if (callerVerdict !== null && callerVerdict !== normalizedOverallVerdict) {
       throw parseError(
-        `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict (the severity verdict); a --judge-verdict run with open act items persists findings_present (ADR 0089)`,
+        `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict (the severity verdict); a --judge-verdict run with open act items persists findings_present (ADR 0275)`,
       );
     }
   }
@@ -1070,7 +1086,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     persistedVerdict = raiseVerdictForActedCopilotBlock(persistedVerdict, severities, blocking);
     if (normalizedOverallVerdict !== undefined) normalizedOverallVerdict = raiseVerdictForActedCopilotBlock(normalizedOverallVerdict, severities, blocking);
   }
-  // After a judge pass an open act item makes the persisted verdict findings_present (ADR 0089); blocked stays blocked.
+  // After a judge pass an open act item makes the persisted verdict findings_present (ADR 0275); blocked stays blocked.
   if (options.judgeVerdict && persistedVerdict !== "blocked" && listOpenActItems(findings).length > 0) {
     persistedVerdict = "findings_present";
     if (normalizedOverallVerdict !== undefined && normalizedOverallVerdict !== "blocked") normalizedOverallVerdict = "findings_present";
