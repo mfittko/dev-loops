@@ -950,16 +950,25 @@ test("decideBashGate denies inline interpreters actor-independently on the targe
   assert.match(dMain.reason, /OPS-NO-INLINE-INTERPRETER/);
 });
 
-test("decideBashGate names incomplete tokenization in the OPS-NO-INLINE-INTERPRETER deny reason (#2442)", () => {
+test("the OPS-NO-INLINE-INTERPRETER deny reason names the four classes and the editor tools; a parse failure denies only with a closed-list head (#2442, Q2)", () => {
   const ctx = { repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET };
-  const d = decideBashGate({ command: 'echo "$(gh pr view 5', ...ctx });
-  assert.equal(d.decision, "deny");
-  assert.match(d.reason, /incomplete tokenization/);
-  const dTick = decideBashGate({ command: "echo `gh pr view 5", ...ctx });
-  assert.equal(dTick.decision, "deny");
-  assert.match(dTick.reason, /incomplete tokenization/);
-  assert.match(dTick.reason, /backtick/);
-  assert.doesNotMatch(decideBashGate({ command: 'node -e "x"', ...ctx }).reason, /incomplete tokenization/);
+  for (const command of ["perl -0pi -e 's/a/b/' src/a.mjs", "sed -i '' 's/a/b/' f", "cat > packages/a.mjs <<'EOF'\nx\nEOF", "cat > tmp/r.mjs <<'EOF'\nx\nEOF\nnode tmp/r.mjs"]) {
+    const d = decideBashGate({ command, ...ctx });
+    assert.equal(d.decision, "deny", command);
+    assert.match(d.reason, /^OPS-NO-INLINE-INTERPRETER:/);
+    assert.match(d.reason, /inline code or a stdin heredoc to node, bun, python, perl or ruby/);
+    assert.match(d.reason, /in-place sed, perl, ruby or awk edit/);
+    assert.match(d.reason, /cat\/tee heredoc write outside a temp path/);
+    assert.match(d.reason, /running a file written by a heredoc in the same command/);
+    assert.match(d.reason, /editor tools \(Write\/Edit under Claude Code, write\/edit under Pi\)/);
+  }
+  // a command that does not parse and names an interpreter is denied; the reason quotes the parse error and names the editor tools
+  const unparsable = decideBashGate({ command: "node -e 'x", ...ctx });
+  assert.equal(unparsable.decision, "deny");
+  assert.match(unparsable.reason, /does not parse \(reached EOF without closing quote `'`\)/);
+  assert.match(unparsable.reason, /editor tools \(Write\/Edit under Claude Code, write\/edit under Pi\)/);
+  // an unparsable command with no closed-list head is an allowed ceiling case (the retro report lists it)
+  for (const command of ['echo "$(gh pr view 5', 'echo "unterminated']) assert.deepEqual(decideBashGate({ command, ...ctx }), { decision: "allow" }, command);
 });
 
 test("decideBashGate allows a heredoc write whose body only names a wait script and denies a backgrounded probe (#2442)", () => {

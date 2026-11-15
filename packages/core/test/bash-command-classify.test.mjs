@@ -3,7 +3,7 @@ import { test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { INLINE_DENY_ROWS } from "../../../test/fixtures/bash-command-classify.inline-deny-rows.mjs";
+import { INLINE_INTERPRETER_FORMS } from "../../../test/fixtures/inline-interpreter-forms.mjs";
 
 import {
   commandContainsTimeoutWrappedSanctionedTool,
@@ -43,6 +43,7 @@ import {
   commandIsSleepPollLoop,
   commandIsFileMarkerPollLoop,
   commandContainsInlineInterpreter,
+  inlineInterpreterVerdict,
   commandContainsCodeVerificationEntrypoint,
   tokenizeShellCommand,
 } from "../src/loop/bash-command-classify.mjs";
@@ -967,68 +968,6 @@ test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scr
   assert.equal(commandContainsDetachedWaitTool("timeout 600 npm test &"), false);
 });
 
-test("commandContainsInlineInterpreter unescapes nested escaped backticks in a backtick substitution", () => {
-  assert.equal(commandContainsInlineInterpreter("echo `echo \\`node -e 1\\``"), true);
-  assert.equal(commandContainsInlineInterpreter("X=`echo \\`python3 -c x\\``"), true);
-  assert.equal(commandContainsInlineInterpreter("X=`node -e 1`"), true);
-  assert.equal(commandContainsInlineInterpreter("echo `echo \\`node scripts/x.mjs\\``"), false);
-  assert.equal(commandContainsInlineInterpreter("X=`node scripts/x.mjs`"), false);
-  assert.equal(commandContainsInlineInterpreter("echo \\`node -e 1\\`"), false);
-  assert.equal(commandContainsInlineInterpreter("X=`echo \\$(node -e 1)`"), true);
-  assert.equal(commandContainsInlineInterpreter("X=`echo \\$(node scripts/x.mjs)`"), false);
-});
-
-test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, and heredocs", () => {
-  assert.equal(commandContainsInlineInterpreter('node -e "console.log(1)"'), true);
-  assert.equal(commandContainsInlineInterpreter('node --eval "console.log(1)"'), true);
-  assert.equal(commandContainsInlineInterpreter('node -p "1+1"'), true);
-  assert.equal(commandContainsInlineInterpreter('python3 -c "print(1)"'), true);
-  assert.equal(commandContainsInlineInterpreter('python3 -c"print(1)"'), true);
-  assert.equal(commandContainsInlineInterpreter('node -e"console.log(1)"'), true);
-  assert.equal(commandContainsInlineInterpreter('node -p"1+1"'), true);
-  assert.equal(commandContainsInlineInterpreter("node <<EOF\nconsole.log(1)\nEOF"), true);
-  assert.equal(commandContainsInlineInterpreter('python -c "print(1)"'), true);
-  assert.equal(commandContainsInlineInterpreter("python3 - <<'EOF'\n...\nEOF"), true);
-  assert.equal(commandContainsInlineInterpreter("node - <<'EOF'\n...\nEOF"), true);
-  // stdin script / heredoc AFTER interpreter flags (#2943)
-  for (const c of ["python3 -I - <<EOF", "python3 -u - <<'EOF'", "node --input-type=module - <<EOF", "node - <<EOF", "node --input-type=module <<EOF", "python3 -I -<<EOF", "python3 -I<<EOF", "node --input-type=module<<EOF", "node --env-file-if-exists .env - <<EOF", "python3 -W ignore - <<EOF", "python3 -X dev - <<EOF", "node --input-type module - <<EOF", "node --require x.js - <<EOF", "cat s.py | python3 -I -", "cat x.mjs | node --input-type=module -", "node --title x - <<EOF", "node --disable-warning DEP0040 - <<EOF", "node --watch-path src - <<EOF", "node --redirect-warnings w.log - <<EOF", "python3 --check-hash-based-pycs never - <<EOF", "node --unhandled-rejections strict - <<EOF", "node --stack-size 2000 - <<EOF", "node --trace-event-categories v8 - <<EOF", "node --experimental-config-file node.config.json - <<EOF", "node --experimental-sea-config sea.json - <<EOF", "node --diagnostic-dir /tmp - <<EOF", "node --require x.js<<EOF", "node --stack-size 2000<<EOF", "node --unhandled-rejections strict<<EOF", "python3 -W ignore<<EOF", "node --unhandled-rejections strict --stack-size 2000 - <<EOF", "node --stack-size 2000 --input-type=module - <<EOF", "python3 -I 2>&1 <<EOF", "node --input-type=module 2>/dev/null <<EOF", "python3 -I 0<<EOF", "python3 -IW ignore - <<EOF", "python3 -I 2>&1<<EOF", "node --input-type=module 2>/dev/null<<EOF", "node --test-reporter ./r.mjs - <<EOF"]) {
-    assert.equal(commandContainsInlineInterpreter(c), true, c);
-  }
-  for (const c of ["node --no-warnings ./node_modules/.bin/tsc -p tsconfig.json", "node --no-warnings bin/cli -", "python3 -I script.py", "node scripts/x.mjs", "python3 script.py <<EOF", "grep node <<EOF", "node scripts/x.mjs --flag -", "node --require x.js script.mjs", "python3 -m json.tool <<EOF", "python3 script.py<<EOF", "node --env-file-if-exists .env scripts/x.mjs", "node --title x scripts/x.mjs", "node --disable-warning DEP0040 scripts/x.mjs", "python3 --check-hash-based-pycs never script.py", "node --require ./setup.js scripts/x.mjs", "node --env-file=.env scripts/x.mjs", "node scripts/x.mjs<<EOF", "node --no-warnings scripts/x.mjs<<EOF", "node --no-warnings scripts/x.mjs<<'EOF'", "node --no-warnings scripts/x.mjs --body-file - <<EOF", "node --trace-warnings scripts/x.mjs --body-file -", "node --experimental-strip-types scripts/x.ts -e foo", "node -- scripts/x.mjs -p 1", "python3 script.py 2>&1", "node --no-warnings \"scripts/x.mjs\" --body-file - <<EOF"]) {
-    assert.equal(commandContainsInlineInterpreter(c), false, c);
-  }
-  // sanctioned script invocations and plain reads are NOT inline interpreters
-  for (const c of ["node --experimental-config-file ./node.config.json - <<EOF", "node --experimental-sea-config ./sea.json - <<EOF", "node --trace-event-file-pattern ./trace.log - <<EOF"]) {
-    assert.equal(commandContainsInlineInterpreter(c), true, c);
-  }
-  for (const c of ["node --experimental-config-file ./node.config.json scripts/x.mjs", "node --experimental-sea-config ./sea.json scripts/x.mjs"]) {
-    assert.equal(commandContainsInlineInterpreter(c), false, c);
-  }
-
-  assert.equal(commandContainsInlineInterpreter("node scripts/github/comment-issue.mjs 5"), false);
-  assert.equal(commandContainsInlineInterpreter("node -v"), false);
-  assert.equal(commandContainsInlineInterpreter("python3 script.py"), false);
-  // a script path stopping the python -c scan (later -c is a script argument, not an interpreter)
-  assert.equal(commandContainsInlineInterpreter("python3 myfile.py -c argvalue"), false);
-  assert.equal(commandContainsInlineInterpreter("gh pr view 1 --jq .state"), false);
-  // a heredoc fed to a command that merely contains the word `node` is NOT an inline interpreter
-  assert.equal(commandContainsInlineInterpreter("grep node <<EOF"), false);
-  // env/wrapper/path prefixes are tolerated
-  assert.equal(commandContainsInlineInterpreter('DEBUG=1 node -e "console.log(1)"'), true);
-  assert.equal(commandContainsInlineInterpreter('command python3 -c "print(1)"'), true);
-  // a value-taking flag BEFORE the interpreter flag must not break the scan for -e/--eval
-  assert.equal(commandContainsInlineInterpreter('node --require ./setup.js -e "console.log(1)"'), true);
-  // path-valued node flags with a relative value must not hide a stdin script
-  for (const c of ["node --report-dir out/r - <<EOF", "node --diagnostic-dir ./d - <<EOF", "node --cpu-prof-dir p/x - <<EOF", "node --test-reporter-destination out/x.txt - <<EOF"]) {
-    assert.equal(commandContainsInlineInterpreter(c), true, c);
-  }
-  for (const c of ["node --require ./setup.js scripts/x.mjs", "node --report-dir out/r scripts/x.mjs", "node scripts/x.mjs"]) {
-    assert.equal(commandContainsInlineInterpreter(c), false, c);
-  }
-  assert.equal(commandContainsInlineInterpreter('node -r ./x.js --eval "1+1"'), true);
-  assert.equal(commandContainsInlineInterpreter('node --import ./m.mjs -p "1+1"'), true);
-});
-
 test("commandContainsCodeVerificationEntrypoint detects known verify/test/build entrypoints and does not over-match compact orchestration commands (#2082)", () => {
   // known verify/test/build entrypoints — must match
   assert.equal(commandContainsCodeVerificationEntrypoint("bun run verify"), true);
@@ -1619,15 +1558,6 @@ test("escaped quotes never open or close a quoted span (#2964)", () => {
   }
 });
 
-test("a plain heredoc closes only on an unindented delimiter, `<<-` on tab-indented (#2967)", () => {
-  for (const c of ["cat <<EOF\n EOF\n'$(node -e 1)'\nEOF", "cat <<EOF\n\tEOF\n$(node -e 1)\nEOF", "cat <<'EOF'\n EOF\nEOF\n$(node -e 1)", "cat <<-EOF\n  EOF\n$(node -e 1)\nEOF"]) {
-    assert.equal(commandContainsInlineInterpreter(c), true, c);
-  }
-  for (const c of ["cat <<-EOF\n\ttext\n\tEOF\necho ok", "cat <<EOF\n$(echo hi)\nEOF\necho ok", "cat <<'EOF'\n $(node -e 1)\nEOF"]) {
-    assert.equal(commandContainsInlineInterpreter(c), false, c);
-  }
-});
-
 const words = (command, s = 0) => tokenizeShellCommand(command).segments[s].words.map((w) => w.value);
 
 test("tokenizeShellCommand: quoting forms (#2442)", () => {
@@ -1683,12 +1613,9 @@ test("tokenizeShellCommand: here-strings and heredocs (#2442)", () => {
   assert.equal(tokenizeShellCommand(clobberCommand).segments.length, 1);
 });
 
-test("tokenizeShellCommand: malformed input is incomplete and the classifier denies it (#2442)", () => {
+test("tokenizeShellCommand: malformed input is incomplete (#2442)", () => {
   for (const c of ["node -e 'x", 'echo "$(gh pr view 5', "cat > tmp/x <<'EOF'\nnode -e y", "cat <<", "echo $(echo `x"]) {
     assert.equal(tokenizeShellCommand(c).incomplete, true, c);
-  }
-  for (const c of ["node -e 'x", 'echo "$(gh pr view 5', "cat > tmp/x <<'EOF'\nnode -e y"]) {
-    assert.equal(commandContainsInlineInterpreter(c), true, c);
   }
   // an unterminated quote leaves the rest of the command unquoted for the poll-loop classifiers
   assert.equal(commandIsSleepPollLoop("echo 'x; while true; do gh pr view 5; sleep 5; done"), true);
@@ -1716,7 +1643,6 @@ test("tokenizeShellCommand: CRLF heredoc, real comments and nesting cap (#2442)"
   assert.equal(commandIsSleepPollLoop('git commit -m "docs: never poll (#12): while true; do gh pr view; sleep 5; done"'), false);
   const nested = "node -e 'evil'\n: \"" + "$(".repeat(5000);
   assert.equal(tokenizeShellCommand(nested).incomplete, true);
-  assert.equal(commandContainsInlineInterpreter(nested), true);
 });
 
 test("stripQuotedLiterals is built on tokenizeShellCommand and the regex pairing is gone (#2442)", () => {
@@ -1767,11 +1693,11 @@ test("review fixes: hazard text keeps the body flag visible, nested quotes are a
   // rejected form: a plain quoted title without --body stays allowed
   assert.equal(commandContainsRawPrBodyEdit("gh pr edit 5 --title 'a'", "mfittko/dev-loops"), false);
   // a newline inside a substitution does not consume the parent's heredoc
-  assert.equal(commandContainsInlineInterpreter(": <<EOF $(printf x\n)\nbody\nEOF"), false);
-  assert.equal(commandContainsInlineInterpreter(": <<EOF $(cat <<EOF2)\nbody\nEOF"), true);
+  assert.equal(tokenizeShellCommand(": <<EOF $(true x\n)\nbody\nEOF").incomplete, false);
+  assert.equal(tokenizeShellCommand(": <<EOF $(cat <<EOF2)\nbody\nEOF").incomplete, true);
   // ANSI-C delimiter decoding
-  assert.equal(commandContainsInlineInterpreter(": <<$'\\x45OF'\nbody\nEOF"), false);
-  assert.equal(commandContainsInlineInterpreter(": <<$'EO\\x46'\nbody\nEOF"), false);
+  assert.equal(tokenizeShellCommand(": <<$'\\x45OF'\nbody\nEOF").segments[0].heredocs[0].delimiter, "EOF");
+  assert.equal(tokenizeShellCommand(": <<$'EO\\x46'\nbody\nEOF").segments[0].heredocs[0].closed, true);
 });
 
 const PROBE = "scripts/loop/probe-copilot-review.mjs";
@@ -1809,7 +1735,6 @@ test("slice 2: a written script run through a wrapper, runner payload, glob or a
     `echo "$(cat <<'EOF'\n${LOOP}\nEOF\n)" > tmp/l.sh; bash tmp/l.sh`,
     `cat &> tmp/l.sh <<'EOF'\n${LOOP}\nEOF\nbash tmp/l.sh`,
   ]) assert.equal(commandIsSleepPollLoop(c), true, c);
-  for (const c of INLINE_DENY_ROWS) assert.equal(commandContainsInlineInterpreter(c), true, c);
 });
 
 test("slice 2: any multi-segment command keeps every heredoc body visible, whatever hides the exec redirect (#2442)", () => {
@@ -1820,41 +1745,6 @@ test("slice 2: any multi-segment command keeps every heredoc body visible, whate
 test("slice 2: the sanctioned single-segment shapes stay visible when an executor hides inside them, and executor arguments are payloads (#2442)", () => {
   const t = "tee />(sh) <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF";
   assert.equal(commandIsSleepPollLoop(t) && commandContainsDetachedWaitTool(t), true);
-  assert.equal(commandContainsInlineInterpreter("git commit -m \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\""), false);
-  assert.equal(commandContainsInlineInterpreter("gh pr create --body \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\""), true); // gh is no text host: the heredoc body stays visible
-});
-
-test("slice 2: quoted literals and cat/tee heredoc bodies that name an interpreter are data; payloads stay visible (#2442)", () => {
-  for (const c of [
-    "cat > tmp/f <<'EOF'\nnode -e 'x'\nEOF",
-    "cat > tmp/f <<'EOF'\npython3 -c x\nEOF",
-    "cat > tmp/f <<'EOF'\ndetect-copilot-loop-state.mjs &\nEOF",
-    "tee tmp/f <<EOF\nnode -e x\nEOF",
-    "git commit -m \"$(cat <<'EOF'\nuse node -e and sed -i here\nEOF\n)\"",
-    'node scripts/loop/x.mjs --notes "11 were python3 or node -e; python3 -c denied"',
-    'node scripts/loop/x.mjs --notes "a | node -e b"',
-    "node scripts/loop/x.mjs --notes 'perl -0pi -e & ruby -e'",
-    "node scripts/loop/x.mjs --notes 'tee src/a.mjs <<EOF'",
-    'grep -n "sed -i" README.md',
-  ]) assert.equal(commandContainsInlineInterpreter(c), false, c);
-  for (const c of [
-    `bash <<< "a b"'; node -e y'`,
-    `bash -c "a b"'; node -e y'`,
-    `bash -c -e 'x; node -e y'`,
-    `bash -c $'x; node -e y'`,
-    `eval $'x; node -e y'`,
-    `bash<<<'x; node -e y'`,
-    `bash <<<$'x; node -e y'`,
-    "# don't\nnode -e 'console.log(1)'",
-    "git commit -F - <<'MSG'\ndon't\nMSG\nnode -e 'x'",
-    "cat <<'EOF' | sh\nnode -e 'x'\nEOF",
-    "bash <<'EOF'\nnode -e 'x'\nEOF",
-    "node - <<'EOF'\nx\nEOF",
-    "python3 - <<'EOF'\nx\nEOF",
-    "cat > tmp/r.sh <<'EOF'\nnode -e 'x'\nEOF\nbash tmp/r.sh",
-    "cat > tmp/x <<EOF\n$(node -e 'x')\nEOF",
-    "bash <<< \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
-  ]) assert.equal(commandContainsInlineInterpreter(c), true, c);
 });
 
 test("slice 2: a heredoc closed by EOF) outside a substitution is incomplete (#2442)", () => {
@@ -1862,7 +1752,6 @@ test("slice 2: a heredoc closed by EOF) outside a substitution is incomplete (#2
 });
 
 test("tokenizeShellCommand: $((expr)) is arithmetic and DELIM) closes a heredoc inside $(...) (#2442)", () => {
-  for (const c of ["echo $((1<<2))", "x=$((a<<b)); echo $x"]) assert.equal(commandContainsInlineInterpreter(c), false, c);
   assert.equal(tokenizeShellCommand(": $((1<<2))").incomplete, false);
   assert.equal(tokenizeShellCommand(": $(( $(date) << 2 ))").incomplete, true); // arithmetic holding a substitution falls back to the `$(` reader: fail closed
   for (const c of [": $((true);(gh pr merge 5))", ": $((true) | (cmd))", ": $((p);(q))", ": $((true)\n(gh pr merge 5))", ": $((p)&(q))", ": $((p) > >(q))", ": $((r) | (s))"]) {
@@ -1870,8 +1759,6 @@ test("tokenizeShellCommand: $((expr)) is arithmetic and DELIM) closes a heredoc 
     // read as a substitution (visible), not opaque arithmetic
     assert.equal(parsed.segments[0].words[1].subs.length, 1, c);
   }
-  assert.equal(commandContainsInlineInterpreter(": $((1<<2))\nnode - <<EOF\nconsole.log(1)\nEOF"), true);
-  assert.equal(commandContainsInlineInterpreter(": $((`node -e 1`<<2))"), true); // the backtick alternative of the readArith guard
   assert.equal(tokenizeShellCommand(': $(("1"<<2))').incomplete, true); // the quote alternative
   assert.equal(tokenizeShellCommand(": $((1<<2").incomplete, true);
   assert.equal(tokenizeShellCommand(": $(( (1<<2) ))").incomplete, false);
@@ -1884,20 +1771,33 @@ test("tokenizeShellCommand: $((expr)) is arithmetic and DELIM) closes a heredoc 
   const closed = "echo \"$(cat <<'EOF'\nbody\nEOF)\"";
   assert.equal(tokenizeShellCommand(closed).incomplete, false);
   assert.equal(tokenizeShellCommand("cat <<'EOF'\nbody\nEOF)").incomplete, true); // outside a substitution `EOF)` is no delimiter
-  assert.equal(commandContainsInlineInterpreter("gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\""), true); // gh is no text host
 });
 
 test("round 3: a shell reached through env/command/exec or `<(`, a joined heredoc line and text consumers (#2442)", () => {
   // thread 1: process substitution into a shell keeps quoted words visible
   assert.equal(commandContainsDetachedWaitTool(`bash <(printf '%s\\n' 'node ${PROBE} --pr 5 &')`), true);
   // thread 2: the receiving shell is found behind env/command/exec
-  assert.equal(commandContainsInlineInterpreter("{\necho 'true; node -e y'\n} | env sh"), true);
   assert.equal(commandContainsDetachedWaitTool(`echo 'node ${PROBE} --pr 5 &' | env bash`), true);
   assert.equal(commandContainsDetachedWaitTool(`echo 'node ${PROBE} --pr 5 &' | grep x`), true); // multi-segment keeps origin/main's split
-  // thread 3: backslash-newline joins before the unquoted-heredoc check
-  assert.equal(commandContainsInlineInterpreter("cat <<EOF\n$\\\n(true; node -e x)\nEOF"), true);
-  assert.equal(commandContainsInlineInterpreter("cat <<'EOF'\n$\\\n(true; node -e x)\nEOF"), false);
-  // thread 5: a here-string or `-c` counts as payload only for a consumer that executes text
-  for (const c of ["cat <<< 'node -e x'", "head -c 100 'node -e x'", "env head -c 100 'node -e x'", 'echo "${HOME}"']) assert.equal(commandContainsInlineInterpreter(c), false, c);
-  for (const c of ["bash <<< 'node -e x'", "env bash <<< 'node -e x'", "exec sh -c 'node -e x'"]) assert.equal(commandContainsInlineInterpreter(c), true, c);
+});
+
+test("OPS-NO-INLINE-INTERPRETER: the gate denies every denied fixture row and allows every inert and ceiling row (#2442)", () => {
+  for (const { command, deny, ceiling } of INLINE_INTERPRETER_FORMS) {
+    assert.equal(commandContainsInlineInterpreter(command), deny, command);
+    assert.equal(inlineInterpreterVerdict(command), deny ? "deny" : ceiling ? "ceiling" : "allow", command);
+  }
+  for (const kind of ["deny", "ceiling", "allow"]) assert.ok(INLINE_INTERPRETER_FORMS.some((row) => inlineInterpreterVerdict(row.command) === kind), kind);
+});
+
+test("OPS-NO-INLINE-INTERPRETER: the inertness heuristics and the hand-written segmenter are gone and the deny path reads no heuristic (#2442)", () => {
+  const source = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/loop/bash-command-classify.mjs"), "utf8");
+  for (const name of ["scanShellText", "interpreterScanParts", "inlineInterpreterDenyDetail", "QUOTE_AWARE_TOKEN_RE", "scanInlineInterpreter", "unshellToken", "segmentCommands", "tokenHasDeny", "segmentsHaveInterpreterForm", "segmentsHaveCeilingForm"]) {
+    assert.doesNotMatch(source, new RegExp(`\\b${name}\\b`), name);
+  }
+  // `redirectionSkip` stays for the sleep-loop predicates; the deny path never reads it. The heuristics the wait and PR-body predicates still call stay out of the structural deny path too.
+  const denyPath = ["interpreterFlag", "interpreterForm", "sedInPlace", "awkInPlace", "isTempPath", "wordOf", "stripWordWrappers", "stripExecPrefix", "payloadStart", "inspectShell", "inspect"]
+    .map((name) => source.match(new RegExp(`function ${name}\\([\\s\\S]*?\\n}\\n`))?.[0] ?? assert.fail(name)).join("");
+  for (const name of ["redirectionSkip", "substitutionIsInert", "dataHeredocs", "blankDataHeredocs", "hasQuotePairingHazard", "segmentsHaveQuotedHeredoc", "inertQuoteSegment", "stripQuotedLiterals", "tokenizeShellCommand", "stripLeadingWrappers", "isPayloadWord", "writeTargets"]) {
+    assert.doesNotMatch(denyPath, new RegExp(`\\b${name}\\b`), name);
+  }
 });

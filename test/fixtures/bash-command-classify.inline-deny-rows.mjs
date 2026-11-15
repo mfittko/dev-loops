@@ -1,4 +1,5 @@
-// Commands the inline-interpreter gate denies (#2442 slice 2): shared by the unit and the differential tests.
+// Commands the inline-interpreter gate denied at origin/main 99bb8b3ce (#2442): corpus rows of the differential test.
+// The head denies each one or lists it as a ceiling row in test/fixtures/inline-interpreter-forms.mjs.
 export const INLINE_DENY_ROWS = [
   "cat > tmp/l.sh <<EOF\nnode -e 1\nEOF\ntimeout 600 bash tmp/l.sh",
   "cat > tmp/l.sh <<EOF\nnode -e 1\nEOF\nchmod +x tmp/l.sh && tmp/l.sh",
