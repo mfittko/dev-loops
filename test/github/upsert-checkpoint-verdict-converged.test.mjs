@@ -679,13 +679,23 @@ test("body-only: a malformed context beside a readable one refuses body_read_unr
 // --findings-json finding keeps that ledger verdict and does not converge to clean.
 test("a writer-produced judged log with low act items and an unjudged --findings-json finding does not post clean", async () => {
   await withTempDir(async (tempDir) => {
-    const acts = [finding("low", 1)];
+    const judgeVerdict = path.join(tempDir, "judge-verdict.json");
+    await writeFile(judgeVerdict, JSON.stringify({
+      headSha: A,
+      scopeDrift: { verdict: "within_scope", rationale: "in scope", driftedAreas: [] },
+      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fixes AC-1", criterion: "AC-1" }],
+    }), "utf8");
+    const written = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, verdict: "clean", judgeVerdict, tmpRoot: tempDir,
+      findings: JSON.stringify({ overallVerdict: "clean", findings: [{ severity: "low", angle: "correctness", summary: "edge case" }] }),
+    });
+    const log = JSON.parse(await readFile(written.path, "utf8"));
+    assert.equal(log.overallVerdict, "findings_present");
     const unjudged = { severity: "low", angle: "scope", summary: "unjudged finding", file: "src/other.mjs", line: 3 };
     const findingsJson = path.join(tempDir, "findings.json");
     await writeFile(findingsJson, JSON.stringify([unjudged]), "utf8");
-    const out = await post(tempDir, { findings: acts, overallVerdict: "findings_present", converged: convergedInput(acts), extraArgs: ["--findings-json", findingsJson] });
-    const posted = out.body ?? "";
-    assert.doesNotMatch(posted, /\*\*Verdict:\*\* clean/);
-    assert.ok(out.error !== undefined || /\*\*Verdict:\*\* findings_present/.test(posted), `unexpected outcome: ${JSON.stringify(out).slice(0, 400)}`);
+    const out = await post(tempDir, { findings: log.findings, overallVerdict: log.overallVerdict, converged: convergedInput(log.findings), extraArgs: ["--findings-json", findingsJson] });
+    assert.match(out.error ?? "", /needs a clean composed verdict over a validated low\/nit act list \(got verdict "findings_present"\)/);
+    assert.deepEqual(out.puts, [], "nothing is posted, so no clean body exists");
   }, { prefix: "dev-loops-converged-unjudged-json-" });
 });
