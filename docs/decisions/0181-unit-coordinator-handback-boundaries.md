@@ -6,6 +6,8 @@ Accepted — 2026-10-24 ([issue 2532](https://github.com/mfittko/dev-loops/issue
 
 Superseded in part by [0220](0220-coordinator-report-points-replace-per-phase-handback.md): the forced hand-back at the unit boundary and the hard 150K cap.
 
+Amended by [issue 3069](https://github.com/mfittko/dev-loops/issues/3069): the end of a gate round and the end of a fix pass are run-ending cases (`COORDINATOR-ROUND-BOUNDARY-HANDBACK` in `skills/docs/main-agent-contract.md`). The coordinator hands back with a typed packet and a fresh coordinator re-resolves state. The 150K soft cap stays advisory.
+
 ## Context
 
 One coordinator ran a whole dev-loop cycle and its context snowballed: the real-run
