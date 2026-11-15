@@ -63,7 +63,7 @@ export function allowlistReason(text) {
  * @param {string} diffText
  * @returns {{ file: string, line: number, text: string }[]}
  */
-export function parseAddedLines(diffText) {
+function parseDiffLines(diffText) {
   const entries = [];
   let file = null;
   let newLine = 0;
@@ -92,7 +92,7 @@ export function parseAddedLines(diffText) {
       continue;
     }
     if (rawLine.startsWith("+")) {
-      entries.push({ file, line: newLine, text: rawLine.slice(1) });
+      entries.push({ file, line: newLine, text: rawLine.slice(1), added: true });
       newLine += 1;
       continue;
     }
@@ -100,20 +100,32 @@ export function parseAddedLines(diffText) {
     if (rawLine.startsWith("\\")) continue; // "\ No newline at end of file"
     // A context line (leading space) or a blank line inside a hunk both
     // still exist in the new file, so both advance the counter.
-    if (newLine > 0) newLine += 1;
+    if (newLine > 0) {
+      entries.push({ file, line: newLine, text: rawLine.slice(1), added: false });
+      newLine += 1;
+    }
   }
   return entries;
 }
 
 /**
- * Scan a full unified diff. The added lines of each file are linted as one
- * source, so a multi-line credential (a PEM block) is still seen whole.
+ * Added lines only, as `{ file, line, text }`.
+ * @param {string} diffText
+ * @returns {{ file: string, line: number, text: string }[]}
+ */
+export function parseAddedLines(diffText) {
+  return parseDiffLines(diffText).filter((e) => e.added).map(({ file, line, text }) => ({ file, line, text }));
+}
+
+/**
+ * Scan a full unified diff. The added AND context lines of each file are linted as one
+ * source, so a multi-line credential (a PEM block) is seen whole; only matches touching an added line count. Readers pass a huge `-U` so the context is the whole file.
  * Throws when the library fails; callers treat a throw as a refusal.
  * @param {string} diffText
  * @returns {Promise<{ ok: boolean, findings: { file: string|null, line: number|null, ruleId: string, reason: string }[] }>}
  */
 export async function scanDiffText(diffText) {
-  const byFile = Map.groupBy(parseAddedLines(diffText), (entry) => entry.file);
+  const byFile = Map.groupBy(parseDiffLines(diffText), (entry) => entry.file);
   const findings = [];
   for (const [file, entries] of byFile) {
     // secretlint also breaks lines on a lone CR, U+2028 (\p{Zl}) and U+2029
@@ -124,10 +136,19 @@ export async function scanDiffText(diffText) {
       options: { config: SECRETLINT_CONFIG, maskSecrets: true, noPhysicFilePath: true },
     });
     for (const message of result.messages) {
-      const entry = entries[(message.loc?.start?.line ?? 0) - 1];
-      // An unmappable location is still reported, and no allow marker applies to it.
-      if (entry && allowlistReason(entry.text) !== null) continue;
-      findings.push({ file, line: entry?.line ?? null, ruleId: message.ruleId, reason: `matches secretlint rule ${message.ruleId} (${message.messageId})` });
+      const start = message.loc?.start?.line ?? 0;
+      const end = Math.max(start, message.loc?.end?.line ?? start);
+      const first = entries[start - 1];
+      let line = null;
+      if (!first) {
+        // An unmappable location is still reported, and no allow marker applies to it.
+      } else {
+        // Keep the finding while any ADDED line in the matched range lacks a valid marker.
+        const open = entries.slice(start - 1, end).find((e) => e.added && allowlistReason(e.text) === null);
+        if (!open) continue;
+        line = open.line;
+      }
+      findings.push({ file, line, ruleId: message.ruleId, reason: `matches secretlint rule ${message.ruleId} (${message.messageId})` });
     }
   }
   return { ok: findings.length === 0, findings };

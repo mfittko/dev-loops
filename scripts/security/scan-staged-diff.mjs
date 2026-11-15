@@ -46,7 +46,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   const options = parseScanStagedDiffCliArgs(argv);
   if (options.help) { stdout.write(`${USAGE}\n`); return { ok: true, help: true }; }
 
-  const { stdout: diffText } = await runCommand(gitCommand, ["diff", "--cached", "--no-color"], { cwd, env });
+  const { stdout: diffText } = await runCommand(gitCommand, ["diff", "--cached", "--no-color", "-U1000000"], { cwd, env });
   const result = await scanDiffText(diffText);
   const payload = result.ok
     ? { ok: true, hits: [] }

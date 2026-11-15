@@ -198,3 +198,43 @@ for (const [name, separator] of [["a lone CR", "\r"], ["U+2028", String.fromChar
     assert.deepEqual(result, { ok: true, findings: [] });
   });
 }
+
+// ---------------------------------------------------------------------------
+// Multi-line (PEM) matches span context and added lines
+// ---------------------------------------------------------------------------
+
+// A diff that replaces the PEM body between unchanged BEGIN/END delimiters.
+function replacedBodyDiff(headerSuffix = "") {
+  const [begin, ...rest] = PEM_BLOCK;
+  const end = rest.pop();
+  return [
+    "diff --git a/k.pem b/k.pem",
+    "--- a/k.pem",
+    "+++ b/k.pem",
+    `@@ -1,3 +1,${rest.length + 2} @@`,
+    ` ${begin}${headerSuffix}`,
+    "-old",
+    ...rest.map((line) => `+${line}`),
+    ` ${end}`,
+  ].join("\n");
+}
+
+test("a replaced PEM body between unchanged delimiters is reported", async () => {
+  const result = await scanDiffText(replacedBodyDiff());
+  assert.equal(result.ok, false);
+  assert.equal(result.findings[0].ruleId, "@secretlint/secretlint-rule-privatekey");
+  assert.equal(result.findings[0].line, 2);
+});
+
+test("an allow marker on the PEM header alone does not suppress unmarked added payload lines", async () => {
+  const lines = [...PEM_BLOCK];
+  lines[0] = `# ${ALLOW_MARKER} header only ${lines[0]}`;
+  const result = await scanDiffText(addedDiff("k.pem", lines));
+  assert.equal(result.ok, false);
+  assert.equal(result.findings[0].line, 2);
+});
+
+test("a PEM block with a marker on every added line is exempt", async () => {
+  const lines = PEM_BLOCK.map((line) => `${line} # ${ALLOW_MARKER} public fixture`);
+  assert.equal((await scanDiffText(addedDiff("k.pem", lines))).ok, true);
+});
