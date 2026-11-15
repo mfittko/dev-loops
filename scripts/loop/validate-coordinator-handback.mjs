@@ -4,16 +4,20 @@ import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { validateCoordinatorHandback } from "./_coordinator-handback.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: validate-coordinator-handback.mjs --packet <path>
 Reads the hand-back packet JSON ({pr, head, nextAction, workerRunning}) and prints the result.
 Stdout: {ok:true} or {ok:false, refusal, message[, missing]}.
-Exit codes: 0 valid, 1 refused, unreadable packet or usage error.`;
+Exit codes: 0 valid, 1 refused, unreadable packet or usage error, 2 invalid --jq/--fields filter.
+
+${JQ_OUTPUT_USAGE}`;
 
 export async function runCli({ argv = process.argv.slice(2), stdout = process.stdout, stderr = process.stderr } = {}) {
   let result;
+  let values = {};
   try {
-    const { values } = parseArgs({ args: argv, options: { packet: { type: "string" }, help: { type: "boolean", short: "h" } } });
+    ({ values } = parseArgs({ args: argv, options: { packet: { type: "string" }, help: { type: "boolean", short: "h" }, ...JQ_OUTPUT_PARSE_OPTIONS } }));
     if (values.help) {
       stdout.write(`${USAGE}\n`);
       return 0;
@@ -27,8 +31,7 @@ export async function runCli({ argv = process.argv.slice(2), stdout = process.st
   } catch (err) {
     result = { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
-  stdout.write(`${JSON.stringify(result)}\n`);
-  return result.ok ? 0 : 1;
+  return emitResult(result, { jq: values.jq, silent: values.silent, fields: values.fields, stdout, stderr });
 }
 
 if (isDirectCliRun(import.meta.url)) process.exitCode = await runCli();

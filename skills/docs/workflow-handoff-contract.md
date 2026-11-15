@@ -133,7 +133,7 @@ restate the boundary:
   conversation** and the previous coordinator never writes or summarizes the next brief.
 - `resume` has a recorded consumer and acceptance linkage even though no code reads it. Its
   consumers are specified rather than coded: the
-  [Main Agent Contract](main-agent-contract.md#unit-coordinator-boundaries-issue-2532-amended-by-issue-2955) and
+  [Main Agent Contract](main-agent-contract.md#unit-coordinator-boundaries-issue-2532-amended-by-issues-2955-and-3069) and
   `agents/dev-loop.agent.md` both name `unitBoundaries.resume` as the identity a replacement coordinator
   re-resolves, and `docs/decisions/0181-unit-coordinator-handback-boundaries.md` records why the
   field exists. Its acceptance linkage is issue 2532's Scope row ("Startup and the existing
@@ -145,7 +145,7 @@ restate the boundary:
   names the brief's other fields; it is not an exclusive field list, so the row requires an
   emitted resume identity rather than excluding one. The report-point re-resolve rule for a
   continuing coordinator lives in the
-  [Main Agent Contract](main-agent-contract.md#unit-coordinator-boundaries-issue-2532-amended-by-issue-2955).
+  [Main Agent Contract](main-agent-contract.md#unit-coordinator-boundaries-issue-2532-amended-by-issues-2955-and-3069).
 
 The field is absent where the route has no unit to report from: a terminal reconciliation envelope
 (`stopRules` are already terminal), a read-only `review` or `ui_review` round (one round, no
