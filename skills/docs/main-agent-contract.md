@@ -195,7 +195,7 @@ of the installed binary. No watchdog, harness patch or durable-sleep experiment 
 
 ## Unit coordinator boundaries (issue 2532, amended by issues 2955 and 3069)
 
-One coordinator may run a whole cycle. The boundary list is tooling-emitted: the handoff envelope
+One coordinator runs one step: up to its first gate-round end, fix-pass end or other run-ending case. The boundary list is tooling-emitted: the handoff envelope
 carries `unitBoundaries` (`reportAfter` + `resume`, derived from the target and route; see
 [Workflow Handoff Contract](workflow-handoff-contract.md#envelope-schema)). `reportAfter` is an
 ordered list of **report points**. At the `draft_pr_opened` report point, the coordinator
@@ -251,10 +251,10 @@ The rule binds the coordinator on every harness, so it stays outside the section
 `COORDINATOR-ROUND-BOUNDARY-HANDBACK`: A unit coordinator hands back at the end of every gate round and at the end of every fix pass. It never continues into the next round. Issue 3069 amends ADR 0181 with these two run-ending cases.
 
 - A gate round ends when the coordinator records the round's verdict. A fix pass ends after a draft or pre_approval fixer pass with its delta review, its push and its CI wait.
-- The hand-back is the run's one `SubagentHandback` report under `COORDINATOR-HANDBACK-ONE-REPORT`. Its packet carries four typed fields: `pr` (the PR number), `head` (the PR head SHA), `nextAction` (the next action from `loop gate-coordination`) and `workerRunning` (true while any worker the coordinator dispatched still runs).
+- The hand-back is the run's one `SubagentHandback` report under `COORDINATOR-HANDBACK-ONE-REPORT`. Its packet adds four typed fields to the compact relay packet, which still carries `status` and the startup-output path. The `status` names the run-ending case (`gate_round_end` or `fix_pass_end`). The four typed fields are: `pr` (the PR number), `head` (the PR head SHA), `nextAction` (the next action from `loop gate-coordination`) and `workerRunning` (true while any worker the coordinator dispatched still runs).
 - A coordinator never sends a round-boundary or fix-pass hand-back while a worker it dispatched runs; the interim hand-back under `GATE-EXEC-HARNESS-JOIN` is unchanged. `validateCoordinatorHandback` in `scripts/loop/_coordinator-handback.mjs` refuses a hand-back with `workerRunning: true` (`worker_running`) and a hand-back with a missing or invalid field (`missing_fields`). Before the hand-back, the coordinator writes the packet to a file and runs `dev-loops-run scripts/loop/validate-coordinator-handback.mjs --packet <path>`. Exit 1 means a refusal or an unreadable packet. On exit 1 it fixes the cause and runs the check again; it never hands back a refused packet.
-- The order before a hand-back is fixed: join every dispatched worker, run `validate-coordinator-handback.mjs`, release the runner claim under `RUNNER-HANDOFF-TEARDOWN` only after exit 0, then hand back. A coordinator releases its runner claim before every hand-back.
-- The orchestrator dispatches a fresh coordinator for the next step with `scripts/loop/emit-coordinator-work-order.mjs`. The fresh coordinator re-resolves state with `loop startup --pr <n>` and `loop gate-coordination`. Its brief names the PR and the bounds and carries no head SHA, ledger path or other state copy. The brief text is unchanged: the work order cites this rule under `ruleReferences.stateDerivation`, and the coordinator follows that reference to derive state.
+- The order before a hand-back is fixed: join every dispatched worker, run `validate-coordinator-handback.mjs`, release the runner claim under `RUNNER-HANDOFF-TEARDOWN` only after exit 0, then hand back. A coordinator releases its runner claim before every run-ending hand-back.
+- The orchestrator dispatches a fresh coordinator for the next step with `scripts/loop/emit-coordinator-work-order.mjs`. The fresh coordinator re-resolves state with `loop startup --pr <n>` and `loop gate-coordination`. The hand-back names the startup-output path under the compact relay packet rule. A coordinator that started from an issue target runs `loop startup --pr <n>` before the hand-back and names that output. Its brief names the PR and the bounds and carries no head SHA, ledger path or other state copy. The brief text is unchanged: the work order cites this rule under `ruleReferences.stateDerivation`, and the coordinator follows that reference to derive state.
 - `COORDINATOR-CONTINUITY-SOFT-CAP` stays advisory.
 
 <!-- rule: MAIN-AGENT-COORDINATOR-REPORT-READ -->

@@ -32,6 +32,8 @@ test("AC1 the run-ending list names the gate-round end and the fix-pass end", as
   assert.match(text, /`COORDINATOR-HANDBACK-ONE-REPORT`/);
   assert.match(text, /`RUNNER-HANDOFF-TEARDOWN`/);
   assert.match(text, /`COORDINATOR-CONTINUITY-SOFT-CAP` stays advisory/);
+  assert.match(text, /compact relay packet, which still carries `status` and the startup-output path/);
+  assert.match(text, /runs `loop startup --pr <n>` before the hand-back and names that output/);
 });
 
 test("AC1 the rule is registered and ADR 0181 carries the amendment note", async () => {

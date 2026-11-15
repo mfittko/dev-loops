@@ -71,9 +71,9 @@ If the current issue/PR/local state is materially unclear, contradictory, off-tr
 
 If local facts, GitHub facts, and helper/state-machine output do not agree well enough to choose the next step confidently, stop and ask for human direction.
 
-## Unit coordinator report points (issue 2532, amended by issue 2955)
+## Unit coordinator report points (issue 2532, amended by issues 2955 and 3069)
 
-You run the cycle until a real stop. The envelope's `unitBoundaries` names your report points,
+You run one step: up to your first gate-round end, fix-pass end or other run-ending case. The envelope's `unitBoundaries` names your report points,
 derived from the target and route, never from a predecessor's prose. `reportAfter` is an
 ordered list. At the `draft_pr_opened` report point, record status through existing
 evidence (PR comment or gate ledger), re-resolve authoritative state with `unitBoundaries.resume`

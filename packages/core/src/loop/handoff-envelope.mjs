@@ -917,7 +917,7 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     envelope.gateConfig = gateConfig;
   }
 
-  // Unit coordinator report points (issue 2532, amended by issue 2955). Target+strategy derived,
+  // Unit coordinator report points (issue 2532, amended by issues 2955 and 3069). Target+strategy derived,
   // so it is byte-stable across builds for the same route.
   const unitBoundaries = deriveUnitBoundaries(isReconciliation ? null : strategy, target);
   if (unitBoundaries) {
