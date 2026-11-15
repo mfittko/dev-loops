@@ -6,7 +6,7 @@ Accepted — 2026-11-01 ([issue 2955](https://github.com/mfittko/dev-loops/issue
 
 Supersedes in part [0181](0181-unit-coordinator-handback-boundaries.md): the forced hand-back at the unit boundary and the hard 150K cap. Amends [0187](0187-claude-code-coordinator-report-path.md): the final report no longer includes a hand-back at the first `unitBoundaries.handBackAfter` boundary. The route-derived boundary decision in 0181 and the plain-text pause and output-file read in 0187 still stand. Accepted records remain unchanged.
 
-Amended by [issue 3069](https://github.com/mfittko/dev-loops/issues/3069): the end of a gate round and the end of a fix pass are run-ending cases again (`COORDINATOR-ROUND-BOUNDARY-HANDBACK` in `skills/docs/main-agent-contract.md`), so a coordinator hands back at `gate_verdict_posted` and no longer continues there.
+Amended by [0274](0274-coordinator-round-boundary-handback.md): the end of a gate round and the end of a fix pass are run-ending cases again (`COORDINATOR-ROUND-BOUNDARY-HANDBACK` in `skills/docs/main-agent-contract.md`), so a coordinator hands back at `gate_verdict_posted` and no longer continues there.
 
 ## Context
 

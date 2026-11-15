@@ -41,7 +41,7 @@ test("AC1 the rule is registered and ADR 0181 carries the amendment note", async
   const registry = JSON.parse(await readRepo("skills/docs/required-rules.json"));
   const ids = JSON.stringify(registry);
   assert.ok(ids.includes(`"${ID}"`), `${ID} registered`);
-  assert.match(await readRepo("docs/decisions/0181-unit-coordinator-handback-boundaries.md"), /Amended by \[issue 3069\][^\n]*gate round[^\n]*fix pass/);
+  assert.match(await readRepo("docs/decisions/0181-unit-coordinator-handback-boundaries.md"), /Amended by \[0274\][^\n]*gate round[^\n]*fix pass/);
 });
 
 test("AC3 the validator refuses a hand-back with a running worker or a missing field", () => {

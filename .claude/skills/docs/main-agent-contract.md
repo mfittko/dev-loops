@@ -248,7 +248,7 @@ The rule binds the coordinator on every harness, so it stays outside the section
 - Every hand-back names the last relayed message it consumed, by first line and arrival time, or states that it consumed none.
 
 <!-- rule: COORDINATOR-ROUND-BOUNDARY-HANDBACK -->
-`COORDINATOR-ROUND-BOUNDARY-HANDBACK`: A unit coordinator hands back at the end of every gate round and at the end of every fix pass. It never continues into the next round. Issue 3069 amends ADR 0181 with these two run-ending cases.
+`COORDINATOR-ROUND-BOUNDARY-HANDBACK`: A unit coordinator hands back at the end of every gate round and at the end of every fix pass. It never continues into the next round. ADR 0274 amends ADR 0181 with these two run-ending cases.
 
 - A gate round ends when the coordinator records the round's verdict. A fix pass ends after a draft or pre_approval fixer pass with its delta review, its push and its CI wait. On a round that is eligible under `GATE-EXEC-LOW-NIT-CONVERGENCE`, the fix pass ends only after the `--converged-json` post.
 - The hand-back is the run's one `SubagentHandback` report under `COORDINATOR-HANDBACK-ONE-REPORT`. Its packet adds four typed fields to the compact relay packet, which still carries `status` and the startup-output path. The `status` names the run-ending case (`gate_round_end` or `fix_pass_end`). The four typed fields are: `pr` (the PR number), `head` (the PR head SHA), `nextAction` (the next action from `loop gate-coordination`) and `workerRunning` (true while any worker the coordinator dispatched still runs).
