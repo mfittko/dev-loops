@@ -553,14 +553,16 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
           // fresh angles/groups). gate.resolvedGroups cross-checks a claimed
           // `group` against this round's actual dispatch-group resolution
           // (mode/gate:full-aware) rather than accepting any self-attested label.
-          const pairingErr = fanoutReviewerPairingError(prov.perAngle, gate.resolvedGroups, prov.dispatchUnits, corroboratedUnitBound(prov, gate.contextUnitBound));
+          const trustedBound = corroboratedUnitBound(prov, gate.contextUnitBound);
+          const pairingErr = fanoutReviewerPairingError(prov.perAngle, gate.resolvedGroups, prov.dispatchUnits, trustedBound);
           if (reviewers === null || reviewers < requiredReviewers) {
             failures.push(
               `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (need provenance.distinctReviewers >= ${requiredReviewers}${requiredReviewers > FANOUT_PROVENANCE_MIN_REVIEWERS ? ` [max(${FANOUT_PROVENANCE_MIN_REVIEWERS}, ${freshUnitCount} fresh dispatch unit(s))]` : ""}, got ${reviewers === null ? "none" : reviewers}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
             );
           } else if (pairingErr !== null) {
             const ledgerBound = resolveReviewerUnitBound(prov.unitBound);
-            const uncorroborated = prov.dispatchUnits != null && ledgerBound > REVIEWER_UNIT_MAX_ANGLES && ![gate.contextUnitBound].flat().includes(ledgerBound)
+            // The message derives from the same corroboration decision the gate used.
+            const uncorroborated = trustedBound !== undefined && trustedBound !== ledgerBound
               ? `; the ledger's unit bound ${ledgerBound} is not corroborated by the gate-context artifact, so re-run the gate-context build and emit-fanout-dispatch for this head so the ledger and artifact agree (a pruned worktree also loses the artifact, and the read path reads only the default tmp root, so for a bundle relocated with --tmp-root rebuild the gate-context artifact and re-emit at the default root)`
               : "";
             failures.push(

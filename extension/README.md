@@ -295,7 +295,7 @@ workflow:
 1. Add the angle name to `gates.draft.angles` or `gates.preApproval.angles`
 2. Add a `personas.<angle>` entry with a `persona` agent name and a `prompt` instruction
 3. Create the corresponding `Agent file` (`agents/<persona>.agent.md`) if using a new persona
-4. On Pi and Codex, optionally set a per-angle model override via `models.roles.<angle>` (Claude ignores it and uses the `review` role model for every angle, per MAIN-CLAUDE-DISPATCH-MODEL)
+4. On Pi and Codex, optionally set a per-angle model override via `models.roles.<angle>` (Claude resolves the same per-angle model, per MAIN-CLAUDE-DISPATCH-MODEL and ADR 0278)
 
 ### Config format
 

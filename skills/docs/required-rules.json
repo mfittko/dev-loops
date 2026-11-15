@@ -408,7 +408,7 @@
     {
       "id": "GATE-EXEC-FANOUT-CAPACITY",
       "enforcement": "runtime",
-      "enforcementNote": "resolveFanoutDispatch in scripts/github/write-gate-context.mjs packs whole base units first-fit decreasing into at most the effective maxConcurrent units of at most 5 angles and throws before any artifact write when no packing fits; test/github/fanout-single-wave.test.mjs pins the single-wave round shapes and the refusal"
+      "enforcementNote": "resolveFanoutDispatch in scripts/github/write-gate-context.mjs packs whole base units first-fit decreasing into at most the effective maxConcurrent units of at most the round's recorded unit bound (fanout.unitBound, 5 when absent) and throws before any artifact write when no packing fits; an eligible gates.fanout.sizeTiers round instead packs per resolved model into units of at most the tier's bound; test/github/fanout-single-wave.test.mjs pins the single-wave round shapes and the refusal"
     },
     {
       "id": "GATE-EXEC-FANOUT-DISPATCH-EMIT",

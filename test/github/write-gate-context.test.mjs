@@ -7070,10 +7070,10 @@ test("writeGateContext request-plan resolves a bare no-override angle to its dis
   }
 });
 
-test("Claude plan records the review role model despite an angle roleTiers override; Pi keeps the per-angle model", async () => {
+test("Claude and Pi plans record the per-angle tier model (ADR 0278 amends ADR 0266)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-claude-review-"));
   try {
-    for (const [harness, expectedModel] of [["claude", "opus"], ["pi", "pi-low"]]) {
+    for (const [harness, expectedModel] of [["claude", "sonnet"], ["pi", "pi-low"]]) {
       const options = parseWriteGateContextCliArgs([
         "--repo", "owner/repo", "--pr", "87", "--gate", "draft_gate",
         "--head-sha", "abc1234567891", "--angles", '["correctness"]',

@@ -185,6 +185,21 @@ test("a .devloops riskPaths addition without ADR or waiver blocks", () => {
   assert.deepEqual(trigger.fields, ["localImplementation.lightMode.riskPaths"]);
 });
 
+test("a .devloops gates.fanout.sizeTiers add, change and removal each trip the proportionality tripwire (issue 3166)", () => {
+  const tiers = (loc) => `version: 1\ngates:\n  fanout:\n    sizeTiers:\n      - maxWholeLogicLoc: ${loc}\n        maxAnglesPerUnit: 10\n`;
+  const trip = (base, head) => computeAdrTripwire({
+    nameStatusOutput: ns(["M\t" + DEVLOOPS_CONFIG_PATH]),
+    baseContents: { [DEVLOOPS_CONFIG_PATH]: base },
+    headContents: { [DEVLOOPS_CONFIG_PATH]: head },
+    prBody: "",
+  });
+  for (const [label, base, head] of [["add", "version: 1\n", tiers(40)], ["change", tiers(40), tiers(80)], ["remove", tiers(40), "version: 1\n"]]) {
+    const r = trip(base, head);
+    assert.equal(r.outcome, "block", label);
+    assert.deepEqual(r.triggers.find((t) => t.type === "devloops-proportionality").fields, ["gates.fanout.sizeTiers"], label);
+  }
+});
+
 test("an ADR record satisfies a .devloops proportionality-field change", () => {
   const r = computeAdrTripwire({
     nameStatusOutput: ns(["M\t" + DEVLOOPS_CONFIG_PATH, "A\t" + ADR_FILE]),

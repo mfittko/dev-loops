@@ -1176,6 +1176,36 @@
         "fanout": {
           "type": "object",
           "properties": {
+            "sizeTiers": {
+              "description": "Opt-in ordered size tiers (strictly ascending maxWholeLogicLoc) that pack more angles per review unit for small changes on draft_gate and pre_approval_gate. Absent keeps existing grouping. Rejected together with mode: per-angle.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "maxWholeLogicLoc": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Weighted whole logic LOC ceiling of this tier: the round uses the first tier whose ceiling is at or above its wholeLogicLoc."
+                  },
+                  "maxAnglesPerUnit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10,
+                    "description": "Max angles per packed dispatch unit for a round in this tier (1 to 10)."
+                  },
+                  "maxFiles": {
+                    "description": "Optional non-doc file-count ceiling (countLightModeFiles); a round above it keeps existing grouping. Absent means no file-count limit; localImplementation.lightMode.maxFiles is never reused.",
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "maxWholeLogicLoc",
+                  "maxAnglesPerUnit"
+                ],
+                "additionalProperties": false
+              }
+            },
             "mode": {
               "default": "grouped",
               "description": "Angle dispatch mode: grouped batches related angles onto one reviewer each (default); per-angle bypasses the configured-groups table and emits one singleton unit per angle (the original full-scrutiny shape). per-angle is equivalent to maxAnglesPerGroup: 1 in dispatch unit size ONLY when no configured multi-angle group matches a resolved angle; otherwise per-angle bypasses configured groups while maxAnglesPerGroup: 1 honors them (matched first, never split).",
