@@ -176,7 +176,7 @@ async function readReviewedBodySha256(options, headSha, repoRoot) {
 
 const roundCapReachedError =(round, cap) => new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs and no fixer follows. After the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`; pre_approval_gate judges what remains. When every open act item is a PR-body item, edit the PR body and run \`--converged-json\` with \`{ fixerCommit, actList, bodyOnly: true }\` instead (ADR 0271).`);
 
-const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>; a draft_gate post requires --findings-ledger carrying overallVerdict while gates.draft.maxReviewRounds > 0) [--next-action <text> (required except on --gate review)] [--gate <draft_gate|pre_approval_gate|review>] [--findings-ledger <path>]
+const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>; on --gate review, --findings-ledger alone suffices; a draft_gate post requires --findings-ledger carrying overallVerdict while gates.draft.maxReviewRounds > 0) [--next-action <text> (required except on --gate review)] [--gate <draft_gate|pre_approval_gate|review>] [--findings-ledger <path>]
 The --findings-json structured per-angle path is preferred for --execution-mode fanout_fanin, except on --gate draft_gate while gates.draft.maxReviewRounds > 0 (GATE-EXEC-ROUND-CAP): there --findings-ledger carrying overallVerdict is the only accepted input, and --findings-json and --findings-file posts are refused (an inline clean with only --findings-summary stays accepted, as reconcile-draft-gate posts it, except at round N+1, where every post but --converged-json is refused with round_cap_reached, ADR 0208).
 Post the gate round's SINGLE visible surface: one PR review of type COMMENT whose
 body carries the checkpoint verdict fields and, with --findings-ledger, the
@@ -983,9 +983,9 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   }
   const missing = ["repo", "pr", "headSha", "verdict", "findingsSummary", ...(options.gate === "review" ? [] : ["nextAction"])]
     .filter((key) => options[key] === undefined);
-  // --findings-file and --findings-json each provide the findings body, so either
-  // satisfies the findingsSummary requirement.
-  if (options.findingsFile || options.findingsJson) {
+  // --findings-file and --findings-json (and --findings-ledger on --gate review)
+  // each provide the findings body, so any of them satisfies the findingsSummary requirement.
+  if (options.findingsFile || options.findingsJson || (options.gate === "review" && options.findingsLedger)) {
     const fsIdx = missing.indexOf("findingsSummary");
     if (fsIdx !== -1) missing.splice(fsIdx, 1);
   }
@@ -1002,7 +1002,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     if (vIdx !== -1) missing.splice(vIdx, 1);
   }
   if (missing.length > 0) {
-    throw parseError("upsert-checkpoint-verdict requires --repo, --pr, --head-sha, --verdict (or --findings-ledger carrying the consolidator's overallVerdict), --findings-summary (or --findings-file or --findings-json), and --next-action (except on --gate review)");
+    throw parseError("upsert-checkpoint-verdict requires --repo, --pr, --head-sha, --verdict (or --findings-ledger carrying the consolidator's overallVerdict), --findings-summary (or --findings-file or --findings-json, or --findings-ledger on --gate review), and --next-action (except on --gate review)");
   }
   if (options.convergedJson && (options.gate !== "draft_gate" || !["clean", undefined].includes(options.verdict))) {
     throw parseError("--converged-json requires --gate draft_gate and --verdict clean (or omitted)");
@@ -3066,6 +3066,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // The angle checks, tick and recorded marker all key on options.executionMode, so a ledger-declared
     // fan-out is promoted onto it rather than enforced only for this local check.
     promoteLedgerFanout(options, preloadedFindingsLedger);
+    // A ledger-only review post has no --findings-summary: derive a counts digest from the ledger.
+    if (options.gate === "review" && !options.findingsSummary) {
+      const n = (preloadedFindingsLedger.findings ?? []).length;
+      options.findingsSummary = `${n} ${n === 1 ? "finding" : "findings"} from the findings ledger.`;
+    }
     const fanout = (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin";
     if (options.gate !== "review" && fanout) {
       unjudgedLedgerFindings = (preloadedFindingsLedger.findings ?? []).filter((f) => !f?.judgeDisposition);

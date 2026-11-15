@@ -630,8 +630,9 @@ const GATE_UNIT_TOKEN_RE = new RegExp(`\\b(?:review|judge|fixer):[\\w.-]+\\/[\\w
 // the identity prefix names the role.
 const DISPATCH_POINTER_RE = new RegExp(`^Run \`${PULL_LINE}\`; follow its printed work order exactly\\. Exit 1: report its JSON verbatim, stop\\.$`);
 const IDENTITY_PREFIX = { review: "r", judge: "j" };
+// Surrounding whitespace is ignored (a relayed prompt often gains a trailing newline); any other difference stays denied.
 const isDispatchPointer = (prompt, role) => {
-  const match = typeof prompt === "string" && Buffer.byteLength(prompt) <= DISPATCH_POINTER_MAX_BYTES ? DISPATCH_POINTER_RE.exec(prompt) : null;
+  const match = typeof prompt === "string" && Buffer.byteLength(prompt) <= DISPATCH_POINTER_MAX_BYTES ? DISPATCH_POINTER_RE.exec(prompt.trim()) : null;
   return Boolean(match) && match[1][0] === IDENTITY_PREFIX[role];
 };
 
@@ -641,6 +642,19 @@ const isDispatchPointer = (prompt, role) => {
 // amends ADR 0179) and passes it as `judgeWorkOrderRef`. Lifecycle-gate and unresolved judge dispatches stay denied.
 const isStandaloneReviewJudgePointer = (prompt, judgeWorkOrderRef) =>
   isDispatchPointer(prompt, "judge") && typeof judgeWorkOrderRef === "string" && /^judge:[^ ]+#\d+:review:/.test(judgeWorkOrderRef);
+
+// Deny-reason diagnostic: which check failed, never more than 120 prompt characters (JSON-escaped).
+const dispatchDiagnostic = (prompt, role, judgeWorkOrderRef) => {
+  const text = typeof prompt === "string" ? prompt : "";
+  const bytes = Buffer.byteLength(text);
+  const shape = DISPATCH_POINTER_RE.exec(text.trim());
+  const parts = [`received ${bytes} bytes (cap ${DISPATCH_POINTER_MAX_BYTES})`, `pointer shape after trim: ${shape && shape[1][0] === IDENTITY_PREFIX[role] ? "match" : "no match"}`];
+  if (role === "judge") {
+    const gate = typeof judgeWorkOrderRef === "string" ? /^judge:[^ ]+#\d+:([a-z_]+):/.exec(judgeWorkOrderRef)?.[1] : null;
+    parts.push(gate ? `execution index resolved to gate ${gate}` : "execution identity not resolved through the execution index");
+  }
+  return ` Diagnostic: ${parts.join("; ")}; prompt starts ${JSON.stringify(text.slice(0, 120))}.`;
+};
 
 /**
  * Decide whether a PreToolUse Agent/Task dispatch must be denied (GATE-EXEC-GATE-COORDINATOR,
@@ -680,7 +694,8 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
       decision: "deny",
       reason:
         `GATE_COORDINATOR_REQUIRED: GATE-EXEC-GATE-COORDINATOR denied this \`${target}\` dispatch from the dev-loop coordinator. ` +
-        "Dispatch one `gate-coordinator` agent for the gate round; it dispatches the round's review and judge agents and returns the typed round result.",
+        "Dispatch one `gate-coordinator` agent for the gate round; it dispatches the round's review and judge agents and returns the typed round result." +
+        dispatchDiagnostic(prompt, target, judgeWorkOrderRef),
     };
   }
   if (caller !== GATE_COORDINATOR_AGENT_TYPE) return ALLOW;
@@ -697,6 +712,6 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
     decision: "deny",
     reason:
       `GATE_DISPATCH_NOT_VERBATIM: GATE-EXEC-GATE-COORDINATOR denied this \`${target}\` dispatch: the prompt is not an emitted \`${target}:\` dispatchPrompt. ` +
-      "Relay the emitter's dispatchPrompt byte for byte, with no added prose, no `cd` wrapper and no extra flags. A same-head retry recovers through GATE-EXEC-ROUND-RETIREMENT and a fresh round.",
+      "Relay the emitter's dispatchPrompt byte for byte (surrounding whitespace is ignored), with no added prose, no `cd` wrapper and no extra flags. A same-head retry recovers through GATE-EXEC-ROUND-RETIREMENT and a fresh round." + dispatchDiagnostic(prompt, target, judgeWorkOrderRef),
   };
 }

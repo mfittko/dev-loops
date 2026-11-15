@@ -152,7 +152,7 @@ this skill dispatches the `review` agents directly.
    [...]` posts the SINGLE visible PR review surface
    (`GATE-COMMENT-SINGLE-SURFACE`) straight from that ledger — no CI wait, no
    coordination-context read, no auto-resolve, no forbidden-action check
-   (those are draft/pre-approval-only machinery `review` never touches). `--next-action` is optional on the `review` gate; any value passed is ignored, and the gate derives the next action from the judge act list (`GATE-COMMENT-REQUIRED-FIELDS`). See
+   (those are draft/pre-approval-only machinery `review` never touches). On `--gate review`, `--findings-ledger` alone suffices; `--findings-summary`, `--findings-file` and `--findings-json` are not required. `--next-action` is optional on the `review` gate; any value passed is ignored, and the gate derives the next action from the judge act list (`GATE-COMMENT-REQUIRED-FIELDS`). See
    [Checkpoint Verdict Comment Contract](../docs/gate-review-comment-contract.md#review-gate-submit-modes-1840)
    for the `--submit` vocabulary. `approve`/`request-changes`/`discard`
    additionally REQUIRE `--interactive-confirm` (#1888/#1912) — fail closed
