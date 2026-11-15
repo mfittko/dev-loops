@@ -641,8 +641,8 @@ export const STATELESS_UNIT_STRATEGIES = Object.freeze([
 /**
  * Derive the unit coordinator's report points from the route the envelope
  * already carries. Nothing here comes from a predecessor: `resume` names the
- * sanctioned re-resolution the unit runs at a report point, or a replacement runs
- * after a real stop, against authoritative state.
+ * sanctioned re-resolution the unit runs at a report point, and a replacement
+ * runs at every run-ending case, against authoritative state.
  * Returns undefined for a route that has no unit to report from (terminal
  * reconciliation, read-only review or ui-review, wait) so the field never
  * contradicts the route's own stop rules.
