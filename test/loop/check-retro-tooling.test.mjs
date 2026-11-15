@@ -312,7 +312,9 @@ test("retro splitter traverses command substitution (#2442)", () => {
 });
 
 test("an unclosed line joins at most 200 lines and is reported (join cap)", () => {
-  const { violations } = analyzeTranscript(['echo "$(gh pr view 1', ...Array.from({ length: 400 }, () => "ls")].join("\n"));
-  assert.ok(violations.some((v) => v.startsWith("inline-interpreter: echo")));
+  // the closing quote sits beyond the cap: inside the cap the three parts would join into one entry
+  const { violations } = analyzeTranscript(['echo "a', ...Array.from({ length: 248 }, () => "ls"), '"'].join("\n"));
+  assert.equal(violations[0], 'inline-interpreter: echo "a');
+  assert.ok(violations.includes('inline-interpreter: "'));
   assert.ok(violations.every((v) => v.split("\n").length <= 200));
 });
