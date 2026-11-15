@@ -379,18 +379,19 @@ Enforcement at write time and post time:
   resolves before any ledger is written. With the keyed fan-in ledger present, that is the ledger's
   `overallVerdict` (the wrapper's value is ignored and `--verdict` is optional); otherwise it is the
   `--findings`/`--findings-file` wrapper's `overallVerdict`. The
-  check is the same whether or not `--judge-verdict` was supplied: the judge only adds
+  check accepts the `overallVerdict` and, on a `--judge-verdict` run with a non-empty judge act
+  list, the composed `findings_present` the log persists: the judge only adds
   `act`/`defer`/`reject` dispositions
   ([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525)).
   After a judge pass the log's `overallVerdict` and `verdict` are `findings_present` whenever the
   judge act list is non-empty (`blocked` stays `blocked`), so a verdict derived from the log is
-  `findings_present` (except `GATE-EXEC-LOW-NIT-CONVERGENCE`, where the poster still posts `clean`). A non-review write without `--judge-verdict` refuses `judge_verdict_required`
+  `findings_present`. `GATE-EXEC-LOW-NIT-CONVERGENCE` still posts `clean` for a fully judged round; a round with an unjudged finding keeps the ledger `overallVerdict`, which is `findings_present` after a judge pass with open act items. A non-review write without `--judge-verdict` refuses `judge_verdict_required`
   while a `j<id>/judge-verdict.json` exists for the round (a judge emitted before the round's
-  fan-out emit plan, or one a live or retained same-head ledger already stamps as a completed
-  `roundIdentity.judgeExecution`, belongs to an earlier same-head round and is ignored, ADR 0275).
+  fan-out emit plan, or one emitted at or before a judge execution that a live or retained same-head ledger
+  already stamps as a completed `roundIdentity.judgeExecution`, belongs to an earlier same-head round and is ignored, ADR 0275).
 - `upsert-checkpoint-verdict.mjs` composes the ledger's `overallVerdict` with its open judge act
   items (ADR 0089) for the same head and gate (#1616), so a non-empty act list yields
-  `findings_present` (except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168), for both ledger cases). A fully judged round takes its verdict from the act list alone, and a round with an unjudged finding keeps the ledger `overallVerdict`. It derives the verdict by default (passing no `--verdict` is valid),
+  `findings_present` (except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168), for a fully judged round only). A fully judged round takes its verdict from the act list alone, and a round with an unjudged finding keeps the ledger `overallVerdict`. It derives the verdict by default (passing no `--verdict` is valid),
   accepts a matching explicit value, and refuses a contradiction citing this rule. A ledger
   without `overallVerdict` still refuses an explicit `clean` while its act list is not empty, except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168).
 - The act list for a verdict post comes from judge-enriched data: the ledger written with

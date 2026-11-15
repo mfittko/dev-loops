@@ -674,3 +674,18 @@ test("body-only: a malformed context beside a readable one refuses body_read_unr
     assert.equal(out.puts.length, 0);
   }, { prefix: "dev-loops-converged-bodyonly-malformed-" });
 });
+
+// 3105 / ADR 0275: a judged log with low act items persists findings_present, so a round that also holds an unjudged
+// --findings-json finding keeps that ledger verdict and does not converge to clean.
+test("a writer-produced judged log with low act items and an unjudged --findings-json finding does not post clean", async () => {
+  await withTempDir(async (tempDir) => {
+    const acts = [finding("low", 1)];
+    const unjudged = { severity: "low", angle: "scope", summary: "unjudged finding", file: "src/other.mjs", line: 3 };
+    const findingsJson = path.join(tempDir, "findings.json");
+    await writeFile(findingsJson, JSON.stringify([unjudged]), "utf8");
+    const out = await post(tempDir, { findings: acts, overallVerdict: "findings_present", converged: convergedInput(acts), extraArgs: ["--findings-json", findingsJson] });
+    const posted = out.body ?? "";
+    assert.doesNotMatch(posted, /\*\*Verdict:\*\* clean/);
+    assert.ok(out.error !== undefined || /\*\*Verdict:\*\* findings_present/.test(posted), `unexpected outcome: ${JSON.stringify(out).slice(0, 400)}`);
+  }, { prefix: "dev-loops-converged-unjudged-json-" });
+});

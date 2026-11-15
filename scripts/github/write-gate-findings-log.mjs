@@ -88,7 +88,8 @@ Optional:
                                  FAILS CLOSED; an absent one changes nothing.
                                  After a judge pass the log's verdict is findings_present whenever an act item is open (blocked
                                  stays blocked). A non-review write without this flag refuses judge_verdict_required when a
-                                 j<id>/judge-verdict.json exists for the round.
+                                 j<id>/judge-verdict.json exists for the round. An explicit --verdict
+                                 may equal the wrapper's overallVerdict or that composed findings_present.
   --tmp-root <path>              Root tmp directory. Default: the MAIN worktree's tmp/
                                  — the ledger is anchored at the primary git
                                  worktree so the merge (running from the main checkout)
@@ -925,6 +926,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
         if (identity?.completed === true && typeof identity.judgeExecution === "string") consumedJudges.add(identity.judgeExecution);
       } catch { /* an unreadable ledger binds no judge; retention refuses a tampered live ledger later */ }
     }
+    // A judge execution emitted at or before the newest consumed one is superseded by it (each run supersedes the previous), so its late verdict is skipped too.
+    const consumedWatermarkMs = Math.max(0, ...[...consumedJudges].map((id) => Number(/^j(\d+)-/.exec(id)?.[1]) || 0));
     // Both ids embed their emission time: order the candidates by it, then id, so the refusal names the latest judge verdict (never a superseded one in readdir order).
     const candidates = [];
     for (const root of judgeRoots) {
@@ -935,7 +938,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       } catch (error) {
         if (error?.code !== "ENOENT") throw error;
       }
-      for (const entry of entries.filter((name) => Number(/^j(\d+)-[0-9a-f]+$/.exec(name)?.[1]) > roundEmittedMs && !consumedJudges.has(name))) {
+      for (const entry of entries.filter((name) => Number(/^j(\d+)-[0-9a-f]+$/.exec(name)?.[1]) > Math.max(roundEmittedMs, consumedWatermarkMs))) {
         const found = path.join(judgeDir, entry, "judge-verdict.json");
         if (await exists(found)) candidates.push({ ms: Number(/^j(\d+)-/.exec(entry)[1]), entry, found });
       }
@@ -1065,14 +1068,14 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     normalizedOverallVerdict = verdict;
     // Fail closed on a caller-passed --verdict that contradicts the
     // consolidator's computed verdict (GATE-COMMENT-VERDICT-VALUES).
-    // The comparison is against the consolidator's severity verdict and runs the same
-    // with or without --judge-verdict; a judged round then persists findings_present
-    // whenever the act list is non-empty (below). A --judge-verdict run can still fail
+    // The comparison accepts the consolidator's severity verdict and, on a judged round with an open
+    // act item, the composed findings_present the log persists (below). A --judge-verdict run can still fail
     // earlier: an unreadable, malformed, or incomplete-coverage judge
     // artifact throws its own error before this contradiction check runs.
-    if (callerVerdict !== null && callerVerdict !== normalizedOverallVerdict) {
+    const composedVerdict = options.judgeVerdict && normalizedOverallVerdict !== "blocked" && listOpenActItems(findings).length > 0 ? "findings_present" : normalizedOverallVerdict;
+    if (callerVerdict !== null && callerVerdict !== normalizedOverallVerdict && callerVerdict !== composedVerdict) {
       throw parseError(
-        `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict (the severity verdict); a --judge-verdict run with open act items persists findings_present (ADR 0275)`,
+        `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict (the severity verdict), or on a --judge-verdict run with an open act item the composed ${JSON.stringify(composedVerdict)} the log persists (ADR 0275)`,
       );
     }
   }
