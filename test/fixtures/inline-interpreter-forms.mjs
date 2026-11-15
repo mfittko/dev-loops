@@ -31,6 +31,22 @@ export const INLINE_INTERPRETER_FORMS = [
   deny("perl -I lib -ne 'print' f"),
   deny("ruby -e 'puts 1'"),
   deny("ruby -C /tmp -e x"),
+  // a listed or unlisted value flag before the form (origin/main value-flag lists; an unlisted --flag takes a value)
+  deny("node --disable-warning ExperimentalWarning -e x"),
+  deny("node --watch-path src -e x"),
+  deny("node --test-reporter spec -e x"),
+  deny("node --report-dir d -e x"),
+  deny("node --redirect-warnings f -e x"),
+  deny("node --openssl-config f -e x"),
+  deny("node --disable-warning X - <<EOF\nx\nEOF"),
+  deny("bun --port 3000 -e x"),
+  deny("bun -d k=v -e x"),
+  deny("bun -l x -e y"),
+  deny("python3 --check-hash-based-pycs always -c x"),
+  ...["node", "bun"].flatMap((h) => [`${h} --in-place lib -c <<EOF`, `${h} --in-place lib -c <<'EOF'`, `${h} --in-place lib -c - <<EOF`]).map(deny),
+  deny("bun -c lib -c <<EOF"),
+  deny("bun -c lib -c <<'EOF'"),
+  deny("bun -c lib -c - <<EOF"),
   // a stdin heredoc to an interpreter head after any flags
   deny("python3 -I - <<'E'\nprint(1)\nE"),
   deny("node - <<EOF\nx\nEOF"),
@@ -63,6 +79,10 @@ export const INLINE_INTERPRETER_FORMS = [
   deny("cat > tmp/r.mjs <<'EOF'\nx\nEOF\nnode tmp/r.mjs"),
   deny("cat > tmp/r.sh <<'EOF'\nx\nEOF\nbash ./tmp/r.sh"),
   deny("tee /tmp/r.py <<'EOF' >/dev/null\nx\nEOF\npython3 /tmp/r.py"),
+  deny("cat > tmp/r.sh <<'EOF'\nnode -e x\nEOF\n. tmp/r.sh"),
+  deny("cat > tmp/r.sh <<'EOF'\nnode -e x\nEOF\nsource tmp/r.sh"),
+  deny("cat > tmp/r.sh <<'EOF'\nnode -e x\nEOF\n./tmp/r.sh"),
+  deny("cat > tmp/l.sh <<EOF\nnode -e 1\nEOF\nchmod +x tmp/l.sh && tmp/l.sh"),
   // after wrappers and reserved words
   deny("for p in a b; do node -e \"x\"; done"),
   deny("if true; then python3 -c x; fi"),
@@ -93,6 +113,8 @@ export const INLINE_INTERPRETER_FORMS = [
   allow("perl script.pl -i"),
   allow("deno eval x"),
   allow("echo x | node scripts/x.mjs"),
+  allow("git commit -m 'sed -i is denied'"),
+  allow("node --stack-size 100 scripts/x.mjs -e x"),
 
   // ceiling: allowed by the gate and reported by check-retro-tooling
   ceiling("bash -c 'node -e y'"),
@@ -136,11 +158,6 @@ export const INLINE_INTERPRETER_FORMS = [
     "git bisect run 'true; node -e y'",
     "xargs git rebase --exec 'true; node -e y'",
     "GIT_EDITOR='true; node -e y' git commit",
-    "bun -c lib -c <<EOF",
-    "bun -c lib -c <<'EOF'",
-    "bun -c lib -c - <<EOF",
-    // an unlisted flag is read as boolean, so its value reads as the script
-    ...["node", "bun"].flatMap((h) => [`${h} --in-place lib -c <<EOF`, `${h} --in-place lib -c <<'EOF'`, `${h} --in-place lib -c - <<EOF`]),
   ].map(ceiling),
   // quoted text in a segment whose quoted words are not inert (a rebound name, a later runner, a pipe)
   ...[
@@ -184,7 +201,6 @@ export const INLINE_INTERPRETER_FORMS = [
   ].map(ceiling),
   // a heredoc body that runs, is piped on, or is written by a substitution or a non-cat/tee host
   ...[
-    "cat > tmp/l.sh <<EOF\nnode -e 1\nEOF\nchmod +x tmp/l.sh && tmp/l.sh",
     "x=$(cat <<EOF\nnode -e 1\nEOF\n); eval \"$x\"",
     "cat > tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash -c 'bash tmp/l.sh'",
     "cat > tmp/l.sh <<'EOF'\nnode -e 1\nEOF\neval \"sh tmp/l.sh\"",
