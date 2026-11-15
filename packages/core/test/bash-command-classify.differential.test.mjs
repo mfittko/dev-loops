@@ -124,6 +124,46 @@ const RESIDUE_SHAPES = [
   `bash <<< x\\ y'; node -e y'`,
   `bash -c -e 'x; node -e y'`,
 ];
+/** Rows of the unit-test tables this PR deleted that origin/main denies (the true rows): each must stay denied or be a listed ceiling row. */
+const DELETED_TABLE_ROWS = [
+  "echo `echo \\`node -e 1\\``", "X=`echo \\`python3 -c x\\``", "X=`node -e 1`", "X=`echo \\$(node -e 1)`",
+  "node -e \"console.log(1)\"", "node --eval \"console.log(1)\"", "node -p \"1+1\"", "python3 -c \"print(1)\"", "python3 -c\"print(1)\"", "node -e\"console.log(1)\"", "node -p\"1+1\"",
+  "node <<EOF\nconsole.log(1)\nEOF", "python -c \"print(1)\"", "python3 - <<'EOF'\n...\nEOF", "node - <<'EOF'\n...\nEOF",
+  "python3 -I - <<EOF", "python3 -u - <<'EOF'", "node --input-type=module - <<EOF", "node - <<EOF", "node --input-type=module <<EOF", "python3 -I -<<EOF", "python3 -I<<EOF", "node --input-type=module<<EOF",
+  "node --env-file-if-exists .env - <<EOF", "python3 -W ignore - <<EOF", "python3 -X dev - <<EOF", "node --input-type module - <<EOF", "node --require x.js - <<EOF", "cat s.py | python3 -I -", "cat x.mjs | node --input-type=module -",
+  "node --title x - <<EOF", "node --disable-warning DEP0040 - <<EOF", "node --watch-path src - <<EOF", "node --redirect-warnings w.log - <<EOF", "python3 --check-hash-based-pycs never - <<EOF", "node --unhandled-rejections strict - <<EOF",
+  "node --stack-size 2000 - <<EOF", "node --trace-event-categories v8 - <<EOF", "node --experimental-config-file node.config.json - <<EOF", "node --experimental-sea-config sea.json - <<EOF", "node --diagnostic-dir /tmp - <<EOF",
+  "node --require x.js<<EOF", "node --stack-size 2000<<EOF", "node --unhandled-rejections strict<<EOF", "python3 -W ignore<<EOF", "node --unhandled-rejections strict --stack-size 2000 - <<EOF", "node --stack-size 2000 --input-type=module - <<EOF",
+  "python3 -I 2>&1 <<EOF", "node --input-type=module 2>/dev/null <<EOF", "python3 -I 0<<EOF", "python3 -IW ignore - <<EOF", "python3 -I 2>&1<<EOF", "node --input-type=module 2>/dev/null<<EOF", "node --test-reporter ./r.mjs - <<EOF",
+  "node --experimental-config-file ./node.config.json - <<EOF", "node --experimental-sea-config ./sea.json - <<EOF", "node --trace-event-file-pattern ./trace.log - <<EOF",
+  "DEBUG=1 node -e \"console.log(1)\"", "command python3 -c \"print(1)\"", "node --require ./setup.js -e \"console.log(1)\"",
+  "node --report-dir out/r - <<EOF", "node --diagnostic-dir ./d - <<EOF", "node --cpu-prof-dir p/x - <<EOF", "node --test-reporter-destination out/x.txt - <<EOF", "node -r ./x.js --eval \"1+1\"", "node --import ./m.mjs -p \"1+1\"",
+  "cat <<EOF\n EOF\n'$(node -e 1)'\nEOF", "cat <<EOF\n\tEOF\n$(node -e 1)\nEOF", "cat <<'EOF'\n EOF\nEOF\n$(node -e 1)", "cat <<-EOF\n  EOF\n$(node -e 1)\nEOF",
+  "node -e 'x", "echo \"$(gh pr view 5", "cat > tmp/x <<'EOF'\nnode -e y", ": <<EOF $(cat <<EOF2)\nbody\nEOF",
+  "git commit -m \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"", "gh pr create --body \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
+  "bash <<< \"a b\"'; node -e y'", "bash -c \"a b\"'; node -e y'", "bash -c -e 'x; node -e y'", "bash -c $'x; node -e y'", "eval $'x; node -e y'", "bash<<<'x; node -e y'", "bash <<<$'x; node -e y'",
+  "# don't\nnode -e 'console.log(1)'", "git commit -F - <<'MSG'\ndon't\nMSG\nnode -e 'x'", "cat <<'EOF' | sh\nnode -e 'x'\nEOF", "bash <<'EOF'\nnode -e 'x'\nEOF", "node - <<'EOF'\nx\nEOF", "python3 - <<'EOF'\nx\nEOF",
+  "cat > tmp/r.sh <<'EOF'\nnode -e 'x'\nEOF\nbash tmp/r.sh", "cat > tmp/x <<EOF\n$(node -e 'x')\nEOF", "bash <<< \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
+  ": $((1<<2))\nnode - <<EOF\nconsole.log(1)\nEOF", ": $((`node -e 1`<<2))", "gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\"", "{\necho 'true; node -e y'\n} | env sh",
+  "cat <<EOF\n$\\\n(true; node -e x)\nEOF", "bash <<< 'node -e x'", "env bash <<< 'node -e x'", "exec sh -c 'node -e x'",
+  "sudo node - <<EOF", "xargs node - <<EOF", "timeout 5 node - <<EOF", "env X=1 nice node -p 1", "X=$(python3 -c \"print(1)\")", "python3 -Ic \"print(1)\"", "python3 -IEc \"x\"", "python -Sc \"x\"",
+  "echo \"$(python3 -c x)\"", "echo $(echo $(python3 -c x))", "time node -", "nice node -e 1", "echo \"don't\" ; X=$(python3 -c x) ; echo \"it's\"", "gh pr comment 1 --body \"Here's the result: $(python3 -c 'print(1)')\"", "echo \"don't\" `node -e 'x'`",
+  "# Don't touch main\nSPEC=$(python3 -c x)\n# Won't retry", "# don't refetch\nSPEC=$(python3 -c \"import json\")\n# it's cached", "cat <<EOF\ndon't\n$(python3 -c x)\nit's\nEOF",
+  "gh pr ready 5 $(node -e 1)", "gh pr ready 1 `node -e 1`", "X=$(cat <<EOF\ndon't\n$(python3 -c x)\nit's\nEOF)", "X=$(cat <<EOF\ndon't\n$(python3 -c x)\nit's\nEOF\n)",
+  "gh pr comment 1 --body \"$(cat <<'EOF'\nthe hook missed `node -e 1`\nEOF\n)\"", "X=$(node -e 1)", "echo \"$(echo \"it's\")\" ; X=$(python3 -c x)", "X=$(echo x | node -)", "X=\"$(echo x | node -)\"", "X=`echo x | node -`",
+  "cat <<'END-X'\ndon't\nEND-X\nX=$(python3 -c x)\n# it's", "cat <<END-X\ndon't\nEND-X\nX=$(python3 -c x)\n# it's",
+  "X=$(node '-e' 1)", "X=$(node \\-e 1)", "X=$(python3 '-c' x)", "X=$(python3 \\-c x)",
+  "cat <<'EOF'\nEOF\nX=$(python3 -c x)\ncat <<'EOF'\nhi\nEOF", "cat <<EOF\nEOF\nX=$(python3 -c x)", "echo \"<<'EOF'\"\n$(python3 -c x)\nEOF", "# <<'EOF'\n$(python3 -c x)\nEOF",
+  "cat <<'A'\n\"\nA\necho \"<<'EOF'\"\n$(python3 -c x)\nEOF", "cat <<A\n\"\nA\necho \"<<'EOF'\"\n$(python3 -c x)\nEOF", "X=$'\\'' $(python3 -c x) $'\\'''",
+  "cat <<EOF-X\n# $(python3 -c y)\nEOF-X", "cat <<<'x'\necho $(python3 -c y)\nx", "cat <<<\"x\"\necho $(python3 -c y)\nx", "cat <<<'x'\necho `node -e 1`\nx", "cat <<A <<B\nx\nA\ndon't\n$(python3 -c y)\nit's\nB",
+  "node -e \"x\" /opt/python/bin", "gh pr ready 5 $(node -e 1) --body python", "python3 script.py $(node -e 1)", "node -e 1 $(python3 script.py)", "X=/opt/python/bin python3 -c x",
+  "NODE_OPTIONS=x node -e 'x'", "/usr/bin/python3 -c 'x'",
+  "cat <<B <<'A'\n$(python3 -c x)\nB\nA", "bun -e 'x'", "bun --eval 'x'", "bun -p '1'", "bun --print '1'", "bun '-e' x", "bun \"--eval\" x", "bun \\-e x", "bun '-p' x", "bun '-' <<EOF", "node '-e' x",
+  "bun -", "bun <<EOF", "bun - <<EOF", "FOO=1 /usr/local/bin/bun -e 'x'", "env bun --cwd /w -e 'x'", "bun --env-file .env -r ./pre.ts -p '1'", "bun run - <<EOF", "bun run --bun - <<EOF", "bun run --silent - <<EOF", "bun run --smol - <<EOF",
+  "bun run --silent -", "bun run --bun -", "bun run -e 'x'", "bun run --eval 'x'", "bun run -p 1", "bun run --print=1", "bun run -", "echo x | bun run -", "bun --console-depth 3 -e 'x'",
+  "bun --cwd '/tmp/work tree' -e 'console.log(1)'", "bun --cwd \"/tmp/work tree\" -p 1", "bun --preload '/tmp/a b.ts' -e 'x'",
+  "gh pr comment 1 --body-file - <<'EOF'\nthe hook refuses cat <<EOF then `node -e 1`\nEOF", "gh issue comment 1 --body-file - <<'EOF'\nsee `python3 -c x`\n```\ncat <<X\nhi\nX\n```\nEOF", "git commit -F - <<'EOF'\nfix: refuse `node -e`\n\nmention: python3 - <<EOF\nEOF",
+];
 /** Deny rows from the closed branch (draft_gate rounds 5 to 7, delta reviews): every deny row of commits 1c48f4f46..5c68e78be. */
 const SALVAGED_DENY_ROWS = [
   ...INLINE_DENY_ROWS,
@@ -251,7 +291,7 @@ const rowKey = (name, cmd) => `${name}: ${JSON.stringify(cmd)}`;
 const CEILING_ROWS = new Set(INLINE_INTERPRETER_FORMS.filter((row) => row.ceiling).map((row) => row.command));
 
 function buildCorpus() {
-  const corpus = new Set([...RESIDUE_SHAPES, ...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW, ...ARITH_SHIFT_ROWS, ...CHAINED_HEREDOC_ROWS, ...INLINE_INTERPRETER_FORMS.map((row) => row.command), ...INLINE_INTERPRETER_VERDICT_CASES.map(([cmd]) => cmd)]);
+  const corpus = new Set([...RESIDUE_SHAPES, ...DELETED_TABLE_ROWS,...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW, ...ARITH_SHIFT_ROWS, ...CHAINED_HEREDOC_ROWS, ...INLINE_INTERPRETER_FORMS.map((row) => row.command), ...INLINE_INTERPRETER_VERDICT_CASES.map(([cmd]) => cmd)]);
   const forms = [...INLINE_FORMS, ...WAIT_FORMS, ...PR_BODY_FORMS];
   for (const f of forms) {
     for (const sep of SEPARATORS) for (const suf of SUFFIXES) corpus.add(`${sep}${f}${suf}`);
