@@ -296,6 +296,16 @@ test("retro classification of an unterminated quote and an escaped backtick befo
   assert.match(analyzeTranscript("echo \\` ; python3 x.py").violations[0], /^python3\b/);
 });
 
+test("retro joins a multi-line command: heredoc body lines and apostrophe-split message lines are not reported (#2442)", () => {
+  assert.deepEqual(analyzeTranscript("cat > tmp/f.md <<'EOF'\nnode -e 'x'\npython3 -c y\nEOF\ngit status").violations, []);
+  assert.deepEqual(analyzeTranscript("git commit -m \"fix: don't run\nnode -e x\nit's denied\"\ngit status").violations, []);
+  assert.deepEqual(analyzeTranscript("git commit -m 'fix: the hook\ndenies node -e x\n'").violations, []);
+  // a joined command is still classified as a whole
+  assert.deepEqual(analyzeTranscript("cat > src/a.mjs <<'EOF'\nx\nEOF").violations, ["inline-interpreter: cat > src/a.mjs <<'EOF'\nx\nEOF"]);
+  // a line that never closes stays one entry
+  assert.deepEqual(analyzeTranscript("don't merge yet\ngit status").violations, ["inline-interpreter: don't merge yet"]);
+});
+
 test("retro splitter traverses command substitution (#2442)", () => {
   assert.match(analyzeTranscript('echo "$(true; gh pr list)"').violations[0], /^gh:/);
   assert.match(analyzeTranscript('echo "$(true; python3 script.py)"').violations[0], /^python3:/);
