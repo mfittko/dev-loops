@@ -10,8 +10,8 @@
  *
  * Enforcement split: warn locally, block at merge. The merge gate
  * (`scripts/github/merge-pr.mjs`, precondition `secret_scan`) blocks
- * fail-closed. The local pre-commit hook is the early signal and still exits
- * non-zero on a hit until the hook switch to a warning lands.
+ * fail-closed. The local pre-commit hook is the early signal: it prints each
+ * candidate to stderr and exits 0, and the agent judges the candidate.
  * A blocking false positive costs an agent loop a stopped pass, an extra
  * dispatch and a reworded line, so no home-built heuristic sits in a blocking
  * path.
@@ -55,15 +55,14 @@ export function allowlistReason(text) {
 }
 
 /**
- * Parse a unified diff (`git diff --cached` output) into `{ file, line, text
- * }` entries — one per ADDED line, `line` the new-file 1-based line number.
- * Removed/context lines are skipped (but context lines still advance the
- * new-file line counter). A binary-file diff (no `@@` hunk) yields no
- * entries for that file.
+ * Parse a unified diff (`git diff --cached` output) into `{ file, line, text,
+ * added }` entries, one per ADDED or context line of the new file; `line` is
+ * the new-file 1-based line number. Removed lines are skipped. A binary-file
+ * diff (no `@@` hunk) yields no entries for that file.
  * @param {string} diffText
- * @returns {{ file: string, line: number, text: string }[]}
+ * @returns {{ file: string, line: number, text: string, added: boolean }[]}
  */
-function parseDiffLines(diffText) {
+export function parseDiffLines(diffText) {
   const entries = [];
   let file = null;
   let newLine = 0;
@@ -77,6 +76,7 @@ function parseDiffLines(diffText) {
   for (const rawLine of diffText.split("\n")) {
     if (rawLine.startsWith("diff --git ")) {
       inHunk = false;
+      newLine = 0; // the next file's index/mode/rename headers are not context lines
       continue;
     }
     if (!inHunk && rawLine.startsWith("+++ ")) {

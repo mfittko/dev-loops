@@ -95,29 +95,20 @@ export function renderGuardHook(hookName, defaultBranches = null, explicitBranch
   }
   const defaults = branches.join(" ");
   const explicitDefaults = explicits.join(" ");
-  // pre-commit ONLY: runs the fail-closed secret scan BEFORE anything else in
-  // this hook — before the override-env check below (that override is a
-  // default-BRANCH escape hatch for a sanctioned release; it must never
-  // double as a secret-scan bypass, there is none) and before the
-  // unresolved-defaults early exit (a secret-scan must never go quiet just
-  // because branch resolution failed at install time). Git always invokes a
-  // hook with the working tree ROOT as its cwd (githooks(5)), so a plain
-  // cwd-relative path here already resolves against each worktree's OWN
-  // checked-out copy of the scanner — no --show-toplevel round trip needed.
-  // A missing scanner file is a checkout that predates this feature (nothing
-  // to run), not a bypass attempt, so it is skipped rather than blocked; a
-  // scanner that IS present and errors, or finds a hit, always blocks — see
-  // scripts/security/scan-staged-diff.mjs. Its stdout carries only the clean
-  // "{ok:true,hits:[]}" success payload (a hit's diagnostics go to STDERR,
-  // per the CLI's own `payload.ok ? stdout : stderr` split above) — silenced
-  // here so a normal commit prints no JSON noise, while a blocked commit's
-  // stderr (file/line/rule id) still reaches the developer untouched.
+  // pre-commit ONLY: runs the secret scan BEFORE anything else in this hook,
+  // so neither the override-env check nor the unresolved-defaults early exit
+  // can silence it. The scan WARNS: candidates (file/line/rule id) and a
+  // scanner error go to stderr and the commit proceeds; the merge gate's
+  // `secret_scan` precondition is the fail-closed block (issue 1858). Git runs
+  // a hook with the working tree ROOT as cwd (githooks(5)), so the
+  // cwd-relative path resolves against each worktree's own scanner copy. A
+  // missing scanner is a checkout that predates the feature and is skipped.
+  // stdout carries only the clean "{ok:true,hits:[]}" payload and is silenced.
   const secretScanBlock = hookName === "pre-commit"
     ? `scan_cli="scripts/security/scan-staged-diff.mjs"
 if [ -f "$scan_cli" ]; then
-  node "$scan_cli" >/dev/null
-  if [ "$?" != "0" ]; then
-    exit 1
+  if ! node "$scan_cli" >/dev/null; then
+    echo "secret-scan: candidates or a scanner error above (warning only; the merge gate blocks). Judge each candidate: remove and rotate a real credential, or add a same-line secret-scan:allow <reason> marker for a public value." >&2
   fi
 fi
 `
