@@ -31,7 +31,9 @@ export async function runCli({ argv = process.argv.slice(2), stdout = process.st
   } catch (err) {
     result = { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
-  return emitResult(result, { jq: values.jq, silent: values.silent, fields: values.fields, stdout, stderr });
+  const code = emitResult(result, { jq: values.jq, silent: values.silent, fields: values.fields, stdout, stderr });
+  // A refused packet never exits 0, whatever the output flags select.
+  return code === 0 && result.ok === false ? 1 : code;
 }
 
 if (isDirectCliRun(import.meta.url)) process.exitCode = await runCli();

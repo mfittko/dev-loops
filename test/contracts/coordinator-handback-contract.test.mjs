@@ -137,6 +137,9 @@ test("AC3 validate-handback exits 0 on a valid packet and 1 on a refusal", async
     const missing = await run({ ...good, head: "" });
     assert.equal(missing.code, 1);
     assert.deepEqual(missing.out.missing, ["head"]);
+    const file = path.join(dir, "packet.json");
+    await writeFile(file, JSON.stringify({ ...good, workerRunning: true }));
+    assert.equal(await handbackCli({ argv: ["--packet", file, "--silent", "--jq", ".refusal"], stdout: sink(), stderr: sink() }), 1);
     assert.equal((await run("not json")).code, 1);
     assert.equal(await handbackCli({ argv: [], stdout: sink(), stderr: sink() }), 1);
   } finally {
