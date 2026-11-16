@@ -7,12 +7,12 @@ import { isClaudeHarness } from "./run-context.mjs";
 
 /**
  * @param {string} text Emitted text that names `dev-loops <ns> <sub>` calls.
- * @param {{env?: Record<string, string|undefined>, root?: string}} [options] `root` is the checkout the agent passes to `--repo-root`.
+ * @param {{env?: Record<string, string|undefined>}} [options]
  * @returns {string}
  */
-export function renderCliText(text, { env = process.env, root = "<checkout>" } = {}) {
+export function renderCliText(text, { env = process.env } = {}) {
   return isClaudeHarness(env)
-    ? rewriteWrapperInvocation(String(text).split("node <dev-loops-package-root>/cli/index.mjs").join(`dev-loops-run --repo-root ${root} cli/index.mjs`), `dev-loops-run --repo-root ${root}`)
+    ? rewriteWrapperInvocation(String(text).split("node <dev-loops-package-root>/cli/index.mjs").join("dev-loops-run --repo-root <checkout> cli/index.mjs"), "dev-loops-run --repo-root <checkout>")
     : String(text);
 }
 

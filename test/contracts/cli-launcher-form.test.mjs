@@ -14,9 +14,9 @@ const REMEDY = "run `dev-loops pr restore-ready --repo o/r --pr 7` then `dev-loo
 const CLAUDE = { CLAUDECODE: "1" };
 
 test("Claude harness renders the launcher form with --repo-root", () => {
-  const out = renderCliText(REMEDY, { env: CLAUDE, root: "/wt" });
-  assert.ok(out.includes("`dev-loops-run --repo-root /wt cli/index.mjs pr restore-ready --repo o/r --pr 7`"));
-  assert.ok(out.includes("dev-loops-run --repo-root /wt cli/index.mjs gate upsert-verdict --gate x"));
+  const out = renderCliText(REMEDY, { env: CLAUDE });
+  assert.ok(out.includes("`dev-loops-run --repo-root <checkout> cli/index.mjs pr restore-ready --repo o/r --pr 7`"));
+  assert.ok(out.includes("dev-loops-run --repo-root <checkout> cli/index.mjs gate upsert-verdict --gate x"));
   assert.ok(out.includes("see `dev-loops queue` and dev-loops gate."), "prose stays untouched");
   assert.equal(renderCliText("dev-loops pr x", { env: CLAUDE }), "dev-loops-run --repo-root <checkout> cli/index.mjs pr x");
 });
