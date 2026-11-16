@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, test } from "bun:test";
-import { runIdFreeEnv, runNode as runNodeHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { runIdFreeEnv, withLaneRunContext, runNode as runNodeHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -1028,6 +1028,27 @@ test("watcher-exclusivity gate permits the copilot watch when this run owns the 
   assert.equal(watcherCalled, true, "the copilot watch ran once this run owned the boundary");
   assert.equal(result.watchStatus, "changed");
   assert.equal(result.watcherExclusivity ?? null, null, "no post-watch transition marker on the copilot path (no watcher-reported head to validate against)");
+});
+
+test("watcher-exclusivity claims under the run id from the run-context file with no env var (issue 3224)", async () => {
+  await withLaneRunContext(async ({ runId }) => {
+    const claimed = [];
+    const result = await runWatchCycle(
+      { repo: "owner/repo", pr: 17 },
+      {
+        env: {},
+        runHandoffImpl: copilotWatchHandoffWithHead("abc123"),
+        ensureOwnershipImpl: async () => ({ ok: true }),
+        recordWatchClaimImpl: async ({ runId: id, head, waitKind }) => {
+          claimed.push(id);
+          return { ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } };
+        },
+        watchCopilotReviewImpl: async () => ({ ok: true, status: "idle", attempts: 1, newComments: [], newReviews: [], newIssueComments: [] }),
+      },
+    );
+    assert.deepEqual(claimed, [runId]);
+    assert.equal(result.watcherExclusivity?.blocked ?? false, false);
+  });
 });
 
 test("watcher-exclusivity CI settled success maps to the resolver's completed transition, carrying the watcher head", async () => {

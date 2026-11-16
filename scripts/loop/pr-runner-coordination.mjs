@@ -25,8 +25,9 @@ const USAGE = `Usage:
   pr-runner-coordination.mjs handoff --repo <owner/name> --pr <number> [--run-id <id>]
 Durable one-runner-per-PR coordination helper.
 If --run-id is omitted for claim/assert/release/takeover, the lane's run id is used:
-DEVLOOPS_RUN_ID, else the worktree's .pi/dev-loop-run-context.json that
-\`loop startup --claim\` writes.
+DEVLOOPS_RUN_ID, the Pi run id variable, the native Pi synthesis, then the linked worktree's
+.pi/dev-loop-run-context.json that \`loop startup --claim\` writes (never read in the main checkout).
+The routed form is \`dev-loops loop runner-coordination <command> ...\`.
 status reports stale (true|false) and staleReason for the active owner.
 takeover refuses a live (non-stale) foreign owner.
 handoff uses the verified runtime identity or the lane's run id when one exists (a

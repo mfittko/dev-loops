@@ -2028,6 +2028,9 @@ test("owner run heartbeats a claim past the max age without a takeover", async (
 test("the coordinator prompt resolves the gate writers' run id from the run-context file, with no env prefix", async () => {
   const prompt = await readFile(new URL("../../agents/dev-loop.agent.md", import.meta.url), "utf8");
   assert.match(prompt, /`loop startup --claim` gives your lane its run id[^\n]*`<worktree>\/\.pi\/dev-loop-run-context\.json`[^\n]*no `DEVLOOPS_RUN_ID=` prefix and no `export`/);
+  assert.match(prompt, /Run it from the lane's linked worktree\.[^\n]*`needs_reconcile`[^\n]*`loop ensure-worktree`[^\n]*A lane started without `--claim`[^\n]*holds no runner claim/);
+  const doc = await readFile(new URL("../../skills/docs/copilot-loop-operations.md", import.meta.url), "utf8");
+  assert.match(doc, /It must run from the lane's linked worktree[^\n]*`loop ensure-worktree`[^\n]*A lane started without `--claim`[^\n]*holds no runner claim/);
 });
 
 test("the coordinator hand-back step runs the routed handoff with no --run-id", async () => {
@@ -2249,7 +2252,7 @@ test("the coordinator prompt's terminal release resolves the claim run id and ru
 test("a skipped automatic release names the explicit handoff command", async () => {
   const skipped = await releaseAsyncRunnerOwnership({ repo: "owner/repo", pr: 17, env: {} });
   assert.equal(skipped.status, "skipped_no_async_run_id");
-  assert.match(skipped.remedy, /pr-runner-coordination\.mjs handoff --repo owner\/repo --pr 17 --run-id/);
+  assert.match(skipped.remedy, /loop runner-coordination handoff --repo owner\/repo --pr 17 --run-id/);
   assert.match(skipped.remedy, /`handoff_noop` with no owner, `ownership_lost` with a foreign owner/);
 });
 
@@ -2315,7 +2318,7 @@ test("claimRunnerOwnership takeover pinned to an own aged claim refuses once a r
 // that `loop startup --claim` writes, so a writer claims and `handoff` releases under it.
 async function laneWorktreeWithRunContext() {
   const cwd = realpathSync(await mkdtemp(path.join(os.tmpdir(), "runner-run-context-")));
-  await writeFile(path.join(cwd, ".git"), "gitdir: ./.git-linked\n");
+  await writeFile(path.join(cwd, ".git"), "gitdir: ./.git-common/worktrees/lane\n");
   const lane = ensureLaneRunContext({ env: {}, cwd });
   assert.equal(lane.minted, true);
   return { cwd, runId: lane.runId };

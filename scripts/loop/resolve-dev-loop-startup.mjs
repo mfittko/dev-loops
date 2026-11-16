@@ -1636,12 +1636,19 @@ export function buildResolveDevLoopStartupResult(input, {
 /**
  * `--claim` gives the lane a run id that later commands resolve without `DEVLOOPS_RUN_ID`
  * (a Claude Code Bash call drops exported env vars): reuse a resolvable run id, else mint
- * one into `<worktree>/.pi/dev-loop-run-context.json`. Native Codex is left untouched.
+ * one into `<worktree>/.pi/dev-loop-run-context.json`. Native Codex is left untouched. Outside a
+ * linked worktree no file can be written, so the claim refuses with the command that creates the
+ * lane worktree, instead of leaving later writers on `skipped_no_async_run_id`.
  */
-export function withClaimRunContext(result, { claim, env, cwd }) {
+export function withClaimRunContext(result, { claim, env, cwd, repoRoot = cwd, issue, pr }) {
   if (!claim || result?.ok !== true) return result;
   const runContext = ensureLaneRunContext({ env, cwd });
-  return runContext === null ? result : { ...result, runContext };
+  if (runContext !== null) return { ...result, runContext };
+  if (resolveRuntimeHarness(env) === "codex") return result;
+  const [flag, kind, n] = issue !== undefined ? ["--issue", "issue", issue] : ["--pr", "pr", pr];
+  const worktree = path.join(repoRoot, "tmp", "worktrees", "dev-loops", `${kind}-${n}`);
+  const nextAction = `\`loop startup --claim\` must run from the lane's linked worktree: ${cwd} is not one, so no run-context file can be written and later gate writers would return skipped_no_async_run_id. Run \`dev-loops-run --repo-root ${repoRoot} cli/index.mjs loop ensure-worktree --repo-root ${repoRoot} ${flag} ${n}\` to create or reuse the worktree at ${worktree}, then re-run \`loop startup ${flag} ${n} --claim\` from there.`;
+  return buildNeedsReconcileStartupResult(result.bundle ?? {}, nextAction, result.bundle?.pendingRetrospectives);
 }
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, adapter = createPiAdapter() } = {}) {
   const sessionCwd = adapter.getCwd();
@@ -1723,7 +1730,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     asyncStartMode,
     adapter,
     config: devLoopConfig,
-  }), { claim: options.claim, env: adapter.getEnv(), cwd: sessionCwd });
+  }), { claim: options.claim, env: adapter.getEnv(), cwd: sessionCwd, repoRoot, issue: options.issue, pr: options.pr });
   if (result.ok === false) {
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout: stderr, stderr });
     return;

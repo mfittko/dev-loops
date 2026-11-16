@@ -521,9 +521,11 @@ Subcommands:
 - `release` — clear ownership when the active run is done
 - `handoff` — atomically record the verified owner's exit signal and clear its claim
 
-Explicit completion handoff:
+Explicit completion handoff (routed form: `dev-loops loop runner-coordination handoff ...`):
 - `handoff --repo <owner/name> --pr <number> [--run-id <id>]` uses the verified runtime
-  identity when one exists (Pi/Claude run context or a verified native Codex child session);
+  identity when one exists (resolution order: `DEVLOOPS_RUN_ID`, the Pi run id variable, the native Pi
+  synthesis, then the linked worktree's `.pi/dev-loop-run-context.json`, never read in the main
+  checkout; or a verified native Codex child session);
   a mismatching `--run-id` is `ownership_lost`. With no verified id, `--run-id <the id used at
   claim>` is the identity and releases the claim only when it equals the active owner. Native
   Codex still requires its verified thread identity; an explicit `--run-id` alone is refused

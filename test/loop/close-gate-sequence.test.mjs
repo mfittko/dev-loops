@@ -142,7 +142,7 @@ test("defaultActor prefers DEVLOOPS_RUN_ID and falls back to unknown when userIn
 test("defaultActor resolves the lane run id from the worktree run-context file with no env var (issue 3224)", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "close-seq-run-context-"));
   try {
-    writeFileSync(path.join(root, ".git"), "gitdir: ./.git-linked\n");
+    writeFileSync(path.join(root, ".git"), "gitdir: ./.git-common/worktrees/lane\n");
     writeRunContext({ runId: "devloops-lane", root });
     const throwing = () => { throw new Error("no passwd entry"); };
     assert.equal(defaultActor({}, throwing, root), "devloops-lane");

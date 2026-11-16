@@ -249,7 +249,7 @@ test("parseResolveDevLoopStartupCliArgs accepts --claim with --issue or --pr and
 test("--claim writes the worktree run-context file once and reuses it (issue 3224)", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "startup-claim-run-context-"));
   try {
-    writeFileSync(path.join(root, ".git"), "gitdir: ./.git-linked\n");
+    writeFileSync(path.join(root, ".git"), "gitdir: ./.git-common/worktrees/lane\n");
     const file = path.join(root, ".pi", "dev-loop-run-context.json");
     const ok = { ok: true, selectedStrategy: "copilot_pr_followup" };
     // No claim, or a refused startup, writes nothing.
@@ -4501,4 +4501,56 @@ test("resolveIssuelessLightweightEligibility: missing size evidence fails closed
     const over = resolveIssuelessLightweightEligibility(config, tempDir, { detectChangedFiles: () => ({ ok: true, files: ["a.mjs"] }), evaluateSize: () => ({ wholeLogicLoc: 99 }) });
     assert.deepEqual([over.reason, over.fileCount, over.wholeLogicLoc], ["over_threshold", 1, 99]);
   }, { prefix: "resolve-dev-loop-eligibility-seams-" });
+});
+
+// Issue 3224 AC1: `loop startup --claim` gives the lane a run id only in a linked worktree.
+async function runClaimStartup(cwd) {
+  execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd, stdio: "ignore" });
+  await writeFile(path.join(cwd, ".devloops"), "version: 1\nstrategy: local-first\ninputSource: phase-docs\n", "utf8");
+  const ghStub = await writeGhStubHelper(cwd, []);
+  return runNode(["--issue", "1025", "--claim"], { cwd, env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_RUN_ID: undefined }) } });
+}
+
+test("runCli --claim from a linked worktree writes the run-context file and reports runContext", async () => {
+  await withTempDir(async (tempDir) => {
+    const main = path.join(tempDir, "main");
+    await mkdir(main);
+    await initFeatureBranchRepo(main);
+    const lane = path.join(tempDir, "lane");
+    execFileSync("git", ["worktree", "add", "-b", "issue-1025", lane], { cwd: main, stdio: "ignore" });
+    const result = await runClaimStartup(lane);
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.runContext.minted, true);
+    assert.equal(JSON.parse(readFileSync(path.join(lane, ".pi", "dev-loop-run-context.json"), "utf8")).runId, parsed.runContext.runId);
+  }, { prefix: "resolve-dev-loop-claim-lane-" });
+});
+
+test("runCli --claim from the main checkout refuses with the ensure-worktree command and the worktree path", async () => {
+  await withTempDir(async (tempDir) => {
+    await initFeatureBranchRepo(tempDir);
+    const result = await runClaimStartup(tempDir);
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.bundleKind, "needs_reconcile");
+    assert.equal(parsed.runContext, undefined);
+    assert.match(parsed.nextAction, /linked worktree/);
+    assert.match(parsed.nextAction, /loop ensure-worktree --repo-root \S+ --issue 1025/);
+    assert.ok(parsed.nextAction.includes(path.join("tmp", "worktrees", "dev-loops", "issue-1025")));
+    assert.throws(() => readFileSync(path.join(tempDir, ".pi", "dev-loop-run-context.json")), { code: "ENOENT" });
+  }, { prefix: "resolve-dev-loop-claim-main-" });
+});
+
+test("withClaimRunContext refuses outside a linked worktree except on native Codex", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "startup-claim-main-"));
+  try {
+    mkdirSync(path.join(root, ".git"));
+    const ok = { ok: true, selectedStrategy: "copilot_pr_followup", bundle: { pendingRetrospectives: [] } };
+    const refused = withClaimRunContext(ok, { claim: true, env: {}, cwd: root, repoRoot: root, pr: 9 });
+    assert.equal(refused.bundleKind, "needs_reconcile");
+    assert.match(refused.nextAction, /loop ensure-worktree --repo-root \S+ --pr 9/);
+    assert.deepEqual(withClaimRunContext(ok, { claim: true, env: { CODEX_THREAD_ID: "thread-1" }, cwd: root, pr: 9 }), ok);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

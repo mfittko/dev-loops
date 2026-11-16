@@ -49,7 +49,7 @@ async function seedPlan(root, specs) {
   return { planPath, fixtures };
 }
 
-const run = (root, planPath, extra = {}) => waitForUnits({ emitPlan: planPath, tmpRoot: path.join(root, "tmp"), receiptTmpRoot: path.join(root, "tmp"), timeoutMs: 10000, ...fakeClock(), ...extra });
+const run = (root, planPath, extra = {}) => waitForUnits({ emitPlan: planPath, tmpRoot: path.join(root, "tmp"), receiptTmpRoot: path.join(root, "tmp"), timeoutMs: 10000, cwd: root, ...fakeClock(), ...extra });
 
 async function snapshot(dir) {
   const out = [];
@@ -600,7 +600,7 @@ test("a long plan wait heartbeats the runner claim for the plan's PR", async () 
 
 test("a long plan wait refreshes the lane's claim from the run-context file with no env var", async () => {
   await withDir(async (root) => {
-    await writeFile(path.join(root, ".git"), "gitdir: ./.git-linked\n");
+    await writeFile(path.join(root, ".git"), "gitdir: ./.git-common/worktrees/lane\n");
     writeRunContext({ runId: "devloops-lane", root });
     const claimed = await claimRunnerOwnership({ repo: "o/r", pr: 7, runId: "devloops-lane", cwd: root, now: "2000-01-01T00:00:00.000Z" });
     const { planPath } = await seedPlan(root, [["g", ["a"]]]);
@@ -611,5 +611,41 @@ test("a long plan wait refreshes the lane's claim from the run-context file with
     const persisted = JSON.parse(await readFile(claimed.filePath, "utf8"));
     assert.equal(persisted.activeRun.runId, "devloops-lane");
     assert.ok(persisted.activeRun.updatedAt > "2000-01-01T00:00:00.000Z", "the aged claim is refreshed");
+  });
+});
+
+test("the heartbeat resolves the run id from the process cwd, not the parent of --tmp-root", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    const plan = JSON.parse(await readFile(planPath, "utf8"));
+    await writeJson(planPath, { ...plan, repo: "o/r", pr: 7 });
+    const calls = [];
+    await run(root, planPath, { timeoutMs: 60000, cwd: "/lane/worktree", ensureOwnership: async (args) => { calls.push(args); return { ok: true }; } });
+    assert.ok(calls.length > 0);
+    assert.ok(calls.every((call) => call.cwd === "/lane/worktree"), "tmpRoot outside the linked worktree does not move the heartbeat cwd");
+  });
+});
+
+test("a judge-plan wait heartbeats the plan's workOrder target", async () => {
+  await withDir(async (root) => {
+    const verdict = path.join(root, "tmp", "judge", "judge-verdict.json");
+    const identity = { workOrderRef: `judge:o/r#7:${GATE}:${HEAD}:r1`, workOrderDigest: "sha256:j", executionIdentity: "r1" };
+    const planPath = path.join(root, "tmp", "judge", "judge-emit-plan.json");
+    await writeJson(planPath, { ...identity, workOrder: { target: { repo: "o/r", pr: 7 }, roundIdentity: { gate: GATE, headSha: HEAD }, outputRefs: [verdict, path.join(root, "tmp", "judge", "spec.json")] } });
+    const calls = [];
+    const result = await waitForUnits({ judgePlan: planPath, tmpRoot: path.join(root, "tmp"), receiptTmpRoot: path.join(root, "tmp"), timeoutMs: 60000, cwd: root, ensureOwnership: async (args) => { calls.push(args); return { ok: true }; }, ...fakeClock() });
+    assert.equal(result.outcome, "timeout");
+    assert.ok(calls.length > 0);
+    assert.ok(calls.every((call) => call.repo === "o/r" && call.pr === 7));
+  });
+});
+
+test("an emit plan without repo and pr never heartbeats", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    let calls = 0;
+    const result = await run(root, planPath, { timeoutMs: 60000, ensureOwnership: async () => { calls += 1; return { ok: true }; } });
+    assert.equal(result.outcome, "timeout");
+    assert.equal(calls, 0);
   });
 });

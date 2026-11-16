@@ -350,9 +350,19 @@ export function resolveRunId(env = process.env, { cwd = null, fs = fsDefault } =
   return root === null ? null : readRunContext({ root, fs })?.runId ?? null;
 }
 
+// A linked worktree's `.git` file points at `<git dir>/worktrees/<name>`; a submodule's points at `<git dir>/modules/<name>`.
+function linkedWorktreeGitDir(dir, fs) {
+  try {
+    const match = /^gitdir:\s*(.+?)\s*$/im.exec(fs.readFileSync(path.join(dir, ".git"), "utf8"));
+    const target = match === null ? null : path.resolve(dir, match[1]);
+    return target !== null && path.basename(path.dirname(target)) === "worktrees" ? target : null;
+  } catch { return null; }
+}
+
 /**
  * The linked-worktree root of `cwd`: the nearest directory, `cwd` included, whose `.git` entry
- * is a file. Null in the main checkout (a `.git` directory) and outside a checkout, so a main
+ * is a file naming a `worktrees/<name>` git dir. Null in the main checkout (a `.git` directory),
+ * a submodule checkout and outside a checkout, so a main
  * agent never adopts a lane's run id, and an older main-checkout run-context file (the headless
  * entry writes one) never acts as a lane identity.
  *
@@ -365,7 +375,7 @@ export function resolveRunContextRoot(cwd, { fs = fsDefault } = {}) {
   for (;;) {
     let gitEntry = null;
     try { gitEntry = fs.statSync(path.join(dir, ".git")); } catch { /* absent: keep walking up */ }
-    if (gitEntry) return gitEntry.isFile() ? dir : null;
+    if (gitEntry) return gitEntry.isFile() && linkedWorktreeGitDir(dir, fs) !== null ? dir : null;
     const parent = path.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
@@ -500,5 +510,19 @@ export function ensureLaneRunContext({ env = process.env, cwd, mintedAt, fs = fs
   const existing = resolveRunId(env, { cwd, fs });
   if (existing) return { runId: existing, minted: false, statePath: null };
   const root = resolveRunContextRoot(cwd, { fs });
-  return root === null ? null : ensureRunId({ env, root, mintedAt, fs });
+  if (root === null) return null;
+  const lane = ensureRunId({ env, root, mintedAt, fs });
+  if (lane.minted) excludeRunContextFile(root, fs);
+  return lane;
+}
+
+// Keep the lane file out of `git add` in a consumer repo with no ignore entry: one line in the common git dir's info/exclude.
+function excludeRunContextFile(root, fs) {
+  const entry = `.pi/${RUN_CONTEXT_FILENAME}`;
+  try {
+    const exclude = path.join(path.dirname(path.dirname(linkedWorktreeGitDir(root, fs))), "info", "exclude");
+    const current = fs.existsSync(exclude) ? fs.readFileSync(exclude, "utf8") : "";
+    if (current.split(/\r?\n/u).includes(entry)) return;
+    fs.appendFileSync(exclude, `${current === "" || current.endsWith("\n") ? "" : "\n"}${entry}\n`);
+  } catch { /* best-effort: the file is still written */ }
 }

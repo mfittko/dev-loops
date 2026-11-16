@@ -188,7 +188,7 @@ async function waitForArtifact({ artifact, after, timeoutMs, now, delay }) {
   }
 }
 
-export async function waitForUnits({ artifact, after, emitPlan, judgePlan, units: wanted, tmpRoot, timeoutMs = DEFAULT_TIMEOUT_MS, receiptTmpRoot, now = Date.now, delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), env = process.env, ensureOwnership = ensureAsyncRunnerOwnership }) {
+export async function waitForUnits({ artifact, after, emitPlan, judgePlan, units: wanted, tmpRoot, timeoutMs = DEFAULT_TIMEOUT_MS, receiptTmpRoot, now = Date.now, delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), env = process.env, cwd = process.cwd(), ensureOwnership = ensureAsyncRunnerOwnership }) {
   if (artifact !== undefined) return waitForArtifact({ artifact, after, timeoutMs, now, delay });
   const planPath = emitPlan ?? judgePlan;
   const planStat = await stat(planPath).catch(() => { throw new Error(`plan ${planPath} does not exist`); });
@@ -202,7 +202,7 @@ export async function waitForUnits({ artifact, after, emitPlan, judgePlan, units
   const heartbeat = async () => {
     if (!target?.repo || !target?.pr || now() - lastHeartbeat < WATCH_HEARTBEAT_MS) return;
     lastHeartbeat = now();
-    try { await ensureOwnership({ repo: target.repo, pr: target.pr, env, cwd: worktreeRoot, claimIfMissing: true, requireExisting: false }); } catch { /* best-effort */ }
+    try { await ensureOwnership({ repo: target.repo, pr: target.pr, env, cwd, claimIfMissing: true, requireExisting: false }); } catch { /* best-effort */ }
   };
   // A whole-round record retires the round; a scoped (body-only rerun) record retires only the units it names. The judge matches any scoped record, as the judge pull and judge-pass do.
   const roundRetired = () => retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs) || units.some((unit) => retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs, role === "judge" ? ANY_SCOPE : unit.scope));

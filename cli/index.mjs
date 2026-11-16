@@ -433,6 +433,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "loop-state": "Detect Copilot loop state",
     "reviewer-state": "Detect reviewer loop state",
     "gate-coordination": "Detect PR gate coordination state",
+    "runner-coordination": "One-runner-per-PR claim helper (status, claim, assert, release, takeover, handoff)",
     "linked-issue-pr": "Detect linked issue ↔ PR",
     "issue-refinement": "Detect issue refinement artifact",
     info: "Show read-only issue/PR state summary",

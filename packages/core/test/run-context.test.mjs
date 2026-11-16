@@ -13,6 +13,7 @@ import {
   NATIVE_PI_SESSION_MARKER,
   NATIVE_PI_ASYNC_MARKERS,
   ASYNC_CONTEXT_ENV_MARKERS,
+  resolveRunContextRoot,
   resolveRunId,
   isNativePiAsyncContext,
   synthesizePiRunId,
@@ -435,7 +436,7 @@ test("isClaudeHarness is true only when CLAUDECODE is exactly \"1\"", () => {
 // reads as its last fallback when the caller passes its cwd.
 function laneWorktree(runId = "devloops-lane") {
   const root = makeTempRoot();
-  fs.writeFileSync(path.join(root, ".git"), "gitdir: ./.git-linked\n");
+  fs.writeFileSync(path.join(root, ".git"), "gitdir: ./.git-common/worktrees/lane\n");
   const nested = path.join(root, "scripts", "loop");
   fs.mkdirSync(nested, { recursive: true });
   if (runId !== null) writeRunContext({ runId, root, mintedAt: "2026-11-16T00:00:00Z" });
@@ -468,6 +469,7 @@ test("resolveRunId resolves null for a missing, unreadable or malformed run-cont
   assert.equal(resolveRunId({}, { cwd: unreadable.root, fs: throwingFs }), null);
   // Outside any checkout there is no worktree root to read from.
   const bare = makeTempRoot();
+  fs.mkdirSync(path.join(bare, ".git")); // a main checkout, so a TMPDIR inside a linked worktree cannot leak its run id in
   writeRunContext({ runId: "outside", root: bare });
   assert.equal(resolveRunId({}, { cwd: bare }), null);
 });
@@ -507,5 +509,38 @@ test("ensureLaneRunContext mints into the worktree once and then reuses the file
   // An env run id keeps precedence and writes nothing.
   assert.deepEqual(ensureLaneRunContext({ env: { DEVLOOPS_RUN_ID: "env-run" }, cwd: root }), { runId: "env-run", minted: false, statePath: null });
   assert.equal(readRunContext({ root }).runId, minted.runId);
-  assert.equal(ensureLaneRunContext({ env: {}, cwd: makeTempRoot() }), null);
+  const outside = makeTempRoot();
+  fs.mkdirSync(path.join(outside, ".git")); // a main checkout, independent of any ancestor of os.tmpdir()
+  assert.equal(ensureLaneRunContext({ env: {}, cwd: outside }), null);
+});
+
+test("resolveRunContextRoot accepts only a .git file naming a worktrees/<name> git dir", () => {
+  const dirFor = (gitdir) => {
+    const root = makeTempRoot();
+    fs.writeFileSync(path.join(root, ".git"), `gitdir: ${gitdir}\n`);
+    return root;
+  };
+  const accepted = dirFor("/repo/.git/worktrees/issue-3224");
+  assert.equal(resolveRunContextRoot(accepted), accepted);
+  // A submodule checkout also has a .git file, but its gitdir lies under modules/.
+  for (const gitdir of ["../.git/modules/sub", "/repo/.git/modules/sub"]) {
+    const rejected = dirFor(gitdir);
+    assert.equal(resolveRunContextRoot(rejected), null, gitdir);
+    writeRunContext({ runId: "left-by-headless", root: rejected });
+    assert.equal(resolveRunId({}, { cwd: rejected }), null, gitdir);
+  }
+});
+
+test("ensureLaneRunContext excludes the run-context file once in the common git dir", () => {
+  const common = makeTempRoot();
+  fs.mkdirSync(path.join(common, "info"));
+  fs.writeFileSync(path.join(common, "info", "exclude"), "# existing\n");
+  const root = makeTempRoot();
+  fs.writeFileSync(path.join(root, ".git"), `gitdir: ${path.join(common, "worktrees", "lane")}\n`);
+  ensureLaneRunContext({ env: {}, cwd: root });
+  fs.unlinkSync(runContextPath(root));
+  ensureLaneRunContext({ env: {}, cwd: root });
+  const lines = fs.readFileSync(path.join(common, "info", "exclude"), "utf8").split("\n").filter((line) => line === ".pi/dev-loop-run-context.json");
+  assert.equal(lines.length, 1);
+  assert.match(fs.readFileSync(path.join(common, "info", "exclude"), "utf8"), /^# existing\n/);
 });
