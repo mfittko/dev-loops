@@ -145,12 +145,69 @@ test("no .claude/hooks script imports an unresolvable bare package (#843)", () =
       const resolvable = spec.startsWith("node:") || spec.startsWith("./") || spec.startsWith("../");
       if (!resolvable) offenders.push(`${file} → ${spec}`);
     }
+    // `require("x")` and `createRequire(url)("x")` load a package at run time and crash the hook the same way (ADR 0276).
+    for (const match of body.matchAll(/\brequire\(\s*["']([^"']+)["']\s*\)|\bcreateRequire\([^)]*\)\(\s*["']([^"']+)["']\s*\)/g)) {
+      const spec = match[1] ?? match[2];
+      if (!(spec.startsWith("node:") || spec.startsWith("./") || spec.startsWith("../"))) offenders.push(`${file} → ${spec}`);
+    }
   }
   assert.deepEqual(
     offenders,
     [],
     `Bundled hooks must only import node: builtins or relative paths (no node_modules in the plugin):\n${offenders.join("\n")}`,
   );
+});
+
+test("an installed plugin without node_modules parses and denies: the vendored sh-syntax carries the hook (ADR 0276)", () => {
+  const plugin = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-hooks-"));
+  try {
+    fs.cpSync(hooksDir, path.join(plugin, "hooks"), { recursive: true });
+    assert.equal(fs.existsSync(path.join(plugin, "node_modules")), false);
+    const run = (command) => spawnSync("node", [path.join(plugin, "hooks", "pre-tool-use-bash-gate.mjs")], {
+      input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: repoRoot }),
+      encoding: "utf8",
+      cwd: plugin,
+    });
+    const denied = run("node -e x");
+    assert.equal(denied.status, 0, denied.stderr);
+    assert.match(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecisionReason, /OPS-NO-INLINE-INTERPRETER/);
+    const allowed = run("cat > tmp/f <<'EOF'\nnode -e 'x'\nEOF");
+    assert.equal(allowed.status, 0, allowed.stderr);
+    assert.equal(allowed.stdout.trim(), "");
+  } finally {
+    fs.rmSync(plugin, { recursive: true, force: true });
+  }
+});
+
+test("the bash-gate hook fails closed in a managed repo when the parser fails to load or the classifier throws (ADR 0276)", () => {
+  const plugin = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-hooks-broken-"));
+  const repo = makeManagedConfigRepo(".devloops");
+  try {
+    const hooks = path.join(plugin, "hooks");
+    fs.cpSync(hooksDir, hooks, { recursive: true });
+    const run = (command) => spawnSync("node", [path.join(hooks, "pre-tool-use-bash-gate.mjs")], {
+      input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: repo }),
+      encoding: "utf8",
+      cwd: plugin,
+    });
+    const reason = (res) => {
+      assert.equal(res.status, 0, res.stderr);
+      return JSON.parse(res.stdout).hookSpecificOutput.permissionDecisionReason;
+    };
+    // a broken vendored entry stands in for a missing or broken wasm: the parse failure denies every command
+    fs.writeFileSync(path.join(hooks, "_vendor/sh-syntax/lib/sync/index.cjs"), "throw new Error('wasm gone');\n");
+    assert.match(reason(run("ls")), /OPS-NO-INLINE-INTERPRETER[\s\S]*parser failed to load: wasm gone/);
+    // a classifier that throws: the hook denies instead of exiting nonzero
+    fs.renameSync(path.join(hooks, "_bash-command-classify.mjs"), path.join(hooks, "_classify-orig.mjs"));
+    fs.writeFileSync(
+      path.join(hooks, "_bash-command-classify.mjs"),
+      "export * from \"./_classify-orig.mjs\";\nexport function commandContainsInlineInterpreter() { throw new Error(\"boom\"); }\n",
+    );
+    assert.match(reason(run("ls")), /OPS-NO-INLINE-INTERPRETER: the inline-interpreter classifier failed \(boom\)/);
+  } finally {
+    fs.rmSync(plugin, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
 });
 
 test("package.json files allowlist ships the plugin hooks", () => {

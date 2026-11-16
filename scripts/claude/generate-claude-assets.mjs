@@ -14,6 +14,7 @@
  *   --help, -h           Print usage and exit 0 without writing anything.
  */
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import { parseArgs } from "node:util";
 import path from "node:path";
 
@@ -111,9 +112,30 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
   // load). Vendor the pure deciders/classifiers they need as self-contained relative `_*.mjs`
   // modules generated from the canonical core sources, with cross-module imports rewritten to
   // local paths. The no-drift check keeps them in sync with packages/core/src.
-  assets.push(...collectHookBundle(repoRoot));
+  assets.push(...collectHookBundle(repoRoot), ...collectVendoredShSyntax(repoRoot));
 
   return assets;
+}
+
+/** The `sh-syntax` synchronous CommonJS entry, relative to the package root (ADR 0276). */
+const SH_SYNTAX_ENTRY = "lib/sync/index.cjs";
+
+/**
+ * Vendor `sh-syntax` (the sync entry, the internal module it requires, `wasm_exec.cjs`, `main.wasm` and the license) into
+ * `.claude/hooks/_vendor/sh-syntax/`, keeping the package layout so the relative requires resolve. The plugin bundle has
+ * no `node_modules`, and the hooks must parse before the plugin installs any (ADR 0276). Binary assets carry a Buffer.
+ */
+function collectVendoredShSyntax(repoRoot) {
+  const core = path.join(repoRoot, "packages/core/package.json");
+  if (!fs.existsSync(core)) return []; // no-op when core sources are absent (e.g. consumer tree)
+  const root = path.dirname(createRequire(core).resolve("sh-syntax/package.json"));
+  const entry = fs.readFileSync(path.join(root, SH_SYNTAX_ENTRY), "utf8");
+  const internal = /require\("\.\.\/(internal-[\w-]+\.cjs)"\)/.exec(entry)?.[1];
+  if (!internal) throw new Error("sh-syntax entry no longer requires an internal-*.cjs module: update the generator");
+  return [SH_SYNTAX_ENTRY, `lib/${internal}`, "vendors/wasm_exec.cjs", "main.wasm", "LICENSE"].map((rel) => ({
+    target: `.claude/hooks/_vendor/sh-syntax/${rel}`,
+    content: fs.readFileSync(path.join(root, rel)),
+  }));
 }
 
 /**
@@ -122,7 +144,9 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
  * builtins are left untouched.
  */
 const HOOK_BUNDLE = [
-  { source: "packages/core/src/loop/bash-command-classify.mjs", target: ".claude/hooks/_bash-command-classify.mjs", rewrites: [] },
+  { source: "packages/core/src/loop/bash-command-classify.mjs", target: ".claude/hooks/_bash-command-classify.mjs", rewrites: [["\"./shell-ast.mjs\"", "\"./_shell-ast.mjs\""]] },
+  // The shell parser adapter: its `sh-syntax/sync` specifier points at the vendored copy (ADR 0276).
+  { source: "packages/core/src/loop/shell-ast.mjs", target: ".claude/hooks/_shell-ast.mjs", rewrites: [["\"sh-syntax/sync\"", `"./_vendor/sh-syntax/${SH_SYNTAX_ENTRY}"`]] },
   // The harness-neutral Bash-gate deny rules, vendored so the Claude PreToolUse hook reaches them
   // without `@dev-loops/core` (unresolvable from the plugin cache).
   {
@@ -253,8 +277,8 @@ export function checkAssets(assets, { repoRoot = process.cwd() } = {}) {
   const expected = new Set(assets.map((a) => a.target));
   for (const { target, content } of assets) {
     const abs = path.join(repoRoot, target);
-    const current = fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : null;
-    if (current !== content) {
+    const current = fs.existsSync(abs) ? fs.readFileSync(abs) : null; // bytes: the vendored `main.wasm` is binary
+    if (current === null || !current.equals(Buffer.from(content))) {
       drifted.push({ target, reason: current === null ? "missing" : "out-of-date" });
     }
   }
