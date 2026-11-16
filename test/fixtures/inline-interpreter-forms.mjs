@@ -1,6 +1,6 @@
 // Shared OPS-NO-INLINE-INTERPRETER fixture table (#2442, sh-syntax swap). Each row is a command, the gate decision
 // (`deny`) and the `ceiling` flag. A ceiling row is allowed by the gate: its form sits where the gate does not
-// read (a payload string, a heredoc body, a pipe into an interpreter, a command that does not parse and names no interpreter).
+// read (a payload string, a heredoc body, a pipe into an interpreter, a `-` stdin script).
 // check-retro-tooling reports every denied and every ceiling row, and no other row.
 // The differential test accepts a row that origin/main 4b62431e8 denies and the head allows only when it is
 // listed here with `ceiling: true`.
@@ -226,8 +226,20 @@ export const INLINE_INTERPRETER_FORMS = [
   deny("git commit -m \"$(cat > .git/hooks/pre-commit <<'EOF'\nnode -e 'x'\nEOF\n)\""),
   deny("function f (\ncat <<'EOF'\nnode -e 'x'\nEOF\ntrue)\nf | sh"),
   deny("gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\""),
-  // a command that does not parse and names a closed-list head (Q2); the reason quotes the parse error
+  // every command that does not parse denies (Q2); the reason quotes the parse error. Bash runs the lines before a syntax error,
+  // so an escaped head before a broken last line must not slip through.
   deny("node -e 'x"),
+  deny("echo \"unterminated"),
+  deny("git commit -m \"# `\nwhile :; do `true '`; 'sleep' 5; gh pr view 5; done\""),
+  deny("git commit -m \"echo '`' ''' ; while :; do `true '`; 'sleep' 5; gh pr view 5; done\""),
+  deny("git commit -m \"echo '$(echo ''')' ; echo 'while true; do gh pr view 5; sleep 5; done'\""),
+  deny("git commit -m \"gh pr edit 5 --title '$(echo ''')' --add-label 'x --body y'\""),
+  deny("echo \"$(gh pr view 5"),
+  deny("n\\ode -e 'x'\necho \""),
+  deny("nod''e -e 'x'\necho \""),
+  deny("$'\\x6eode' -e x\necho \""),
+  deny("s\\ed -i s/a/b/ f\necho \""),
+  deny("c\\at > a.txt <<EOF\nx\nEOF\necho \""),
   ...["", "echo a; ", "echo a && ", "echo a || ", "echo a | ", "echo a & ", "echo a\n", "true\n\n"].map((sep) => deny(`${sep}cat > tmp/r.mjs <<'EOF' && node tmp/r.mjs\necho done`)),
   deny("# can't\ncat > tmp/r.mjs <<'EOF' && node tmp/r.mjs\n# don't"),
 
@@ -298,9 +310,6 @@ export const INLINE_INTERPRETER_FORMS = [
   ceiling("git rebase -ix 'true; node -e y' HEAD~1"),
   ceiling("python3 <<< 'x'"),
   ceiling("node 0<<< 'x'"),
-  // a command that does not parse and names no closed-list head (Q2, narrowed): allowed and reported
-  ceiling("echo \"unterminated"),
-  ceiling("echo \"$(gh pr view 5"),
   // origin/main denied this; the head reads the here-string as a stdin payload (ceiling), reported by check-retro-tooling (operator decision 2)
   ceiling("node <<< x script.js"),
   // origin/main denied these pipe, dash and here-string variants; the head reads the stdin payload (ceiling, operator decision 2)
@@ -375,10 +384,6 @@ export const INLINE_INTERPRETER_FORMS = [
     "export PATH\\=tmp; grep -ec 'true; node -e y'",
     "declare -x 'PATH'=tmp; grep -ec 'true; node -e y'",
     "builtin printf -vPATH tmp; grep -ec 'true; node -e y'",
-    "git commit -m \"# `\nwhile :; do `true '`; 'sleep' 5; gh pr view 5; done\"",
-    "git commit -m \"echo '`' ''' ; while :; do `true '`; 'sleep' 5; gh pr view 5; done\"",
-    "git commit -m \"echo '$(echo ''')' ; echo 'while true; do gh pr view 5; sleep 5; done'\"",
-    "git commit -m \"gh pr edit 5 --title '$(echo ''')' --add-label 'x --body y'\"",
   ].map(ceiling),
   // rows of the unit-test tables the swap deleted that origin/main denies and the head allows: here-strings, payloads, pipes into a stdin interpreter, data-looking heredocs
   ...[

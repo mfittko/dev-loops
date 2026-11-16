@@ -1790,8 +1790,6 @@ function payloadStart(tail, head) {
   return at < 0 ? Infinity : at + (tail[at].value.startsWith("--exec=") ? 0 : 1);
 }
 
-/** Text that names a closed-list head (an interpreter, an in-place sed/awk, a cat/tee heredoc): a command that does not parse is denied only when it holds one (Q2, ADR 0276). */
-const CLOSED_LIST_TEXT_RE = /(?<![\w.-])(?:node|bun|python3?|perl|ruby)(?![\w-])|\bg?sed\b[^\n]*(?:\s-[A-Za-z]*i|--in-place)|\bg?awk\b[^\n]*inplace|\b(?:cat|tee)\b[^\n]*<</;
 /** Heads whose quoted arguments are inert text when the command is one simple command (`inertQuoteSegment`'s list). */
 const TEXT_HEAD_RE = /^(?:echo|printf|cat|tee|grep|rg|head|tail|wc|sort|test|dev-loops-run)$/;
 const WRITE_REDIRECTS = ["RdrOut", "AppOut", "RdrInOut", "RdrClob", "AppClob", "RdrAll", "RdrAllClob", "AppAll"];
@@ -1800,16 +1798,16 @@ const WRITE_REDIRECTS = ["RdrOut", "AppOut", "RdrInOut", "RdrClob", "AppClob", "
  * One walk over every simple command of COMMAND's syntax tree (substitutions, process substitution, function bodies, `case` arms,
  * `coproc` and unquoted heredoc bodies included; a quoted-delimiter heredoc body is inert text). The command head is read from the
  * parsed word list after env assignments and wrappers. Returns `{ deny, ceiling, parseError }`:
- * deny when a closed-list form (issue 2442 item 10) sits in a simple command, or when the text does not parse and names a closed-list head;
+ * deny when a closed-list form (issue 2442 item 10) sits in a simple command, or when the text does not parse;
  * with REPORT, ceiling when a form sits where the gate does not read: a pipe or `-`/here-string stdin into an interpreter, a payload word
- * (`-c`, `eval`, `watch`, a here-string), a heredoc body or quoted word that a non-inert command carries, or text that does not parse.
+ * (`-c`, `eval`, `watch`, a here-string), a heredoc body or quoted word that a non-inert command carries.
  * SKIP_FIRST ignores the first simple command (the first command of a quoted word is text, a later one follows a separator).
  */
 function inspectShell(command, report = false, skipFirst = false) {
   const parsed = parseShell(command);
   if (parsed.error) {
-    const deny = CLOSED_LIST_TEXT_RE.test(command);
-    return { deny, ceiling: !deny, parseError: parsed.error.message };
+    // every parse failure denies: bash runs the lines before a syntax error, so a text match on the head would fail open (ADR 0276)
+    return { deny: true, ceiling: false, parseError: parsed.error.message };
   }
   const { redir: R, binCmd: B } = shellOperators();
   const out = { deny: false, ceiling: false, parseError: null };
@@ -1913,7 +1911,7 @@ export function inlineInterpreterVerdict(command) {
   return deny ? "deny" : ceiling ? "ceiling" : "allow";
 }
 
-/** The parse error message when the gate denies COMMAND because it does not parse and names a closed-list head, else null. */
+/** The parse error message when the gate denies COMMAND because it does not parse, else null. */
 export function inlineInterpreterParseError(command) {
   const { deny, parseError } = inspectShell(command);
   return deny ? parseError : null;
