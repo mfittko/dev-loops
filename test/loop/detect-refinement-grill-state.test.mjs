@@ -96,7 +96,7 @@ test("--body-file with an already-refined body AND a recorded no-gap results com
     const bodyPath = path.join(tempDir, "body.md");
     const commentsPath = path.join(tempDir, "comments.json");
     await writeFile(bodyPath, REFINED_BODY, "utf8");
-    await writeFile(commentsPath, JSON.stringify([{ body: NO_GAPS_COMMENT }]), "utf8");
+    await writeFile(commentsPath, JSON.stringify([{ body: NO_GAPS_COMMENT, createdAt: "2026-11-06T10:00:00Z" }]), "utf8");
     const { stdout } = await runDetect(["--body-file", bodyPath, "--comments-file", commentsPath]);
     const parsed = JSON.parse(stdout);
     assert.equal(parsed.snapshot.openGapCount, 0);
@@ -109,13 +109,47 @@ test("--body-file with an already-refined body AND a recorded no-gap results com
   }
 });
 
+test("AC2 (3127): --repo/--number pass the GraphQL body lastEditedAt through to spec_changed_since_grill", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-edited-"));
+  try {
+    const bodyPath = path.join(tempDir, "body.md");
+    const commentsPath = path.join(tempDir, "comments.json");
+    await writeFile(bodyPath, REFINED_BODY, "utf8");
+    await writeFile(commentsPath, JSON.stringify([{ body: NO_GAPS_COMMENT, createdAt: "2026-11-06T10:00:00Z" }]), "utf8");
+    const detectWithEdit = async (lastEditedAt) => {
+      const calls = [];
+      const runChild = async (cmd, args) => {
+        calls.push(args);
+        return { code: 0, stdout: JSON.stringify({ body: REFINED_BODY, lastEditedAt }), stderr: "" };
+      };
+      const stdout = makeCapture();
+      await runCli(["--body-file", bodyPath, "--surface", "pr", "--comments-file", commentsPath, "--repo", "o/r", "--number", "7"], { stdout, stderr: makeCapture(), runChild });
+      assert.equal(calls.length, 1, "exactly one api graphql call per CLI run");
+      assert.ok(calls[0].includes("number=7"));
+      return JSON.parse(stdout.text());
+    };
+    const edited = await detectWithEdit("2026-11-06T11:00:00Z");
+    assert.equal(edited.state, "detect_gaps");
+    assert.equal(edited.reason, "spec_changed_since_grill");
+    assert.equal(edited.snapshot.specChangedSinceGrill, true);
+    assert.equal((await detectWithEdit(null)).state, "grill_clean");
+    assert.equal((await detectWithEdit("2026-11-06T09:00:00Z")).state, "grill_clean");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--repo without --number fails closed", async () => {
+  await assert.rejects(() => runDetect(["--body-file", "x.md", "--repo", "o/r"]), /--repo and --number must be given together/);
+});
+
 test("--comments-file accepts a { comments: [...] } wrapper object", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-comments-wrapper-"));
   try {
     const bodyPath = path.join(tempDir, "body.md");
     const commentsPath = path.join(tempDir, "comments.json");
     await writeFile(bodyPath, REFINED_BODY, "utf8");
-    await writeFile(commentsPath, JSON.stringify({ comments: [{ body: NO_GAPS_COMMENT }] }), "utf8");
+    await writeFile(commentsPath, JSON.stringify({ comments: [{ body: NO_GAPS_COMMENT, createdAt: "2026-11-06T10:00:00Z" }] }), "utf8");
     const { stdout } = await runDetect(["--body-file", bodyPath, "--comments-file", commentsPath]);
     const parsed = JSON.parse(stdout);
     assert.equal(parsed.state, "grill_clean");
@@ -132,7 +166,7 @@ test("--body-file with a bypass-recorded results comment seeds grill_clean flagg
     await writeFile(bodyPath, REFINED_BODY, "utf8");
     await writeFile(
       commentsPath,
-      JSON.stringify([{ body: `## ${RESULTS_TITLE}\n\nbypass: operator-authorized by mfittko\n\nRan anyway; no gaps found.` }]),
+      JSON.stringify([{ body: `## ${RESULTS_TITLE}\n\nbypass: operator-authorized by mfittko\n\nRan anyway; no gaps found.`, createdAt: "2026-11-06T10:00:00Z" }]),
       "utf8",
     );
     const { stdout } = await runDetect(["--body-file", bodyPath, "--comments-file", commentsPath]);
@@ -222,7 +256,7 @@ test("detector round-trip: a hand-authored matrix with no comments gets a real s
     // Pass 2: the semantic pass ran, found no gaps, and recorded its own
     // provenance by posting a results comment stating so.
     const noGapsCommentsPath = path.join(tempDir, "comments-no-gaps.json");
-    await writeFile(noGapsCommentsPath, JSON.stringify([{ body: NO_GAPS_COMMENT }]), "utf8");
+    await writeFile(noGapsCommentsPath, JSON.stringify([{ body: NO_GAPS_COMMENT, createdAt: "2026-11-06T10:00:00Z" }]), "utf8");
     const second = JSON.parse((await runDetect(["--body-file", bodyPath, "--comments-file", noGapsCommentsPath])).stdout);
     assert.equal(second.state, "grill_clean");
     assert.equal(second.reason, "provenance_recorded");
@@ -230,7 +264,7 @@ test("detector round-trip: a hand-authored matrix with no comments gets a real s
     // Alternative pass: the semantic pass found and filled a gap, and recorded
     // that outcome instead -- also a recorded pass, also grill_clean on a re-check.
     const gapFillingCommentsPath = path.join(tempDir, "comments-gap-filling.json");
-    await writeFile(gapFillingCommentsPath, JSON.stringify([{ body: GAP_FILLING_COMMENT }]), "utf8");
+    await writeFile(gapFillingCommentsPath, JSON.stringify([{ body: GAP_FILLING_COMMENT, createdAt: "2026-11-06T10:00:00Z" }]), "utf8");
     const third = JSON.parse((await runDetect(["--body-file", bodyPath, "--comments-file", gapFillingCommentsPath])).stdout);
     assert.equal(third.state, "grill_clean");
     assert.equal(third.reason, "provenance_recorded");

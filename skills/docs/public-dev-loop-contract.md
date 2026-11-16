@@ -128,6 +128,8 @@ Required authoritative inputs:
 - refreshed `linked_pr_ready_for_followup` for an issue target with a resolved linked PR: promote stale bootstrap waiting to the linked PR follow-up path, or fail closed if the linked-PR facts are incomplete/contradictory, instead of preserving the old bootstrap wait route
 - refreshed `prior_linked_pr_closed_unmerged` for a Copilot-owned issue target with `issueLinkageResolution=resolved_no_open_pr`: fail closed to reconcile instead of treating the issue as a healthy bootstrap wait or fresh issue-intake path
 
+A spec-change stop of `loop startup` emits top-level `issueReadiness` (`needs_clarification`) and `issueReadinessReason` (`spec_changed_since_grill` or `spec_change_read_failed`) beside a `needs_reconcile` bundle; the bundle itself carries neither `issueReadinessReason` nor a changed `issueReadiness`.
+
 Resolved bundle output shape:
 
 ```json
@@ -267,7 +269,7 @@ Do not create, read, or update `docs/phases/phase-<n>.md` for the same tracker-b
 
 For Copilot-first issue flows (`currentState.target.kind=issue`, `ownership=copilot`, and no linked PR), orchestration must resolve this seam from authoritative issue facts before follow-up routing:
 
-1. `issueReadiness=needs_clarification` → ask clarification questions and stop before assignment (`issueAssignmentSeam=needs_refinement`)
+1. `issueReadiness=needs_clarification` → ask clarification questions and stop before assignment (`issueAssignmentSeam=needs_refinement`); when `issueReadinessReason` is set, follow the startup `nextAction` instead: `spec_changed_since_grill` routes to a re-grill and `spec_change_read_failed` routes to a startup retry (`GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL`)
 2. `issueReadiness=ready` + `issueAssignmentState=unassigned` + `authorization=needs_confirmation` → ask for explicit assignment confirmation (`issueAssignmentSeam=ready_needs_assignment_confirmation`)
 3. `issueReadiness=ready` + `issueAssignmentState=unassigned` + `authorization=authorized` → assign `copilot-swe-agent` now before PR/bootstrap/watch follow-up (`issueAssignmentSeam=ready_assign_now`)
 4. `issueReadiness=ready` + `issueAssignmentState=assigned_to_copilot` → assignment seam satisfied; proceed to follow-up (`issueAssignmentSeam=assigned_to_copilot`)
@@ -442,7 +444,7 @@ Any conflict that would materially change artifact identity, ownership truth, or
 
 The bounded allow-list is exported from `packages/core/src/loop/public-dev-loop-routing.mjs` as `DEV_LOOP_VARIATION_PARAMETER_CONTRACT`.
 
-`issueReadiness` and `issueAssignmentState` are **not** part of that bounded variation-parameter allow-list. They are authoritative issue-state facts used only for the Copilot-first unassigned-issue seam during startup/status/routing resolution.
+`issueReadiness` and `issueAssignmentState` are **not** part of that bounded variation-parameter allow-list. They are authoritative issue-state facts used for the Copilot-first unassigned-issue seam during startup/status/routing resolution. `issueReadinessReason` additionally stops `loop startup` on every target preference (`GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL`).
 
 ### Explicit non-parameters for this slice
 

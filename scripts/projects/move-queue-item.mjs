@@ -30,7 +30,8 @@ Exit codes:
   1 — usage or argument error
   2 — GitHub API error / invalid --jq filter
   3 — project, field, column, or item not found
-  4 — issue targets the pickup column without a refinement artifact
+  4 — issue targets the pickup column without a refinement artifact, or whose
+      spec changed after its latest grill (spec_changed_since_grill)
 `.trim();
 
 function parseCliArgs(argv) {
