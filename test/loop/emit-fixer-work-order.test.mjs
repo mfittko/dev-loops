@@ -3071,11 +3071,12 @@ test("ADR 0197: a PR-own change after the cap round keeps the round_cap_reached 
   });
 });
 
-// Issue 2752 slice 4 (PR 3223 shape): the round-2 verdict (cap 2) was posted at the origin head O; origin/main then moved and the branch merged it into M.
-// The act list belongs to O's ledger; M has none. `side` writes the ledger at a commit that is not an ancestor of M, `criss` builds a criss-cross merge base.
-async function verdictCarryScenario({ root, wt, files }, { baseFile = "main-only.md", baseContent = "main content\n", conflict = false, side = false, criss = false, ownChangeAfterMerge = false, cap = 2 } = {}) {
+// Issue 2752 slice 4 (PR 3223 shape): the verdict was posted at the origin head O, whose ledger is the only one (round 1); origin/main then moved and the branch merged it into M.
+// The act list belongs to O's ledger; M has none unless `mLedger` writes one ("findings_present" or "blocked"). `side` writes the ledger at a commit that is not an ancestor of M, `criss` builds a criss-cross merge base.
+// `handEdit` adds a hand edit of a PR path after the merge (a changed PR blob); it builds no conflict hunk, and no test here claims conflict-hunk coverage.
+async function verdictCarryScenario({ root, wt, files }, { baseFile = "main-only.md", baseContent = "main content\n", handEdit = false, side = false, criss = false, ownChangeAfterMerge = false, cap = 2, severity = "medium", mLedger = null } = {}) {
   await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: cap } } }));
-  const medium = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
+  const medium = withFp({ ...ACT[0], severity, judgeFix: "guard the deref" });
   await writeFile(files.actList, JSON.stringify([medium]));
   await writeFile(path.join(wt, "pr.md"), "pr content\n");
   git(wt, "add", "pr.md");
@@ -3093,18 +3094,20 @@ async function verdictCarryScenario({ root, wt, files }, { baseFile = "main-only
   await writeFile(path.join(dir, `draft_gate-${ledgerHead}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: ledgerHead, verdict: "findings_present", loggedAt: "2026-11-02T00:00:00.000Z", findings: [medium] }));
   const baseCommit = async () => {
     await mkdir(path.dirname(path.join(root, baseFile)), { recursive: true });
-    await writeFile(path.join(root, baseFile), conflict ? "main side\n" : baseContent);
+    await writeFile(path.join(root, baseFile), handEdit ? "main side\n" : baseContent);
     git(root, "add", "-A");
     git(root, "commit", "-q", "-m", "main moves");
     git(root, "update-ref", "refs/remotes/origin/main", "main");
   };
   await baseCommit();
-  if (conflict) {
-    try { git(wt, "merge", "-q", "--no-edit", "origin/main"); } catch { /* conflict expected */ }
+  if (handEdit) {
+    // The merge is followed by a hand edit of a PR path in a second commit; no conflict hunk is built here.
+    git(wt, "merge", "-q", "--no-ff", "-m", "merge origin/main", "origin/main");
     await writeFile(path.join(wt, "pr.md"), "resolved by hand\n");
     git(wt, "add", "-A");
-    git(wt, "commit", "-q", "-m", "resolve");
+    git(wt, "commit", "-q", "-m", "hand edit");
   } else git(wt, "merge", "-q", "--no-ff", "-m", "merge origin/main", "origin/main");
+  if (mLedger) await writeFile(path.join(dir, `draft_gate-${git(wt, "rev-parse", "HEAD")}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: git(wt, "rev-parse", "HEAD"), verdict: mLedger, loggedAt: "2026-11-03T00:00:00.000Z", findings: [medium] }));
   if (criss) {
     git(root, "merge", "-q", "--no-ff", "--no-edit", origin);
     git(root, "update-ref", "refs/remotes/origin/main", "main");
@@ -3135,11 +3138,25 @@ test("issue 2752 slice 4: the seam ignores the gate-tooling rule (scripts/ and .
   }
 });
 
+test("issue 2752 slice 4: the act list is counted at the origin round, so a round-1 nit-only list is accepted under the seam", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await verdictCarryScenario(fx, { severity: "nit" });
+    assert.equal((await fx.emit(over())).workOrder.source, "act-list");
+  });
+  // Without the seam the same list is counted at the merged head (round 2) and refused.
+  await withFixture(async (fx) => {
+    const { over } = await verdictCarryScenario(fx, { severity: "nit", ownChangeAfterMerge: true, cap: 3 });
+    await assert.rejects(fx.emit(over()), (e) => e.refusal === "low_fix_until_cap" || /verdict_not_posted/.test(e.message));
+  });
+});
+
 test("issue 2752 slice 4: every fail-closed case keeps the verdict_not_posted refusal", async () => {
   const notPosted = (e) => /verdict_not_posted/.test(e.message);
   const cases = {
     "changed PR blob": { scenario: { ownChangeAfterMerge: true } },
-    "conflict-resolution merge": { scenario: { conflict: true } },
+    "merge followed by a hand edit of a PR path": { scenario: { handEdit: true } },
+    "head with its own unposted findings_present ledger": { scenario: { mLedger: "findings_present" } },
+    "head with its own blocked ledger": { scenario: { mLedger: "blocked" } },
     "non-ancestor origin head": { scenario: { side: true } },
     "criss-cross merge base": { scenario: { criss: true } },
     "missing origin verdict": { scenario: {}, posted: "e".repeat(40) },

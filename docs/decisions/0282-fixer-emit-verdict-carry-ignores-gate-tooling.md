@@ -8,7 +8,7 @@ Amends [0156](./0156-carry-gate-verdict-across-base-only-merge.md). Cites [0197]
 
 ## Context
 
-`GATE-EXEC-POST-BEFORE-FIX` makes `emit-fixer-work-order` refuse an act-list order with `verdict_not_posted` until the gate's verdict review is posted at the PR head. On PR 3223 the `draft_gate` round 2 verdict was posted at one head. A merge of the base then gave a new head with an unchanged PR patch. The emit refused at the new head, and at the old head because it was no longer the PR head. The five judged act items had no route to a fixer, and the lane spent a third gate round re-reviewing the same patch.
+`GATE-EXEC-POST-BEFORE-FIX` makes `emit-fixer-work-order` refuse an act-list order with `verdict_not_posted` until the gate's verdict review is posted at the PR head. On PR 3223 a `draft_gate` verdict was posted at one head. A merge of the base then gave a new head with an unchanged PR patch. The emit refused at the new head, and at the old head because it was no longer the PR head. The five judged act items had no route to a fixer, and the lane spent a third gate round re-reviewing the same patch.
 
 ADR 0156 carries a verdict across a base-only merge for gate coordination and merge acceptance. It also requires that the base delta touches no gate tooling. Its reason is the refresh rule of ADR 0096: a round must run on current gate tooling. A base delta that touches `scripts/` is the common case, so the full classifier would refuse the PR 3223 shape in most real merges.
 
@@ -27,6 +27,8 @@ The tooling rule has two reasons not to apply here:
 
 - The act items were already judged at the origin head. The fix changes nothing about what was judged.
 - The round after the fix runs on current tooling, so the tooling rule keeps its purpose where it matters.
+
+The seam returns no origin head when the PR head has a findings ledger of its own (live, retained, blocked or unreadable): that head ran a round whose verdict is not posted. When the seam accepts, the act list's round and the round cap are counted at the origin head, because the head's own count would be one round late. A round after the cap round stays refused.
 
 The seam accepts the origin head's posted verdict and its ledger as the authority for the act list. At the round cap, a head with no ledger of its own reads the origin head's ledger for the cap-round blocker check, and only when the seam accepts the origin head. The fix pass starts from the current head. The seam posts, edits and records nothing.
 

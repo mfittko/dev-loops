@@ -572,9 +572,14 @@ export async function emitFixerWorkOrder({
   // verdict is posted there and every PR blob is unchanged at the PR head (tooling rule ignored, nothing recorded). Any failure returns null (fail closed).
   const verdictPosted = (m) => Boolean(m?.[gate]?.visible && m[gate].contractComplete === true);
   let carryMemo;
+  const ledgerPath = (head) => path.resolve(resolveRepoRoot(cwd), buildLogPath({ repo, pr, gate, headSha: head, tmpRoot: tmpRoot || resolveGateArtifactTmpRoot(resolveRepoRoot(cwd)) }));
   const carryOriginHead = () => carryMemo ??= (async () => {
     try {
-      const originHead = closureFromHeadOf(await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), onUnreadable: () => { throw new Error("unreadable prior ledger"); } }));
+      // A head with a ledger of its own (live, blocked, unreadable or retained) ran a round whose verdict is not the origin's: the seam carries nothing across it.
+      if (existsSync(ledgerPath(headSha))) return null;
+      const closed = await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), includeRetainedCurrentHead: true, includeLiveCurrentHead: true, onUnreadable: () => { throw new Error("unreadable prior ledger"); } });
+      if (closed.some((log) => String(log.headSha).trim().toLowerCase() === headSha)) return null;
+      const originHead = closureFromHeadOf(closed);
       const baseRefName = (await fetchPr({ repo, pr }))?.baseRefName;
       return originHead !== headSha && typeof baseRefName === "string" && baseRefName !== ""
         && verdictPosted(await fetchVerdictMarkers({ repo, pr, headSha: originHead, gate, runtime: { env, ghCommand, runChild } }))
@@ -584,6 +589,8 @@ export async function emitFixerWorkOrder({
   if (actListFile && (gate === "draft_gate" || lowNitOnly)) {
     // The round state comes from the same --tmp-root as the ledger writer, judge-pass and the verdict poster.
     let { lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot },{ repoRoot: resolveRepoRoot(cwd) });
+    // Slice 4: when the seam accepts, the act list belongs to the origin head's round, so the round and cap are counted there, not one round late at the ledger-less head.
+    if (gate === "draft_gate" && !existsSync(ledgerPath(headSha)) && await carryOriginHead()) ({ lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha: await carryOriginHead(), tmpRoot }, { repoRoot: resolveRepoRoot(cwd) }));
     // ADR 0197: a base-only merge after the cap round neither counts as a round nor consumes the closure round. The head with no ledger of its own,
     // whose changes since the cap-round head are merges of the PR base with an unchanged PR-own patch, is still the cap round: the cap-round ledger and posted verdict are read at the cap-round head.
     if (cap > 0 && round === cap + 1 && !existsSync(path.resolve(resolveRepoRoot(cwd), buildLogPath({ repo, pr, gate, headSha, tmpRoot })))) {
@@ -614,8 +621,6 @@ export async function emitFixerWorkOrder({
     }
     // At the cap round the current-head round can still compose blocked (a high act item without a judgeFix, a question act item, a closed finding naming a human decision): no fixer order follows a blocked verdict. An unreadable ledger fails closed.
     if (cap > 0 && round === cap) {
-      const repoRoot = resolveRepoRoot(cwd);
-      const ledgerPath = (head) => path.resolve(repoRoot, buildLogPath({ repo, pr, gate, headSha: head, tmpRoot: tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }));
       // Slice 4: a head with no ledger of its own reads the origin head's ledger (the act list's round) when the carry seam accepts that head.
       let ledgerFile = ledgerPath(capRoundHead);
       if (!existsSync(ledgerFile)) { const origin = await carryOriginHead(); if (origin) ledgerFile = ledgerPath(origin); }
