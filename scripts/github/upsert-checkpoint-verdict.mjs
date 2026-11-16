@@ -2862,7 +2862,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const checkFreshness = checkBaseFreshness ?? (runChild === defaultRunChild ? defaultCheckBaseFreshness : null);
     const prBase = coordinationContext?.prData?.baseRefName;
     if (verdict === "clean" && !isReviewGate && checkFreshness && typeof prBase === "string" && prBase.trim()) {
-      const stale = await staleBaseReason({ base: prBase.trim(), head: canonicalHeadSha, cwd: repoRoot, env, check: checkFreshness });
+      // A converged post records at the reviewed head A; the base check belongs to the current PR head (the fixer commit).
+      const stale = await staleBaseReason({ base: prBase.trim(), head: convergedInput?.fixerCommit ?? canonicalHeadSha, cwd: repoRoot, env, check: checkFreshness });
       if (stale) throw new Error(`${stale} A clean ${options.gate} verdict is not recorded at a stale base.`);
     }
   };

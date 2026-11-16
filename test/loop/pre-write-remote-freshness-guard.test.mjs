@@ -452,6 +452,14 @@ test("staleBaseReason derives the default branch from the full origin/HEAD ref, 
   }
 });
 
+test("staleBaseReason shows the first 5 newer commits and counts the rest", async () => {
+  const newerCommits = Array.from({ length: 7 }, (_, i) => `c${i} commit ${i}`);
+  const check = async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits, foreignFiles: [], remedy: "R" });
+  const reason = await staleBaseReason({ base: "main", head: "h", cwd: ".", check });
+  assert.ok(reason.includes("c4 commit 4 (+2 more). R"));
+  assert.ok(!reason.includes("c5 commit 5"));
+});
+
 test("checkBaseFreshness fetches a trusted origin/-prefixed or 40-hex baseRefName", async () => {
   const { root, clone } = await makeStaleBaseFixture({ advance: false });
   try {
