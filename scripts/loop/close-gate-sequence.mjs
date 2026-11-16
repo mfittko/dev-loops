@@ -100,17 +100,22 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
     return record?.outcome === "bounded_out" && record.nextStep === "push_to_gate" && executionIdentity !== undefined
       && record.origin?.workOrderRef === workOrderRef && record.origin?.executionIdentity === executionIdentity;
   };
-  let condition = null;
-  // A marker younger than the grace may belong to a fixer still dispatching, and a missing pull proves nothing about it, so it closes only once the grace has passed.
-  if (markerUnreadable && now() - (markerMtime ?? now()) < grace) return refuse("abandonment_unproven", `the marker for ${head} is unreadable or names no branch and is younger than the ${grace / 60000} minute dispatch grace, so a fixer may still be starting`, `Rerun close-sequence after ${grace / 60000} minutes.`);
-  if (markerUnreadable) {
-    // A sealed record of this baseline for the marker's own execution that does not push (needs_fix, fix_and_rereview) keeps the sequence live, as on the branch path.
+  // A sealed record of this baseline for the marker's own execution that does not push (needs_fix, fix_and_rereview) keeps the sequence live, as on the branch path; rechecked under the lock.
+  const unreadableLive = () => {
     let record = null;
     try { record = readSealedGateDeltaRecord(tmpRoot, head); } catch { /* an unreadable record proves nothing */ }
     if (executionIdentity !== undefined && record?.nextStep !== undefined && record.nextStep !== "push_to_gate"
       && record.origin?.workOrderRef === workOrderRef && record.origin?.executionIdentity === executionIdentity) {
       return refuse("sequence_live", `the sealed delta record of ${head} names the fixer execution ${executionIdentity} with next step ${record.nextStep}`, "Finish the sequence with the pre-push delta review (dev-loops loop pre-push-delta).");
     }
+    return null;
+  };
+  let condition = null;
+  // A marker younger than the grace may belong to a fixer still dispatching, and a missing pull proves nothing about it, so it closes only once the grace has passed.
+  if (markerUnreadable && now() - (markerMtime ?? now()) < grace) return refuse("abandonment_unproven", `the marker for ${head} is unreadable or names no branch and is younger than the ${grace / 60000} minute dispatch grace, so a fixer may still be starting`, `Rerun close-sequence after ${grace / 60000} minutes.`);
+  if (markerUnreadable) {
+    const live = unreadableLive();
+    if (live) return live;
     condition = "MARKER_UNREADABLE";
   } else {
     const { pr: facts } = await fetchPr({ repo, pr, fields: "headRefOid,headRefName" });
@@ -138,6 +143,7 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
       const pulledAfterRead = pulledMeanwhile() ?? fixerRunning();
       if (pulledAfterRead) return pulledAfterRead;
       if (condition === "BOUNDED_OUT" && !boundedOut()) return refuse("sequence_live", `the delta record for ${head} changed while it was checked`, "Rerun close-sequence.");
+      if (condition === "MARKER_UNREADABLE") { const live = unreadableLive(); if (live) return live; }
       // Record first, marker second: a failed write leaves the marker in place.
       const file = sequenceClosurePath(tmpRoot, head, executionIdentity);
       mkdirSync(path.dirname(file), { recursive: true });
