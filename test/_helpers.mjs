@@ -121,6 +121,19 @@ export function runIdFreeEnv(overrides = {}) {
   return env;
 }
 
+// Runs an in-process test body with CLAUDECODE unset, then restores it. renderCliText and
+// cliError rewrite bare `dev-loops <cmd>` text to the `dev-loops-run` launcher form under
+// CLAUDECODE=1, so tests that pin the bare form must not inherit it from a Claude Code session.
+export async function withoutClaudeCode(fn) {
+  const saved = process.env.CLAUDECODE;
+  delete process.env.CLAUDECODE;
+  try {
+    return await fn();
+  } finally {
+    if (saved !== undefined) process.env.CLAUDECODE = saved;
+  }
+}
+
 // In-process replacement for the PATH-installed gh stub (buildGhStubScript /
 // writeGhStub). Returns `{ runChild, calls }` where `runChild(command, args, env,
 // stdinText)` replays the SAME sequential semantics the PATH stub implements, but

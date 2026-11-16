@@ -25,7 +25,7 @@ import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs"
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
-import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
+import { makeGhMock, runIdFreeEnv, withTempDir, withoutClaudeCode } from "../_helpers.mjs";
 import { TOOLCHAIN_ROOT, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { sealDeltaFixture } from "./_seal-fixture.mjs";
 
@@ -953,7 +953,7 @@ test("F1: a delta result that does not belong to this act list and head refuses 
   });
 });
 
-test("verdict_not_posted: an act-list order refuses without a posted verdict for the gate at the head; a threads order is unaffected", async () => {
+test("verdict_not_posted: an act-list order refuses without a posted verdict for the gate at the head; a threads order is unaffected", () => withoutClaudeCode(async () => {
   await withFixture(async ({ head, files, emit }) => {
     const refuse = (over) => assert.rejects(emit(over), /verdict_not_posted[^]*dev-loops gate upsert-verdict[^]*--head-sha[^]*--gate (draft_gate|pre_approval_gate)/);
     await refuse({ fetchVerdictMarkers: async () => summarizeGateReviewCommentMarkers([], { headSha: head }) });
@@ -974,9 +974,9 @@ test("verdict_not_posted: an act-list order refuses without a posted verdict for
     const neverCalled = async () => { throw new Error("threads source must not read verdicts"); };
     assert.equal((await emit({ ...threadsOnly, phase: "commit_only", actListFile: undefined, threadsFile: files.threads, fetchVerdictMarkers: neverCalled })).workOrder.source, "threads");
   });
-});
+}));
 
-const threadsOnly = { actListFile: undefined, gate: undefined, phase: "full" };
+const threadsOnly ={ actListFile: undefined, gate: undefined, phase: "full" };
 const THREE = { ...THREADS, threads: ["T1", "T2", "T3"].map((threadId, i) => ({ ...THREADS.threads[0], threadId, commentId: i + 1 })) };
 
 test("F1: a judge-act finding below the inline floor still reaches the work order through the act list", async () => {
@@ -2684,7 +2684,7 @@ for (const route of ["Historical main", "OLD authority", "complete"]) test(`${ro
   });
 });
 
-test("F8: the work order routes validation through the canonical policy and carries no full-run command", async () => {
+test("F8: the work order routes validation through the canonical policy and carries no full-run command", () => withoutClaudeCode(async () => {
   await withFixture(async ({ emit, prepareFull }) => {
     for (const phase of ["commit_only", "full"]) {
       const unit = phase === "full" ? await (await prepareFull()).full() : await emit({ phase });
@@ -2697,7 +2697,7 @@ test("F8: the work order routes validation through the canonical policy and carr
       for (const text of strings) assert.notEqual(classifyValidationCommand(text), "full-repository", text);
     }
   });
-});
+}));
 
 test("issue 2787: a THREAD full order has the numbered steps, runs --construct and asks for no hand-written handoff", async () => {
   await withFixture(async ({ emit, files, writeRecord }) => {
