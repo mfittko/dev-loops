@@ -3114,10 +3114,16 @@ test("ADR 0197: a PR-own change after the cap round keeps the round_cap_reached 
 // Issue 3105 (PR 3237 shape): the first cap-round fixer pass fixed part of the act list and pushed; the PR head is its candidate C, with no ledger of its own.
 async function capRoundFirstPassPushed(fx) {
   await writeCapRoundLedgers(fx);
+  // The cap-round ledger holds two findings; the first pass fixes only the first, so the second stays open for the later pass.
+  const [fixedItem] = JSON.parse(await readFile(fx.files.actList));
+  const openItem = withFp({ ...ACT[0], severity: "medium", summary: "finding left for the second pass", judgeFix: "fix it" });
+  const ledger = path.join(fx.root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${fx.head}.json`);
+  await writeFile(ledger, JSON.stringify({ ...JSON.parse(await readFile(ledger)), findings: [fixedItem, openItem] }));
   // The full phase needs a clean worktree, so the untracked cap config is ignored.
   await writeFile(path.join(fx.root, ".git", "info", "exclude"), ".devloops.json\n");
   const first = await fx.prepareFull();
   assert.equal((await first.full()).workOrder.headSha, first.candidate);
+  await writeFile(fx.files.actList, JSON.stringify([fixedItem, openItem]));
   const at = (prHead) => ({ headSha: prHead, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: prHead, baseRefName: "main" }), fetchVerdictMarkers: verdictPostedAt(fx.head) });
   return { candidate: first.candidate, at };
 }
