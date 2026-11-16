@@ -29,6 +29,7 @@ import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
 import { closureFromHeadOf, clearingChainLastCandidates, readClosedPriorRoundLogs, renderRequiredReadLine, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
+import { fixerEmitCarryAccepts } from "../github/_carried-verdict.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { authenticateOriginalPlan, beginFixerEmission } from "../github/_fixer-emission-evidence.mjs";
@@ -567,6 +568,19 @@ export async function emitFixerWorkOrder({
   const actSeverities = actListFile ? source.parsed.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity])) : [];
   const lowNitOnly = actSeverities.every((s) => ["low", "nit"].includes(normalizeSeverity(s)));
   let capRoundHead = headSha; // the head whose ledger and posted verdict the act list belongs to (ADR 0197)
+  // Fixer-emit carry seam (issue 2752 slice 4, ADR 0282): the origin head is the head of the latest closed earlier ledger. It is returned only when the gate's
+  // verdict is posted there and every PR blob is unchanged at the PR head (tooling rule ignored, nothing recorded). Any failure returns null (fail closed).
+  const verdictPosted = (m) => Boolean(m?.[gate]?.visible && m[gate].contractComplete === true);
+  let carryMemo;
+  const carryOriginHead = () => carryMemo ??= (async () => {
+    try {
+      const originHead = closureFromHeadOf(await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), onUnreadable: () => { throw new Error("unreadable prior ledger"); } }));
+      const baseRefName = (await fetchPr({ repo, pr }))?.baseRefName;
+      return originHead !== headSha && typeof baseRefName === "string" && baseRefName !== ""
+        && verdictPosted(await fetchVerdictMarkers({ repo, pr, headSha: originHead, gate, runtime: { env, ghCommand, runChild } }))
+        && await fixerEmitCarryAccepts({ originHead, headSha, baseRef: `origin/${baseRefName}`, repoRoot: cwd }) ? originHead : null;
+    } catch { return null; }
+  })();
   if (actListFile && (gate === "draft_gate" || lowNitOnly)) {
     // The round state comes from the same --tmp-root as the ledger writer, judge-pass and the verdict poster.
     let { lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot },{ repoRoot: resolveRepoRoot(cwd) });
@@ -601,7 +615,10 @@ export async function emitFixerWorkOrder({
     // At the cap round the current-head round can still compose blocked (a high act item without a judgeFix, a question act item, a closed finding naming a human decision): no fixer order follows a blocked verdict. An unreadable ledger fails closed.
     if (cap > 0 && round === cap) {
       const repoRoot = resolveRepoRoot(cwd);
-      const ledgerFile = path.resolve(repoRoot, buildLogPath({ repo, pr, gate, headSha: capRoundHead, tmpRoot: tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }));
+      const ledgerPath = (head) => path.resolve(repoRoot, buildLogPath({ repo, pr, gate, headSha: head, tmpRoot: tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }));
+      // Slice 4: a head with no ledger of its own reads the origin head's ledger (the act list's round) when the carry seam accepts that head.
+      let ledgerFile = ledgerPath(capRoundHead);
+      if (!existsSync(ledgerFile)) { const origin = await carryOriginHead(); if (origin) ledgerFile = ledgerPath(origin); }
       if (!existsSync(ledgerFile)) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} does not exist; failing closed at the cap round`);
       const { findings: ledgerFindings } = await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): ${m}; failing closed at the cap round`) });
       const blockers = pastCapBlockers([...ledgerFindings, ...source.parsed], { round, cap });
@@ -711,7 +728,7 @@ export async function emitFixerWorkOrder({
     try { markers = await fetchVerdictMarkers({ repo, pr, headSha: capRoundHead, gate, runtime: { env, ghCommand, runChild } }); } catch (error) {
       throw new Refusal(`verdict_not_posted: could not read the PR's posted verdicts (${error?.message ?? error}); post the ${gate} verdict review at ${capRoundHead} before fixing: ${upsert}`);
     }
-    if (!(markers?.[gate]?.visible && markers[gate].contractComplete === true)) throw new Refusal(`verdict_not_posted: no ${gate} verdict review is posted on ${repo}#${pr} at ${capRoundHead}; post it before fixing (GATE-EXEC-POST-BEFORE-FIX): ${upsert}`);
+    if (!verdictPosted(markers) && !(await carryOriginHead())) throw new Refusal(`verdict_not_posted: no ${gate} verdict review is posted on ${repo}#${pr} at ${capRoundHead}; post it before fixing (GATE-EXEC-POST-BEFORE-FIX): ${upsert}`);
   }
 
   let completion, completionRead, candidateHead = headSha, recheckCandidate = () => {}, rejectOriginalRetirement = () => {};

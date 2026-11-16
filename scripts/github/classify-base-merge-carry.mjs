@@ -62,7 +62,7 @@ async function singleMergeBase(runGit, repoRoot, baseRef, head) {
   return bases[0];
 }
 
-export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRoot, runGit = runPinnedGit }) {
+export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRoot, runGit = runPinnedGit, ignoreGateTooling = false }) {
   try {
     const anc = await runGit(["merge-base", "--is-ancestor", prevHead, headSha], { repoRoot });
     if (anc.code === 1) throw new Error("prev-head is not an ancestor of head-sha");
@@ -92,7 +92,7 @@ export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRo
     return classifyBaseMergeCarry({
       sourceHead: prevHead, newHead: headSha, prBlobsBefore, prBlobsAfter,
       baseDeltaPaths, conflictResolutionHunks,
-    });
+    }, { ignoreGateTooling });
   } catch (error) {
     return classifyBaseMergeCarry({ sourceHead: prevHead, newHead: headSha, detectionError: error instanceof Error ? error.message : String(error) });
   }
