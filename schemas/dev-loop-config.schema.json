@@ -352,7 +352,7 @@
                         "minLength": 1
                       },
                       "tier": {
-                        "description": "Model tier alias for this angle (used when `model` is absent).",
+                        "description": "Model tier alias for this angle. On Pi it applies when `model` is absent, Claude always applies it, and Codex inherits.",
                         "type": "string",
                         "minLength": 1
                       },
@@ -596,7 +596,7 @@
                         "minLength": 1
                       },
                       "tier": {
-                        "description": "Model tier alias for this angle (used when `model` is absent).",
+                        "description": "Model tier alias for this angle. On Pi it applies when `model` is absent, Claude always applies it, and Codex inherits.",
                         "type": "string",
                         "minLength": 1
                       },
@@ -835,7 +835,7 @@
                         "minLength": 1
                       },
                       "tier": {
-                        "description": "Model tier alias for this angle (used when `model` is absent).",
+                        "description": "Model tier alias for this angle. On Pi it applies when `model` is absent, Claude always applies it, and Codex inherits.",
                         "type": "string",
                         "minLength": 1
                       },

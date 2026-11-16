@@ -223,7 +223,7 @@ const GateAngleEntry = z.preprocess(
     persona: z.string().trim().min(1).optional().describe("Reviewer persona for this angle."),
     prompt: z.string().min(1).optional().describe("Short focused instruction for the reviewer agent — what to look for and how to judge this angle."),
     model: z.string().trim().min(1).optional().describe("Concrete model override for this angle. Applies on Pi only; Claude honors the angle tier and Codex inherits."),
-    tier: z.string().trim().min(1).optional().describe("Model tier alias for this angle (used when `model` is absent)."),
+    tier: z.string().trim().min(1).optional().describe("Model tier alias for this angle. On Pi it applies when `model` is absent, Claude always applies it, and Codex inherits."),
     scope: z.enum(GATE_ANGLE_SCOPES).optional().describe("Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle or its changed-files/adjacent-file summary section), or docs-only (doc-file paths only; the diff stays the required diff read). Unknown/omitted resolves to full."),
     readsPrBody: z.boolean().optional().describe("Declare that this angle reads the PR body, so a PR-body-only edit re-runs its dispatch unit (GATE-EXEC-BODY-ONLY-RERUN). An angle whose prompt names the PR body or PR description is body-reading without it."),
     categories: z.array(z.enum(CHANGE_CATEGORY_NAMES)).min(1).optional().describe("Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed."),

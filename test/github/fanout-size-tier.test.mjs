@@ -135,6 +135,15 @@ describe("tier packing in resolveFanoutDispatch (AC1, AC4, AC6, AC7, AC9)", () =
     assert.equal(plan.unitBound, 5);
   });
 
+  test("a light-mode round with empty changedFiles is not escalated and reuses the recorded tier", () => {
+    const angles = POOL.slice(0, 9);
+    const first = dispatch(TIERED, "draft", angles, piEnv());
+    const light = withFanout({ sizeTiers: [TIER] }, LIGHT_CONFIG);
+    const plan = dispatch(light, "draft", angles, piEnv(), { changedFiles: [], sizeOutcome: SIZE(30), recordedSizeTier: first.sizeTier });
+    assert.deepEqual(plan.sizeTier.reasons, ["size_tier_applied"]);
+    assert.equal(plan.unitBound, 10);
+  });
+
   test("a sequential tiered round still packs and records size_tier_applied", () => {
     const angles = POOL.slice(0, 9);
     const plan = dispatch(withFanout({ sizeTiers: [TIER], sequential: true }), "draft", angles, piEnv());

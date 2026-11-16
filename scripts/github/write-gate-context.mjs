@@ -2605,7 +2605,7 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // A classifiable round that light mode would run inline reaches fan-out only through an inline escalation, so it is treated as escalated and keeps existing grouping. An unclassifiable file forces full fan-out without escalation, so that round records unclassifiable_diff instead.
   const classifyRules = resolveClassifyRules(config);
   const unclassifiable = Array.isArray(changedFiles) && changedFiles.some((f) => classifyFile(f, classifyRules) === "unknown");
-  const escalated = !unclassifiable && resolveGateDispatchMode(config, configGate, { changedFiles, sizeOutcome, hasFullLabel: fullLabel }).mode === "inline";
+  const escalated = !unclassifiable && Array.isArray(changedFiles) && changedFiles.length > 0 && resolveGateDispatchMode(config, configGate, { changedFiles, sizeOutcome, hasFullLabel: fullLabel }).mode === "inline";
   let tierDecision = resolveFanoutSizeTier(config, singleWave ? configGate : "review", { sizeOutcome, changedFiles, hasFullLabel: fullLabel, escalated });
   // A same-head rebuild without size evidence reuses the recorded applied tier, so the membership wave 1 dispatched on stays round-stable; any other reason re-derives.
   let reusedTier = false;
