@@ -1584,6 +1584,18 @@ test("PR-own commits that net-revert a file leave an empty patch and fail closed
   } finally { cleanup(repo); }
 });
 
+test("under CLAUDECODE=1 the replacement-PR remedy names the dev-loops-run launcher form", async () => {
+  const repo = reviewerOnlyRepo({ netRevert: true });
+  const saved = process.env.CLAUDECODE;
+  process.env.CLAUDECODE = "1";
+  try {
+    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "s", "--result-path", path.join(repo.dir, "r.json")], seam), /empty_resolution_patch[\s\S]*dev-loops-run --repo-root <checkout> cli\/index\.mjs pr create --head/);
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDECODE; else process.env.CLAUDECODE = saved;
+    cleanup(repo);
+  }
+});
+
 test("the reviewer-only route accepts only the canonical draft_gate cap-round ledger as --findings-log", async () => {
   const repo = reviewerOnlyRepo();
   try {

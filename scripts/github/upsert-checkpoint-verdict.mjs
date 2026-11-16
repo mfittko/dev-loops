@@ -2056,7 +2056,7 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
       const restoreHint = renderCliText(options.verdict === "clean"
         ? `run \`dev-loops pr restore-ready --repo ${options.repo} --pr ${options.pr}\` to restore ready`
         : `resolve the posted findings and restore ready through \`dev-loops pr ready-for-review\` ` +
-          `(or the dev-loop) — \`dev-loops pr restore-ready\` refuses on a non-clean verdict`);
+          `(or the dev-loop) — \`dev-loops pr restore-ready\` refuses on a non-clean verdict`, { env });
       throw new Error(
         `draft_gate verdict was posted to ${options.repo}#${options.pr} (comment ${result.commentId ?? "?"}), ` +
         `but restoring the PR to ready failed; it may be left in draft. Do not re-post the gate — ${restoreHint}. ` +
@@ -2679,7 +2679,7 @@ async function applyGateFullLabel({ repo, pr }, { env, ghCommand, runChild = def
  * check: it proves the round resolved its validation, and reviewers already
  * report it as incomplete evidence.
  */
-export async function assertGateValidationArtifact({ repo, pr, gate, headSha, repoRoot, contextTmpRoot }) {
+export async function assertGateValidationArtifact({ repo, pr, gate, headSha, repoRoot, contextTmpRoot, env = process.env }) {
   const relPath = buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot: contextTmpRoot || "tmp" });
   const expectedHead = String(headSha).toLowerCase();
   let problem = "is absent";
@@ -2706,6 +2706,7 @@ export async function assertGateValidationArtifact({ repo, pr, gate, headSha, re
   throw cliError(
     `Cannot post a fanout_fanin verdict for ${repo}#${pr} ${gate}: the validation artifact ${relPath} ${problem}. `
     + `Resolve the round's validation once before dispatching reviewers with dev-loops gate resolve-validation --profile <targeted|full-repository> --repo ${repo} --pr ${pr} --gate ${gate} --head-sha ${headSha} [--suite <name>]..., which writes this artifact through run-gate-validation.mjs. If the round resolved validation under an explicit --tmp-root, pass that path as --context-tmp-root instead of re-running (GATE-EXEC-VALIDATION-RESOLUTION).`,
+    { env },
   );
 }
 
@@ -2989,6 +2990,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         `the conversion mutation, or the conversion did not take). Not recursing. Re-run the draft_gate post ` +
         `once the PR reflects the draft state, or reconcile with ` +
         `\`dev-loops pr reconcile-draft --repo ${options.repo} --pr ${options.pr}\`.`,
+        { env },
       );
     }
     // A --converged-json update only amends the existing draft_gate comment, so the cap-fixed RUN_DRAFT_GATE ban does not apply to it; its own validation still runs.
@@ -3315,6 +3317,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         : "";
       throw cliError(
         `--verdict "${options.verdict}" for ${options.gate} @ ${canonicalHeadSha} contradicts the consolidated ledger's overallVerdict "${ledgerVerdict}" (from --findings-ledger "${options.findingsLedger}" for ${preloadedFindingsLedger.repo}#${preloadedFindingsLedger.pr} ${preloadedFindingsLedger.gate} @ ${preloadedFindingsLedger.headSha}).${actNote}${compositionNote} The verdict must match the fan-in consolidator's computed value composed with any deterministic gate blocker — GATE-COMMENT-VERDICT-VALUES (skills/docs/gate-review-comment-contract.md): "clean" = a fully judged round has an empty judge act list (a round with an unjudged finding also needs no blocking-severity finding); "findings_present" = a fully judged round has a non-empty judge act list, or a round with an unjudged finding has an issue at a blocking severity or a non-empty judge act list; "blocked" = the fan-in could not complete or a proven deterministic gate blocker (unchecked AC/DoD) prevents crossing. Re-run the gate fan-in (dev-loops gate consolidate-fanin) and let its overallVerdict flow through, or omit --verdict to post the composed verdict. A contradicting posted verdict is a contract breach this script refuses to record.`,
+        { env },
       );
     }
     // else: a matching explicit --verdict is accepted unchanged.
@@ -3648,7 +3651,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // GATE-EXEC-VALIDATION-RESOLUTION enforcement: the round must have run
     // run-gate-validation.mjs once for the reviewed head. Same opt-out and
     // placement as the ledger refusal above, so its message wins when both fire.
-    await assertGateValidationArtifact({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, repoRoot, contextTmpRoot: options.contextTmpRoot });
+    await assertGateValidationArtifact({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, repoRoot, contextTmpRoot: options.contextTmpRoot, env });
   }
   // FINDINGS-SOURCE FOOTGUN WARNING: a fanout_fanin round posted with
   // --findings-json but no --findings-ledger silently files ZERO inline

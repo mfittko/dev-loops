@@ -976,7 +976,7 @@ test("verdict_not_posted: an act-list order refuses without a posted verdict for
   });
 }));
 
-const threadsOnly ={ actListFile: undefined, gate: undefined, phase: "full" };
+const threadsOnly = {actListFile: undefined, gate: undefined, phase: "full" };
 const THREE = { ...THREADS, threads: ["T1", "T2", "T3"].map((threadId, i) => ({ ...THREADS.threads[0], threadId, commentId: i + 1 })) };
 
 test("F1: a judge-act finding below the inline floor still reaches the work order through the act list", async () => {
@@ -2698,6 +2698,27 @@ test("F8: the work order routes validation through the canonical policy and carr
     }
   });
 }));
+
+test("the work order text follows --harness, not the emitting process CLAUDECODE", async () => {
+  const saved = process.env.CLAUDECODE;
+  try {
+    await withFixture(async ({ emit }) => {
+      process.env.CLAUDECODE = "1";
+      const codex = await emit({ phase: "commit_only", harness: "codex" });
+      assert.match(codex.workOrder.executionRules.validation, /dev-loops gate resolve-validation/);
+      assert.doesNotMatch(codex.workOrder.executionRules.validation, /dev-loops-run/);
+      delete process.env.CLAUDECODE;
+      const claude = await emit({ phase: "commit_only", harness: "claude" });
+      assert.match(claude.workOrder.executionRules.validation, /dev-loops-run --repo-root <checkout> cli\/index\.mjs gate resolve-validation/);
+      await assert.rejects(
+        emit({ harness: "claude", fetchVerdictMarkers: async () => summarizeGateReviewCommentMarkers([], { headSha: claude.workOrder.headSha }) }),
+        /verdict_not_posted[^]*dev-loops-run --repo-root <checkout> cli\/index\.mjs gate upsert-verdict/,
+      );
+    });
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDECODE; else process.env.CLAUDECODE = saved;
+  }
+});
 
 test("issue 2787: a THREAD full order has the numbered steps, runs --construct and asks for no hand-written handoff", async () => {
   await withFixture(async ({ emit, files, writeRecord }) => {

@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ASYNC_CONTEXT_ENV_MARKERS } from "@dev-loops/core/loop/run-context";
+import { ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER } from "@dev-loops/core/loop/run-context";
 import { writePrePrReviewRecord } from "../scripts/loop/_pre-pr-review-record.mjs";
 import { dispatchPromptLayoutRecordPath } from "../scripts/github/record-dispatch-prompt-layout.mjs";
 
@@ -110,6 +110,8 @@ export function trustGhEntries(entries) {
 export function runIdFreeEnv(overrides = {}) {
   const base = { ...process.env };
   for (const marker of ASYNC_CONTEXT_ENV_MARKERS) delete base[marker];
+  // CLAUDECODE switches emitted CLI text to the launcher form; tests that pin the bare form must not inherit it.
+  delete base[CLAUDE_HARNESS_MARKER];
   const env = { ...base, ...overrides };
   // The adapter boundary owns the marker literals; overrides may also unset a
   // key by passing `undefined` (matching resolverTestEnv's established

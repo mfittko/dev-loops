@@ -17,4 +17,4 @@ export function renderCliText(text, { env = process.env, root = "<checkout>" } =
 }
 
 /** An `Error` whose message names CLI calls in the active harness's launcher form. */
-export const cliError = (message) => new Error(renderCliText(message));
+export const cliError = (message, options) => new Error(renderCliText(message, options));

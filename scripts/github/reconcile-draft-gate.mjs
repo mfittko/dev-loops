@@ -191,7 +191,7 @@ const FANOUT_REFUSAL_MARKER = "inline gate verdicts are not accepted";
 function isFanoutRefusalError(error) {
   return error instanceof Error && error.message.includes(FANOUT_REFUSAL_MARKER);
 }
-function withFanoutRefusalGuidance(error, { repo, pr, headSha } = {}) {
+function withFanoutRefusalGuidance(error, { repo, pr, headSha, env } = {}) {
   if (!isFanoutRefusalError(error)) return error;
   const repoArg = repo ? `--repo ${repo} --pr ${pr}` : "--repo <repo> --pr <pr>";
   const headShaArg = headSha || "<current head>";
@@ -202,7 +202,8 @@ function withFanoutRefusalGuidance(error, { repo, pr, headSha } = {}) {
     `--gate draft_gate --head-sha ${headShaArg} --execution-mode fanout_fanin --findings-ledger ` +
     `<path from write-findings-log>\` backed by a findings-log ledger from \`dev-loops gate ` +
     `write-findings-log\` for the current head, then \`dev-loops pr ready-for-review ${repoArg}\` (or ` +
-    `\`dev-loops pr restore-ready ${repoArg}\` if CI is blocking), instead of reconciling.`
+    `\`dev-loops pr restore-ready ${repoArg}\` if CI is blocking), instead of reconciling.`,
+    { env },
   );
 }
 export async function reconcileDraftGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild } = {}) {
@@ -275,7 +276,7 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
       } catch {
       }
     }
-    throw withFanoutRefusalGuidance(error, { repo: options.repo, pr: options.pr, headSha });
+    throw withFanoutRefusalGuidance(error, { repo: options.repo, pr: options.pr, headSha, env });
   }
   await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
   return {
