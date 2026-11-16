@@ -1023,6 +1023,25 @@ test("buildGateContext persists resolveGateAnglesDynamic output (docs-only)", as
   }
 });
 
+// ADR 0278 caller wiring: sizeOutcome and changedFiles must reach resolveFanoutDispatch through buildGateContext, and a same-head rebuild without size evidence keeps the recorded tier.
+test("buildGateContext threads sizeOutcome and changedFiles into the persisted fanout size tier", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-size-tier-"));
+  try {
+    const base = draftConfig();
+    const config = { ...base, gates: { ...base.gates, fanout: { sizeTiers: [{ maxWholeLogicLoc: 40, maxAnglesPerUnit: 10 }] } } };
+    const input = { config, hasFullLabel: false, gate: "draft_gate", diff: DOCS_ONLY_DIFF, repo: "owner/repo", pr: 12, headSha: "abc1234567890", branch: "issue-877", touchedFiles: ["docs/foo.md", "README.md"], acceptanceCriteria: "#877", validationPosture: "npm run verify", sizeOutcome: { outcome: "pass", wholeLogicLoc: 30, tierLogicLoc: { t1: 0 } } };
+    const applied = await buildGateContext(input, { repoRoot });
+    assert.equal(applied.artifact.fanout.sizeTier.tier.maxAnglesPerUnit, 10);
+    assert.deepEqual(applied.artifact.fanout.sizeTier.reasons, ["size_tier_applied"]);
+    assert.equal(applied.artifact.fanout.unitBound, 10);
+    const noEvidence = await buildGateContext({ ...input, sizeOutcome: null }, { repoRoot: await mkdtemp(path.join(os.tmpdir(), "gate-context-size-tier-none-")) });
+    assert.deepEqual(noEvidence.artifact.fanout.sizeTier.reasons, ["size_outcome_unavailable"]);
+    assert.equal(noEvidence.artifact.fanout.unitBound, 5);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // Tier resolution needs real hunk text for its line-count fact (an empty
 // diffOutput fails closed as scope_unavailable), so this fixture carries a
 // genuine docs-only diff body unlike the synthetic DOCS_ONLY_DIFF above.
@@ -1530,6 +1549,27 @@ test("CLI --base reads gates.contextExpansion from .devloops into adjacentCode.e
     // The written scoped variant carries the expansion list (pins the adjacentCode wiring into the scoped render).
     const variantText = await readFile(path.resolve(repoRoot, artifact.briefingVariants["docs-only"]), "utf8");
     assert.ok(variantText.includes("Expansion files"), "written scoped variant lists the expansion files");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ADR 0278 production caller wiring: main() must thread sizeOutcome and changedFiles into resolveFanoutDispatch.
+test("CLI --base threads size evidence into the persisted fanout size tier", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: false\n    maxFiles: 1\n    maxLines: 1\ngates:\n  fanout:\n    sizeTiers:\n      - maxWholeLogicLoc: 40\n        maxAnglesPerUnit: 10\n",
+      "utf8",
+    );
+    await main([
+      "--repo", "owner/repo", "--pr", "42", "--gate", "draft_gate", "--head-sha", headSha,
+      "--angles", '["scope","correctness","coverage","docs-drift","security-surface","config-drift"]', "--base", baseSha,
+    ], { repoRoot, run: stubGhRun });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha }, { repoRoot });
+    assert.deepEqual(artifact.fanout.sizeTier.reasons, ["size_tier_applied"]);
+    assert.equal(artifact.fanout.unitBound, 10);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -6071,12 +6111,12 @@ test("#1601 resolveFanoutDispatch: auto-chunks ungrouped angles + emits a bounde
   assert.deepEqual(plan.wavePlan[0].map((u) => u.name), ["group:a+b", "group:c+d", "e"]);
 });
 
-test("resolveFanoutDispatch keeps a recorded unit bound of 10 and defaults an absent one to 5", () => {
+test("resolveFanoutDispatch drops a recorded unit bound above 5 that no size tier backs and defaults an absent one to 5", () => {
   const angles = ["a", "b", "c", "d", "e", "f"];
   const config = { version: 1, gates: { fanout: { groups: [{ name: "wide", angles }] } } };
-  const kept = resolveFanoutDispatch(config, "draft", angles, { env: {}, unitBound: 10 });
-  assert.equal(kept.unitBound, 10);
-  assert.deepEqual(kept.pendingGroups.map((g) => g.angles.length), [6]);
+  const dropped = resolveFanoutDispatch(config, "draft", angles, { env: {}, unitBound: 10 });
+  assert.equal(dropped.unitBound, 5);
+  assert.deepEqual(dropped.pendingGroups.map((g) => g.angles.length), [5, 1]);
   const dflt = resolveFanoutDispatch(config, "draft", angles, { env: {} });
   assert.equal(dflt.unitBound, 5);
   assert.deepEqual(dflt.pendingGroups.map((g) => g.angles.length), [5, 1]);
@@ -7070,10 +7110,10 @@ test("writeGateContext request-plan resolves a bare no-override angle to its dis
   }
 });
 
-test("Claude plan records the review role model despite an angle roleTiers override; Pi keeps the per-angle model", async () => {
+test("Claude and Pi plans record the per-angle tier model (ADR 0278 amends ADR 0266)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-claude-review-"));
   try {
-    for (const [harness, expectedModel] of [["claude", "opus"], ["pi", "pi-low"]]) {
+    for (const [harness, expectedModel] of [["claude", "sonnet"], ["pi", "pi-low"]]) {
       const options = parseWriteGateContextCliArgs([
         "--repo", "owner/repo", "--pr", "87", "--gate", "draft_gate",
         "--head-sha", "abc1234567891", "--angles", '["correctness"]',

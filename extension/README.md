@@ -180,10 +180,10 @@ models:
     quality: high            # promote a routine role
     developer: inherit       # opt a role out entirely
   roles:
-    correctness: gpt-5       # concrete per-angle override (beats any tier)
+    fixer: gpt-5             # concrete per-role override (beats any tier)
 ```
 
-On Pi and Codex, angles are dispatched with `resolveRoleModel(config, { role: angle, harness, kind: "angle" })`. Their precedence is: `models.roles[angle]` (concrete) > explicit `models.roleTiers[angle]` > the **`review` tier** (high). A gate review runs at review quality regardless of the angle's persona, so an angle whose **name** collides with a built-in routine role no longer takes that role's tier — e.g. the `docs` review angle resolves via the `review` tier (`high`), not the `docs`→low writer role (only its persona/agent still comes from the registry). Genuinely distinct angles (`correctness`, `renderer-security`, `acceptance-criteria`) resolve `high` too. Only a **bare routine role** dispatch (no `kind`, e.g. the `docs`/`developer` subagents) still resolves `low` via `roleTiers`. Retarget a specific angle by setting `models.roleTiers[angle]` explicitly. An unknown tier alias in `models.roleTiers` is rejected by the schema with a clear error. On Claude (MAIN-CLAUDE-DISPATCH-MODEL), per-angle overrides do not apply: every review angle uses the `review` role model from `gate resolve-role --role review --harness claude`.
+On Pi, angles are dispatched with `resolveRoleModel(config, { role: angle, harness, kind: "angle" })`. Their precedence is: the angle's `gates.<gate>.angles[].model` > its `gates.<gate>.angles[].tier` > the **`review` tier** (high). Codex angles inherit: the resolver returns null, so they read neither `gates.<gate>.angles[].model` nor `.tier` and never resolve the review tier. A gate review runs at review quality regardless of the angle's persona, so an angle whose **name** collides with a built-in routine role no longer takes that role's tier — e.g. the `docs` review angle resolves via the `review` tier (`high`) and takes only its persona and agent from the `docs` registry entry. Genuinely distinct angles (`correctness`, `renderer-security`, `acceptance-criteria`) resolve `high` too. Only a **bare routine role** dispatch (no `kind`, e.g. the `docs`/`developer` subagents) still resolves `low` via `roleTiers`. Retarget a specific angle by setting `gates.<gate>.angles[].tier` (or `.model` on Pi) explicitly (Pi and Claude only); `models.roles[angle]` and `models.roleTiers[angle]` are not read for gate angles. An unknown tier alias in `models.roleTiers` is rejected by the schema with a clear error. On Claude (MAIN-CLAUDE-DISPATCH-MODEL), a per-angle `gates.<gate>.angles[].tier` applies (a concrete angle `model` applies on Pi only), and an angle with no override uses the repo's `models.roles.review` or `models.roleTiers.review`, else the high tier. This repo-level review fallback is Claude-only. On Pi and Claude, the angle lookup prefers the dispatching gate's own `gates.<gate>.angles[]` entry over an earlier gate's, and Codex angles inherit.
 
 ### MCP tools for Claude subagents (`extraTools`)
 
@@ -295,7 +295,7 @@ workflow:
 1. Add the angle name to `gates.draft.angles` or `gates.preApproval.angles`
 2. Add a `personas.<angle>` entry with a `persona` agent name and a `prompt` instruction
 3. Create the corresponding `Agent file` (`agents/<persona>.agent.md`) if using a new persona
-4. On Pi and Codex, optionally set a per-angle model override via `models.roles.<angle>` (Claude ignores it and uses the `review` role model for every angle, per MAIN-CLAUDE-DISPATCH-MODEL)
+4. Optionally set a per-angle model via `gates.<gate>.angles[].model` (Pi) or a per-angle tier via `gates.<gate>.angles[].tier` (Pi, and Claude per MAIN-CLAUDE-DISPATCH-MODEL and ADR 0278). Codex angles inherit and read neither
 
 ### Config format
 
