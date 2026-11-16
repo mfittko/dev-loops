@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import {
+  buildSpecChangeFactsGhArgs,
   detectGrillProvenance,
+  detectSpecChangedSinceGrill,
+  parseSpecChangeFacts,
+  SPEC_CHANGED_SINCE_GRILL_REASON,
   GRILL_STATE,
   GRILL_TRANSITIONS,
   interpretRefinementGrillState,
@@ -316,4 +320,132 @@ test("allowedTransitions equals GRILL_TRANSITIONS for the current state", () => 
   assert.deepEqual(clean.allowedTransitions, GRILL_TRANSITIONS[GRILL_STATE.GRILL_CLEAN]);
   const detect = interpretRefinementGrillState({ loaded: true, detectRan: false });
   assert.deepEqual(detect.allowedTransitions, GRILL_TRANSITIONS[GRILL_STATE.DETECT_GAPS]);
+});
+
+// GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL (issue 3127)
+const GRILL_AT = "2026-11-06T10:00:00Z";
+const BEFORE = "2026-11-06T09:00:00Z";
+const AFTER = "2026-11-06T11:00:00Z";
+const resultsComment = (createdAt, extra = "") => ({ body: `## ${RESULTS_TITLE}\n\nNo gaps were found.${extra}`, createdAt });
+
+function grillStateFor({ comments, bodyLastEditedAt = null, surface = "issue" }) {
+  const provenance = detectGrillProvenance(comments);
+  return interpretRefinementGrillState({
+    loaded: true,
+    detectRan: true,
+    surface,
+    openGapCount: 0,
+    provenanceRecorded: provenance.provenanceRecorded,
+    provenanceBypass: provenance.bypass,
+    specChangedSinceGrill: detectSpecChangedSinceGrill({ comments, bodyLastEditedAt }),
+  });
+}
+
+test("AC1: a counted comment after the latest results comment returns detect_gaps / spec_changed_since_grill", () => {
+  const out = grillStateFor({ comments: [resultsComment(GRILL_AT), { body: "Decision: also cover the PR surface.", createdAt: AFTER }] });
+  assert.equal(out.state, GRILL_STATE.DETECT_GAPS);
+  assert.equal(out.reason, SPEC_CHANGED_SINCE_GRILL_REASON);
+  assert.match(out.nextAction, /Re-grill/);
+});
+
+test("AC1: a counted comment before the latest results comment does not trigger the reason", () => {
+  const out = grillStateFor({ comments: [{ body: "Decision: also cover the PR surface.", createdAt: BEFORE }, resultsComment(GRILL_AT)] });
+  assert.equal(out.state, GRILL_STATE.GRILL_CLEAN);
+  assert.equal(out.reason, "provenance_recorded");
+});
+
+test("AC1: only the latest results comment counts as the grill time", () => {
+  const comments = [resultsComment(BEFORE), { body: "new note", createdAt: GRILL_AT }, resultsComment(AFTER)];
+  assert.equal(detectSpecChangedSinceGrill({ comments }), false);
+});
+
+test("a counted comment and lastEditedAt equal to the results comment createdAt do not trigger the reason", () => {
+  const comments = [resultsComment(GRILL_AT), { body: "note", createdAt: GRILL_AT }];
+  assert.equal(detectSpecChangedSinceGrill({ comments, bodyLastEditedAt: GRILL_AT }), false);
+});
+
+test("AC2: a body lastEditedAt after the latest results comment triggers the reason; null or earlier does not", () => {
+  const comments = [resultsComment(GRILL_AT)];
+  assert.equal(grillStateFor({ comments, bodyLastEditedAt: AFTER }).reason, SPEC_CHANGED_SINCE_GRILL_REASON);
+  assert.equal(grillStateFor({ comments, bodyLastEditedAt: null }).state, GRILL_STATE.GRILL_CLEAN);
+  assert.equal(grillStateFor({ comments, bodyLastEditedAt: BEFORE }).state, GRILL_STATE.GRILL_CLEAN);
+});
+
+test("AC3: the pr surface applies the same check", () => {
+  const out = grillStateFor({ surface: "pr", comments: [resultsComment(GRILL_AT), { body: "please also handle X", createdAt: AFTER }] });
+  assert.equal(out.state, GRILL_STATE.DETECT_GAPS);
+  assert.equal(out.reason, SPEC_CHANGED_SINCE_GRILL_REASON);
+});
+
+for (const [kind, body] of [
+  ["a <!-- dev-loops: marker comment", "<!-- dev-loops:gate-verdict head=abc -->\nverdict: clean"],
+  ["a merge record", "merge-pr record: merged head `abc` (squash merge); approvalVia `comment`; approver `op`."],
+  ["an operator marker line", "approve merge"],
+  ["an operator marker line (approve release)", "approve release v1.3"],
+  ["a results comment", `## ${RESULTS_TITLE}\n\nsecond pass`],
+]) {
+  test(`AC4: ${kind} after the latest results comment does not trigger the reason`, () => {
+    const comments = [resultsComment(GRILL_AT), { body, createdAt: AFTER }];
+    assert.equal(detectSpecChangedSinceGrill({ comments }), false);
+  });
+}
+
+for (const [kind, body] of [
+  ["a spec decision mentioning approve release in prose", "Decision: drop AC3. We will not approve release v1.3 without it."],
+  ["a spec decision followed by an approve merge line", "Decision: also cover the PR surface.\napprove merge"],
+  ["a spec decision ending in approve release prose", "Decision: also cover the PR surface. Once green we can approve release v1.0.14."],
+]) {
+  test(`AC4: ${kind} still triggers the reason`, () => {
+    const out = grillStateFor({ comments: [resultsComment(GRILL_AT), { body, createdAt: AFTER }] });
+    assert.equal(out.reason, SPEC_CHANGED_SINCE_GRILL_REASON);
+  });
+}
+
+test("a milestone-move note counts; a bypass line does not exempt the target", () => {
+  const comments = [resultsComment(GRILL_AT, "\nbypass: operator-authorized by op"), { body: "Moved to milestone v1.2.", createdAt: AFTER }];
+  const out = grillStateFor({ comments });
+  assert.equal(out.reason, SPEC_CHANGED_SINCE_GRILL_REASON);
+  assert.equal(out.bypass, false);
+});
+
+test("no dated results comment, or undated comments, never trigger the reason", () => {
+  assert.equal(detectSpecChangedSinceGrill({ comments: [{ body: "note", createdAt: AFTER }], bodyLastEditedAt: AFTER }), false);
+  assert.equal(detectSpecChangedSinceGrill({ comments: [{ body: "note" }, "note"] }), false);
+});
+
+test("a results comment with no parseable createdAt fails closed", () => {
+  const heading = `## ${RESULTS_TITLE}\n\nNo gaps.`;
+  const counted = { body: "Decision: drop AC3", createdAt: AFTER };
+  for (const undated of [heading, { body: heading }, { body: heading, createdAt: "not-a-date" }]) {
+    assert.equal(detectSpecChangedSinceGrill({ comments: [undated, counted] }), true);
+    assert.equal(grillStateFor({ comments: [undated, counted] }).reason, "spec_changed_since_grill");
+  }
+  assert.equal(detectSpecChangedSinceGrill({ comments: [{ body: heading, createdAt: GRILL_AT }, counted] }), true);
+  assert.equal(detectSpecChangedSinceGrill({ comments: [{ body: heading, createdAt: GRILL_AT }] }), false);
+});
+
+test("normalizeGrillSnapshot forces specChangedSinceGrill to false without provenance", () => {
+  assert.equal(normalizeGrillSnapshot({ specChangedSinceGrill: true }).specChangedSinceGrill, false);
+});
+
+test("a truncated comment window with no results comment fails closed; an untruncated one does not", () => {
+  const comments = [{ body: "note", createdAt: AFTER }];
+  assert.equal(detectSpecChangedSinceGrill({ comments, commentsTruncated: true }), true);
+  assert.equal(detectSpecChangedSinceGrill({ comments, commentsTruncated: false }), false);
+  assert.equal(detectSpecChangedSinceGrill({ comments: [resultsComment(GRILL_AT)], commentsTruncated: true }), false);
+});
+
+test("parseSpecChangeFacts reads the GraphQL node and tolerates a body-only payload", () => {
+  assert.deepEqual(
+    parseSpecChangeFacts({ body: "b", lastEditedAt: AFTER, comments: { nodes: [{ body: "c", createdAt: GRILL_AT }] } }),
+    { body: "b", lastEditedAt: AFTER, commentsTruncated: false, comments: [{ body: "c", createdAt: GRILL_AT }] },
+  );
+  assert.deepEqual(parseSpecChangeFacts({ body: "b" }), { body: "b", lastEditedAt: null, commentsTruncated: false, comments: [] });
+  assert.equal(parseSpecChangeFacts({ comments: { pageInfo: { hasPreviousPage: true }, nodes: [] } }).commentsTruncated, true);
+  assert.throws(() => parseSpecChangeFacts({ body: "b", comments: [] }), /comments must be/);
+  assert.ok(buildSpecChangeFactsGhArgs({ repo: "o/r", number: 7 }).includes("number=7"));
+  assert.ok(buildSpecChangeFactsGhArgs({ repo: "mfittko/dev-loops", number: 7 }).includes("name=dev-loops"));
+  for (const repo of ["foo", "a/b/c", "mfittko/dev-loops/extra"]) {
+    assert.throws(() => buildSpecChangeFactsGhArgs({ repo, number: 7 }), /repo must match <owner\/name>/);
+  }
 });

@@ -29,6 +29,11 @@ import {
   detectIssueRefinementArtifact,
   REFINEMENT_ARTIFACT_SOURCES,
 } from "@dev-loops/core/loop/issue-refinement-artifact";
+import {
+  SPEC_CHANGED_SINCE_GRILL_REASON,
+  detectSpecChangedSinceGrill,
+  fetchSpecChangeFacts,
+} from "@dev-loops/core/loop/refinement-grill-state";
 
 const USAGE = `Usage: dev-loops queue parked-unrefined --repo <owner/name> [--project <number|id>]
 
@@ -49,7 +54,8 @@ Output (stdout):
   JSON: { ok: true, parkedColumn, items: [ { issueNumber, title, url, itemId,
           finding, reason, missing } ... ] }
   items lists ONLY un-refined issues in the park column (refined issues and PRs
-  are excluded). An empty array means nothing is parked awaiting refinement.
+  are excluded). A refined issue whose spec changed after its latest grill is
+  listed with finding spec_changed_since_grill. An empty array means nothing is parked awaiting refinement.
 
 ${JQ_OUTPUT_USAGE}
 
@@ -165,12 +171,26 @@ async function main(args, { env = process.env, runChild = _runChild, cwd = proce
     // finding !== null is the explicit "fails the refinement floor" signal:
     // no refinement artifact, or an incomplete matrix arm — an
     // AC-only or DoD-only body carries a partial artifact but still fails.
-    if (artifact.finding === null) return null;
-    return {
+    const entry = {
       issueNumber: item.issueNumber,
       title: item.title ?? null,
       url: item.url ?? null,
       itemId: item.itemId ?? null,
+    };
+    if (artifact.finding === null) {
+      // The pickup gate also diverts a complete artifact whose spec changed
+      // after the latest grill (GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).
+      const facts = await fetchSpecChangeFacts({ repo: args.repo, number: item.issueNumber, env, runChild });
+      if (!detectSpecChangedSinceGrill({ comments: facts.comments, bodyLastEditedAt: facts.lastEditedAt, commentsTruncated: facts.commentsTruncated })) return null;
+      return {
+        ...entry,
+        finding: SPEC_CHANGED_SINCE_GRILL_REASON,
+        reason: "A comment or a body edit is newer than the latest \"🔬 Grill / refinement results\" comment.",
+        missing: ["grill pass after the latest spec change"],
+      };
+    }
+    return {
+      ...entry,
       finding: artifact.finding,
       reason: artifact.reason,
       missing: MISSING_BY_FINDING.get(artifact.finding) ?? [...REFINEMENT_ARTIFACT_SOURCES],

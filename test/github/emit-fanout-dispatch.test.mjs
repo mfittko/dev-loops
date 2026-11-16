@@ -2614,3 +2614,28 @@ test("buildAngleNamingSuffix passes --unit-bound to the blocked command only abo
   assert.match(at10, /--max-tool-calls \d+ --unit-bound 10 --findings-dir/);
   assert.doesNotMatch(buildAngleNamingSuffix(unit, "pre-approval-gate-group-design-simplicity"), /--unit-bound/);
 });
+
+// #3166 AC1: a size-tier plan recorded in the gate-context artifact survives emit-fanout-dispatch on both gates as one unit and one scope.
+const TIER_ANGLES = BOUND_ANGLES.slice(0, 7);
+for (const gate of ["draft_gate", "pre_approval_gate"]) {
+  test(`main(): a size-tier plan for ${gate} emits one packed unit with one dispatch scope and the resolved angle set`, async () => {
+    await withTmpDir(async (repoRoot) => {
+      await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1,
+        localImplementation: { lightMode: { enabled: false, maxFiles: 3, maxLines: 200 } },
+        gates: { fanout: { sizeTiers: [{ maxWholeLogicLoc: 100, maxAnglesPerUnit: 10 }] } } }));
+      const { config, errors } = await loadDevLoopConfig({ repoRoot });
+      assert.deepEqual(errors, []);
+      const fanout = resolveFanoutDispatch(config, mapGateToConfigKey(gate), TIER_ANGLES, { env: {}, sizeOutcome: { outcome: "pass", wholeLogicLoc: 30, tierLogicLoc: { t1: 0 } }, changedFiles: ["docs/guide.md", "test/a.test.mjs"] });
+      assert.notEqual(fanout.sizeTier?.tier, null, "the tier applies");
+      const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(TIER_ANGLES)]);
+      await writeGateContext({ ...options, config, fanoutDispatch: fanout }, { repoRoot });
+      const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+      assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+      const payload = JSON.parse(emitted.stdout);
+      assert.equal(payload.count, 1);
+      assert.equal(payload.units.length, 1);
+      assert.deepEqual([...payload.units[0].angles].sort(), [...TIER_ANGLES].sort());
+      assert.equal(new Set(payload.units.map((unit) => unit.scope)).size, 1);
+    });
+  });
+}
