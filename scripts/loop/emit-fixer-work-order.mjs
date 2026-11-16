@@ -7,7 +7,7 @@
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { readFile, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -576,7 +576,8 @@ export async function emitFixerWorkOrder({
   const carryOriginHead = () => carryMemo ??= (async () => {
     try {
       // A head with a ledger of its own (live, blocked, unreadable or retained) ran a round whose verdict is not the origin's: the seam carries nothing across it.
-      if (existsSync(ledgerPath(headSha))) return null;
+      const liveLedger = ledgerPath(headSha), retainedPrefix = `${path.basename(liveLedger, ".json")}.round-`;
+      if (existsSync(liveLedger) || readdirSync(path.dirname(liveLedger)).some((n) => n.startsWith(retainedPrefix) && /\.round-\d+\.json$/.test(n))) return null;
       const closed = await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), includeRetainedCurrentHead: true, includeLiveCurrentHead: true, onUnreadable: () => { throw new Error("unreadable prior ledger"); } });
       if (closed.some((log) => String(log.headSha).trim().toLowerCase() === headSha)) return null;
       const originHead = closureFromHeadOf(closed);
