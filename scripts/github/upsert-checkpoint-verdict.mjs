@@ -2980,8 +2980,14 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       && !coordination.draftGateAlreadySatisfied
       && coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE)
     ) {
-      // Refuse before the transition mutates the PR (draft conversion and restore). Without --verdict the ledger verdict stands in (shortcut: the ledger overallVerdict ignores judge act items, so a stale base may refuse early a post that would derive findings_present).
-      const earlyVerdict = options.verdict ?? (options.findingsLedger ? (await loadMatchingFindingsLedger(options, canonicalHeadSha)).overallVerdict : undefined);
+      // Refuse before the transition mutates the PR (draft conversion and restore). Without --verdict the ledger verdict stands in, composed as at the later derivation: a fully judged ledger is clean when it has no open act item, whatever its severity overallVerdict says (shortcut: ledger-only, the --findings-json act items are not loaded yet, so such a post may still refuse after the transition).
+      let earlyVerdict = options.verdict;
+      if (earlyVerdict === undefined && options.findingsLedger) {
+        const earlyLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
+        earlyVerdict = isFullyJudged(earlyLedger.findings ?? []) && earlyLedger.overallVerdict !== "blocked"
+          ? (listOpenActItems(earlyLedger.findings ?? []).length > 0 ? "findings_present" : "clean")
+          : earlyLedger.overallVerdict;
+      }
       await refuseStaleBase(earlyVerdict);
       return await postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild });
     }

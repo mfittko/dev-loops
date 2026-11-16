@@ -56,13 +56,13 @@ function makeRunChild(posted, { isDraft = true, mutations = [] } = {}) {
   };
 }
 
-async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDraft = true, omitVerdict = false } = {}) {
+async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDraft = true, omitVerdict = false, rejectedMedium = false } = {}) {
   const clean = verdict === "clean";
   const ledgerPath = path.join(tempDir, "ledger.json");
   await writeFile(ledgerPath, JSON.stringify({
-    repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD, verdict, overallVerdict: verdict,
+    repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD, verdict, overallVerdict: rejectedMedium ? "findings_present" : verdict,
     loggedAt: "2026-11-16T00:00:00.000Z",
-    findings: [clean
+    findings: [rejectedMedium ? { severity: "medium", angle: "correctness", summary: "medium finding", judgeDisposition: "reject", judgeRationale: "test" } : clean
       ? { severity: "low", angle: "correctness", summary: "low finding", judgeDisposition: "reject", judgeRationale: "test" }
       : { severity: "medium", angle: "correctness", summary: "medium finding", judgeDisposition: "act", judgeRationale: "test" }],
   }), "utf8");
@@ -141,4 +141,13 @@ test("a ready-PR draft_gate post with no --verdict and a clean ledger refuses at
     assert.deepEqual(out.mutations, []);
     assert.equal(out.posted.length, 0);
   }, { prefix: "dev-loops-base-freshness-ready-noverdict-" });
+});
+
+test("a ready-PR draft_gate post with a judged ledger whose severity verdict is findings_present but composes clean refuses at a stale base before any draft conversion", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await postClean(tempDir, async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: REMEDY }), { isDraft: false, omitVerdict: true, rejectedMedium: true });
+    assert.match(out.error, /^base_stale_integrate_first:/);
+    assert.deepEqual(out.mutations, []);
+    assert.equal(out.posted.length, 0);
+  }, { prefix: "dev-loops-base-freshness-judged-" });
 });
