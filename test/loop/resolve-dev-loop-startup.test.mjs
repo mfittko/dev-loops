@@ -1529,6 +1529,13 @@ test("AC5 (3127): --issue reports needs_clarification / spec_changed_since_grill
   assert.equal(changed.issueReadiness, "needs_clarification");
   assert.equal(changed.issueReadinessReason, "spec_changed_since_grill");
   assert.equal(changed.warnings, undefined);
+  // The default prefer_local route never reads issueReadiness; the result
+  // builder still stops and routes the target back to the grill.
+  const routed = buildResolveDevLoopStartupResult({ ...changed, targetPreference: "prefer_local" }, { env: { ...resolverTestEnv(), DEVLOOPS_WORKTREE_BYPASS: "1" }, cwd: os.tmpdir() });
+  assert.equal(routed.selectedStrategy, "none");
+  assert.equal(routed.issueReadiness, "needs_clarification");
+  assert.equal(routed.issueReadinessReason, "spec_changed_since_grill");
+  assert.match(routed.nextAction, /loop-grill 735 --auto/);
 
   const clean = await resolveWith([{ body: "early note", createdAt: "2026-11-06T09:00:00Z" }, results]);
   assert.equal(clean.issueReadiness, "ready");

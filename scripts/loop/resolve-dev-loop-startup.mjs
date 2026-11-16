@@ -1488,7 +1488,7 @@ export function buildResolveDevLoopStartupResult(input, {
   // `canonicalSpecSource`). Strip them before evaluation and re-attach to the
   // result; `planFileExempt` waives the worktree-isolation guard because a
   // pre-promotion plan has no issue to key a worktree on.
-  const { planFileExempt = false, planFileIntakeState = null, spikeIntakeState = null, canonicalSpecSource = null, draftStart = null, ...routingInput } = input;
+  const { planFileExempt = false, planFileIntakeState = null, spikeIntakeState = null, canonicalSpecSource = null, draftStart = null, issueReadinessReason = null, ...routingInput } = input;
   input = routingInput;
   // Retrospective checkpoint gate (RETRO-ENFORCEMENT-CONFIG-GATED). The
   // durable checkpoint file, when present, is always honored. Cycle scoping
@@ -1521,6 +1521,20 @@ export function buildResolveDevLoopStartupResult(input, {
     input = { ...input, retrospectiveCheckpointState: checkpointState };
   }
   const bundle = resolveAuthoritativeStartupResumeBundle(input);
+  // GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL: every target preference stops and
+  // routes back to the grill (prefer_local never reads issueReadiness).
+  if (issueReadinessReason === SPEC_CHANGED_SINCE_GRILL_REASON) {
+    const issue = input.currentState?.target?.issue;
+    return {
+      ...buildNeedsReconcileStartupResult(
+        bundle,
+        `Issue #${issue} changed after its latest "🔬 Grill / refinement results" comment (${SPEC_CHANGED_SINCE_GRILL_REASON}). Re-grill it with \`/dev-loops:loop-grill ${issue} --auto\` (or \`/loop-grill ${issue} --auto\` in the dev-loops repo itself), then re-run startup (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
+        pendingRetrospectives,
+      ),
+      issueReadiness: input.issueReadiness,
+      issueReadinessReason,
+    };
+  }
   const strategyKey = bundle.selectedStrategy ?? "none";
   if (!(strategyKey in STRATEGY_REQUIRED_READS)) {
     throw new Error(
