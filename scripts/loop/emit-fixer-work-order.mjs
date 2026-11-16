@@ -512,7 +512,7 @@ export async function emitFixerWorkOrder({ harness, ...args }) {
   try {
     return await emitPlan({ ...args, renderEnv });
   } catch (error) {
-    if (error instanceof Refusal) error.message = renderCliText(error.message, { env: renderEnv });
+    if (error instanceof Refusal || error instanceof WorkOrderRefusal) error.message = renderCliText(error.message, { env: renderEnv });
     throw error;
   }
 }
@@ -632,7 +632,7 @@ async function emitPlan({
         let baseOnly = false;
         if (typeof baseRefName === "string" && baseRefName) {
           const { ends, candidates } = await clearingChainWalk({ tmpRoot: resolveGateArtifactTmpRoot(cwd), capHead: fromHead, repo, pr, baseRefName, repoRoot: cwd });
-          // A second or later cap-round fixer pass: a record candidate head of the sealed clearing chain (ADR 0254/0261) holds only sealed fixes of the cap round since the cap-round head.
+          // A second or later cap-round fixer pass: a record candidate head of the sealed clearing chain (ADR 0254/0261) is covered by a sealed clearing record of the cap round since the cap-round head (ADR 0287 residual risk).
           // A seeded base-only merge (a record baseline) is no candidate: the base-only loop below decides it.
           if (candidates.includes(headSha)) { gitIn(cwd, "merge-base", "--is-ancestor", fromHead, headSha); baseOnly = true; laterPass = true; }
           else for (const from of [...ends, fromHead]) {
@@ -659,9 +659,9 @@ async function emitPlan({
       if (!existsSync(ledgerFile)) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} does not exist; failing closed at the cap round`);
       const { findings: ledgerFindings } = await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): ${m}; failing closed at the cap round`) });
       // A later cap-round pass fixes only the cap round's findings: an act item outside the cap-round ledger would open a new round past the cap.
-      // The bound limits the act items of each pass; the sealed chain, which the operator extends, limits the passes. The ADR 0197 base-only merge path skips this bound.
+      // The bound limits the act items of each pass. The fixer route's own pre-push delta seals the next chain link, so the number of passes has no separate bound. The ADR 0197 base-only merge path skips this bound.
       if (laterPass) {
-        const capRefs = new Set(ledgerFindings.map(fingerprintFinding));
+        const capRefs = new Set(ledgerFindings.filter((f) => f.judgeDisposition === "act").map(fingerprintFinding));
         const extra = source.parsed.find((f) => !capRefs.has(fingerprintFinding(f)));
         if (extra) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): act item ${JSON.stringify(extra.summary)} is not a finding of the cap-round ledger ${ledgerFile}; a later cap-round pass fixes only the cap round's act list`);
       }

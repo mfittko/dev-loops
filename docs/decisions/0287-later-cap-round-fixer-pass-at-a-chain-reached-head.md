@@ -13,14 +13,14 @@ ADR 0208 gives the cap round one fixer pass. After that pass lands, the PR head 
 ## Decision
 
 1. `emit-fixer-work-order.mjs` accepts a second or later cap-round fixer pass when the caller passes the PR head, the ledgerless PR head descends from the cap-round head, and the PR head is a record candidate head of the cap round's sealed clearing chain (`clearingChainWalk` `candidates`, ADR 0254 and ADR 0261). A seeded base-only merge is a record baseline, not a candidate. The ADR 0197 base-only merge check decides it as before. The emitter reads the cap-round ledger and the posted verdict at the cap-round head and emits the order at the PR head.
-2. A later pass emits only act items of the cap-round ledger. Any other act item refuses with `round_cap_reached`. This bound limits the act items of each pass. It does not limit the number of passes. The sealed chain limits the passes, and only the operator extends it.
+2. A later pass emits only act items of the cap-round ledger. Any other act item refuses with `round_cap_reached`. This bound limits the act items of each pass. The fixer route's own full-phase pre-push delta seals the next chain link, so the number of passes has no separate bound.
 3. Any other commit in the range keeps the `round_cap_reached` refusal. When the chain walk ran and did not reach the PR head, the refusal names `dev-loops gate extend-cap-round-chain` (`GATE-EXEC-ROUND-CAP-CHAIN-EXTEND`) as the remedy.
 4. `GATE-EXEC-ROUND-CAP` in `skills/docs/gate-review-sub-loop-contract.md` records this exception.
 
 ## Consequences
 
 - A partial cap-round fix no longer strands the remaining act items. The fixer runs again at the PR head.
-- No new review round runs past the cap. A later pass cannot add findings. Each later pass needs a head that the sealed chain reaches, so the operator's chain extensions limit the number of passes.
+- No new review round runs past the cap. A later pass cannot add findings. Each later pass needs a head that the sealed chain reaches, and the fixer route's own pre-push delta seals that link, so nothing else limits the number of passes.
 - A head that the chain does not reach still refuses. The operator extends the chain first and re-emits at the PR head.
 
 ## Residual risk
