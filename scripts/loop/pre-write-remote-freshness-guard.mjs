@@ -88,7 +88,7 @@ export async function staleBaseReason({ base, head, cwd, env = process.env, chec
       .then(({ stdout }) => (stdout.trim().startsWith(prefix) ? stdout.trim().slice(prefix.length) : ""), () => "");
     if (!base) return null;
   }
-  const freshness = await check({ base, head, cwd, env, trusted: true }).catch(() => null);
+  const freshness = await check({ base, head, cwd, env, trusted: true });
   if (freshness?.error !== "base_stale_integrate_first") return null;
   const more = freshness.newerCommits.length > 5 ? ` (+${freshness.newerCommits.length - 5} more)` : "";
   return `base_stale_integrate_first: head ${head} does not contain origin/${base}; newer commits: ${freshness.newerCommits.slice(0, 5).join("; ")}${more}. ${freshness.remedy}`;

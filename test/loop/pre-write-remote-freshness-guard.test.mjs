@@ -472,3 +472,8 @@ test("checkBaseFreshness fetches a trusted origin/-prefixed or 40-hex baseRefNam
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("staleBaseReason propagates an unexpected checker failure instead of proceeding", async () => {
+  const check = async () => { throw new Error("checker blew up"); };
+  await assert.rejects(staleBaseReason({ base: "main", head: "abc", cwd: process.cwd(), check }), /checker blew up/u);
+});
