@@ -1584,6 +1584,18 @@ test("PR-own commits that net-revert a file leave an empty patch and fail closed
   } finally { cleanup(repo); }
 });
 
+test("with CLAUDECODE unset the replacement-PR remedy keeps the package-local node form", async () => {
+  const repo = reviewerOnlyRepo({ netRevert: true });
+  const saved = process.env.CLAUDECODE;
+  delete process.env.CLAUDECODE;
+  try {
+    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(repo), "--spec-identity", "s", "--result-path", path.join(repo.dir, "r.json")], seam), /empty_resolution_patch[\s\S]*node <dev-loops-package-root>\/cli\/index\.mjs pr create --head/);
+  } finally {
+    if (saved !== undefined) process.env.CLAUDECODE = saved;
+    cleanup(repo);
+  }
+});
+
 test("under CLAUDECODE=1 the replacement-PR remedy names the dev-loops-run launcher form", async () => {
   const repo = reviewerOnlyRepo({ netRevert: true });
   const saved = process.env.CLAUDECODE;

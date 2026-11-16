@@ -21,6 +21,12 @@ test("Claude harness renders the launcher form with --repo-root", () => {
   assert.equal(renderCliText("dev-loops pr x", { env: CLAUDE }), "dev-loops-run --repo-root <checkout> cli/index.mjs pr x");
 });
 
+test("the package-local node token is rewritten under Claude only", () => {
+  const text = "run node <dev-loops-package-root>/cli/index.mjs pr create --head x";
+  assert.equal(renderCliText(text, { env: CLAUDE }), "run dev-loops-run --repo-root <checkout> cli/index.mjs pr create --head x");
+  assert.equal(renderCliText(text, { env: {} }), text);
+});
+
 test("Pi and Codex text stays byte-identical", () => {
   for (const env of [{}, { CODEX_THREAD_ID: "t-1" }, { CLAUDECODE: "0" }]) {
     assert.equal(renderCliText(REMEDY, { env }), REMEDY);

@@ -490,7 +490,7 @@ const FIXER_REMEDY = "The cap round's open act items need a fix commit: commit i
 // A locally_clear record or an extension at the baseline means the act items are cleared: the next range starts at the chain end.
 // Both render at use time so the form follows CLAUDECODE at the refusal, like the sibling call-time cliError.
 const chainEndRemedy = () => renderCliText("The cap round's act items are already cleared: run dev-loops gate extend-cap-round-chain --repo <owner/name> --pr <n> (its refusal names the reviewer-only delta and the baseline to use)");
-const replacementRemedy = () => renderCliText("dev-loops pr create --head <new-branch> --allow-replacement-pr <this PR number> while this PR is still open");
+const replacementRemedy = () => renderCliText("node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr <this PR number> while this PR is still open");
 
 // ADR 0255 (decision 6, amended by ADR 0261): why a prior record at the baseline is protected from the reviewer-only run, or null. The same act set re-runs. A non-clearing record
 // (the fixer's needs_fix) is taken over whatever its ref set or candidate: it is never clearing evidence, and the takeover continues its invocation count. Only a locally_clear

@@ -2781,7 +2781,7 @@ test("regenerate: the rendered line is present and the materialization hash stil
   });
 });
 
-test("regenerate: the rule is identical for the claude, pi and codex harness CLI adapters", async () => {
+test("regenerate: the rule names the launcher form for claude and the bare node form for pi and codex", async () => {
   await withFixture(async ({ root, wt, head, files, writeRecord }) => {
     await writeRecord({ items: [{ ref: ACT_REF, status: "resolved" }] });
     await addGenerator(wt);
@@ -2798,8 +2798,10 @@ test("regenerate: the rule is identical for the claude, pi and codex harness CLI
       rules.push(JSON.parse(await readFile(JSON.parse(cli.stdout).planPath, "utf8")).workOrder.executionRules.regenerate);
       await new Promise((resolve) => setTimeout(resolve, 2));
     }
-    assert.ok(rules[0]);
-    assert.equal(new Set(rules).size, 1);
+    assert.ok(rules[0].includes(`dev-loops-run --repo-root <checkout> ${GENERATOR}`));
+    assert.ok(!rules[0].includes(`node ${GENERATOR}`));
+    for (const rule of rules.slice(1)) assert.ok(rule.includes(`node ${GENERATOR}`));
+    assert.equal(rules[1], rules[2]);
   });
 });
 

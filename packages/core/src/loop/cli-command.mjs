@@ -12,7 +12,7 @@ import { isClaudeHarness } from "./run-context.mjs";
  */
 export function renderCliText(text, { env = process.env, root = "<checkout>" } = {}) {
   return isClaudeHarness(env)
-    ? rewriteWrapperInvocation(text, `dev-loops-run --repo-root ${root}`)
+    ? rewriteWrapperInvocation(String(text).split("node <dev-loops-package-root>/cli/index.mjs").join(`dev-loops-run --repo-root ${root} cli/index.mjs`), `dev-loops-run --repo-root ${root}`)
     : String(text);
 }
 
