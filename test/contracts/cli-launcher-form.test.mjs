@@ -63,6 +63,10 @@ test("no agent-facing doc or emitter names a `cd <checkout> &&` prefix before de
   assert.deepEqual(hitsOf(files, CD_RE), []);
 });
 
+test("AGENTS.md names no launcher without --repo-root", () => {
+  assert.doesNotMatch(fs.readFileSync(path.join(repoRoot, "AGENTS.md"), "utf8"), /dev-loops-run cli\/index\.mjs/);
+});
+
 test("no AGENTS.md, skill, agent or Claude asset doc names the bare `dev-loops <ns>` form", () => {
   assert.deepEqual(hitsOf(["AGENTS.md", ...listFiles(["skills", "agents", ".claude"], ".md")], new RegExp(BARE_DEV_LOOPS_NS_SOURCE)), []);
 });

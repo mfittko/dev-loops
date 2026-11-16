@@ -2,7 +2,7 @@
 
 ## Repo contract
 - `dev-loop` is the single public workflow entrypoint.
-- For routed work, run `dev-loops-run cli/index.mjs loop startup ...` first, then load only the returned `requiredReads`.
+- For routed work, run `dev-loops-run --repo-root <checkout> cli/index.mjs loop startup ...` first, then load only the returned `requiredReads`.
 - Canonical workflow docs live under `skills/docs/`.
 
 ## Working rules
@@ -14,9 +14,9 @@
 - Canonical guidance lives in `skills/docs/worktree-guidance.md`.
 - Operator principles (ADR 0270): `PURPOSE-STEER-NOT-TRAP` and `PURPOSE-DETERMINISTIC-FIT` in the [contract style guide](skills/docs/contract-style-guide.md), `MAIN-AGENT-OPERATOR-QUESTION-SCOPE` in the [main-agent contract](skills/docs/main-agent-contract.md).
 - Prefer the GitHub-first routed path for branch/PR/CI/review work; use local implementation only when explicitly requested.
-- Use the narrowest deterministic targeted check for local changes. Only `dev-loops-run cli/index.mjs gate resolve-validation` and `dev-loops-run cli/index.mjs loop validation-record` (VALIDATE-LOCAL-RECORD-PRODUCER, ADR 0170) may launch local full-repository validation. Contributors and CI use the exactly pinned Bun 1.4.1 toolchain; published packages continue to run on Node `>=24`, and npm remains the registry/pack/publish client. See [Validation Policy](skills/docs/validation-policy.md).
+- Use the narrowest deterministic targeted check for local changes. Only `dev-loops-run --repo-root <checkout> cli/index.mjs gate resolve-validation` and `dev-loops-run --repo-root <checkout> cli/index.mjs loop validation-record` (VALIDATE-LOCAL-RECORD-PRODUCER, ADR 0170) may launch local full-repository validation. Contributors and CI use the exactly pinned Bun 1.4.1 toolchain; published packages continue to run on Node `>=24`, and npm remains the registry/pack/publish client. See [Validation Policy](skills/docs/validation-policy.md).
 - When creating GitHub issues via `gh issue create`, always include `--assignee @me` so the new artifact is self-assigned.
-- When creating PRs in this repo, use the canonical `dev-loops-run cli/index.mjs pr create ...` path (always draft, self-assigned by default; `--assignee @me` is the default) — never raw `gh pr create`.
+- When creating PRs in this repo, use the canonical `dev-loops-run --repo-root <checkout> cli/index.mjs pr create ...` path (always draft, self-assigned by default; `--assignee @me` is the default) — never raw `gh pr create`.
 - Never start implementation (file mutation, branch creation, PR creation) without explicit instruction. "Queue," "add to list," "track," "note" are NOT implementation triggers. Only proceed when the user says "start," "go," "implement," "do it," "work on," or equivalent imperative. Confirm if unsure. Exception: `RELEASE-POST-RELEASE-RECURRING-STEPS` in [release runbook](skills/docs/release-runbook.md) is a standing explicit instruction.
 - All work must originate from a tracked artifact: a GitHub issue (tracker-first), a persisted markdown plan file (local-planning), or — on the sanctioned lightweight path — the PR description itself as the spec-of-record (`--lightweight`, `canonicalSpecSource: pr_body`; no committed plan artifact). See [Artifact Authority Contract](skills/docs/artifact-authority-contract.md) for canonical mode definitions and settings. No work may originate from a PR (other than the sanctioned lightweight PR-body-as-spec path) or a direct local change unless explicitly requested.
 - Implement one phase at a time; if durable repo docs explicitly record a reprioritization exception, follow [Implementation State](docs/IMPLEMENTATION_STATE.md) and the active phase doc.
