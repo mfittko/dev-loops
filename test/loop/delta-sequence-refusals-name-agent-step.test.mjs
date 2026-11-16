@@ -19,9 +19,10 @@ const T0 = Date.parse("2026-11-01T10:00:00Z");
 
 const FORBIDDEN = [/\brm\b/i, /delete the marker/i, /deleting the marker/i, /ask the operator/i];
 const sanctionedNames = Object.values(SANCTIONED_COMMANDS).flatMap((group) => Object.values(group)).filter((file) => typeof file === "string").map((file) => path.basename(file));
-// A remedy names a sanctioned command (by its script name) or a rerun of the refusing command.
-const RERUN_OR_ROUTE = /close-sequence|pre-push-delta|ensure-worktree|emit --phase|\b[Rr]erun\b|[Rr]e-run|\bWait for\b|Pass --repo|Pass the --/u;
-const NAMES_AGENT_STEP = { test: (text) => RERUN_OR_ROUTE.test(text) || sanctionedNames.some((name) => text.includes(name)) };
+// A remedy names a sanctioned command (by its script name), one of the loop commands below, or a rerun of the refusing command.
+const LOOP_COMMANDS = ["gate close-sequence", "loop pre-push-delta", "check-pre-push-delta.mjs", "emit --phase"];
+const RERUN = /\b[Rr]erun\b|[Rr]e-run|\bWait for\b|Pass --repo|Pass the --/u;
+const NAMES_AGENT_STEP = { test: (text) => RERUN.test(text) || [...sanctionedNames, ...LOOP_COMMANDS].some((name) => text.includes(name)) };
 const assertAgentStep = (label, text) => {
   assert.ok(NAMES_AGENT_STEP.test(text), `${label} names no agent step: ${text}`);
   for (const pattern of FORBIDDEN) assert.doesNotMatch(text, pattern, `${label} matches ${pattern}: ${text}`);
@@ -102,4 +103,13 @@ test("the contract names BOUNDED_OUT and MARKER_UNREADABLE and no longer ends a 
   assert.match(contract, /`MARKER_UNREADABLE`/);
   assert.doesNotMatch(contract, /deleting the marker ends it/);
   assert.doesNotMatch(contract, /ask the operator to delete/);
+});
+
+test("the --phase full evidence and membership refusals in emit-fixer-work-order name a rerun of the --result step", () => {
+  const source = readFileSync("scripts/loop/emit-fixer-work-order.mjs", "utf8");
+  for (const needle of ["refused (GATE-EXEC-EVIDENCE-SEALED): ${error.message}", "does not belong to this act list at ${headSha}"]) {
+    const line = source.split("\n").find((l) => l.includes(needle));
+    assert.ok(line, `refusal text for ${needle} exists`);
+    assertAgentStep(`--phase full ${needle}`, line);
+  }
 });

@@ -196,6 +196,9 @@ function nonEmptyStrings(value) {
   return Array.isArray(value) && value.length > 0 && value.every(nonEmpty);
 }
 
+/** A PR-body act item names no file; a thread item is exempt (its ref is the thread id). Consumers align to `sequence.actItems` with `actList.filter((e) => !isDeltaBodyItem(e))`. */
+export const isDeltaBodyItem = (entry) => entry?.angle !== "review-thread" && !resolveFindingFile(entry);
+
 /**
  * Open a delta sequence for one gate round. The baseline is the head that gate
  * round reviewed and stays pinned for every invocation in the sequence; a new
@@ -207,14 +210,16 @@ export function startDeltaSequence({ reviewBaselineHead, actList, reviewerOnly =
   if (!nonEmpty(reviewBaselineHead)) throw new Error("delta sequence requires reviewBaselineHead");
   // A PR-body act item names no file, so the file-reading delta reviewer can never resolve it; the next gate round verifies the body (ADR 0271).
   // A thread item is exempt: its ref is the thread id the full-phase binding checks.
-  const isBodyItem = (entry) => entry?.angle !== "review-thread" && !resolveFindingFile(entry);
-  const codeList = Array.isArray(actList) ? actList.filter((entry) => !isBodyItem(entry)) : actList;
-  const bodyEntries = Array.isArray(actList) ? actList.filter(isBodyItem) : [];
+  const codeList = Array.isArray(actList) ? actList.filter((entry) => !isDeltaBodyItem(entry)) : actList;
+  const bodyEntries = Array.isArray(actList) ? actList.filter(isDeltaBodyItem) : [];
   const bodyItems = bodyEntries.length > 0 ? toDeltaActItems(bodyEntries).map((item) => item.ref) : [];
   if (bodyItems.length > 0 && codeList.length === 0) {
     throw new Error(`delta_body_only_act_set: every act item names no file (PR-body items: ${bodyItems.join(", ")}), so no delta review runs. Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged verdict (upsert-checkpoint-verdict.mjs --converged-json with bodyOnly: true) at the cap round, or run the next gate round below the cap.`);
   }
   const actItems = reviewerOnly && Array.isArray(codeList) && codeList.length === 0 ? [] : toDeltaActItems(codeList);
+  // Auto refs (`act-N`) restart per sublist, so only an explicit ref can collide.
+  const collision = bodyEntries.map((entry) => entry.ref).filter(nonEmpty).map((ref) => ref.trim()).find((ref) => actItems.some((item) => item.ref === ref));
+  if (collision) throw new Error(`act list has duplicate ref ${JSON.stringify(collision)} across the PR-body and code items`);
   const actSetId = createHash("sha256")
     .update(JSON.stringify(actItems.map((item) => {
       const { ref, angle, severity, file, line, summary } = item;

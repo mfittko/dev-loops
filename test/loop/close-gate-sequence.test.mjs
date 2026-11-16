@@ -23,6 +23,7 @@ const MOVED = "b".repeat(40);
 const T0 = Date.parse("2026-11-01T10:00:00Z");
 const execution = (dir) => ({ executionIdentity: "f1-abcd1234", workOrderRef: "fixer:o/r#7:head:f1-abcd1234", outputRef: path.join(dir, "out.json") });
 const pr = (oid, name = "feat") => async () => ({ pr: { headRefOid: oid, headRefName: name } });
+const aged = () => Date.now() + FIXER_GRACE_MS + 60_000; // a marker written now is past the dispatch grace
 const base = (tmpRoot, extra = {}) => ({ tmpRoot, head: HEAD, repo: "o/r", pr: 7, actor: "tester", now: () => T0, fetchPr: pr(MOVED), branchActivityMs: () => null, ...extra }); // no host git state: tests that need activity inject it
 const pull = (tmpRoot, ex, pulledAt) => {
   const file = pullReceiptPath(tmpRoot, ex.workOrderRef);
@@ -495,7 +496,7 @@ test("a malformed marker closes as MARKER_UNREADABLE; an invalid PR head sha is 
   await withTempDir(async (tmpRoot) => {
     mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
     writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
-    assert.equal((await closeGateSequence(base(tmpRoot))).condition, "MARKER_UNREADABLE");
+    assert.equal((await closeGateSequence(base(tmpRoot, { now: aged }))).condition, "MARKER_UNREADABLE");
     assert.equal(existsSync(sequenceMarkerPath(tmpRoot, HEAD)), false);
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat" });
     assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr("HEAD~1") }))).refusal, "abandonment_unproven");
@@ -724,14 +725,26 @@ test("MARKER_UNREADABLE: an unreadable marker, a marker with no branch and a non
   await withTempDir(async (tmpRoot) => {
     mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
     writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
-    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD) }))).condition, "MARKER_UNREADABLE");
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }))).condition, "MARKER_UNREADABLE");
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD });
-    const noBranch = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD) }));
+    const noBranch = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
     assert.equal(noBranch.condition, "MARKER_UNREADABLE");
     assert.ok(existsSync(noBranch.recordPath));
     writeSequenceMarker({ tmpRoot, baselineHead: "not-a-sha", branch: "feat" });
-    assert.equal((await closeGateSequence(base(tmpRoot, { head: "not-a-sha", fetchPr: pr(HEAD) }))).condition, "MARKER_UNREADABLE");
+    assert.equal((await closeGateSequence(base(tmpRoot, { head: "not-a-sha", fetchPr: pr(HEAD), now: aged }))).condition, "MARKER_UNREADABLE");
     assert.equal(readSequenceMarker(tmpRoot, "not-a-sha"), null);
+  });
+});
+
+test("MARKER_UNREADABLE waits out the dispatch grace: a young marker refuses with a rerun remedy and survives", async () => {
+  await withTempDir(async (tmpRoot) => {
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD });
+    const mtime = statSync(sequenceMarkerPath(tmpRoot, HEAD)).mtimeMs;
+    const young = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: () => mtime + FIXER_GRACE_MS - 1000 }));
+    assert.equal(young.refusal, "abandonment_unproven");
+    assert.match(young.remedy, /Rerun close-sequence after/);
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: () => mtime + FIXER_GRACE_MS + 1000 }))).condition, "MARKER_UNREADABLE");
   });
 });
 
@@ -739,7 +752,7 @@ test("MARKER_UNREADABLE needs --repo and --pr and still honors a running fixer",
   await withTempDir(async (tmpRoot) => {
     const ex = execution(tmpRoot);
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, execution: ex });
-    assert.equal((await closeGateSequence(base(tmpRoot, { pr: undefined }))).refusal, "abandonment_unproven");
+    assert.equal((await closeGateSequence(base(tmpRoot, { pr: undefined, now: aged }))).refusal, "abandonment_unproven");
     pull(tmpRoot, ex, new Date(T0 - 60_000).toISOString());
     assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "fixer_running");
   });

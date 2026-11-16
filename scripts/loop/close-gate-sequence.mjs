@@ -91,6 +91,8 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
       && record.origin?.workOrderRef === workOrderRef && record.origin?.executionIdentity === executionIdentity;
   };
   let condition = null;
+  // A marker younger than the grace may belong to a fixer still dispatching, and a missing pull proves nothing about it, so it closes only once the grace has passed.
+  if (markerUnreadable && now() - (markerMtime ?? now()) < grace) return refuse("abandonment_unproven", `the marker for ${head} is unreadable or names no branch and is younger than the ${grace / 60000} minute dispatch grace, so a fixer may still be starting`, `Rerun close-sequence after ${grace / 60000} minutes.`);
   if (markerUnreadable) condition = "MARKER_UNREADABLE";
   else {
     const { pr: facts } = await fetchPr({ repo, pr, fields: "headRefOid,headRefName" });

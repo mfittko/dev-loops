@@ -98,7 +98,7 @@ export function clearSequenceMarker(tmpRoot, baselineHead) {
  */
 const noCommitHint = (baselineHead, markerPath, branch) => !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(baselineHead) ? ` The sequence marker is ${markerPath}. The marker names a baseline head that is not a full lowercase hex SHA, so no close command is rendered; the PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery.` : !branch ? ` The sequence marker is ${markerPath}. The marker is unreadable or names no branch, so the no-commit close cannot authenticate it; the PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery.` : ` The sequence marker is ${markerPath}. To close a commit_only sequence whose fixer made no commit, run \`check-pre-push-delta.mjs (--act-list <act-list> --findings-log <findings-log> | --threads-file <threads-file> --repo <owner/name> --pr <n>) --baseline ${baselineHead} --spec-identity <id> --fixer-plan <fixer-plan> --site-coverage <handback> --worktree <dir>\` (outcome no_commit); a fix commit takes the delta review and the full-phase push.`;
 
-/** Adds the close-sequence recovery for an abandoned sequence (the PR head moved, or no fixer ever pulled the work order); a live sequence stays uncloseable (#2999). */
+/** Adds the close-sequence recovery for a closable sequence (HEAD_MOVED, BOUNDED_OUT, FIXER_NEVER_PULLED, or MARKER_UNREADABLE once the dispatch grace has passed); a live sequence stays uncloseable. */
 export const recoveryHint = (baselineHead, markerPath, branch) => noCommitHint(baselineHead, markerPath, branch) + (markerPath ? ` To close an abandoned sequence instead, run dev-loops-run cli/index.mjs gate close-sequence --head <baseline sha> --repo <owner/name> --pr <number>; it refuses a live sequence.` : "");
 
 /** Approximates git check-ref-format for a branch name; an invalid name reads as no branch (fail closed). */
@@ -137,7 +137,7 @@ export function readSequenceMarker(tmpRoot, baselineHead) {
  * (push target equals the marker's branch, or is unknown, or the marker names no branch) a sequence is active while
  * the tested commit is its baseline or descends from it, or when `remoteRef` is the marker's branch (whatever the
  * pushed sha is, so a force-push is covered); a branch marker ends once the remote ref has advanced past the baseline.
- * A marker that names no branch cannot be ended by a remote ref: it stays active until deleted (fail closed).
+ * A marker that names no branch cannot be ended by a remote ref: it stays active until `gate close-sequence` closes it as MARKER_UNREADABLE (fail closed).
  * With several active markers a non-granted one wins, so a stale
  * granted marker cannot admit a commit_only fixer push.
  * @param {{ tmpRoot: string, head: string, remoteRef?: string, listBaselines: () => string[], isAncestor: (a: string, b: string) => boolean, remoteAdvanced: (baseline: string, branch: string) => boolean }} input

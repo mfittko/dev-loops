@@ -26,7 +26,7 @@ import {
   normalizeFixerDispositionHandoff,
   siteCoverageGaps,
 } from "@dev-loops/core/loop/fixer-disposition";
-import { deltaCoverageBinding, isDeltaResultFresh, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
+import { deltaCoverageBinding, isDeltaBodyItem, isDeltaResultFresh, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DELTA_CLEARING_NEXT_STEPS, listGateDeltaRecords, readGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { LOOP_DERIVED_CI_CHECK_NAMES } from "@dev-loops/core/loop/copilot-ci-status";
@@ -550,8 +550,9 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       const statuses = new Map(delta.actionableItems.map(({ ref, status }) => [ref, status]));
       deltaStatuses = new Map();
       // A shared fingerprint permits tackled/live resolution only when every member is resolved.
+      const codeEntries = actList.filter((entry) => !isDeltaBodyItem(entry));
       for (const [index, item] of sequence.actItems.entries()) {
-        const fingerprint = actList[index]?.fingerprint ?? fingerprintFinding(actList[index]);
+        const fingerprint = codeEntries[index]?.fingerprint ?? fingerprintFinding(codeEntries[index]);
         const status = statuses.get(item.ref);
         if (!deltaStatuses.has(fingerprint) || status !== "resolved") deltaStatuses.set(fingerprint, status);
       }

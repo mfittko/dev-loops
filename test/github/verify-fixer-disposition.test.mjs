@@ -3176,18 +3176,21 @@ test("an act item with no fingerprint field is matched by its derived fingerprin
   });
 });
 
-for (const check of [false, true]) for (const kind of ["resolved", "resolved-deferred", "residual-hint", "repeated-mixed"]) {
+for (const check of [false, true]) for (const kind of ["resolved", "resolved-deferred", "residual-hint", "repeated-mixed", "body-first"]) {
   test(`derived fingerprint roots use authenticated Delta statuses (${check}, ${kind})`, async () => {
     await withRepoRoot(async (repoRoot) => {
       const derived = fingerprintFinding({ summary: "s" });
-      const actList = kind === "repeated-mixed"
+      // A file-less body item ahead of the code item must not shift the code item's fingerprint lookup.
+      const actList = kind === "body-first"
+        ? [{ ref: "body-1", severity: "medium", summary: "b", judgeDisposition: "act" }, { severity: "medium", summary: "s", file: "src/a.mjs", judgeDisposition: "act" }]
+        : kind === "repeated-mixed"
         ? ["first", "second"].map((ref) => ({ ref, severity: "medium", summary: "s", file: "src/a.mjs", judgeDisposition: "act" }))
         : [{ severity: "medium", summary: "s", file: "src/a.mjs", judgeDisposition: "act" }];
       const sequence = startDeltaSequence({ reviewBaselineHead: HEAD_SHA, actList });
       const items = sequence.actItems.map(({ ref }, index) => ({ ref, status: kind === "residual-hint" || (kind === "repeated-mixed" && index === 1) ? "cannot_verify" : "resolved" }));
       const delta = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: sequence.actSetId, actionableItems: items.map((item) => ({ ...item, evidence: ["targeted check"] })), newFindings: [], widenedReads: [], outcome: "bounded_out" };
       const decision = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: sequence.actSetId, invocation: 3, outcome: "bounded_out", nextStep: "push_to_gate", items };
-      const tackled = kind === "resolved";
+      const tackled = kind === "resolved" || kind === "body-first";
       const dispositions = [{ threadId: "PRRT_DERIVED", ...(kind === "residual-hint" ? { fingerprint: derived } : {}), fixingCommitSha: HEAD_SHA, disposition: tackled ? "tackled" : "deferred" }];
       const fixerPlan = await deliver(repoRoot, dispositions, { actList, delta, decision });
       const body = `${ACT_MARKER.replace(ACT_FP, derived)}\n${tackled ? `Fixed in commit ${HEAD_SHA}.` : "residual"}`;

@@ -31,3 +31,5 @@ Residuals:
 - A PR-body item is no longer checked inside the delta sequence. A body edit that does not resolve it surfaces in the next gate round.
 - `BOUNDED_OUT` relies on `origin` in the sealed record. A thread-route record carries no `origin`, so its sequence closes through `HEAD_MOVED` or `no_commit` as before.
 - A non-hex marker name cannot be passed to the CLI, which validates `--head` as a full SHA. The `MARKER_UNREADABLE` condition for that shape applies to the function and to a marker that carries a valid name but an unreadable body.
+- A file-less act item that is a code issue routes to the PR body, the ADR 0271 predicate. `startDeltaSequence` rejects an explicit ref that appears in both the body and the code sublist.
+- `MARKER_UNREADABLE` closes only once the marker is as old as the dispatch grace, like `FIXER_NEVER_PULLED`. A younger marker refuses `abandonment_unproven` with a rerun remedy.

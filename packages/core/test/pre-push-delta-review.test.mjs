@@ -307,6 +307,8 @@ describe("result schema", () => {
 
   test("rejects duplicate refs in the act list and in the result", () => {
     assert.throws(() => startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], ref: "x" }, { ...ACT_LIST[1], ref: "x" }] }), /duplicate ref "x"/);
+    const body = { severity: "low", summary: "body only", judgeDisposition: "act", ref: "x" };
+    assert.throws(() => startDeltaSequence({ reviewBaselineHead: A, actList: [body, { ...ACT_LIST[0], ref: "x" }] }), /duplicate ref "x" across the PR-body and code items/);
     const dup = result({ actionableItems: [{ ref: "act-1", status: "resolved", evidence: ["e"] }, { ref: "act-1", status: "resolved", evidence: ["e"] }] });
     assert.match(validateDeltaResult(dup, { sequence: sequence() }).join("\n"), /"act-1" is a duplicate/);
   });
