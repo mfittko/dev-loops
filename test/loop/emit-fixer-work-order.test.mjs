@@ -3074,7 +3074,7 @@ test("ADR 0197: a PR-own change after the cap round keeps the round_cap_reached 
 // Issue 2752 slice 4 (PR 3223 shape): the verdict was posted at the origin head O, whose ledger is the only one (round 1); origin/main then moved and the branch merged it into M.
 // The act list belongs to O's ledger; M has none unless `mLedger` writes one ("findings_present" or "blocked"). `side` writes the ledger at a commit that is not an ancestor of M, `criss` builds a criss-cross merge base.
 // `handEdit` adds a hand edit of a PR path after the merge (a changed PR blob); it builds no conflict hunk, and no test here claims conflict-hunk coverage.
-async function verdictCarryScenario({ root, wt, files }, { baseFile = "main-only.md", baseContent = "main content\n", handEdit = false, side = false, criss = false, ownChangeAfterMerge = false, cap = 2, severity = "medium", mLedger = null } = {}) {
+async function verdictCarryScenario({ root, wt, files }, { baseFile = "main-only.md", baseContent = "main content\n", handEdit = false, side = false, criss = false, ownChangeAfterMerge = false, cap = 2, severity = "medium", mLedger = null, originFindings = null, priorRounds = 0 } = {}) {
   await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: cap } } }));
   const medium = withFp({ ...ACT[0], severity, judgeFix: "guard the deref" });
   await writeFile(files.actList, JSON.stringify([medium]));
@@ -3091,7 +3091,11 @@ async function verdictCarryScenario({ root, wt, files }, { baseFile = "main-only
   }
   const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
   await mkdir(dir, { recursive: true });
-  await writeFile(path.join(dir, `draft_gate-${ledgerHead}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: ledgerHead, verdict: "findings_present", loggedAt: "2026-11-02T00:00:00.000Z", findings: [medium] }));
+  await writeFile(path.join(dir, `draft_gate-${ledgerHead}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: ledgerHead, verdict: "findings_present", loggedAt: "2026-11-02T00:00:00.000Z", findings: originFindings ?? [medium] }));
+  for (let i = 0; i < priorRounds; i += 1) {
+    const sha = String(i + 1).repeat(40);
+    await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-01T00:00:0${i}.000Z`, findings: [] }));
+  }
   const baseCommit = async () => {
     await mkdir(path.dirname(path.join(root, baseFile)), { recursive: true });
     await writeFile(path.join(root, baseFile), handEdit ? "main side\n" : baseContent);
@@ -3146,7 +3150,7 @@ test("issue 2752 slice 4: the act list is counted at the origin round, so a roun
   // Without the seam the same list is counted at the merged head (round 2) and refused.
   await withFixture(async (fx) => {
     const { over } = await verdictCarryScenario(fx, { severity: "nit", ownChangeAfterMerge: true, cap: 3 });
-    await assert.rejects(fx.emit(over()), (e) => e.refusal === "low_fix_until_cap" || /verdict_not_posted/.test(e.message));
+    await assert.rejects(fx.emit(over()), (e) => e.refusal === "low_fix_until_cap");
   });
 });
 
@@ -3173,6 +3177,25 @@ test("issue 2752 slice 4: every fail-closed case keeps the verdict_not_posted re
   // At the cap round the unaccepted seam leaves the missing-ledger refusal in place (still fail closed).
   await withFixture(async (fx) => {
     const { over } = await verdictCarryScenario(fx, { ownChangeAfterMerge: true });
+    await assert.rejects(fx.emit(over()), (e) => e.refusal === "round_cap_reached");
+  });
+});
+
+test("issue 2752 slice 4: at the cap round the origin head's ledger decides the blocker check under an accepted seam", async () => {
+  await withFixture(async (fx) => {
+    const question = withFp({ ...ACT[0], severity: "question", summary: "which API shape", judgeFix: "" });
+    const { over } = await verdictCarryScenario(fx, { cap: 1, originFindings: [question] });
+    await assert.rejects(fx.emit(over()), (e) => e.refusal === "round_cap_reached" && /GATE-EXEC-SOFT-CAP/.test(e.message));
+  });
+  await withFixture(async (fx) => {
+    const { over } = await verdictCarryScenario(fx, { cap: 1 });
+    assert.equal((await fx.emit(over())).workOrder.source, "act-list");
+  });
+});
+
+test("issue 2752 slice 4: an origin head past the cap round stays refused under an accepted seam (no ADR 0197 rewrite)", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await verdictCarryScenario(fx, { cap: 2, priorRounds: 2 });
     await assert.rejects(fx.emit(over()), (e) => e.refusal === "round_cap_reached");
   });
 });

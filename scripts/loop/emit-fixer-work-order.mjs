@@ -590,10 +590,14 @@ export async function emitFixerWorkOrder({
     // The round state comes from the same --tmp-root as the ledger writer, judge-pass and the verdict poster.
     let { lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot },{ repoRoot: resolveRepoRoot(cwd) });
     // Slice 4: when the seam accepts, the act list belongs to the origin head's round, so the round and cap are counted there, not one round late at the ledger-less head.
-    if (gate === "draft_gate" && !existsSync(ledgerPath(headSha)) && await carryOriginHead()) ({ lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha: await carryOriginHead(), tmpRoot }, { repoRoot: resolveRepoRoot(cwd) }));
+    let seamCounted = false; // the round is already counted at the origin head, so the ADR 0197 rewrite below must not reinterpret it
+    if (gate === "draft_gate" && !existsSync(ledgerPath(headSha)) && await carryOriginHead()) {
+      ({ lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha: await carryOriginHead(), tmpRoot }, { repoRoot: resolveRepoRoot(cwd) }));
+      seamCounted = true;
+    }
     // ADR 0197: a base-only merge after the cap round neither counts as a round nor consumes the closure round. The head with no ledger of its own,
     // whose changes since the cap-round head are merges of the PR base with an unchanged PR-own patch, is still the cap round: the cap-round ledger and posted verdict are read at the cap-round head.
-    if (cap > 0 && round === cap + 1 && !existsSync(path.resolve(resolveRepoRoot(cwd), buildLogPath({ repo, pr, gate, headSha, tmpRoot })))) {
+    if (!seamCounted && cap > 0 && round === cap + 1 && !existsSync(path.resolve(resolveRepoRoot(cwd), buildLogPath({ repo, pr, gate, headSha, tmpRoot })))) {
       try {
         let unreadable = 0;
         const fromHead = closureFromHeadOf(await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), onUnreadable: () => { unreadable += 1; } }));
