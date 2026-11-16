@@ -9,6 +9,7 @@ import {
   composeConvergedDraftGate,
   decideDeltaNextStep,
   deltaFixerFindings,
+  deltaResultShapeErrors,
   deriveDeltaOutcome,
   isDeltaResultFresh,
   resolveDeltaTrigger,
@@ -102,6 +103,7 @@ const ACT_LIST = [
     severity: "low",
     angle: "error-handling",
     summary: "missing errno branch for ENOTDIR",
+    file: "scripts/loop/y.mjs",
     judgeDisposition: "act",
     judgeRationale: "names a real failure path",
   },
@@ -663,5 +665,72 @@ describe("composeConvergedDraftGate round gate", () => {
 
   test("the cap round and later converge, and a disabled cap does not gate", () => {
     for (const [round, cap] of [[4, 4], [5, 4], [1, 0]]) assert.equal(converge(round, cap).fixerCommit, FULL_B);
+  });
+});
+
+describe("PR-body act items leave the delta act set", () => {
+  const code = (n) => ({ ref: `code-${n}`, severity: "medium", angle: "correctness", summary: `code finding ${n}`, file: `src/f${n}.mjs`, line: n, judgeDisposition: "act" });
+  const body = (n) => ({ ref: `body-${n}`, severity: "low", angle: "spec", summary: `PR body finding ${n}`, judgeDisposition: "act" });
+  const REPLAY = [code(1), body(1), code(2), code(3), body(2)];
+
+  test("the act set holds the code items, its id equals the id of the code items alone and the dropped refs are bodyItems", () => {
+    const seq = startDeltaSequence({ reviewBaselineHead: A, actList: REPLAY });
+    const codeOnly = startDeltaSequence({ reviewBaselineHead: A, actList: [code(1), code(2), code(3)] });
+    assert.deepEqual(seq.actItems.map((item) => item.ref), ["code-1", "code-2", "code-3"]);
+    assert.deepEqual(seq.bodyItems, ["body-1", "body-2"]);
+    assert.equal(seq.actSetId, codeOnly.actSetId);
+    const done = { reviewBaselineHead: A, candidateHead: B, actSetId: seq.actSetId, widenedReads: [], newFindings: [], outcome: "locally_clear",
+      actionableItems: seq.actItems.map(({ ref }) => ({ ref, status: "resolved", evidence: ["checked"] })) };
+    assert.equal(deriveDeltaOutcome(done), "locally_clear");
+    assert.deepEqual(validateDeltaResult(done, { sequence: seq }), []);
+  });
+
+  test("an all-body act set refuses delta_body_only_act_set with the edit-pr and body-only converged remedy", () => {
+    assert.throws(() => startDeltaSequence({ reviewBaselineHead: A, actList: [body(1), body(2)] }), /delta_body_only_act_set[^]*edit-pr\.mjs[^]*--converged-json[^]*bodyOnly/);
+  });
+
+  test("a thread item without a path is not a body item", () => {
+    const seq = startDeltaSequence({ reviewBaselineHead: A, actList: [{ ref: "T1", angle: "review-thread", summary: "x", judgeDisposition: "act" }] });
+    assert.deepEqual(seq.actItems.map((item) => item.ref), ["T1"]);
+  });
+});
+
+describe("membershipOnly skips the outcome check", () => {
+  const downgraded = () => result({ actionableItems: [
+    { ref: "act-1", status: "resolved", evidence: ["x"] },
+    { ref: "act-2", status: "cannot_verify", evidence: ["the PR body is not a repository file"] },
+  ] });
+
+  test("a locally_clear result with a cannot_verify item passes membershipOnly and fails full validation", () => {
+    assert.deepEqual(validateDeltaResult(downgraded(), { sequence: sequence(), membershipOnly: true }), []);
+    assert.match(validateDeltaResult(downgraded(), { sequence: sequence() }).join(), /locally_clear requires every act item resolved/);
+  });
+
+  test("membershipOnly still rejects a shape error", () => {
+    assert.match(validateDeltaResult(result({ widenedReads: ["scripts/x.mjs"] }), { sequence: sequence(), membershipOnly: true }).join(), /widenedReads\[0\] needs a path and a reason/);
+  });
+
+  test("the converged gate still refuses a locally_clear result with an unresolved item", () => {
+    const FULL = "a".repeat(40), FIX = "b".repeat(40);
+    const actList = [{ severity: "low", angle: "correctness", summary: "s", judgeDisposition: "act", file: "f.mjs", line: 1 }];
+    const seq = startDeltaSequence({ reviewBaselineHead: FULL, actList });
+    const deltaResult = { reviewBaselineHead: FULL, candidateHead: FIX, actSetId: seq.actSetId, widenedReads: [], newFindings: [], outcome: "locally_clear",
+      actionableItems: [{ ref: seq.actItems[0].ref, status: "cannot_verify", evidence: ["e"] }] };
+    assert.throws(() => composeConvergedDraftGate({ gate: "draft_gate", headSha: FULL, round: 1, cap: 0, roundActItems: actList, converged: { fixerCommit: FIX, actList, deltaResult } }), /locally_clear requires every act item resolved/);
+  });
+});
+
+describe("the reviewer result shape", () => {
+  test("resultShape.outcome states that locally_clear forbids a cannot_verify item", () => {
+    const { resultShape } = buildDeltaInput({ sequence: sequence(), candidateHead: B });
+    assert.match(resultShape.outcome, /locally_clear only when every actionableItems status is resolved[^]*cannot_verify/);
+  });
+
+  test("deltaResultShapeErrors names a contradicting outcome and a bare-string widenedReads entry, and accepts a corrected result", () => {
+    const bad = result({ actionableItems: [{ ref: "act-1", status: "cannot_verify", evidence: ["x"] }, { ref: "act-2", status: "resolved", evidence: ["x"] }], widenedReads: ["scripts/x.mjs"] });
+    const errors = deltaResultShapeErrors(bad).join();
+    assert.match(errors, /locally_clear requires every act item resolved/);
+    assert.match(errors, /widenedReads\[0\] needs a path and a reason/);
+    assert.deepEqual(deltaResultShapeErrors(result()), []);
   });
 });

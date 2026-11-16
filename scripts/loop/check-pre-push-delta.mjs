@@ -78,7 +78,7 @@ const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha
 
 Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
 
-  --act-list <path>       The judge-pass --out act list the fix resolves
+  --act-list <path>       The judge-pass --out act list the fix resolves. An act item that names no file (a PR-body item) leaves the act set and is printed as bodyItems; edit the PR body through scripts/github/edit-pr.mjs and the next gate round verifies it. An act list of only such items refuses delta_body_only_act_set
   --threads-file <path>   Thread route, in place of --act-list: successful list-review-threads --unresolved-only
                           output for --repo/--pr. Each unresolved thread is one act item; its ref is the threadId.
   --repo <owner/name>     Required with --threads-file and --reviewer-only
@@ -793,7 +793,7 @@ export async function runCli(
       writeFileSync(patchPath, reviewerPatch ?? diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead, ownPaths));
     }
     // The target binds the log's repo and pr: authenticateCoverage's for a plan, --repo/--pr for the reviewer-only route; without one the chain path refuses.
-    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE, sealCommand: deltaSealCommand(options.resultPath, tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), options.worktree) }), ...buildDeltaInput({ sequence, candidateHead: currentHead, runId, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles, staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
+    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE, sealCommand: deltaSealCommand(options.resultPath, tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), options.worktree) }), ...buildDeltaInput({ sequence, candidateHead: currentHead, runId, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles, staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) }, ...(sequence.bodyItems.length > 0 ? { bodyItems: sequence.bodyItems } : {}) };
     // Every input run opens its own unsealed record, so a re-run of the producer at the same heads can seal again. Last step: only a successful input run moves the pointer.
     if (!options.handback) createEvidenceRun(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), { reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead, actSetId: sequence.actSetId, runId }, path.resolve(options.worktree, options.resultPath));
   }

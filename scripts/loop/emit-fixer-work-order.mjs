@@ -317,7 +317,7 @@ const itemPairs = (items) => [...new Set((Array.isArray(items) ? items : []).map
 
 // The commit_only phase commits unpushed; the delta review then decides whether `full` may push.
 // `delta` is the parsed --delta-result (act-list route); `threads` the unresolved threads (thread route).
-function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidateHead, coverageBinding }) {
+export function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidateHead, coverageBinding }) {
   const recordPath = gateDeltaRecordPath(tmpRoot, headSha);
   const record = readGateDeltaRecord(tmpRoot, headSha);
   const next = "emit --phase commit_only, run the delta review (dev-loops loop pre-push-delta), then emit --phase full";
@@ -336,11 +336,15 @@ function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidat
       throw new Refusal(`--phase full refused: the --delta-result's item statuses differ from the delta record ${recordPath}, so it is not the result that decision used; pass the clearing result (${next})`);
     }
     if (candidateHead) {
+      // HEAD moved past the reviewed candidate: the full phase cannot push it, and the authenticated head_moved closure routes it to a gate round.
+      if (record.reviewBaselineHead === headSha && record.candidateHead !== candidateHead) {
+        throw new Refusal(`--phase full refused: HEAD ${candidateHead} is past the delta record's reviewed candidate ${record.candidateHead}; close the sequence with the authenticated head_moved closure (run check-pre-push-delta.mjs with --fixer-plan and --site-coverage; outcome head_moved, nextStep push_to_gate), then run the full gate round`);
+      }
       if (record.reviewBaselineHead !== headSha || record.candidateHead !== candidateHead
         || !(record.outcome === "bounded_out" && record.nextStep === "push_to_gate" && record.invocation === 3)
           && !(record.outcome === "locally_clear" && record.nextStep === "push" && delta.outcome === "locally_clear"
             && delta.candidateHead === candidateHead && Number.isInteger(record.invocation) && record.invocation >= 1 && record.invocation <= 3)) {
-        throw new Refusal("--phase full refused: Delta decision does not clear the actual candidate and reviewed baseline");
+        throw new Refusal(`--phase full refused: Delta decision does not clear the actual candidate and reviewed baseline; ${next}`);
       }
       deltaCoverageBinding(delta, coverageBinding);
       deltaCoverageBinding(record, coverageBinding);
@@ -348,7 +352,7 @@ function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidat
     return;
   }
   if (!record) throw new Refusal(`--phase full with --threads-file needs a delta record at ${recordPath} from a thread-route delta review: ${next}`);
-  if (record.candidateHead !== candidateHead) throw new Refusal("--phase full refused: THREAD delta candidateHead differs from the committed candidate");
+  if (record.candidateHead !== candidateHead) throw new Refusal(`--phase full refused: THREAD delta candidateHead differs from the committed candidate; review the committed candidate (${next})`);
   const threadIds = new Set(threads.map((thread) => thread.threadId));
   const refs = (Array.isArray(record.items) ? record.items : []).map((item) => item?.ref);
   const unbound = refs.filter((ref) => !threadIds.has(ref));

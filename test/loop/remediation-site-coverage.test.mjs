@@ -50,7 +50,7 @@ test("the delta input carries the site query and the authorized remediation text
 });
 
 test("an act item without remediation fields still builds a delta input (ledgers from before this change)", () => {
-  const legacy = { fingerprint: "fp1", angle: "a", severity: "high", summary: "s", judgeDisposition: "act" };
+  const legacy = { fingerprint: "fp1", angle: "a", severity: "high", summary: "s", file: "src/a.mjs", judgeDisposition: "act" };
   const input = buildDeltaInput({ sequence: startDeltaSequence({ reviewBaselineHead: BASE, actList: [legacy] }), candidateHead: CANDIDATE });
   assert.equal(input.actItems[0].siteQuery, undefined);
 });

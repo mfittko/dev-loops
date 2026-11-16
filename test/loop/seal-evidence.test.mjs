@@ -14,7 +14,7 @@ import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.m
 import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { A, B, boundArgs, coverageRepo } from "./_delta-coverage-fixture.mjs";
 
-const ACT = { ref: "act-1", severity: "low", angle: "correctness", summary: "s", judgeDisposition: "act" };
+const ACT = { ref: "act-1", severity: "low", angle: "correctness", summary: "s", file: "src/a.mjs", judgeDisposition: "act" };
 const ACT_LIST = [{ ...ACT, fingerprint: fingerprintFinding(ACT) }];
 const ACT_SET_ID = startDeltaSequence({ reviewBaselineHead: A, actList: ACT_LIST }).actSetId;
 const RUN_ID = "0123456789abcdef";
@@ -196,7 +196,7 @@ test("the input run records the briefed result path and seal-evidence refuses an
   const bound = await boundArgs(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", findingsLog, "--result-path", briefed]);
   const { input } = await runDeltaCli(bound.args, { ...bound.seam, ...quiet });
   const foreign = path.join(dir, "scratch-x.json");
-  fs.writeFileSync(foreign, JSON.stringify({ ...input.resultShape, outcome: "locally_clear" }));
+  fs.writeFileSync(foreign, JSON.stringify({ ...input.resultShape, actionableItems: input.actItems.map(({ ref }) => ({ ref, status: "resolved", evidence: ["e"] })), newFindings: [], widenedReads: [], outcome: "locally_clear" }));
   assert.throws(() => sealCli(["--kind", "delta", "--file", foreign], { ...quiet, cwd: coverageRepo }), /evidence_foreign_run/);
   fs.copyFileSync(foreign, briefed);
   sealCli(["--kind", "delta", "--file", briefed], { ...quiet, cwd: coverageRepo });
@@ -421,4 +421,16 @@ test("sealEvidence seals the bytes the caller parsed, not a second read of the p
   const sealed = sealEvidence(dir, file, result(), parsedBytes);
   assert.equal(sealed.sha256, createHash("sha256").update(parsedBytes).digest("hex"));
   assert.equal(reason(() => verify(dir, file, result())), "evidence_digest_mismatch");
+});
+
+test("the seal CLI refuses a contradicting outcome and a bare-string widenedReads entry as evidence_malformed, writes no seal, then seals the corrected file", () => {
+  const { dir, file } = setup(result({ actionableItems: [{ ref: "act-1", status: "cannot_verify", evidence: ["the PR body is not a repository file"] }] }));
+  const sealOf = () => `${evidenceRunRecordPath(dir, KEY)}.sealed`;
+  assert.throws(() => sealCli(["--kind", "delta", "--file", file, "--tmp-root", dir], quiet), (error) => error.reason === "evidence_malformed" && /locally_clear requires every act item resolved/.test(error.message));
+  fs.writeFileSync(file, JSON.stringify(result({ widenedReads: ["scripts/x.mjs"] })));
+  assert.throws(() => sealCli(["--kind", "delta", "--file", file, "--tmp-root", dir], quiet), (error) => error.reason === "evidence_malformed" && /widenedReads\[0\] needs a path and a reason/.test(error.message));
+  assert.equal(fs.existsSync(sealOf()), false);
+  fs.writeFileSync(file, JSON.stringify(result({ actionableItems: [{ ref: "act-1", status: "cannot_verify", evidence: ["x"] }], outcome: "needs_fix" })));
+  sealCli(["--kind", "delta", "--file", file, "--tmp-root", dir], quiet);
+  assert.equal(fs.existsSync(sealOf()), true);
 });

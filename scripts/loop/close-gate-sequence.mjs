@@ -4,8 +4,11 @@
  * The tool removes `<tmp>/gate-delta/<head>.sequence` only after it proves one abandonment condition
  * from authoritative state, and writes the audit record `<head>.sequence-closed.<execution|none>.json` first.
  * Conditions: HEAD_MOVED (the marker's PR head differs from the marker baseline, so the baseline is
- * obsolete) and FIXER_NEVER_PULLED (the marker names a fixer execution whose work order was never
- * pulled within the dispatch grace, so no fixer ran and no commit on the branch is the fixer's).
+ * obsolete), FIXER_NEVER_PULLED (the marker names a fixer execution whose work order was never
+ * pulled within the dispatch grace, so no fixer ran and no commit on the branch is the fixer's),
+ * BOUNDED_OUT (the sealed delta record of the baseline holds bounded_out/push_to_gate for the marker's
+ * fixer execution and that fixer is not running, so the sequence finished and the full phase pushes)
+ * and MARKER_UNREADABLE (the marker is unreadable, names no branch or has a baseline name that is not a full hex sha).
  * A live sequence is never closed. Refusals: sequence_absent, baseline_unknown, sequence_live, fixer_running, abandonment_unproven.
  */
 import { spawnSync } from "node:child_process";
@@ -20,6 +23,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightFieldsSp
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { viewPr } from "../github/view-pr.mjs";
 import { pullReceiptPath } from "../github/_work-order-protocol.mjs";
+import { readSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { STALE_RUNNER_DEFAULT_MAX_AGE_MS, resolveStaleRunnerMaxAgeMs } from "./_stale-runner-detection.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 
@@ -56,15 +60,17 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   const pulledMeanwhile = () => snapshot() !== receiptBefore ? refuse("sequence_live", `fixer execution ${executionIdentity} pulled its work order while the PR was read`, "Wait for the fixer to hand back, then rerun.") : null;
   let receipt = null;
   let receiptFound = false; // presence of the file, not its parsed content
+  let receiptMtime = null; // set for an unreadable or non-object receipt: the pull's activity time is then the file mtime, so it ages out of the grace
   if (workOrderRef) {
-    try { receipt = JSON.parse(readFileSync(pullReceiptPath(tmpRoot, workOrderRef), "utf8")); receiptFound = true; } catch (error) {
-      if (error?.code !== "ENOENT") return refuse("fixer_running", `the pull receipt of fixer execution ${executionIdentity} is unreadable (${error?.code ?? "invalid JSON"}), so a pull cannot be ruled out`, "Rerun once the receipt is readable, or ask the operator.");
+    const receiptFile = pullReceiptPath(tmpRoot, workOrderRef);
+    try { receipt = JSON.parse(readFileSync(receiptFile, "utf8")); receiptFound = true; } catch (error) {
+      if (error?.code !== "ENOENT") { receiptFound = true; receiptMtime = mtimeMs(receiptFile) ?? NaN; }
     }
-    if (receiptFound && (receipt === null || typeof receipt !== "object" || Array.isArray(receipt))) return refuse("fixer_running", `the pull receipt of fixer execution ${executionIdentity} is not a JSON object, so a pull cannot be ruled out`, "Rerun once the receipt is readable, or ask the operator.");
+    if (receiptFound && receiptMtime === null && (receipt === null || typeof receipt !== "object" || Array.isArray(receipt))) receiptMtime = mtimeMs(receiptFile) ?? NaN;
   }
   const markerMtime = mtimeMs(sequenceMarkerPath(tmpRoot, head));
   const pulled = receiptFound; // any receipt object at the work order ref proves a pull, whatever its content
-  const pulledAt = pulled ? Date.parse(receipt.pulledAt) : NaN;
+  const pulledAt = receiptMtime !== null ? receiptMtime : pulled ? Date.parse(receipt.pulledAt) : NaN;
   const grace = fixerGraceMs();
   // A fixer that pulled its work order is running unless it handed back (outputRef exists) or its last activity (the pull, or the last write to its branch reflog; a fixer that never commits shows only its pull) is older than the grace.
   // An unparseable pulledAt makes the activity NaN, which reads as running (fail closed). The runner claim updatedAt is no signal: the closing coordinator heartbeats it itself.
@@ -74,22 +80,35 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
     : null;
   const runningBeforeFetch = fixerRunning();
   if (runningBeforeFetch) return runningBeforeFetch;
-  if (marker.branch === undefined || !repo || !pr) return refuse("abandonment_unproven", "the PR head cannot be checked without the marker's branch and --repo/--pr", "Pass --repo and --pr of the marker's PR. A marker without a branch cannot be proven abandoned, so ask the operator to delete it.");
-  const { pr: facts } = await fetchPr({ repo, pr, fields: "headRefOid,headRefName" });
-  if (!isFullSha(facts.headRefOid ?? "")) return refuse("abandonment_unproven", `GitHub returned no valid head sha for PR #${pr}`, "Rerun when the PR head is readable.");
-  // The work order ref `fixer:<owner/name>#<pr>:...` names the marker's PR; a same-named branch in another repo or PR is no proof.
-  const owner = /^fixer:([^#:]+)#([0-9]+):/u.exec(workOrderRef ?? "");
-  if (owner && (owner[1] !== repo || Number(owner[2]) !== pr)) return refuse("abandonment_unproven", `the marker belongs to ${owner[1]}#${owner[2]}, not ${repo}#${pr}`, "Pass the --repo and --pr the marker names.");
-  if (facts.headRefName !== marker.branch) return refuse("abandonment_unproven", `PR #${pr} head branch ${facts.headRefName} is not the marker branch ${marker.branch}`, "Pass the --pr whose head branch the marker names.");
-  // Without a work order ref nothing ties the marker to this repo, so the baseline sha must be a commit here.
-  if (!owner && facts.headRefOid !== head && !hasCommit(head)) return refuse("baseline_unknown", `the marker names no work order ref and its baseline ${head} is not a commit in this repository`, "Run the close from a checkout of the marker's repository, or ask the operator to delete the marker.");
+  if (!repo || !pr) return refuse("abandonment_unproven", "the sequence cannot be checked without --repo and --pr", "Rerun with --repo and --pr of the marker's PR.");
+  // An unreadable marker, one that names no branch and one whose baseline name is not a full hex sha prove nothing about the PR, so they close on their own condition (the fixer-running check above already passed).
+  const markerUnreadable = marker.branch === undefined || !isFullSha(head);
+  // The sealed delta record of this baseline bounded out for the marker's own fixer execution: the fixer handed back and the full phase pushes.
+  const boundedOut = () => {
+    let record = null;
+    try { record = readSealedGateDeltaRecord(tmpRoot, head); } catch { /* an unreadable record proves nothing */ }
+    return record?.outcome === "bounded_out" && record.nextStep === "push_to_gate" && executionIdentity !== undefined
+      && record.origin?.workOrderRef === workOrderRef && record.origin?.executionIdentity === executionIdentity;
+  };
   let condition = null;
-  if (facts.headRefOid !== head) condition = "HEAD_MOVED";
-  else if (executionIdentity && !receiptFound && now() - (markerMtime ?? now()) >= grace) condition = "FIXER_NEVER_PULLED";
+  if (markerUnreadable) condition = "MARKER_UNREADABLE";
+  else {
+    const { pr: facts } = await fetchPr({ repo, pr, fields: "headRefOid,headRefName" });
+    if (!isFullSha(facts.headRefOid ?? "")) return refuse("abandonment_unproven", `GitHub returned no valid head sha for PR #${pr}`, "Rerun when the PR head is readable.");
+    // The work order ref `fixer:<owner/name>#<pr>:...` names the marker's PR; a same-named branch in another repo or PR is no proof.
+    const owner = /^fixer:([^#:]+)#([0-9]+):/u.exec(workOrderRef ?? "");
+    if (owner && (owner[1] !== repo || Number(owner[2]) !== pr)) return refuse("abandonment_unproven", `the marker belongs to ${owner[1]}#${owner[2]}, not ${repo}#${pr}`, "Pass the --repo and --pr the marker names.");
+    if (facts.headRefName !== marker.branch) return refuse("abandonment_unproven", `PR #${pr} head branch ${facts.headRefName} is not the marker branch ${marker.branch}`, "Pass the --pr whose head branch the marker names.");
+    // Without a work order ref nothing ties the marker to this repo, so the baseline sha must be a commit here.
+    if (!owner && facts.headRefOid !== head && !hasCommit(head)) return refuse("baseline_unknown", `the marker names no work order ref and its baseline ${head} is not a commit in this repository`, "Rerun the close from a checkout of the marker's repository.");
+    if (facts.headRefOid !== head) condition = "HEAD_MOVED";
+    else if (boundedOut()) condition = "BOUNDED_OUT";
+    else if (executionIdentity && !receiptFound && now() - (markerMtime ?? now()) >= grace) condition = "FIXER_NEVER_PULLED";
+  }
   if (condition === null) {
     return executionIdentity
-      ? refuse("sequence_live", `the PR head is still ${head} and the fixer execution ${executionIdentity} is not proven abandoned`, "Finish the sequence with the pre-push delta review, or rerun after the dispatch grace if no fixer ever pulled the work order.")
-      : refuse("abandonment_unproven", `the PR head is still ${head} and the marker names no fixer execution`, "Finish the sequence with the pre-push delta review, or ask the operator to delete the marker.");
+      ? refuse("sequence_live", `the PR head is still ${head} and the fixer execution ${executionIdentity} is not proven abandoned`, "Finish the sequence with the pre-push delta review (dev-loops loop pre-push-delta), or rerun after the dispatch grace if no fixer ever pulled the work order.")
+      : refuse("abandonment_unproven", `the PR head is still ${head} and the marker names no fixer execution`, "Finish the sequence with the pre-push delta review (dev-loops loop pre-push-delta), then rerun close-sequence.");
   }
   // The rest runs under the head's sequence lock (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC): a pull admission and a marker re-emit take the same lock, so neither interleaves with the checks below.
   try {
@@ -101,13 +120,14 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
       // The last pull receipt recheck precedes the record write, so a refused close leaves no record.
       const pulledAfterRead = pulledMeanwhile() ?? fixerRunning();
       if (pulledAfterRead) return pulledAfterRead;
+      if (condition === "BOUNDED_OUT" && !boundedOut()) return refuse("sequence_live", `the delta record for ${head} changed while it was checked`, "Rerun close-sequence.");
       // Record first, marker second: a failed write leaves the marker in place.
       const file = sequenceClosurePath(tmpRoot, head, executionIdentity);
       mkdirSync(path.dirname(file), { recursive: true });
       writeFileSync(`${file}.tmp`, `${JSON.stringify(record, null, 2)}\n`);
       renameSync(`${file}.tmp`, file);
       clearSequenceMarker(tmpRoot, head);
-      return { ok: true, ...record, recordPath: file };
+      return { ok: true, ...record, recordPath: file, ...(condition === "BOUNDED_OUT" ? { nextStep: "push_to_gate", next: "The delta sequence bounded out and is closed: run emit-fixer-work-order.mjs --phase full with the sealed --delta-result to emit the push order." } : {}) };
     }, lock);
   } catch (error) {
     if (error?.code === "SEQUENCE_LOCK_BUSY") return refuse("sequence_live", error.message, "Rerun close-sequence once the concurrent pull or emission finishes.");

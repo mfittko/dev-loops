@@ -1168,8 +1168,8 @@ for (const check of [false, true]) for (const [name, setup, expected] of [
   ["a handoff written before the pull (stale or replayed)", { receiptMtime: new Date("2000-01-01T00:00:00Z") }, /result_predates_pull/],
   ["a handoff whose head is not the observed head", { handoffHead: FIX_SHA }, /not the observed head/],
   ["a commit_only plan", { phase: "commit_only" }, /not a full-phase fixer work order/],
-  ["an act item with a siteQuery and no coverage record", { actList: [{ fingerprint: "fp1", severity: "high", summary: "s", judgeDisposition: "act", siteQuery: "git grep -n x" }] }, /act item fp1 has a site query and no site coverage record/],
-  ["an act list edited after emission", { editActListAfter: true, actList: [{ fingerprint: "fp1", severity: "high", summary: "s", judgeDisposition: "act", siteQuery: "git grep -n x" }] }, /differs from the sha256 the work order binds/],
+  ["an act item with a siteQuery and no coverage record", { actList: [{ fingerprint: "fp1", severity: "high", summary: "s", file: "src/a.mjs", judgeDisposition: "act", siteQuery: "git grep -n x" }] }, /act item fp1 has a site query and no site coverage record/],
+  ["an act list edited after emission", { editActListAfter: true, actList: [{ fingerprint: "fp1", severity: "high", summary: "s", file: "src/a.mjs", judgeDisposition: "act", siteQuery: "git grep -n x" }] }, /differs from the sha256 the work order binds/],
   ["a handoff leaving a returned site neither fixed nor skipped", { handoffText: JSON.stringify({ headSha: HEAD_SHA, dispositions: [{ threadId: "PRRT_kwDOabc", fixingCommitSha: FIX_SHA, disposition: "tackled", returnedSites: ["src/a.mjs:guard", "src/b.mjs:guard"], sites: [{ site: "src/a.mjs:guard", status: "fixed" }] }] }) }, /leaves returned site src\/b\.mjs:guard neither fixed nor skipped/],
   ["a handoff skipping a returned site without a reason", { handoffText: JSON.stringify({ headSha: HEAD_SHA, dispositions: [{ threadId: "PRRT_kwDOabc", fixingCommitSha: FIX_SHA, disposition: "tackled", returnedSites: ["src/a.mjs:guard"], sites: [{ site: "src/a.mjs:guard", status: "skipped" }] }] }) }, /records no skip reason/],
 ]) {
@@ -1479,7 +1479,7 @@ test("site coverage riding a fingerprinted thread entry satisfies the act item's
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, [
       { threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled", fingerprint: "fp1", returnedSites: ["s"], sites: [{ site: "s", status: "fixed" }] },
-    ], { actList: [{ fingerprint: "fp1", severity: "high", summary: "s", judgeDisposition: "act", siteQuery: "git grep -n x" }] });
+    ], { actList: [{ fingerprint: "fp1", severity: "high", summary: "s", file: "src/a.mjs", judgeDisposition: "act", siteQuery: "git grep -n x" }] });
     const { deps } = runtime([
       threadsCallEntry([
         { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, authorAssociation: "OWNER", author: { login: "gate-bot", __typename: "User" } }] } },
@@ -1706,7 +1706,7 @@ test("a failing lazy thread loader makes a checkpoint disposition incomplete ins
 for (const hasCheckpoint of [false, true]) for (const [name, setup, expected] of [
   ["missing output", { writeHandoff: false }, /result_missing/],
   ["empty THREAD output", { threads: { threads: [{ threadId: "PRRT_SOURCE" }] } }, /PRRT_SOURCE/],
-  ["omitted authenticated ACT thread", { actList: [{ fingerprint: fingerprintFinding({ summary: "s" }), severity: "medium", summary: "s", judgeDisposition: "act" }] }, /PRRT_ACT/],
+  ["omitted authenticated ACT thread", { actList: [{ fingerprint: fingerprintFinding({ summary: "s", file: "src/a.mjs" }), severity: "medium", summary: "s", file: "src/a.mjs", judgeDisposition: "act" }] }, /PRRT_ACT/],
   ["malformed output", { handoffText: "{" }, /not valid JSON/],
   ["stale head", { handoffHead: FIX_SHA }, /not the observed head/],
   ["predates pull", { receiptMtime: new Date("2000-01-01T00:00:00Z") }, /result_predates_pull/],
@@ -1873,9 +1873,9 @@ test("the finding marker is found on any comment of the thread, not only the id-
   });
 });
 
-const ACT_FP = fingerprintFinding({ severity: "medium", summary: "s", judgeDisposition: "act" });
+const ACT_FP = fingerprintFinding({ severity: "medium", summary: "s", file: "src/a.mjs", judgeDisposition: "act" });
 const ACT_MARKER = `<!-- dev-loops:finding ${ACT_FP} severity=medium angle=correctness round=1 -->`;
-const ACT_LIST = [{ fingerprint: ACT_FP, severity: "medium", summary: "s", judgeDisposition: "act" }];
+const ACT_LIST = [{ fingerprint: ACT_FP, severity: "medium", summary: "s", file: "src/a.mjs", judgeDisposition: "act" }];
 const userEntry = { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "gate" })}\n` };
 // Head CI reads (check-runs, then statuses) the verifier makes before it writes, replies or resolves.
 const ciEntries = (head, { failing, runs, statuses = [], checkRunsExit = 0 } = {}) => [
@@ -3170,7 +3170,7 @@ test("an act item with no fingerprint field is matched by its derived fingerprin
   const derived = fingerprintFinding({ summary: "s" });
   const marker = ACT_MARKER.replace(ACT_FP, derived);
   await withRepoRoot(async (repoRoot) => {
-    const fixerPlan = await deliver(repoRoot, [], { actList: [{ severity: "medium", summary: "s", judgeDisposition: "act" }] });
+    const fixerPlan = await deliver(repoRoot, [], { actList: [{ severity: "medium", summary: "s", file: "src/a.mjs", judgeDisposition: "act" }] });
     const { deps } = runtime([threadsCallEntry([actThread("PRRT_DERIVED", [gateComment("c1", 103, `${marker}\n**Problem:** s`)])]), userEntry], repoRoot);
     await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps), /PRRT_DERIVED/);
   });
@@ -3181,8 +3181,8 @@ for (const check of [false, true]) for (const kind of ["resolved", "resolved-def
     await withRepoRoot(async (repoRoot) => {
       const derived = fingerprintFinding({ summary: "s" });
       const actList = kind === "repeated-mixed"
-        ? ["first", "second"].map((ref) => ({ ref, severity: "medium", summary: "s", judgeDisposition: "act" }))
-        : [{ severity: "medium", summary: "s", judgeDisposition: "act" }];
+        ? ["first", "second"].map((ref) => ({ ref, severity: "medium", summary: "s", file: "src/a.mjs", judgeDisposition: "act" }))
+        : [{ severity: "medium", summary: "s", file: "src/a.mjs", judgeDisposition: "act" }];
       const sequence = startDeltaSequence({ reviewBaselineHead: HEAD_SHA, actList });
       const items = sequence.actItems.map(({ ref }, index) => ({ ref, status: kind === "residual-hint" || (kind === "repeated-mixed" && index === 1) ? "cannot_verify" : "resolved" }));
       const delta = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: sequence.actSetId, actionableItems: items.map((item) => ({ ...item, evidence: ["targeted check"] })), newFindings: [], widenedReads: [], outcome: "bounded_out" };
