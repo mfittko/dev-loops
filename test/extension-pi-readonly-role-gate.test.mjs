@@ -80,6 +80,7 @@ test("Pi and Claude judge gates agree on the decision-check matcher", async () =
 test("Pi reviewer reads and searches but cannot run tests or builds", async () => {
   for (const cmd of ["git diff origin/main...HEAD", "grep -rn foo src", "rg foo", "cat README.md", PULL,
     "cd /w/tree && dev-loops-run scripts/github/verify-fresh-review-context.mjs --context-path a.json",
+    "dev-loops-run --repo-root /w/tree scripts/github/verify-fresh-review-context.mjs --context-path a.json",
     "dev-loops-run scripts/github/emit-reviewer-blocked.mjs --head abc", "dev-loops-run scripts/loop/seal-evidence.mjs --kind delta --file /w/r.json", "jq .adjacentCode a.json", "find src -name x.ts", 'git -C "/w/tree" diff origin/main...HEAD']) {
     assert.deepEqual(await callAs("review", cmd), { block: false }, cmd);
   }

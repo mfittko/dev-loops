@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { BARE_DEV_LOOPS_NS_SOURCE } from "../../packages/core/src/claude/asset-generation.mjs";
 import { cliError, renderCliText } from "../../packages/core/src/loop/cli-command.mjs";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
@@ -38,19 +39,31 @@ test("cliError renders the message per harness", () => {
   }
 });
 
-test("no agent-facing doc names a `cd <checkout> &&` prefix before dev-loops-run", () => {
+const listFiles = (dirs, ext) => {
+  const files = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(path.join(repoRoot, d), { withFileTypes: true })) {
+      const rel = path.join(d, e.name);
+      if (e.isDirectory()) walk(rel);
+      else if (e.name.endsWith(ext)) files.push(rel);
+    }
+  };
+  for (const dir of dirs) if (fs.existsSync(path.join(repoRoot, dir))) walk(dir);
+  return files;
+};
+const hitsOf = (files, re) => files.filter((f) => re.test(fs.readFileSync(path.join(repoRoot, f), "utf8")));
+
+test("Claude-rendered text names no bare `dev-loops <ns>` call", () => {
+  assert.doesNotMatch(renderCliText(REMEDY, { env: CLAUDE }), new RegExp(BARE_DEV_LOOPS_NS_SOURCE));
+});
+
+test("no agent-facing doc or emitter names a `cd <checkout> &&` prefix before dev-loops-run", () => {
   const CD_RE = /\bcd\s+\S+\s+&&\s+dev-loops-run\b/;
-  const files = ["AGENTS.md"];
-  for (const dir of ["skills", "agents", ".claude"]) {
-    const walk = (d) => {
-      for (const e of fs.readdirSync(path.join(repoRoot, d), { withFileTypes: true })) {
-        const rel = path.join(d, e.name);
-        if (e.isDirectory()) walk(rel);
-        else if (e.name.endsWith(".md")) files.push(rel);
-      }
-    };
-    if (fs.existsSync(path.join(repoRoot, dir))) walk(dir);
-  }
-  const hits = files.filter((f) => CD_RE.test(fs.readFileSync(path.join(repoRoot, f), "utf8")));
-  assert.deepEqual(hits, []);
+  const files = ["AGENTS.md", ...listFiles(["skills", "agents", ".claude"], ".md"), ...listFiles(["scripts", "packages/core/src"], ".mjs")];
+  assert.deepEqual(hitsOf(files, CD_RE), []);
+});
+
+// AGENTS.md is harness-shared and its bare names are pinned by other doc contracts; its launcher line covers Claude.
+test("no skill, agent or Claude asset doc names the bare `dev-loops <ns>` form", () => {
+  assert.deepEqual(hitsOf(listFiles(["skills", "agents", ".claude"], ".md"), new RegExp(BARE_DEV_LOOPS_NS_SOURCE)), []);
 });
