@@ -1027,3 +1027,27 @@ test("reconcile-draft-gate succeeds for a light-mode under-threshold PR under ac
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("reconcile-draft-gate refuses a stale base before converting a ready PR to draft", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-stale-base-"));
+
+  try {
+    await disableFanoutEvidence(tempDir);
+    const { runChild, calls } = makeGhMock([
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc123456789"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["pr", "checks", "17", "--repo", "owner/repo", "--json", "bucket,state,name,workflow"], stdout: '[{"bucket":"pass","state":"SUCCESS","name":"verify","workflow":"CI"}]\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefName"], stdout: '{"baseRefName":"main"}\n' },
+    ]);
+    const checkBaseFreshness = async () => ({ error: "base_stale_integrate_first", newerCommits: ["deadbee newer base commit"], remedy: "Integrate origin/main first." });
+
+    await assert.rejects(
+      reconcileDraftGate({ repo: "owner/repo", pr: 17 }, { env: runIdFreeEnv({}), repoRoot: tempDir, runChild, checkBaseFreshness }),
+      /base_stale_integrate_first.*Integrate origin\/main first\./s,
+    );
+    assert.equal(calls.some(({ args }) => args.some((arg) => arg.includes("convertPullRequestToDraft"))), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
