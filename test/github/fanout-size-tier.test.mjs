@@ -203,6 +203,22 @@ describe("tier packing in resolveFanoutDispatch (AC1, AC4, AC6, AC7, AC9)", () =
     assert.equal(grown.unitBound, 5);
   });
 
+  test("a present malformed sizeOutcome does not reuse the recorded tier, and valid in-tier evidence with no changed files does", () => {
+    const angles = POOL.slice(0, 9);
+    const first = dispatch(TIERED, "draft", angles, piEnv());
+    for (const sizeOutcome of [{ outcome: "block" }, SIZE(-1), SIZE(Number.NaN)]) {
+      const plan = dispatch(TIERED, "draft", angles, piEnv(), { sizeOutcome, recordedSizeTier: first.sizeTier });
+      assert.deepEqual(plan.sizeTier.reasons, ["size_outcome_unavailable"]);
+      assert.equal(plan.sizeTier.tier, null);
+      assert.equal(plan.unitBound, 5);
+    }
+    for (const sizeOutcome of [null, undefined, SIZE(30)]) {
+      const plan = dispatch(TIERED, "draft", angles, piEnv(), { changedFiles: null, sizeOutcome, recordedSizeTier: first.sizeTier });
+      assert.deepEqual(plan.sizeTier.reasons, ["size_tier_applied"]);
+      assert.equal(plan.unitBound, 10);
+    }
+  });
+
   test("without the key the plan carries no sizeTier record and today's grouping", () => {
     const config = withFanout({ sizeTiers: undefined });
     const plan = dispatch(config, "draft", POOL.slice(0, 9), piEnv());

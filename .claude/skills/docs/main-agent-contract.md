@@ -279,7 +279,7 @@ The rule binds the coordinator on every harness, so it stays outside the section
 `gate-coordinator`, `review`, `judge`, the pre-push reviewer) passes it from the dispatching
 agent: the `dev-loop` agent for its own sub-delegates, the `gate-coordinator` for its review and
 judge dispatches. A review dispatch uses its angles' resolved model
-(`gate resolve-role --gate <operation> --angle <angle> --harness claude`, high tier by default); a unit whose angles resolve to different models uses the `review` role model (`gate resolve-role --role review --harness claude`), per ADR 0278. A consumer's `.devloops` tiers therefore apply with no change to installed
+(`gate resolve-role --gate <operation> --angle <angle> --harness claude`, default: the repo's `models.roles.review` or `models.roleTiers.review`, else the high tier); a unit whose angles resolve to different models uses the `review` role model (`gate resolve-role --role review --harness claude`), per ADR 0278. A consumer's `.devloops` tiers therefore apply with no change to installed
 agent frontmatter. The Agent `model` parameter takes an alias (`sonnet`, `opus`, `haiku`,
 `fable`), so `.devloops` Claude tier values (`models.tiers.<alias>.claude`) should be aliases
 for dispatch; no code maps a full model id to an alias. The resolver also bakes the tier

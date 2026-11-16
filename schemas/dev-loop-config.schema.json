@@ -347,7 +347,7 @@
                         "minLength": 1
                       },
                       "model": {
-                        "description": "Concrete model override for this angle (highest precedence).",
+                        "description": "Concrete model override for this angle. Applies on Pi only; Claude honors the angle tier and Codex inherits.",
                         "type": "string",
                         "minLength": 1
                       },
@@ -591,7 +591,7 @@
                         "minLength": 1
                       },
                       "model": {
-                        "description": "Concrete model override for this angle (highest precedence).",
+                        "description": "Concrete model override for this angle. Applies on Pi only; Claude honors the angle tier and Codex inherits.",
                         "type": "string",
                         "minLength": 1
                       },
@@ -830,7 +830,7 @@
                         "minLength": 1
                       },
                       "model": {
-                        "description": "Concrete model override for this angle (highest precedence).",
+                        "description": "Concrete model override for this angle. Applies on Pi only; Claude honors the angle tier and Codex inherits.",
                         "type": "string",
                         "minLength": 1
                       },

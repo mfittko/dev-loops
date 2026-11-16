@@ -2613,8 +2613,9 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
     const recorded = priorSizeTier?.tier;
     const configured = (config?.gates?.fanout?.sizeTiers ?? []).find((t) => t.maxWholeLogicLoc === recorded?.maxWholeLogicLoc && t.maxAnglesPerUnit === recorded?.maxAnglesPerUnit);
     const presentLoc = sizeOutcome?.wholeLogicLoc;
-    // Present size evidence above the recorded tier re-derives; only absent evidence reuses it.
-    const fits = !(typeof presentLoc === "number" && Number.isFinite(presentLoc)) || presentLoc <= configured?.maxWholeLogicLoc;
+    // Only absent evidence, or valid evidence within the recorded tier with unavailable changed files, reuses it. Present malformed evidence and evidence above the tier re-derive.
+    const fits = sizeOutcome == null
+      || (tierDecision.reason === "changed_files_unavailable" && typeof presentLoc === "number" && Number.isFinite(presentLoc) && presentLoc >= 0 && presentLoc <= configured?.maxWholeLogicLoc);
     if (configured && fits) {
       tierDecision = { tier: configured, reason: "size_tier_applied" };
       reusedTier = true;

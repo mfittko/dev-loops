@@ -1554,6 +1554,27 @@ test("CLI --base reads gates.contextExpansion from .devloops into adjacentCode.e
   }
 });
 
+// ADR 0278 production caller wiring: main() must thread sizeOutcome and changedFiles into resolveFanoutDispatch.
+test("CLI --base threads size evidence into the persisted fanout size tier", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: false\n    maxFiles: 1\n    maxLines: 1\ngates:\n  fanout:\n    sizeTiers:\n      - maxWholeLogicLoc: 40\n        maxAnglesPerUnit: 10\n",
+      "utf8",
+    );
+    await main([
+      "--repo", "owner/repo", "--pr", "42", "--gate", "draft_gate", "--head-sha", headSha,
+      "--angles", '["scope","correctness","coverage","docs-drift","security-surface","config-drift"]', "--base", baseSha,
+    ], { repoRoot, run: stubGhRun });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha }, { repoRoot });
+    assert.deepEqual(artifact.fanout.sizeTier.reasons, ["size_tier_applied"]);
+    assert.equal(artifact.fanout.unitBound, 10);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("CLI without --base emits an explicit thin-briefing posture, not a silent full-looking bundle", async () => {
   const { repoRoot, headSha } = await makeBaseDiffRepo();
   try {

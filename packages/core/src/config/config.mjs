@@ -222,7 +222,7 @@ const GateAngleEntry = z.preprocess(
     enabled: z.boolean().optional().describe("Set false to drop this angle from the resolved list (a later config layer disabling a base angle)."),
     persona: z.string().trim().min(1).optional().describe("Reviewer persona for this angle."),
     prompt: z.string().min(1).optional().describe("Short focused instruction for the reviewer agent — what to look for and how to judge this angle."),
-    model: z.string().trim().min(1).optional().describe("Concrete model override for this angle (highest precedence)."),
+    model: z.string().trim().min(1).optional().describe("Concrete model override for this angle. Applies on Pi only; Claude honors the angle tier and Codex inherits."),
     tier: z.string().trim().min(1).optional().describe("Model tier alias for this angle (used when `model` is absent)."),
     scope: z.enum(GATE_ANGLE_SCOPES).optional().describe("Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle or its changed-files/adjacent-file summary section), or docs-only (doc-file paths only; the diff stays the required diff read). Unknown/omitted resolves to full."),
     readsPrBody: z.boolean().optional().describe("Declare that this angle reads the PR body, so a PR-body-only edit re-runs its dispatch unit (GATE-EXEC-BODY-ONLY-RERUN). An angle whose prompt names the PR body or PR description is body-reading without it."),
