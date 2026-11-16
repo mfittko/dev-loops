@@ -4,6 +4,8 @@
 
 Accepted — 2026-09-29 ([issue 2506](https://github.com/mfittko/dev-loops/issues/2506))
 
+Amended by [0285](./0285-repo-root-is-the-only-named-launcher-form.md), which makes the `--repo-root` form the only named launcher form.
+
 ## Context
 
 In the dev-loops repository, a PR changes the toolchain that gates it. The session hooks load from the main checkout. The gate scripts run from the checkout that `dev-loops-run` resolves from the shell cwd. Every gate step also reads its cwd for the diff, the config and the `tmp/` bundle. A PR that adds or changes a gate script, a gate config default or a hook-consumed shape therefore could not always gate itself.
@@ -14,7 +16,7 @@ The evidence is on [issue 2506](https://github.com/mfittko/dev-loops/issues/2506
 
 ## Decision
 
-- Gate scripts run the review root's toolchain. `dev-loops-run --repo-root <checkout> <script> [args...]` resolves the toolchain from `<checkout>` when it is a dev-loops source checkout and runs the script with cwd `<checkout>`. For any other directory, the toolchain order is unchanged and only the cwd follows the flag. Amendment (issue 3105 slice 11): `dev-loops-run --repo-root <checkout> <script>` is the only named launcher form; see WORKTREE-SCRIPT-LAUNCHER-CWD in `skills/docs/worktree-guidance.md`.
+- Gate scripts run the review root's toolchain. `dev-loops-run --repo-root <checkout> <script> [args...]` resolves the toolchain from `<checkout>` when it is a dev-loops source checkout and runs the script with cwd `<checkout>`. For any other directory, the toolchain order is unchanged and only the cwd follows the flag. `cd <checkout> && dev-loops-run <script>` stays valid.
 - `consolidate-fanin.mjs`, `judge-pass.mjs` and `generate-claude-assets.mjs` refuse a `--repo-root` that names a dev-loops checkout other than their own toolchain root, with `toolchain_root_mismatch` and the flag-form command.
 - The pull delegates. When the execution index entry sits in another linked dev-loops worktree that has `scripts/github/pull-work-order.mjs`, the pull re-runs that script with the same argv (a `--tmp-root` made absolute) and cwd set to that worktree. The emitter wrote a linked-worktree entry there, so its location is the deterministic review root. The pull never delegates to the main checkout: a main-anchored entry (the fixer index) can be emitted from any checkout, so its location names no review root. The dispatch pointer and the work-order shapes do not change. An environment marker stops a second delegation.
 - The session hooks stay on the main checkout. A change to a shape that a hook or a main-checkout script consumes ships in two steps (`GATE-SELF-HOST-EXPAND-CONTRACT`), and the grill asks the self-gate question for each changed producer/consumer pair (`GRILL-SELF-HOST-PATH`).
