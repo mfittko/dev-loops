@@ -25,4 +25,4 @@ The check fails closed. A results comment with no parseable `createdAt`, when no
 - The re-grill reads the counted comments and the body edits after the latest results comment. It folds the accepted content into the body and its AC / DoD matrix, then posts a new results comment. That comment clears the reason.
 - A bypass line on an earlier results comment does not exempt the issue from the check.
 - Every counted comment forces a re-grill, including a milestone-move note or a comment with no requirement content. The grill pass decides whether the comment changes the spec.
-- Open item, deferred: the grill misses comments made while a grill pass runs. A comment posted after the grill reads the comments and before it posts its results comment is older than the new results comment. The check does not see that comment, and the issue passes as refined.
+- Open item, deferred (tracked in #3227): the grill misses comments made while a grill pass runs. A comment posted after the grill reads the comments and before it posts its results comment is older than the new results comment. The check does not see that comment, and the issue passes as refined.
