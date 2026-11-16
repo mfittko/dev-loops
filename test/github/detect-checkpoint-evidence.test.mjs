@@ -4767,6 +4767,9 @@ test("buildFanoutEnforcement selects and passes a one-reviewer ledger for a sing
         "        enabled: false",
         "  fanout:",
         "    maxAnglesPerGroup: 10",
+        "    sizeTiers:",
+        "      - maxWholeLogicLoc: 100",
+        "        maxAnglesPerUnit: 10",
         "    groups:",
         "      - name: tier",
         "        angles: [a, b, pr-checklist]",
@@ -4812,11 +4815,11 @@ test("buildFanoutEnforcement selects and passes a one-reviewer ledger for a sing
   }
 });
 
-test("buildFanoutEnforcement passes a one-reviewer ledger for a tier-5 single unit when the context records the applied tier (#3166)", async () => {
+test("buildFanoutEnforcement passes a one-reviewer ledger for a tier-5 single unit when sizeTiers is configured and the context records the applied tier (#3166)", async () => {
   const { buildGateContextPath } = await import("../../scripts/github/_gate-artifact-paths.mjs");
-  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-tier5-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-tier5-on-"));
   try {
-    await writeFile(path.join(dir, ".devloops"), ["version: 1", "gates:", "  requireFanoutEvidence: true", "  requireFanoutProvenance: true", "  preApproval:", "    angles:", "      - a", "      - b", "      - name: pr-checklist", "        mandatory: true", "      - name: holistic", "        enabled: false", ""].join("\n"), "utf8");
+    await writeFile(path.join(dir, ".devloops"), ["version: 1", "gates:", "  requireFanoutEvidence: true", "  requireFanoutProvenance: true", "  preApproval:", "    angles:", "      - a", "      - b", "      - name: pr-checklist", "        mandatory: true", "      - name: holistic", "        enabled: false", "  fanout:", "    sizeTiers:", "      - maxWholeLogicLoc: 100", "        maxAnglesPerUnit: 5", ""].join("\n"), "utf8");
     const { config } = await loadDevLoopConfig({ repoRoot: dir });
     const headSha = "f".repeat(40);
     const dispatchUnits = [{ name: "tier", group: "tier", angles: ["a", "b", "pr-checklist"] }];
@@ -4841,6 +4844,40 @@ test("buildFanoutEnforcement passes a one-reviewer ledger for a tier-5 single un
       preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
     }, 0, null, enforcement);
     assert.equal(result.ok, true, JSON.stringify(result.failures));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildFanoutEnforcement keeps the 2-reviewer floor when the context records a tier but the repo configures no sizeTiers (#3166)", async () => {
+  const { buildGateContextPath } = await import("../../scripts/github/_gate-artifact-paths.mjs");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-tier5-off-"));
+  try {
+    await writeFile(path.join(dir, ".devloops"), ["version: 1", "gates:", "  requireFanoutEvidence: true", "  requireFanoutProvenance: true", "  preApproval:", "    angles:", "      - a", "      - b", "      - name: pr-checklist", "        mandatory: true", "      - name: holistic", "        enabled: false", ""].join("\n"), "utf8");
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const headSha = "f".repeat(40);
+    const dispatchUnits = [{ name: "tier", group: "tier", angles: ["a", "b", "pr-checklist"] }];
+    const perAngle = ["a", "b", "pr-checklist"].map((angle) => ({ angle, reviewer: "review-a", group: "tier" }));
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-34");
+    await mkdir(ledgerDir, { recursive: true });
+    await writeFile(path.join(ledgerDir, `pre_approval_gate-${headSha}.json`), `${JSON.stringify({ gate: "pre_approval_gate", headSha, findings: [], provenance: { distinctReviewers: 1, dispatchUnits, perAngle } })}\n`, "utf8");
+    const contextPath = buildGateContextPath({ repo: "owner/repo", pr: 34, gate: "pre_approval_gate", headSha, tmpRoot: "tmp" });
+    await mkdir(path.dirname(path.join(dir, contextPath)), { recursive: true });
+    await writeFile(path.join(dir, contextPath), `${JSON.stringify({ fanout: { unitBound: 5, sizeTier: { tier: { maxWholeLogicLoc: 100, maxAnglesPerUnit: 5 } } } })}\n`, "utf8");
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 34, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: { visible: true, headSha, executionMode: "fanout_fanin" },
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const gate = enforcement.gates.find((g) => g.name === "pre_approval_gate");
+    assert.equal(gate.contextUnitBound.tiered, false);
+    const result = buildPreMergeGateCheck({
+      currentHeadSha: headSha,
+      draftGate: { visible: true, verdict: "clean" },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
+    }, 0, null, enforcement);
+    assert.equal(result.ok, false);
+    assert.match(result.failures.join("\n"), /distinctReviewers|reviewer/i);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

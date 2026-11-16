@@ -1056,6 +1056,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   // requires it. Only the angle-CONTRACT resolvers below (resolveGateAngleContract,
   // resolveFanoutGroups) use angleConfig — activation and angle-contract are
   // deliberately split across two different config sources.
+  const sizeTiersConfigured = Array.isArray(angleConfig?.gates?.fanout?.sizeTiers) && angleConfig.gates.fanout.sizeTiers.length > 0;
   const draftGateConfig = resolveGateConfig(config, "draft");
   const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
   // Shared angle-contract resolver (exclude-filtered mandatory angles +
@@ -1127,7 +1128,8 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
     // checkout's contract-failing ledger cannot shadow a passing one.
     const readProvenance = requireProvenance || spec.marker.executionMode === "fanout_fanin";
     const angleFields = GATE_ANGLE_CONFIG[spec.name];
-    const contextUnitBound = readProvenance
+    // The tier exception to the reviewer floor and the above-5 bound count only in a repo that configures gates.fanout.sizeTiers; a stray artifact never relaxes the floor elsewhere.
+    const contextUnitBound = readProvenance && sizeTiersConfigured
       ? await readContextUnitBoundInAny(checkouts, buildGateContextPath({ repo, pr, gate: spec.name, headSha, tmpRoot: "tmp" }))
       : DEFAULT_CONTEXT_UNIT;
     const provenance = readProvenance
