@@ -2999,6 +2999,14 @@ async function writeCapRoundLedgers({ root, wt, head, files }) {
   }
 }
 
+// A sealed clearing delta record from -> to under the fixture's gate tmp root.
+async function sealClearingRecord(root, from, to) {
+  const text = JSON.stringify({ reviewBaselineHead: from, candidateHead: to, nextStep: "push_to_gate", outcome: "locally_clear", items: [] });
+  await mkdir(path.join(root, "tmp", "gate-delta"), { recursive: true });
+  await writeFile(path.join(root, "tmp", "gate-delta", `${from}.json`), text);
+  await writeFile(path.join(root, "tmp", "gate-delta", `${from}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`);
+}
+
 async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfterMerge = false, fixerCommitBeforeMerge = false, secondCandidate = false, baseMergeBeforeFixer = false } = {}) {
   await writeCapRoundLedgers({ root, wt, head, files });
   let ledgerlessBase;
@@ -3016,12 +3024,7 @@ async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfter
     await writeFile(path.join(wt, "fixer.md"), "fixer change\n");
     git(wt, "add", "fixer.md");
     git(wt, "commit", "-q", "-m", "fixer commit");
-    const seal = async (from, to) => {
-      const text = JSON.stringify({ reviewBaselineHead: from, candidateHead: to, nextStep: "push_to_gate", outcome: "locally_clear", items: [] });
-      await mkdir(path.join(root, "tmp", "gate-delta"), { recursive: true });
-      await writeFile(path.join(root, "tmp", "gate-delta", `${from}.json`), text);
-      await writeFile(path.join(root, "tmp", "gate-delta", `${from}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`);
-    };
+    const seal = (from, to) => sealClearingRecord(root, from, to);
     const b1 = git(wt, "rev-parse", "HEAD");
     await seal(ledgerlessBase ?? head, b1);
     if (secondCandidate) {
@@ -3052,6 +3055,16 @@ test("ADR 0197: a base-only merge after the cap round does not consume the closu
     const { over } = await capRoundThenBaseMerge(fx, {});
     const result = await fx.emit(over);
     assert.equal(result.workOrder.source, "act-list");
+  });
+});
+
+test("issue 3105: the later-pass act-ref bound does not apply on the ADR 0197 base-only merge path", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await capRoundThenBaseMerge(fx, {});
+    const capList = JSON.parse(await readFile(fx.files.actList));
+    const extra = withFp({ ...ACT[0], severity: "medium", summary: "act item outside the cap-round ledger", judgeFix: "fix it" });
+    await writeFile(fx.files.actList, JSON.stringify([...capList, extra]));
+    assert.equal((await fx.emit(over)).workOrder.source, "act-list");
   });
 });
 
@@ -3140,6 +3153,18 @@ test("issue 3105: a foreign commit after the first cap-round pass keeps round_ca
     git(fx.wt, "commit", "-q", "--allow-empty", "-m", "foreign commit");
     const foreign = git(fx.wt, "rev-parse", "HEAD");
     await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, ...at(foreign) }), (e) => e.refusal === "round_cap_reached" && /gate extend-cap-round-chain --repo/.test(e.message));
+  });
+});
+
+test("issue 3105: a chain candidate head that does not descend from the cap-round head refuses round_cap_reached", async () => {
+  await withFixture(async (fx) => {
+    const { candidate, at } = await capRoundFirstPassPushed(fx);
+    // A parentless commit with the candidate's tree: the sealed chain reaches it, but the cap-round head is not its ancestor.
+    const orphan = git(fx.wt, "commit-tree", `${candidate}^{tree}`, "-m", "orphan chain head");
+    await sealClearingRecord(fx.root, candidate, orphan);
+    git(fx.wt, "update-ref", "HEAD", orphan); // same tree, so the worktree stays clean
+    // The ancestor check throws before the chain-miss flag is set, so the refusal carries no chain-extension remedy.
+    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, ...at(orphan) }), (e) => e.refusal === "round_cap_reached" && !/extend-cap-round-chain/.test(e.message));
   });
 });
 
