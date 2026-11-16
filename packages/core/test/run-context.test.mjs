@@ -22,6 +22,7 @@ import {
   writeRunContext,
   readRunContext,
   ensureRunId,
+  ensureLaneRunContext,
   isClaudeHarness,
   CLAUDE_HARNESS_MARKER,
   validateNativeCodexMetadata,
@@ -428,4 +429,73 @@ test("isClaudeHarness is true only when CLAUDECODE is exactly \"1\"", () => {
   assert.equal(isClaudeHarness({ CLAUDECODE: "true" }), false);
   assert.equal(isClaudeHarness({ CLAUDECODE: "" }), false);
   assert.equal(isClaudeHarness({}), false);
+});
+
+// Issue 3224: a lane's run id persists in the worktree run-context file, which resolveRunId
+// reads as its last fallback when the caller passes its cwd.
+function laneWorktree(runId = "devloops-lane") {
+  const root = makeTempRoot();
+  fs.mkdirSync(path.join(root, ".git"));
+  const nested = path.join(root, "scripts", "loop");
+  fs.mkdirSync(nested, { recursive: true });
+  if (runId !== null) writeRunContext({ runId, root, mintedAt: "2026-11-16T00:00:00Z" });
+  return { root, nested };
+}
+
+test("resolveRunId reads the worktree run-context file last, from any directory of the worktree", () => {
+  const { root, nested } = laneWorktree();
+  assert.equal(resolveRunId({}, { cwd: root }), "devloops-lane");
+  assert.equal(resolveRunId({}, { cwd: nested }), "devloops-lane");
+  // Every env carrier and the native Pi synthesis keep precedence over the file.
+  assert.equal(resolveRunId({ DEVLOOPS_RUN_ID: "env-run" }, { cwd: nested }), "env-run");
+  assert.equal(resolveRunId({ PI_SUBAGENT_RUN_ID: "pi-run" }, { cwd: nested }), "pi-run");
+  assert.equal(resolveRunId(nativePiEnv(), { cwd: nested }), "pi-session-session-abc");
+  // A caller without cwd (hook guards, ensureRunId) stays env-only.
+  assert.equal(resolveRunId({}), null);
+  assert.equal(resolveRunId({}, { cwd: null }), null);
+});
+
+test("resolveRunId resolves null for a missing, unreadable or malformed run-context file", () => {
+  assert.equal(resolveRunId({}, { cwd: laneWorktree(null).nested }), null);
+  const malformed = laneWorktree(null);
+  fs.mkdirSync(path.join(malformed.root, ".pi"), { recursive: true });
+  fs.writeFileSync(runContextPath(malformed.root), "{not json");
+  assert.equal(resolveRunId({}, { cwd: malformed.root }), null);
+  fs.writeFileSync(runContextPath(malformed.root), JSON.stringify({ runId: "  " }));
+  assert.equal(resolveRunId({}, { cwd: malformed.root }), null);
+  const unreadable = laneWorktree();
+  const throwingFs = { ...fs, readFileSync() { throw Object.assign(new Error("EACCES"), { code: "EACCES" }); } };
+  assert.equal(resolveRunId({}, { cwd: unreadable.root, fs: throwingFs }), null);
+  // Outside any checkout there is no worktree root to read from.
+  const bare = makeTempRoot();
+  writeRunContext({ runId: "outside", root: bare });
+  assert.equal(resolveRunId({}, { cwd: bare }), null);
+});
+
+test("native Codex identity is never overridden by a persisted run id", () => {
+  const { env, file } = codexFixture();
+  const { root } = laneWorktree("devloops-competing");
+  assert.equal(resolveRunId(env, { cwd: root }), `codex-thread-${codexId}`);
+  assert.equal(ensureLaneRunContext({ env, cwd: root }), null);
+  fs.unlinkSync(file);
+  // Unverified Codex fails closed instead of borrowing the file's id.
+  assert.equal(resolveRunId(env, { cwd: root }), null);
+  assert.equal(ensureLaneRunContext({ env, cwd: root }), null);
+  assert.equal(readRunContext({ root }).runId, "devloops-competing");
+  const fresh = laneWorktree(null);
+  assert.equal(ensureLaneRunContext({ env, cwd: fresh.nested }), null);
+  assert.equal(fs.existsSync(runContextPath(fresh.root)), false);
+});
+
+test("ensureLaneRunContext mints into the worktree once and then reuses the file", () => {
+  const { root, nested } = laneWorktree(null);
+  const minted = ensureLaneRunContext({ env: {}, cwd: nested, mintedAt: "2026-11-16T00:00:00Z" });
+  assert.equal(minted.minted, true);
+  assert.equal(minted.statePath, runContextPath(root));
+  assert.equal(readRunContext({ root }).runId, minted.runId);
+  assert.deepEqual(ensureLaneRunContext({ env: {}, cwd: root }), { runId: minted.runId, minted: false, statePath: null });
+  // An env run id keeps precedence and writes nothing.
+  assert.deepEqual(ensureLaneRunContext({ env: { DEVLOOPS_RUN_ID: "env-run" }, cwd: root }), { runId: "env-run", minted: false, statePath: null });
+  assert.equal(readRunContext({ root }).runId, minted.runId);
+  assert.equal(ensureLaneRunContext({ env: {}, cwd: makeTempRoot() }), null);
 });

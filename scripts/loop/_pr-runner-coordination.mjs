@@ -880,7 +880,7 @@ export async function handoffRunnerOwnership({
 } = {}) {
   const normalizedRepo = normalizeRepoSlug(repo);
   const normalizedPr = normalizePr(pr);
-  const envRunId = normalizeRunId(resolveRunId(env));
+  const envRunId = normalizeRunId(resolveRunId(env, { cwd }));
   const requestedRunId = normalizeRunId(runId);
   // RUNNER-HANDOFF-TEARDOWN: without a verified identity the explicit run id is the identity (owner-only below).
   // Native Codex keeps its verified-identity requirement.
@@ -1029,7 +1029,7 @@ export async function ensureAsyncRunnerOwnership({
   // verdict to exercise the production wiring without a live stale claim.
   detectStale = detectStaleRunner,
 } = {}) {
-  const runId = normalizeRunId(resolveRunId(env));
+  const runId = normalizeRunId(resolveRunId(env, { cwd }));
   if (runId === null) {
     if ((claimIfMissing || requireExisting) && resolveRuntimeHarness(env) === "codex") {
       return buildConflict({
@@ -1141,7 +1141,7 @@ export async function releaseAsyncRunnerOwnership({
   env = process.env,
   cwd = process.cwd(),
 } = {}) {
-  const runId = normalizeRunId(resolveRunId(env));
+  const runId = normalizeRunId(resolveRunId(env, { cwd }));
   if (runId === null) {
     return {
       ok: true,

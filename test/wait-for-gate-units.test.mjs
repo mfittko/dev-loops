@@ -10,6 +10,8 @@ import { pullReceiptPath } from "../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../cli/index.mjs";
 import { ARTIFACT_STALE_PENDING_REMEDY, ARTIFACT_STALE_REMEDY, ARTIFACT_TIMEOUT_REMEDY, main, parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
 import { captureStderr, withTempDir } from "./_helpers.mjs";
+import { claimRunnerOwnership } from "../scripts/loop/_pr-runner-coordination.mjs";
+import { writeRunContext } from "@dev-loops/core/loop/run-context";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/loop/wait-for-gate-units.mjs", import.meta.url));
 const HEAD = "a".repeat(40);
@@ -574,5 +576,40 @@ test("--after is re-read on every poll: a reference replaced mid-wait makes an o
     const result = await waitForUnits({ artifact: file, after, timeoutMs: 4000, now: clock.now, delay });
     assert.equal(result.outcome, "timeout");
     assert.equal(result.stale, true, "the newer reference made the artifact stale");
+  });
+});
+
+// Issue 3224 AC3: a long join refreshes the PR runner claim like probe-ci-status.
+test("a long plan wait heartbeats the runner claim for the plan's PR", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    const plan = JSON.parse(await readFile(planPath, "utf8"));
+    await writeJson(planPath, { ...plan, repo: "o/r", pr: 7 });
+    const calls = [];
+    const env = { DEVLOOPS_RUN_ID: "run-lane" };
+    const result = await run(root, planPath, { timeoutMs: 120000, env, ensureOwnership: async (args) => { calls.push(args); return { ok: true }; } });
+    assert.equal(result.outcome, "timeout");
+    // One refresh per 45 s heartbeat window, never one per 2 s re-check.
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[0], { repo: "o/r", pr: 7, env, cwd: root, claimIfMissing: true, requireExisting: false });
+    // A failing refresh never affects the wait.
+    const failing = await run(root, planPath, { timeoutMs: 120000, ensureOwnership: async () => { throw new Error("lease boom"); } });
+    assert.equal(failing.outcome, "timeout");
+  });
+});
+
+test("a long plan wait refreshes the lane's claim from the run-context file with no env var", async () => {
+  await withDir(async (root) => {
+    await mkdir(path.join(root, ".git"));
+    writeRunContext({ runId: "devloops-lane", root });
+    const claimed = await claimRunnerOwnership({ repo: "o/r", pr: 7, runId: "devloops-lane", cwd: root, now: "2000-01-01T00:00:00.000Z" });
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    const plan = JSON.parse(await readFile(planPath, "utf8"));
+    await writeJson(planPath, { ...plan, repo: "o/r", pr: 7 });
+    const result = await run(root, planPath, { timeoutMs: 60000, env: {} });
+    assert.equal(result.outcome, "timeout");
+    const persisted = JSON.parse(await readFile(claimed.filePath, "utf8"));
+    assert.equal(persisted.activeRun.runId, "devloops-lane");
+    assert.ok(persisted.activeRun.updatedAt > "2000-01-01T00:00:00.000Z", "the aged claim is refreshed");
   });
 });

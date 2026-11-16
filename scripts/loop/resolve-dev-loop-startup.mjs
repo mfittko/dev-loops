@@ -9,7 +9,7 @@ import {
   resolveCheckpointStateFromArtifact,
 } from "@dev-loops/core/loop/public-dev-loop-routing";
 import { CHECKPOINT_FILE, resolveCheckpointRepoRoot } from "./checkpoint-contract.mjs";
-import { resolveNativeCodexContext, resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
+import { ensureLaneRunContext, resolveNativeCodexContext, resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { execFileSync } from "node:child_process";
@@ -90,11 +90,14 @@ Required (exactly one):
   --spike <path>  Path to a spike artifact to start a spike loop locally
 Optional modifier:
   --claim        With --issue <n> or --pr <n> only: if the target is open and unassigned,
-                 assign the current user (the only write; open targets only), then start. Pass it
+                 assign the current user (the only GitHub write; open targets only), then start. Pass it
                  only when the user explicitly asked to start or continue that
                  exact target. With --pr, an unreadable linked issue refuses
                  the claim. Rejected with --review/--ui-review/--input/
-                 --plan-file/--spike and with no target.
+                 --plan-file/--spike and with no target. Outside native Codex, a
+                 started --claim also reports runContext: it reuses the lane's
+                 run id, or mints one into <worktree>/.pi/dev-loop-run-context.json
+                 that later commands resolve without DEVLOOPS_RUN_ID.
   --review       With --pr only: route the PR to the read-only review strategy
                  instead of the default continue_on_pr path. Requires no
                  ownership. Rejected without --pr, or combined with --issue/
@@ -1630,6 +1633,16 @@ export function buildResolveDevLoopStartupResult(input, {
     bundle: routedBundle,
   };
 }
+/**
+ * `--claim` gives the lane a run id that later commands resolve without `DEVLOOPS_RUN_ID`
+ * (a Claude Code Bash call drops exported env vars): reuse a resolvable run id, else mint
+ * one into `<worktree>/.pi/dev-loop-run-context.json`. Native Codex is left untouched.
+ */
+export function withClaimRunContext(result, { claim, env, cwd }) {
+  if (!claim || result?.ok !== true) return result;
+  const runContext = ensureLaneRunContext({ env, cwd });
+  return runContext === null ? result : { ...result, runContext };
+}
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, adapter = createPiAdapter() } = {}) {
   const sessionCwd = adapter.getCwd();
   const options = parseResolveDevLoopStartupCliArgs(argv);
@@ -1706,11 +1719,11 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       env: adapter.getEnv(),
     });
   }
-  const result = buildResolveDevLoopStartupResult(input, {
+  const result = withClaimRunContext(buildResolveDevLoopStartupResult(input, {
     asyncStartMode,
     adapter,
     config: devLoopConfig,
-  });
+  }), { claim: options.claim, env: adapter.getEnv(), cwd: sessionCwd });
   if (result.ok === false) {
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout: stderr, stderr });
     return;

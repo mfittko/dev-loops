@@ -308,6 +308,7 @@ export const SUBCOMMAND_ROUTES = {
     "loop-state":           "scripts/loop/detect-copilot-loop-state.mjs",
     "reviewer-state":       "scripts/loop/detect-reviewer-loop-state.mjs",
     "gate-coordination":    "scripts/loop/detect-pr-gate-coordination-state.mjs",
+    "runner-coordination":  "scripts/loop/pr-runner-coordination.mjs",
     "linked-issue-pr":      "scripts/github/detect-linked-issue-pr.mjs",
     "info":                  "scripts/loop/info.mjs",
     "issue-refinement":     "scripts/loop/detect-issue-refinement-artifact.mjs",

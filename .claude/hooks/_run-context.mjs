@@ -26,6 +26,10 @@
  *
  * Native Codex context uses bounded first-record metadata IO via resolveNativeCodexContext;
  * CODEX_THREAD_ID is only a lookup key. Pi/Claude retain their existing marker precedence.
+ *
+ * A Claude Code Bash call does not keep an exported env var for the next call, so a lane's
+ * run id also persists in `<worktree>/.pi/dev-loop-run-context.json` (`ensureLaneRunContext`),
+ * which `resolveRunId` reads as its last fallback when the caller passes its cwd.
  */
 
 import crypto from "node:crypto";
@@ -317,13 +321,17 @@ function resolveNativePiChildSessionId(env) {
  *
  * Verified native Codex identity takes precedence over inherited carriers and fails closed.
  * Outside Codex, a run-id carrier wins when present. With none present, a native Pi async context synthesizes
- * a stable id: the child's own session id when available, else the parent session id. No
- * async context at all still returns null.
+ * a stable id: the child's own session id when available, else the parent session id.
+ * When `cwd` is given, the last fallback is the run-context file at the worktree root of
+ * `cwd`, which `loop startup --claim` writes for a lane whose harness carries no env
+ * across tool calls (Claude Code). Callers that own a runner claim pass their cwd; a caller
+ * without `cwd` (hook guards, `ensureRunId`) stays env-only. No run id at all returns null.
  *
  * @param {Record<string, string|undefined>} [env]
+ * @param {{ cwd?: string|null, fs?: typeof import("node:fs") }} [options]
  * @returns {string|null} The trimmed run id, or null when no async context is present.
  */
-export function resolveRunId(env = process.env) {
+export function resolveRunId(env = process.env, { cwd = null, fs = fsDefault } = {}) {
   if (resolveRuntimeHarness(env) === "codex") {
     const native = resolveNativeCodexContext({ env });
     return native.status === "valid" ? native.runId : null;
@@ -338,7 +346,26 @@ export function resolveRunId(env = process.env) {
     const childSessionId = resolveNativePiChildSessionId(env);
     return synthesizePiRunId(childSessionId ?? env[NATIVE_PI_PARENT_SESSION_MARKER]);
   }
-  return null;
+  const root = typeof cwd === "string" && cwd.length > 0 ? resolveRunContextRoot(cwd, { fs }) : null;
+  return root === null ? null : readRunContext({ root, fs })?.runId ?? null;
+}
+
+/**
+ * The worktree root of `cwd`: the nearest directory, `cwd` included, that holds a `.git`
+ * entry (a directory in the main checkout, a file in a linked worktree). Null outside a checkout.
+ *
+ * @param {string} cwd
+ * @param {{ fs?: typeof import("node:fs") }} [options]
+ * @returns {string|null}
+ */
+export function resolveRunContextRoot(cwd, { fs = fsDefault } = {}) {
+  let dir = path.resolve(cwd);
+  for (;;) {
+    if (fs.existsSync(path.join(dir, ".git"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
 }
 
 /**
@@ -446,4 +473,28 @@ export function ensureRunId({ env = process.env, root, mintedAt, fs = fsDefault 
     statePath = writeRunContext({ runId, root, mintedAt, fs });
   }
   return { runId, minted: true, statePath };
+}
+
+/**
+ * Give a claiming lane a run id that later commands resolve without an env var.
+ *
+ * `loop startup --claim` calls this with its working directory. A run id that already
+ * resolves (env, Pi synthesis, or the worktree's run-context file) is reused; otherwise
+ * `ensureRunId` mints one and writes `<worktree>/.pi/dev-loop-run-context.json`. Native
+ * Codex keeps its verified thread identity, so this never mints or writes there.
+ *
+ * @param {object} params
+ * @param {Record<string, string|undefined>} [params.env]
+ * @param {string} params.cwd
+ * @param {string} [params.mintedAt]
+ * @param {typeof import("node:fs")} [params.fs]
+ * @returns {{ runId: string, minted: boolean, statePath: string|null }|null} Null on native
+ *   Codex or outside a checkout.
+ */
+export function ensureLaneRunContext({ env = process.env, cwd, mintedAt, fs = fsDefault } = {}) {
+  if (resolveRuntimeHarness(env) === "codex") return null;
+  const existing = resolveRunId(env, { cwd, fs });
+  if (existing) return { runId: existing, minted: false, statePath: null };
+  const root = resolveRunContextRoot(cwd, { fs });
+  return root === null ? null : ensureRunId({ env, root, mintedAt, fs });
 }

@@ -1,8 +1,10 @@
 // close-gate-sequence: a sanctioned close of an abandoned fix sequence; a live sequence is never closable.
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
+import { writeRunContext } from "@dev-loops/core/loop/run-context";
 import { afterAll, test } from "bun:test";
 import { readSequenceMarker, recoveryHint, sequenceClosurePath, sequenceMarkerPath, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
@@ -135,6 +137,19 @@ test("defaultActor prefers DEVLOOPS_RUN_ID and falls back to unknown when userIn
   assert.equal(defaultActor({ DEVLOOPS_RUN_ID: "run-1" }, throwing), "run-1");
   assert.equal(defaultActor({}, throwing), "unknown");
   assert.equal(defaultActor({}, () => ({ username: "me" })), "me");
+});
+
+test("defaultActor resolves the lane run id from the worktree run-context file with no env var (issue 3224)", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "close-seq-run-context-"));
+  try {
+    mkdirSync(path.join(root, ".git"));
+    writeRunContext({ runId: "devloops-lane", root });
+    const throwing = () => { throw new Error("no passwd entry"); };
+    assert.equal(defaultActor({}, throwing, root), "devloops-lane");
+    assert.equal(defaultActor({ DEVLOOPS_RUN_ID: "run-1" }, throwing, root), "run-1");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("readSequenceMarker accepts a well-formed execution and rejects malformed ones", async () => {

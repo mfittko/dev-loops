@@ -29,6 +29,7 @@ import { runPrRunnerCoordination } from "../../scripts/loop/pr-runner-coordinati
 import { resolveBunTestTimeoutMs } from "../../scripts/run-bun-test.mjs";
 import {
   NATIVE_PI_CHILD_MARKER,
+  ensureLaneRunContext,
   NATIVE_PI_PARENT_SESSION_MARKER,
   NATIVE_PI_SESSION_MARKER,
   synthesizePiRunId,
@@ -2024,14 +2025,14 @@ test("owner run heartbeats a claim past the max age without a takeover", async (
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
 
-test("the coordinator prompt sets the run id for every gate writer call", async () => {
+test("the coordinator prompt resolves the gate writers' run id from the run-context file, with no env prefix", async () => {
   const prompt = await readFile(new URL("../../agents/dev-loop.agent.md", import.meta.url), "utf8");
-  assert.match(prompt, /Prefix every `gate \.\.\.` writer call .*with `DEVLOOPS_RUN_ID=<the id used at claim>`/);
+  assert.match(prompt, /`loop startup --claim` gives your lane its run id[^\n]*`<worktree>\/\.pi\/dev-loop-run-context\.json`[^\n]*no `DEVLOOPS_RUN_ID=` prefix and no `export`/);
 });
 
-test("the coordinator hand-back step passes the claim run id to handoff", async () => {
+test("the coordinator hand-back step runs the routed handoff with no --run-id", async () => {
   const prompt = await readFile(new URL("../../agents/dev-loop.agent.md", import.meta.url), "utf8");
-  assert.match(prompt, /pr-runner-coordination\.mjs handoff --repo <owner\/name> --pr <number> --run-id <the id used at claim>/);
+  assert.match(prompt, /<dev-loops-package-root>\/cli\/index\.mjs loop runner-coordination handoff --repo <owner\/name> --pr <number>\n/);
 });
 
 test("status reports stale for an owner with a recorded exit signal, and a live owner names no takeover", async () => {
@@ -2238,10 +2239,10 @@ test("pinObservedClaim coerces a non-string member to null", () => {
   assert.deepEqual(pinObservedClaim(null), { expectPreviousRunId: null, expectPreviousClaim: { claimedAt: null, updatedAt: null } });
 });
 
-test("the coordinator prompt prefixes terminal-reaching calls with the claim run id and runs the explicit handoff when the release was skipped", async () => {
+test("the coordinator prompt's terminal release resolves the claim run id and runs the explicit handoff when the release was skipped", async () => {
   const prompt = await readFile(new URL("../../agents/dev-loop.agent.md", import.meta.url), "utf8");
-  assert.match(prompt, /Prefix every `loop handoff`, `loop gate-coordination`[^\n]*`DEVLOOPS_RUN_ID=<the id used at claim>`/);
-  assert.match(prompt, /skipped_no_async_run_id[^\n]*run the explicit handoff[^\n]*--run-id/);
+  assert.match(prompt, /automatic release at a terminal stop \(`loop handoff`, `loop gate-coordination`\) resolves the same run id/);
+  assert.match(prompt, /skipped_no_async_run_id[^\n]*run the explicit handoff below/);
   assert.match(prompt, /`handoff_noop` with no owner, `ownership_lost` with exit 1 when another run holds the claim/);
 });
 
@@ -2308,4 +2309,46 @@ test("claimRunnerOwnership takeover pinned to an own aged claim refuses once a r
     assert.equal(refused.ok, false);
     assert.equal(refused.activeRun.runId, "run-s");
   } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+// Issue 3224: with no env var, the lane's run id comes from the worktree run-context file
+// that `loop startup --claim` writes, so a writer claims and `handoff` releases under it.
+async function laneWorktreeWithRunContext() {
+  const cwd = realpathSync(await mkdtemp(path.join(os.tmpdir(), "runner-run-context-")));
+  await mkdir(path.join(cwd, ".git"));
+  const lane = ensureLaneRunContext({ env: {}, cwd });
+  assert.equal(lane.minted, true);
+  return { cwd, runId: lane.runId };
+}
+
+test("claim then handoff with no env var and no --run-id resolve one run id from the run-context file", async () => {
+  const { cwd, runId } = await laneWorktreeWithRunContext();
+  const target = { repo: "owner/repo", pr: 3224 };
+  try {
+    const claimed = await ensureAsyncRunnerOwnership({ ...target, env: {}, cwd });
+    assert.equal(claimed.ok, true, JSON.stringify(claimed));
+    assert.equal(claimed.activeRun.runId, runId);
+    const asserted = await runPrRunnerCoordination({ command: "assert", ...target }, { env: {}, cwd });
+    assert.equal(asserted.status, "owner_confirmed");
+    const handoff = await runPrRunnerCoordination({ command: "handoff", ...target }, { env: {}, cwd });
+    assert.equal(handoff.status, "handoff_recorded", JSON.stringify(handoff));
+    assert.equal(handoff.runId, runId);
+    const { state } = await loadRunnerCoordinationState({ ...target, cwd });
+    assert.equal(state.activeRun, null);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("releaseAsyncRunnerOwnership releases the run-context lane's claim with no env var", async () => {
+  const { cwd, runId } = await laneWorktreeWithRunContext();
+  const target = { repo: "owner/repo", pr: 3225 };
+  try {
+    await claimRunnerOwnership({ ...target, runId, cwd });
+    const released = await releaseAsyncRunnerOwnership({ ...target, env: {}, cwd });
+    assert.equal(released.status, "released", JSON.stringify(released));
+    assert.equal(released.runId, runId);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
 });

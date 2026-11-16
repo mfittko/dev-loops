@@ -117,11 +117,11 @@ join while child work is outstanding — a longest-timeout assumption is not a j
 
 ### Keeping the PR claim live through gate writers
 
-Prefix every `gate ...` writer call (`gate upsert-verdict`, `gate detect-evidence` and the rest) with `DEVLOOPS_RUN_ID=<the id used at claim>`. Without it the gate writer has no owner identity on Claude Code. Your claim then goes stale during a long child wait and the next writer call refuses it. With it, the writer heartbeats your claim and never needs a `takeover`.
+`loop startup --claim` gives your lane its run id. It reuses `DEVLOOPS_RUN_ID` when set. Otherwise it writes the id to `<worktree>/.pi/dev-loop-run-context.json` and reports it as `runContext.runId`. Run every later `gate ...` writer, probe and wait from that worktree in the plain routed `cli/index.mjs` form, with no `DEVLOOPS_RUN_ID=` prefix and no `export`. Each call resolves the same run id from the file. The writers and `gate wait-for-units` heartbeat your claim, so it stays fresh through long waits. When a writer still refuses with your own stale claim, run the stale-claim recovery in `RUNNER-HANDOFF-TEARDOWN` ([Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
 
 ### Releasing the PR claim at a terminal stop
 
-Prefix every `loop handoff`, `loop gate-coordination` and other terminal-reaching call with `DEVLOOPS_RUN_ID=<the id used at claim>`, so the automatic release at the terminal stop finds your identity. When a terminal result carries `runnerRelease.status: skipped_no_async_run_id` and you claimed the PR, run the explicit handoff below with `--run-id` and record its status in the hand-back (the handoff writes nothing when you hold no claim: status `handoff_noop` with no owner, `ownership_lost` with exit 1 when another run holds the claim) (`RUNNER-HANDOFF-TEARDOWN` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
+The automatic release at a terminal stop (`loop handoff`, `loop gate-coordination`) resolves the same run id. When a terminal result carries `runnerRelease.status: skipped_no_async_run_id` and you claimed the PR, run the explicit handoff below and record its status in the hand-back (the handoff writes nothing when you hold no claim: status `handoff_noop` with no owner, `ownership_lost` with exit 1 when another run holds the claim) (`RUNNER-HANDOFF-TEARDOWN` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
 
 ### Releasing the PR claim before the hand-back
 
@@ -130,14 +130,14 @@ claim to the stale window. Once you have verified with native evidence that your
 are joined, run the owner-only handoff and record its status in the hand-back:
 
 ```sh
-node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs handoff --repo <owner/name> --pr <number> --run-id <the id used at claim>
+dev-loops-run cli/index.mjs loop runner-coordination handoff --repo <owner/name> --pr <number>
 ```
 
 It appends your exit signal and clears the claim in one locked write, so the successor's pre-flight
 finds no claim to recover: it claims fresh with no `recovery` field. A `recovery` field appears only
 when the successor actually displaces a claim. Statuses: `handoff_recorded` (signal written, claim cleared),
 `handoff_noop` (nothing to hand off — no state write), `ownership_lost` and `run_id_required` (exit
-1, no state write). The verified runtime run id is the identity when one exists. Without one, the explicit `--run-id` is the identity, and the handoff succeeds only when it equals the active owner (`RUNNER-HANDOFF-TEARDOWN` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
+1, no state write). The lane's resolved run id (env, Pi or the run-context file) is the identity when one exists. Without one, add `--run-id <the id used at claim>`; that explicit id is the identity, and the handoff succeeds only when it equals the active owner (`RUNNER-HANDOFF-TEARDOWN` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
 
 Your successor's recovery is evidence-gated and typed: the handoff `runnerOwnership` result carries
 `recovery: { evidence: "exit_signal" | "stale_max_age", displacedRunId, maxAgeMs }` when a competing

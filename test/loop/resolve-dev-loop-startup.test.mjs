@@ -23,6 +23,7 @@ import {
   ownershipGateAppliesToStrategy,
   runCli,
   shouldRunStartupReconcile,
+  withClaimRunContext,
   OPERATOR_BRIEFING,
 } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
 import { buildDevLoopHandoffEnvelope, validateHandoffEnvelope } from "@dev-loops/core/loop/handoff-envelope";
@@ -242,6 +243,26 @@ test("parseResolveDevLoopStartupCliArgs accepts --claim with --issue or --pr and
     ["--spike", "s.md", "--claim"],
   ]) {
     assert.throws(() => parseResolveDevLoopStartupCliArgs(args), /--claim is only valid/, JSON.stringify(args));
+  }
+});
+
+test("--claim writes the worktree run-context file once and reuses it (issue 3224)", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "startup-claim-run-context-"));
+  try {
+    mkdirSync(path.join(root, ".git"));
+    const file = path.join(root, ".pi", "dev-loop-run-context.json");
+    const ok = { ok: true, selectedStrategy: "copilot_pr_followup" };
+    // No claim, or a refused startup, writes nothing.
+    assert.deepEqual(withClaimRunContext(ok, { claim: false, env: {}, cwd: root }), ok);
+    assert.deepEqual(withClaimRunContext({ ok: false }, { claim: true, env: {}, cwd: root }), { ok: false });
+    assert.throws(() => readFileSync(file), { code: "ENOENT" });
+    const first = withClaimRunContext(ok, { claim: true, env: {}, cwd: root });
+    assert.equal(first.runContext.minted, true);
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).runId, first.runContext.runId);
+    const second = withClaimRunContext(ok, { claim: true, env: {}, cwd: root });
+    assert.deepEqual(second.runContext, { runId: first.runContext.runId, minted: false, statePath: null });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
