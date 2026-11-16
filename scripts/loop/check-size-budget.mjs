@@ -304,7 +304,7 @@ export function computeSizeBudget({
   const unclassifiedPaths = [];
   // A configured t1/t3 pattern is an explicit operator signal that a path is
   // risk-slice/relaxed-tier; a matching file that classifies outside
-  // code/test, or is a runtime-pin file, still drops its LOC to 0 (docs/config/ci/asset/unknown all excluded
+  // code/test, is excluded from LOC (a runtime pin, a vendored file or a generated hook mirror), still drops its LOC to 0 (docs/config/ci/asset/unknown all excluded
   // above), which would silently defeat that signal rather than the intended
   // "code the classifier does not recognize" gap.
   let tierPatternDroppedToZero = false;
@@ -389,7 +389,7 @@ export function computeSizeBudget({
       );
     }
     if (tierPatternDroppedToZero) {
-      reasons.push("a configured t1/t3 pattern matched a file whose logic LOC would silently drop to 0 (it classifies outside code/test or is a runtime-pin file excluded from LOC); size budget cannot be computed safely — no waiver possible");
+      reasons.push("a configured t1/t3 pattern matched a file whose logic LOC would silently drop to 0 (it classifies outside code/test or is excluded from LOC as a runtime pin, a vendored file under .claude/hooks/_vendor/ or a generated hook mirror); size budget cannot be computed safely — no waiver possible");
     }
   }
   if (wholeLoc > absoluteHardLoc) {
