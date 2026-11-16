@@ -213,7 +213,10 @@ export function buildSpecChangeFactsGhArgs({ repo, number }) {
  * @returns {{body: string, lastEditedAt: string|null, commentsTruncated: boolean, comments: Array<{body?: string, createdAt?: string}>}}
  */
 export function parseSpecChangeFacts(node) {
-  const comments = node?.comments?.nodes ?? node?.comments;
+  const comments = node?.comments?.nodes;
+  if (node?.comments !== undefined && !Array.isArray(comments)) {
+    throw new TypeError("spec change facts: comments must be { nodes: [] }");
+  }
   return {
     body: typeof node?.body === "string" ? node.body : "",
     lastEditedAt: typeof node?.lastEditedAt === "string" ? node.lastEditedAt : null,

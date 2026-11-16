@@ -442,6 +442,7 @@ test("parseSpecChangeFacts reads the GraphQL node and tolerates a body-only payl
   );
   assert.deepEqual(parseSpecChangeFacts({ body: "b" }), { body: "b", lastEditedAt: null, commentsTruncated: false, comments: [] });
   assert.equal(parseSpecChangeFacts({ comments: { pageInfo: { hasPreviousPage: true }, nodes: [] } }).commentsTruncated, true);
+  assert.throws(() => parseSpecChangeFacts({ body: "b", comments: [] }), /comments must be/);
   assert.ok(buildSpecChangeFactsGhArgs({ repo: "o/r", number: 7 }).includes("number=7"));
   assert.ok(buildSpecChangeFactsGhArgs({ repo: "mfittko/dev-loops", number: 7 }).includes("name=dev-loops"));
   for (const repo of ["foo", "a/b/c", "mfittko/dev-loops/extra"]) {
