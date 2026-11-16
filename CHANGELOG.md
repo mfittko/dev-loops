@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.12-pre.4
+
+### Added
+
+- An opt-in `gates.fanout.sizeTiers` setting packs more review angles per reviewer unit for small changes, and Claude review angles can follow their own model tier (#3166)
+
+### Changed
+
+- Validation, `pr reconcile-draft` and clean gate verdict posts refuse a head that lacks the current base with `base_stale_integrate_first` and the merge remedy (#2885)
+- The fixer work-order emitter accepts a gate verdict from an earlier head when the PR files are byte-identical, and does not carry one across a head that ran its own gate round (#2752)
+- A comment or body edit after the latest grill results returns `spec_changed_since_grill`, and an undated results comment fails closed the same way; startup and the pickup gate act on it (#3127)
+- An existing `gates.<gate>.angles[].tier` now applies on Claude review dispatch, and a concrete angle `model` now applies on Pi only (#3166)
+- On Pi and Claude, the angle model lookup now prefers the dispatching gate's own `gates.<gate>.angles[]` entry over an earlier gate's (#3166)
+- With `gates.requireFanoutProvenance`, the `distinctReviewers` floor drops to `max(1, units)` only for a corroborated size tier with `gates.fanout.sizeTiers` set, else `max(2, units)` (#3166)
+
+### Fixed
+
+- The size budget skips `.claude/hooks/_vendor/**` and the generated hook mirror files from unclassified-source accounting and whole-PR logic LOC, so a vendored dependency swap can open a PR (#3231)
+
 ## 1.0.12-pre.3
 
 ### Changed
