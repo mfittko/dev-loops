@@ -23,6 +23,7 @@ This record is provisional until the operator checkpoint accepts the authority c
 ## Consequences
 
 - A base merge no longer voids a patch-id approval.
-- A patch-id approval does not cover a change to the added or removed lines of the PR's own diff or to their three surrounding context lines, because that changes the patch-id. `git patch-id` drops hunk line numbers, so the three context lines bind the position of a change.- The id stays valid across a clean base-only refresh (a base merge that changes no line the PR diff touches or uses as context).
+- A patch-id approval does not cover a change to the added or removed lines of the PR's own diff or to their three surrounding context lines, because that changes the patch-id. `git patch-id` drops hunk line numbers, so the three context lines bind the position of a change.
+- The id stays valid across a clean base-only refresh (a base merge that changes no line the PR diff touches or uses as context).
 - A patch-id marker stays valid across heads, so revoking it takes a new commit that changes the diff or deleting the comment.
 - A base change that edits a context line of the PR diff changes the patch-id, so the operator posts a new line. The base-containment check bounds the base the approval was read against.

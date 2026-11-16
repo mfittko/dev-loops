@@ -119,9 +119,9 @@ draft_gate / current-head pre_approval_gate / threads / runner-lock / fan-out-pr
   suffix, `approve merge <headSha> patch-id <patchId>`. When the PR head contains
   `origin/<base>` and no head-pinned record matches, a marker by `<login>` whose
   `<patchId>` equals the current patch-id also satisfies it, so a base-only head change (a base merge) keeps the approval (ADR 0279).
-  The only supported source of the id is the `approveMergeLine` that `merge-pr --check` prints. It is the first token of
-  `git -c core.quotePath=true diff -U3 --no-color --no-ext-diff --no-textconv --binary --no-renames --diff-algorithm=myers --src-prefix=a/ --dst-prefix=b/ origin/<base>...<head> | git patch-id --verbatim`
-  (whitespace and binary changes count; a moved or edited line changes the id).
+  The only supported source of the id is the `approveMergeLine` that `merge-pr --check` prints. The id is the
+  first token of `git patch-id --verbatim` over a diff with pinned git options (the exact command is in ADR 0279).
+  Whitespace and binary changes count. A change to the added or removed lines or to their three context lines changes the id.
   When the head does not contain the base, the wrapper computes no patch-id and only a
   head match counts. A review approval stays head-only. The result reports
   `approvalMatch` (`head`, `patch_id` or `null`). No agent writes that marker:
