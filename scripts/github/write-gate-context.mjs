@@ -2601,15 +2601,21 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // ADR 0278 size tier: an eligible small round packs whole base units, per
   // resolved model, into units of at most the tier's bound. This replaces the
   // single-wave packing below; verification re-derives the unpacked base units.
-  // A round that light mode would run inline reaches fan-out only through an inline escalation, so it is treated as escalated and keeps existing grouping.
-  const escalated = resolveGateDispatchMode(config, configGate, { changedFiles, sizeOutcome, hasFullLabel: fullLabel }).mode === "inline";
+  // An applied tier still packs under `sequential: true`; only the wave scheduler serializes the units.
+  // A classifiable round that light mode would run inline reaches fan-out only through an inline escalation, so it is treated as escalated and keeps existing grouping. An unclassifiable file forces full fan-out without escalation, so that round records unclassifiable_diff instead.
+  const classifyRules = resolveClassifyRules(config);
+  const unclassifiable = Array.isArray(changedFiles) && changedFiles.some((f) => classifyFile(f, classifyRules) === "unknown");
+  const escalated = !unclassifiable && resolveGateDispatchMode(config, configGate, { changedFiles, sizeOutcome, hasFullLabel: fullLabel }).mode === "inline";
   let tierDecision = resolveFanoutSizeTier(config, singleWave ? configGate : "review", { sizeOutcome, changedFiles, hasFullLabel: fullLabel, escalated });
   // A same-head rebuild without size evidence reuses the recorded applied tier, so the membership wave 1 dispatched on stays round-stable; any other reason re-derives.
   let reusedTier = false;
   if (tierDecision.reason === "size_outcome_unavailable" || tierDecision.reason === "changed_files_unavailable") {
     const recorded = priorSizeTier?.tier;
     const configured = (config?.gates?.fanout?.sizeTiers ?? []).find((t) => t.maxWholeLogicLoc === recorded?.maxWholeLogicLoc && t.maxAnglesPerUnit === recorded?.maxAnglesPerUnit);
-    if (configured) {
+    const presentLoc = sizeOutcome?.wholeLogicLoc;
+    // Present size evidence above the recorded tier re-derives; only absent evidence reuses it.
+    const fits = !(typeof presentLoc === "number" && Number.isFinite(presentLoc)) || presentLoc <= configured?.maxWholeLogicLoc;
+    if (configured && fits) {
       tierDecision = { tier: configured, reason: "size_tier_applied" };
       reusedTier = true;
     }

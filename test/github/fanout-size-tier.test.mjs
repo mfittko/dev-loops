@@ -17,6 +17,7 @@ const claudeEnv = () => ({ ...process.env, CLAUDECODE: "1" });
 const piEnv = () => {
   const env = { ...process.env, [piRunIdMarker]: "pi-run-1" };
   delete env.CLAUDECODE;
+  delete env.CODEX_THREAD_ID;
   return env;
 };
 
@@ -126,11 +127,27 @@ describe("tier packing in resolveFanoutDispatch (AC1, AC4, AC6, AC7, AC9)", () =
     assert.deepEqual(plan.sizeTier.reasons, ["escalated"]);
   });
 
+  test("a light-eligible round with an unclassifiable file records unclassifiable_diff, not escalated", () => {
+    const angles = POOL.slice(0, 9);
+    const light = withFanout({ sizeTiers: [TIER] }, LIGHT_CONFIG);
+    const plan = dispatch(light, "draft", angles, piEnv(), { changedFiles: ["docs/a.md", "mystery.zzz"], sizeOutcome: SIZE(10) });
+    assert.deepEqual(plan.sizeTier.reasons, ["unclassifiable_diff"]);
+    assert.equal(plan.unitBound, 5);
+  });
+
+  test("a sequential tiered round still packs and records size_tier_applied", () => {
+    const angles = POOL.slice(0, 9);
+    const plan = dispatch(withFanout({ sizeTiers: [TIER], sequential: true }), "draft", angles, piEnv());
+    assert.equal(plan.unitBound, 10);
+    assert.equal(units(plan).length, 1);
+    assert.deepEqual(plan.sizeTier.reasons, ["size_tier_applied"]);
+  });
+
   test("an explicit harness override drives the model partition, not the env harness", () => {
     const config = withFanout({ sizeTiers: [TIER], groups: [{ name: "lowg", angles: POOL.slice(0, 2) }, { name: "highg", angles: POOL.slice(2, 4) }] });
     const tiered = { ...config, gates: { ...config.gates, draft: { ...config.gates.draft, angles: [...POOL.slice(0, 2).map((name) => ({ name, tier: "low" })), ...config.gates.draft.angles] } } };
     const angles = POOL.slice(0, 4);
-    assert.equal(dispatch(tiered, "draft", angles, piEnv(), { harness: "claude" }).groups.length, 2, "claude partitions by the angle tier");
+    assert.equal(dispatch(tiered, "draft", angles, codexEnv(), { harness: "claude" }).groups.length, 2, "the override beats the Codex env harness, which alone yields one group");
     assert.equal(dispatch(tiered, "draft", angles, codexEnv()).groups.length, 1, "the Codex env harness inherits every angle");
   });
 
@@ -176,6 +193,14 @@ describe("tier packing in resolveFanoutDispatch (AC1, AC4, AC6, AC7, AC9)", () =
     assert.equal(rebuilt.sizeTier.wholeLogicLoc, 30);
     const excluded = dispatch(TIERED, "draft", angles, piEnv(), { sizeOutcome: SIZE(41), recordedSizeTier: first.sizeTier });
     assert.deepEqual(excluded.sizeTier.reasons, ["above_size_tiers"], "an explicit exclusion re-derives");
+    const stale = dispatch(withFanout({ sizeTiers: [{ maxWholeLogicLoc: 80, maxAnglesPerUnit: 6 }] }), "draft", angles, piEnv(), { sizeOutcome: null, recordedSizeTier: first.sizeTier });
+    assert.deepEqual(stale.sizeTier.reasons, ["size_outcome_unavailable"], "a recorded tier the config no longer has re-derives");
+    assert.equal(stale.unitBound, 5);
+    const noFiles = dispatch(TIERED, "draft", angles, piEnv(), { changedFiles: null, sizeOutcome: null, recordedSizeTier: first.sizeTier });
+    assert.deepEqual(noFiles.sizeTier.reasons, ["size_tier_applied"], "absent size evidence reuses");
+    const grown = dispatch(TIERED, "draft", angles, piEnv(), { changedFiles: null, sizeOutcome: SIZE(100), recordedSizeTier: first.sizeTier });
+    assert.equal(grown.sizeTier.tier, null, "present size above the recorded tier re-derives");
+    assert.equal(grown.unitBound, 5);
   });
 
   test("without the key the plan carries no sizeTier record and today's grouping", () => {
