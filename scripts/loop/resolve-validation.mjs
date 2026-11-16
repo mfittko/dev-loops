@@ -18,6 +18,7 @@ import { buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { buildValidationArtifact, classifyPackageSuites, defaultReadPrTitle, parseRunGateValidationCliArgs, readPackageScripts, runKillable, stripAnsi } from "./run-gate-validation.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { staleBaseReason } from "./pre-write-remote-freshness-guard.mjs";
 import { DEVLOOPS_CONFIG_PATHS } from "./check-adr-tripwire.mjs";
 import { readDefaultBranchConfig } from "./standing-authorization.mjs";
 
@@ -188,6 +189,8 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     };
     const beforeProblem = currentTreeProblem();
     if (beforeProblem) return incomplete(beforeProblem.reason, beforeProblem);
+    const stale = await staleBaseReason({ head: options.headSha, cwd: repoRoot, env });
+    if (stale) return incomplete(stale);
     const checkout = readCheckoutValidation(repoRoot);
     if (checkout.reason) return incomplete(checkout.reason);
     const base = readBaseValidation(repoRoot);

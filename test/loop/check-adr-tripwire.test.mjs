@@ -131,6 +131,25 @@ test("contract-doc touch without ADR or waiver blocks", () => {
   assert.ok(r.reasons.length > 0);
 });
 
+test("the waiver remedy follows the injected env, not process.env", () => {
+  const input = {
+    nameStatusOutput: ns(["M\t" + CONTRACT_DOC]),
+    baseContents: { [CONTRACT_DOC]: BASE_CONTRACT },
+    headContents: { [CONTRACT_DOC]: HEAD_CONTRACT_PROSE_ONLY },
+    prBody: "",
+  };
+  const saved = process.env.CLAUDECODE;
+  delete process.env.CLAUDECODE;
+  try {
+    const claude = computeAdrTripwire({ ...input, env: { CLAUDECODE: "1" } }).reasons.join("\n");
+    assert.match(claude, /dev-loops-run --repo-root <checkout> cli\/index\.mjs pr waive-adr-tripwire/);
+    const plain = computeAdrTripwire({ ...input, env: {} }).reasons.join("\n");
+    assert.doesNotMatch(plain, /dev-loops-run/);
+  } finally {
+    if (saved !== undefined) process.env.CLAUDECODE = saved;
+  }
+});
+
 test("gate-config touch without ADR or waiver blocks", () => {
   const r = computeAdrTripwire({
     nameStatusOutput: ns(["M\t" + GATE_CONFIG]),
@@ -183,6 +202,21 @@ test("a .devloops riskPaths addition without ADR or waiver blocks", () => {
   assert.equal(r.outcome, "block");
   const trigger = r.triggers.find((t) => t.type === "devloops-proportionality");
   assert.deepEqual(trigger.fields, ["localImplementation.lightMode.riskPaths"]);
+});
+
+test("a .devloops gates.fanout.sizeTiers add, change and removal each trip the proportionality tripwire (issue 3166)", () => {
+  const tiers = (loc) => `version: 1\ngates:\n  fanout:\n    sizeTiers:\n      - maxWholeLogicLoc: ${loc}\n        maxAnglesPerUnit: 10\n`;
+  const trip = (base, head) => computeAdrTripwire({
+    nameStatusOutput: ns(["M\t" + DEVLOOPS_CONFIG_PATH]),
+    baseContents: { [DEVLOOPS_CONFIG_PATH]: base },
+    headContents: { [DEVLOOPS_CONFIG_PATH]: head },
+    prBody: "",
+  });
+  for (const [label, base, head] of [["add", "version: 1\n", tiers(40)], ["change", tiers(40), tiers(80)], ["remove", tiers(40), "version: 1\n"]]) {
+    const r = trip(base, head);
+    assert.equal(r.outcome, "block", label);
+    assert.deepEqual(r.triggers.find((t) => t.type === "devloops-proportionality").fields, ["gates.fanout.sizeTiers"], label);
+  }
 });
 
 test("an ADR record satisfies a .devloops proportionality-field change", () => {

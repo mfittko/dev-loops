@@ -29,13 +29,13 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, findAngleEntry, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, findAngleEntry, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveFanoutSizeTier, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveGateDispatchMode, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { VERIFIED_ITEMS_ANGLES, baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves, validateAngleResult } from "@dev-loops/core/loop/gate-fanin";
 import { anchorBaseRef, normalizeBaseBranch } from "../lib/anchor-base-ref.mjs";
 import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-write-remote-freshness-guard.mjs";
-import { resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { REVIEWER_UNIT_MAX_ANGLES, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 import { retireGateRound } from "./retire-gate-round.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -1428,7 +1428,7 @@ export function renderBriefingPrefix({
   lines.push("");
   const findingsDir = path.join(worktreeRoot, buildGateReviewsDir({ repo, pr, gate, headSha }));
   lines.push(
-    `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${worktreeRoot}" && dev-loops-run scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${worktreeRoot}" ...\` and every file read via an absolute path under ${worktreeRoot}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
+    `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as \`dev-loops-run --repo-root "${worktreeRoot}" scripts/github/verify-fresh-review-context.mjs ...\` (\`--repo-root\` runs it with cwd at this worktree) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${worktreeRoot}" ...\` and every file read via an absolute path under ${worktreeRoot}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
   );
   lines.push("");
   lines.push(
@@ -2513,10 +2513,10 @@ function normalizeCarriedAnglesArg(carriedAngles) {
  * @param {import("@dev-loops/core/config").DevLoopConfig|null} config
  * @param {"draft"|"preApproval"} configGate
  * @param {string[]} resolvedAngles
- * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string>, carriedAngles?: Iterable<string>, env?: Record<string, string|undefined>, singleWave?: boolean, unitBound?: number }} [options] — `env` defaults to `process.env`; injectable so a caller-boundary test can pin the harness deterministically instead of depending on the ambient environment. `singleWave` (default true) enables packing and the capacity refusal; the review gate passes false. `unitBound` is the same-head context's recorded bound, kept on resume; absent means the default.
+ * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string>, carriedAngles?: Iterable<string>, env?: Record<string, string|undefined>, singleWave?: boolean, unitBound?: number, sizeOutcome?: object|null, changedFiles?: string[]|null, harness?: string, recordedSizeTier?: object }} [options] — `env` defaults to `process.env`; injectable so a caller-boundary test can pin the harness deterministically instead of depending on the ambient environment. `singleWave` (default true) enables packing and the capacity refusal; the review gate passes false. `unitBound` is the same-head context's recorded bound, kept on resume; absent means the default, and a bound above the default survives only when a size tier applies. `harness` (default the env harness) drives the tier model partition. `recordedSizeTier` is the same-head context's `fanout.sizeTier`, reused when size evidence is unavailable.
  * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number, unitBound: number, preflight: object, pendingGroups: { name: string, angles: string[] }[], pendingWavePlan: { name: string, angles: string[] }[][] }}
  */
-export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null, env = process.env, singleWave = true, unitBound: requestedUnitBound } = {}) {
+export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null, env = process.env, singleWave = true, unitBound: requestedUnitBound, sizeOutcome = null, changedFiles = null, harness: requestedHarness, recordedSizeTier: priorSizeTier } = {}) {
   // Angle-pool order, as the pairing guard re-derives it: auto-chunk
   // boundaries must not depend on the order the angles arrived in.
   const catalogOrder = resolveGateAngleContract(config, configGate).pool ?? [];
@@ -2597,8 +2597,67 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // `singleWave: false` (the standalone review gate, whose full-PR angle set
   // exceeds single-wave capacity) keeps the multi-wave plan unchanged.
   const perAngleMode = config?.gates?.fanout?.mode === "per-angle";
-  const unitBound = resolveReviewerUnitBound(requestedUnitBound);
-  if (singleWave && !sequential && !perAngleMode) {
+  let unitBound = resolveReviewerUnitBound(requestedUnitBound);
+  // ADR 0278 size tier: an eligible small round packs whole base units, per
+  // resolved model, into units of at most the tier's bound. This replaces the
+  // single-wave packing below; verification re-derives the unpacked base units.
+  // An applied tier still packs under `sequential: true`; only the wave scheduler serializes the units.
+  // A classifiable round that light mode would run inline reaches fan-out only through an inline escalation, so it is treated as escalated and keeps existing grouping. An unclassifiable file forces full fan-out without escalation, so that round records unclassifiable_diff instead.
+  const classifyRules = resolveClassifyRules(config);
+  const unclassifiable = Array.isArray(changedFiles) && changedFiles.some((f) => classifyFile(f, classifyRules) === "unknown");
+  const escalated = !unclassifiable && Array.isArray(changedFiles) && changedFiles.length > 0 && resolveGateDispatchMode(config, configGate, { changedFiles, sizeOutcome, hasFullLabel: fullLabel }).mode === "inline";
+  let tierDecision = resolveFanoutSizeTier(config, singleWave ? configGate : "review", { sizeOutcome, changedFiles, hasFullLabel: fullLabel, escalated });
+  // A same-head rebuild without size evidence reuses the recorded applied tier, so the membership wave 1 dispatched on stays round-stable; any other reason re-derives.
+  let reusedTier = false;
+  if (tierDecision.reason === "size_outcome_unavailable" || tierDecision.reason === "changed_files_unavailable") {
+    const recorded = priorSizeTier?.tier;
+    const configured = (config?.gates?.fanout?.sizeTiers ?? []).find((t) => t.maxWholeLogicLoc === recorded?.maxWholeLogicLoc && t.maxAnglesPerUnit === recorded?.maxAnglesPerUnit);
+    const presentLoc = sizeOutcome?.wholeLogicLoc;
+    // Only absent evidence, or valid evidence within the recorded tier with unavailable changed files, reuses it. Present malformed evidence and evidence above the tier re-derive.
+    const fits = sizeOutcome == null
+      || (tierDecision.reason === "changed_files_unavailable" && typeof presentLoc === "number" && Number.isFinite(presentLoc) && presentLoc >= 0 && presentLoc <= configured?.maxWholeLogicLoc);
+    if (configured && fits) {
+      tierDecision = { tier: configured, reason: "size_tier_applied" };
+      reusedTier = true;
+    }
+  }
+  const sizeTierReasons = [tierDecision.reason];
+  let tierPacked = false;
+  if (tierDecision.tier) {
+    const tierBound = resolveReviewerUnitBound(tierDecision.tier.maxAnglesPerUnit);
+    const tierNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
+    const carried = new Set(carriedAnglesList.map((a) => baseAngleName(a).trim().toLowerCase()));
+    const dispatchable = groups.filter((g) => !(Array.isArray(g?.angles) && g.angles.length > 0 && g.angles.every((a) => carried.has(baseAngleName(String(a)).trim().toLowerCase()))));
+    const harness = requestedHarness ?? resolveRuntimeHarness(env);
+    const modelOf = (angle) => (config ? resolveRoleModel(config, { role: angle, harness, kind: "angle", gate: singleWave ? configGate : undefined }) : null);
+    const byModel = new Map();
+    let mixedBaseUnit = false;
+    for (const unit of expandDispatchUnits(dispatchable, tierNames, tierBound)) {
+      const models = new Set(unit.angles.map(modelOf));
+      if (models.size > 1) mixedBaseUnit = true;
+      const key = [...models][0] ?? null;
+      byModel.set(key, [...(byModel.get(key) ?? []), unit]);
+    }
+    if (byModel.size === 0 || mixedBaseUnit) {
+      sizeTierReasons[0] = mixedBaseUnit ? "mixed_model_base_unit" : "no_dispatchable_units";
+    } else {
+      // shortcut: first-fit decreasing is not guaranteed minimal for every set, upgrade when a measured case needs exact bin packing.
+      const packed = [...byModel.values()].flatMap((units) => packDispatchUnits(units, Infinity, tierBound));
+      if (singleWave && !sequential && expandDispatchUnits(packed, tierNames, tierBound).length > effectiveConcurrency) {
+        // Keep the single-wave guarantee: the existing path below packs to one wave or throws GATE-EXEC-FANOUT-CAPACITY.
+        sizeTierReasons[0] = "over_concurrency";
+      } else {
+        groups = packed;
+        unitBound = tierBound;
+        tierPacked = true;
+        if (byModel.size > 1) sizeTierReasons.push("model_partition");
+        if ([...byModel.values()].some((units) => units.reduce((n, u) => n + u.angles.length, 0) > tierBound)) sizeTierReasons.push("unit_bound_reached");
+      }
+    }
+  }
+  // No tier backs a recorded bound above the default, so existing grouping never inherits one from an earlier tiered build at this head.
+  if (!tierPacked) unitBound = Math.min(unitBound, REVIEWER_UNIT_MAX_ANGLES);
+  if (!tierPacked && singleWave && !sequential && !perAngleMode) {
     const configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
     const baseUnits = expandDispatchUnits(groups, configuredGroupNames, unitBound);
     if (baseUnits.length > effectiveConcurrency) {
@@ -2655,7 +2714,12 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   const wavePlan = scheduleFanoutWaves(groups, effectiveConcurrency);
   const pendingGroups = preflight.pendingGroups;
   const pendingWavePlan = scheduleFanoutWaves(pendingGroups, effectiveConcurrency);
-  return { groups, wavePlan, sequential, maxAnglesPerGroup, maxConcurrent, effectiveConcurrency, unitBound, preflight, pendingGroups, pendingWavePlan };
+  // The plan's size-tier record (AC4): only present when sizeTiers is configured, so a repo without the key keeps today's artifact shape.
+  const wholeLogicLoc = Number.isFinite(sizeOutcome?.wholeLogicLoc) ? sizeOutcome.wholeLogicLoc : (reusedTier && Number.isFinite(priorSizeTier?.wholeLogicLoc) ? priorSizeTier.wholeLogicLoc : null);
+  const sizeTier = Array.isArray(config?.gates?.fanout?.sizeTiers)
+    ? { wholeLogicLoc, tier: tierPacked ? tierDecision.tier : null, angleCount: groups.reduce((n, g) => n + g.angles.length, 0), unitCount: expandDispatchUnits(groups, dispatchGroupNames, unitBound).length, reasons: sizeTierReasons }
+    : undefined;
+  return { groups, wavePlan, sequential, maxAnglesPerGroup, maxConcurrent, effectiveConcurrency, unitBound, ...(sizeTier ? { sizeTier } : {}), preflight, pendingGroups, pendingWavePlan };
 }
 
 export function buildGateContextArtifact(options) {
@@ -3286,12 +3350,13 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   const prefixHash = createHash("sha256").update(prefixBytes).digest("hex");
 
   // Request plan: angles partition by concrete resolved model via
-  // resolveRoleModel(config, { role: angle, harness, kind: "angle" }) — the
-  // SAME dispatch-time resolution a Pi/Codex fan-out actually dispatches on.
-  // On Claude every review dispatch uses the one `review` role model with no
-  // per-angle override (MAIN-CLAUDE-DISPATCH-MODEL), so the plan resolves
-  // { role: "review", harness } for every angle. (config
-  // override → per-angle tier → built-in tier → null=inherit), unlike
+  // resolveRoleModel(config, { role: angle, harness, kind: "angle" }), the
+  // dispatch-time resolution of a size-tier unit and of a Pi/Codex fan-out. On
+  // Claude a unit OUTSIDE a size tier whose angles resolve to different models
+  // dispatches at the `review` role model (contract Per-angle Claude model
+  // tiers), so the per-angle models recorded here can differ from what that
+  // unit uses. The Claude default is `models.roles.review` / `models.roleTiers.review`,
+  // then the high tier (ADR 0278). (angle model on Pi → angle tier → built-in tier → null=inherit), unlike
   // resolveReviewerRole's `.model`, which ignores `tier` and can merge/split
   // groups wrongly. Harness defaults to the active runtime (override via
   // options.harness). Without a config every angle resolves to inherit
@@ -3317,11 +3382,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   const pendingAngles = pendingAngleNames ? angleUniverse.filter((a) => pendingAngleNames.has(a)) : angleUniverse;
   const angleModels = pendingAngles.map((angle) => ({
     angle,
-    model: !options.config
-      ? null
-      : harness === "claude"
-        ? resolveRoleModel(options.config, { role: "review", harness })
-        : resolveRoleModel(options.config, { role: angle, harness, kind: "angle" }),
+    model: !options.config ? null : resolveRoleModel(options.config, { role: angle, harness, kind: "angle", gate: options.gate === "review" ? undefined : resolveGateAngleCatalogKey(options.gate) }),
   }));
   // Harness capability, routed through the canonical 4-dimension model
   // (breakpointControl/barrierSignal/cacheTtlControl/usageTelemetry) — a
@@ -3821,7 +3882,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
   const angleState = await readBodyAwareAngleState({ ...input, tmpRoot, carriedAngles: input.carriedAngles ?? null }, { repoRoot });
   const completedAngles = input.completedAngles ?? angleState.completedAngles;
-  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: angleState.carriedAngles, singleWave: !isReviewGate, unitBound: await recordedUnitBound(input, repoRoot) });
+  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: angleState.carriedAngles, singleWave: !isReviewGate, unitBound: await recordedUnitBound(input, repoRoot), sizeOutcome: input.sizeOutcome, changedFiles, harness: input.harness ?? resolveRuntimeHarness(), recordedSizeTier: await recordedSizeTier(input, repoRoot) });
 
   const writeResult = await writeGateContext(
     {
@@ -3864,6 +3925,11 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
  * @param {{ repoRoot?: string }} [options]
  * @returns {Promise<object|null>}
  */
+/** The size-tier record the same-head context artifact recorded (`fanout.sizeTier`); undefined when no readable artifact records one. */
+async function recordedSizeTier(input, repoRoot) {
+  return (await readGateContext(input, { repoRoot }).catch(() => null))?.fanout?.sizeTier;
+}
+
 /** The unit bound the same-head context artifact recorded (`fanout.unitBound`); undefined when no readable artifact records one. */
 async function recordedUnitBound(input, repoRoot) {
   return (await readGateContext(input, { repoRoot }).catch(() => null))?.fanout?.unitBound;
@@ -4463,7 +4529,7 @@ export async function main(
       const angleState = await readBodyAwareAngleState({ ...options, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });
       const { completedAngles } = angleState;
       options.carriedAngles = angleState.carriedAngles;
-      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles, singleWave: options.gate !== "review", unitBound: await recordedUnitBound(options, repoRoot) });
+      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles, singleWave: options.gate !== "review", unitBound: await recordedUnitBound(options, repoRoot), sizeOutcome, changedFiles: options.changedFiles, harness: options.harness, recordedSizeTier: await recordedSizeTier(options, repoRoot) });
     }
     const result = await writeGateContext(options, { repoRoot });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });

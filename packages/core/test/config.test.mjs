@@ -7422,6 +7422,42 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     assert.equal(resolveRoleModel(config, { role: "correctness", harness: "codex", kind: "angle" }), null);
   });
 
+  test("a Claude angle falls back to the repo review override before the built-in tier", () => {
+    const angle = (models, harness = "claude", name = "correctness") => resolveRoleModel({ models }, { role: name, harness, kind: "angle" });
+    assert.equal(angle({ roleTiers: { review: "low" }, tiers: { low: { claude: "sonnet" } } }), "sonnet");
+    assert.equal(angle({ roles: { review: "haiku" } }), "haiku");
+    assert.equal(angle({ roles: { review: "haiku" } }, "pi"), null);
+    assert.equal(angle({}, "pi"), null);
+  });
+
+  test("a gate-scoped angle lookup prefers its own gate's entry over an earlier gate", () => {
+    const config = { models: { tiers: { low: { claude: "sonnet" }, high: { claude: "opus" } } }, gates: { draft: { angles: [{ name: "correctness", tier: "low" }] }, preApproval: { angles: [{ name: "correctness", tier: "high" }] } } };
+    const model = (gate) => resolveRoleModel(config, { role: "correctness", harness: "claude", kind: "angle", gate });
+    assert.equal(model(undefined), "sonnet");
+    assert.equal(model("draft"), "sonnet");
+    assert.equal(model("preApproval"), "opus");
+  });
+
+  test("a gate-scoped angle lookup on Pi prefers its own gate's entry", () => {
+    const config = { gates: { draft: { angles: [{ name: "correctness", model: "gpt-5" }] }, preApproval: { angles: [{ name: "correctness" }] } } };
+    const model = (gate) => resolveRoleModel(config, { role: "correctness", harness: "pi", kind: "angle", gate });
+    assert.equal(model("draft"), "gpt-5");
+    assert.notEqual(model("preApproval"), "gpt-5");
+  });
+
+  test("a Claude angle tier beats models.roles.review, a concrete angle model applies on Pi only, and Codex stays null", () => {
+    const withAngle = (entry, models = {}) => ({ models: { tiers: { low: { claude: "sonnet", pi: "pi-low" } }, ...models }, gates: { draft: { angles: [{ name: "correctness", ...entry }] } } });
+    const angle = (config, harness) => resolveRoleModel(config, { role: "correctness", harness, kind: "angle" });
+    assert.equal(angle(withAngle({ tier: "low" }, { roles: { review: "haiku" } }), "claude"), "sonnet");
+    const concrete = withAngle({ model: "gpt-5" }, { roles: { review: "haiku" } });
+    assert.equal(angle(concrete, "pi"), "gpt-5");
+    assert.equal(angle(concrete, "claude"), "haiku", "Claude ignores the harness-specific concrete model and falls back to the review override");
+    assert.equal(angle(withAngle({ model: "gpt-5" }), "claude"), "opus");
+    assert.equal(angle(withAngle({ tier: "low", model: "gpt-5" }), "claude"), "sonnet");
+    assert.equal(angle(withAngle({ tier: "low", model: "gpt-5" }), "codex"), null);
+    assert.equal(angle({ models: { roles: { correctness: "gpt-5" }, roleTiers: { correctness: "low" } } }, "claude"), "opus", "models.roles[angle] is never read for a gate angle");
+  });
+
   test("a consumer low tier of sonnet reaches every low-tier role, dev-loop and gate-coordinator, and leaves review roles high", () => {
     const config = {
       models: {

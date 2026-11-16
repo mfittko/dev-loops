@@ -320,7 +320,7 @@ test("AGENTS stays compact and resolver-first", async () => {
 
   assert.ok(lineCount <= 30, `AGENTS.md should stay at or under 30 lines, got ${lineCount}`);
   assert.match(agents, /dev-loop[\s\S]*single public workflow entrypoint/i);
-  assert.match(agents, /dev-loops loop startup/i);
+  assert.match(agents, /dev-loops-run --repo-root <checkout> cli\/index\.mjs loop startup/i);
   assert.match(agents, /load only the returned[\s\S]*requiredReads/i);
   assert.match(agents, /skills\/docs\//i);
   assert.doesNotMatch(agents, /Standard refinement chain pattern/i);

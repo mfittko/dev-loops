@@ -39,6 +39,7 @@ const SHELL_ACTIVE_RE = /[;&|<>`$\n\r(){}\\'"*?[\]]/;
 
 // The reviewer contract's mandated sentinel and bound-escape scripts, and its `cd <worktree> && ...` prefix.
 const REVIEWER_SCRIPT_RE = /^dev-loops-run (?:--repo-root [\w.\/-]+ )?scripts\/(?:github\/(?:verify-fresh-review-context|emit-reviewer-blocked)|loop\/seal-evidence)\.mjs(?: .*)?$/;
+const QUOTED_REPO_ROOT_RE = /^(dev-loops-run --repo-root )"[\w. \/-]+" /;
 const CD_PREFIX_RE = /^cd (?:"[\w./-]+"|[\w./-]+) && /;
 const GIT_C_RE = /^git -C (?:"[\w./-]+"|[\w./-]+) /;
 // Flags that make an allowed program execute another program or write a file. Git accepts unique prefixes, so match prefixes.
@@ -83,7 +84,8 @@ const CUT_RE = /^-c\d+-\d+$/;
 
 function isReadSearchCommand(rawCommand: string): boolean {
   // Strip the mandated `cd <path> && ` and `git -C <path> ` forms first; their paths allow safe characters only.
-  const command = rawCommand.trim().replace(CD_PREFIX_RE, '').replace(GIT_C_RE, 'git ');
+  // A double-quoted --repo-root path (spaces allowed, no shell-active characters) is swapped for a bare placeholder before the shell-active check.
+  const command = rawCommand.trim().replace(CD_PREFIX_RE, '').replace(GIT_C_RE, 'git ').replace(QUOTED_REPO_ROOT_RE, '$1x ');
   if (/[\n\r]/.test(command)) return false;
   if (REVIEWER_SCRIPT_RE.test(command) && !SHELL_ACTIVE_RE.test(command)) return true;
   const words = tokenize(command);

@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
-import { requireTokenValue } from "../_cli-primitives.mjs";
+import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import {
   detectGrillProvenance,
+  detectSpecChangedSinceGrill,
+  fetchSpecChangeFacts,
   interpretRefinementGrillState,
   normalizeGrillSnapshot,
 } from "@dev-loops/core/loop/refinement-grill-state";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
-const HELP = `Usage: detect-refinement-grill-state.mjs [--input <path> | --body-file <path> [--surface issue|pr|plan] [--comments-file <path>]]
+const HELP = `Usage: detect-refinement-grill-state.mjs [--input <path> | --body-file <path> [--surface issue|pr|plan] [--comments-file <path>] [--repo <owner/name> --number <n>]]
 Detect refinement/grill sub-loop state.
 Modes (choose exactly one):
   --input <path>                  Interpret a JSON grill snapshot from file
@@ -22,7 +24,14 @@ Options (body-file mode only):
   --comments-file <path>          JSON array of comments (or { "comments": [...] }), each a
                                   string or an object with a string "body"; detects recorded
                                   grill provenance (a posted "🔬 Grill / refinement results"
-                                  comment, optionally carrying a recorded bypass line)
+                                  comment, optionally carrying a recorded bypass line); a
+                                  comment's "createdAt" feeds the spec-changed check; when no
+                                  results comment carries a parseable "createdAt", the check
+                                  fails closed (detect_gaps / spec_changed_since_grill)
+  --repo <owner/name> --number <n>
+                                  Read the target's GraphQL body "lastEditedAt" (issue or PR);
+                                  a counted comment or a body edit after the latest results
+                                  comment returns detect_gaps / spec_changed_since_grill
 
 ${JQ_OUTPUT_USAGE}
 
@@ -43,6 +52,8 @@ export function parseDetectGrillCliArgs(argv) {
       "body-file": { type: "string" },
       surface: { type: "string" },
       "comments-file": { type: "string" },
+      repo: { type: "string" },
+      number: { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -87,6 +98,14 @@ export function parseDetectGrillCliArgs(argv) {
       options.commentsFilePath = requireTokenValue(token);
       continue;
     }
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token).trim();
+      continue;
+    }
+    if (token.name === "number") {
+      options.number = parsePositiveInteger(requireTokenValue(token), "--number");
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t))) continue;
     throw new Error(`Unknown argument: ${token.rawName}`);
   }
@@ -101,12 +120,18 @@ export function parseDetectGrillCliArgs(argv) {
   if (hasInput && options.commentsFilePath !== undefined) {
     throw new Error("--comments-file applies only to --body-file mode");
   }
+  if ((options.repo === undefined) !== (options.number === undefined)) {
+    throw new Error("--repo and --number must be given together");
+  }
+  if (options.repo !== undefined && (hasInput || options.surface === "plan")) {
+    throw new Error("--repo/--number apply only to --body-file mode on an issue or pr surface");
+  }
   return options;
 }
 
 export async function runCli(
   argv = process.argv.slice(2),
-  { stdout = process.stdout, stderr = process.stderr } = {},
+  { stdout = process.stdout, stderr = process.stderr, runChild: run = runChild, env = process.env } = {},
 ) {
   const options = parseDetectGrillCliArgs(argv);
   if (options.help) { stdout.write(HELP); return; }
@@ -119,10 +144,11 @@ export async function runCli(
     const body = await readFile(options.bodyFilePath, "utf8");
     const surface = options.surface ?? "issue";
     let provenance = { provenanceRecorded: false, bypass: false };
+    let comments = [];
     if (options.commentsFilePath) {
       const commentsText = await readFile(options.commentsFilePath, "utf8");
       const parsedComments = parseJsonText(commentsText);
-      const comments = Array.isArray(parsedComments)
+      comments = Array.isArray(parsedComments)
         ? parsedComments
         : (parsedComments && typeof parsedComments === "object" && Array.isArray(parsedComments.comments)
           ? parsedComments.comments
@@ -132,6 +158,9 @@ export async function runCli(
       }
       provenance = detectGrillProvenance(comments);
     }
+    const bodyLastEditedAt = options.repo !== undefined
+      ? (await fetchSpecChangeFacts({ repo: options.repo, number: options.number, env, runChild: run })).lastEditedAt
+      : null;
     // Deterministic seed for the already-refined / zero-iteration path only: the full
     // semantic gap detection (scope/actor/decision) is the agent-layer bounded input consumed
     // at await_answers. This body-file mode computes ONLY the deterministic AC-presence signal
@@ -146,6 +175,7 @@ export async function runCli(
       unresolvedGapCount: 0,
       provenanceRecorded: provenance.provenanceRecorded,
       provenanceBypass: provenance.bypass,
+      specChangedSinceGrill: detectSpecChangedSinceGrill({ comments, bodyLastEditedAt }),
     });
   }
 

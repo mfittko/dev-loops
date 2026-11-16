@@ -121,7 +121,7 @@ export function resolveOperationReviewerRole(loadResult, { operation, angle, har
   const ok = !configErrorPresent && member;
 
   const role = resolveReviewerRole(config, angle);
-  const model = resolveRoleModel(config, { role: angle, harness, kind: "angle" });
+  const model = resolveRoleModel(config, { role: angle, harness, kind: "angle", gate: OPERATION_GATE_KEY[operation] });
 
   const warnings = [];
   let status;

@@ -1023,6 +1023,25 @@ test("buildGateContext persists resolveGateAnglesDynamic output (docs-only)", as
   }
 });
 
+// ADR 0278 caller wiring: sizeOutcome and changedFiles must reach resolveFanoutDispatch through buildGateContext, and a same-head rebuild without size evidence keeps the recorded tier.
+test("buildGateContext threads sizeOutcome and changedFiles into the persisted fanout size tier", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-size-tier-"));
+  try {
+    const base = draftConfig();
+    const config = { ...base, gates: { ...base.gates, fanout: { sizeTiers: [{ maxWholeLogicLoc: 40, maxAnglesPerUnit: 10 }] } } };
+    const input = { config, hasFullLabel: false, gate: "draft_gate", diff: DOCS_ONLY_DIFF, repo: "owner/repo", pr: 12, headSha: "abc1234567890", branch: "issue-877", touchedFiles: ["docs/foo.md", "README.md"], acceptanceCriteria: "#877", validationPosture: "npm run verify", sizeOutcome: { outcome: "pass", wholeLogicLoc: 30, tierLogicLoc: { t1: 0 } } };
+    const applied = await buildGateContext(input, { repoRoot });
+    assert.equal(applied.artifact.fanout.sizeTier.tier.maxAnglesPerUnit, 10);
+    assert.deepEqual(applied.artifact.fanout.sizeTier.reasons, ["size_tier_applied"]);
+    assert.equal(applied.artifact.fanout.unitBound, 10);
+    const noEvidence = await buildGateContext({ ...input, sizeOutcome: null }, { repoRoot: await mkdtemp(path.join(os.tmpdir(), "gate-context-size-tier-none-")) });
+    assert.deepEqual(noEvidence.artifact.fanout.sizeTier.reasons, ["size_outcome_unavailable"]);
+    assert.equal(noEvidence.artifact.fanout.unitBound, 5);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // Tier resolution needs real hunk text for its line-count fact (an empty
 // diffOutput fails closed as scope_unavailable), so this fixture carries a
 // genuine docs-only diff body unlike the synthetic DOCS_ONLY_DIFF above.
@@ -1530,6 +1549,27 @@ test("CLI --base reads gates.contextExpansion from .devloops into adjacentCode.e
     // The written scoped variant carries the expansion list (pins the adjacentCode wiring into the scoped render).
     const variantText = await readFile(path.resolve(repoRoot, artifact.briefingVariants["docs-only"]), "utf8");
     assert.ok(variantText.includes("Expansion files"), "written scoped variant lists the expansion files");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ADR 0278 production caller wiring: main() must thread sizeOutcome and changedFiles into resolveFanoutDispatch.
+test("CLI --base threads size evidence into the persisted fanout size tier", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: false\n    maxFiles: 1\n    maxLines: 1\ngates:\n  fanout:\n    sizeTiers:\n      - maxWholeLogicLoc: 40\n        maxAnglesPerUnit: 10\n",
+      "utf8",
+    );
+    await main([
+      "--repo", "owner/repo", "--pr", "42", "--gate", "draft_gate", "--head-sha", headSha,
+      "--angles", '["scope","correctness","coverage","docs-drift","security-surface","config-drift"]', "--base", baseSha,
+    ], { repoRoot, run: stubGhRun });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha }, { repoRoot });
+    assert.deepEqual(artifact.fanout.sizeTier.reasons, ["size_tier_applied"]);
+    assert.equal(artifact.fanout.unitBound, 10);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -3077,16 +3117,15 @@ test("AC2 composer seam: the composed holistic dispatch prompt carries spec + di
 // #2241: the fresh-context sentinel must be invoked through the dev-loops-run
 // launcher, never a bare `node scripts/…` path — a consumer plugin install
 // ships without the scripts/ tree, so bare node throws MODULE_NOT_FOUND.
-test("renderBriefingPrefix: emits the fresh-context sentinel via the dev-loops-run launcher, never bare `node scripts/…`, in both the standalone and compound cd forms (#2241)", () => {
+test("renderBriefingPrefix: emits the fresh-context sentinel via the dev-loops-run launcher, never bare `node scripts/…`, in the standalone and --repo-root forms (#2241)", () => {
   const { text } = renderBriefingPrefix(renderInput({ worktreeRoot: "/wt/issue-2241" }));
-  // Standalone (line 1329) form: launcher, not bare node.
+  // Standalone form: launcher, not bare node.
   assert.ok(text.includes("dev-loops-run scripts/github/verify-fresh-review-context.mjs"));
-  // Compound `cd … && …` (line 1334) form: launcher inside the worktree cd.
-  assert.ok(text.includes('cd "/wt/issue-2241" && dev-loops-run scripts/github/verify-fresh-review-context.mjs'));
-  // No bare `node scripts/github/…` on the reviewer-briefing dispatch surface.
+  // Worktree-locality form: --repo-root runs the sentinel with cwd at the worktree (WORKTREE-SCRIPT-LAUNCHER-CWD).
+  assert.ok(text.includes("dev-loops-run --repo-root \"/wt/issue-2241\" scripts/github/verify-fresh-review-context.mjs"));
+  // No bare `node scripts/github/…` and no `cd … &&` prefix on the reviewer-briefing dispatch surface.
   assert.ok(!text.includes("node scripts/github/verify-fresh-review-context.mjs"));
-  // Worktree-locality preserved: reviewer cd's in first, --context-path stays cwd-relative.
-  assert.ok(text.includes('cd "/wt/issue-2241" &&'));
+  assert.ok(!text.includes('cd "/wt/issue-2241" &&'));
   assert.ok(text.includes(`--context-path ${renderInput().contextPath}`));
 });
 
@@ -3666,7 +3705,7 @@ test("linked worktree + main-anchored ledger: the sentinel runs from the worktre
     assert.equal(path.isAbsolute(contextPath), false);
     const prefix = await readFile(path.join(linked, prefixPath), "utf8");
     assert.ok(prefix.includes(`--context-path ${contextPath} `), "the briefed --context-path is cwd-relative");
-    assert.ok(prefix.includes(`cd "${linked}" && dev-loops-run scripts/github/verify-fresh-review-context.mjs`), "the sentinel cd target is the worktree");
+    assert.ok(prefix.includes(`dev-loops-run --repo-root "${linked}" scripts/github/verify-fresh-review-context.mjs`), "the sentinel --repo-root target is the worktree");
     const r = spawnSync("node", [contextGuardPath, "--scope", "scope", "--context-path", contextPath, "--prefix-file", prefixPath], { cwd: linked, encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
   } finally {
@@ -4126,7 +4165,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "",
       "Mandatory: before doing any angle-specific work, run `dev-loops-run scripts/github/verify-fresh-review-context.mjs --scope <the exact --scope value your dispatch unit's angle section names> --context-path tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json --prefix-file tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-prefix.txt` once — run once for the whole dispatch unit, never once per angle in it. Refuse to proceed on contamination or a missing artifact.", // secret-scan:allow fixture head SHA in briefing snapshot (not a secret)
       "",
-      `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${path.resolve(repoRoot)}" && dev-loops-run scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${path.resolve(repoRoot)}" ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
+      `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as \`dev-loops-run --repo-root "${path.resolve(repoRoot)}" scripts/github/verify-fresh-review-context.mjs ...\` (\`--repo-root\` runs it with cwd at this worktree) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${path.resolve(repoRoot)}" ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
       "",
       `Findings write-path invariant: WRITE each per-angle findings artifact to the ABSOLUTE path \`${path.resolve(repoRoot)}/tmp/gate-reviews/owner-repo/pr-80/draft_gate-${options.headSha}/<angle>.json\` (\`<angle>\` = your angle name) under THIS worktree's tmp/, never the primary checkout's. Cwd-relative \`tmp/...\` resolves against whatever checkout the command started in — a per-angle artifact written to the primary checkout's tmp/ is invisible to fan-in and fails the gate as missing evidence. Author it with the file-write tool (the \`write\` builtin, \`Write\` on Claude Code), never a shell write (redirect, heredoc, \`tee\`, or an inline script): the Claude Code auto-mode classifier denies a Bash write of a findings artifact. A \`blocked\` result goes through \`dev-loops-run scripts/github/emit-reviewer-blocked.mjs\` instead. Do NOT pin \`--tmp-root "${path.resolve(repoRoot)}/tmp"\` on the findings-log LEDGER writer (\`write-gate-findings-log.mjs\`): the ledger is anchored at the MAIN worktree automatically so the orchestrator's merge can read it and it survives worktree pruning — pinning it to this worktree loses it on prune and refuses the merge for missing provenance.`,
       "",
@@ -6071,12 +6110,12 @@ test("#1601 resolveFanoutDispatch: auto-chunks ungrouped angles + emits a bounde
   assert.deepEqual(plan.wavePlan[0].map((u) => u.name), ["group:a+b", "group:c+d", "e"]);
 });
 
-test("resolveFanoutDispatch keeps a recorded unit bound of 10 and defaults an absent one to 5", () => {
+test("resolveFanoutDispatch drops a recorded unit bound above 5 that no size tier backs and defaults an absent one to 5", () => {
   const angles = ["a", "b", "c", "d", "e", "f"];
   const config = { version: 1, gates: { fanout: { groups: [{ name: "wide", angles }] } } };
-  const kept = resolveFanoutDispatch(config, "draft", angles, { env: {}, unitBound: 10 });
-  assert.equal(kept.unitBound, 10);
-  assert.deepEqual(kept.pendingGroups.map((g) => g.angles.length), [6]);
+  const dropped = resolveFanoutDispatch(config, "draft", angles, { env: {}, unitBound: 10 });
+  assert.equal(dropped.unitBound, 5);
+  assert.deepEqual(dropped.pendingGroups.map((g) => g.angles.length), [5, 1]);
   const dflt = resolveFanoutDispatch(config, "draft", angles, { env: {} });
   assert.equal(dflt.unitBound, 5);
   assert.deepEqual(dflt.pendingGroups.map((g) => g.angles.length), [5, 1]);
@@ -7070,10 +7109,10 @@ test("writeGateContext request-plan resolves a bare no-override angle to its dis
   }
 });
 
-test("Claude plan records the review role model despite an angle roleTiers override; Pi keeps the per-angle model", async () => {
+test("Claude and Pi plans record the per-angle tier model (ADR 0278 amends ADR 0266)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-claude-review-"));
   try {
-    for (const [harness, expectedModel] of [["claude", "opus"], ["pi", "pi-low"]]) {
+    for (const [harness, expectedModel] of [["claude", "sonnet"], ["pi", "pi-low"]]) {
       const options = parseWriteGateContextCliArgs([
         "--repo", "owner/repo", "--pr", "87", "--gate", "draft_gate",
         "--head-sha", "abc1234567891", "--angles", '["correctness"]',

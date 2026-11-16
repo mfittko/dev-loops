@@ -26,6 +26,7 @@ import { STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
 import { assertRunnerOwnership, claimRunnerOwnership, pinObservedClaim } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
+import { checkBaseFreshness as defaultCheckBaseFreshness, staleBaseReason } from "../loop/pre-write-remote-freshness-guard.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
@@ -64,6 +65,7 @@ import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerd
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 import { countPrOwnCommits as realCountPrOwnCommits } from "../loop/check-pre-push-delta.mjs";
+import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
 import { buildValidationResultsPath, countCompletedRounds, buildGateContextPath, prBodySha256, readGateContext, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
@@ -2007,7 +2009,7 @@ async function verifyPostedSurface({ repo, pr, surface, commentId }, { env, ghCo
 // The convert/markPrReady mutations are individually idempotent, so
 // concurrent cooperating runners cause at most a transient draft flicker,
 // never a stuck draft (only a hard crash mid-transition can leave one).
-async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild = defaultRunChild }) {
+async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild = defaultRunChild, checkBaseFreshness }) {
   process.stderr.write(
     `[draft_gate] ${options.repo}#${options.pr} is ready but needs clean draft_gate evidence; ` +
     `temporarily converting to draft to post the verdict, then restoring ready.\n`,
@@ -2023,7 +2025,7 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
     // with a clear error instead of recursing indefinitely (exit 13).
     result = await upsertCheckpointVerdict(
       { ...options, _draftTransitionInProgress: true },
-      { env, ghCommand, repoRoot, runChild },
+      { env, ghCommand, repoRoot, runChild, checkBaseFreshness },
     );
   } catch (error) {
     if (conversion.alreadyDraft !== true) {
@@ -2052,10 +2054,10 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
       // clean current-head marker verdict and refuses on findings_present/blocked
       // or on unresolved gate-authored threads, so it is only an executable
       // remedy after a clean post.
-      const restoreHint = options.verdict === "clean"
+      const restoreHint = renderCliText(options.verdict === "clean"
         ? `run \`dev-loops pr restore-ready --repo ${options.repo} --pr ${options.pr}\` to restore ready`
         : `resolve the posted findings and restore ready through \`dev-loops pr ready-for-review\` ` +
-          `(or the dev-loop) — \`dev-loops pr restore-ready\` refuses on a non-clean verdict`;
+          `(or the dev-loop) — \`dev-loops pr restore-ready\` refuses on a non-clean verdict`, { env });
       throw new Error(
         `draft_gate verdict was posted to ${options.repo}#${options.pr} (comment ${result.commentId ?? "?"}), ` +
         `but restoring the PR to ready failed; it may be left in draft. Do not re-post the gate — ${restoreHint}. ` +
@@ -2678,7 +2680,7 @@ async function applyGateFullLabel({ repo, pr }, { env, ghCommand, runChild = def
  * check: it proves the round resolved its validation, and reviewers already
  * report it as incomplete evidence.
  */
-export async function assertGateValidationArtifact({ repo, pr, gate, headSha, repoRoot, contextTmpRoot }) {
+export async function assertGateValidationArtifact({ repo, pr, gate, headSha, repoRoot, contextTmpRoot, env = process.env }) {
   const relPath = buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot: contextTmpRoot || "tmp" });
   const expectedHead = String(headSha).toLowerCase();
   let problem = "is absent";
@@ -2702,13 +2704,14 @@ export async function assertGateValidationArtifact({ repo, pr, gate, headSha, re
     if (stamped === expectedHead) return;
     problem = `is stamped with head ${stamped ?? "(none)"}, not the reviewed head ${expectedHead}`;
   }
-  throw new Error(
+  throw cliError(
     `Cannot post a fanout_fanin verdict for ${repo}#${pr} ${gate}: the validation artifact ${relPath} ${problem}. `
     + `Resolve the round's validation once before dispatching reviewers with dev-loops gate resolve-validation --profile <targeted|full-repository> --repo ${repo} --pr ${pr} --gate ${gate} --head-sha ${headSha} [--suite <name>]..., which writes this artifact through run-gate-validation.mjs. If the round resolved validation under an explicit --tmp-root, pass that path as --context-tmp-root instead of re-running (GATE-EXEC-VALIDATION-RESOLUTION).`,
+    { env },
   );
 }
 
-export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, detectStale = detectStaleRunner, countPrOwnCommits = realCountPrOwnCommits } = {}) {
+export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, detectStale = detectStaleRunner, countPrOwnCommits = realCountPrOwnCommits, checkBaseFreshness } = {}) {
   const gh = { env, ghCommand, repoRoot, runChild };
   // Optional --spec-authority stamps the RETURNED result (this script's
   // durable verdict record — it posts no file of its own) with the pinned
@@ -2855,6 +2858,17 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     } else convergedMarker = composeConvergedDraftGate(capacity);
     return [];
   };
+  // GATE-EXEC-BASE-REFRESH (issue 2885): a clean draft_gate or pre_approval_gate never records at a head that lacks origin/<base>.
+  // An injected runChild test double skips the fetch unless the test injects the checker too.
+  const refuseStaleBase = async (verdict = options.verdict) => {
+    const checkFreshness = checkBaseFreshness ?? (runChild === defaultRunChild ? defaultCheckBaseFreshness : null);
+    const prBase = coordinationContext?.prData?.baseRefName;
+    if (verdict === "clean" && !isReviewGate && checkFreshness && typeof prBase === "string" && prBase.trim()) {
+      // A converged post records at the reviewed head A; the base check belongs to the current PR head (the fixer commit).
+      const stale = await staleBaseReason({ base: prBase.trim(), head: convergedInput?.fixerCommit ?? canonicalHeadSha, cwd: repoRoot, env, check: checkFreshness });
+      if (stale) throw new Error(`${stale} A clean ${options.gate} verdict is not recorded at a stale base.`);
+    }
+  };
   if (!isReviewGate) {
     // Thread the light-dispatch signal so the context interpreter and the
     // maxCopilotRounds resolution below use the same composed lightweight cap
@@ -2969,7 +2983,14 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       && !coordination.draftGateAlreadySatisfied
       && coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE)
     ) {
-      return await postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild });
+      // Refuse before the transition mutates the PR (draft conversion and restore). Without --verdict the ledger verdict stands in, composed like the later derivation except that it omits the past-cap draft_gate blockers: a fully judged ledger is clean when it has no open act item, whatever its severity overallVerdict says. On a past-cap round a ledger that would compose blocked there is still refused at a stale head, and the merge remedy applies before any post. With --findings-json the act items are not loaded yet, so the final verdict can be findings_present (unchanged by this refusal) and clean (still refused): the early check is skipped and the post-transition refuseStaleBase call decides, restoring ready on error.
+      let earlyVerdict = options.verdict;
+      if (earlyVerdict === undefined && options.findingsLedger && !options.findingsJson) {
+        const earlyLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
+        earlyVerdict = composeReviewVerdict(earlyLedger.overallVerdict, earlyLedger.findings ?? []);
+      }
+      await refuseStaleBase(earlyVerdict);
+      return await postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild, checkBaseFreshness });
     }
     // Fail closed on a lagged draft-state read: we are re-entering FROM
     // postDraftGateViaDraftTransition (which just converted the PR to draft) yet the
@@ -2982,12 +3003,13 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       && !prIsDraft
       && options._draftTransitionInProgress
     ) {
-      throw new Error(
+      throw cliError(
         `draft_gate self-heal for ${options.repo}#${options.pr} failed: the PR was converted to draft ` +
         `to post the verdict, but GitHub still reports it as non-draft on re-entry (draft-state read lagged ` +
         `the conversion mutation, or the conversion did not take). Not recursing. Re-run the draft_gate post ` +
         `once the PR reflects the draft state, or reconcile with ` +
         `\`dev-loops pr reconcile-draft --repo ${options.repo} --pr ${options.pr}\`.`,
+        { env },
       );
     }
     // A --converged-json update only amends the existing draft_gate comment, so the cap-fixed RUN_DRAFT_GATE ban does not apply to it; its own validation still runs.
@@ -3312,8 +3334,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       const actNote = ledgerVerdict !== preloadedFindingsLedger.overallVerdict
         ? ` The ledger's severity overallVerdict "${preloadedFindingsLedger.overallVerdict}" is composed with ${new Set(listOpenActItems([...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems]).map((f) => fingerprintFinding(f ?? {}))).size} open judge act item(s) (ADR 0089).`
         : "";
-      throw new Error(
+      throw cliError(
         `--verdict "${options.verdict}" for ${options.gate} @ ${canonicalHeadSha} contradicts the consolidated ledger's overallVerdict "${ledgerVerdict}" (from --findings-ledger "${options.findingsLedger}" for ${preloadedFindingsLedger.repo}#${preloadedFindingsLedger.pr} ${preloadedFindingsLedger.gate} @ ${preloadedFindingsLedger.headSha}).${actNote}${compositionNote} The verdict must match the fan-in consolidator's computed value composed with any deterministic gate blocker — GATE-COMMENT-VERDICT-VALUES (skills/docs/gate-review-comment-contract.md): "clean" = a fully judged round has an empty judge act list (a round with an unjudged finding also needs no blocking-severity finding); "findings_present" = a fully judged round has a non-empty judge act list, or a round with an unjudged finding has an issue at a blocking severity or a non-empty judge act list; "blocked" = the fan-in could not complete or a proven deterministic gate blocker (unchecked AC/DoD) prevents crossing. Re-run the gate fan-in (dev-loops gate consolidate-fanin) and let its overallVerdict flow through, or omit --verdict to post the composed verdict. A contradicting posted verdict is a contract breach this script refuses to record.`,
+        { env },
       );
     }
     // else: a matching explicit --verdict is accepted unchanged.
@@ -3336,6 +3359,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (convergedInput && (convergedMarker === null || options.verdict !== "clean")) {
     throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs a clean composed verdict over a validated low/nit act list (got verdict ${JSON.stringify(options.verdict)}); post a full round instead.`);
   }
+  await refuseStaleBase();
   // A fully judged round takes its verdict from the judge's act list alone, so the severity floor never overrides it. A partly judged ledger keeps the floor.
   if (
     options.verdict === "clean"
@@ -3647,7 +3671,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // GATE-EXEC-VALIDATION-RESOLUTION enforcement: the round must have run
     // run-gate-validation.mjs once for the reviewed head. Same opt-out and
     // placement as the ledger refusal above, so its message wins when both fire.
-    await assertGateValidationArtifact({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, repoRoot, contextTmpRoot: options.contextTmpRoot });
+    await assertGateValidationArtifact({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, repoRoot, contextTmpRoot: options.contextTmpRoot, env });
   }
   // FINDINGS-SOURCE FOOTGUN WARNING: a fanout_fanin round posted with
   // --findings-json but no --findings-ledger silently files ZERO inline

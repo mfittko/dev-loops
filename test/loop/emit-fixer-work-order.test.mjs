@@ -25,7 +25,7 @@ import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs"
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
-import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
+import { makeGhMock, runIdFreeEnv, withTempDir, withoutClaudeCode } from "../_helpers.mjs";
 import { TOOLCHAIN_ROOT, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { sealDeltaFixture } from "./_seal-fixture.mjs";
 
@@ -953,7 +953,7 @@ test("F1: a delta result that does not belong to this act list and head refuses 
   });
 });
 
-test("verdict_not_posted: an act-list order refuses without a posted verdict for the gate at the head; a threads order is unaffected", async () => {
+test("verdict_not_posted: an act-list order refuses without a posted verdict for the gate at the head; a threads order is unaffected", () => withoutClaudeCode(async () => {
   await withFixture(async ({ head, files, emit }) => {
     const refuse = (over) => assert.rejects(emit(over), /verdict_not_posted[^]*dev-loops gate upsert-verdict[^]*--head-sha[^]*--gate (draft_gate|pre_approval_gate)/);
     await refuse({ fetchVerdictMarkers: async () => summarizeGateReviewCommentMarkers([], { headSha: head }) });
@@ -974,7 +974,7 @@ test("verdict_not_posted: an act-list order refuses without a posted verdict for
     const neverCalled = async () => { throw new Error("threads source must not read verdicts"); };
     assert.equal((await emit({ ...threadsOnly, phase: "commit_only", actListFile: undefined, threadsFile: files.threads, fetchVerdictMarkers: neverCalled })).workOrder.source, "threads");
   });
-});
+}));
 
 const threadsOnly = { actListFile: undefined, gate: undefined, phase: "full" };
 const THREE = { ...THREADS, threads: ["T1", "T2", "T3"].map((threadId, i) => ({ ...THREADS.threads[0], threadId, commentId: i + 1 })) };
@@ -2684,7 +2684,7 @@ for (const route of ["Historical main", "OLD authority", "complete"]) test(`${ro
   });
 });
 
-test("F8: the work order routes validation through the canonical policy and carries no full-run command", async () => {
+test("F8: the work order routes validation through the canonical policy and carries no full-run command", () => withoutClaudeCode(async () => {
   await withFixture(async ({ emit, prepareFull }) => {
     for (const phase of ["commit_only", "full"]) {
       const unit = phase === "full" ? await (await prepareFull()).full() : await emit({ phase });
@@ -2697,6 +2697,27 @@ test("F8: the work order routes validation through the canonical policy and carr
       for (const text of strings) assert.notEqual(classifyValidationCommand(text), "full-repository", text);
     }
   });
+}));
+
+test("the work order text follows --harness, not the emitting process CLAUDECODE", async () => {
+  const saved = process.env.CLAUDECODE;
+  try {
+    await withFixture(async ({ emit }) => {
+      process.env.CLAUDECODE = "1";
+      const codex = await emit({ phase: "commit_only", harness: "codex" });
+      assert.match(codex.workOrder.executionRules.validation, /dev-loops gate resolve-validation/);
+      assert.doesNotMatch(codex.workOrder.executionRules.validation, /dev-loops-run/);
+      delete process.env.CLAUDECODE;
+      const claude = await emit({ phase: "commit_only", harness: "claude" });
+      assert.match(claude.workOrder.executionRules.validation, /dev-loops-run --repo-root <checkout> cli\/index\.mjs gate resolve-validation/);
+      await assert.rejects(
+        emit({ harness: "claude", fetchVerdictMarkers: async () => summarizeGateReviewCommentMarkers([], { headSha: claude.workOrder.headSha }) }),
+        /verdict_not_posted[^]*dev-loops-run --repo-root <checkout> cli\/index\.mjs gate upsert-verdict/,
+      );
+    });
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDECODE; else process.env.CLAUDECODE = saved;
+  }
 });
 
 test("issue 2787: a THREAD full order has the numbered steps, runs --construct and asks for no hand-written handoff", async () => {
@@ -2731,7 +2752,7 @@ async function addGenerator(wt) {
   await writeFile(path.join(wt, GENERATOR), "");
 }
 
-test("regenerate: a repository with the generator gets the rule, named for the mirror trees only", async () => {
+test("regenerate: a repository with the generator gets the rule, named for the mirror trees only", () => withoutClaudeCode(async () => {
   await withFixture(async ({ wt, emit }) => {
     await addGenerator(wt);
     const { workOrder } = await emit({});
@@ -2739,7 +2760,7 @@ test("regenerate: a repository with the generator gets the rule, named for the m
     for (const part of ["`skills/`", "`agents/`", "`commands/`", `node ${GENERATOR}`, "same commit", "bun run assets:check", "never hand-edit"]) assert.ok(rule.includes(part), part);
     assert.deepEqual([...new Set(rule.match(/\.claude\/[\w.]+\/?/g))].sort(), [".claude/agents/", ".claude/commands/", ".claude/skills/"]);
   });
-});
+}));
 
 test("regenerate: a repository without the generator gets no rule and no rendered line", async () => {
   await withFixture(async ({ emit }) => {
@@ -2760,7 +2781,7 @@ test("regenerate: the rendered line is present and the materialization hash stil
   });
 });
 
-test("regenerate: the rule is identical for the claude, pi and codex harness CLI adapters", async () => {
+test("regenerate: the rule names the launcher form for claude and the bare node form for pi and codex", async () => {
   await withFixture(async ({ root, wt, head, files, writeRecord }) => {
     await writeRecord({ items: [{ ref: ACT_REF, status: "resolved" }] });
     await addGenerator(wt);
@@ -2777,8 +2798,10 @@ test("regenerate: the rule is identical for the claude, pi and codex harness CLI
       rules.push(JSON.parse(await readFile(JSON.parse(cli.stdout).planPath, "utf8")).workOrder.executionRules.regenerate);
       await new Promise((resolve) => setTimeout(resolve, 2));
     }
-    assert.ok(rules[0]);
-    assert.equal(new Set(rules).size, 1);
+    assert.ok(rules[0].includes(`dev-loops-run --repo-root <checkout> ${GENERATOR}`));
+    assert.ok(!rules[0].includes(`node ${GENERATOR}`));
+    for (const rule of rules.slice(1)) assert.ok(rule.includes(`node ${GENERATOR}`));
+    assert.equal(rules[1], rules[2]);
   });
 });
 
@@ -3068,6 +3091,152 @@ test("ADR 0197: a PR-own change after the cap round keeps the round_cap_reached 
   await withFixture(async (fx) => {
     const { over } = await capRoundThenBaseMerge(fx, { ownChangeAfterMerge: true });
     await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
+  });
+});
+
+// Issue 2752 slice 4 (PR 3223 shape): the verdict was posted at the origin head O, whose ledger is the only one (round 1); origin/main then moved and the branch merged it into M.
+// The act list belongs to O's ledger; M has none unless `mLedger` writes one ("findings_present" or "blocked"). `side` writes the ledger at a commit that is not an ancestor of M, `criss` builds a criss-cross merge base.
+// `handEdit` adds a hand edit of a PR path after the merge (a changed PR blob); it builds no conflict hunk, and no test here claims conflict-hunk coverage.
+async function verdictCarryScenario({ root, wt, files }, { baseFile = "main-only.md", baseContent = "main content\n", handEdit = false, side = false, criss = false, ownChangeAfterMerge = false, cap = 2, severity = "medium", mLedger = null, originFindings = null, priorRounds = 0, corruptPrior = false, mRetained = null } = {}) {
+  await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: cap } } }));
+  const medium = withFp({ ...ACT[0], severity, judgeFix: "guard the deref" });
+  await writeFile(files.actList, JSON.stringify([medium]));
+  await writeFile(path.join(wt, "pr.md"), "pr content\n");
+  git(wt, "add", "pr.md");
+  git(wt, "commit", "-q", "-m", "pr change");
+  const origin = git(wt, "rev-parse", "HEAD");
+  let ledgerHead = origin;
+  if (side) {
+    git(wt, "checkout", "-q", "-b", "side", "main");
+    git(wt, "commit", "-q", "--allow-empty", "-m", "side");
+    ledgerHead = git(wt, "rev-parse", "HEAD");
+    git(wt, "checkout", "-q", "issue-1");
+  }
+  const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, `draft_gate-${ledgerHead}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: ledgerHead, verdict: "findings_present", loggedAt: "2026-11-02T00:00:00.000Z", findings: originFindings ?? [medium] }));
+  for (let i = 0; i < priorRounds; i += 1) {
+    const sha = String(i + 1).repeat(40);
+    await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-01T00:00:0${i}.000Z`, findings: [] }));
+  }
+  if (corruptPrior) await writeFile(path.join(dir, `draft_gate-${"d".repeat(40)}.json`), "{not json"); // an unparseable ledger at a later prior head
+  const baseCommit = async () => {
+    await mkdir(path.dirname(path.join(root, baseFile)), { recursive: true });
+    await writeFile(path.join(root, baseFile), handEdit ? "main side\n" : baseContent);
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "main moves");
+    git(root, "update-ref", "refs/remotes/origin/main", "main");
+  };
+  await baseCommit();
+  if (handEdit) {
+    // The merge is followed by a hand edit of a PR path in a second commit; no conflict hunk is built here.
+    git(wt, "merge", "-q", "--no-ff", "-m", "merge origin/main", "origin/main");
+    await writeFile(path.join(wt, "pr.md"), "resolved by hand\n");
+    git(wt, "add", "-A");
+    git(wt, "commit", "-q", "-m", "hand edit");
+  } else git(wt, "merge", "-q", "--no-ff", "-m", "merge origin/main", "origin/main");
+  if (mLedger) await writeFile(path.join(dir, `draft_gate-${git(wt, "rev-parse", "HEAD")}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: git(wt, "rev-parse", "HEAD"), verdict: mLedger, loggedAt: "2026-11-03T00:00:00.000Z", findings: [medium] }));
+  if (mRetained) await writeFile(path.join(dir, `draft_gate-${git(wt, "rev-parse", "HEAD")}.round-1.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: git(wt, "rev-parse", "HEAD"), verdict: mRetained, loggedAt: "2026-11-03T00:00:00.000Z", findings: [medium] }));
+  if (criss) {
+    git(root, "merge", "-q", "--no-ff", "--no-edit", origin);
+    git(root, "update-ref", "refs/remotes/origin/main", "main");
+  }
+  if (ownChangeAfterMerge) {
+    await writeFile(path.join(wt, "pr.md"), "changed pr blob\n");
+    git(wt, "commit", "-q", "-am", "own change");
+  }
+  const merged = git(wt, "rev-parse", "HEAD");
+  const over = (postedAt = ledgerHead, baseRefName = "main") => ({ headSha: merged, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: merged, baseRefName }), fetchVerdictMarkers: verdictPostedAt(postedAt), phase: "commit_only", deltaResult: undefined });
+  return { origin, merged, over };
+}
+
+test("issue 2752 slice 4: an act-list emit at a base-merged head carries the verdict posted at the origin head (PR 3223 shape)", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await verdictCarryScenario(fx);
+    const result = await fx.emit(over());
+    assert.equal(result.workOrder.source, "act-list");
+  });
+});
+
+test("issue 2752 slice 4: the seam ignores the gate-tooling rule (scripts/ and .devloops in the base delta)", async () => {
+  for (const baseFile of ["scripts/tool.mjs", ".devloops"]) {
+    await withFixture(async (fx) => {
+      const { over } = await verdictCarryScenario(fx, { baseFile });
+      assert.equal((await fx.emit(over())).workOrder.source, "act-list", baseFile);
+    });
+  }
+});
+
+test("issue 2752 slice 4: the act list is counted at the origin round, so a round-1 nit-only list is accepted under the seam", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await verdictCarryScenario(fx, { severity: "nit" });
+    assert.equal((await fx.emit(over())).workOrder.source, "act-list");
+  });
+  // Without the seam the same list is counted at the merged head (round 2) and refused.
+  await withFixture(async (fx) => {
+    const { over } = await verdictCarryScenario(fx, { severity: "nit", ownChangeAfterMerge: true, cap: 3 });
+    await assert.rejects(fx.emit(over()), (e) => e.refusal === "low_fix_until_cap");
+  });
+});
+
+test("issue 2752 slice 4: every fail-closed case keeps the verdict_not_posted refusal", async () => {
+  const notPosted = (e) => /verdict_not_posted/.test(e.message);
+  const cases = {
+    "changed PR blob": { scenario: { ownChangeAfterMerge: true } },
+    "merge followed by a hand edit of a PR path": { scenario: { handEdit: true } },
+    "head with its own unposted findings_present ledger": { scenario: { mLedger: "findings_present" } },
+    "head with its own blocked ledger": { scenario: { mLedger: "blocked" } },
+    "head with only a retained blocked ledger": { scenario: { mRetained: "blocked" } },
+    "unreadable prior ledger at a later head": { scenario: { corruptPrior: true, cap: 4 } },
+    "non-ancestor origin head": { scenario: { side: true } },
+    "criss-cross merge base": { scenario: { criss: true } },
+    "missing origin verdict": { scenario: {}, posted: "e".repeat(40) },
+    "detection failure (unknown base ref)": { scenario: {}, baseRefName: "no-such-ref" },
+    "no base ref name": { scenario: {}, baseRefName: null },
+  };
+  for (const [name, { scenario, posted, baseRefName = "main" }] of Object.entries(cases)) {
+    await withFixture(async (fx) => {
+      // Cap 3 keeps round 2 below the cap, so the verdict check (not the cap-round ledger read) decides.
+      const { over } = await verdictCarryScenario(fx, { cap: 3, ...scenario });
+      await assert.rejects(fx.emit(over(posted, baseRefName)), notPosted, name);
+    });
+  }
+  // At the cap round the unaccepted seam leaves the missing-ledger refusal in place (still fail closed).
+  await withFixture(async (fx) => {
+    const { over } = await verdictCarryScenario(fx, { ownChangeAfterMerge: true });
+    await assert.rejects(fx.emit(over()), (e) => e.refusal === "round_cap_reached");
+  });
+});
+
+test("issue 2752 slice 4: a current-head ledger written while the verdict reads are pending refuses the carried emit", async () => {
+  await withFixture(async (fx) => {
+    const { merged, over } = await verdictCarryScenario(fx, { cap: 3 });
+    const base = over();
+    const fetchVerdictMarkers = async (args) => {
+      const result = await base.fetchVerdictMarkers(args);
+      await writeFile(path.join(fx.root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${merged}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: merged, verdict: "blocked", loggedAt: "2026-11-03T00:00:00.000Z", findings: [] }));
+      return result;
+    };
+    await assert.rejects(fx.emit({ ...base, fetchVerdictMarkers }), (e) => /verdict_not_posted|changed source identity|ledger appeared/.test(e.message));
+  });
+});
+
+test("issue 2752 slice 4: at the cap round the origin head's ledger decides the blocker check under an accepted seam", async () => {
+  await withFixture(async (fx) => {
+    const question = withFp({ ...ACT[0], severity: "question", summary: "which API shape", judgeFix: "" });
+    const { over } = await verdictCarryScenario(fx, { cap: 1, originFindings: [question] });
+    await assert.rejects(fx.emit(over()), (e) => e.refusal === "round_cap_reached" && /GATE-EXEC-SOFT-CAP/.test(e.message));
+  });
+  await withFixture(async (fx) => {
+    const { over } = await verdictCarryScenario(fx, { cap: 1 });
+    assert.equal((await fx.emit(over())).workOrder.source, "act-list");
+  });
+});
+
+test("issue 2752 slice 4: an origin head past the cap round stays refused under an accepted seam (no ADR 0197 rewrite)", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await verdictCarryScenario(fx, { cap: 2, priorRounds: 2 });
+    await assert.rejects(fx.emit(over()), (e) => e.refusal === "round_cap_reached");
   });
 });
 

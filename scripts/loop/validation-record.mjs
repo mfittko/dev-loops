@@ -15,6 +15,7 @@ import { parseValidationRecord, validationRecordPath } from "@dev-loops/core/loo
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { buildParseError,formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { staleBaseReason } from "./pre-write-remote-freshness-guard.mjs";
 import { readBaseValidation, readCheckoutValidation, validationDifferenceRefusal } from "./resolve-validation.mjs";
 import { buildValidationArtifact, classifyPackageSuites, readPackageScripts } from "./run-gate-validation.mjs";
 
@@ -88,6 +89,8 @@ export async function produceValidationRecord(options, { repoRoot = resolveRepoR
     } catch {
       return incomplete("origin/HEAD does not resolve; run git fetch origin and git remote set-head origin -a");
     }
+    const stale = await staleBaseReason({ head: options.headSha, cwd: repoRoot, env });
+    if (stale) return incomplete(stale);
     const checkout = readCheckoutValidation(repoRoot);
     if (checkout.reason) return incomplete(checkout.reason);
     const base = readBaseValidation(repoRoot);

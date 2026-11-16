@@ -150,6 +150,9 @@ const HOOK_BUNDLE = [
   { source: "packages/core/src/loop/gate-round-retirement.mjs", target: ".claude/hooks/_gate-round-retirement.mjs", rewrites: [] },
 ];
 
+/** Generated hook-mirror paths; the size budget counts their `packages/core` sources instead. */
+export const HOOK_BUNDLE_TARGETS = Object.freeze(HOOK_BUNDLE.map(({ target }) => target));
+
 /** Marker that identifies a generated hook-bundle module (a JS comment, distinct from the
  * markdown `<!-- GENERATED -->` banner used by generated skills/agents/docs). Used both to
  * stamp generated bundle modules and to scope orphan detection to them within `.claude/hooks/`. */
