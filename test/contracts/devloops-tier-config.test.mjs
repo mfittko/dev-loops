@@ -135,7 +135,15 @@ for (const harness of ["claude", "pi"]) {
       code: "ERR_ASSERTION",
       message: new RegExp(`spike angle ${angle} must not declare a model override`),
     });
-    assert.equal(resolveRoleModel(synthetic, { role: angle, harness, kind: "angle" }), entry.model);
+    if (harness === "claude") {
+      // A concrete angle model is Pi-only; Claude's escape hatch is the angle tier.
+      assert.equal(resolveRoleModel(synthetic, { role: angle, harness, kind: "angle" }), "opus");
+      delete entry.model;
+      entry.tier = "low";
+      assert.notEqual(resolveRoleModel(synthetic, { role: angle, harness, kind: "angle" }), "opus");
+    } else {
+      assert.equal(resolveRoleModel(synthetic, { role: angle, harness, kind: "angle" }), entry.model);
+    }
     assert.throws(() => assertGateAngleModelPolicy(synthetic), {
       code: "ERR_ASSERTION",
       message: new RegExp(`spike angle ${angle} on ${harness}`),

@@ -137,6 +137,7 @@ export const DEVLOOPS_PROPORTIONALITY_FIELD_PATHS = Object.freeze([
   ["localImplementation", "lightMode", "maxFiles"],
   ["localImplementation", "lightMode", "maxLines"],
   ["localImplementation", "lightMode", "riskPaths"],
+  ["gates", "fanout", "sizeTiers"],
 ]);
 const COMMIT_MSG_GUARD_FIELD_PATH = Object.freeze(["worktree", "commitMsgGuard", "requireClaudeSession"]);
 export const WAIVER_MARKER = "adr-tripwire:allow";
