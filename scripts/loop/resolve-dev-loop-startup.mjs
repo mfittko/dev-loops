@@ -1670,6 +1670,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       delete parsed.spikeIntakeState;
       delete parsed.canonicalSpecSource;
       delete parsed.draftStart;
+      delete parsed.issueReadinessReason;
     }
     input = parsed;
   } else if (options.issue !== undefined) {

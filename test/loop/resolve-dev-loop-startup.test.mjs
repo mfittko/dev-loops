@@ -537,6 +537,27 @@ test("resolve-dev-loop-startup CLI emits stable JSON for a final-approval route"
   }, { prefix: "resolve-dev-loop-startup-" });
 });
 
+test("resolve-dev-loop-startup CLI --input strips an injected issueReadinessReason", async () => {
+  await withTempDir(async (tempDir) => {
+    const inputPath = await writeTempJson(tempDir, "startup.json", {
+      currentState: {
+        target: { kind: "pr", issue: 89, pr: 92 },
+        ownership: "copilot",
+        nextActor: "user",
+        status: "approval_ready",
+        authorization: "needs_confirmation",
+      },
+      artifactState: "open",
+      issueLinkageResolution: "not_applicable",
+      issueReadinessReason: "spec_changed_since_grill",
+    });
+    const result = await runNode(["--input", inputPath], { cwd: tempDir });
+    const parsed = JSON.parse(result.stdout.trim());
+    assert.equal(parsed.issueReadinessReason, undefined);
+    assert.doesNotMatch(parsed.nextAction ?? "", /changed after its latest grill/i);
+  }, { prefix: "resolve-dev-loop-startup-" });
+});
+
 test("buildResolveDevLoopStartupResult auto-injects retrospectiveCheckpointState from file", async () => {
   await withTempDir(async (tempDir) => {
     // Create a .pi/dev-loop-retrospective-checkpoint.json in temp dir

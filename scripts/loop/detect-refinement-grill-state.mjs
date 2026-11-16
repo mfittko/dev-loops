@@ -25,9 +25,9 @@ Options (body-file mode only):
                                   string or an object with a string "body"; detects recorded
                                   grill provenance (a posted "🔬 Grill / refinement results"
                                   comment, optionally carrying a recorded bypass line); a
-                                  comment's "createdAt" feeds the spec-changed check, and a
-                                  results comment without a parseable "createdAt" fails
-                                  closed (detect_gaps / spec_changed_since_grill)
+                                  comment's "createdAt" feeds the spec-changed check; when no
+                                  results comment carries a parseable "createdAt", the check
+                                  fails closed (detect_gaps / spec_changed_since_grill)
   --repo <owner/name> --number <n>
                                   Read the target's GraphQL body "lastEditedAt" (issue or PR);
                                   a counted comment or a body edit after the latest results
