@@ -1874,6 +1874,7 @@ test("--issue assigned to the viewer (assigned_to_me) proceeds", async () => {
     await initRepoWithOrigin(tempDir);
     const ghStub = await writeGhStubHelper(tempDir, [
       noLinkedPrGraphqlEntry(),
+      { assertArgs: ["api", "graphql", "number=511", ".data.repository.issueOrPullRequest"], stdout: JSON.stringify({ body: "", lastEditedAt: null, comments: { nodes: [] } }) },
       { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
     ], { matchMode: "claims" });
