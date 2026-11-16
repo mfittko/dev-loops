@@ -539,7 +539,7 @@ export function defaultIsAncestor({ base, head, repoRoot }) {
 export function defaultComputePatchId({ base, head, repoRoot }) {
   try {
     const env = scrubGitEnv(process.env);
-    const diff = execFileSync("git", ["-c", "core.quotePath=true", "diff", "-U3", "--no-color", "--no-ext-diff", "--no-textconv", "--binary", "--no-renames", "--diff-algorithm=myers", "--src-prefix=a/", "--dst-prefix=b/", `${base}...${head}`], { cwd: repoRoot, env, maxBuffer: 512 * 1024 * 1024 });
+    const diff = execFileSync("git", ["-c", "core.quotePath=true", "-c", "diff.interHunkContext=0", "-c", "diff.indentHeuristic=true", "-c", "diff.suppressBlankEmpty=false", "diff", "-U3", "--submodule=short", "--no-color", "--no-ext-diff", "--no-textconv", "--binary", "--no-renames", "--diff-algorithm=myers", "--src-prefix=a/", "--dst-prefix=b/", `${base}...${head}`], { cwd: repoRoot, env, maxBuffer: 512 * 1024 * 1024 });
     const out = execFileSync("git", ["patch-id", "--verbatim"], { cwd: repoRoot, env, input: diff, encoding: "utf8" });
     return out.trim().split(/\s+/)[0] || null;
   } catch {
