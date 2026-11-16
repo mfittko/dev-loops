@@ -1574,7 +1574,7 @@ export function commandContainsTimeoutWrappedSanctionedTool(command) {
 }
 
 /** Wrapper binaries whose first argument is the real command to classify. */
-const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command", "nohup", "exec", "stdbuf", "setsid", "ionice", "busybox"]);
+const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command", "nohup", "exec", "stdbuf", "setsid", "ionice", "busybox", "builtin"]);
 // A bare wrapper flag (`-n`, `--user`) takes the next word as its argument, unless that word is itself the command.
 const WRAPPER_FLAG_TARGETS = new Set([...WRAPPER_BINARIES, ...SLEEP_LOOP_SHELLS, "timeout", "gtimeout", "sleep"]);
 
@@ -1747,6 +1747,17 @@ function wordOf(word) {
   return { value: word.parts.map(text).join(""), start: word.start, quoted: word.parts.some((p) => p.type === "SglQuoted" || p.type === "DblQuoted"), expandsToName, dynamic: word.parts.some(dynamic) };
 }
 
+/** REST starts at an `env` option: when it is `-S STR`, `-SSTR` or `--split-string[=]STR`, the words with STR split on whitespace in its place (env runs STR as a command line), else null. shortcut: a quote inside STR is not honored, so it splits on every space; a split inside a quoted word only adds words. */
+function envSplitWords(rest) {
+  const v = rest[0]?.value ?? "";
+  const attached = /^(?:-S|--split-string=)(.+)$/s.exec(v);
+  const separate = v === "-S" || v === "--split-string";
+  const text = attached ? attached[1] : separate ? rest[1]?.value : null;
+  if (text == null) return null;
+  const parts = text.split(/\s+/).filter(Boolean).map((value) => ({ value, start: rest[0].start, quoted: false, expandsToName: false, dynamic: false }));
+  return [...parts, ...rest.slice(separate ? 2 : 1)];
+}
+
 const DURATION_WORD_RE = /^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?$/i;
 /** WORDS from the command head on: env assignments, `timeout [options] DURATION` and the `WRAPPER_BINARIES` with their flags are skipped (`stripLeadingWrappers` on a word list, so no quote ever pairs across words). */
 function stripWordWrappers(words) {
@@ -1761,9 +1772,11 @@ function stripWordWrappers(words) {
     } else if (WRAPPER_BINARIES.has(head)) {
       rest = w.slice(1);
       while (rest[0]?.value.startsWith("-")) {
+        const split = head === "env" ? envSplitWords(rest) : null;
+        if (split) { rest = split; break; }
         const bare = /^(?:-[A-Za-z]|--[\w-]+)$/.test(rest[0].value);
         rest = rest.slice(1);
-        if (bare && rest.length > 1 && !WRAPPER_FLAG_TARGETS.has(rest[0].value.replace(/^.*\//, ""))) rest = rest.slice(1);
+        if (bare && rest.length > 1 && !rest[0].value.startsWith("-") && !WRAPPER_FLAG_TARGETS.has(rest[0].value.replace(/^.*\//, ""))) rest = rest.slice(1);
       }
     }
     if (!rest?.length) return w;
@@ -1776,7 +1789,7 @@ function stripExecPrefix(words) {
   for (let w = words; ;) {
     while (ENV_ASSIGNMENT_WORD_RE.test(w[0]?.value ?? "")) w = w.slice(1);
     const head = (w[0]?.value ?? "").toLowerCase();
-    if (head === "command" || head === "exec") { w = w.slice(1); continue; }
+    if (head === "command" || head === "exec" || head === "builtin") { w = w.slice(1); continue; }
     if (head !== "env") return w;
     w = w.slice(1);
     for (let v; (v = w[0]?.value) !== undefined;) {
@@ -1821,6 +1834,7 @@ function inspectShell(command, report = false, skipFirst = false) {
   const written = []; // lowercased paths that a cat/tee heredoc writes
   const ends = (s, side) => (s.cmd?.type === "BinaryCmd" ? ends(s.cmd[side], side) : s);
   const isHeredoc = (r) => r.op === R.Hdoc || r.op === R.DashHdoc;
+  const isStdinText = (r) => isHeredoc(r) || r.op === R.WordHdoc; // a heredoc or here-string: the text a cat/tee writes
   const formIn = (text, skip) => inspectShell(text, false, skip).deny;
   const alone = parsed.file.stmts.length === 1 && parsed.file.stmts[0].cmd?.type === "CallExpr"; // the whole command is one simple command
   let depth = 0; // open substitutions
@@ -1855,8 +1869,8 @@ function inspectShell(command, report = false, skipFirst = false) {
       if (isWritten(tail[0]) || isWritten(script.script) || script.loaded.some(isWritten)) out.deny = true;
       // a tee that receives a pipe from a cat heredoc segment is the heredoc write (other heads write their own output, not the heredoc)
       const feeder = pipeSource.get(stmt);
-      const fed = head === "tee" && feeder?.cmd?.type === "CallExpr" && feeder.redirs.some(isHeredoc) && feeder.cmd.args.some((a) => wordOf(a).value.split("/").pop().toLowerCase() === "cat");
-      if (/^(?:cat|tee)$/.test(head) && (redirs.some(isHeredoc) || fed)) {
+      const fed = head === "tee" && feeder?.cmd?.type === "CallExpr" && feeder.redirs.some(isStdinText) && feeder.cmd.args.some((a) => wordOf(a).value.split("/").pop().toLowerCase() === "cat");
+      if (/^(?:cat|tee)$/.test(head) && (redirs.some(isStdinText) || fed)) {
         // a redirect of another fd than 1 (`2>err.log`) is no heredoc write; `>&2` duplicates a descriptor; only an exact device name is no file write
         const targets = [...redirs.filter((r) => WRITE_REDIRECTS.some((n) => r.op === R[n]) && (!r.n || r.n.value === "1")).map((r) => wordOf(r.word).value), ...(head === "tee" ? args.filter((a) => !a.value.startsWith("-")).map((a) => a.value) : [])]
           .filter((t) => t && !/^\d+$|^-$/.test(t)).map((t) => t.replace(/^\.\//, "")).filter((t) => !DEVICE_TARGETS.has(t));
@@ -1871,7 +1885,12 @@ function inspectShell(command, report = false, skipFirst = false) {
     const heredocBody = (r) => (isHeredoc(r) && r.hdoc?.parts.every((p) => p.type === "Lit") ? r.hdoc.parts.map((p) => p.value).join("") : null);
     // a heredoc that never reaches its delimiter has no readable body (origin/main denied it as incomplete)
     const unterminated = (r) => isHeredoc(r) && (!r.hdoc || (r.hdoc.parts.length > 0 && !(r.hdoc.parts.at(-1).type === "Lit" && r.hdoc.parts.at(-1).value.endsWith("\n"))));
-    if (redirs.some(unterminated) || (!dataHost && redirs.some((r) => heredocBody(r) !== null && formIn(heredocBody(r), false)))) out.ceiling = true;
+    // a body is data when a top-level `gh` takes it unpiped (a PR or issue comment body; bash expands only `$()`, backticks and `${}` in it, and the walk reads those); any other host may write then run it, so its body stays read as shell
+    // shortcut: only `gh` is a data head, widen the head set when another body-taking CLI shows up as a ceiling false positive
+    const bodyIsShell = !(head0 === "gh" && depth === 0 && !pipedOut.has(stmt));
+    // a shell that reads a here-string built by a substitution runs text the gate cannot see
+    if (FILE_RUNNER_HEAD_RE.test(head0) && redirs.some((r) => r.op === R.WordHdoc && wordOf(r.word).dynamic)) out.ceiling = true;
+    if (redirs.some(unterminated) || (!dataHost && bodyIsShell && redirs.some((r) => heredocBody(r) !== null && formIn(heredocBody(r), false)))) out.ceiling = true;
     const tail0 = tails[0] ?? [];
     const from = words.length - tail0.length + payloadStart(tail0, head0);
     const hereWords = TEXT_CONSUMER_RE.test(head0) ? [] : redirs.filter((r) => r.op === R.WordHdoc).map((r) => wordOf(r.word));

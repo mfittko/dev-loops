@@ -288,7 +288,7 @@ const ARITH_SHIFT_ROWS = ["echo $((1<<2))", "echo $(( 1 << 2 ))", "x=$((a<<b)); 
 const CHAINED_HEREDOC_ROWS = ["git add -A && git commit -m \"$(cat <<'EOF'\nfix: refuse `node -e`\nEOF\n)\"", "node scripts/github/comment-issue.mjs 5 --body-file - <<'EOF'\nfix: refuse `node -e`\nEOF"];
 const rowKey = (name, cmd) => `${name}: ${JSON.stringify(cmd)}`;
 /** The only rows whose inline-interpreter decision may flip from deny to allow (decision 2). */
-const CEILING_ROWS = new Set(INLINE_INTERPRETER_FORMS.filter((row) => row.ceiling).map((row) => row.command));
+const CEILING_ROWS = new Set(INLINE_INTERPRETER_FORMS.filter((row) => row.ceiling || row.narrowed).map((row) => row.command));
 
 function buildCorpus() {
   const corpus = new Set([...RESIDUE_SHAPES, ...DELETED_TABLE_ROWS,...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW, ...ARITH_SHIFT_ROWS, ...CHAINED_HEREDOC_ROWS, ...INLINE_INTERPRETER_FORMS.map((row) => row.command), ...INLINE_INTERPRETER_VERDICT_CASES.map(([cmd]) => cmd)]);

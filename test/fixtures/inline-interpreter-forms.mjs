@@ -8,6 +8,8 @@
 const deny = (command) => ({ command, deny: true, ceiling: false });
 const allow = (command) => ({ command, deny: false, ceiling: false });
 const ceiling = (command) => ({ command, deny: false, ceiling: true });
+// origin/main denied it; the head allows it as data, with no ceiling report (the differential accepts it like a ceiling row)
+const narrowed = (command) => ({ command, deny: false, ceiling: false, narrowed: true });
 
 export const INLINE_INTERPRETER_FORMS = [
   // inline code
@@ -128,6 +130,17 @@ export const INLINE_INTERPRETER_FORMS = [
   deny("python3 -I 0<<EOF\nx\nEOF"),
   deny("node 0<<EOF\nx\nEOF"),
   deny("bun 0<<'EOF'\nx\nEOF"),
+  // builtin and env -S wrap the head; a here-string is a stdin text like a heredoc for the cat/tee write check
+  deny("builtin command node -e x"),
+  deny("env -S 'node -e x'"),
+  deny("env --split-string='node -e x'"),
+  deny("sudo env -S 'node -e x'"),
+  deny("env -i -S 'node -e x'"),
+  deny("cat > a.mjs <<<x"),
+  deny("tee a.txt <<<x"),
+  // an unquoted heredoc body of a data head is data: markdown lines are no shell; a substitution still runs
+  allow("gh pr comment 1 --body-file - <<EOF\n* item\n[text](url)\n- [ ] task\nEOF"),
+  deny("gh pr comment 1 --body-file - <<EOF\n* item\n[text](url)\n- [ ] task\n$(node -e 1)\nEOF"),
   // a flag after a `<<<` here-string is still read
   deny("node <<< x -e y"),
   deny("python3 <<< x -c y"),
@@ -321,10 +334,11 @@ export const INLINE_INTERPRETER_FORMS = [
     "bun run --silent -",
     "bun run --bun -",
     "echo x | bun run -",
-    "gh pr comment 1 --body-file - <<'EOF'\nthe hook refuses cat <<EOF then `node -e 1`\nEOF",
-    "gh issue comment 1 --body-file - <<'EOF'\nsee `python3 -c x`\n```\ncat <<X\nhi\nX\n```\nEOF",
     "git commit -F - <<'EOF'\nfix: refuse `node -e`\n\nmention: python3 - <<EOF\nEOF",
   ].map(ceiling),
+  // origin/main denied these data-head heredocs; a body is data unless a shell reads it or a pipe carries it on, so the head allows them with no ceiling
+  narrowed("gh pr comment 1 --body-file - <<'EOF'\nthe hook refuses cat <<EOF then `node -e 1`\nEOF"),
+  narrowed("gh issue comment 1 --body-file - <<'EOF'\nsee `python3 -c x`\n```\ncat <<X\nhi\nX\n```\nEOF"),
 
   // ceiling rows of the differential corpus: origin/main 4b62431e8 denied each one
   // -c/eval/here-string, watch/trap and git exec payloads
@@ -564,8 +578,6 @@ export const INLINE_INTERPRETER_VERDICT_CASES = [
   ["python3 -I 0<<EOF", true],
   ["node 0<<EOF", true],
   ["python3 <<< 'x'", false],
-  ["gh pr comment 1 --body-file - <<'EOF'\nthe hook refuses cat <<EOF then `node -e 1`\nEOF", false],
-  ["gh issue comment 1 --body-file - <<'EOF'\nsee `python3 -c x`\n```\ncat <<X\nhi\nX\n```\nEOF", false],
   ["git commit -F - <<'EOF'\nfix: refuse `node -e`\n\nmention: python3 - <<EOF\nEOF", false],
   ["cat <<B <<'A'\n$(python3 -c x)\nB\nA", true],
 ];

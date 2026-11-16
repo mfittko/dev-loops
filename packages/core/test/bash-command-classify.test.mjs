@@ -1782,10 +1782,13 @@ test("round 3: a shell reached through env/command/exec or `<(`, a joined heredo
 });
 
 test("OPS-NO-INLINE-INTERPRETER: the gate denies every denied fixture row and allows every inert and ceiling row (#2442)", () => {
+  const mismatches = [];
   for (const { command, deny, ceiling } of INLINE_INTERPRETER_FORMS) {
     assert.equal(commandContainsInlineInterpreter(command), deny, command);
-    assert.equal(inlineInterpreterVerdict(command), deny ? "deny" : ceiling ? "ceiling" : "allow", command);
+    const want = deny ? "deny" : ceiling ? "ceiling" : "allow";
+    if (inlineInterpreterVerdict(command) !== want) mismatches.push(`${want}: ${command}`);
   }
+  assert.deepEqual(mismatches, []);
   for (const kind of ["deny", "ceiling", "allow"]) assert.ok(INLINE_INTERPRETER_FORMS.some((row) => inlineInterpreterVerdict(row.command) === kind), kind);
 });
 
