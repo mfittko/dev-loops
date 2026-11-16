@@ -4,7 +4,9 @@
 
 Proposed (provisional, pending operator checkpoint) — 2026-11-16 ([issue 3048](https://github.com/mfittko/dev-loops/issues/3048)).
 
-Amends [0258](0258-operator-owned-line-registry.md): the pin of the per-merge approval. Accepted records remain unchanged.
+Amends [0188](0188-low-nit-never-block.md): the head pin of the per-merge approval (`GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE`). Accepted records remain unchanged.
+
+Relates to [0258](0258-operator-owned-line-registry.md): the operator-owned line registry and writer refusals stay unchanged.
 
 ## Context
 

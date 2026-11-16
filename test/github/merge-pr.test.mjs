@@ -1470,6 +1470,8 @@ test("defaultComputePatchId binds position and bytes, ignores local diff config 
     const plain = defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir });
     git("config", "diff.noprefix", "true");
     assert.equal(defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir }), plain, "diff.noprefix leaves the id unchanged");
+    writeFileSync(join(dir, ".gitattributes"), "*.js -diff\n");
+    assert.equal(defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir }), plain, "an uncommitted working-tree .gitattributes leaves the id unchanged");
     assert.equal(defaultComputePatchId({ base: "origin/no-such-ref", head: "HEAD", repoRoot: dir }), null, "a git error fails closed");
   } finally {
     rmSync(dir, { recursive: true, force: true });

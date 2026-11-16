@@ -538,8 +538,9 @@ export function defaultIsAncestor({ base, head, repoRoot }) {
 // The diff pins context (-U3 binds line position), prefixes, renames, algorithm and quoting so the id is a function of the commits only, and stays a Buffer so no byte is lost.
 export function defaultComputePatchId({ base, head, repoRoot }) {
   try {
-    const env = scrubGitEnv(process.env);
-    const diff = execFileSync("git", ["-c", "core.quotePath=true", "-c", "diff.interHunkContext=0", "-c", "diff.indentHeuristic=true", "-c", "diff.suppressBlankEmpty=false", "diff", "-U3", "--submodule=short", "--no-color", "--no-ext-diff", "--no-textconv", "--binary", "--no-renames", "--diff-algorithm=myers", "--src-prefix=a/", "--dst-prefix=b/", `${base}...${head}`], { cwd: repoRoot, env, maxBuffer: 512 * 1024 * 1024 });
+    // Attributes come from the head tree only, so the id is a function of the commits (ADR 0279).
+    const env = { ...scrubGitEnv(process.env), GIT_ATTR_NOSYSTEM: "1" };
+    const diff = execFileSync("git", [`--attr-source=${head}`, "-c", "core.attributesFile=/dev/null", "-c", "core.quotePath=true", "-c", "diff.interHunkContext=0", "-c", "diff.indentHeuristic=true", "-c", "diff.suppressBlankEmpty=false", "diff", "-U3", "--submodule=short", "--no-color", "--no-ext-diff", "--no-textconv", "--binary", "--no-renames", "--diff-algorithm=myers", "--src-prefix=a/", "--dst-prefix=b/", `${base}...${head}`], { cwd: repoRoot, env, maxBuffer: 512 * 1024 * 1024 });
     const out = execFileSync("git", ["patch-id", "--verbatim"], { cwd: repoRoot, env, input: diff, encoding: "utf8" });
     return out.trim().split(/\s+/)[0] || null;
   } catch {

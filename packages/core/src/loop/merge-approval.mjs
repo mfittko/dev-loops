@@ -364,7 +364,7 @@ function foldTiedReview(latest, next) {
  * ESCALATED: a standing authorization does NOT satisfy it — a fresh per-merge
  * operator approval is required.
  *
- * @returns {{ authorized: boolean, via: string|null, reason: string|null }}
+ * @returns {{ authorized: boolean, via: string|null, matchKind: "head"|"patch_id"|null, reason: string|null }}
  */
 export function resolveMergeApprovalDecision({ mergeClass, standingAuthorized = false, freshApproval = null } = {}) {
   const fresh = freshApproval != null && freshApproval.satisfied === true;
@@ -373,6 +373,7 @@ export function resolveMergeApprovalDecision({ mergeClass, standingAuthorized = 
     return {
       authorized: false,
       via: null,
+      matchKind: null,
       reason: `escalated/stable-release merge requires a fresh per-merge operator approval; a standing authorization does not satisfy it${freshApproval?.reason ? ` (${freshApproval.reason})` : ""}`,
     };
   }
@@ -381,6 +382,7 @@ export function resolveMergeApprovalDecision({ mergeClass, standingAuthorized = 
   return {
     authorized: false,
     via: null,
+    matchKind: null,
     reason: `drain merge requires a recorded standing authorization or a fresh operator approval${freshApproval?.reason ? ` (${freshApproval.reason})` : ""}`,
   };
 }

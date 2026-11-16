@@ -202,6 +202,7 @@ test("resolveMergeApprovalDecision: standing authorization allows a drain merge"
 test("resolveMergeApprovalDecision: standing authorization does NOT satisfy an escalated merge", () => {
   const res = resolveMergeApprovalDecision({ mergeClass: MERGE_CLASS.ESCALATED, standingAuthorized: true, freshApproval: { satisfied: false, reason: "no approval" } });
   assert.equal(res.authorized, false);
+  assert.equal(res.matchKind, null);
   const withFresh = resolveMergeApprovalDecision({ mergeClass: MERGE_CLASS.ESCALATED, standingAuthorized: false, freshApproval: { satisfied: true, via: "approved_review" } });
   assert.equal(withFresh.authorized, true);
 });
