@@ -29,6 +29,7 @@
  */
 
 import { trimmedOrNull } from "./normalize.mjs";
+import { findOperatorOwnedLineRefusal } from "../github/operator-owned-lines.mjs";
 
 export const GRILL_STATE = Object.freeze({
   LOAD_TARGET: "load_target",
@@ -109,6 +110,128 @@ function normalizeCount(value) {
     : 0;
 }
 
+function commentBody(comment) {
+  if (typeof comment === "string") return comment;
+  return comment && typeof comment.body === "string" ? comment.body : null;
+}
+
+function firstNonEmptyLine(body) {
+  return body.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim() ?? "";
+}
+
+// A comment counts as a results comment only when its FIRST non-empty line,
+// trimmed, is EXACTLY the "## " heading -- this rejects a bare title, a
+// different heading level (`###`), a missing space (`##🔬`), the title merely
+// quoted in a code fence, or the title appearing later in an unrelated reply.
+function isResultsComment(body) {
+  return firstNonEmptyLine(body) === RESULTS_COMMENT_HEADING;
+}
+
+export const SPEC_CHANGED_SINCE_GRILL_REASON = "spec_changed_since_grill";
+
+// Loop-owned comments never change the spec (GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL):
+// a `<!-- dev-loops:` marker comment, a merge record, an operator-owned line,
+// and the grill's own results comment.
+function isLoopOwnedComment(body) {
+  const first = firstNonEmptyLine(body);
+  return first.startsWith("<!-- dev-loops:")
+    || first.startsWith("merge-pr record:")
+    || isResultsComment(body)
+    || findOperatorOwnedLineRefusal(body) !== null;
+}
+
+function timestampOrNull(value) {
+  const time = typeof value === "string" ? Date.parse(value) : Number.NaN;
+  return Number.isNaN(time) ? null : time;
+}
+
+/**
+ * True when the spec changed after the latest `🔬 Grill / refinement results`
+ * comment: a counted (not loop-owned) comment was posted after it, or the body
+ * `lastEditedAt` is after it. No dated results comment means false; the
+ * provenance check owns that case. Pure.
+ *
+ * @param {{comments?: Array<string|{body?: string, createdAt?: string}>, bodyLastEditedAt?: string|null}} input
+ * @returns {boolean}
+ */
+export function detectSpecChangedSinceGrill({ comments = [], bodyLastEditedAt = null } = {}) {
+  const list = Array.isArray(comments) ? comments : [];
+  let latestGrill = null;
+  for (const comment of list) {
+    const body = commentBody(comment);
+    const time = timestampOrNull(comment?.createdAt);
+    if (body !== null && time !== null && isResultsComment(body) && (latestGrill === null || time > latestGrill)) {
+      latestGrill = time;
+    }
+  }
+  if (latestGrill === null) return false;
+  const edited = timestampOrNull(bodyLastEditedAt);
+  if (edited !== null && edited > latestGrill) return true;
+  return list.some((comment) => {
+    const body = commentBody(comment);
+    const time = timestampOrNull(comment?.createdAt);
+    return body !== null && time !== null && time > latestGrill && !isLoopOwnedComment(body);
+  });
+}
+
+// shortcut: reads the last 100 comments only; page the connection if a target outgrows that.
+const SPEC_CHANGE_FACTS_QUERY = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issueOrPullRequest(number:$number){
+... on Issue { body lastEditedAt comments(last:100) { nodes { body createdAt } } }
+... on PullRequest { body lastEditedAt comments(last:100) { nodes { body createdAt } } }
+}}}`;
+
+/**
+ * `gh` args that read an issue or PR body, its GraphQL `lastEditedAt` and its
+ * comments with `createdAt`. `gh issue view --json` does not expose `lastEditedAt`.
+ *
+ * @param {{repo: string, number: number|string}} input
+ * @returns {string[]}
+ */
+export function buildSpecChangeFactsGhArgs({ repo, number }) {
+  const [owner, name] = String(repo).split("/");
+  return [
+    "api", "graphql",
+    "-f", `query=${SPEC_CHANGE_FACTS_QUERY}`,
+    "-f", `owner=${owner}`,
+    "-f", `name=${name}`,
+    "-F", `number=${number}`,
+    "--jq", ".data.repository.issueOrPullRequest",
+  ];
+}
+
+/**
+ * Normalize the `buildSpecChangeFactsGhArgs` output node. Pure.
+ *
+ * @param {unknown} node
+ * @returns {{body: string, lastEditedAt: string|null, comments: Array<{body?: string, createdAt?: string}>}}
+ */
+export function parseSpecChangeFacts(node) {
+  const comments = node?.comments?.nodes ?? node?.comments;
+  return {
+    body: typeof node?.body === "string" ? node.body : "",
+    lastEditedAt: typeof node?.lastEditedAt === "string" ? node.lastEditedAt : null,
+    comments: Array.isArray(comments) ? comments : [],
+  };
+}
+
+/**
+ * Run `buildSpecChangeFactsGhArgs` through an injected async `runChild`
+ * (`{code, stdout, stderr}`) and parse the result. A failed or unparseable
+ * read throws with code `GH_API_ERROR`.
+ */
+export async function fetchSpecChangeFacts({ repo, number, env, runChild }) {
+  const result = await runChild("gh", buildSpecChangeFactsGhArgs({ repo, number }), env);
+  if (result.code !== 0) {
+    const detail = result.stderr?.trim() || `exit code ${result.code}`;
+    throw Object.assign(new Error(`gh api graphql failed: ${detail}`), { code: "GH_API_ERROR" });
+  }
+  try {
+    return parseSpecChangeFacts(JSON.parse(result.stdout));
+  } catch {
+    throw Object.assign(new Error("gh api graphql returned invalid JSON"), { code: "GH_API_ERROR" });
+  }
+}
+
 /**
  * Detect recorded grill provenance from a target's comments: a durable
  * `🔬 Grill / refinement results` comment, optionally carrying an
@@ -129,21 +252,9 @@ export function detectGrillProvenance(comments) {
   let bypassBy = null;
 
   for (const comment of comments) {
-    const body = typeof comment === "string"
-      ? comment
-      : (comment && typeof comment.body === "string" ? comment.body : null);
-    if (body === null) continue;
-
+    const body = commentBody(comment);
+    if (body === null || !isResultsComment(body)) continue;
     const lines = body.split(/\r?\n/);
-    // A comment counts as a results comment only when its FIRST non-empty
-    // line, trimmed, is EXACTLY the "## " heading -- this rejects a bare
-    // title, a different heading level (`###`), a missing space (`##🔬`),
-    // the title merely quoted in a code fence, or the title appearing later
-    // in an unrelated reply.
-    const firstNonEmpty = lines.find((line) => line.trim().length > 0);
-    const isResultsComment = firstNonEmpty !== undefined
-      && firstNonEmpty.trim() === RESULTS_COMMENT_HEADING;
-    if (!isResultsComment) continue;
 
     provenanceRecorded = true;
     if (!bypass) {
@@ -203,11 +314,16 @@ export function normalizeGrillSnapshot(raw) {
     // never a standalone shortcut to grill_clean.
     provenanceRecorded: Boolean(raw.provenanceRecorded),
     provenanceBypass: Boolean(raw.provenanceRecorded) && Boolean(raw.provenanceBypass),
+    // a counted comment or a body edit after the latest results comment
+    // (detectSpecChangedSinceGrill); meaningless without recorded provenance.
+    specChangedSinceGrill: Boolean(raw.provenanceRecorded) && Boolean(raw.specChangedSinceGrill),
   };
 }
 
 const PROVENANCE_MISSING_NEXT_ACTION =
   "Run the semantic gap pass on the loaded spec, then post the \"🔬 Grill / refinement results\" comment recording the outcome — including a zero-gap pass, which states that no gaps were found";
+const SPEC_CHANGED_NEXT_ACTION =
+  "Re-grill: read the comments and body edits after the latest \"🔬 Grill / refinement results\" comment, fold the accepted content into the body and its AC / DoD matrix, then post a new results comment";
 
 /**
  * Deterministically interpret the current refinement-grill state.
@@ -251,6 +367,11 @@ export function interpretRefinementGrillState(snapshot) {
       // Local plan files have no comment surface: shape-only, zero-iteration clean.
       state = GRILL_STATE.GRILL_CLEAN;
       reason = "plan_shape_only";
+    } else if (s.specChangedSinceGrill) {
+      // The spec changed after the latest grill: the grill owes another pass,
+      // with or without a bypass line on an earlier results comment.
+      state = GRILL_STATE.DETECT_GAPS;
+      reason = SPEC_CHANGED_SINCE_GRILL_REASON;
     } else if (s.provenanceBypass) {
       // A recorded bypass line still counts as recorded provenance.
       state = GRILL_STATE.GRILL_CLEAN;
@@ -271,7 +392,9 @@ export function interpretRefinementGrillState(snapshot) {
 
   const nextAction = reason === "provenance_missing"
     ? PROVENANCE_MISSING_NEXT_ACTION
-    : GRILL_NEXT_ACTIONS[state];
+    : reason === SPEC_CHANGED_SINCE_GRILL_REASON
+      ? SPEC_CHANGED_NEXT_ACTION
+      : GRILL_NEXT_ACTIONS[state];
 
   return {
     state,

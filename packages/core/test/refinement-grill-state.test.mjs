@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import {
+  buildSpecChangeFactsGhArgs,
   detectGrillProvenance,
+  detectSpecChangedSinceGrill,
+  parseSpecChangeFacts,
+  SPEC_CHANGED_SINCE_GRILL_REASON,
   GRILL_STATE,
   GRILL_TRANSITIONS,
   interpretRefinementGrillState,
@@ -316,4 +320,88 @@ test("allowedTransitions equals GRILL_TRANSITIONS for the current state", () => 
   assert.deepEqual(clean.allowedTransitions, GRILL_TRANSITIONS[GRILL_STATE.GRILL_CLEAN]);
   const detect = interpretRefinementGrillState({ loaded: true, detectRan: false });
   assert.deepEqual(detect.allowedTransitions, GRILL_TRANSITIONS[GRILL_STATE.DETECT_GAPS]);
+});
+
+// GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL (issue 3127)
+const GRILL_AT = "2026-11-06T10:00:00Z";
+const BEFORE = "2026-11-06T09:00:00Z";
+const AFTER = "2026-11-06T11:00:00Z";
+const resultsComment = (createdAt, extra = "") => ({ body: `## ${RESULTS_TITLE}\n\nNo gaps were found.${extra}`, createdAt });
+
+function grillStateFor({ comments, bodyLastEditedAt = null, surface = "issue" }) {
+  const provenance = detectGrillProvenance(comments);
+  return interpretRefinementGrillState({
+    loaded: true,
+    detectRan: true,
+    surface,
+    openGapCount: 0,
+    provenanceRecorded: provenance.provenanceRecorded,
+    provenanceBypass: provenance.bypass,
+    specChangedSinceGrill: detectSpecChangedSinceGrill({ comments, bodyLastEditedAt }),
+  });
+}
+
+test("AC1: a counted comment after the latest results comment returns detect_gaps / spec_changed_since_grill", () => {
+  const out = grillStateFor({ comments: [resultsComment(GRILL_AT), { body: "Decision: also cover the PR surface.", createdAt: AFTER }] });
+  assert.equal(out.state, GRILL_STATE.DETECT_GAPS);
+  assert.equal(out.reason, SPEC_CHANGED_SINCE_GRILL_REASON);
+  assert.match(out.nextAction, /Re-grill/);
+});
+
+test("AC1: a counted comment before the latest results comment does not trigger the reason", () => {
+  const out = grillStateFor({ comments: [{ body: "Decision: also cover the PR surface.", createdAt: BEFORE }, resultsComment(GRILL_AT)] });
+  assert.equal(out.state, GRILL_STATE.GRILL_CLEAN);
+  assert.equal(out.reason, "provenance_recorded");
+});
+
+test("AC1: only the latest results comment counts as the grill time", () => {
+  const comments = [resultsComment(BEFORE), { body: "new note", createdAt: GRILL_AT }, resultsComment(AFTER)];
+  assert.equal(detectSpecChangedSinceGrill({ comments }), false);
+});
+
+test("AC2: a body lastEditedAt after the latest results comment triggers the reason; null or earlier does not", () => {
+  const comments = [resultsComment(GRILL_AT)];
+  assert.equal(grillStateFor({ comments, bodyLastEditedAt: AFTER }).reason, SPEC_CHANGED_SINCE_GRILL_REASON);
+  assert.equal(grillStateFor({ comments, bodyLastEditedAt: null }).state, GRILL_STATE.GRILL_CLEAN);
+  assert.equal(grillStateFor({ comments, bodyLastEditedAt: BEFORE }).state, GRILL_STATE.GRILL_CLEAN);
+});
+
+test("AC3: the pr surface applies the same check", () => {
+  const out = grillStateFor({ surface: "pr", comments: [resultsComment(GRILL_AT), { body: "please also handle X", createdAt: AFTER }] });
+  assert.equal(out.state, GRILL_STATE.DETECT_GAPS);
+  assert.equal(out.reason, SPEC_CHANGED_SINCE_GRILL_REASON);
+});
+
+for (const [kind, body] of [
+  ["a <!-- dev-loops: marker comment", "<!-- dev-loops:gate-verdict head=abc -->\nverdict: clean"],
+  ["a merge record", "merge-pr record: merged head `abc` (squash merge); approvalVia `comment`; approver `op`."],
+  ["an operator marker line", "approve merge"],
+  ["a results comment", `## ${RESULTS_TITLE}\n\nsecond pass`],
+]) {
+  test(`AC4: ${kind} after the latest results comment does not trigger the reason`, () => {
+    const comments = [resultsComment(GRILL_AT), { body, createdAt: AFTER }];
+    assert.equal(detectSpecChangedSinceGrill({ comments }), false);
+  });
+}
+
+test("a milestone-move note counts; a bypass line does not exempt the target", () => {
+  const comments = [resultsComment(GRILL_AT, "\nbypass: operator-authorized by op"), { body: "Moved to milestone v1.2.", createdAt: AFTER }];
+  const out = grillStateFor({ comments });
+  assert.equal(out.reason, SPEC_CHANGED_SINCE_GRILL_REASON);
+  assert.equal(out.bypass, false);
+});
+
+test("no dated results comment, or undated comments, never trigger the reason", () => {
+  assert.equal(detectSpecChangedSinceGrill({ comments: [{ body: "note", createdAt: AFTER }], bodyLastEditedAt: AFTER }), false);
+  assert.equal(detectSpecChangedSinceGrill({ comments: [`## ${RESULTS_TITLE}`, "note"] }), false);
+  assert.equal(normalizeGrillSnapshot({ specChangedSinceGrill: true }).specChangedSinceGrill, false);
+});
+
+test("parseSpecChangeFacts reads the GraphQL node and tolerates a body-only payload", () => {
+  assert.deepEqual(
+    parseSpecChangeFacts({ body: "b", lastEditedAt: AFTER, comments: { nodes: [{ body: "c", createdAt: GRILL_AT }] } }),
+    { body: "b", lastEditedAt: AFTER, comments: [{ body: "c", createdAt: GRILL_AT }] },
+  );
+  assert.deepEqual(parseSpecChangeFacts({ body: "b" }), { body: "b", lastEditedAt: null, comments: [] });
+  assert.ok(buildSpecChangeFactsGhArgs({ repo: "o/r", number: 7 }).includes("number=7"));
 });

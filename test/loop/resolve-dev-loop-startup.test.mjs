@@ -1510,6 +1510,31 @@ test("runCli --issue resolves linked-PR detection module-relative even when the 
   }, { prefix: "resolve-dev-loop-linkage-module-relative-" });
 });
 
+test("AC5 (3127): --issue reports needs_clarification / spec_changed_since_grill when a comment is newer than the latest grill", async () => {
+  const acBody = "## Acceptance Criteria\n\n- it works\n";
+  const results = { body: "## 🔬 Grill / refinement results\n\nNo gaps were found.", createdAt: "2026-11-06T10:00:00Z" };
+  const resolveWith = async (comments) => withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const stub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
+      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: acBody }) },
+      { assertArgs: ["api", "graphql", "number=735", ".data.repository.issueOrPullRequest"],
+        stdout: JSON.stringify({ body: acBody, lastEditedAt: null, comments: { nodes: comments } }) },
+      { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
+    ], { matchMode: "claims" });
+    return buildAutoResolvedInput({ issue: 735, cwd: tempDir, env: { ...stub.env, ...resolverTestEnv() } });
+  }, { prefix: "resolve-dev-loop-spec-changed-" });
+
+  const changed = await resolveWith([results, { body: "Decision: also cover the PR surface.", createdAt: "2026-11-06T11:00:00Z" }]);
+  assert.equal(changed.issueReadiness, "needs_clarification");
+  assert.equal(changed.issueReadinessReason, "spec_changed_since_grill");
+  assert.equal(changed.warnings, undefined);
+
+  const clean = await resolveWith([{ body: "early note", createdAt: "2026-11-06T09:00:00Z" }, results]);
+  assert.equal(clean.issueReadiness, "ready");
+  assert.equal(clean.issueReadinessReason, undefined);
+});
+
 test("local-first phase-doc intake fires no tracker artifact / Copilot call before promotion (#953 AC3)", async () => {
   // local-first comes from the shipped extension defaults (settings only sets
   // inputSource), proving the low-noise intake holds with the shipped posture.

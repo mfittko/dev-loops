@@ -48,6 +48,12 @@ import {
   PLAN_FILE_REFINEMENT_SECTIONS,
 } from "@dev-loops/core/loop/plan-file-intake-contract";
 import { evaluateSpikeIntakeState } from "@dev-loops/core/loop/spike-intake-contract";
+import {
+  SPEC_CHANGED_SINCE_GRILL_REASON,
+  buildSpecChangeFactsGhArgs,
+  detectSpecChangedSinceGrill,
+  parseSpecChangeFacts,
+} from "@dev-loops/core/loop/refinement-grill-state";
 import { loadBoardConfig } from "@dev-loops/core/loop/queue-board-sync";
 import { main as reconcileQueue } from "../projects/reconcile-queue.mjs";
 import { parseArgs } from "node:util";
@@ -913,12 +919,27 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
         targetPreference: resolvedTargetPreference, inputSource, claim, expectedIssue: issue, env });
     }
     let issueReadiness;
+    let issueReadinessReason;
     try {
       const issueJson = ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "body"], repoRoot, env);
       issueReadiness = hasAcSection(issueJson.body) ? "ready" : "needs_clarification";
     } catch {
       issueReadiness = "needs_clarification";
       warnings.push(`issueReadiness: using default "${issueReadiness}" — gh issue view failed`);
+    }
+    // GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL: a ready spec that changed after
+    // its latest grill goes back to the grill.
+    if (issueReadiness === "ready") {
+      try {
+        const facts = parseSpecChangeFacts(ghJson(buildSpecChangeFactsGhArgs({ repo, number: issue }), repoRoot, env));
+        if (detectSpecChangedSinceGrill({ comments: facts.comments, bodyLastEditedAt: facts.lastEditedAt })) {
+          issueReadiness = "needs_clarification";
+          issueReadinessReason = SPEC_CHANGED_SINCE_GRILL_REASON;
+        }
+      } catch {
+        issueReadiness = "needs_clarification";
+        warnings.push(`issueReadiness: using default "${issueReadiness}" — spec-change read failed`);
+      }
     }
     // Single-contributor ownership gate: a failed read defaults to an empty
     // assignee list (today's warn+default posture for the READ).
@@ -959,6 +980,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       artifactState: "not_applicable",
       issueLinkageResolution: "resolved_no_open_pr",
       issueReadiness,
+      ...(issueReadinessReason ? { issueReadinessReason } : {}),
       issueAssignmentState,
       loopState,
       warnings: warnings.length > 0 ? warnings : undefined,

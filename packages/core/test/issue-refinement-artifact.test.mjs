@@ -735,6 +735,26 @@ test("#1866 runPickupRefinementGate anchors linked-doc resolution to the repoRoo
   }
 });
 
+test("AC5 (3127): runPickupRefinementGate blocks, or diverts under --auto, a refined issue whose spec changed after the latest grill", async () => {
+  const { runPickupRefinementGate } = await import("../src/loop/issue-refinement-artifact.mjs");
+  const results = { body: "## 🔬 Grill / refinement results\n\nNo gaps were found.", createdAt: "2026-11-06T10:00:00Z" };
+  const node = (comments, lastEditedAt = null) => ({ body: "## Problem\n\nX\n" + MATRIX + NGOALS, lastEditedAt, comments: { nodes: comments } });
+  const runChildFor = (payload) => async (cmd, args) => {
+    assert.equal(cmd, "gh");
+    assert.deepEqual(args.slice(0, 2), ["api", "graphql"]);
+    return { code: 0, stdout: JSON.stringify(payload), stderr: "" };
+  };
+  const gate = (payload, auto = false) => runPickupRefinementGate({ issueNumber: 3127, repo: "o/r", env: {}, runChild: runChildFor(payload), auto });
+
+  const later = { body: "Decision: also cover the PR surface.", createdAt: "2026-11-06T11:00:00Z" };
+  await assert.rejects(() => gate(node([results, later])), (err) => err.code === "MISSING_REFINEMENT_ARTIFACT" && /spec_changed_since_grill/.test(err.message));
+  const diverted = await gate(node([results], "2026-11-06T11:00:00Z"), true);
+  assert.equal(diverted.action, "divert");
+  assert.match(diverted.reason, /GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL/);
+  const earlier = { body: "Decision: also cover the PR surface.", createdAt: "2026-11-06T09:00:00Z" };
+  assert.deepEqual(await gate(node([earlier, results], "2026-11-06T09:30:00Z")), { action: "enqueue" });
+});
+
 test("#1866 containment: a linked-doc path with '..' segments is rejected, never fs-probed", () => {
   const body = "## Plan\n\nSee tmp/refinement/../../docs/some-existing.md for details.\n" + NGOALS;
   const artifact = detectIssueRefinementArtifact({

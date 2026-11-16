@@ -109,6 +109,39 @@ test("--body-file with an already-refined body AND a recorded no-gap results com
   }
 });
 
+test("AC2 (3127): --repo/--number pass the GraphQL body lastEditedAt through to spec_changed_since_grill", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-edited-"));
+  try {
+    const bodyPath = path.join(tempDir, "body.md");
+    const commentsPath = path.join(tempDir, "comments.json");
+    await writeFile(bodyPath, REFINED_BODY, "utf8");
+    await writeFile(commentsPath, JSON.stringify([{ body: NO_GAPS_COMMENT, createdAt: "2026-11-06T10:00:00Z" }]), "utf8");
+    const detectWithEdit = async (lastEditedAt) => {
+      const calls = [];
+      const runChild = async (cmd, args) => {
+        calls.push(args);
+        return { code: 0, stdout: JSON.stringify({ body: REFINED_BODY, lastEditedAt }), stderr: "" };
+      };
+      const stdout = makeCapture();
+      await runCli(["--body-file", bodyPath, "--surface", "pr", "--comments-file", commentsPath, "--repo", "o/r", "--number", "7"], { stdout, stderr: makeCapture(), runChild });
+      assert.ok(calls[0].includes("number=7"));
+      return JSON.parse(stdout.text());
+    };
+    const edited = await detectWithEdit("2026-11-06T11:00:00Z");
+    assert.equal(edited.state, "detect_gaps");
+    assert.equal(edited.reason, "spec_changed_since_grill");
+    assert.equal(edited.snapshot.specChangedSinceGrill, true);
+    assert.equal((await detectWithEdit(null)).state, "grill_clean");
+    assert.equal((await detectWithEdit("2026-11-06T09:00:00Z")).state, "grill_clean");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--repo without --number fails closed", async () => {
+  await assert.rejects(() => runDetect(["--body-file", "x.md", "--repo", "o/r"]), /--repo and --number must be given together/);
+});
+
 test("--comments-file accepts a { comments: [...] } wrapper object", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-comments-wrapper-"));
   try {

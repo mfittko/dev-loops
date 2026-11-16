@@ -20,6 +20,7 @@
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { SPEC_CHANGED_SINCE_GRILL_REASON, detectSpecChangedSinceGrill, fetchSpecChangeFacts } from "./refinement-grill-state.mjs";
 
 /**
  * This module owns:
@@ -1497,16 +1498,28 @@ export function checklistLineScopes(body) {
  *   - pickup target, artifact missing, headless/auto caller → divert (caller
  *     parks the item in the non-pickup column instead of failing the run).
  *
- * @param {{ artifact: ReturnType<typeof detectIssueRefinementArtifact>, targetIsPickup: boolean, auto?: boolean }} input
+ * A complete artifact whose spec changed after the latest grill
+ * (`specChangedSinceGrill`, GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL) is treated
+ * like a missing artifact.
+ *
+ * @param {{ artifact: ReturnType<typeof detectIssueRefinementArtifact>, targetIsPickup: boolean, auto?: boolean, specChangedSinceGrill?: boolean }} input
  * @returns {{ action: "enqueue" } | { action: "block"|"divert", reason: string, missing: string[] }}
  */
-export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = false }) {
+export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = false, specChangedSinceGrill = false }) {
+  if (!targetIsPickup) {
+    return { action: "enqueue" };
+  }
   // `artifact.finding === null` is the explicit "passes the full refinement
   // check" signal (a valid AC→DoD mapping matrix + an explicit Non-goals
   // section, or a resolvable linked refinement doc + Non-goals), clearer than
   // reading `hasACs`, whose name understates what it covers.
-  if (!targetIsPickup || artifact.finding === null) {
-    return { action: "enqueue" };
+  if (artifact.finding === null) {
+    if (!specChangedSinceGrill) return { action: "enqueue" };
+    const reason =
+      `Issue spec changed after the latest grill (${SPEC_CHANGED_SINCE_GRILL_REASON}): a comment or a body edit is newer than the latest "🔬 Grill / refinement results" comment. ` +
+      "Re-grill the issue so the new content is folded into the body and its AC / DoD matrix " +
+      "(rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL; e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself)) — refusing to enqueue a spec the grill has not seen.";
+    return { action: auto ? "divert" : "block", reason, missing: ["grill pass after the latest spec change"] };
   }
   // artifact present but the contract-mandated Non-goals section is
   // absent/empty — a distinct failure with its own guidance.
@@ -1546,7 +1559,7 @@ export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = f
 
 /**
  * Apply the pickup-column refinement gate to one issue: fetch the issue body,
- * run `decideEnqueueRefinementGate`, and throw the canonical `GH_API_ERROR` /
+ * its comments and its body `lastEditedAt` (GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL), run `decideEnqueueRefinementGate`, and throw the canonical `GH_API_ERROR` /
  * `MISSING_REFINEMENT_ARTIFACT` on failure. This is the single
  * gate-application orchestration shared by `queue add` (enqueue-time) and
  * `queue move` (move-time) — never a second copy. It returns the gate decision
@@ -1557,22 +1570,7 @@ export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = f
  * @returns {Promise<{ action: "enqueue" } | { action: "divert"|"block", reason: string, missing: string[] }>}
  */
 export async function runPickupRefinementGate({ issueNumber, repo, env, runChild, auto = false, repoRoot = null }) {
-  const bodyResult = await runChild(
-    "gh",
-    ["issue", "view", String(issueNumber), "--repo", repo, "--json", "body"],
-    env,
-  );
-  if (bodyResult.code !== 0) {
-    const detail = bodyResult.stderr?.trim() || `exit code ${bodyResult.code}`;
-    throw Object.assign(new Error(`gh issue view failed: ${detail}`), { code: "GH_API_ERROR" });
-  }
-  let bodyPayload;
-  try {
-    bodyPayload = JSON.parse(bodyResult.stdout);
-  } catch {
-    throw new Error("Invalid JSON input");
-  }
-  const body = typeof bodyPayload?.body === "string" ? bodyPayload.body : "";
+  const { body, lastEditedAt, comments } = await fetchSpecChangeFacts({ repo, number: issueNumber, env, runChild });
   // a linked refinement doc satisfies the gate only when it actually
   // resolves. Paths follow the `tmp/refinement/*.md` convention and are
   // anchored to the caller's repo root (`repoRoot` option, falling back to
@@ -1584,7 +1582,8 @@ export async function runPickupRefinementGate({ issueNumber, repo, env, runChild
     issueNumber,
     resolveLinkedDoc: (p) => existsSync(path.isAbsolute(p) ? p : path.resolve(docAnchor, p)),
   });
-  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto });
+  const specChangedSinceGrill = detectSpecChangedSinceGrill({ comments, bodyLastEditedAt: lastEditedAt });
+  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto, specChangedSinceGrill });
   if (decision.action === "block") {
     throw Object.assign(new Error(decision.reason), {
       code: "MISSING_REFINEMENT_ARTIFACT",
