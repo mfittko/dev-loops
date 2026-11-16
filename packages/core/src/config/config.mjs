@@ -1257,7 +1257,7 @@ function normalizeAngleEntries(raw) {
 
 /**
  * Find a named angle's configured entry, searching this config's own gates in
- * a fixed priority order (draft, preApproval, spike) with no gate preferred, and returning the first match. An ENABLED entry in any gate wins: returning a bare `enabled:false`
+ * a fixed priority order (draft, preApproval, spike), with `preferGate` searched first when given, and returning the first match. An ENABLED entry in any gate wins: returning a bare `enabled:false`
  * placeholder first would shadow another gate's real override of the same
  * angle name. When no gate enables the name, the first DISABLED entry is the
  * fallback, so an angle the SECURITY_SENSITIVE_SEAM override adds past
