@@ -7358,6 +7358,20 @@ async function stageValidationArtifact(repoRoot, { repo = "owner/repo", pr = 17,
     });
   });
 
+  test("assertGateValidationArtifact renders its remedy from the injected env, not process.env", async () => {
+    await withTempDir(async (tempDir) => {
+      await writeFile(path.join(tempDir, ".devloops"), "version: 1\n", "utf8");
+      await assert.rejects(
+        assertGateValidationArtifact({ ...args(tempDir), env: { CLAUDECODE: "1" } }),
+        /dev-loops-run --repo-root <checkout> cli\/index\.mjs gate resolve-validation/,
+      );
+      await assert.rejects(
+        assertGateValidationArtifact({ ...args(tempDir), env: {} }),
+        (error) => /dev-loops gate resolve-validation/.test(error.message) && !/dev-loops-run/.test(error.message),
+      );
+    });
+  });
+
   test("assertGateValidationArtifact refuses when the artifact is unreadable", async () => {
     await withTempDir(async (tempDir) => {
       await writeFile(path.join(tempDir, ".devloops"), "version: 1\n", "utf8");

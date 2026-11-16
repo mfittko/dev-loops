@@ -2,20 +2,21 @@
 
 ## Repo contract
 - `dev-loop` is the single public workflow entrypoint.
-- For routed work, run `dev-loops loop startup ...` first, then load only the returned `requiredReads`.
+- For routed work, run `dev-loops-run --repo-root <checkout> cli/index.mjs loop startup ...` first, then load only the returned `requiredReads`.
 - Canonical workflow docs live under `skills/docs/`.
 
 ## Working rules
 - Main agent: read-only for all files tracked by the repository. All mutations flow through `dev-loop` async subagent. `skills/docs/main-agent-contract.md` is a mandatory baseline read alongside AGENTS.md (intentional exception to requiredReads-only loading for routed work; it defines the absolute delegation boundary that applies in all sessions).
 - Use feature branches, worktrees, and PRs; no direct commits to `main` except deliberate release/reconcile commits and pushes under ADR 0044 and [worktree guidance](skills/docs/worktree-guidance.md). Stable tag/publish approval remains operator-owned under the [release runbook](skills/docs/release-runbook.md).
 - Use `tmp/worktrees/<issue-or-branch-slug>/` for mutating local work; keep the main checkout for inspection.
+- Under Claude Code, run CLI calls and repo scripts as `dev-loops-run --repo-root <checkout> cli/index.mjs <ns> ...` or `dev-loops-run --repo-root <checkout> scripts/<path>`: the `Bash(dev-loops-run:*)` allow rule matches it. Do not run the bare `dev-loops <ns>` form or prefix `cd <checkout> &&` (`WORKTREE-SCRIPT-LAUNCHER-CWD`).
 - Always run `git fetch origin` before creating or reusing a worktree — never create from a stale `origin/main`.
 - Canonical guidance lives in `skills/docs/worktree-guidance.md`.
 - Operator principles (ADR 0270): `PURPOSE-STEER-NOT-TRAP` and `PURPOSE-DETERMINISTIC-FIT` in the [contract style guide](skills/docs/contract-style-guide.md), `MAIN-AGENT-OPERATOR-QUESTION-SCOPE` in the [main-agent contract](skills/docs/main-agent-contract.md).
 - Prefer the GitHub-first routed path for branch/PR/CI/review work; use local implementation only when explicitly requested.
-- Use the narrowest deterministic targeted check for local changes. Only `dev-loops gate resolve-validation` and `dev-loops loop validation-record` (VALIDATE-LOCAL-RECORD-PRODUCER, ADR 0170) may launch local full-repository validation. Contributors and CI use the exactly pinned Bun 1.4.1 toolchain; published packages continue to run on Node `>=24`, and npm remains the registry/pack/publish client. See [Validation Policy](skills/docs/validation-policy.md).
+- Use the narrowest deterministic targeted check for local changes. Only `dev-loops-run --repo-root <checkout> cli/index.mjs gate resolve-validation` and `dev-loops-run --repo-root <checkout> cli/index.mjs loop validation-record` (VALIDATE-LOCAL-RECORD-PRODUCER, ADR 0170) may launch local full-repository validation. Contributors and CI use the exactly pinned Bun 1.4.1 toolchain; published packages continue to run on Node `>=24`, and npm remains the registry/pack/publish client. See [Validation Policy](skills/docs/validation-policy.md).
 - When creating GitHub issues via `gh issue create`, always include `--assignee @me` so the new artifact is self-assigned.
-- When creating PRs in this repo, use the canonical `dev-loops pr create ...` path (always draft, self-assigned by default; `--assignee @me` is the default) — never raw `gh pr create`.
+- When creating PRs in this repo, use the canonical `dev-loops-run --repo-root <checkout> cli/index.mjs pr create ...` path (always draft, self-assigned by default; `--assignee @me` is the default) — never raw `gh pr create`.
 - Never start implementation (file mutation, branch creation, PR creation) without explicit instruction. "Queue," "add to list," "track," "note" are NOT implementation triggers. Only proceed when the user says "start," "go," "implement," "do it," "work on," or equivalent imperative. Confirm if unsure. Exception: `RELEASE-POST-RELEASE-RECURRING-STEPS` in [release runbook](skills/docs/release-runbook.md) is a standing explicit instruction.
 - All work must originate from a tracked artifact: a GitHub issue (tracker-first), a persisted markdown plan file (local-planning), or — on the sanctioned lightweight path — the PR description itself as the spec-of-record (`--lightweight`, `canonicalSpecSource: pr_body`; no committed plan artifact). See [Artifact Authority Contract](skills/docs/artifact-authority-contract.md) for canonical mode definitions and settings. No work may originate from a PR (other than the sanctioned lightweight PR-body-as-spec path) or a direct local change unless explicitly requested.
 - Implement one phase at a time; if durable repo docs explicitly record a reprioritization exception, follow [Implementation State](docs/IMPLEMENTATION_STATE.md) and the active phase doc.

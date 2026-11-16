@@ -67,7 +67,7 @@ test("WORKTREE-SCRIPT-LAUNCHER-CWD names the --repo-root form and the bare pull 
   const doc = await readRepo("skills/docs/worktree-guidance.md");
   const start = doc.indexOf("<!-- rule: WORKTREE-SCRIPT-LAUNCHER-CWD -->");
   const rule = collapse(doc.slice(start, doc.indexOf("\n## ", start)));
-  // The MUST headline itself names both sanctioned forms and the bare pull line exemption.
-  assert.ok(rule.includes("`cd <checkout> && dev-loops-run scripts/<path>`, or as `dev-loops-run --repo-root <checkout> scripts/<path>`. A dispatched pull line is exempt and runs bare."));
+  // The MUST headline names only the --repo-root form and the bare pull line exemption.
+  assert.ok(rule.includes("MUST run a repo script as `dev-loops-run --repo-root <checkout> scripts/<path>`; `--repo-root` runs the script with cwd `<checkout>`, so no `cd <checkout> &&` prefix is named. A dispatched pull line is exempt and runs bare."));
   assert.match(rule, /A dispatched pull line runs bare, exactly as dispatched, and is never prefixed with `cd`\./);
 });
