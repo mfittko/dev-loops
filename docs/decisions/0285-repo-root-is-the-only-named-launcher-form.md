@@ -20,3 +20,4 @@ ADR 0117 left two launcher forms valid: `dev-loops-run --repo-root <checkout> <s
 
 - Operators see one launcher form and the allow rule matches it.
 - Existing `cd` invocations keep working. New guidance and emitted commands do not name them.
+- The generated `.claude/` asset tree keeps the ADR 0118 `dev-loops-run cli/index.mjs <ns>` form, which the `Bash(dev-loops-run:*)` allow rule also matches, until a later slice of issue 3105 converts the generator.
