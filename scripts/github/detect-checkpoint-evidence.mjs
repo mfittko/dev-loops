@@ -776,7 +776,7 @@ async function readContextUnitBoundInAny(checkouts, contextPath) {
 async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
   const {
     requireProvenance = false, mandatoryAngles = [], anglePool = null, rejectForeignAngles = true,
-    config = null, gateKey = "draft_gate", hasFullLabel = false, contextUnitBound = [REVIEWER_UNIT_MAX_ANGLES],
+    config = null, gateKey = "draft_gate", hasFullLabel = false, contextUnitBound = DEFAULT_CONTEXT_UNIT,
   } = criteria;
   const satisfies = (prov) => {
     if (provenanceConsistencyError(prov) !== null) return false;
