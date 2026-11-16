@@ -1,4 +1,4 @@
-# 0286. A later cap-round fixer pass runs at a head the sealed clearing chain reaches
+# 0287. A later cap-round fixer pass runs at a head the sealed clearing chain reaches
 
 ## Status
 
