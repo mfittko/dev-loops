@@ -2752,7 +2752,7 @@ async function addGenerator(wt) {
   await writeFile(path.join(wt, GENERATOR), "");
 }
 
-test("regenerate: a repository with the generator gets the rule, named for the mirror trees only", async () => {
+test("regenerate: a repository with the generator gets the rule, named for the mirror trees only", () => withoutClaudeCode(async () => {
   await withFixture(async ({ wt, emit }) => {
     await addGenerator(wt);
     const { workOrder } = await emit({});
@@ -2760,7 +2760,7 @@ test("regenerate: a repository with the generator gets the rule, named for the m
     for (const part of ["`skills/`", "`agents/`", "`commands/`", `node ${GENERATOR}`, "same commit", "bun run assets:check", "never hand-edit"]) assert.ok(rule.includes(part), part);
     assert.deepEqual([...new Set(rule.match(/\.claude\/[\w.]+\/?/g))].sort(), [".claude/agents/", ".claude/commands/", ".claude/skills/"]);
   });
-});
+}));
 
 test("regenerate: a repository without the generator gets no rule and no rendered line", async () => {
   await withFixture(async ({ emit }) => {
