@@ -82,8 +82,10 @@ export async function staleBaseReason({ base, head, cwd, env = process.env, chec
   if (!base) {
     const gitEnv = { ...env };
     for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"]) delete gitEnv[key];
-    base = await runCommand("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { cwd, env: gitEnv })
-      .then(({ stdout }) => stdout.trim().replace(/^origin\//u, ""), () => "");
+    // No --short: it returns remotes/origin/<b> when a local branch named origin/<b> exists.
+    const prefix = "refs/remotes/origin/";
+    base = await runCommand("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], { cwd, env: gitEnv })
+      .then(({ stdout }) => (stdout.trim().startsWith(prefix) ? stdout.trim().slice(prefix.length) : ""), () => "");
     if (!base) return null;
   }
   const freshness = await check({ base, head, cwd, env, trusted: true }).catch(() => null);

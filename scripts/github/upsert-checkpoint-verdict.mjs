@@ -2856,6 +2856,16 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     } else convergedMarker = composeConvergedDraftGate(capacity);
     return [];
   };
+  // GATE-EXEC-BASE-REFRESH (issue 2885): a clean draft_gate or pre_approval_gate never records at a head that lacks origin/<base>.
+  // An injected runChild test double skips the fetch unless the test injects the checker too.
+  const refuseStaleBase = async () => {
+    const checkFreshness = checkBaseFreshness ?? (runChild === defaultRunChild ? defaultCheckBaseFreshness : null);
+    const prBase = coordinationContext?.prData?.baseRefName;
+    if (options.verdict === "clean" && !isReviewGate && checkFreshness && typeof prBase === "string" && prBase.trim()) {
+      const stale = await staleBaseReason({ base: prBase.trim(), head: canonicalHeadSha, cwd: repoRoot, env, check: checkFreshness });
+      if (stale) throw new Error(`${stale} A clean ${options.gate} verdict is not recorded at a stale base.`);
+    }
+  };
   if (!isReviewGate) {
     // Thread the light-dispatch signal so the context interpreter and the
     // maxCopilotRounds resolution below use the same composed lightweight cap
@@ -2970,6 +2980,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       && !coordination.draftGateAlreadySatisfied
       && coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE)
     ) {
+      // Refuse before the transition mutates the PR (draft conversion and restore).
+      await refuseStaleBase();
       return await postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild });
     }
     // Fail closed on a lagged draft-state read: we are re-entering FROM
@@ -3337,14 +3349,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (convergedInput && (convergedMarker === null || options.verdict !== "clean")) {
     throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs a clean composed verdict over a validated low/nit act list (got verdict ${JSON.stringify(options.verdict)}); post a full round instead.`);
   }
-  // GATE-EXEC-BASE-REFRESH (issue 2885): a clean draft_gate or pre_approval_gate never records at a head that lacks origin/<base>.
-  // An injected runChild test double skips the fetch unless the test injects the checker too.
-  const checkFreshness = checkBaseFreshness ?? (runChild === defaultRunChild ? defaultCheckBaseFreshness : null);
-  const prBase = coordinationContext?.prData?.baseRefName;
-  if (options.verdict === "clean" && !isReviewGate && checkFreshness && typeof prBase === "string" && prBase.trim()) {
-    const stale = await staleBaseReason({ base: prBase.trim(), head: canonicalHeadSha, cwd: repoRoot, env, check: checkFreshness });
-    if (stale) throw new Error(`${stale} A clean ${options.gate} verdict is not recorded at a stale base.`);
-  }
+  await refuseStaleBase();
   // A fully judged round takes its verdict from the judge's act list alone, so the severity floor never overrides it. A partly judged ledger keeps the floor.
   if (
     options.verdict === "clean"

@@ -30,14 +30,15 @@ after(async () => {
   if (repoRoot) await rm(repoRoot, { recursive: true, force: true });
 });
 
-function makeRunChild(posted) {
+function makeRunChild(posted, { isDraft = true, mutations = [] } = {}) {
   const prJson = JSON.stringify({
-    number: 17, state: "OPEN", isDraft: true, headRefOid: HEAD, baseRefName: "main", body: DEFAULT_TEST_PR_BODY,
+    number: 17, state: "OPEN", isDraft, headRefOid: HEAD, baseRefName: "main", body: DEFAULT_TEST_PR_BODY,
     closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
   }) + "\n";
   return async (cmd, args = [], _env, stdin = "") => {
     if (cmd === "git") return { code: 0, stdout: "", stderr: "" };
     const a = args.join(" ");
+    if (a.includes("convertPullRequestToDraft") || a.includes("pr ready")) mutations.push(a);
     if (a.includes("pulls/17/reviews") && a.includes("-X POST")) {
       posted.push(String(stdin ?? ""));
       return { code: 0, stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n', stderr: "" };
@@ -53,27 +54,31 @@ function makeRunChild(posted) {
   };
 }
 
-async function postClean(tempDir, checkBaseFreshness) {
+async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDraft = true } = {}) {
+  const clean = verdict === "clean";
   const ledgerPath = path.join(tempDir, "ledger.json");
   await writeFile(ledgerPath, JSON.stringify({
-    repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD, verdict: "clean", overallVerdict: "clean",
+    repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD, verdict, overallVerdict: verdict,
     loggedAt: "2026-11-16T00:00:00.000Z",
-    findings: [{ severity: "low", angle: "correctness", summary: "low finding", judgeDisposition: "reject", judgeRationale: "test" }],
+    findings: [clean
+      ? { severity: "low", angle: "correctness", summary: "low finding", judgeDisposition: "reject", judgeRationale: "test" }
+      : { severity: "medium", angle: "correctness", summary: "medium finding", judgeDisposition: "act", judgeRationale: "test" }],
   }), "utf8");
   const options = parseUpsertCheckpointVerdictCliArgs([
-    "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD, "--verdict", "clean",
+    "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD, "--verdict", verdict,
     "--findings-summary", "base freshness test", "--findings-ledger", ledgerPath,
     "--next-action", "mark ready for review", "--inline-reason", "base freshness test",
-    "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 1, question: 0, nit: 0 }),
+    "--findings-severity-counts", JSON.stringify(clean ? { high: 0, medium: 0, low: 1, question: 0, nit: 0 } : { high: 0, medium: 1, low: 0, question: 0, nit: 0 }),
   ]);
   const posted = [];
   const calls = [];
+  const mutations = [];
   const check = async (input) => { calls.push(input); return checkBaseFreshness(input); };
   try {
-    const result = await upsertCheckpointVerdict(options, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild(posted), checkBaseFreshness: check });
-    return { result, posted, calls };
+    const result = await upsertCheckpointVerdict(options, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild(posted, { isDraft, mutations }), checkBaseFreshness: check });
+    return { result, posted, calls, mutations };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error), posted, calls };
+    return { error: error instanceof Error ? error.message : String(error), posted, calls, mutations };
   }
 }
 
@@ -98,4 +103,23 @@ test("a current base or a fetch failure posts the clean verdict unchanged", asyn
       assert.match(out.posted.join("\n"), /\*\*Verdict:\*\* clean/);
     }, { prefix: "dev-loops-base-freshness-current-" });
   }
+});
+
+test("a findings_present draft_gate post skips the stale-base check and posts", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await postClean(tempDir, async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: REMEDY }), { verdict: "findings_present" });
+    assert.equal(out.error, undefined);
+    assert.equal(out.calls.length, 0);
+    assert.match(out.posted.join("\n"), /\*\*Verdict:\*\* findings_present/);
+  }, { prefix: "dev-loops-base-freshness-findings-" });
+});
+
+test("a clean draft_gate post on a ready PR refuses at a stale base before any draft conversion", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await postClean(tempDir, async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: REMEDY }), { isDraft: false });
+    assert.match(out.error, /^base_stale_integrate_first:/);
+    assert.equal(out.calls.length, 1);
+    assert.deepEqual(out.mutations, []);
+    assert.equal(out.posted.length, 0);
+  }, { prefix: "dev-loops-base-freshness-ready-" });
 });
