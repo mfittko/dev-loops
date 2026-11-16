@@ -976,7 +976,7 @@ test("verdict_not_posted: an act-list order refuses without a posted verdict for
   });
 }));
 
-const threadsOnly = {actListFile: undefined, gate: undefined, phase: "full" };
+const threadsOnly = { actListFile: undefined, gate: undefined, phase: "full" };
 const THREE = { ...THREADS, threads: ["T1", "T2", "T3"].map((threadId, i) => ({ ...THREADS.threads[0], threadId, commentId: i + 1 })) };
 
 test("F1: a judge-act finding below the inline floor still reaches the work order through the act list", async () => {
