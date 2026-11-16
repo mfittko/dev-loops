@@ -110,20 +110,25 @@ function copilotConvergenceReviewLogin(entry) {
 /**
  * Verify a fresh, agent-unforgeable, head-pinned human approval by `approvedBy`.
  *
- * Two accepted records, in preference order:
+ * Three accepted records, in preference order:
  *  1. a genuine `APPROVED` review by `approvedBy` whose `commit_id` equals the
  *     current head SHA — GitHub forbids approving your own PR, so an `APPROVED`
  *     review can only have come from a real human distinct from the author;
  *  2. else a head-pinned operator comment marker `approve merge <headSha>`
  *     authored by `approvedBy` — the solo-operator path, since an author cannot
- *     leave an `APPROVED` review on their own agent-authored PR.
+ *     leave an `APPROVED` review on their own agent-authored PR;
+ *  3. else a marker `approve merge <sha> patch-id <patchId>` authored by
+ *     `approvedBy` whose `<patchId>` equals `currentPatchId` (ADR 0279), so a
+ *     base-only head change keeps the approval.
  *
  * FAILS CLOSED (returns `{ satisfied: false }`) when the approval is stale (on
- * an earlier commit), agent/bot-authored (a Copilot-login review/comment never
- * satisfies), from a login other than `approvedBy`, or absent. Because both
- * records are pinned to the current head SHA, this re-gates on every head bump.
+ * an earlier commit with a different patch-id), agent/bot-authored (a
+ * Copilot-login review/comment never satisfies), from a login other than
+ * `approvedBy`, or absent. A review or head-pinned marker re-gates on every head
+ * bump; a patch-id marker survives a head change that keeps the patch-id.
  *
- * @returns {{ satisfied: boolean, via: "approved_review"|"comment_marker"|null, reason: string|null }}
+ * @param {{ currentPatchId?: string|null }} [input] `currentPatchId` is null when no patch-id was computed, so only a head match counts.
+ * @returns {{ satisfied: boolean, via: "approved_review"|"comment_marker"|null, matchKind: "head"|"patch_id"|null, reason: string|null }}
  */
 export function verifyFreshHumanApproval({ approvedBy, currentHeadSha, currentPatchId = null, reviews = [], comments = [] } = {}) {
   if (!isValidGithubLogin(approvedBy)) {
@@ -408,7 +413,7 @@ export function resolveCiGreenFromRollup(rollup) {
  * specific failing precondition(s). The CLI resolves the live facts and passes
  * them in; this stays pure so each branch is unit-testable.
  *
- * @returns {{ ok: boolean, failures: Array<{ precondition: string, reason: string }>, mergeClass: string, approvalVia: string|null }}
+ * @returns {{ ok: boolean, failures: Array<{ precondition: string, reason: string }>, mergeClass: string, approvalVia: string|null, approvalMatch: "head"|"patch_id"|null }}
  */
 export function evaluateMergePreconditions({
   humanApprovedBy,

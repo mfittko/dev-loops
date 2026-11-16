@@ -59,7 +59,7 @@ Required:
   --pr <number>         Pull request number
 Optional:
   --base-ref-name <name>  PR base branch; lets a sealed cap-round-fixed proof stand in for the clean draft_gate comment
-  --patch-id <hex>        git patch-id --verbatim of origin/<base>...<head>; set only by merge-pr and advisory (merge-pr re-checks); lets an "approve merge <sha> patch-id <hex>" comment satisfy the size gate
+  --patch-id <hex>        40-hex patch-id from the approveMergeLine of merge-pr --check (the only supported source: pinned git diff -U3 --binary --no-renames origin/<base>...<head> | git patch-id --verbatim); set only by merge-pr and advisory (merge-pr re-checks); lets an "approve merge <sha> patch-id <hex>" comment satisfy the size gate
   --head-declared-keys <json>  Dotted config key paths the PR head's own schema declares
                           ({"declaredKeys":[...]}); a head-only unknown key listed there is tolerated
   --head-declared-keys-sha <sha>  Head SHA the declared keys were reported for; the keys apply only when it
@@ -245,6 +245,7 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
     }
     if (token.name === "patch-id") {
       options.patchId = requireTokenValue(token, parseError).trim();
+      if (!/^[0-9a-f]{40}$/i.test(options.patchId)) throw parseError("--patch-id must be a 40-hex git patch-id");
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;

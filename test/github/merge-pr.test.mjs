@@ -1446,6 +1446,51 @@ test("defaultComputePatchId counts whitespace and binary changes and survives a 
   }
 });
 
+test("defaultComputePatchId binds position and bytes, ignores local diff config and fails closed", () => {
+  const dir = mkdtempSync(join(tmpdir(), "patch-id-"));
+  try {
+    const git = (...args) => runGitFixture(dir, ["-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@t", ...args]);
+    const commitFile = (name, content, msg) => { writeFileSync(join(dir, name), content); git("add", name); git("commit", "-q", "-m", msg); };
+    git("init", "-q", "-b", "main");
+    commitFile("f.js", "function a() {\n  check();\n}\nfunction b() {\n  check();\n}\n", "base");
+    git("update-ref", "refs/remotes/origin/main", "HEAD");
+    const idAt = (branch, name, content) => {
+      git("checkout", "-q", "-B", branch, "refs/remotes/origin/main");
+      commitFile(name, content, branch);
+      return defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir });
+    };
+    const inA = idAt("in-a", "f.js", "function a() {\n  check();\n  return true;\n}\nfunction b() {\n  check();\n}\n");
+    const inB = idAt("in-b", "f.js", "function a() {\n  check();\n}\nfunction b() {\n  check();\n  return true;\n}\n");
+    assert.ok(inA && inB);
+    assert.notEqual(inA, inB, "relocating an added line changes the id");
+    const latinE9 = idAt("l1", "l.txt", Buffer.from([0x63, 0x61, 0xe9, 0x0a]));
+    const latinE8 = idAt("l2", "l.txt", Buffer.from([0x63, 0x61, 0xe8, 0x0a]));
+    assert.notEqual(latinE9, latinE8, "two non-UTF-8 bytes give distinct ids");
+    git("checkout", "-q", "in-a");
+    const plain = defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir });
+    git("config", "diff.noprefix", "true");
+    assert.equal(defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir }), plain, "diff.noprefix leaves the id unchanged");
+    assert.equal(defaultComputePatchId({ base: "origin/no-such-ref", head: "HEAD", repoRoot: dir }), null, "a git error fails closed");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildDetectEvidenceArgv adds --patch-id only for a non-empty patchId, and mergePr forwards the computed id", async () => {
+  const id = "c".repeat(40);
+  const argv = buildDetectEvidenceArgv({ repo: "o/r", pr: 5, patchId: id });
+  assert.deepEqual(argv.slice(-2), ["--patch-id", id]);
+  assert.equal(buildDetectEvidenceArgv({ repo: "o/r", pr: 5, patchId: null }).includes("--patch-id"), false);
+  assert.equal(buildDetectEvidenceArgv({ repo: "o/r", pr: 5, patchId: "" }).includes("--patch-id"), false);
+  const { runtime } = makeRuntime({ evidence: ESCALATED_EVIDENCE, comments: [] });
+  const seen = [];
+  const detect = runtime.detectEvidence;
+  runtime.detectEvidence = async (opts) => { seen.push(opts.patchId); return detect(opts); };
+  runtime.computePatchId = () => id;
+  await mergePr(baseOptions({ standingAuthorization: false }), runtime).catch(() => {});
+  assert.deepEqual(seen, [id]);
+});
+
 test("defaultFetchPrHead fetches the base with an explicit refspec so a restricted remote.origin.fetch cannot leave a stale ref", () => {
   const calls = [];
   defaultFetchPrHead({ pr: 7, baseRefName: "main", repoRoot: "/repo" }, (cmd, args) => { calls.push([cmd, ...args]); });

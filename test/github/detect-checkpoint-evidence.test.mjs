@@ -1545,6 +1545,16 @@ test("buildPreMergeGateCheck: --patch-id lets a patch-id approve-merge comment c
   assert.equal(parseDetectCheckpointEvidenceCliArgs(["--repo", "owner/repo", "--pr", "17", "--patch-id", patchId]).patchId, patchId);
 });
 
+test("parse: --patch-id accepts 40 hex in either case and rejects anything else", () => {
+  const base = ["--repo", "owner/repo", "--pr", "17", "--patch-id"];
+  for (const ok of ["0123456789abcdef0123456789abcdef01234567", "0123456789ABCDEF0123456789ABCDEF01234567"]) {
+    assert.equal(parseDetectCheckpointEvidenceCliArgs([...base, ok]).patchId, ok);
+  }
+  for (const bad of ["c0ffee", "", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "zz23456789abcdef0123456789abcdef01234567"]) {
+    assert.throws(() => parseDetectCheckpointEvidenceCliArgs([...base, bad]));
+  }
+});
+
 test("buildPreMergeGateCheck: a bot-authored \"approve merge <headSha>\" comment never satisfies the gate (AC5 fail-closed)", () => {
   const evidence = cleanEvidence();
   evidence.preApprovalGateMarker.sizeOutcome = "escalate";

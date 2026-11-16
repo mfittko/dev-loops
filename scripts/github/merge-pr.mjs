@@ -156,8 +156,11 @@ Merge classes:
              satisfy it. Fresh approval = a head-pinned APPROVED review by
              <login>, else a head-pinned operator comment "approve merge <headSha>",
              or, when the head contains origin/<base>, "approve merge <any sha>
-             patch-id <id>" where <id> is the git patch-id --verbatim of
-             origin/<base>...<head> (a base-only head change keeps it valid).
+             patch-id <id>" where <id> is the patch-id printed in the
+             approveMergeLine of merge-pr --check (the only supported source:
+             git diff -U3 --binary --no-renames origin/<base>...<head> with pinned
+             options, piped to git patch-id --verbatim; a base-only head change
+             keeps it valid).
 
 Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approvalVia, approvalMatch, method, repo, pr, headSha, copilotConvergenceState, copilotDisposition, copilotCarriedConvergence, copilotBodyDisposition, postMerge }
   copilotConvergenceState: current_head_clean | current_head_findings | no_current_head_review,
@@ -532,10 +535,11 @@ export function defaultIsAncestor({ base, head, repoRoot }) {
 }
 
 // The verbatim patch-id of origin/<base>...<head> (whitespace and binary changes count), or null on any error (fail closed to head-only approval).
+// The diff pins context (-U3 binds line position), prefixes, renames, algorithm and quoting so the id is a function of the commits only, and stays a Buffer so no byte is lost.
 export function defaultComputePatchId({ base, head, repoRoot }) {
   try {
     const env = scrubGitEnv(process.env);
-    const diff = execFileSync("git", ["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--binary", `${base}...${head}`], { cwd: repoRoot, env, encoding: "utf8", maxBuffer: 512 * 1024 * 1024 });
+    const diff = execFileSync("git", ["-c", "core.quotePath=true", "diff", "-U3", "--no-color", "--no-ext-diff", "--no-textconv", "--binary", "--no-renames", "--diff-algorithm=myers", "--src-prefix=a/", "--dst-prefix=b/", `${base}...${head}`], { cwd: repoRoot, env, maxBuffer: 512 * 1024 * 1024 });
     const out = execFileSync("git", ["patch-id", "--verbatim"], { cwd: repoRoot, env, input: diff, encoding: "utf8" });
     return out.trim().split(/\s+/)[0] || null;
   } catch {
