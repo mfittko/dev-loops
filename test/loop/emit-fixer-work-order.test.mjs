@@ -991,7 +991,7 @@ const THREE = { ...THREADS, threads: ["T1", "T2", "T3"].map((threadId, i) => ({ 
 
 test("F1: a judge-act finding below the inline floor still reaches the work order through the act list", async () => {
   await withFixture(async ({ files, emit }) => {
-    const lowAct = [{ severity: "nit", angle: "naming", summary: "rename the local", judgeDisposition: "act" }].map(withFp);
+    const lowAct = [{ severity: "nit", angle: "naming", summary: "rename the local", file: "src/a.mjs", line: 3, judgeDisposition: "act" }].map(withFp);
     await writeFile(files.actList, JSON.stringify(lowAct));
     const { workOrder } = await emit({ deltaResult: undefined, phase: "commit_only" });
     assert.equal(workOrder.source, "act-list");
@@ -2895,8 +2895,8 @@ test("handbackCheck is machine-local: two commit_only emissions with different e
 test("the skeleton merges a shared fingerprint and dedupes repeated site texts", async () => {
   await withFixture(async ({ files, emit }) => {
     await writeFile(files.actList, JSON.stringify([
-      { severity: "low", angle: "correctness", summary: "one", judgeDisposition: "act", siteQuery: "q1", statedSurfaces: ["a.md", "a.md", "--x"], acceptedForms: ["--x"] },
-      { severity: "low", angle: "holistic", summary: "one", judgeDisposition: "act", siteQuery: "q2", statedSurfaces: ["b.md", "a.md"] },
+      { severity: "low", angle: "correctness", summary: "one", file: "a.mjs", line: 1, judgeDisposition: "act", siteQuery: "q1", statedSurfaces: ["a.md", "a.md", "--x"], acceptedForms: ["--x"] },
+      { severity: "low", angle: "holistic", summary: "one", file: "a.mjs", line: 1, judgeDisposition: "act", siteQuery: "q2", statedSurfaces: ["b.md", "a.md"] },
     ].map(withFp)));
     const { workOrder } = await emit({ phase: "commit_only", deltaResult: undefined });
     assert.equal(workOrder.siteCoverage.length, 1);
