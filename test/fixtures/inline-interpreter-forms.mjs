@@ -466,6 +466,32 @@ export const INLINE_INTERPRETER_FORMS = [
     .flatMap(([h, value, code]) => ["<<< x", "<<<''"].map((m) => `${h} ${value} ${m} ${code} y`))
     .flatMap((row) => [row, `echo a; ${row}; echo b`]).map(ceiling),
   ...["<<< x", "<<<''"].flatMap((m) => [`bun -c lib -c ${m} -e y`, `bun --in-place lib -c ${m} -e y`]).map(ceiling),
+  // a head that bash expands before the lookup (ANSI-C quote, brace and pathname expansion) can name any binary: deny
+  deny("$'\\x6eode' -e x"),
+  deny("$'c\\x61t' > a.txt <<EOF\nx\nEOF"),
+  deny("{node,-e,x}"),
+  deny("s{e,}d -i x f"),
+  deny("nod? -e x"),
+  deny("nod[e] -e x"),
+  deny("/usr/local/bin/nod? -e x"),
+  deny("no* -e x"),
+  deny("env nod? -e x"),
+  deny("command $'\\x6eode' -e x"),
+  deny("exec {node,-e,x}"),
+  deny("xargs nod? -e x"),
+  deny("echo a; $'\\x6eode' -e x"),
+  // a parameter expansion or substitution in the head is a reported ceiling
+  ceiling("${X}ode -e x"),
+  ceiling("X=n; ${X}ode -e x"),
+  ceiling("$X -e x"),
+  ceiling("\"$(which node)\" -e x"),
+  ceiling("env ${X}ode -e x"),
+  // common safe heads stay allowed: a quoted or escaped glob character is literal, `[` is the test command
+  allow("[ -f x ] && echo y"),
+  allow("echo '*' \"?\" {a,b} $'x'"),
+  allow("ls *.md"),
+  allow("'nod?' x"),
+  allow("nod\\? x"),
 ];
 
 // OPS-NO-INLINE-INTERPRETER verdict table: [command, commandContainsInlineInterpreter]. perl and ruby are covered,

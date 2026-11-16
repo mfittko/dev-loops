@@ -1739,7 +1739,12 @@ function isTempPath(path) {
 /** The text of a parsed word: quotes and backslashes removed, every expansion read as `$`. Returns `{ value, start, quoted }`. */
 function wordOf(word) {
   const text = (p) => (p.type === "Lit" ? p.value.replace(/\\(.)/gs, "$1") : p.type === "SglQuoted" ? p.value : p.type === "DblQuoted" ? p.parts.map(text).join("") : p.type === "ParamExp" ? `$${p.param?.value ?? ""}` : "$");
-  return { value: word.parts.map(text).join(""), start: word.start, quoted: word.parts.some((p) => p.type === "SglQuoted" || p.type === "DblQuoted") };
+  const dynamic = (p) => (p.type === "DblQuoted" ? p.parts.some(dynamic) : p.type !== "Lit" && p.type !== "SglQuoted");
+  // bash expands the head word before it looks the command up: ANSI-C quoting and unquoted `{ * ? [` (brace and pathname expansion) can spell any binary name
+  // a brace needs a comma or `..` inside to expand, so a literal `{}` stays a name
+  const bare = word.parts.map((p) => (p.type === "Lit" ? p.value.replace(/\\./gs, "") : "\0")).join("");
+  const expandsToName = word.parts.some((p) => p.type === "SglQuoted" && p.dollar) || /[*?[]|\{[^}]*(?:,|\.\.)[^}]*\}/.test(bare);
+  return { value: word.parts.map(text).join(""), start: word.start, quoted: word.parts.some((p) => p.type === "SglQuoted" || p.type === "DblQuoted"), expandsToName, dynamic: word.parts.some(dynamic) };
 }
 
 const DURATION_WORD_RE = /^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?$/i;
@@ -1828,6 +1833,9 @@ function inspectShell(command, report = false, skipFirst = false) {
     const tails = [stripWordWrappers(words), stripExecPrefix(words)].filter((t) => t.length);
     if (skipping) { skipping = false; return; }
     for (const tail of tails) {
+      // a head that bash expands first (ANSI-C quote, brace/glob) can name any binary: deny. A parameter expansion or substitution in the head is a reported ceiling.
+      if (tail[0].expandsToName && tail[0].value !== "[") out.deny = true;
+      if (tail[0].dynamic) out.ceiling = true;
       const head = tail[0].value.split("/").pop().toLowerCase();
       const args = tail.slice(1);
       const form = INTERPRETER_HEAD_RE.test(head) ? interpreterForm(head, args, stdin) : null;
