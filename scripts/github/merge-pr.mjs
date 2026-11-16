@@ -77,8 +77,10 @@ Optional:
                                comment_marker; null with mergeClass null when the
                                evidence is for another head or lacks the size
                                outcome or the T1 fact),approveMergeLine (the exact
-                               "approve merge <headSha>" line for comment_marker),
-                               sizeClass, and EVERY failing precondition. Exit 0
+                               "approve merge <headSha>" line for comment_marker,
+                               with " patch-id <id>" appended when the head
+                               contains origin/<base>), approvalMatch (head |
+                               patch_id | null), sizeClass, and EVERY failing precondition. Exit 0
                                whenever the preconditions could be evaluated
                                (ok:false carries the failures; under
                                autonomy.humanMergeOnly it carries a
@@ -152,9 +154,12 @@ Merge classes:
   escalated  size escalate/block, T1-touching, or --stable-release — requires a
              fresh per-merge operator approval; a standing authorization does not
              satisfy it. Fresh approval = a head-pinned APPROVED review by
-             <login>, else a head-pinned operator comment "approve merge <headSha>".
+             <login>, else a head-pinned operator comment "approve merge <headSha>",
+             or, when the head contains origin/<base>, "approve merge <any sha>
+             patch-id <id>" where <id> is the git patch-id --stable of
+             origin/<base>...<head> (a base-only head change keeps it valid).
 
-Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approvalVia, method, repo, pr, headSha, copilotConvergenceState, copilotDisposition, copilotCarriedConvergence, copilotBodyDisposition, postMerge }
+Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approvalVia, approvalMatch, method, repo, pr, headSha, copilotConvergenceState, copilotDisposition, copilotCarriedConvergence, copilotBodyDisposition, postMerge }
   copilotConvergenceState: current_head_clean | current_head_findings | no_current_head_review,
   or null when the current head SHA is unknown
   copilotDisposition: the current-head review disposition, or for
@@ -247,14 +252,14 @@ export function parseMergePrCliArgs(argv) {
 // current-head pre_approval_gate verdicts, unresolved threads, the runner lock,
 // and fan-out provenance — reused wholesale (non-goal: do not re-derive the set).
 const DETECT_EVIDENCE_PATH = fileURLToPath(new URL("./detect-checkpoint-evidence.mjs", import.meta.url));
-export function buildDetectEvidenceArgv({ repo, pr, baseRefName, readOnly }) {
-  return [DETECT_EVIDENCE_PATH, "--repo", repo, "--pr", String(pr), ...(baseRefName ? ["--base-ref-name", baseRefName] : []), ...(readOnly ? ["--read-only"] : [])];
+export function buildDetectEvidenceArgv({ repo, pr, baseRefName, readOnly, patchId }) {
+  return [DETECT_EVIDENCE_PATH, "--repo", repo, "--pr", String(pr), ...(baseRefName ? ["--base-ref-name", baseRefName] : []), ...(readOnly ? ["--read-only"] : []), ...(patchId ? ["--patch-id", patchId] : [])];
 }
-function defaultDetectEvidence({ repo, pr, env, cwd, baseRefName, readOnly }) {
+function defaultDetectEvidence({ repo, pr, env, cwd, baseRefName, readOnly, patchId }) {
   return new Promise((resolve) => {
     execFile(
       process.execPath,
-      buildDetectEvidenceArgv({ repo, pr, baseRefName, readOnly }),
+      buildDetectEvidenceArgv({ repo, pr, baseRefName, readOnly, patchId }),
       { env, cwd, maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
         let parsed = null;
@@ -526,7 +531,19 @@ export function defaultIsAncestor({ base, head, repoRoot }) {
   }
 }
 
-const couldNotVerify = (baseRefName, error) => `could not verify that the head contains origin/${baseRefName || "<base>"}: ${error instanceof Error ? error.message : String(error)}`;
+// The stable patch-id of origin/<base>...<head>, or null on any error (fail closed to head-only approval).
+export function defaultComputePatchId({ base, head, repoRoot }) {
+  try {
+    const env = scrubGitEnv(process.env);
+    const diff = execFileSync("git", ["diff", "-U0", "--no-color", "--no-ext-diff", `${base}...${head}`], { cwd: repoRoot, env, encoding: "utf8", maxBuffer: 512 * 1024 * 1024 });
+    const out = execFileSync("git", ["patch-id", "--stable"], { cwd: repoRoot, env, input: diff, encoding: "utf8" });
+    return out.trim().split(/\s+/)[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+const couldNotVerify =(baseRefName, error) => `could not verify that the head contains origin/${baseRefName || "<base>"}: ${error instanceof Error ? error.message : String(error)}`;
 
 // The single base + PR-head fetch of the merge. Returns a base_not_integrated refusal reason, or null.
 // Any unreadable ref, origin mismatch or fetch error is a refusal (fail closed).
@@ -670,13 +687,13 @@ async function runPostMergeSteps(context, injected = {}) {
 // --check without --human-approved-by: not a valid GitHub login, so no review or comment can match it.
 const CHECK_NO_APPROVER = "(no approver)";
 
-function describeApproval({ verdict, headSha, sizeClass }) {
+function describeApproval({ verdict, headSha, patchId = null, sizeClass }) {
   const viaPath = { standing_authorization: "standing_authorization", approved_review: "human_review", comment_marker: "comment_marker" };
   const approvalPath = viaPath[verdict.approvalVia] ?? "comment_marker";
   return {
     mergeClass: verdict.mergeClass,
     approvalPath,
-    approveMergeLine: approvalPath === "comment_marker" ? `approve merge ${headSha}` : null,
+    approveMergeLine: approvalPath === "comment_marker" ? `approve merge ${headSha}${patchId ? ` patch-id ${patchId}` : ""}` : null,
     sizeClass: sizeClass ?? null,
   };
 }
@@ -712,6 +729,7 @@ export async function mergePr(options, runtime = {}) {
     waiveAdrTripwire = defaultWaiveAdrTripwire,
     readMergeDiff = defaultReadMergeDiff,
     isAncestor = defaultIsAncestor,
+    computePatchId = defaultComputePatchId,
     postMergeComment = defaultPostMergeComment,
   } = runtime;
 
@@ -746,7 +764,6 @@ export async function mergePr(options, runtime = {}) {
     { env, ghCommand, runChild },
   )).map((c) => ({ login: c?.user?.login ?? null, body: c?.body ?? "", type: c?.user?.type ?? null }));
 
-  const evidence = await detectEvidence({ repo: options.repo, pr: options.pr, env, cwd, baseRefName, readOnly: options.check === true });
   const configLoad = await loadConfig({ repoRoot: resolveRepoRoot(cwd) });
 
   // Fail closed on a config load/validation error: an unreadable `.devloops` is
@@ -773,6 +790,17 @@ export async function mergePr(options, runtime = {}) {
   // The only base + PR-head fetch of the merge; the ADR tripwire, the secret scan and the ancestry check reuse it.
   const fetchReason = resolveBaseFetchRefusal({ options, baseRefName, headSha: currentHeadSha, repoRoot, fetchPrHead, detectOriginSlug });
   // --check collects this failure with the rest; a real run raises it after the verdict so an escalated refusal names the approval.
+  // A patch-id approval marker counts only when the head contains the base tip (ADR 0279); any error leaves head-only matching.
+  let currentPatchId = null;
+  if (fetchReason === null) {
+    try {
+      if (isAncestor({ base: `origin/${baseRefName}`, head: currentHeadSha, repoRoot })) {
+        currentPatchId = computePatchId({ base: `origin/${baseRefName}`, head: currentHeadSha, repoRoot });
+      }
+    } catch { currentPatchId = null; }
+  }
+
+  const evidence = await detectEvidence({ repo: options.repo, pr: options.pr, env, cwd, baseRefName, readOnly: options.check === true, patchId: currentPatchId });
 
   // A standing authorization is NOT established by config alone
   // (autonomy.humanMergeOnly:false authorizes nothing). The orchestrator asserts
@@ -843,6 +871,7 @@ export async function mergePr(options, runtime = {}) {
     touchesT1: evidence.touchesT1,
     unresolvedChangesRequestedCount: countUnresolvedHumanChangesRequested(rawReviews),
     currentHeadSha,
+    currentPatchId,
     reviews: submittedReviews,
     comments,
     standingAuthorized,
@@ -872,7 +901,7 @@ export async function mergePr(options, runtime = {}) {
     : verdict.failures;
   // Unreadable evidence, or evidence for another head, has no size outcome for this head: sizeClass is unknown, and so is mergeClass unless a stable release forces escalated.
   const approval = {
-    ...describeApproval({ verdict, headSha: currentHeadSha, sizeClass: evidence.sizeOutcome }),
+    ...describeApproval({ verdict, headSha: currentHeadSha, patchId: currentPatchId, sizeClass: evidence.sizeOutcome }),
     // A missing size outcome or a missing T1 fact also leaves the class unknown, and the approval path with it: nothing is confirmed as standing_authorization or drain.
     ...(evidenceHeadMismatch || !evidence.sizeOutcome || typeof evidence.touchesT1 !== "boolean"
       ? { sizeClass: null, ...(options.stableRelease === true ? {} : { mergeClass: null, approvalPath: null, approveMergeLine: null }) }
@@ -916,6 +945,7 @@ export async function mergePr(options, runtime = {}) {
       ...(humanMergeOnly ? { humanMergeOnly: true } : {}),
       approverAssumed,
       approvalVia: verdict.approvalVia,
+      approvalMatch: verdict.approvalMatch,
       failures: checkFailures,
       copilotConvergenceState: verdict.copilotConvergenceState,
       copilotDisposition: verdict.copilotDisposition,
@@ -1054,6 +1084,7 @@ export async function mergePr(options, runtime = {}) {
     approvedBy: options.humanApprovedBy,
     mergeClass: verdict.mergeClass,
     approvalVia: verdict.approvalVia,
+    approvalMatch: verdict.approvalMatch,
     method: options.method,
     repo: options.repo,
     pr: options.pr,

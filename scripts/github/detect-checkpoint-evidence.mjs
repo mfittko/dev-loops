@@ -59,6 +59,7 @@ Required:
   --pr <number>         Pull request number
 Optional:
   --base-ref-name <name>  PR base branch; lets a sealed cap-round-fixed proof stand in for the clean draft_gate comment
+  --patch-id <hex>        git patch-id --stable of origin/<base>...<head>; lets an "approve merge <sha> patch-id <hex>" comment satisfy the size gate
   --head-declared-keys <json>  Dotted config key paths the PR head's own schema declares
                           ({"declaredKeys":[...]}); a head-only unknown key listed there is tolerated
   --head-declared-keys-sha <sha>  Head SHA the declared keys were reported for; the keys apply only when it
@@ -184,6 +185,7 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       "skip-fanout-ledger-check": { type: "boolean" },
       "read-only": { type: "boolean" },
       "base-ref-name": { type: "string" },
+      "patch-id": { type: "string" },
       "head-declared-keys": { type: "string" },
       "head-declared-keys-sha": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
@@ -239,6 +241,10 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
     }
     if (token.name === "base-ref-name") {
       options.baseRefName = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (token.name === "patch-id") {
+      options.patchId = requireTokenValue(token, parseError).trim();
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -377,7 +383,7 @@ function normalizeGateMarkerSummary(summary) {
  * human login the two streams surface against the one existing resolver
  * rather than reimplementing its bot-exclusion/head-pinning/marker rules.
  */
-function anyFreshHumanApproval({ currentHeadSha, reviews: allReviews, comments: allComments }) {
+function anyFreshHumanApproval({ currentHeadSha, currentPatchId = null, reviews: allReviews, comments: allComments }) {
   // Only association-trusted entries can approve (ADR 0248); a stranger's
   // "approve merge <head>" comment or APPROVED review never satisfies the gate.
   const reviews = allReviews.filter((e) => e?.trusted === true);
@@ -390,7 +396,7 @@ function anyFreshHumanApproval({ currentHeadSha, reviews: allReviews, comments: 
     if (typeof entry?.login === "string" && entry.login.length > 0) candidateLogins.add(entry.login);
   }
   for (const login of candidateLogins) {
-    if (verifyFreshHumanApproval({ approvedBy: login, currentHeadSha, reviews, comments }).satisfied) return true;
+    if (verifyFreshHumanApproval({ approvedBy: login, currentHeadSha, currentPatchId, reviews, comments }).satisfied) return true;
   }
   return false;
 }
@@ -436,7 +442,7 @@ export function capRoundThreadsResolved(capRoundNumber, threadNodes) {
   if (!Number.isInteger(capRoundNumber) || !Array.isArray(threadNodes)) return false;
   return threadNodes.every((node) => parseFindingMarker(node?.comments?.nodes?.[0]?.body)?.round !== capRoundNumber || node?.isResolved === true);
 }
-export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null, { skipFanoutLedgerCheck = false, capRoundFixed = false } = {}) {
+export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null, { skipFanoutLedgerCheck = false, capRoundFixed = false, patchId = null } = {}) {
   const failures = [];
   const warnings = [];
   // A sealed "cap round fixed" proof stands in for the clean draft_gate comment; every other condition below stays fail-closed.
@@ -481,7 +487,7 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
     if (resolveSizeBudgetHumanApprovalRequired({
       sizeOutcome: preApproval.sizeOutcome,
       touchesT1: preApproval.sizeTouchesT1,
-      humanApprovalSatisfied: anyFreshHumanApproval({ currentHeadSha: evidence.currentHeadSha, reviews, comments }),
+      humanApprovalSatisfied: anyFreshHumanApproval({ currentHeadSha: evidence.currentHeadSha, currentPatchId: patchId, reviews, comments }),
       unresolvedChangesRequestedCount,
     })) {
       failures.push(
@@ -1458,7 +1464,7 @@ async function main() {
     const draftClean = result.draftGate.visible && result.draftGate.verdict === "clean";
     const capRoundFixed = !draftClean && (githubCapFixed || (Boolean(options.baseRefName)
       && Boolean(await resolveCapRoundFixed({ repo: result.repo, pr: result.pr, headSha: result.currentHeadSha, baseRefName: options.baseRefName, anyHead: true }, { repoRoot: resolveRepoRoot(process.cwd()) }).catch(() => null))));
-    const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement, { skipFanoutLedgerCheck: options.skipFanoutLedgerCheck === true, capRoundFixed });
+    const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement, { skipFanoutLedgerCheck: options.skipFanoutLedgerCheck === true, capRoundFixed, patchId: options.patchId ?? null });
     const evidenceState = deriveEvidenceState(result, preMergeGateCheck, capRoundFixed);
     // reviews/comments are raw size-budget-gate input facts (comments carry
     // FULL PR comment bodies) consumed internally by buildPreMergeGateCheck

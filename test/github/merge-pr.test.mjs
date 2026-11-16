@@ -125,6 +125,7 @@ function makeRuntime({
       fetchPrHead: () => {},
       postMergeComment: async (c) => { calls.comments.push(c); },
       isAncestor: () => true,
+      computePatchId: () => null,
       detectOriginSlug: () => "mfittko/dev-loops",
       evaluateAdrTripwire: async () => ({ outcome: "pass" }),
       readMergeDiff: () => "",
@@ -1353,7 +1354,8 @@ test("base_not_integrated refuses a head that does not contain origin/<base> and
   const asked = [];
   runtime.isAncestor = (opts) => { asked.push({ base: opts.base, head: opts.head }); return false; };
   await assert.rejects(() => mergePr(baseOptions(), runtime), /base_not_integrated \(.*GATE-EXEC-BASE-REFRESH/);
-  assert.deepEqual(asked, [{ base: "origin/main", head: HEAD }]);
+  // One read before the evidence (patch-id gate), one for the refusal after the ADR step.
+  assert.deepEqual(asked, [{ base: "origin/main", head: HEAD }, { base: "origin/main", head: HEAD }]);
   assert.equal(mergeCalls(calls).length, 0);
 
   const ok = makeRuntime({ prView: { baseRefName: "main" } });
@@ -1434,14 +1436,14 @@ test("ancestry is rechecked after the ADR tripwire base refresh", async () => {
   assert.equal(mergeCalls(calls).length, 0);
 });
 
-test("the ancestry check runs once, after the ADR step and the single fetch", async () => {
+test("the refusal ancestry check runs after the ADR step and the single fetch; the patch-id gate reads it right after the fetch", async () => {
   const { runtime } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
   const order = [];
   runtime.fetchPrHead = () => { order.push("fetch"); };
   runtime.evaluateAdrTripwire = async () => { order.push("adr"); return { outcome: "pass" }; };
   runtime.isAncestor = () => { order.push("ancestry"); return true; };
   await mergePr(baseOptions(), runtime);
-  assert.deepEqual(order, ["fetch", "adr", "ancestry"]);
+  assert.deepEqual(order, ["fetch", "ancestry", "adr", "ancestry"]);
 });
 
 test("the evidence detector receives the PR base branch so the cap-fixed proof can be evaluated", async () => {
@@ -1484,6 +1486,57 @@ test("--check on the PR 2630 shape (escalated, no approval comment) reports ever
   for (const expected of ["title_markers", "size_budget_human_approval", "merge_approval", "base_not_integrated"]) assert.ok(names.includes(expected), `${expected} in ${names}`);
   assert.equal(calls.runChild.length, 0, "no merge, comment or write");
   assert.equal(calls.comments.length, 0);
+});
+
+const PATCH_ID = "c".repeat(40);
+test("a patch-id marker approves a changed head when the head contains the base (AC1)", async () => {
+  const { runtime } = makeRuntime({
+    evidence: ESCALATED_EVIDENCE,
+    comments: [{ user: { login: "mfittko" }, body: `approve merge ${OLD_HEAD} patch-id ${PATCH_ID}` }],
+  });
+  runtime.computePatchId = () => PATCH_ID;
+  const result = await mergePr(baseOptions({ standingAuthorization: false }), runtime);
+  assert.equal(result.ok, true);
+  assert.equal(result.approvalVia, "comment_marker");
+  assert.equal(result.approvalMatch, "patch_id");
+});
+
+test("a patch-id marker for a different patch-id is refused with the stale-approval reason (AC2)", async () => {
+  const { runtime } = makeRuntime({
+    evidence: ESCALATED_EVIDENCE,
+    comments: [{ user: { login: "mfittko" }, body: `approve merge ${OLD_HEAD} patch-id ${"d".repeat(40)}` }],
+  });
+  runtime.computePatchId = () => PATCH_ID;
+  const threw = await mergePr(baseOptions({ standingAuthorization: false }), runtime).catch((e) => e);
+  assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "merge_approval" && /no fresh mfittko approval on head/.test(f.reason)));
+});
+
+test("a patch-id marker is refused when the base is not contained (no patch-id computed)", async () => {
+  const { runtime } = makeRuntime({
+    evidence: ESCALATED_EVIDENCE,
+    comments: [{ user: { login: "mfittko" }, body: `approve merge ${OLD_HEAD} patch-id ${PATCH_ID}` }],
+  });
+  runtime.isAncestor = () => false;
+  runtime.computePatchId = () => { throw new Error("must not run"); };
+  const threw = await mergePr(baseOptions({ standingAuthorization: false }), runtime).catch((e) => e);
+  assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "merge_approval"));
+});
+
+test("--check reports approvalMatch and the patch-id approve-merge line (AC4)", async () => {
+  const matched = makeRuntime({
+    evidence: ESCALATED_EVIDENCE,
+    comments: [{ user: { login: "mfittko" }, body: `approve merge ${OLD_HEAD} patch-id ${PATCH_ID}` }],
+  });
+  matched.runtime.computePatchId = () => PATCH_ID;
+  const hit = await mergePr(baseOptions({ check: true, humanApprovedBy: "mfittko", standingAuthorization: false }), matched.runtime);
+  assert.equal(hit.approvalMatch, "patch_id");
+  assert.equal(hit.approveMergeLine, `approve merge ${HEAD} patch-id ${PATCH_ID}`);
+  const head = makeRuntime({ evidence: ESCALATED_EVIDENCE, comments: [{ user: { login: "mfittko" }, body: `approve merge ${HEAD}` }] });
+  const bare = await mergePr(baseOptions({ check: true, humanApprovedBy: "mfittko", standingAuthorization: false }), head.runtime);
+  assert.equal(bare.approvalMatch, "head");
+  const none = makeRuntime({ evidence: ESCALATED_EVIDENCE });
+  const missing = await mergePr(baseOptions({ check: true, humanApprovedBy: "mfittko", standingAuthorization: false }), none.runtime);
+  assert.equal(missing.approvalMatch, null);
 });
 
 test("--check without an approver passes a drain PR under a standing authorization and names the path", async () => {
