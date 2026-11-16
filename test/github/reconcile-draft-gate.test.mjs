@@ -666,6 +666,57 @@ test("reconcile-draft-gate marks the PR ready again if gate-comment upsert throw
   }
 });
 
+// Entries for a clean reconcile run on a ready PR; `baseView` is the baseRefName lookup entry.
+function cleanReconcileEntries(baseView) {
+  return [
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc123456789"}\n' },
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+    { assertArgs: ["pr", "checks", "17", "--repo", "owner/repo", "--json", "bucket,state,name,workflow"], stdout: '[{"bucket":"pass","state":"SUCCESS","name":"verify","workflow":"CI"}]\n' },
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefName"], ...baseView },
+    { assertArgs: ["api", "graphql", "-f", "-F"], assertArgContains: ["owner=owner", "name=repo", "number=17", "pullRequest(number: $number)"], stdout: '{"data":{"repository":{"pullRequest":{"id":"PR_kwDOScHU78000017","isDraft":false}}}}\n' },
+    { assertArgs: ["api", "graphql", "-f", "-F"], assertArgContains: ["pullRequestId=PR_kwDOScHU78000017", "convertPullRequestToDraft"], stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_kwDOScHU78000017","isDraft":true}}}}\n' },
+    {
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+      stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc123456789", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+    },
+    { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+    { assertArgs: ["api", "graphql", "--field", "owner=owner", "--field", "name=repo", "--field", "pr=17"], assertArgContains: ["reviewThreads(first: 100, after: $after)"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc123456789"}\n' },
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/index.ts\n" },
+    { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+    { assertArgs: ["api", "graphql"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+    {
+      assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+      assertStdinIncludes: ["### Gate review: `draft_gate`", "**Reviewed head SHA:** `abc123456789`"],
+      stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+    },
+    { assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"], stdout: "" },
+  ];
+}
+
+for (const [label, baseView, checkBaseFreshness] of [
+  ["a current base", { stdout: '{"baseRefName":"main"}\n' }, async () => ({ ok: true, status: "base_current" })],
+  ["a null exit-0 baseRefName payload", { stdout: "null\n" }, async () => { throw new Error("checker must not run without a base"); }],
+  ["a non-JSON exit-0 baseRefName payload", { stdout: "not json\n" }, async () => { throw new Error("checker must not run without a base"); }],
+]) {
+  test(`reconcile-draft-gate converts to draft and posts the clean verdict with ${label}`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-base-pass-"));
+    try {
+      await disableFanoutEvidence(tempDir);
+      const { runChild, calls } = makeGhMock(cleanReconcileEntries(baseView), { repeatLastOnOverflow: true });
+      const result = await reconcileDraftGate({ repo: "owner/repo", pr: 17 }, { env: runIdFreeEnv({}), repoRoot: tempDir, runChild, checkBaseFreshness });
+      assert.equal(result.action, "reconciled");
+      assert.equal(calls.some(({ args }) => args.some((arg) => arg.includes("convertPullRequestToDraft"))), true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
+
 test("reconcile-draft-gate converts to draft, posts clean evidence, and marks ready when CI is green", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-success-"));
 

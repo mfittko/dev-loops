@@ -59,7 +59,7 @@ function makeRunChild(posted, { isDraft = true, mutations = [], reviews = [] } =
   };
 }
 
-async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDraft = true, omitVerdict = false, rejectedMedium = false, partlyJudged = false, gate = "draft_gate" } = {}) {
+async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDraft = true, omitVerdict = false, rejectedMedium = false, partlyJudged = false, actInFindingsJson = false, gate = "draft_gate" } = {}) {
   const clean = verdict === "clean";
   const ledgerPath = path.join(tempDir, "ledger.json");
   await writeFile(ledgerPath, JSON.stringify({
@@ -69,9 +69,11 @@ async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDra
       ? { severity: "low", angle: "correctness", summary: "low finding", judgeDisposition: "reject", judgeRationale: "test" }
       : { severity: "medium", angle: "correctness", summary: "medium finding", judgeDisposition: "act", judgeRationale: "test" }],
   }), "utf8");
+  const jsonPath = path.join(tempDir, "findings.json");
+  if (actInFindingsJson) await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [{ severity: "low", angle: "correctness", summary: "json act finding", judgeDisposition: "act", judgeRationale: "test" }] }]), "utf8");
   const options = parseUpsertCheckpointVerdictCliArgs([
     "--repo", "owner/repo", "--pr", "17", "--gate", gate, "--head-sha", HEAD, ...(omitVerdict ? [] : ["--verdict", verdict]),
-    "--findings-summary", "base freshness test", "--findings-ledger", ledgerPath,
+    "--findings-summary", "base freshness test", "--findings-ledger", ledgerPath, ...(actInFindingsJson ? ["--findings-json", jsonPath] : []),
     "--next-action", "mark ready for review", "--inline-reason", "base freshness test",
     "--findings-severity-counts", JSON.stringify(clean ? { high: 0, medium: 0, low: 1, question: 0, nit: 0 } : { high: 0, medium: 1, low: 0, question: 0, nit: 0 }),
   ]);
@@ -160,6 +162,14 @@ test("a ready-PR draft_gate post with a partly judged ledger that has an open ac
     const out = await postClean(tempDir, async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: REMEDY }), { isDraft: false, omitVerdict: true, partlyJudged: true });
     assert.equal(out.calls.length, 0);
   }, { prefix: "dev-loops-base-freshness-partly-judged-" });
+});
+
+test("a ready-PR draft_gate post with no --verdict whose --findings-json adds an act item is not refused early at a stale base", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await postClean(tempDir, async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: REMEDY }), { isDraft: false, omitVerdict: true, actInFindingsJson: true });
+    assert.doesNotMatch(out.error ?? "", /base_stale_integrate_first/);
+    assert.equal(out.calls.length, 0);
+  }, { prefix: "dev-loops-base-freshness-findings-json-" });
 });
 
 const STALE = async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: REMEDY });

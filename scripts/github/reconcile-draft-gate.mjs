@@ -246,7 +246,11 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
   const checkFreshness = checkBaseFreshness ?? (runChild === defaultRunChild ? defaultCheckBaseFreshness : null);
   if (checkFreshness) {
     const view = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "baseRefName"], env);
-    const baseRefName = view.code === 0 ? (JSON.parse(view.stdout.trim() || "{}").baseRefName ?? "").trim() : "";
+    let baseRefName = "";
+    if (view.code === 0) {
+      // A malformed payload skips the check like a nonzero exit (a lookup failure proceeds).
+      try { baseRefName = (JSON.parse(view.stdout.trim() || "{}")?.baseRefName ?? "").trim(); } catch { baseRefName = ""; }
+    }
     if (baseRefName) {
       const stale = await staleBaseReason({ base: baseRefName, head: headSha, cwd: repoRoot, env, check: checkFreshness });
       if (stale) throw new Error(`${stale} A clean draft_gate verdict is not recorded at a stale base.`);
