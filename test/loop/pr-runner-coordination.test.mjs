@@ -2315,7 +2315,7 @@ test("claimRunnerOwnership takeover pinned to an own aged claim refuses once a r
 // that `loop startup --claim` writes, so a writer claims and `handoff` releases under it.
 async function laneWorktreeWithRunContext() {
   const cwd = realpathSync(await mkdtemp(path.join(os.tmpdir(), "runner-run-context-")));
-  await mkdir(path.join(cwd, ".git"));
+  await writeFile(path.join(cwd, ".git"), "gitdir: ./.git-linked\n");
   const lane = ensureLaneRunContext({ env: {}, cwd });
   assert.equal(lane.minted, true);
   return { cwd, runId: lane.runId };

@@ -249,7 +249,7 @@ test("parseResolveDevLoopStartupCliArgs accepts --claim with --issue or --pr and
 test("--claim writes the worktree run-context file once and reuses it (issue 3224)", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "startup-claim-run-context-"));
   try {
-    mkdirSync(path.join(root, ".git"));
+    writeFileSync(path.join(root, ".git"), "gitdir: ./.git-linked\n");
     const file = path.join(root, ".pi", "dev-loop-run-context.json");
     const ok = { ok: true, selectedStrategy: "copilot_pr_followup" };
     // No claim, or a refused startup, writes nothing.

@@ -5542,7 +5542,7 @@ test("upsert-checkpoint-verdict by run R on R's own aged claim succeeds with no 
 test("upsert-checkpoint-verdict renews the lane's aged claim through the run-context file with no env var", async () => {
   await withTempDir(async (tempDir) => {
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
-    await mkdir(path.join(tempDir, ".git"));
+    await writeFile(path.join(tempDir, ".git"), "gitdir: ./.git-linked\n");
     writeRunContext({ runId: "devloops-lane", root: tempDir });
     const claim = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "devloops-lane", cwd: tempDir, now: new Date(Date.now() - 1_800_000 - 60_000).toISOString() });
     const ghEnv = await writeGhStub(tempDir, [

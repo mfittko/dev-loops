@@ -435,7 +435,7 @@ test("isClaudeHarness is true only when CLAUDECODE is exactly \"1\"", () => {
 // reads as its last fallback when the caller passes its cwd.
 function laneWorktree(runId = "devloops-lane") {
   const root = makeTempRoot();
-  fs.mkdirSync(path.join(root, ".git"));
+  fs.writeFileSync(path.join(root, ".git"), "gitdir: ./.git-linked\n");
   const nested = path.join(root, "scripts", "loop");
   fs.mkdirSync(nested, { recursive: true });
   if (runId !== null) writeRunContext({ runId, root, mintedAt: "2026-11-16T00:00:00Z" });
@@ -470,6 +470,16 @@ test("resolveRunId resolves null for a missing, unreadable or malformed run-cont
   const bare = makeTempRoot();
   writeRunContext({ runId: "outside", root: bare });
   assert.equal(resolveRunId({}, { cwd: bare }), null);
+});
+
+test("the main checkout's run-context file is never a lane identity", () => {
+  // A main checkout has a `.git` directory; a headless run may have left a run-context file there.
+  const main = makeTempRoot();
+  fs.mkdirSync(path.join(main, ".git"));
+  writeRunContext({ runId: "devloops-headless", root: main });
+  assert.equal(resolveRunId({}, { cwd: main }), null);
+  assert.equal(ensureLaneRunContext({ env: {}, cwd: main }), null);
+  assert.equal(readRunContext({ root: main }).runId, "devloops-headless");
 });
 
 test("native Codex identity is never overridden by a persisted run id", () => {

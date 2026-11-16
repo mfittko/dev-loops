@@ -321,7 +321,7 @@ function resolveNativePiChildSessionId(env) {
  * Verified native Codex identity takes precedence over inherited carriers and fails closed.
  * Outside Codex, a run-id carrier wins when present. With none present, a native Pi async context synthesizes
  * a stable id: the child's own session id when available, else the parent session id.
- * When `cwd` is given, the last fallback is the run-context file at the worktree root of
+ * When `cwd` is given, the last fallback is the run-context file at the linked-worktree root of
  * `cwd`, which `loop startup --claim` writes for a lane whose harness carries no env
  * across tool calls (Claude Code). Callers that own a runner claim pass their cwd; a caller
  * without `cwd` (hook guards, `ensureRunId`) stays env-only. No run id at all returns null.
@@ -350,8 +350,10 @@ export function resolveRunId(env = process.env, { cwd = null, fs = fsDefault } =
 }
 
 /**
- * The worktree root of `cwd`: the nearest directory, `cwd` included, that holds a `.git`
- * entry (a directory in the main checkout, a file in a linked worktree). Null outside a checkout.
+ * The linked-worktree root of `cwd`: the nearest directory, `cwd` included, whose `.git` entry
+ * is a file. Null in the main checkout (a `.git` directory) and outside a checkout, so a main
+ * agent never adopts a lane's run id, and an older main-checkout run-context file (the headless
+ * entry writes one) never acts as a lane identity.
  *
  * @param {string} cwd
  * @param {{ fs?: typeof import("node:fs") }} [options]
@@ -360,7 +362,9 @@ export function resolveRunId(env = process.env, { cwd = null, fs = fsDefault } =
 export function resolveRunContextRoot(cwd, { fs = fsDefault } = {}) {
   let dir = path.resolve(cwd);
   for (;;) {
-    if (fs.existsSync(path.join(dir, ".git"))) return dir;
+    let gitEntry = null;
+    try { gitEntry = fs.statSync(path.join(dir, ".git")); } catch { /* absent: keep walking up */ }
+    if (gitEntry) return gitEntry.isFile() ? dir : null;
     const parent = path.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
@@ -488,7 +492,7 @@ export function ensureRunId({ env = process.env, root, mintedAt, fs = fsDefault 
  * @param {string} [params.mintedAt]
  * @param {typeof import("node:fs")} [params.fs]
  * @returns {{ runId: string, minted: boolean, statePath: string|null }|null} Null on native
- *   Codex or outside a checkout.
+ *   Codex, in the main checkout, or outside a checkout.
  */
 export function ensureLaneRunContext({ env = process.env, cwd, mintedAt, fs = fsDefault } = {}) {
   if (resolveRuntimeHarness(env) === "codex") return null;

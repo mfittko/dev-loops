@@ -600,7 +600,7 @@ test("a long plan wait heartbeats the runner claim for the plan's PR", async () 
 
 test("a long plan wait refreshes the lane's claim from the run-context file with no env var", async () => {
   await withDir(async (root) => {
-    await mkdir(path.join(root, ".git"));
+    await writeFile(path.join(root, ".git"), "gitdir: ./.git-linked\n");
     writeRunContext({ runId: "devloops-lane", root });
     const claimed = await claimRunnerOwnership({ repo: "o/r", pr: 7, runId: "devloops-lane", cwd: root, now: "2000-01-01T00:00:00.000Z" });
     const { planPath } = await seedPlan(root, [["g", ["a"]]]);

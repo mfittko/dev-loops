@@ -96,7 +96,7 @@ Optional modifier:
                  the claim. Rejected with --review/--ui-review/--input/
                  --plan-file/--spike and with no target. Outside native Codex, a
                  started --claim also reports runContext: it reuses the lane's
-                 run id, or mints one into <worktree>/.pi/dev-loop-run-context.json
+                 run id, or mints one into <linked worktree>/.pi/dev-loop-run-context.json
                  that later commands resolve without DEVLOOPS_RUN_ID.
   --review       With --pr only: route the PR to the read-only review strategy
                  instead of the default continue_on_pr path. Requires no

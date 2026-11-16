@@ -132,7 +132,7 @@ join while child work is outstanding — a longest-timeout assumption is not a j
 
 ### Keeping the PR claim live through gate writers
 
-`loop startup --claim` gives your lane its run id. It reuses `DEVLOOPS_RUN_ID` when set. Otherwise it writes the id to `<worktree>/.pi/dev-loop-run-context.json` and reports it as `runContext.runId`. Run every later `gate ...` writer, probe and wait from that worktree in the plain routed `cli/index.mjs` form, with no `DEVLOOPS_RUN_ID=` prefix and no `export`. Each call resolves the same run id from the file. The writers and `gate wait-for-units` heartbeat your claim, so it stays fresh through long waits. When a writer still refuses with your own stale claim, run the stale-claim recovery in `RUNNER-HANDOFF-TEARDOWN` ([Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
+`loop startup --claim` gives your lane its run id. It reuses `DEVLOOPS_RUN_ID` when set. Otherwise it writes the id to `<worktree>/.pi/dev-loop-run-context.json` and reports it as `runContext.runId`. Run every later `gate ...` writer, probe and wait from that linked worktree (never the main checkout) in the plain routed `cli/index.mjs` form, with no `DEVLOOPS_RUN_ID=` prefix and no `export`. Each call resolves the same run id from the file. The writers and `gate wait-for-units` heartbeat your claim, so it stays fresh through long waits. When a writer still refuses with your own stale claim, run the stale-claim recovery in `RUNNER-HANDOFF-TEARDOWN` ([Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
 
 ### Releasing the PR claim at a terminal stop
 
