@@ -2984,9 +2984,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       let earlyVerdict = options.verdict;
       if (earlyVerdict === undefined && options.findingsLedger) {
         const earlyLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
-        earlyVerdict = isFullyJudged(earlyLedger.findings ?? []) && earlyLedger.overallVerdict !== "blocked"
-          ? (listOpenActItems(earlyLedger.findings ?? []).length > 0 ? "findings_present" : "clean")
-          : earlyLedger.overallVerdict;
+        earlyVerdict = composeReviewVerdict(earlyLedger.overallVerdict, earlyLedger.findings ?? []);
       }
       await refuseStaleBase(earlyVerdict);
       return await postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild });
