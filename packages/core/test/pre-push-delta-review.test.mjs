@@ -736,6 +736,14 @@ describe("the reviewer result shape", () => {
     assert.match(errors, /widenedReads\[0\] needs a path and a reason/);
     assert.deepEqual(deltaResultShapeErrors(result()), []);
   });
+
+  test("deltaResultShapeErrors returns the required-array error for a non-array actionableItems or newFindings instead of throwing", () => {
+    for (const bad of [{}, "x", 1, null]) {
+      assert.ok(deltaResultShapeErrors(result({ actionableItems: bad })).includes("actionableItems[] is required"), JSON.stringify(bad));
+      assert.ok(deltaResultShapeErrors(result({ newFindings: bad })).includes("newFindings[] is required"), JSON.stringify(bad));
+    }
+    assert.deepEqual(deltaResultShapeErrors(result({ actionableItems: [{ ref: "act-0", status: "resolved", evidence: ["x"] }] })), []);
+  });
 });
 
 describe("auto refs and errors use the full act list position", () => {

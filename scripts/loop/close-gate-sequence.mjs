@@ -37,7 +37,7 @@ const isFullSha = (sha) => normalizeFullHeadSha(sha) === sha;
 /** A full sha, or any other safe marker file name (never a path); a non-sha name routes only to MARKER_UNREADABLE. An empty name, a name over 128 characters or one with any other character stays uncloseable. */
 const isSafeMarkerName = (name) => isFullSha(name) || (/^[A-Za-z0-9._-]{1,128}$/u.test(name) && name !== "." && name !== "..");
 
-const USAGE = `usage: close-gate-sequence.mjs --head <marker baseline sha> --repo <owner/name> --pr <number> [--help]\n\n${JQ_OUTPUT_USAGE}`;
+const USAGE = `usage: close-gate-sequence.mjs --head <marker baseline sha or marker file name> --repo <owner/name> --pr <number> [--help]\n\n${JQ_OUTPUT_USAGE}`;
 const refuse =(refusal, reason, remedy) => ({ ok: false, refusal, reason, remedy });
 /** True when the sha is a commit object in the local repository. */
 export const localCommitExists = (sha) => spawnSync("git", ["cat-file", "-e", `${sha}^{commit}`], { stdio: "ignore", env: gitEnvNoDirOverrides() }).status === 0;
@@ -103,8 +103,16 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   let condition = null;
   // A marker younger than the grace may belong to a fixer still dispatching, and a missing pull proves nothing about it, so it closes only once the grace has passed.
   if (markerUnreadable && now() - (markerMtime ?? now()) < grace) return refuse("abandonment_unproven", `the marker for ${head} is unreadable or names no branch and is younger than the ${grace / 60000} minute dispatch grace, so a fixer may still be starting`, `Rerun close-sequence after ${grace / 60000} minutes.`);
-  if (markerUnreadable) condition = "MARKER_UNREADABLE";
-  else {
+  if (markerUnreadable) {
+    // A sealed record of this baseline for the marker's own execution that does not push (needs_fix, fix_and_rereview) keeps the sequence live, as on the branch path.
+    let record = null;
+    try { record = readSealedGateDeltaRecord(tmpRoot, head); } catch { /* an unreadable record proves nothing */ }
+    if (executionIdentity !== undefined && record?.nextStep !== undefined && record.nextStep !== "push_to_gate"
+      && record.origin?.workOrderRef === workOrderRef && record.origin?.executionIdentity === executionIdentity) {
+      return refuse("sequence_live", `the sealed delta record of ${head} names the fixer execution ${executionIdentity} with next step ${record.nextStep}`, "Finish the sequence with the pre-push delta review (dev-loops loop pre-push-delta).");
+    }
+    condition = "MARKER_UNREADABLE";
+  } else {
     const { pr: facts } = await fetchPr({ repo, pr, fields: "headRefOid,headRefName" });
     if (!isFullSha(facts.headRefOid ?? "")) return refuse("abandonment_unproven", `GitHub returned no valid head sha for PR #${pr}`, "Rerun when the PR head is readable.");
     if (facts.headRefName !== marker.branch) return refuse("abandonment_unproven", `PR #${pr} head branch ${facts.headRefName} is not the marker branch ${marker.branch}`, "Pass the --pr whose head branch the marker names.");

@@ -238,6 +238,14 @@ test("a malformed result gives the typed evidence_malformed, not evidence_run_mi
   await assert.rejects(withCli((file) => edit(file, { reviewBaselineHead: "" })), (error) => /evidence_malformed/.test(error.message) && !/evidence_run_missing/.test(error.message));
 });
 
+test("a non-array actionableItems or newFindings gives evidence_malformed, not a TypeError", async () => {
+  for (const over of [{ actionableItems: {} }, { actionableItems: "x" }, { actionableItems: 1 }, { actionableItems: null }, { newFindings: "none" }, { newFindings: {} }, { newFindings: 1 }, { newFindings: null }]) {
+    const { dir, file } = setup(result(over));
+    assert.throws(() => sealCli(["--kind", "delta", "--file", file, "--tmp-root", dir], quiet), (error) => error.reason === "evidence_malformed" && /\[\] is required/.test(error.message), JSON.stringify(over));
+    assert.equal(fs.existsSync(`${evidenceRunRecordPath(dir, KEY)}.sealed`), false);
+  }
+});
+
 test("--result refuses every falsy or non-object JSON result with evidence_malformed and writes no gate-delta record", async () => {
   for (const body of ["null", "false", "0", '""', "[]"]) {
     await assert.rejects(withCli((file) => fs.writeFileSync(file, body)), /evidence_malformed/, body);

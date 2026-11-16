@@ -82,7 +82,10 @@ export async function withSequenceLock(tmpRoot, baselineHeads, fn, { staleMs = 6
 export function writeSequenceMarker({ tmpRoot, baselineHead, fullGranted = false, branch, execution }) {
   const file = sequenceMarkerPath(tmpRoot, baselineHead);
   mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify({ baselineHead, fullGranted, ...(typeof branch === "string" && branch ? { branch } : {}), ...(execution ? { execution } : {}) })}\n`);
+  // Write to a sibling tmp file and rename, so a crash never leaves a truncated marker at the marker path.
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify({ baselineHead, fullGranted, ...(typeof branch === "string" && branch ? { branch } : {}), ...(execution ? { execution } : {}) })}\n`);
+  renameSync(tmp, file);
   return file;
 }
 
@@ -99,7 +102,7 @@ export function clearSequenceMarker(tmpRoot, baselineHead) {
 const noCommitHint = (baselineHead, markerPath, branch) => !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(baselineHead) ? ` The sequence marker is ${markerPath}. The marker names a baseline head that is not a full lowercase hex SHA, so no close command is rendered; the PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery.` : !branch ? ` The sequence marker is ${markerPath}. The marker is unreadable or names no branch, so the no-commit close cannot authenticate it; the PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery.` : ` The sequence marker is ${markerPath}. To close a commit_only sequence whose fixer made no commit, run \`check-pre-push-delta.mjs (--act-list <act-list> --findings-log <findings-log> | --threads-file <threads-file> --repo <owner/name> --pr <n>) --baseline ${baselineHead} --spec-identity <id> --fixer-plan <fixer-plan> --site-coverage <handback> --worktree <dir>\` (outcome no_commit); a fix commit takes the delta review and the full-phase push.`;
 
 /** Adds the close-sequence recovery for a closable sequence (HEAD_MOVED, BOUNDED_OUT, FIXER_NEVER_PULLED, or MARKER_UNREADABLE once the dispatch grace has passed); a live sequence stays uncloseable. */
-export const recoveryHint = (baselineHead, markerPath, branch) => noCommitHint(baselineHead, markerPath, branch) + (markerPath ? ` To close an abandoned sequence instead, run dev-loops-run cli/index.mjs gate close-sequence --head <baseline sha> --repo <owner/name> --pr <number>; it refuses a live sequence.` : "");
+export const recoveryHint = (baselineHead, markerPath, branch) => noCommitHint(baselineHead, markerPath, branch) + (markerPath ? ` To close an abandoned sequence instead, run dev-loops-run cli/index.mjs gate close-sequence --head ${/^[A-Za-z0-9._-]{1,128}$/.test(baselineHead) && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(baselineHead) ? baselineHead : "<baseline sha>"} --repo <owner/name> --pr <number>; it refuses a live sequence.` : "");
 
 /** Approximates git check-ref-format for a branch name; an invalid name reads as no branch (fail closed). */
 const isValidBranchName = (b) =>

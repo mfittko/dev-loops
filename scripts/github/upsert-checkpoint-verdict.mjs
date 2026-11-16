@@ -2856,6 +2856,14 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
           .catch((err) => { if (err instanceof Error && err.message.startsWith("own_commit_in_range:")) throw err; throw new Error(`--converged-json bodyOnly: cannot count PR-own commits in ${canonicalHeadSha}..${convergedInput.fixerCommit}: ${err instanceof Error ? err.message : String(err)}`); });
       convergedMarker = composeBodyOnlyConvergedDraftGate({ ...composeInput, ownCommits });
     } else {
+      // One property, two lists: the posted round items and converged.actList must agree on which items are PR-body items (convergedActItemKey ignores the file field).
+      if (Array.isArray(convergedInput.actList)) {
+        const bodyCounts = (list) => list.reduce((m, f) => (isDeltaBodyItem(f) ? m.set(convergedActItemKey(f), (m.get(convergedActItemKey(f)) ?? 0) + 1) : m), new Map());
+        const roundBody = bodyCounts(roundActItems);
+        const listBody = bodyCounts(convergedInput.actList);
+        const differs = [...new Set([...roundBody.keys(), ...listBody.keys()])].filter((k) => (roundBody.get(k) ?? 0) !== (listBody.get(k) ?? 0));
+        if (differs.length > 0) throw new Error(`--converged-json actList and the round's act items (ledger at ${canonicalHeadSha} plus --findings-json) disagree on which items are PR-body items (no file): ${differs.join("; ")}. Give each item the same file in both lists.`);
+      }
       // A mixed list holds PR-body items the delta reviewer never sees: pass the digests of the body-only route's body-change check.
       const bodyDigests = roundActItems.some(isDeltaBodyItem) ? {
         reviewedBodySha: await readReviewedBodySha256(options, canonicalHeadSha, repoRoot),

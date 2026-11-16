@@ -1,6 +1,6 @@
 // close-gate-sequence: a sanctioned close of an abandoned fix sequence; a live sequence is never closable.
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { afterAll, test } from "bun:test";
@@ -212,10 +212,19 @@ test("unproven abandonment is refused: no execution, no branch, no PR, wrong bra
   });
 });
 
+test("writeSequenceMarker writes atomically: the marker parses and no tmp sibling remains", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const file = writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat" });
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).baselineHead, HEAD);
+    assert.deepEqual(readdirSync(path.dirname(file)), [path.basename(file)]);
+  });
+});
+
 test("recoveryHint names the close command", () => {
   const hint = recoveryHint("a".repeat(40), "/x/gate-delta/h.sequence", "feat");
   assert.ok(hint.includes("dev-loops-run cli/index.mjs gate close-sequence --head <baseline sha> --repo <owner/name> --pr <number>"));
   assert.doesNotMatch(hint, /close-gate-sequence\.mjs/);
+  assert.ok(recoveryHint("not-a-sha", "/x/gate-delta/not-a-sha.sequence", undefined).includes("gate close-sequence --head not-a-sha --repo <owner/name>"));
 });
 
 const lockPath = (tmpRoot) => `${path.join(tmpRoot, "gate-delta", HEAD)}.sequence-lock`;
@@ -735,6 +744,17 @@ test("MARKER_UNREADABLE: an unreadable marker, a marker with no branch and a non
   });
 });
 
+test("MARKER_UNREADABLE: a no-branch marker with a needs_fix sealed record for its own execution stays sequence_live", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, execution: ex });
+    handedBack(tmpRoot, ex);
+    boundedRecord(tmpRoot, ex, { outcome: "needs_fix", nextStep: "fix_and_rereview" });
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }))).refusal, "sequence_live");
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
 test("MARKER_UNREADABLE waits out the dispatch grace: a young marker refuses with a rerun remedy and survives", async () => {
   await withTempDir(async (tmpRoot) => {
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD });
@@ -798,13 +818,15 @@ test("MARKER_UNREADABLE checks the work order owner: a no-branch marker of anoth
   });
 });
 
-test("the CLI accepts a safe non-hex --head and refuses a path-like one", () => {
+test("the CLI accepts a safe non-hex --head and refuses a path-like one", async () => {
+  await withTempDir(async (tmpRoot) => {
   for (const head of ["../x", "a/b", ".", "..", "a b", ""]) {
-    const run = spawnSync("node", [cli, "--head", head, "--repo", "o/r", "--pr", "7"], { encoding: "utf8" });
+    const run = spawnSync("node", [cli, "--head", head, "--repo", "o/r", "--pr", "7"], { encoding: "utf8", cwd: tmpRoot });
     assert.equal(run.status, 1, `--head ${JSON.stringify(head)}`);
     assert.match(run.stderr, /usage/);
   }
-  const ok = spawnSync("node", [cli, "--head", "not-a-sha", "--repo", "o/r", "--pr", "7"], { encoding: "utf8" });
+  const ok = spawnSync("node", [cli, "--head", "not-a-sha", "--repo", "o/r", "--pr", "7"], { encoding: "utf8", cwd: tmpRoot });
   assert.doesNotMatch(ok.stderr, /usage/);
   assert.match(ok.stdout, /sequence_absent/);
+  });
 });

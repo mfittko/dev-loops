@@ -334,13 +334,13 @@ export function deltaResultShapeErrors(result, { checkOutcome = true } = {}) {
   if (!result || typeof result !== "object") return ["result must be an object"];
   const r = /** @type {any} */ (result);
   if (!Array.isArray(r.actionableItems)) errors.push("actionableItems[] is required");
-  for (const [i, item] of (r.actionableItems ?? []).entries()) {
+  for (const [i, item] of (Array.isArray(r.actionableItems) ? r.actionableItems : []).entries()) {
     if (item?.status === undefined) errors.push(`actionableItems[${i}].status is missing`);
     else if (!DELTA_ITEM_STATUSES.includes(item.status)) errors.push(`actionableItems[${i}].status ${JSON.stringify(item.status)} is unknown`);
     if (!nonEmptyStrings(item?.evidence)) errors.push(`actionableItems[${i}].evidence[] must be non-empty strings`);
   }
   if (!Array.isArray(r.newFindings)) errors.push("newFindings[] is required");
-  for (const [i, f] of (r.newFindings ?? []).entries()) {
+  for (const [i, f] of (Array.isArray(r.newFindings) ? r.newFindings : []).entries()) {
     if (!VALID_SEVERITIES.has(normalizeSeverity(f?.severity))) errors.push(`newFindings[${i}].severity ${JSON.stringify(f?.severity)} is unknown`);
     if (!nonEmpty(f?.summary)) errors.push(`newFindings[${i}].summary is required`);
     if (!nonEmptyStrings(f?.evidence)) errors.push(`newFindings[${i}].evidence[] must be non-empty strings`);

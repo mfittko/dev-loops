@@ -306,6 +306,17 @@ for (const [name, findings] of [
   });
 }
 
+test("a converged actList that disagrees with the round's act items on which are PR-body items refuses naming both lists", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("low", 1)];
+    const input = convergedInput(findings);
+    input.actList = input.actList.map(({ file, line, ...rest }) => rest);
+    const out = await post(tempDir, { findings, converged: input });
+    assert.match(out.error ?? "", /disagree on which items are PR-body items/);
+    assert.deepEqual(out.puts, []);
+  }, { prefix: "dev-loops-converged-bodyset-" });
+});
+
 test("an empty act list, a stale delta result and a delta result that is not locally_clear fail closed", async () => {
   await withTempDir(async (tempDir) => {
     const findings = [finding("low", 1)];
@@ -711,7 +722,8 @@ test("a writer-produced judged log with low act items and an unjudged --findings
     const unjudged = { severity: "low", angle: "scope", summary: "unjudged finding", file: "src/other.mjs", line: 3 };
     const findingsJson = path.join(tempDir, "findings.json");
     await writeFile(findingsJson, JSON.stringify([unjudged]), "utf8");
-    const out = await post(tempDir, { findings: log.findings, overallVerdict: log.overallVerdict, converged: convergedInput(log.findings.map((f) => ({ ...f, file: "src/a.mjs" }))), extraArgs: ["--findings-json", findingsJson] });
+    const located = log.findings.map((f) => ({ ...f, file: "src/a.mjs" }));
+    const out = await post(tempDir, { findings: located, overallVerdict: log.overallVerdict, converged: convergedInput(located), extraArgs: ["--findings-json", findingsJson] });
     assert.match(out.error ?? "", /needs a clean composed verdict over a validated low\/nit act list \(got verdict "findings_present"\)/);
     assert.deepEqual(out.puts, [], "nothing is posted, so no clean body exists");
   }, { prefix: "dev-loops-converged-unjudged-json-" });
