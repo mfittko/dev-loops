@@ -1056,7 +1056,8 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   // requires it. Only the angle-CONTRACT resolvers below (resolveGateAngleContract,
   // resolveFanoutGroups) use angleConfig — activation and angle-contract are
   // deliberately split across two different config sources.
-  const sizeTiersConfigured = Array.isArray(angleConfig?.gates?.fanout?.sizeTiers) && angleConfig.gates.fanout.sizeTiers.length > 0;
+  // Invoking config, never the PR head's: a PR must not opt itself into the lowered reviewer floor.
+  const sizeTiersConfigured = Array.isArray(config?.gates?.fanout?.sizeTiers) && config.gates.fanout.sizeTiers.length > 0;
   const draftGateConfig = resolveGateConfig(config, "draft");
   const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
   // Shared angle-contract resolver (exclude-filtered mandatory angles +

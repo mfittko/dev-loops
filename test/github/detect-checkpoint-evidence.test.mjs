@@ -4883,6 +4883,51 @@ test("buildFanoutEnforcement keeps the 2-reviewer floor when the context records
   }
 });
 
+test("buildFanoutEnforcement keeps the 2-reviewer floor when only the PR head config sets sizeTiers (#3166)", async () => {
+  const { buildGateContextPath } = await import("../../scripts/github/_gate-artifact-paths.mjs");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-tier5-head-only-"));
+  try {
+    const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    const base = ["version: 1", "gates:", "  requireFanoutEvidence: true", "  requireFanoutProvenance: true", "  preApproval:", "    angles:", "      - a", "      - b", "      - name: pr-checklist", "        mandatory: true", "      - name: holistic", "        enabled: false", ""];
+    await writeFile(path.join(dir, ".devloops"), base.join("\n"), "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "base");
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    await writeFile(path.join(dir, ".devloops"), [...base, "  fanout:", "    sizeTiers:", "      - maxWholeLogicLoc: 100", "        maxAnglesPerUnit: 5", ""].join("\n"), "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "head adds sizeTiers");
+    const headSha = g("rev-parse", "HEAD").trim();
+    const dispatchUnits = [{ name: "tier", group: "tier", angles: ["a", "b", "pr-checklist"] }];
+    const perAngle = ["a", "b", "pr-checklist"].map((angle) => ({ angle, reviewer: "review-a", group: "tier" }));
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-34");
+    await mkdir(ledgerDir, { recursive: true });
+    await writeFile(path.join(ledgerDir, `pre_approval_gate-${headSha}.json`), `${JSON.stringify({ gate: "pre_approval_gate", headSha, findings: [], provenance: { distinctReviewers: 1, dispatchUnits, perAngle } })}\n`, "utf8");
+    const contextPath = buildGateContextPath({ repo: "owner/repo", pr: 34, gate: "pre_approval_gate", headSha, tmpRoot: "tmp" });
+    await mkdir(path.dirname(path.join(dir, contextPath)), { recursive: true });
+    await writeFile(path.join(dir, contextPath), `${JSON.stringify({ fanout: { unitBound: 5, sizeTier: { tier: { maxWholeLogicLoc: 100, maxAnglesPerUnit: 5 } } } })}\n`, "utf8");
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 34, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: { visible: true, headSha, executionMode: "fanout_fanin" },
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const gate = enforcement.gates.find((g2) => g2.name === "pre_approval_gate");
+    assert.equal(gate.contextUnitBound.tiered, false);
+    const result = buildPreMergeGateCheck({
+      currentHeadSha: headSha,
+      draftGate: { visible: true, verdict: "clean" },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
+    }, 0, null, enforcement);
+    assert.equal(result.ok, false);
+    assert.match(result.failures.join("\n"), /distinctReviewers|reviewer/i);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("detectCheckpointEvidence carries clean gate markers from an earlier head across a base-only merge (#2752)", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-carry-"));
   try {
