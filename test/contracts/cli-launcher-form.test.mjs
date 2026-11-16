@@ -63,7 +63,6 @@ test("no agent-facing doc or emitter names a `cd <checkout> &&` prefix before de
   assert.deepEqual(hitsOf(files, CD_RE), []);
 });
 
-// AGENTS.md is harness-shared and its bare names are pinned by other doc contracts; its launcher line covers Claude.
-test("no skill, agent or Claude asset doc names the bare `dev-loops <ns>` form", () => {
-  assert.deepEqual(hitsOf(listFiles(["skills", "agents", ".claude"], ".md"), new RegExp(BARE_DEV_LOOPS_NS_SOURCE)), []);
+test("no AGENTS.md, skill, agent or Claude asset doc names the bare `dev-loops <ns>` form", () => {
+  assert.deepEqual(hitsOf(["AGENTS.md", ...listFiles(["skills", "agents", ".claude"], ".md")], new RegExp(BARE_DEV_LOOPS_NS_SOURCE)), []);
 });
