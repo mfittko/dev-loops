@@ -394,6 +394,8 @@ function ghJson(args, cwd, env = process.env) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: GH_CALL_TIMEOUT_MS,
+      // Default 1 MiB overflows on 100 long comment bodies (spec-change facts read).
+      maxBuffer: 16 * 1024 * 1024,
     });
     return JSON.parse(stdout);
   } catch (err) {
