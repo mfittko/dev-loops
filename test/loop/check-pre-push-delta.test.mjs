@@ -1063,6 +1063,16 @@ test("a reviewer-only baseline that is a base-only merge of a non-clean cap-roun
   } finally { cleanup(repo); }
 });
 
+test("a reviewer-only run over an all-body cap-round ledger with a later PR-own commit runs the input run with an empty code act set and prints bodyItems", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    const bodyAct = { severity: "low", summary: "body gap", angle: "spec", judgeDisposition: "act", judgeTitle: "Body" };
+    const out = await runDeltaCli([...reviewerOnlyArgs(repo, [bodyAct]), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], seam);
+    assert.deepEqual(out.input.actItems, []);
+    assert.deepEqual(out.bodyItems, [fingerprintFinding(bodyAct)]);
+  } finally { cleanup(repo); }
+});
+
 test("AC3: a reviewer-only result with a medium or high finding, or a residue claim, does not seal a clearing record", async () => {
   const repo = reviewerOnlyRepo();
   try {

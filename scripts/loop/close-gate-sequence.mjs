@@ -10,7 +10,9 @@
  * fixer execution and that fixer is not running, so the sequence finished and the full phase pushes)
  * and MARKER_UNREADABLE (the marker is unreadable, names no branch or has a baseline name that is not a full hex sha; --head then
  * takes any safe marker file name, never a path). It closes only once the marker is as old as the dispatch grace, and only for the
- * work order owner (--repo and --pr). Residuals: a marker whose name is empty cannot be closed here, and a no-branch marker that names
+ * work order owner (--repo and --pr). A marker that does not parse names no execution, so the pull-receipt and fixer-running checks use the
+ * execution and branch of the PR's emit plan when that plan was emitted for the marker's baseline; with no such plan only marker age and the
+ * sealed-record check apply, and the closure record is keyed none. Residuals: a marker whose name is empty cannot be closed here, and a no-branch marker that names
  * a pulled execution loses the branch reflog activity signal, so only its pull time counts and a fixer still committing more than
  * one grace after its pull reads as stopped.
  * A live sequence is never closed. Refusals: sequence_absent, baseline_unknown, sequence_live, fixer_running, abandonment_unproven.
@@ -27,6 +29,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightFieldsSp
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { viewPr } from "../github/view-pr.mjs";
 import { pullReceiptPath } from "../github/_work-order-protocol.mjs";
+import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { readSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { STALE_RUNNER_DEFAULT_MAX_AGE_MS, resolveStaleRunnerMaxAgeMs } from "./_stale-runner-detection.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
@@ -56,17 +59,38 @@ export const defaultActor = (env = process.env, lookup = userInfo) => {
   try { return lookup().username; } catch { return "unknown"; }
 };
 
+/**
+ * The fixer execution of the PR's emit plan when it was emitted for this baseline head, else undefined (an absent, unreadable or other-baseline plan proves nothing).
+ * The branch joins only when it is a plain ref name, because it reaches a reflog path.
+ */
+const planExecutionFor = (tmpRoot, repo, pr, head) => {
+  try {
+    const plan = JSON.parse(readFileSync(path.join(tmpRoot, "gate-fixer", repoSlugFor(repo), `pr-${pr}`, "fixer-emit-plan.json"), "utf8"));
+    const order = plan?.workOrder;
+    const baseline = order?.authority?.reviewBaselineHead ?? order?.headSha;
+    const outputRef = order?.outputRefs?.[0];
+    if (baseline !== head || typeof plan.executionIdentity !== "string" || typeof plan.workOrderRef !== "string" || typeof outputRef !== "string") return undefined;
+    const branch = order.mutationAuthority?.branch;
+    return { executionIdentity: plan.executionIdentity, workOrderRef: plan.workOrderRef, outputRef, ...(typeof branch === "string" && /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/u.test(branch) && !branch.includes("..") ? { branch } : {}) };
+  } catch { return undefined; }
+};
+
 /** @param {{ tmpRoot: string, head: string, repo?: string, pr?: number, fetchPr?: Function, now?: () => number, actor?: string }} input */
 export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = viewPr, now = Date.now, actor = defaultActor(), hasCommit = localCommitExists, branchActivityMs = branchReflogMs, lock }) {
   if (!isSafeMarkerName(head)) throw new Error(`close-sequence head ${JSON.stringify(head)} is not a full sha or a safe marker file name`);
   const marker = readSequenceMarker(tmpRoot, head);
   if (!marker) return refuse("sequence_absent", `no sequence marker exists for ${head}`, "Nothing to close here; the push block comes from another marker, so rerun with that marker's head.");
-  const { executionIdentity, workOrderRef, outputRef } = marker.execution ?? {};
+  const { executionIdentity } = marker.execution ?? {};
+  // A marker with no execution (it did not parse) names no work order, so the pull-receipt and fixer-running checks read the PR's emit plan for the same baseline.
+  const recovered = marker.execution || !repo || !pr ? undefined : planExecutionFor(tmpRoot, repo, pr, head);
+  const { workOrderRef, outputRef } = marker.execution ?? recovered ?? {};
+  const runningIdentity = executionIdentity ?? recovered?.executionIdentity;
+  const fixerBranch = marker.branch ?? recovered?.branch;
   // Only ENOENT proves the work order was never pulled; any other read or parse failure leaves the pull state unknown.
   // The receipt as raw text (null = ENOENT, undefined = unreadable): any later difference means a fixer pulled meanwhile.
   const snapshot = () => { if (!workOrderRef) return null; try { return readFileSync(pullReceiptPath(tmpRoot, workOrderRef), "utf8"); } catch (error) { return error?.code === "ENOENT" ? null : undefined; } };
   const receiptBefore = snapshot();
-  const pulledMeanwhile = () => snapshot() !== receiptBefore ? refuse("sequence_live", `fixer execution ${executionIdentity} pulled its work order while the PR was read`, "Wait for the fixer to hand back, then rerun.") : null;
+  const pulledMeanwhile = () => snapshot() !== receiptBefore ? refuse("sequence_live", `fixer execution ${runningIdentity} pulled its work order while the PR was read`, "Wait for the fixer to hand back, then rerun.") : null;
   let receipt = null;
   let receiptFound = false; // presence of the file, not its parsed content
   let receiptMtime = null; // set for an unreadable or non-object receipt: the pull's activity time is then the file mtime, so it ages out of the grace
@@ -84,8 +108,8 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   // A fixer that pulled its work order is running unless it handed back (outputRef exists) or its last activity (the pull, or the last write to its branch reflog; a fixer that never commits shows only its pull) is older than the grace.
   // A receipt with no parseable pulledAt counts its file mtime as the pull time; a stat failure makes the activity NaN, which reads as running (fail closed). The runner claim updatedAt is no signal: the closing coordinator heartbeats it itself.
   // Evaluated again under the sequence lock: a fixer commit or handback during fetchPr or the lock wait must still refuse the close.
-  const fixerRunning = () => pulled && mtimeMs(outputRef) === null && !(now() - Math.max(pulledAt, (marker.branch && branchActivityMs(marker.branch)) ?? -Infinity) >= grace)
-    ? refuse("fixer_running", `fixer execution ${executionIdentity} pulled its work order, has not handed back, and was active within ${grace / 60000} minutes (activity-based: the pull or the last write to the fixer branch reflog)`, `Wait for the fixer to hand back, or for ${grace / 60000} minutes without fixer activity, then rerun.`)
+  const fixerRunning = () => pulled && mtimeMs(outputRef) === null && !(now() - Math.max(pulledAt, (fixerBranch && branchActivityMs(fixerBranch)) ?? -Infinity) >= grace)
+    ? refuse("fixer_running", `fixer execution ${runningIdentity} pulled its work order, has not handed back, and was active within ${grace / 60000} minutes (activity-based: the pull or the last write to the fixer branch reflog)`, `Wait for the fixer to hand back, or for ${grace / 60000} minutes without fixer activity, then rerun.`)
     : null;
   const runningBeforeFetch = fixerRunning();
   if (runningBeforeFetch) return runningBeforeFetch;

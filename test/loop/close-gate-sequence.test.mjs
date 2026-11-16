@@ -902,3 +902,25 @@ test("the CLI accepts a safe non-hex --head and refuses a path-like one", async 
   assert.match(ok.stdout, /sequence_absent/);
   });
 });
+
+test("MARKER_UNREADABLE recovers the fixer execution from the PR's emit plan: a pulled fixer that has not handed back refuses, a handed-back one closes", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    const planDir = path.join(tmpRoot, "gate-fixer", "o-r", "pr-7");
+    mkdirSync(planDir, { recursive: true });
+    const plan = (headSha) => writeFileSync(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ ...ex, workOrder: { headSha, outputRefs: [ex.outputRef], mutationAuthority: { branch: "feat" } } }));
+    mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
+    writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
+    // The marker is past the grace, the fixer pulled within it and has not handed back.
+    pull(tmpRoot, ex, new Date(Date.now() + 120_000).toISOString());
+    plan(MOVED);
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }))).condition, "MARKER_UNREADABLE", "a plan for another baseline proves nothing");
+    writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
+    plan(HEAD);
+    const running = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
+    assert.equal(running.refusal, "fixer_running");
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+    writeFileSync(ex.outputRef, "{}");
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }))).condition, "MARKER_UNREADABLE");
+  });
+});

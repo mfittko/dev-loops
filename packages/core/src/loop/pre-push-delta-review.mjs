@@ -214,7 +214,8 @@ export function startDeltaSequence({ reviewBaselineHead, actList, reviewerOnly =
   const all = Array.isArray(actList) && actList.length > 0 ? toDeltaActItems(actList) : null;
   const bodyItems = all ? all.filter((_, i) => isDeltaBodyItem(actList[i])).map((item) => item.ref) : [];
   const codeItems = all ? all.filter((_, i) => !isDeltaBodyItem(actList[i])) : [];
-  if (bodyItems.length > 0 && codeItems.length === 0) {
+  // reviewerOnly reviews the PR-own commit range and accepts an empty act set, so an all-body list yields the empty code set instead of refusing.
+  if (bodyItems.length > 0 && codeItems.length === 0 && !reviewerOnly) {
     throw new Error(`delta_body_only_act_set: every act item names no file (PR-body items: ${bodyItems.join(", ")}), so no delta review runs. Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged verdict (upsert-checkpoint-verdict.mjs --converged-json with bodyOnly: true) at the cap round, or run the next gate round below the cap.`);
   }
   const actItems = all ? codeItems : reviewerOnly && Array.isArray(actList) && actList.length === 0 ? [] : toDeltaActItems(actList);

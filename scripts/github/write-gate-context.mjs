@@ -62,6 +62,7 @@ import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 import { clusterFindings, clustersFromStampedIds, dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
+import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DELTA_CLEARING_NEXT_STEPS, listGateDeltaRecords, readGateDeltaRecord, readSealedGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { captureMainRelativeChangedFilesSince, isBaseOnlyMergeSince, runGitCommand } from "../lib/git-delta.mjs";
 import { existsSync } from "node:fs";
@@ -2310,7 +2311,8 @@ const CLEAN_CAP_EXTENSIONS = new Set(["docs_tests_only", "delta_covered"]);
  */
 export const capRoundCovers = (capRound, tmpRoot) => (record) => {
   const refs = new Set((Array.isArray(record.items) ? record.items : []).map((i) => String(i?.ref)));
-  const actRefs = [...new Set(capRoundActRefs(capRound.log.findings, capRound.log.headSha).values())];
+  // A PR-body act item never enters a delta record (startDeltaSequence drops it), so the record cannot name its ref.
+  const actRefs = [...new Set([...capRoundActRefs(capRound.log.findings, capRound.log.headSha)].filter(([f]) => !isDeltaBodyItem(f)).map(([, ref]) => ref))];
   // A clean cap round has no act item, so only a record whose extension is in CLEAN_CAP_EXTENSIONS proves it (ADR 0250 for docs_tests_only):
   // the first record carries one, or a clearing chain over later heads reaches one.
   if (isCleanCapRound(capRound)) {
