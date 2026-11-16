@@ -316,3 +316,17 @@ test("retro splitter traverses command substitution (#2442)", () => {
   assert.match(analyzeTranscript('echo "$(true; gh pr list)"').violations[0], /^gh:/);
   assert.match(analyzeTranscript('echo "$(true; python3 script.py)"').violations[0], /^python3:/);
 });
+
+test("--transcript accepts several Claude Code session transcripts and extracts their Bash commands", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "retro-sessions-"));
+  const session = (command) => `${JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "gh pr list" }, { type: "tool_use", name: "Bash", input: { command } }] } })}\n${JSON.stringify({ type: "user", message: { content: "gh api x" } })}\n`;
+  const [a, b] = [join(dir, "a.jsonl"), join(dir, "b.jsonl")];
+  writeFileSync(a, session("dev-loops loop info"));
+  writeFileSync(b, session("gh api repos/o/r"));
+  const out = new PassThrough();
+  let text = "";
+  out.on("data", (chunk) => { text += chunk; });
+  const code = await run(["--transcript", a, "--transcript", b, "--json"], { stdout: out, stderr: new PassThrough() });
+  assert.equal(code, 1);
+  assert.deepEqual(JSON.parse(text).rawCallViolations, ["gh: gh api repos/o/r"]);
+});

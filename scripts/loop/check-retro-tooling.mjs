@@ -63,14 +63,15 @@ import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
 import { isPayloadWord, scanInlineInterpreter, stripLeadingWrappers, tokenizeShellCommand } from "@dev-loops/core/loop/bash-command-classify";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]
+const USAGE = `Usage: node scripts/loop/check-retro-tooling.mjs [--transcript <path>]... [--json]
 
-Reads a newline-delimited transcript of agent shell commands (from --transcript
-or stdin) and reports agent-level raw gh/python/node -e calls (internal-tooling-only
+Reads a newline-delimited transcript of agent shell commands, or Claude Code
+session transcripts (JSONL), from each --transcript or stdin and reports agent-level raw gh/python/node -e calls (internal-tooling-only
 rule, issue #982).
 
 Options:
-  --transcript <path>   File of newline-delimited commands (default: read stdin)
+  --transcript <path>   Repeatable. A file of newline-delimited commands, or a Claude Code session
+                        transcript (JSONL) whose Bash tool commands are extracted. Default: read stdin
   --json                Emit machine-readable JSON (default: human summary)
 
 ${JQ_OUTPUT_USAGE}
@@ -168,13 +169,28 @@ export function analyzeTranscript(transcript) {
   return { violations, allowedWriteOps, internalToolingOnly: violations.length === 0 };
 }
 
+/**
+ * A Claude Code session transcript is JSONL; its Bash tool_use inputs are the commands. A line that is
+ * not a JSON object stays a plain command line, so a newline-delimited transcript passes unchanged.
+ */
+export function extractBashCommands(text) {
+  return String(text ?? "").split(/\r?\n/).flatMap((line) => {
+    if (!line.startsWith("{")) return [line];
+    let entry;
+    try { entry = JSON.parse(line); } catch { return [line]; }
+    const content = entry?.message?.content;
+    if (!Array.isArray(content)) return [];
+    return content.filter((part) => part?.type === "tool_use" && part.name === "Bash" && typeof part.input?.command === "string").map((part) => part.input.command);
+  }).join("\n");
+}
+
 function parseCliArgs(argv) {
   let values;
   try {
     ({ values } = parseArgs({
       args: argv,
       options: {
-        transcript: { type: "string" },
+        transcript: { type: "string", multiple: true },
         json: { type: "boolean" },
         help: { type: "boolean", short: "h" },
         ...JQ_OUTPUT_PARSE_OPTIONS,
@@ -205,7 +221,7 @@ export async function run(argv, { stdout, stderr, stdin = process.stdin }) {
     return 0;
   }
   const transcript = values.transcript
-    ? readFileSync(values.transcript, "utf8")
+    ? values.transcript.map((file) => extractBashCommands(readFileSync(file, "utf8"))).join("\n")
     : await readStdin(stdin);
   if (transcript.trim().length === 0) throw new Error("empty transcript");
 

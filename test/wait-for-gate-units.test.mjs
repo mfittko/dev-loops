@@ -5,7 +5,8 @@ import { link, mkdir, open, readFile, readdir, realpath, rm, stat, symlink, utim
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
-import { resolveRepoRoot } from "../scripts/loop/_repo-root-resolver.mjs";
+import { readFileSync, readdirSync } from "node:fs";
+import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../scripts/loop/_repo-root-resolver.mjs";
 import { pullReceiptPath } from "../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../cli/index.mjs";
 import { ARTIFACT_STALE_PENDING_REMEDY, ARTIFACT_STALE_REMEDY, ARTIFACT_TIMEOUT_REMEDY, main, parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
@@ -575,4 +576,20 @@ test("--after is re-read on every poll: a reference replaced mid-wait makes an o
     assert.equal(result.outcome, "timeout");
     assert.equal(result.stale, true, "the newer reference made the artifact stale");
   });
+});
+
+test("the join resolves the same gate tmp root on every harness when --tmp-root is omitted", () => {
+  const expected = resolveGateArtifactTmpRoot(process.cwd());
+  assert.equal(parseWaitArgs(["--emit-plan", "a"]).tmpRoot, expected);
+  assert.equal(parseWaitArgs(["--judge-plan", "a"]).tmpRoot, expected);
+  assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t"]).tmpRoot, "t");
+});
+
+const REPO = fileURLToPath(new URL("../", import.meta.url));
+test("no script refuses a missing --tmp-root", () => {
+  for (const dir of ["scripts/loop", "scripts/github"]) {
+    for (const name of readdirSync(path.join(REPO, dir)).filter((n) => n.endsWith(".mjs"))) {
+      assert.doesNotMatch(readFileSync(path.join(REPO, dir, name), "utf8"), /--tmp-root is required/, `${dir}/${name}`);
+    }
+  }
 });

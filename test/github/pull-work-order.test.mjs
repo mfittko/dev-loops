@@ -837,3 +837,14 @@ test("self-hosting fixer pull: a successful delegated pull returns the worktree 
     }
   });
 });
+
+test("a pull with a custom-root execution refuses naming the searched roots and the default root", async () => {
+  await withDir(async (root) => {
+    const unit = await emitRound(root);
+    const custom = path.join(root, "custom-tmp");
+    const body = refusal(run("pull-work-order.mjs", [unit.executionIdentity, "--tmp-root", custom], root));
+    assert.equal(body.refusal, "dispatch_reference_mismatch");
+    assert.match(body.message ?? body.error ?? JSON.stringify(body), new RegExp(`searched tmp roots ${custom.replaceAll(".", "\\.")}; the default tmp root is ${resolveGateArtifactTmpRoot(root).replaceAll(".", "\\.")}`));
+    assert.equal(pull(unit, root).status, 0);
+  });
+});
