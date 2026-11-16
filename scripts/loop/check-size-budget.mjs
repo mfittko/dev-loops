@@ -304,7 +304,7 @@ export function computeSizeBudget({
   const unclassifiedPaths = [];
   // A configured t1/t3 pattern is an explicit operator signal that a path is
   // risk-slice/relaxed-tier; a matching file that classifies outside
-  // code/test, is excluded from LOC (a runtime pin, a vendored file or a generated hook mirror), still drops its LOC to 0 (docs/config/ci/asset/unknown all excluded
+  // code/test, or is excluded from LOC (a runtime pin, a vendored file or a generated hook mirror), still drops its LOC to 0 (docs/config/ci/asset/unknown all excluded
   // above), which would silently defeat that signal rather than the intended
   // "code the classifier does not recognize" gap.
   let tierPatternDroppedToZero = false;
