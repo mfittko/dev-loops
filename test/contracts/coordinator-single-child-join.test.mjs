@@ -52,6 +52,13 @@ test("COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK is registered, follows
   }
 });
 
+test("the interim-notification bullet and the bounded-wait fixer bullet are pinned", () => {
+  const contract = read("skills/docs/gate-review-sub-loop-contract.md");
+  assert.match(contract, /Claude Code interim notification: .*The Claude Code "report has not been delivered" prompt during that turn end is not a forced hand-back: the dev-loop coordinator answers it with a plain-text pause that names the child by agent id and `joinRef`, and calls no `SubagentHandback` while the child runs \(`COORDINATOR-HANDBACK-ONE-REPORT`/);
+  assert.doesNotMatch(contract, /handback-send-enforce/);
+  assert.match(contract, /The fixer delivery wait \(`wait-pr-checks`, 540 s requested\) is re-issued on `pending` and is never replaced by raw `gh pr checks` or `gh run watch`/);
+});
+
 test("each routed --artifact join command carries the --after reference", () => {
   for (const file of ["skills/docs/gate-review-sub-loop-contract.md", "skills/docs/pre-pr-review-contract.md", "skills/local-implementation/SKILL.md", "skills/copilot-pr-followup/SKILL.md", "skills/dev-loop/SKILL.md", "agents/dev-loop.agent.md"]) {
     const text = read(file);

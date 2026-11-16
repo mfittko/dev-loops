@@ -200,13 +200,18 @@ const EDIT_RULE = "Edit rule: write file content only with the Edit and Write to
 
 const REVIEW_BODY_EDIT_RULE = "Edit rule: write file content only with the Edit and Write tools. Never write file content through Bash (heredoc, redirect, `sed -i`, or cp/mv onto a tracked file). Write the handoff only at step 4; the verifier posts the reply comment.";
 
+// Under the 600 s DEV-LOOP-PROBE-TIMEOUT-CEILING; wait-pr-checks caps each call at WAIT_CAP_MS and returns `pending` (issue 3099).
+const DELIVERY_WAIT_SECONDS = 540;
+// Step 3 wait rules shared by the ci-failure order and the numbered full-phase steps.
+const WAIT_STEP_RULES = "If it prints `outcome: \"pending\"` (exit 2), run its `reissue` command unchanged in the foreground and repeat until the outcome is no longer pending. If it exits 2 with any outcome other than pending, run the original step 3 wait command exactly once more in the foreground. If the harness moves a wait to the background, run the last printed `reissue` command (or the original wait command when none was printed) in the foreground and never read raw `gh pr checks` or run `gh run watch`, because only the wait excludes `gate-evidence`.";
+
 // The branch and wait-pr-checks command shared by every numbered full-phase order.
 function branchAndWait(workOrder) {
   const root = path.dirname(path.dirname(workOrder.executionRules.contract));
   const { repo, pr } = workOrder.target;
   const { branch } = workOrder.mutationAuthority;
   if (spawnSync("git", ["check-ref-format", "--branch", branch]).status !== 0) throw new Error(`refusing to render a branch name git rejects: ${JSON.stringify(branch)}`);
-  return { branch, wait: `node ${shellQuote(path.join(root, "scripts/github/wait-pr-checks.mjs"))} --repo ${shellQuote(repo)} --pr ${pr} --timeout 900` };
+  return { branch, wait: `node ${shellQuote(path.join(root, "scripts/github/wait-pr-checks.mjs"))} --repo ${shellQuote(repo)} --pr ${pr} --timeout ${DELIVERY_WAIT_SECONDS}` };
 }
 const CI_RED_HANDBACK = "hand back `ci_failed` with the failing check names";
 const CI_UNSETTLED_HANDBACK = "hand back `ci_pending` (`ci_unknown` when the checks cannot be read)";
@@ -219,7 +224,7 @@ function ciFailureFullTask(workOrder, dispositionPath) {
 Do these steps in this order; none may be skipped or reordered:
 1. Commit the fixes and push them to branch ${JSON.stringify(branch)}.
 2. Confirm the remote head equals the pushed commit: run \`git ls-remote origin\` with the ref ${JSON.stringify(`refs/heads/${branch}`)}; it must print the pushed commit SHA. If it does not, stop and report.
-3. Run \`${wait}\` once. If it exits 2 (not settled), run it exactly once more. If CI is red (\`failure\`), ${CI_RED_HANDBACK}. If it is still not settled, reports \`stuck\` or \`changed\`, or exits 1 with an error, ${CI_UNSETTLED_HANDBACK}.
+3. Run \`${wait}\`. ${WAIT_STEP_RULES} If CI is red (\`failure\`), ${CI_RED_HANDBACK}. If it is still not settled, reports \`stuck\` or \`changed\`, or exits 1 with an error, ${CI_UNSETTLED_HANDBACK}.
 4. Only when CI is green, write the handoff \`{ "headSha": "<full pushed SHA>" }\` to \`${dispositionPath}\` with the Write tool. This is the last step.
 Edit rule: write file content only with the Edit and Write tools. Never write file content through Bash (heredoc, redirect, \`sed -i\`, or cp/mv onto a tracked file).`;
 }
@@ -230,7 +235,7 @@ function fullPhaseSteps(workOrder, verifier, { push, handoffStep = null }) {
   return `Do these steps in this order; none may be skipped or reordered:
 1. ${push}
 2. Confirm the remote head equals the candidate: run \`git ls-remote origin\` with the ref ${JSON.stringify(`refs/heads/${branch}`)}; it must print the pushed candidate SHA. If it does not, stop and report.${verifier.includes("<pushed-head-sha>") ? " Replace `<pushed-head-sha>` in steps 4 to 6 with the confirmed SHA." : ""}
-3. Run \`${wait}\` once. If it exits 2 (not settled), run it exactly once more. If CI is red (\`failure\`), resolve no thread, run no verifier step, and ${CI_RED_HANDBACK}. If it is still not settled, reports \`stuck\` or \`changed\`, or exits 1 with an error, resolve no thread, run no verifier step, and ${CI_UNSETTLED_HANDBACK}.
+3. Run \`${wait}\`. ${WAIT_STEP_RULES} If CI is red (\`failure\`), resolve no thread, run no verifier step, and ${CI_RED_HANDBACK}. If it is still not settled, reports \`stuck\` or \`changed\`, or exits 1 with an error, resolve no thread, run no verifier step, and ${CI_UNSETTLED_HANDBACK}.
 4. ${handoffStep ?? `Run \`${verifier} --construct\`. If it fails because the output exists, go to step 5. If step 5 refuses the report as hand-written, rm only this execution's refused outputRef and its corresponding stale \`<outputRef>.constructed\` marker, then re-run step 4. Preserve accepted construction evidence and unrelated files.`}
 5. Run \`${verifier}\`.
 6. Run \`${verifier} --check --report-path ${shellQuote(fixerReportPath(workOrder.outputRefs[0]))}\`. It publishes the final join report there, last; no earlier step writes it.
