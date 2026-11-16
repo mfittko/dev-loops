@@ -131,6 +131,25 @@ test("contract-doc touch without ADR or waiver blocks", () => {
   assert.ok(r.reasons.length > 0);
 });
 
+test("the waiver remedy follows the injected env, not process.env", () => {
+  const input = {
+    nameStatusOutput: ns(["M\t" + CONTRACT_DOC]),
+    baseContents: { [CONTRACT_DOC]: BASE_CONTRACT },
+    headContents: { [CONTRACT_DOC]: HEAD_CONTRACT_PROSE_ONLY },
+    prBody: "",
+  };
+  const saved = process.env.CLAUDECODE;
+  delete process.env.CLAUDECODE;
+  try {
+    const claude = computeAdrTripwire({ ...input, env: { CLAUDECODE: "1" } }).reasons.join("\n");
+    assert.match(claude, /dev-loops-run --repo-root <checkout> cli\/index\.mjs pr waive-adr-tripwire/);
+    const plain = computeAdrTripwire({ ...input, env: {} }).reasons.join("\n");
+    assert.doesNotMatch(plain, /dev-loops-run/);
+  } finally {
+    if (saved !== undefined) process.env.CLAUDECODE = saved;
+  }
+});
+
 test("gate-config touch without ADR or waiver blocks", () => {
   const r = computeAdrTripwire({
     nameStatusOutput: ns(["M\t" + GATE_CONFIG]),

@@ -395,7 +395,7 @@ test("skill docs enforce self-assignment and draft-first rules for create comman
   assert.match(finalApprovalSkill, /Human approval checkpoint/i);
   assert.match(finalApprovalSkill, /Do not restate merge-ready preconditions/i);
   assert.match(agents, /When creating GitHub issues via `gh issue create`, always include `--assignee @me`/i);
-  assert.match(agents, /dev-loops pr create \.\.\./i);
+  assert.match(agents, /dev-loops-run --repo-root <checkout> cli\/index\.mjs pr create \.\.\./i);
   assert.doesNotMatch(agents, /gh issue create` or `gh pr create`/i);
   // Workflow handoff template is now a derivation contract, not a prose dispatch template.
   // Draft-first enforcement lives in AGENTS.md and individual skill docs.

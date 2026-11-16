@@ -323,7 +323,7 @@ the alias, and `-f` skips the prompt. A dispatch to an editing worker cites
 this rule by ID.
 
 <!-- rule: WORKTREE-SCRIPT-LAUNCHER-CWD -->
-`WORKTREE-SCRIPT-LAUNCHER-CWD`: an agent MUST run a repo script either as one compound command that enters the target checkout first, `cd <checkout> && dev-loops-run scripts/<path>`, or as `dev-loops-run --repo-root <checkout> scripts/<path>`. A dispatched pull line is exempt and runs bare. The judge decision-check line (`dev-loops-run scripts/loop/check-judge-decision.mjs --file <path>`) is exempt the same way.
+`WORKTREE-SCRIPT-LAUNCHER-CWD`: an agent MUST run a repo script as `dev-loops-run --repo-root <checkout> scripts/<path>`; `--repo-root` runs the script with cwd `<checkout>`, so no `cd <checkout> &&` prefix is named. A dispatched pull line is exempt and runs bare. The judge decision-check line (`dev-loops-run scripts/loop/check-judge-decision.mjs --file <path>`) is exempt the same way.
 Each Bash call may start in another checkout, and the working directory does
 not persist between calls. A standalone `cd <checkout>` call followed by a
 separate `dev-loops-run` call therefore runs the scripts of whichever checkout
@@ -413,7 +413,7 @@ binary, or leading git global options (`-C`, `-c`, `--git-dir=`, `--work-tree=`)
 merge and re-check. Never rebase a pushed branch and never force-push it: merge `origin/<base>`,
 push the merge and re-check at the new head. The merge procedure is owned by `GATE-EXEC-BASE-REFRESH` in
 [Gate review sub-loop contract](gate-review-sub-loop-contract.md#base-refresh-before-a-gate-round).
-Run `cd <worktree> && dev-loops-run scripts/loop/pre-write-remote-freshness-guard.mjs --base <base>`
+Run `dev-loops-run --repo-root <worktree> scripts/loop/pre-write-remote-freshness-guard.mjs --base <base>`
 before validation, before push and before every gate dispatch. It exits nonzero with
 `base_stale_integrate_first`, the newer commits and any `foreignFiles` (files that differ from
 `origin/<base>` only because the base moved), with `base_fetch_failed` when the fetch fails or times

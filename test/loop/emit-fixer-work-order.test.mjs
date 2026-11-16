@@ -25,7 +25,7 @@ import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs"
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
-import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
+import { makeGhMock, runIdFreeEnv, withTempDir, withoutClaudeCode } from "../_helpers.mjs";
 import { TOOLCHAIN_ROOT, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { sealDeltaFixture } from "./_seal-fixture.mjs";
 
@@ -953,7 +953,7 @@ test("F1: a delta result that does not belong to this act list and head refuses 
   });
 });
 
-test("verdict_not_posted: an act-list order refuses without a posted verdict for the gate at the head; a threads order is unaffected", async () => {
+test("verdict_not_posted: an act-list order refuses without a posted verdict for the gate at the head; a threads order is unaffected", () => withoutClaudeCode(async () => {
   await withFixture(async ({ head, files, emit }) => {
     const refuse = (over) => assert.rejects(emit(over), /verdict_not_posted[^]*dev-loops gate upsert-verdict[^]*--head-sha[^]*--gate (draft_gate|pre_approval_gate)/);
     await refuse({ fetchVerdictMarkers: async () => summarizeGateReviewCommentMarkers([], { headSha: head }) });
@@ -974,7 +974,7 @@ test("verdict_not_posted: an act-list order refuses without a posted verdict for
     const neverCalled = async () => { throw new Error("threads source must not read verdicts"); };
     assert.equal((await emit({ ...threadsOnly, phase: "commit_only", actListFile: undefined, threadsFile: files.threads, fetchVerdictMarkers: neverCalled })).workOrder.source, "threads");
   });
-});
+}));
 
 const threadsOnly = { actListFile: undefined, gate: undefined, phase: "full" };
 const THREE = { ...THREADS, threads: ["T1", "T2", "T3"].map((threadId, i) => ({ ...THREADS.threads[0], threadId, commentId: i + 1 })) };
@@ -2684,7 +2684,7 @@ for (const route of ["Historical main", "OLD authority", "complete"]) test(`${ro
   });
 });
 
-test("F8: the work order routes validation through the canonical policy and carries no full-run command", async () => {
+test("F8: the work order routes validation through the canonical policy and carries no full-run command", () => withoutClaudeCode(async () => {
   await withFixture(async ({ emit, prepareFull }) => {
     for (const phase of ["commit_only", "full"]) {
       const unit = phase === "full" ? await (await prepareFull()).full() : await emit({ phase });
@@ -2697,6 +2697,27 @@ test("F8: the work order routes validation through the canonical policy and carr
       for (const text of strings) assert.notEqual(classifyValidationCommand(text), "full-repository", text);
     }
   });
+}));
+
+test("the work order text follows --harness, not the emitting process CLAUDECODE", async () => {
+  const saved = process.env.CLAUDECODE;
+  try {
+    await withFixture(async ({ emit }) => {
+      process.env.CLAUDECODE = "1";
+      const codex = await emit({ phase: "commit_only", harness: "codex" });
+      assert.match(codex.workOrder.executionRules.validation, /dev-loops gate resolve-validation/);
+      assert.doesNotMatch(codex.workOrder.executionRules.validation, /dev-loops-run/);
+      delete process.env.CLAUDECODE;
+      const claude = await emit({ phase: "commit_only", harness: "claude" });
+      assert.match(claude.workOrder.executionRules.validation, /dev-loops-run --repo-root <checkout> cli\/index\.mjs gate resolve-validation/);
+      await assert.rejects(
+        emit({ harness: "claude", fetchVerdictMarkers: async () => summarizeGateReviewCommentMarkers([], { headSha: claude.workOrder.headSha }) }),
+        /verdict_not_posted[^]*dev-loops-run --repo-root <checkout> cli\/index\.mjs gate upsert-verdict/,
+      );
+    });
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDECODE; else process.env.CLAUDECODE = saved;
+  }
 });
 
 test("issue 2787: a THREAD full order has the numbered steps, runs --construct and asks for no hand-written handoff", async () => {
@@ -2731,7 +2752,7 @@ async function addGenerator(wt) {
   await writeFile(path.join(wt, GENERATOR), "");
 }
 
-test("regenerate: a repository with the generator gets the rule, named for the mirror trees only", async () => {
+test("regenerate: a repository with the generator gets the rule, named for the mirror trees only", () => withoutClaudeCode(async () => {
   await withFixture(async ({ wt, emit }) => {
     await addGenerator(wt);
     const { workOrder } = await emit({});
@@ -2739,7 +2760,7 @@ test("regenerate: a repository with the generator gets the rule, named for the m
     for (const part of ["`skills/`", "`agents/`", "`commands/`", `node ${GENERATOR}`, "same commit", "bun run assets:check", "never hand-edit"]) assert.ok(rule.includes(part), part);
     assert.deepEqual([...new Set(rule.match(/\.claude\/[\w.]+\/?/g))].sort(), [".claude/agents/", ".claude/commands/", ".claude/skills/"]);
   });
-});
+}));
 
 test("regenerate: a repository without the generator gets no rule and no rendered line", async () => {
   await withFixture(async ({ emit }) => {
@@ -2760,7 +2781,7 @@ test("regenerate: the rendered line is present and the materialization hash stil
   });
 });
 
-test("regenerate: the rule is identical for the claude, pi and codex harness CLI adapters", async () => {
+test("regenerate: the rule names the launcher form for claude and the bare node form for pi and codex", async () => {
   await withFixture(async ({ root, wt, head, files, writeRecord }) => {
     await writeRecord({ items: [{ ref: ACT_REF, status: "resolved" }] });
     await addGenerator(wt);
@@ -2777,8 +2798,10 @@ test("regenerate: the rule is identical for the claude, pi and codex harness CLI
       rules.push(JSON.parse(await readFile(JSON.parse(cli.stdout).planPath, "utf8")).workOrder.executionRules.regenerate);
       await new Promise((resolve) => setTimeout(resolve, 2));
     }
-    assert.ok(rules[0]);
-    assert.equal(new Set(rules).size, 1);
+    assert.ok(rules[0].includes(`dev-loops-run --repo-root <checkout> ${GENERATOR}`));
+    assert.ok(!rules[0].includes(`node ${GENERATOR}`));
+    for (const rule of rules.slice(1)) assert.ok(rule.includes(`node ${GENERATOR}`));
+    assert.equal(rules[1], rules[2]);
   });
 });
 
