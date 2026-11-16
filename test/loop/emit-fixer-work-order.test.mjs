@@ -1928,7 +1928,15 @@ function assertFullPhaseSteps(text, { push }) {
     from += match.index + match[0].length;
   }
   assert.match(text, /If CI is red \(`failure`\), resolve no thread, run no verifier step, and hand back `ci_failed` with the failing check names/);
-  assert.match(text, /If it exits 2 \(not settled\), run it exactly once more\./);
+  // Issue 3099: the wait is capped per call, so the order re-issues on `pending` and never reads raw `gh pr checks`.
+  const timeout = Number(/wait-pr-checks\.mjs[^`]* --timeout (\d+)`/.exec(text)[1]);
+  assert.ok(timeout > 0 && timeout <= 600, `delivery wait --timeout ${timeout} must stay at or under 600`);
+  assert.doesNotMatch(text, /--timeout 900/);
+  assert.match(text, /If it prints `outcome: "pending"` \(exit 2\), run its `reissue` command unchanged in the foreground and repeat until the outcome is no longer pending\. If it exits 2 with any outcome other than pending, run the original step 3 wait command exactly once more in the foreground\./);
+  const sanctioned = "run the last printed `reissue` command (or the original wait command when none was printed) in the foreground and never read raw `gh pr checks` or run `gh run watch`, because only the wait excludes `gate-evidence`";
+  assert.ok(text.includes(sanctioned));
+  assert.match(text, /moves a wait to the background, run the last printed `reissue` command/);
+  assert.doesNotMatch(text.replace(sanctioned, ""), /gh pr checks|gh run watch/);
   assert.match(text, /reports `stuck` or `changed`, or exits 1 with an error, resolve no thread, run no verifier step, and hand back `ci_pending` \(`ci_unknown` when the checks cannot be read\)/);
   assert.doesNotMatch(text, /repeat while it reports/);
   assert.match(text, /If step 5 refuses the report as hand-written, rm only this execution's refused outputRef and its corresponding stale `<outputRef>\.constructed` marker, then re-run step 4\./);
@@ -3190,7 +3198,10 @@ test("issue 2787 C11: --ci-file emits a ci-failure order that names the failing 
     assert.match(text, /"build \(24\)"/);
     assert.match(text, /"lint \\"x\\""/);
     assert.match(text, /git ls-remote origin/);
-    assert.match(text, /wait-pr-checks\.mjs/);
+    assert.match(text, /wait-pr-checks\.mjs[^`]* --timeout 540`/);
+    assert.doesNotMatch(text, /--timeout 900/);
+    assert.match(text, /If it prints `outcome: "pending"` \(exit 2\), run its `reissue` command unchanged in the foreground/);
+    assert.match(text, /never read raw `gh pr checks` or run `gh run watch`/);
     assert.match(text, /hand back `ci_failed` with the failing check names/);
     assert.match(text, /\{ "headSha": "<full pushed SHA>" \}/);
     assert.match(text, /Edit and Write tools/);
