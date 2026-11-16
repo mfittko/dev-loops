@@ -169,6 +169,7 @@ test("a ready-PR draft_gate post with no --verdict whose --findings-json adds an
     const out = await postClean(tempDir, async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: REMEDY }), { isDraft: false, omitVerdict: true, actInFindingsJson: true });
     assert.doesNotMatch(out.error ?? "", /base_stale_integrate_first/);
     assert.equal(out.calls.length, 0);
+    assert.ok(out.mutations.some((m) => m.includes("convertPullRequestToDraft")), `expected the findings_present post to reach the draft transition, got ${JSON.stringify(out.mutations)} / ${out.error}`);
   }, { prefix: "dev-loops-base-freshness-findings-json-" });
 });
 
