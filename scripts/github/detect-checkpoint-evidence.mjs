@@ -545,7 +545,7 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
           // dispatch units than distinct reviewers could only have paired one
           // reviewer across units.
           const freshUnitCount = countFreshDispatchUnits(prov.perAngle);
-          const requiredReviewers = Math.max(FANOUT_PROVENANCE_MIN_REVIEWERS, freshUnitCount);
+          const requiredReviewers = requiredFanoutReviewers(prov, gate.contextUnitBound);
           // Re-validate the per-identity pairing here too: the ledger is a
           // worktree-local file, so the read path must not trust that the
           // write-time floor produced it (a hand-crafted padded ledger can
@@ -730,6 +730,11 @@ function corroboratedUnitBound(prov, contextUnitBounds) {
   const ledgerBound = resolveReviewerUnitBound(prov.unitBound);
   return ledgerBound > REVIEWER_UNIT_MAX_ANGLES && ![contextUnitBounds].flat().includes(ledgerBound) ? REVIEWER_UNIT_MAX_ANGLES : ledgerBound;
 }
+// A corroborated size-tier bound (above the default) legitimately packs a small round into one unit, so one reviewer suffices there.
+function requiredFanoutReviewers(prov, contextUnitBounds) {
+  const tiered = (corroboratedUnitBound(prov, contextUnitBounds) ?? REVIEWER_UNIT_MAX_ANGLES) > REVIEWER_UNIT_MAX_ANGLES;
+  return Math.max(tiered ? 1 : FANOUT_PROVENANCE_MIN_REVIEWERS, countFreshDispatchUnits(prov.perAngle));
+}
 /**
  * The resolved `fanout.unitBound` of every readable gate-context artifact across
  * the enumerated checkouts, so a stale checkout's artifact cannot shadow the
@@ -777,7 +782,7 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
     // candidate, not once up front, since a stale checkout can record a
     // different fresh angle set than the worktree ledger.
     const resolvedGroups = resolveFanoutGroups(config, resolveGateAngleCatalogKey(gateKey), ledgerAngleNames(prov.perAngle, anglePool ?? []), { fullLabel: hasFullLabel });
-    if (requireProvenance && prov.distinctReviewers < Math.max(FANOUT_PROVENANCE_MIN_REVIEWERS, countFreshDispatchUnits(prov.perAngle))) return false;
+    if (requireProvenance && prov.distinctReviewers < requiredFanoutReviewers(prov, contextUnitBound)) return false;
     if (requireProvenance && fanoutReviewerPairingError(prov.perAngle, resolvedGroups, prov.dispatchUnits, corroboratedUnitBound(prov, contextUnitBound)) !== null) return false;
     const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(prov.perAngle, { mandatoryAngles, pool: anglePool });
     if (missingMandatory.length > 0) return false;

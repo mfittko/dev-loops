@@ -1790,6 +1790,29 @@ test("buildPreMergeGateCheck with requireProvenance ON fails closed when distinc
 
 // --- Reader floor scales with the fresh-angle count (#1431) ---
 
+test("buildPreMergeGateCheck accepts one reviewer for a single size-tier unit and still requires two without a corroborated tier bound", () => {
+  const gate = (extra) => ({
+    name: "pre_approval_gate",
+    executionMode: "fanout_fanin",
+    ledgerPath: "tmp/b.json",
+    ledgerExists: true,
+    ...extra,
+    provenance: {
+      distinctReviewers: 1,
+      unitBound: 10,
+      dispatchUnits: [["scope", "safety"]],
+      perAngle: [
+        { angle: "scope", reviewer: "review-a", group: "g" },
+        { angle: "safety", reviewer: "review-a", group: "g" },
+      ],
+    },
+  });
+  const check = (g) => buildPreMergeGateCheck(cleanEvidence(), 0, null, { required: true, requireProvenance: true, gates: [g] });
+  const floorFailures = (r) => r.failures.filter((f) => f.includes("need provenance.distinctReviewers"));
+  assert.deepEqual(floorFailures(check(gate({ contextUnitBound: [10] }))), []);
+  assert.equal(floorFailures(check(gate({ contextUnitBound: [5] }))).length, 1);
+});
+
 test("buildPreMergeGateCheck with requireProvenance ON fails closed when distinctReviewers < scaled fresh-angle floor", () => {
   const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
     required: true,

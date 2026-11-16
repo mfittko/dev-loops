@@ -2629,7 +2629,7 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
     const carried = new Set(carriedAnglesList.map((a) => baseAngleName(a).trim().toLowerCase()));
     const dispatchable = groups.filter((g) => !(Array.isArray(g?.angles) && g.angles.length > 0 && g.angles.every((a) => carried.has(baseAngleName(String(a)).trim().toLowerCase()))));
     const harness = requestedHarness ?? resolveRuntimeHarness(env);
-    const modelOf = (angle) => (config ? resolveRoleModel(config, { role: angle, harness, kind: "angle" }) : null);
+    const modelOf = (angle) => (config ? resolveRoleModel(config, { role: angle, harness, kind: "angle", gate: singleWave ? configGate : undefined }) : null);
     const byModel = new Map();
     let mixedBaseUnit = false;
     for (const unit of expandDispatchUnits(dispatchable, tierNames, tierBound)) {
@@ -3382,7 +3382,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   const pendingAngles = pendingAngleNames ? angleUniverse.filter((a) => pendingAngleNames.has(a)) : angleUniverse;
   const angleModels = pendingAngles.map((angle) => ({
     angle,
-    model: !options.config ? null : resolveRoleModel(options.config, { role: angle, harness, kind: "angle" }),
+    model: !options.config ? null : resolveRoleModel(options.config, { role: angle, harness, kind: "angle", gate: options.gate === "review" ? undefined : resolveGateAngleCatalogKey(options.gate) }),
   }));
   // Harness capability, routed through the canonical 4-dimension model
   // (breakpointControl/barrierSignal/cacheTtlControl/usageTelemetry) — a

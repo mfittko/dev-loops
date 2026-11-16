@@ -1265,11 +1265,13 @@ function normalizeAngleEntries(raw) {
  * entry in any gate returns null.
  * @param {DevLoopConfig} config
  * @param {string} name
+ * @param {string} [preferGate] config gate key searched first, so a gate-scoped caller sees its own gate's entry
  * @returns {{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string, scope?: string, categories?: string[], kinds?: string[], readsPrBody?: boolean}|null}
  */
-export function findAngleEntry(config, name) {
+export function findAngleEntry(config, name, preferGate) {
   let disabled = null;
-  for (const gate of ["draft", "preApproval", "spike"]) {
+  const order = ["draft", "preApproval", "spike"];
+  for (const gate of preferGate ? [preferGate, ...order.filter((g) => g !== preferGate)] : order) {
     const entries = normalizeAngleEntries(config?.gates?.[gate]?.angles);
     for (const e of entries) {
       if (e.name !== name) continue;
@@ -1384,15 +1386,15 @@ export function resolveReviewerRole(config, angle) {
  * @param {DevLoopConfig} config
  * Codex roles select harness-scoped settings; Codex angles still inherit.
  *
- * @param {{ role: string, harness: "claude"|"pi"|"codex", kind?: "role"|"angle" }} params
+ * @param {{ role: string, harness: "claude"|"pi"|"codex", kind?: "role"|"angle", gate?: string }} params
  * @returns {string|null}
  */
-export function resolveRoleModel(config, { role, harness, kind } = {}) {
+export function resolveRoleModel(config, { role, harness, kind, gate } = {}) {
   if (harness === "codex") return kind === "angle" || !role ? null : resolveRoleSettings(config, { role, harness }).model;
   if (!role || (harness !== "claude" && harness !== "pi")) return null;
 
   if (kind === "angle") {
-    const entry = findAngleEntry(config, role);
+    const entry = findAngleEntry(config, role, gate);
     // A concrete angle model is a harness-specific string (e.g. a gpt-* id on Pi), so Claude honors only the angle's tier.
     if (harness === "pi" && typeof entry?.model === "string" && entry.model.length > 0) return entry.model;
     // Claude only: the repo-level review override (models.roles.review / models.roleTiers.review) is the angle default.

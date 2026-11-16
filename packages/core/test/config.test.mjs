@@ -7430,6 +7430,14 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     assert.equal(angle({}, "pi"), null);
   });
 
+  test("a gate-scoped angle lookup prefers its own gate's entry over an earlier gate", () => {
+    const config = { models: { tiers: { low: { claude: "sonnet" }, high: { claude: "opus" } } }, gates: { draft: { angles: [{ name: "correctness", tier: "low" }] }, preApproval: { angles: [{ name: "correctness", tier: "high" }] } } };
+    const model = (gate) => resolveRoleModel(config, { role: "correctness", harness: "claude", kind: "angle", gate });
+    assert.equal(model(undefined), "sonnet");
+    assert.equal(model("draft"), "sonnet");
+    assert.equal(model("preApproval"), "opus");
+  });
+
   test("a Claude angle tier beats models.roles.review, a concrete angle model applies on Pi only, and Codex stays null", () => {
     const withAngle = (entry, models = {}) => ({ models: { tiers: { low: { claude: "sonnet", pi: "pi-low" } }, ...models }, gates: { draft: { angles: [{ name: "correctness", ...entry }] } } });
     const angle = (config, harness) => resolveRoleModel(config, { role: "correctness", harness, kind: "angle" });
