@@ -1475,6 +1475,16 @@ test("defaultComputePatchId binds position and bytes, ignores local diff config 
     mkdirSync(join(dir, ".git", "info"), { recursive: true });
     writeFileSync(join(dir, ".git", "info", "attributes"), "*.js -diff\n");
     assert.equal(defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir }), plain, "a local info/attributes line leaves the id unchanged");
+    const tpl = join(dir, "tpl");
+    mkdirSync(join(tpl, "info"), { recursive: true });
+    writeFileSync(join(tpl, "info", "attributes"), "*.js -diff\n");
+    const prevTpl = process.env.GIT_TEMPLATE_DIR;
+    process.env.GIT_TEMPLATE_DIR = tpl;
+    try {
+      assert.equal(defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir }), plain, "an init template with info/attributes leaves the id unchanged");
+    } finally {
+      if (prevTpl === undefined) delete process.env.GIT_TEMPLATE_DIR; else process.env.GIT_TEMPLATE_DIR = prevTpl;
+    }
     assert.equal(defaultComputePatchId({ base: "origin/no-such-ref", head: "HEAD", repoRoot: dir }), null, "a git error fails closed");
   } finally {
     rmSync(dir, { recursive: true, force: true });
