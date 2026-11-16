@@ -48,6 +48,12 @@ import {
   PLAN_FILE_REFINEMENT_SECTIONS,
 } from "@dev-loops/core/loop/plan-file-intake-contract";
 import { evaluateSpikeIntakeState } from "@dev-loops/core/loop/spike-intake-contract";
+import {
+  SPEC_CHANGED_SINCE_GRILL_REASON,
+  buildSpecChangeFactsGhArgs,
+  detectSpecChangedSinceGrill,
+  parseSpecChangeFacts,
+} from "@dev-loops/core/loop/refinement-grill-state";
 import { loadBoardConfig } from "@dev-loops/core/loop/queue-board-sync";
 import { main as reconcileQueue } from "../projects/reconcile-queue.mjs";
 import { parseArgs } from "node:util";
@@ -58,6 +64,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 // the target repoRoot. A non-vendored consumer's repoRoot has no scripts/ tree;
 // resolving there threw "Cannot find module" and disabled linkage resolution.
 // Matches the module-relative sibling pattern (ui-review-diagnose.mjs).
+const SPEC_CHANGE_READ_FAILED_REASON = "spec_change_read_failed";
 const DETECT_LINKED_ISSUE_PR_SCRIPT = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "../github/detect-linked-issue-pr.mjs",
@@ -387,6 +394,8 @@ function ghJson(args, cwd, env = process.env) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: GH_CALL_TIMEOUT_MS,
+      // Default 1 MiB overflows on 100 long comment bodies (spec-change facts read).
+      maxBuffer: 16 * 1024 * 1024,
     });
     return JSON.parse(stdout);
   } catch (err) {
@@ -913,12 +922,30 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
         targetPreference: resolvedTargetPreference, inputSource, claim, expectedIssue: issue, env });
     }
     let issueReadiness;
+    let issueReadinessReason;
     try {
       const issueJson = ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "body"], repoRoot, env);
       issueReadiness = hasAcSection(issueJson.body) ? "ready" : "needs_clarification";
     } catch {
       issueReadiness = "needs_clarification";
       warnings.push(`issueReadiness: using default "${issueReadiness}" — gh issue view failed`);
+    }
+    // GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL: a ready spec that changed after
+    // its latest grill goes back to the grill. Runs regardless of the AC
+    // heading (linked refinement documents, edited-out headings); the existing
+    // readiness value is kept when no change is found.
+    {
+      try {
+        const facts = parseSpecChangeFacts(ghJson(buildSpecChangeFactsGhArgs({ repo, number: issue }), repoRoot, env));
+        if (detectSpecChangedSinceGrill({ comments: facts.comments, bodyLastEditedAt: facts.lastEditedAt, commentsTruncated: facts.commentsTruncated })) {
+          issueReadiness = "needs_clarification";
+          issueReadinessReason = SPEC_CHANGED_SINCE_GRILL_REASON;
+        }
+      } catch (error) {
+        issueReadiness = "needs_clarification";
+        issueReadinessReason = SPEC_CHANGE_READ_FAILED_REASON;
+        warnings.push(`issueReadiness: using default "${issueReadiness}" — spec-change read failed: ${error?.message ?? error}`);
+      }
     }
     // Single-contributor ownership gate: a failed read defaults to an empty
     // assignee list (today's warn+default posture for the READ).
@@ -959,6 +986,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       artifactState: "not_applicable",
       issueLinkageResolution: "resolved_no_open_pr",
       issueReadiness,
+      ...(issueReadinessReason ? { issueReadinessReason } : {}),
       issueAssignmentState,
       loopState,
       warnings: warnings.length > 0 ? warnings : undefined,
@@ -1466,7 +1494,7 @@ export function buildResolveDevLoopStartupResult(input, {
   // `canonicalSpecSource`). Strip them before evaluation and re-attach to the
   // result; `planFileExempt` waives the worktree-isolation guard because a
   // pre-promotion plan has no issue to key a worktree on.
-  const { planFileExempt = false, planFileIntakeState = null, spikeIntakeState = null, canonicalSpecSource = null, draftStart = null, ...routingInput } = input;
+  const { planFileExempt = false, planFileIntakeState = null, spikeIntakeState = null, canonicalSpecSource = null, draftStart = null, issueReadinessReason = null, ...routingInput } = input;
   input = routingInput;
   // Retrospective checkpoint gate (RETRO-ENFORCEMENT-CONFIG-GATED). The
   // durable checkpoint file, when present, is always honored. Cycle scoping
@@ -1499,6 +1527,33 @@ export function buildResolveDevLoopStartupResult(input, {
     input = { ...input, retrospectiveCheckpointState: checkpointState };
   }
   const bundle = resolveAuthoritativeStartupResumeBundle(input);
+  // GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL: every target preference stops and
+  // routes back to the grill (prefer_local never reads issueReadiness).
+  if (issueReadinessReason === SPEC_CHANGE_READ_FAILED_REASON) {
+    const issue = input.currentState?.target?.issue;
+    return {
+      ...buildNeedsReconcileStartupResult(
+        bundle,
+        `The spec-change read for issue #${issue} failed (${SPEC_CHANGE_READ_FAILED_REASON}). Retry startup; check the warnings for the read error (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
+        pendingRetrospectives,
+      ),
+      issueReadiness: input.issueReadiness,
+      issueReadinessReason,
+      ...(input.warnings ? { warnings: input.warnings } : {}),
+    };
+  }
+  if (issueReadinessReason === SPEC_CHANGED_SINCE_GRILL_REASON) {
+    const issue = input.currentState?.target?.issue;
+    return {
+      ...buildNeedsReconcileStartupResult(
+        bundle,
+        `Issue #${issue} changed after its latest "🔬 Grill / refinement results" comment (${SPEC_CHANGED_SINCE_GRILL_REASON}). Re-grill it with \`/dev-loops:loop-grill ${issue} --auto\` (or \`/loop-grill ${issue} --auto\` in the dev-loops repo itself), then re-run startup (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
+        pendingRetrospectives,
+      ),
+      issueReadiness: input.issueReadiness,
+      issueReadinessReason,
+    };
+  }
   const strategyKey = bundle.selectedStrategy ?? "none";
   if (!(strategyKey in STRATEGY_REQUIRED_READS)) {
     throw new Error(
@@ -1620,6 +1675,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       delete parsed.spikeIntakeState;
       delete parsed.canonicalSpecSource;
       delete parsed.draftStart;
+      delete parsed.issueReadinessReason;
     }
     input = parsed;
   } else if (options.issue !== undefined) {
