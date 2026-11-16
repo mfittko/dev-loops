@@ -43,7 +43,7 @@ const isFactList = (v) => Array.isArray(v) && v.length > 0 && isPathList(v);
  * @param {boolean} [input.conflictResolutionHunks] true when the merge resolved conflicts
  * @param {string} [input.detectionError] set when computing any input failed
  */
-export function classifyBaseMergeCarry(input = {}) {
+export function classifyBaseMergeCarry(input = {}, { ignoreGateTooling = false } = {}) {
   const { sourceHead, newHead, prBlobsBefore, prBlobsAfter, baseDeltaPaths, conflictResolutionHunks = false, detectionError } = input;
   const evidence = {
     sourceHead: sourceHead ?? null,
@@ -76,8 +76,11 @@ export function classifyBaseMergeCarry(input = {}) {
 
   if (JSON.stringify([...prBlobsBefore].sort()) !== JSON.stringify([...prBlobsAfter].sort())) return done("full_regate", "PR blob changed between heads");
   if (conflictResolutionHunks) return done("full_regate", "merge carries conflict-resolution hunks");
-  if (evidence.gateToolingPaths.length > 0) return done("full_regate", "base delta touches gate tooling or config");
+  if (!ignoreGateTooling && evidence.gateToolingPaths.length > 0) return done("full_regate", "base delta touches gate tooling or config");
   if (evidence.pathIntersection.length > 0) return done("full_regate", "base delta overlaps PR paths");
+  // The fixer-emit seam (ADR 0156 amendment) skips the tooling rule. Its own reason text keeps that evidence
+  // from ever validating under the default rule, so it cannot satisfy gate coordination or merge-pr.
+  if (ignoreGateTooling) return done("carry_verdict", "PR blobs identical, no overlap; gate tooling rule ignored (fixer-emit seam)");
   return done("carry_verdict", "PR blobs identical, no overlap, no gate tooling in base delta");
 }
 
@@ -90,7 +93,7 @@ export function classifyBaseMergeCarry(input = {}) {
  * expectedNewHead bind the record to the heads the caller is merging.
  * Returns { ok, reason }.
  */
-export function validateBaseMergeCarryEvidence(evidence, { expectedSourceHead, expectedNewHead } = {}) {
+export function validateBaseMergeCarryEvidence(evidence, { expectedSourceHead, expectedNewHead, ignoreGateTooling = false } = {}) {
   if (!evidence || typeof evidence !== "object") return { ok: false, reason: "evidence missing" };
   const keys = ["sourceHead", "newHead", "prBlobsBefore", "prBlobsAfter", "prDiffPaths", "baseDeltaPaths", "conflictResolutionHunks", "pathIntersection", "gateToolingPaths", "decision", "reason"];
   for (const k of keys) if (!(k in evidence)) return { ok: false, reason: `missing field ${k}` };
@@ -99,7 +102,7 @@ export function validateBaseMergeCarryEvidence(evidence, { expectedSourceHead, e
   if (expectedSourceHead !== undefined && evidence.sourceHead !== expectedSourceHead) return { ok: false, reason: "sourceHead mismatch" };
   if (expectedNewHead !== undefined && evidence.newHead !== expectedNewHead) return { ok: false, reason: "newHead mismatch" };
   if (evidence.decision === "fallback_full") return { ok: true, reason: "" }; // never carries
-  const re = classifyBaseMergeCarry(evidence);
+  const re = classifyBaseMergeCarry(evidence, { ignoreGateTooling });
   if (re.decision !== evidence.decision) return { ok: false, reason: `decision recomputes to ${re.decision}` };
   for (const k of ["prDiffPaths", "pathIntersection", "gateToolingPaths", "reason"]) {
     if (JSON.stringify(re[k]) !== JSON.stringify(evidence[k])) return { ok: false, reason: `${k} does not match recomputed value` };
