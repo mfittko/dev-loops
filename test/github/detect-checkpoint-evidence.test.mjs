@@ -1796,11 +1796,12 @@ test("buildPreMergeGateCheck accepts one reviewer for a single size-tier unit an
     executionMode: "fanout_fanin",
     ledgerPath: "tmp/b.json",
     ledgerExists: true,
+    resolvedGroups: [{ name: "g", angles: ["scope", "safety"] }],
     ...extra,
     provenance: {
       distinctReviewers: 1,
       unitBound: 10,
-      dispatchUnits: [["scope", "safety"]],
+      dispatchUnits: [{ name: "g", angles: ["scope", "safety"] }],
       perAngle: [
         { angle: "scope", reviewer: "review-a", group: "g" },
         { angle: "safety", reviewer: "review-a", group: "g" },
@@ -1809,7 +1810,9 @@ test("buildPreMergeGateCheck accepts one reviewer for a single size-tier unit an
   });
   const check = (g) => buildPreMergeGateCheck(cleanEvidence(), 0, null, { required: true, requireProvenance: true, gates: [g] });
   const floorFailures = (r) => r.failures.filter((f) => f.includes("need provenance.distinctReviewers"));
-  assert.deepEqual(floorFailures(check(gate({ contextUnitBound: [10] }))), []);
+  const packed = check(gate({ contextUnitBound: [10] }));
+  assert.deepEqual(packed.failures, []);
+  assert.equal(packed.ok, true);
   assert.equal(floorFailures(check(gate({ contextUnitBound: [5] }))).length, 1);
 });
 
@@ -4730,6 +4733,74 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES a ledger built from
       draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
       config, cwd: dir, hasFullLabel: false,
     });
+    const result = buildPreMergeGateCheck({
+      currentHeadSha: headSha,
+      draftGate: { visible: true, verdict: "clean" },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
+    }, 0, null, enforcement);
+    assert.equal(result.ok, true, JSON.stringify(result.failures));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildFanoutEnforcement selects and passes a one-reviewer ledger for a single size-tier unit with a corroborating context artifact (#3166)", async () => {
+  const { expandDispatchUnits } = await import("../../scripts/github/_dispatch-units.mjs");
+  const { resolveFanoutGroups } = await import("@dev-loops/core/config");
+  const { buildGateContextPath } = await import("../../scripts/github/_gate-artifact-paths.mjs");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-onetier-"));
+  try {
+    await writeFile(
+      path.join(dir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  requireFanoutProvenance: true",
+        "  preApproval:",
+        "    angles:",
+        "      - a",
+        "      - b",
+        "      - name: pr-checklist",
+        "        mandatory: true",
+        "      - name: holistic",
+        "        enabled: false",
+        "  fanout:",
+        "    maxAnglesPerGroup: 10",
+        "    groups:",
+        "      - name: tier",
+        "        angles: [a, b, pr-checklist]",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const dispatchUnits = expandDispatchUnits(resolveFanoutGroups(config, "preApproval", ["a", "b", "pr-checklist"]), new Set());
+    assert.equal(dispatchUnits.length, 1);
+    const headSha = "e".repeat(40);
+    const perAngle = dispatchUnits[0].angles.map((angle) => ({ angle, reviewer: "review-a", group: dispatchUnits[0].group }));
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-33");
+    await mkdir(ledgerDir, { recursive: true });
+    await writeFile(
+      path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
+      `${JSON.stringify({
+        gate: "pre_approval_gate", headSha, findings: [],
+        provenance: { distinctReviewers: 1, unitBound: 10, dispatchUnits, perAngle },
+      })}\n`,
+      "utf8",
+    );
+    const contextPath = buildGateContextPath({ repo: "owner/repo", pr: 33, gate: "pre_approval_gate", headSha, tmpRoot: "tmp" });
+    await mkdir(path.dirname(path.join(dir, contextPath)), { recursive: true });
+    await writeFile(path.join(dir, contextPath), `${JSON.stringify({ fanout: { unitBound: 10 } })}\n`, "utf8");
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 33, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: { visible: true, headSha, executionMode: "fanout_fanin" },
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const gate = enforcement.gates.find((g) => g.name === "pre_approval_gate");
+    assert.deepEqual(gate.contextUnitBound, [10]);
+    assert.ok(gate.provenance, "selection accepts the one-reviewer tier ledger");
+    assert.equal(gate.provenance.distinctReviewers, 1);
     const result = buildPreMergeGateCheck({
       currentHeadSha: headSha,
       draftGate: { visible: true, verdict: "clean" },
