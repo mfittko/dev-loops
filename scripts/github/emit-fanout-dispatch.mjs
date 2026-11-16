@@ -18,7 +18,7 @@ import { isQuarantinedHead, latestQuarantineMs, logWrittenMs } from "./_gate-qua
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
-import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES, computeReviewerUnitBudget, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_BUDGET_CAP, REVIEWER_UNIT_BUDGET_PER_EXTRA_ANGLE, REVIEWER_UNIT_MAX_ANGLES, computeReviewerUnitBudget, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "../loop/_operator-focus.mjs";
 import { dispatchUnitScope, expandDispatchUnits, normalizeUnitAngles, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 
@@ -246,7 +246,7 @@ export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unit
     ? `${REVIEWER_VERIFIED_ITEMS_INSTRUCTION}.\n`
     : "";
   const contract = `## Bounded reviewer contract
-Budget: at most ${budget.maxModelTurns} model turns and ${budget.maxToolCalls} tool calls for this unit, computed from the size of the diff blocks in this unit's scope (doc and unparsed-path blocks for a docs-only unit, every block otherwise), plus 9 model turns and 10 tool calls for each angle above 5, clamped at 95 and 100.
+Budget: at most ${budget.maxModelTurns} model turns and ${budget.maxToolCalls} tool calls for this unit, computed from the size of the diff blocks in this unit's scope (doc and unparsed-path blocks for a docs-only unit, every block otherwise), plus ${REVIEWER_UNIT_BUDGET_PER_EXTRA_ANGLE.maxModelTurns} model turns and ${REVIEWER_UNIT_BUDGET_PER_EXTRA_ANGLE.maxToolCalls} tool calls for each angle above ${REVIEWER_UNIT_MAX_ANGLES}, clamped at ${REVIEWER_UNIT_BUDGET_CAP.maxModelTurns} and ${REVIEWER_UNIT_BUDGET_CAP.maxToolCalls}.
 Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is prohibited. The one exception: also apply the Secret leaks check of the review agent's Review Focus (a prefixless secret in the diff, or a secret value written to a log, a file or a workflow output); it is never an unassigned angle.
 Prohibited: ${prohibited}.
 Widening: ${REVIEWER_WIDENING_RULE}.

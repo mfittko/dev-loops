@@ -7,6 +7,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { zeroSeverityCounts } from "@dev-loops/core/loop/gate-fanin";
 import { detectCheckpointEvidence } from "./detect-checkpoint-evidence.mjs";
 import { upsertCheckpointVerdict } from "./upsert-checkpoint-verdict.mjs";
+import { checkBaseFreshness as defaultCheckBaseFreshness, staleBaseReason } from "../loop/pre-write-remote-freshness-guard.mjs";
 // convertPrToDraft/markPrReady live in their own module (no dependency on this
 // file or upsert-checkpoint-verdict.mjs) so both callers can import them
 // statically without a circular reference back to upsert-checkpoint-verdict.mjs
@@ -204,7 +205,7 @@ function withFanoutRefusalGuidance(error, { repo, pr, headSha } = {}) {
     `\`dev-loops pr restore-ready ${repoArg}\` if CI is blocking), instead of reconciling.`
   );
 }
-export async function reconcileDraftGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild } = {}) {
+export async function reconcileDraftGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, checkBaseFreshness } = {}) {
   const { config } = await loadDevLoopConfigStrict({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
   const initialEvidence = await detectCheckpointEvidence(
@@ -240,6 +241,21 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
       );
     }
   }
+  // GATE-EXEC-BASE-REFRESH (issue 2885): refuse a stale base before any draft conversion, so a refusal never flips a ready PR to draft.
+  // An injected runChild test double skips the fetch unless the test injects the checker too.
+  const checkFreshness = checkBaseFreshness ?? (runChild === defaultRunChild ? defaultCheckBaseFreshness : null);
+  if (checkFreshness) {
+    const view = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "baseRefName"], env);
+    let baseRefName = "";
+    if (view.code === 0) {
+      // A malformed payload skips the check like a nonzero exit (a lookup failure proceeds).
+      try { baseRefName = (JSON.parse(view.stdout.trim() || "{}")?.baseRefName ?? "").trim(); } catch { baseRefName = ""; }
+    }
+    if (baseRefName) {
+      const stale = await staleBaseReason({ base: baseRefName, head: headSha, cwd: repoRoot, env, check: checkFreshness });
+      if (stale) throw new Error(`${stale} A clean draft_gate verdict is not recorded at a stale base.`);
+    }
+  }
   const draftConversion = await convertPrToDraft({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
   let gateResult;
   try {
@@ -266,7 +282,7 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
         ? "Reconciled non-draft PR — draft gate auto-reconciled (CI green)."
         : "Reconciled non-draft PR — draft gate auto-reconciled (CI optional by config).",
       nextAction: "mark ready for review",
-    }, { env, ghCommand, repoRoot, runChild });
+    }, { env, ghCommand, repoRoot, runChild, checkBaseFreshness });
   } catch (error) {
     if (draftConversion.alreadyDraft !== true) {
       try {

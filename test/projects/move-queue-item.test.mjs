@@ -937,7 +937,7 @@ describe("move-queue-item", () => {
     }
 
     // GH call sequence for a move from Backlog -> Next Up (pickup): owner,
-    // projects, fields, items, then (gate) issue view body, then the update.
+    // projects, fields, items, then (gate) the graphql body read, then the update.
     function moveResponses(itemBodyResponse, refined) {
       const responses = [
         { payload: userPayload() },
@@ -974,7 +974,7 @@ describe("move-queue-item", () => {
       await withTempCwd(async (cwd) => {
         const calls = [];
         // Same move sequence as "refuses to move an un-refined issue", but the
-        // gate's `gh issue view` (5th call) fails instead of returning a body.
+        // gate's `gh api graphql` body read (5th call) fails instead of returning a body.
         const responses = [
           { payload: userPayload() },
           { payload: listUserProjectsResponse([EXISTING_PROJECT]) },

@@ -7,7 +7,7 @@
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { readFile, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -29,6 +29,7 @@ import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
 import { closureFromHeadOf, clearingChainLastCandidates, readClosedPriorRoundLogs, renderRequiredReadLine, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
+import { fixerEmitCarryAccepts } from "../github/_carried-verdict.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { authenticateOriginalPlan, beginFixerEmission } from "../github/_fixer-emission-evidence.mjs";
@@ -200,13 +201,18 @@ const EDIT_RULE = "Edit rule: write file content only with the Edit and Write to
 
 const REVIEW_BODY_EDIT_RULE = "Edit rule: write file content only with the Edit and Write tools. Never write file content through Bash (heredoc, redirect, `sed -i`, or cp/mv onto a tracked file). Write the handoff only at step 4; the verifier posts the reply comment.";
 
+// Under the 600 s DEV-LOOP-PROBE-TIMEOUT-CEILING; wait-pr-checks caps each call at WAIT_CAP_MS and returns `pending` (issue 3099).
+const DELIVERY_WAIT_SECONDS = 540;
+// Step 3 wait rules shared by the ci-failure order and the numbered full-phase steps.
+const WAIT_STEP_RULES = "If it prints `outcome: \"pending\"` (exit 2), run its `reissue` command unchanged in the foreground and repeat until the outcome is no longer pending. If it exits 2 with any outcome other than pending, run the original step 3 wait command exactly once more in the foreground. If the harness moves a wait to the background, run the last printed `reissue` command (or the original wait command when none was printed) in the foreground and never read raw `gh pr checks` or run `gh run watch`, because only the wait excludes `gate-evidence`.";
+
 // The branch and wait-pr-checks command shared by every numbered full-phase order.
 function branchAndWait(workOrder) {
   const root = path.dirname(path.dirname(workOrder.executionRules.contract));
   const { repo, pr } = workOrder.target;
   const { branch } = workOrder.mutationAuthority;
   if (spawnSync("git", ["check-ref-format", "--branch", branch]).status !== 0) throw new Error(`refusing to render a branch name git rejects: ${JSON.stringify(branch)}`);
-  return { branch, wait: `node ${shellQuote(path.join(root, "scripts/github/wait-pr-checks.mjs"))} --repo ${shellQuote(repo)} --pr ${pr} --timeout 900` };
+  return { branch, wait: `node ${shellQuote(path.join(root, "scripts/github/wait-pr-checks.mjs"))} --repo ${shellQuote(repo)} --pr ${pr} --timeout ${DELIVERY_WAIT_SECONDS}` };
 }
 const CI_RED_HANDBACK = "hand back `ci_failed` with the failing check names";
 const CI_UNSETTLED_HANDBACK = "hand back `ci_pending` (`ci_unknown` when the checks cannot be read)";
@@ -219,7 +225,7 @@ function ciFailureFullTask(workOrder, dispositionPath) {
 Do these steps in this order; none may be skipped or reordered:
 1. Commit the fixes and push them to branch ${JSON.stringify(branch)}.
 2. Confirm the remote head equals the pushed commit: run \`git ls-remote origin\` with the ref ${JSON.stringify(`refs/heads/${branch}`)}; it must print the pushed commit SHA. If it does not, stop and report.
-3. Run \`${wait}\` once. If it exits 2 (not settled), run it exactly once more. If CI is red (\`failure\`), ${CI_RED_HANDBACK}. If it is still not settled, reports \`stuck\` or \`changed\`, or exits 1 with an error, ${CI_UNSETTLED_HANDBACK}.
+3. Run \`${wait}\`. ${WAIT_STEP_RULES} If CI is red (\`failure\`), ${CI_RED_HANDBACK}. If it is still not settled, reports \`stuck\` or \`changed\`, or exits 1 with an error, ${CI_UNSETTLED_HANDBACK}.
 4. Only when CI is green, write the handoff \`{ "headSha": "<full pushed SHA>" }\` to \`${dispositionPath}\` with the Write tool. This is the last step.
 Edit rule: write file content only with the Edit and Write tools. Never write file content through Bash (heredoc, redirect, \`sed -i\`, or cp/mv onto a tracked file).`;
 }
@@ -230,7 +236,7 @@ function fullPhaseSteps(workOrder, verifier, { push, handoffStep = null }) {
   return `Do these steps in this order; none may be skipped or reordered:
 1. ${push}
 2. Confirm the remote head equals the candidate: run \`git ls-remote origin\` with the ref ${JSON.stringify(`refs/heads/${branch}`)}; it must print the pushed candidate SHA. If it does not, stop and report.${verifier.includes("<pushed-head-sha>") ? " Replace `<pushed-head-sha>` in steps 4 to 6 with the confirmed SHA." : ""}
-3. Run \`${wait}\` once. If it exits 2 (not settled), run it exactly once more. If CI is red (\`failure\`), resolve no thread, run no verifier step, and ${CI_RED_HANDBACK}. If it is still not settled, reports \`stuck\` or \`changed\`, or exits 1 with an error, resolve no thread, run no verifier step, and ${CI_UNSETTLED_HANDBACK}.
+3. Run \`${wait}\`. ${WAIT_STEP_RULES} If CI is red (\`failure\`), resolve no thread, run no verifier step, and ${CI_RED_HANDBACK}. If it is still not settled, reports \`stuck\` or \`changed\`, or exits 1 with an error, resolve no thread, run no verifier step, and ${CI_UNSETTLED_HANDBACK}.
 4. ${handoffStep ?? `Run \`${verifier} --construct\`. If it fails because the output exists, go to step 5. If step 5 refuses the report as hand-written, rm only this execution's refused outputRef and its corresponding stale \`<outputRef>.constructed\` marker, then re-run step 4. Preserve accepted construction evidence and unrelated files.`}
 5. Run \`${verifier}\`.
 6. Run \`${verifier} --check --report-path ${shellQuote(fixerReportPath(workOrder.outputRefs[0]))}\`. It publishes the final join report there, last; no earlier step writes it.
@@ -562,12 +568,46 @@ export async function emitFixerWorkOrder({
   const actSeverities = actListFile ? source.parsed.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity])) : [];
   const lowNitOnly = actSeverities.every((s) => ["low", "nit"].includes(normalizeSeverity(s)));
   let capRoundHead = headSha; // the head whose ledger and posted verdict the act list belongs to (ADR 0197)
+  // Fixer-emit carry seam (issue 2752 slice 4, ADR 0282): the origin head is the head of the latest closed earlier ledger. It is returned only when the gate's
+  // verdict is posted there and every PR blob is unchanged at the PR head (tooling rule ignored, nothing recorded). Any failure returns null (fail closed).
+  const verdictPosted = (m) => Boolean(m?.[gate]?.visible && m[gate].contractComplete === true);
+  let carryMemo;
+  const ledgerPath = (head) => path.resolve(resolveRepoRoot(cwd), buildLogPath({ repo, pr, gate, headSha: head, tmpRoot: tmpRoot || resolveGateArtifactTmpRoot(resolveRepoRoot(cwd)) }));
+  // A head with a ledger of its own (live, blocked, unreadable or retained) ran a round whose verdict is not the origin's: the seam carries nothing across it.
+  const currentHeadLedgerExists = () => {
+    const liveLedger = ledgerPath(headSha), retainedPrefix = `${path.basename(liveLedger, ".json")}.round-`;
+    return existsSync(liveLedger) || readdirSync(path.dirname(liveLedger)).some((n) => n.startsWith(retainedPrefix) && /\.round-\d+\.json$/.test(n));
+  };
+  const carryOriginHead = () => carryMemo ??= (async () => {
+    try {
+      // The capture pins the live current-head ledger as absent, so a writer that creates it during the GitHub reads fails the publish recheck.
+      await capture.read(ledgerPath(headSha));
+      if (currentHeadLedgerExists()) return null;
+      const closed = await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), includeRetainedCurrentHead: true, includeLiveCurrentHead: true, onUnreadable: () => { throw new Error("unreadable prior ledger"); } });
+      if (closed.some((log) => String(log.headSha).trim().toLowerCase() === headSha)) return null;
+      const originHead = closureFromHeadOf(closed);
+      const baseRefName = (await fetchPr({ repo, pr }))?.baseRefName;
+      const accepted = originHead !== headSha && typeof baseRefName === "string" && baseRefName !== ""
+        && verdictPosted(await fetchVerdictMarkers({ repo, pr, headSha: originHead, gate, runtime: { env, ghCommand, runChild } }))
+        && await fixerEmitCarryAccepts({ originHead, headSha, baseRef: `origin/${baseRefName}`, repoRoot: cwd });
+      if (!accepted) return null;
+      // Pin the origin ledger admitted here, and re-check current-head ledger absence after the pending reads (retained ledgers are not covered by the capture).
+      await capture.read(ledgerPath(originHead));
+      return currentHeadLedgerExists() ? null : originHead;
+    } catch { return null; }
+  })();
   if (actListFile && (gate === "draft_gate" || lowNitOnly)) {
     // The round state comes from the same --tmp-root as the ledger writer, judge-pass and the verdict poster.
     let { lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot },{ repoRoot: resolveRepoRoot(cwd) });
+    // Slice 4: when the seam accepts, the act list belongs to the origin head's round, so the round and cap are counted there, not one round late at the ledger-less head.
+    let seamCounted = false; // the round is already counted at the origin head, so the ADR 0197 rewrite below must not reinterpret it
+    if (gate === "draft_gate" && !existsSync(ledgerPath(headSha)) && await carryOriginHead()) {
+      ({ lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha: await carryOriginHead(), tmpRoot }, { repoRoot: resolveRepoRoot(cwd) }));
+      seamCounted = true;
+    }
     // ADR 0197: a base-only merge after the cap round neither counts as a round nor consumes the closure round. The head with no ledger of its own,
     // whose changes since the cap-round head are merges of the PR base with an unchanged PR-own patch, is still the cap round: the cap-round ledger and posted verdict are read at the cap-round head.
-    if (cap > 0 && round === cap + 1 && !existsSync(path.resolve(resolveRepoRoot(cwd), buildLogPath({ repo, pr, gate, headSha, tmpRoot })))) {
+    if (!seamCounted && cap > 0 && round === cap + 1 && !existsSync(path.resolve(resolveRepoRoot(cwd), buildLogPath({ repo, pr, gate, headSha, tmpRoot })))) {
       try {
         let unreadable = 0;
         const fromHead = closureFromHeadOf(await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), onUnreadable: () => { unreadable += 1; } }));
@@ -595,8 +635,9 @@ export async function emitFixerWorkOrder({
     }
     // At the cap round the current-head round can still compose blocked (a high act item without a judgeFix, a question act item, a closed finding naming a human decision): no fixer order follows a blocked verdict. An unreadable ledger fails closed.
     if (cap > 0 && round === cap) {
-      const repoRoot = resolveRepoRoot(cwd);
-      const ledgerFile = path.resolve(repoRoot, buildLogPath({ repo, pr, gate, headSha: capRoundHead, tmpRoot: tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }));
+      // Slice 4: a head with no ledger of its own reads the origin head's ledger (the act list's round) when the carry seam accepts that head.
+      let ledgerFile = ledgerPath(capRoundHead);
+      if (!existsSync(ledgerFile)) { const origin = await carryOriginHead(); if (origin) ledgerFile = ledgerPath(origin); }
       if (!existsSync(ledgerFile)) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} does not exist; failing closed at the cap round`);
       const { findings: ledgerFindings } = await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): ${m}; failing closed at the cap round`) });
       const blockers = pastCapBlockers([...ledgerFindings, ...source.parsed], { round, cap });
@@ -706,7 +747,7 @@ export async function emitFixerWorkOrder({
     try { markers = await fetchVerdictMarkers({ repo, pr, headSha: capRoundHead, gate, runtime: { env, ghCommand, runChild } }); } catch (error) {
       throw new Refusal(`verdict_not_posted: could not read the PR's posted verdicts (${error?.message ?? error}); post the ${gate} verdict review at ${capRoundHead} before fixing: ${upsert}`);
     }
-    if (!(markers?.[gate]?.visible && markers[gate].contractComplete === true)) throw new Refusal(`verdict_not_posted: no ${gate} verdict review is posted on ${repo}#${pr} at ${capRoundHead}; post it before fixing (GATE-EXEC-POST-BEFORE-FIX): ${upsert}`);
+    if (!verdictPosted(markers) && !(await carryOriginHead())) throw new Refusal(`verdict_not_posted: no ${gate} verdict review is posted on ${repo}#${pr} at ${capRoundHead}; post it before fixing (GATE-EXEC-POST-BEFORE-FIX): ${upsert}`);
   }
 
   let completion, completionRead, candidateHead = headSha, recheckCandidate = () => {}, rejectOriginalRetirement = () => {};
@@ -821,6 +862,7 @@ export async function emitFixerWorkOrder({
   // A keyed plan records its parent execution; locateFixerUnit reports it stale once the parent is superseded or closed.
   await capture.write(tempPath, `${JSON.stringify(appendOnly ? { ...plan, parentExecutionIdentity: JSON.parse(originalBytes).executionIdentity } : plan, null, 2)}\n`);
   await capture.recheck();
+  if (carryMemo && await carryMemo && currentHeadLedgerExists()) throw new Refusal(`a gate round ledger appeared at ${headSha} while the work order was prepared; the carried verdict no longer authorizes a fixer, so re-run the emit`);
   rejectOriginalRetirement();
   recheckCandidate();
   // PRE-PUSH-DELTA-PUSH-AUTHORITY: the marker is written last so a refused emit never grants the push; only a full work order grants the fixer.

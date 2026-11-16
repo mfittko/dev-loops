@@ -537,6 +537,27 @@ test("resolve-dev-loop-startup CLI emits stable JSON for a final-approval route"
   }, { prefix: "resolve-dev-loop-startup-" });
 });
 
+test("resolve-dev-loop-startup CLI --input strips an injected issueReadinessReason", async () => {
+  await withTempDir(async (tempDir) => {
+    const inputPath = await writeTempJson(tempDir, "startup.json", {
+      currentState: {
+        target: { kind: "pr", issue: 89, pr: 92 },
+        ownership: "copilot",
+        nextActor: "user",
+        status: "approval_ready",
+        authorization: "needs_confirmation",
+      },
+      artifactState: "open",
+      issueLinkageResolution: "not_applicable",
+      issueReadinessReason: "spec_changed_since_grill",
+    });
+    const result = await runNode(["--input", inputPath], { cwd: tempDir });
+    const parsed = JSON.parse(result.stdout.trim());
+    assert.equal(parsed.issueReadinessReason, undefined);
+    assert.doesNotMatch(parsed.nextAction ?? "", /changed after its latest grill/i);
+  }, { prefix: "resolve-dev-loop-startup-" });
+});
+
 test("buildResolveDevLoopStartupResult auto-injects retrospectiveCheckpointState from file", async () => {
   await withTempDir(async (tempDir) => {
     // Create a .pi/dev-loop-retrospective-checkpoint.json in temp dir
@@ -1510,6 +1531,79 @@ test("runCli --issue resolves linked-PR detection module-relative even when the 
   }, { prefix: "resolve-dev-loop-linkage-module-relative-" });
 });
 
+test("AC5 (3127): --issue reports needs_clarification / spec_changed_since_grill when a comment is newer than the latest grill", async () => {
+  const acBody = "## Acceptance Criteria\n\n- it works\n";
+  const results = { body: "## 🔬 Grill / refinement results\n\nNo gaps were found.", createdAt: "2026-11-06T10:00:00Z" };
+  const resolveWith = async (comments) => withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const stub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
+      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: acBody }) },
+      { assertArgs: ["api", "graphql", "number=735", ".data.repository.issueOrPullRequest"],
+        stdout: JSON.stringify({ body: acBody, lastEditedAt: null, comments: { nodes: comments } }) },
+      { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
+    ], { matchMode: "claims" });
+    return buildAutoResolvedInput({ issue: 735, cwd: tempDir, env: { ...stub.env, ...resolverTestEnv() } });
+  }, { prefix: "resolve-dev-loop-spec-changed-" });
+
+  const changed = await resolveWith([results, { body: "Decision: also cover the PR surface.", createdAt: "2026-11-06T11:00:00Z" }]);
+  assert.equal(changed.issueReadiness, "needs_clarification");
+  assert.equal(changed.issueReadinessReason, "spec_changed_since_grill");
+  assert.equal(changed.warnings, undefined);
+  // The default prefer_local route never reads issueReadiness; the result
+  // builder still stops and routes the target back to the grill.
+  const routed = buildResolveDevLoopStartupResult({ ...changed, targetPreference: "prefer_local" }, { env: { ...resolverTestEnv(), DEVLOOPS_WORKTREE_BYPASS: "1" }, cwd: os.tmpdir() });
+  assert.equal(routed.selectedStrategy, "none");
+  assert.equal(routed.issueReadiness, "needs_clarification");
+  assert.equal(routed.issueReadinessReason, "spec_changed_since_grill");
+  assert.match(routed.nextAction, /loop-grill 735 --auto/);
+
+  const clean = await resolveWith([{ body: "early note", createdAt: "2026-11-06T09:00:00Z" }, results]);
+  assert.equal(clean.issueReadiness, "ready");
+  assert.equal(clean.issueReadinessReason, undefined);
+});
+
+test("AC5 (3127): a failed spec-change read stops startup on prefer_local with a read-failed warning", async () => {
+  const acBody = "## Acceptance Criteria\n\n- it works\n";
+  const failed = await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const stub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
+      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: acBody }) },
+      { assertArgs: ["api", "graphql", "number=735", ".data.repository.issueOrPullRequest"], exitCode: 1, stderr: "gh: network error\n" },
+      { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
+    ], { matchMode: "claims" });
+    return buildAutoResolvedInput({ issue: 735, cwd: tempDir, env: { ...stub.env, ...resolverTestEnv() } });
+  }, { prefix: "resolve-dev-loop-spec-read-failed-" });
+  assert.equal(failed.issueReadiness, "needs_clarification");
+  assert.equal(failed.issueReadinessReason, "spec_change_read_failed");
+  assert.ok(failed.warnings.some((w) => /spec-change read failed: \S/.test(w)));
+  const routed = buildResolveDevLoopStartupResult({ ...failed, targetPreference: "prefer_local" }, { env: { ...resolverTestEnv(), DEVLOOPS_WORKTREE_BYPASS: "1" }, cwd: os.tmpdir() });
+  assert.equal(routed.selectedStrategy, "none");
+  assert.equal(routed.issueReadiness, "needs_clarification");
+  assert.equal(routed.issueReadinessReason, "spec_change_read_failed");
+  assert.match(routed.nextAction, /Retry startup/);
+  assert.doesNotMatch(routed.nextAction, /changed after/);
+  assert.ok(routed.warnings.some((w) => /spec-change read failed: \S/.test(w)));
+});
+
+test("AC5 (3127): the freshness check runs when the issue body has no AC heading", async () => {
+  const noAcBody = "Spec lives in a linked refinement document.\n";
+  const results = { body: "## 🔬 Grill / refinement results\n\nNo gaps were found.", createdAt: "2026-11-06T10:00:00Z" };
+  const changed = await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const stub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
+      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: noAcBody }) },
+      { assertArgs: ["api", "graphql", "number=735", ".data.repository.issueOrPullRequest"],
+        stdout: JSON.stringify({ body: noAcBody, lastEditedAt: null, comments: { nodes: [results, { body: "Decision: widen scope.", createdAt: "2026-11-06T11:00:00Z" }] } }) },
+      { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
+    ], { matchMode: "claims" });
+    return buildAutoResolvedInput({ issue: 735, cwd: tempDir, env: { ...stub.env, ...resolverTestEnv() } });
+  }, { prefix: "resolve-dev-loop-spec-changed-noac-" });
+  assert.equal(changed.issueReadinessReason, "spec_changed_since_grill");
+});
+
 test("local-first phase-doc intake fires no tracker artifact / Copilot call before promotion (#953 AC3)", async () => {
   // local-first comes from the shipped extension defaults (settings only sets
   // inputSource), proving the low-noise intake holds with the shipped posture.
@@ -1780,6 +1874,7 @@ test("--issue assigned to the viewer (assigned_to_me) proceeds", async () => {
     await initRepoWithOrigin(tempDir);
     const ghStub = await writeGhStubHelper(tempDir, [
       noLinkedPrGraphqlEntry(),
+      { assertArgs: ["api", "graphql", "number=511", ".data.repository.issueOrPullRequest"], stdout: JSON.stringify({ body: "", lastEditedAt: null, comments: { nodes: [] } }) },
       { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
     ], { matchMode: "claims" });

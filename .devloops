@@ -41,6 +41,12 @@ gates:
   # sequential: false (ADR 0095).
   fanout:
     maxConcurrent: 5
+    # Size tier (ADR 0278): a small, non-risky draft or pre-approval round with
+    # weighted logic LOC at or below 40 packs same-model angles into units of up
+    # to 10. maxFiles is omitted on purpose: no file-count limit for the tier.
+    sizeTiers:
+      - maxWholeLogicLoc: 40
+        maxAnglesPerUnit: 10
   # Drop the generated .claude mirror trees from the required reviewer diff.
   # scripts/claude/generate-claude-assets.mjs owns every file in them, and
   # test/contracts/claude-assets-reproducible.test.mjs proves byte parity with

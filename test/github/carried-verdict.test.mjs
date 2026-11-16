@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { carryFromPostedVerdict, carryGateMarker, parseCarriedHeads, renderCarriedHeadsBody } from "../../scripts/github/_carried-verdict.mjs";
+import { carryFromPostedVerdict, carryGateMarker, fixerEmitCarryAccepts, parseCarriedHeads, renderCarriedHeadsBody } from "../../scripts/github/_carried-verdict.mjs";
 import { fetchDraftGateEvidence } from "../../scripts/github/_gate-finding-surface.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { buildPreMergeGateCheck } from "../../scripts/github/detect-checkpoint-evidence.mjs";
@@ -151,6 +151,30 @@ test("buildPreMergeGateCheck rejects a recorded entry whose evidence differs fro
   assert.deepEqual(result, m);
   const pre = { ...result, sizeOutcome: "pass", sizeTouchesT1: false };
   assert.equal(buildPreMergeGateCheck({ currentHeadSha: cur, draftGate: { visible: true, verdict: "clean" }, preApprovalGateMarker: pre }, 0).ok, false);
+});
+
+// Issue 2752 slice 4: the fixer-emit seam accepts a tooling base delta, but gate-round carry and merge acceptance keep the tooling rule.
+test("fixerEmitCarryAccepts accepts a scripts/ base delta that carryGateMarker and merge acceptance refuse", async () => {
+  const s = setup();
+  const origin = s.head();
+  const cur = s.mergeBase("scripts/tool.mjs");
+  assert.equal(await fixerEmitCarryAccepts({ originHead: origin, headSha: cur, baseRef: "main", repoRoot: s.dir }), true);
+  const m = marker(origin);
+  const written = [];
+  assert.deepEqual(await carry(s, m, cur, { written }), m);
+  assert.deepEqual(written, []);
+  const pre = { ...(await carry(s, m, cur, { written })), sizeOutcome: "pass", sizeTouchesT1: false };
+  assert.equal(buildPreMergeGateCheck({ currentHeadSha: cur, draftGate: { visible: true, verdict: "clean" }, preApprovalGateMarker: pre }, 0).ok, false);
+});
+
+test("fixerEmitCarryAccepts fails closed on a changed PR blob, a non-ancestor origin head and a missing base ref", async () => {
+  const s = setup();
+  const origin = s.head();
+  s.put("src/x.mjs", "changed pr blob\n"); s.git("add", "-A"); s.git("commit", "-qm", "pr edit");
+  const cur = s.mergeBase("docs/a.md");
+  assert.equal(await fixerEmitCarryAccepts({ originHead: origin, headSha: cur, baseRef: "main", repoRoot: s.dir }), false);
+  assert.equal(await fixerEmitCarryAccepts({ originHead: cur, headSha: origin, baseRef: "main", repoRoot: s.dir }), false);
+  assert.equal(await fixerEmitCarryAccepts({ originHead: origin, headSha: cur, baseRef: undefined, repoRoot: s.dir }), false);
 });
 
 test("buildPreMergeGateCheck rejects a candidate with contractComplete false", async () => {

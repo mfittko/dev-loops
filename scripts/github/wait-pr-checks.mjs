@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { capWait, parseBaselineSha, pendingFields, resolveTimeoutMs, scriptCommand } from "../lib/timeout-flag.mjs";
+import { WAIT_CAP_MS, capWait, parseBaselineSha, pendingFields, resolveTimeoutMs, scriptCommand } from "../lib/timeout-flag.mjs";
 import { parsePositiveInteger, parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -36,7 +36,7 @@ Optional:
   --timeout-ms <n>        Deprecated alias for --timeout (milliseconds); warns on
                           stderr. Passing both flags fails closed.
   --poll <seconds>        Delay between polls (default ${DEFAULT_POLL_SECONDS})
-One call waits at most 170 seconds (GATE-EXEC-BOUNDED-WAIT-CAP). A longer --timeout
+One call waits at most ${WAIT_CAP_MS / 1000} seconds (GATE-EXEC-BOUNDED-WAIT-CAP). A longer --timeout
 returns status "timeout" with outcome "pending" (exit 2) and a "reissue" command
 carrying the remaining --timeout; run it.
 Not-yet-registered-check race guard:
@@ -64,7 +64,7 @@ The RATE_LIMITED envelope is written to stdout when output is unfiltered, and
 always to stderr.
 On GraphQL rate-limit exhaustion the tool waits for the reset inside the
 remaining --timeout budget (heartbeats continue) and retries once; otherwise
-it returns RATE_LIMITED at once. When the reset falls past this call's ~170 s
+it returns RATE_LIMITED at once. When the reset falls past this call's ~${WAIT_CAP_MS / 1000} s
 cap but inside the requested budget, it sleeps within the cap and returns
 status "timeout" with outcome "pending", ciStatus "pending", the baseline
 headSha (null when none was read yet), "rateLimitResetAt" (ISO 8601) and a

@@ -372,7 +372,9 @@ for (const harness of ["claude", "pi"]) {
       const payload = parseJson(r.stdout);
       assert.equal(payload.persona, "override-persona");
       assert.equal(payload.prompt, "Override prompt.");
-      assert.equal(payload.model, "override-model");
+      // A concrete angle model is Pi-only; Claude resolves the angle's tier instead.
+      if (harness === "pi") assert.equal(payload.model, "override-model");
+      else assert.notEqual(payload.model, "override-model");
       assert.equal(payload.harness, harness);
     } finally {
       await rm(dir, { recursive: true, force: true });
