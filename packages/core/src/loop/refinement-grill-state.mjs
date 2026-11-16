@@ -30,6 +30,7 @@
 
 import { trimmedOrNull } from "./normalize.mjs";
 import { findOperatorOwnedLineRefusal } from "../github/operator-owned-lines.mjs";
+import { parseRepoSlugParts } from "../github/repo-slug.mjs";
 
 export const GRILL_STATE = Object.freeze({
   LOAD_TARGET: "load_target",
@@ -132,12 +133,15 @@ export const SPEC_CHANGED_SINCE_GRILL_REASON = "spec_changed_since_grill";
 // Loop-owned comments never change the spec (GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL):
 // a `<!-- dev-loops:` marker comment, a merge record, an operator-owned line,
 // and the grill's own results comment.
+// The approve-release matcher fires mid-prose; only a line that opens with it is the operator line.
+const isProseApproveRelease = (line) => /approve\s+release/i.test(line) && !/^[ \t>*-]*approve\s+release/i.test(line);
+
 function isLoopOwnedComment(body) {
   const first = firstNonEmptyLine(body);
   return first.startsWith("<!-- dev-loops:")
     || first.startsWith("merge-pr record:")
     || isResultsComment(body)
-    || findOperatorOwnedLineRefusal(body) !== null;
+    || (findOperatorOwnedLineRefusal(first) !== null && !isProseApproveRelease(first));
 }
 
 function timestampOrNull(value) {
@@ -148,13 +152,14 @@ function timestampOrNull(value) {
 /**
  * True when the spec changed after the latest `🔬 Grill / refinement results`
  * comment: a counted (not loop-owned) comment was posted after it, or the body
- * `lastEditedAt` is after it. No dated results comment means false; the
- * provenance check owns that case. Pure.
+ * `lastEditedAt` is after it. No dated results comment means false (the
+ * provenance check owns that case), unless `commentsTruncated` says older comments
+ * fell outside the read window: then the grill may be among them, so it fails closed. Pure.
  *
- * @param {{comments?: Array<string|{body?: string, createdAt?: string}>, bodyLastEditedAt?: string|null}} input
+ * @param {{comments?: Array<string|{body?: string, createdAt?: string}>, commentsTruncated?: boolean, bodyLastEditedAt?: string|null}} input
  * @returns {boolean}
  */
-export function detectSpecChangedSinceGrill({ comments = [], bodyLastEditedAt = null } = {}) {
+export function detectSpecChangedSinceGrill({ comments = [], bodyLastEditedAt = null, commentsTruncated = false } = {}) {
   const list = Array.isArray(comments) ? comments : [];
   let latestGrill = null;
   for (const comment of list) {
@@ -164,7 +169,7 @@ export function detectSpecChangedSinceGrill({ comments = [], bodyLastEditedAt = 
       latestGrill = time;
     }
   }
-  if (latestGrill === null) return false;
+  if (latestGrill === null) return commentsTruncated === true;
   const edited = timestampOrNull(bodyLastEditedAt);
   if (edited !== null && edited > latestGrill) return true;
   return list.some((comment) => {
@@ -174,10 +179,10 @@ export function detectSpecChangedSinceGrill({ comments = [], bodyLastEditedAt = 
   });
 }
 
-// shortcut: reads the last 100 comments only; page the connection if a target outgrows that.
+// shortcut: reads the last 100 comments only; a window with no results comment but older comments fails closed (changed), page the connection if that false positive becomes common.
 const SPEC_CHANGE_FACTS_QUERY = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issueOrPullRequest(number:$number){
-... on Issue { body lastEditedAt comments(last:100) { nodes { body createdAt } } }
-... on PullRequest { body lastEditedAt comments(last:100) { nodes { body createdAt } } }
+... on Issue { body lastEditedAt comments(last:100) { pageInfo { hasPreviousPage } nodes { body createdAt } } }
+... on PullRequest { body lastEditedAt comments(last:100) { pageInfo { hasPreviousPage } nodes { body createdAt } } }
 }}}`;
 
 /**
@@ -188,7 +193,7 @@ const SPEC_CHANGE_FACTS_QUERY = `query($owner:String!,$name:String!,$number:Int!
  * @returns {string[]}
  */
 export function buildSpecChangeFactsGhArgs({ repo, number }) {
-  const [owner, name] = String(repo).split("/");
+  const { owner, name } = parseRepoSlugParts(repo);
   return [
     "api", "graphql",
     "-f", `query=${SPEC_CHANGE_FACTS_QUERY}`,
@@ -203,13 +208,14 @@ export function buildSpecChangeFactsGhArgs({ repo, number }) {
  * Normalize the `buildSpecChangeFactsGhArgs` output node. Pure.
  *
  * @param {unknown} node
- * @returns {{body: string, lastEditedAt: string|null, comments: Array<{body?: string, createdAt?: string}>}}
+ * @returns {{body: string, lastEditedAt: string|null, commentsTruncated: boolean, comments: Array<{body?: string, createdAt?: string}>}}
  */
 export function parseSpecChangeFacts(node) {
   const comments = node?.comments?.nodes ?? node?.comments;
   return {
     body: typeof node?.body === "string" ? node.body : "",
     lastEditedAt: typeof node?.lastEditedAt === "string" ? node.lastEditedAt : null,
+    commentsTruncated: node?.comments?.pageInfo?.hasPreviousPage === true,
     comments: Array.isArray(comments) ? comments : [],
   };
 }

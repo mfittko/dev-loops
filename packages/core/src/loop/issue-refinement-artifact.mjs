@@ -1570,7 +1570,7 @@ export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = f
  * @returns {Promise<{ action: "enqueue" } | { action: "divert"|"block", reason: string, missing: string[] }>}
  */
 export async function runPickupRefinementGate({ issueNumber, repo, env, runChild, auto = false, repoRoot = null }) {
-  const { body, lastEditedAt, comments } = await fetchSpecChangeFacts({ repo, number: issueNumber, env, runChild });
+  const { body, lastEditedAt, comments, commentsTruncated } = await fetchSpecChangeFacts({ repo, number: issueNumber, env, runChild });
   // a linked refinement doc satisfies the gate only when it actually
   // resolves. Paths follow the `tmp/refinement/*.md` convention and are
   // anchored to the caller's repo root (`repoRoot` option, falling back to
@@ -1582,7 +1582,7 @@ export async function runPickupRefinementGate({ issueNumber, repo, env, runChild
     issueNumber,
     resolveLinkedDoc: (p) => existsSync(path.isAbsolute(p) ? p : path.resolve(docAnchor, p)),
   });
-  const specChangedSinceGrill = detectSpecChangedSinceGrill({ comments, bodyLastEditedAt: lastEditedAt });
+  const specChangedSinceGrill = detectSpecChangedSinceGrill({ comments, bodyLastEditedAt: lastEditedAt, commentsTruncated });
   const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto, specChangedSinceGrill });
   if (decision.action === "block") {
     throw Object.assign(new Error(decision.reason), {

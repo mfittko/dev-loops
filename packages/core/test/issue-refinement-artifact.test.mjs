@@ -739,15 +739,21 @@ test("AC5 (3127): runPickupRefinementGate blocks, or diverts under --auto, a ref
   const { runPickupRefinementGate } = await import("../src/loop/issue-refinement-artifact.mjs");
   const results = { body: "## 🔬 Grill / refinement results\n\nNo gaps were found.", createdAt: "2026-11-06T10:00:00Z" };
   const node = (comments, lastEditedAt = null) => ({ body: "## Problem\n\nX\n" + MATRIX + NGOALS, lastEditedAt, comments: { nodes: comments } });
+  let graphqlCalls = 0;
   const runChildFor = (payload) => async (cmd, args) => {
+    graphqlCalls += 1;
     assert.equal(cmd, "gh");
     assert.deepEqual(args.slice(0, 2), ["api", "graphql"]);
     return { code: 0, stdout: JSON.stringify(payload), stderr: "" };
   };
-  const gate = (payload, auto = false) => runPickupRefinementGate({ issueNumber: 3127, repo: "o/r", env: {}, runChild: runChildFor(payload), auto });
+  const gate = (payload, auto = false) => {
+    graphqlCalls = 0;
+    return runPickupRefinementGate({ issueNumber: 3127, repo: "o/r", env: {}, runChild: runChildFor(payload), auto });
+  };
 
   const later = { body: "Decision: also cover the PR surface.", createdAt: "2026-11-06T11:00:00Z" };
   await assert.rejects(() => gate(node([results, later])), (err) => err.code === "MISSING_REFINEMENT_ARTIFACT" && /spec_changed_since_grill/.test(err.message));
+  assert.equal(graphqlCalls, 1, "exactly one api graphql call per gate run");
   const diverted = await gate(node([results], "2026-11-06T11:00:00Z"), true);
   assert.equal(diverted.action, "divert");
   assert.match(diverted.reason, /GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL/);

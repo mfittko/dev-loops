@@ -1542,6 +1542,26 @@ test("AC5 (3127): --issue reports needs_clarification / spec_changed_since_grill
   assert.equal(clean.issueReadinessReason, undefined);
 });
 
+test("AC5 (3127): a failed spec-change read stops startup on prefer_local with a read-failed warning", async () => {
+  const acBody = "## Acceptance Criteria\n\n- it works\n";
+  const failed = await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const stub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
+      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: acBody }) },
+      { assertArgs: ["api", "graphql", "number=735", ".data.repository.issueOrPullRequest"], exitCode: 1, stderr: "gh: network error\n" },
+      { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
+    ], { matchMode: "claims" });
+    return buildAutoResolvedInput({ issue: 735, cwd: tempDir, env: { ...stub.env, ...resolverTestEnv() } });
+  }, { prefix: "resolve-dev-loop-spec-read-failed-" });
+  assert.equal(failed.issueReadiness, "needs_clarification");
+  assert.equal(failed.issueReadinessReason, "spec_changed_since_grill");
+  assert.ok(failed.warnings.some((w) => /spec-change read failed/.test(w)));
+  const routed = buildResolveDevLoopStartupResult({ ...failed, targetPreference: "prefer_local" }, { env: { ...resolverTestEnv(), DEVLOOPS_WORKTREE_BYPASS: "1" }, cwd: os.tmpdir() });
+  assert.equal(routed.selectedStrategy, "none");
+  assert.equal(routed.issueReadiness, "needs_clarification");
+});
+
 test("local-first phase-doc intake fires no tracker artifact / Copilot call before promotion (#953 AC3)", async () => {
   // local-first comes from the shipped extension defaults (settings only sets
   // inputSource), proving the low-noise intake holds with the shipped posture.

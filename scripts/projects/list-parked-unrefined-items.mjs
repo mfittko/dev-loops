@@ -181,7 +181,7 @@ async function main(args, { env = process.env, runChild = _runChild, cwd = proce
       // The pickup gate also diverts a complete artifact whose spec changed
       // after the latest grill (GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).
       const facts = await fetchSpecChangeFacts({ repo: args.repo, number: item.issueNumber, env, runChild });
-      if (!detectSpecChangedSinceGrill({ comments: facts.comments, bodyLastEditedAt: facts.lastEditedAt })) return null;
+      if (!detectSpecChangedSinceGrill({ comments: facts.comments, bodyLastEditedAt: facts.lastEditedAt, commentsTruncated: facts.commentsTruncated })) return null;
       return {
         ...entry,
         finding: SPEC_CHANGED_SINCE_GRILL_REASON,

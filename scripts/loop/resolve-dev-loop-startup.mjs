@@ -932,12 +932,13 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     if (issueReadiness === "ready") {
       try {
         const facts = parseSpecChangeFacts(ghJson(buildSpecChangeFactsGhArgs({ repo, number: issue }), repoRoot, env));
-        if (detectSpecChangedSinceGrill({ comments: facts.comments, bodyLastEditedAt: facts.lastEditedAt })) {
+        if (detectSpecChangedSinceGrill({ comments: facts.comments, bodyLastEditedAt: facts.lastEditedAt, commentsTruncated: facts.commentsTruncated })) {
           issueReadiness = "needs_clarification";
           issueReadinessReason = SPEC_CHANGED_SINCE_GRILL_REASON;
         }
       } catch {
         issueReadiness = "needs_clarification";
+        issueReadinessReason = SPEC_CHANGED_SINCE_GRILL_REASON;
         warnings.push(`issueReadiness: using default "${issueReadiness}" — spec-change read failed`);
       }
     }

@@ -124,6 +124,7 @@ test("AC2 (3127): --repo/--number pass the GraphQL body lastEditedAt through to 
       };
       const stdout = makeCapture();
       await runCli(["--body-file", bodyPath, "--surface", "pr", "--comments-file", commentsPath, "--repo", "o/r", "--number", "7"], { stdout, stderr: makeCapture(), runChild });
+      assert.equal(calls.length, 1, "exactly one api graphql call per CLI run");
       assert.ok(calls[0].includes("number=7"));
       return JSON.parse(stdout.text());
     };

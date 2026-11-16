@@ -376,11 +376,23 @@ for (const [kind, body] of [
   ["a <!-- dev-loops: marker comment", "<!-- dev-loops:gate-verdict head=abc -->\nverdict: clean"],
   ["a merge record", "merge-pr record: merged head `abc` (squash merge); approvalVia `comment`; approver `op`."],
   ["an operator marker line", "approve merge"],
+  ["an operator marker line (approve release)", "approve release v1.3"],
   ["a results comment", `## ${RESULTS_TITLE}\n\nsecond pass`],
 ]) {
   test(`AC4: ${kind} after the latest results comment does not trigger the reason`, () => {
     const comments = [resultsComment(GRILL_AT), { body, createdAt: AFTER }];
     assert.equal(detectSpecChangedSinceGrill({ comments }), false);
+  });
+}
+
+for (const [kind, body] of [
+  ["a spec decision mentioning approve release in prose", "Decision: drop AC3. We will not approve release v1.3 without it."],
+  ["a spec decision followed by an approve merge line", "Decision: also cover the PR surface.\napprove merge"],
+  ["a spec decision ending in approve release prose", "Decision: also cover the PR surface. Once green we can approve release v1.0.14."],
+]) {
+  test(`AC4: ${kind} still triggers the reason`, () => {
+    const out = grillStateFor({ comments: [resultsComment(GRILL_AT), { body, createdAt: AFTER }] });
+    assert.equal(out.reason, SPEC_CHANGED_SINCE_GRILL_REASON);
   });
 }
 
@@ -394,14 +406,29 @@ test("a milestone-move note counts; a bypass line does not exempt the target", (
 test("no dated results comment, or undated comments, never trigger the reason", () => {
   assert.equal(detectSpecChangedSinceGrill({ comments: [{ body: "note", createdAt: AFTER }], bodyLastEditedAt: AFTER }), false);
   assert.equal(detectSpecChangedSinceGrill({ comments: [`## ${RESULTS_TITLE}`, "note"] }), false);
+});
+
+test("normalizeGrillSnapshot forces specChangedSinceGrill to false without provenance", () => {
   assert.equal(normalizeGrillSnapshot({ specChangedSinceGrill: true }).specChangedSinceGrill, false);
+});
+
+test("a truncated comment window with no results comment fails closed; an untruncated one does not", () => {
+  const comments = [{ body: "note", createdAt: AFTER }];
+  assert.equal(detectSpecChangedSinceGrill({ comments, commentsTruncated: true }), true);
+  assert.equal(detectSpecChangedSinceGrill({ comments, commentsTruncated: false }), false);
+  assert.equal(detectSpecChangedSinceGrill({ comments: [resultsComment(GRILL_AT)], commentsTruncated: true }), false);
 });
 
 test("parseSpecChangeFacts reads the GraphQL node and tolerates a body-only payload", () => {
   assert.deepEqual(
     parseSpecChangeFacts({ body: "b", lastEditedAt: AFTER, comments: { nodes: [{ body: "c", createdAt: GRILL_AT }] } }),
-    { body: "b", lastEditedAt: AFTER, comments: [{ body: "c", createdAt: GRILL_AT }] },
+    { body: "b", lastEditedAt: AFTER, commentsTruncated: false, comments: [{ body: "c", createdAt: GRILL_AT }] },
   );
-  assert.deepEqual(parseSpecChangeFacts({ body: "b" }), { body: "b", lastEditedAt: null, comments: [] });
+  assert.deepEqual(parseSpecChangeFacts({ body: "b" }), { body: "b", lastEditedAt: null, commentsTruncated: false, comments: [] });
+  assert.equal(parseSpecChangeFacts({ comments: { pageInfo: { hasPreviousPage: true }, nodes: [] } }).commentsTruncated, true);
   assert.ok(buildSpecChangeFactsGhArgs({ repo: "o/r", number: 7 }).includes("number=7"));
+  assert.ok(buildSpecChangeFactsGhArgs({ repo: "mfittko/dev-loops", number: 7 }).includes("name=dev-loops"));
+  for (const repo of ["foo", "a/b/c", "mfittko/dev-loops/extra"]) {
+    assert.throws(() => buildSpecChangeFactsGhArgs({ repo, number: 7 }), /repo must match <owner\/name>/);
+  }
 });
