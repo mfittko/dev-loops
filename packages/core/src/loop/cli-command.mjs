@@ -1,5 +1,5 @@
 // Render CLI invocations in emitted text (work orders, agentRemedy, refusals) for the active
-// harness (ADR 0118, #3105 slice 11). Under Claude Code the bare `dev-loops <ns> <sub>` form is
+// harness (ADR 0118). Under Claude Code the bare `dev-loops <ns> <sub>` form is
 // denied by the auto-mode classifier, while `dev-loops-run ...` matches the `Bash(dev-loops-run:*)`
 // allow rule. Pi and Codex text stays byte-identical.
 import { rewriteWrapperInvocation } from "../claude/asset-generation.mjs";

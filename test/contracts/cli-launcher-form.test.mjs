@@ -1,5 +1,5 @@
-// #3105 slice 11 (AC18, AC24): emitted CLI calls use the launcher form under Claude Code, and
-// Pi and Codex text stays byte-identical (#1086 cross-harness non-regression).
+// Emitted CLI calls use the launcher form under Claude Code (ADR 0118), and
+// Pi and Codex text stays byte-identical (cross-harness regression contract).
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import fs from "node:fs";

@@ -3077,7 +3077,7 @@ test("AC2 composer seam: the composed holistic dispatch prompt carries spec + di
 // #2241: the fresh-context sentinel must be invoked through the dev-loops-run
 // launcher, never a bare `node scripts/…` path — a consumer plugin install
 // ships without the scripts/ tree, so bare node throws MODULE_NOT_FOUND.
-test("renderBriefingPrefix: emits the fresh-context sentinel via the dev-loops-run launcher, never bare `node scripts/…`, in the standalone and --repo-root forms (#2241, #3105)", () => {
+test("renderBriefingPrefix: emits the fresh-context sentinel via the dev-loops-run launcher, never bare `node scripts/…`, in the standalone and --repo-root forms (#2241)",() => {
   const { text } = renderBriefingPrefix(renderInput({ worktreeRoot: "/wt/issue-2241" }));
   // Standalone form: launcher, not bare node.
   assert.ok(text.includes("dev-loops-run scripts/github/verify-fresh-review-context.mjs"));
