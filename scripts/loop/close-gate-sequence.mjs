@@ -34,7 +34,7 @@ import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-r
 /** The grace is the runner-lock TTL, floored at the 30 minute default: DEVLOOPS_STALE_RUNNER_MAX_AGE_MS can only lengthen it, so a caller cannot close a live sequence early. */
 export const fixerGraceMs = () => Math.max(STALE_RUNNER_DEFAULT_MAX_AGE_MS, resolveStaleRunnerMaxAgeMs());
 const isFullSha = (sha) => normalizeFullHeadSha(sha) === sha;
-/** A full sha, or any other safe marker file name (never a path); a non-sha name routes only to MARKER_UNREADABLE. The empty name stays uncloseable. */
+/** A full sha, or any other safe marker file name (never a path); a non-sha name routes only to MARKER_UNREADABLE. An empty name, a name over 128 characters or one with any other character stays uncloseable. */
 const isSafeMarkerName = (name) => isFullSha(name) || (/^[A-Za-z0-9._-]{1,128}$/u.test(name) && name !== "." && name !== "..");
 
 const USAGE = `usage: close-gate-sequence.mjs --head <marker baseline sha> --repo <owner/name> --pr <number> [--help]\n\n${JQ_OUTPUT_USAGE}`;
