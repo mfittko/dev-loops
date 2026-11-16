@@ -118,8 +118,8 @@ draft_gate / current-head pre_approval_gate / threads / runner-lock / fan-out-pr
   marker `approve merge <headSha>` authored by `<login>`. The marker may carry a
   suffix, `approve merge <headSha> patch-id <patchId>`. When the PR head contains
   `origin/<base>` and no head-pinned record matches, a marker by `<login>` whose
-  `<patchId>` equals the `git patch-id --stable` of `origin/<base>...<head>` also
-  satisfies it, so a base-only head change (a base merge) keeps the approval (ADR 0279).
+  `<patchId>` equals the `git patch-id --verbatim` of `origin/<base>...<head>` (whitespace and binary changes
+  count) also satisfies it, so a base-only head change (a base merge) keeps the approval (ADR 0279).
   When the head does not contain the base, the wrapper computes no patch-id and only a
   head match counts. A review approval stays head-only. The result reports
   `approvalMatch` (`head` or `patch_id`). No agent writes that marker:

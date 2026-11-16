@@ -59,7 +59,7 @@ Required:
   --pr <number>         Pull request number
 Optional:
   --base-ref-name <name>  PR base branch; lets a sealed cap-round-fixed proof stand in for the clean draft_gate comment
-  --patch-id <hex>        git patch-id --stable of origin/<base>...<head>; lets an "approve merge <sha> patch-id <hex>" comment satisfy the size gate
+  --patch-id <hex>        git patch-id --verbatim of origin/<base>...<head>; set only by merge-pr and advisory (merge-pr re-checks); lets an "approve merge <sha> patch-id <hex>" comment satisfy the size gate
   --head-declared-keys <json>  Dotted config key paths the PR head's own schema declares
                           ({"declaredKeys":[...]}); a head-only unknown key listed there is tolerated
   --head-declared-keys-sha <sha>  Head SHA the declared keys were reported for; the keys apply only when it

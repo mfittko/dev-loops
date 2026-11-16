@@ -1,6 +1,6 @@
 import { test, mock } from "bun:test";
 import assert from "node:assert/strict";
-import { mergePr, parseMergePrCliArgs, main, defaultReadMergeDiff, defaultIsAncestor, defaultFetchPrHead, buildDetectEvidenceArgv, defaultPostMergeComment } from "../../scripts/github/merge-pr.mjs";
+import { mergePr, parseMergePrCliArgs, main, defaultReadMergeDiff, defaultIsAncestor, defaultComputePatchId, defaultFetchPrHead, buildDetectEvidenceArgv, defaultPostMergeComment } from "../../scripts/github/merge-pr.mjs";
 import { runChild } from "../../scripts/_cli-primitives.mjs";
 import { captureStream } from "../_helpers.mjs";
 import { scanDiffText } from "@dev-loops/core/security/secret-scan";
@@ -1408,6 +1408,39 @@ test("defaultIsAncestor answers true, false, and throws on a bad ref in a real r
   assert.equal(defaultIsAncestor({ base: side, head: side, repoRoot: dir }), true);
   assert.equal(defaultIsAncestor({ base: side, head: first, repoRoot: dir }), false);
   assert.throws(() => defaultIsAncestor({ base: "no-such-ref", head: side, repoRoot: dir }));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("defaultComputePatchId counts whitespace and binary changes and survives a base-only refresh", () => {
+  const dir = mkdtempSync(join(tmpdir(), "patch-id-"));
+  try {
+    const git = (...args) => runGitFixture(dir, ["-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@t", ...args]);
+    const commitFile = (name, content, msg) => { writeFileSync(join(dir, name), content); git("add", name); git("commit", "-q", "-m", msg); };
+    git("init", "-q", "-b", "main");
+    commitFile("a.txt", "x\n", "base");
+    git("update-ref", "refs/remotes/origin/main", "HEAD");
+    const idAt = (branch, name, content) => {
+      git("checkout", "-q", "-B", branch, "refs/remotes/origin/main");
+      commitFile(name, content, branch);
+      return defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir });
+    };
+    const spaced = idAt("ws1", "f.txt", "a b\n");
+    const unspaced = idAt("ws2", "f.txt", "a  b\n");
+    const binA = idAt("bin1", "f.bin", Buffer.from([0, 1, 2, 3]));
+    const binB = idAt("bin2", "f.bin", Buffer.from([0, 1, 2, 4]));
+    assert.ok(spaced && unspaced && binA && binB);
+    assert.notEqual(spaced, unspaced);
+    assert.notEqual(binA, binB);
+    git("checkout", "-q", "ws1");
+    const before = defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir });
+    git("checkout", "-q", "-B", "other", "refs/remotes/origin/main");
+    commitFile("other.txt", "o\n", "base-only");
+    git("update-ref", "refs/remotes/origin/main", "HEAD");
+    git("checkout", "-q", "ws1");
+    git("merge", "-q", "--no-edit", "origin/main");
+    assert.equal(defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir }), before);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

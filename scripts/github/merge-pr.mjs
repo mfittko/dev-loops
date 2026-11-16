@@ -156,7 +156,7 @@ Merge classes:
              satisfy it. Fresh approval = a head-pinned APPROVED review by
              <login>, else a head-pinned operator comment "approve merge <headSha>",
              or, when the head contains origin/<base>, "approve merge <any sha>
-             patch-id <id>" where <id> is the git patch-id --stable of
+             patch-id <id>" where <id> is the git patch-id --verbatim of
              origin/<base>...<head> (a base-only head change keeps it valid).
 
 Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approvalVia, approvalMatch, method, repo, pr, headSha, copilotConvergenceState, copilotDisposition, copilotCarriedConvergence, copilotBodyDisposition, postMerge }
@@ -531,19 +531,19 @@ export function defaultIsAncestor({ base, head, repoRoot }) {
   }
 }
 
-// The stable patch-id of origin/<base>...<head>, or null on any error (fail closed to head-only approval).
+// The verbatim patch-id of origin/<base>...<head> (whitespace and binary changes count), or null on any error (fail closed to head-only approval).
 export function defaultComputePatchId({ base, head, repoRoot }) {
   try {
     const env = scrubGitEnv(process.env);
-    const diff = execFileSync("git", ["diff", "-U0", "--no-color", "--no-ext-diff", `${base}...${head}`], { cwd: repoRoot, env, encoding: "utf8", maxBuffer: 512 * 1024 * 1024 });
-    const out = execFileSync("git", ["patch-id", "--stable"], { cwd: repoRoot, env, input: diff, encoding: "utf8" });
+    const diff = execFileSync("git", ["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--binary", `${base}...${head}`], { cwd: repoRoot, env, encoding: "utf8", maxBuffer: 512 * 1024 * 1024 });
+    const out = execFileSync("git", ["patch-id", "--verbatim"], { cwd: repoRoot, env, input: diff, encoding: "utf8" });
     return out.trim().split(/\s+/)[0] || null;
   } catch {
     return null;
   }
 }
 
-const couldNotVerify =(baseRefName, error) => `could not verify that the head contains origin/${baseRefName || "<base>"}: ${error instanceof Error ? error.message : String(error)}`;
+const couldNotVerify = (baseRefName, error) => `could not verify that the head contains origin/${baseRefName || "<base>"}: ${error instanceof Error ? error.message : String(error)}`;
 
 // The single base + PR-head fetch of the merge. Returns a base_not_integrated refusal reason, or null.
 // Any unreadable ref, origin mismatch or fetch error is a refusal (fail closed).
@@ -789,7 +789,6 @@ export async function mergePr(options, runtime = {}) {
 
   // The only base + PR-head fetch of the merge; the ADR tripwire, the secret scan and the ancestry check reuse it.
   const fetchReason = resolveBaseFetchRefusal({ options, baseRefName, headSha: currentHeadSha, repoRoot, fetchPrHead, detectOriginSlug });
-  // --check collects this failure with the rest; a real run raises it after the verdict so an escalated refusal names the approval.
   // A patch-id approval marker counts only when the head contains the base tip (ADR 0279); any error leaves head-only matching.
   let currentPatchId = null;
   if (fetchReason === null) {
@@ -909,6 +908,7 @@ export async function mergePr(options, runtime = {}) {
   };
   // Escalated with no head-pinned approval: name the class, the exact approval line and the size class.
   const refusalClassFields = verdict.mergeClass === MERGE_CLASS.ESCALATED ? approval : { mergeClass: approval.mergeClass };
+  // --check collects this failure with the rest; a real run raises it after the verdict so an escalated refusal names the approval.
   if (fetchReason !== null && !options.check) refuseBaseNotIntegrated(fetchReason, refusalClassFields);
 
   if (options.check) {

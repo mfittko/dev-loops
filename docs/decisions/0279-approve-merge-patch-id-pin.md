@@ -14,7 +14,7 @@ The operator approval marker `approve merge <headSha>` pins one head SHA. A base
 
 The approval pins the head SHA or the PR patch-id plus base containment. A comment marker `approve merge <headSha>` keeps working. The marker may carry a suffix, `approve merge <sha> patch-id <patchId>`. When no head match exists, a marker by the named non-bot approver whose `<patchId>` equals the current patch-id also satisfies the approval, with `matchKind` `patch_id`. The `<sha>` of that marker is any 40-hex SHA.
 
-The current patch-id is the first token of `git patch-id --stable` over `git diff -U0 origin/<base>...<head>`. `merge-pr.mjs` computes it only when `origin/<base>` is an ancestor of the head. Any error leaves it null, and only a head match counts. An `APPROVED` review stays head-only. `_policy-change-approval.mjs` stays head-only.
+The current patch-id is the first token of `git patch-id --verbatim` over `git diff -U0 --no-color --no-ext-diff --no-textconv --binary origin/<base>...<head>`. `--verbatim` does not strip whitespace, so whitespace-only and binary changes change the patch-id. `merge-pr.mjs` computes it only when `origin/<base>` is an ancestor of the head. Any error leaves it null, and only a head match counts. An `APPROVED` review stays head-only. `_policy-change-approval.mjs` stays head-only.
 
 The operator alone writes the marker (`OPERATOR-OWNED-LINE`, `GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE`). The registry and the sanctioned writers are unchanged. `merge-pr.mjs` reports `approvalMatch` (`head`, `patch_id` or `null`) next to `approvalVia`.
 
@@ -24,4 +24,5 @@ This record is provisional until the operator checkpoint accepts the authority c
 
 - A base merge no longer voids a patch-id approval.
 - A patch-id approval does not cover a change to the PR's own diff, because that changes the patch-id.
+- A patch-id marker stays valid across heads, so revoking it takes a new commit that changes the diff or deleting the comment.
 - The `-U0` diff ignores context lines, so a base change that shifts only context keeps the patch-id. The base-containment check bounds the base the approval was read against.
