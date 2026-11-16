@@ -35,7 +35,9 @@ import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-r
 export const fixerGraceMs = () => Math.max(STALE_RUNNER_DEFAULT_MAX_AGE_MS, resolveStaleRunnerMaxAgeMs());
 const isFullSha = (sha) => normalizeFullHeadSha(sha) === sha;
 /** A full sha, or any other safe marker file name (never a path); a non-sha name routes only to MARKER_UNREADABLE. An empty name, a name over 128 characters or one with any other character stays uncloseable. */
-const isSafeMarkerName = (name) => isFullSha(name) || (/^[A-Za-z0-9._-]{1,128}$/u.test(name) && name !== "." && name !== "..");
+const isSafeMarkerName = (name) => normalizeFullHeadSha(name) !== null
+  ? isFullSha(name) // a case or whitespace variant of a full sha opens the real marker on a case-insensitive filesystem, so it is no non-hex name
+  : /^[A-Za-z0-9._-]{1,128}$/u.test(name) && name !== "." && name !== "..";
 
 const USAGE = `usage: close-gate-sequence.mjs --head <marker baseline sha or marker file name> --repo <owner/name> --pr <number> [--help]\n\n${JQ_OUTPUT_USAGE}`;
 const refuse =(refusal, reason, remedy) => ({ ok: false, refusal, reason, remedy });
@@ -100,13 +102,18 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
     return record?.outcome === "bounded_out" && record.nextStep === "push_to_gate" && executionIdentity !== undefined
       && record.origin?.workOrderRef === workOrderRef && record.origin?.executionIdentity === executionIdentity;
   };
-  // A sealed record of this baseline for the marker's own execution that does not push (needs_fix, fix_and_rereview) keeps the sequence live, as on the branch path; rechecked under the lock.
+  // A sealed record of this baseline that does not push (needs_fix, fix_and_rereview) keeps the sequence live, as on the branch path; rechecked under the lock.
+  // It must name the marker's own execution; a marker that names no execution (it did not parse) matches any such record of the baseline.
   const unreadableLive = () => {
     let record = null;
     try { record = readSealedGateDeltaRecord(tmpRoot, head); } catch { /* an unreadable record proves nothing */ }
-    if (executionIdentity !== undefined && record?.nextStep !== undefined && record.nextStep !== "push_to_gate"
-      && record.origin?.workOrderRef === workOrderRef && record.origin?.executionIdentity === executionIdentity) {
-      return refuse("sequence_live", `the sealed delta record of ${head} names the fixer execution ${executionIdentity} with next step ${record.nextStep}`, "Finish the sequence with the pre-push delta review (dev-loops loop pre-push-delta).");
+    if (record?.nextStep !== undefined && record.nextStep !== "push_to_gate"
+      && (executionIdentity === undefined || (record.origin?.workOrderRef === workOrderRef && record.origin?.executionIdentity === executionIdentity))) {
+      // A push record already cleared the sequence, so the next step is the full-phase emission, not another delta review.
+      const remedy = record.nextStep === "push"
+        ? "Run emit-fixer-work-order.mjs --phase full with the sealed --delta-result to emit the push order."
+        : "Finish the sequence with the pre-push delta review (dev-loops loop pre-push-delta).";
+      return refuse("sequence_live", `the sealed delta record of ${head} ${executionIdentity === undefined ? "" : `names the fixer execution ${executionIdentity} and `}has next step ${record.nextStep}`, remedy);
     }
     return null;
   };

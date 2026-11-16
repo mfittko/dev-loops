@@ -400,6 +400,15 @@ test("a commit_only emit under a held head lock refuses sequence_lock_busy and l
   });
 });
 
+test("a commit_only emit for an all-body act list refuses delta_body_only_act_set and writes no marker", async () => {
+  const { sequenceMarkerPath } = await import("@dev-loops/core/loop/fix-push-authority");
+  await withFixture(async ({ root, head, files, emit }) => {
+    await writeFile(files.actList, JSON.stringify([withFp({ severity: "high", angle: "correctness", summary: "PR body claims an unshipped route", judgeDisposition: "act" })]));
+    await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), (error) => error.refusal === "delta_body_only_act_set" && /edit-pr\.mjs/.test(error.message));
+    assert.equal(existsSync(sequenceMarkerPath(path.join(root, "tmp"), head)), false);
+  });
+});
+
 test("after a close of execution A, a new execution B on the same head stays pullable", async () => {
   const { closeGateSequence } = await import("../../scripts/loop/close-gate-sequence.mjs");
   const { readSequenceMarker } = await import("@dev-loops/core/loop/fix-push-authority");

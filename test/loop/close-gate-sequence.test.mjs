@@ -755,6 +755,78 @@ test("MARKER_UNREADABLE: a no-branch marker with a needs_fix sealed record for i
   });
 });
 
+test("MARKER_UNREADABLE: a record with next step push names the full-phase emission, not another delta review", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, execution: ex });
+    handedBack(tmpRoot, ex);
+    boundedRecord(tmpRoot, ex, { outcome: "locally_clear", nextStep: "push" });
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
+    assert.equal(result.refusal, "sequence_live");
+    assert.match(result.remedy, /emit-fixer-work-order\.mjs --phase full/);
+    assert.match(result.remedy, /--delta-result/);
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("MARKER_UNREADABLE: a corrupt marker with a live sealed record of the baseline stays sequence_live", async () => {
+  await withTempDir(async (tmpRoot) => {
+    mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
+    writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
+    boundedRecord(tmpRoot, execution(tmpRoot), { outcome: "needs_fix", nextStep: "fix_and_rereview" });
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
+    assert.equal(result.refusal, "sequence_live");
+    assert.match(result.remedy, /pre-push delta review/);
+    assert.equal(existsSync(sequenceMarkerPath(tmpRoot, HEAD)), true);
+  });
+});
+
+// A busy sequence lock makes the close wait; the wait callback rewrites the sealed record and frees the lock, so only the under-lock recheck can see the change.
+const rewriteWhileLocked = (tmpRoot, rewrite) => {
+  const lockDir = path.join(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), `${HEAD}.sequence-lock`);
+  mkdirSync(lockDir, { recursive: true });
+  return { waitMs: 5000, sleep: async () => { rewrite(); rmSync(lockDir, { recursive: true, force: true }); } };
+};
+
+test("BOUNDED_OUT: a delta record rewritten between the first check and the lock is sequence_live and the marker survives", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    handedBack(tmpRoot, ex);
+    boundedRecord(tmpRoot, ex);
+    const lock = rewriteWhileLocked(tmpRoot, () => boundedRecord(tmpRoot, ex, { outcome: "needs_fix", nextStep: "fix_and_rereview" }));
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), lock }));
+    assert.equal(result.refusal, "sequence_live");
+    assert.match(result.reason, /changed while it was checked/);
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("MARKER_UNREADABLE: a sealed record that appears between the first check and the lock is sequence_live and the marker survives", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, execution: ex });
+    handedBack(tmpRoot, ex);
+    const lock = rewriteWhileLocked(tmpRoot, () => boundedRecord(tmpRoot, ex, { outcome: "needs_fix", nextStep: "fix_and_rereview" }));
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged, lock }));
+    assert.equal(result.refusal, "sequence_live");
+    assert.match(result.reason, /next step fix_and_rereview/);
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("a case or whitespace variant of a full sha is a usage error and leaves the live marker", async () => {
+  await withTempDir(async (tmpRoot) => {
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: execution(tmpRoot) });
+    const mixed = `${HEAD.slice(0, 20)}${"A".repeat(20)}`;
+    for (const head of [HEAD.toUpperCase(), mixed, "", ".", "..", "../x", ` ${HEAD}`]) {
+      await assert.rejects(closeGateSequence(base(tmpRoot, { head, now: aged })), /not a full sha or a safe marker file name/, JSON.stringify(head));
+    }
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+    for (const head of [HEAD, "not-a-sha", "legacy.marker_1"]) await closeGateSequence(base(tmpRoot, { head, fetchPr: pr(HEAD) })); // accepted forms do not throw
+  });
+});
+
 test("MARKER_UNREADABLE waits out the dispatch grace: a young marker refuses with a rerun remedy and survives", async () => {
   await withTempDir(async (tmpRoot) => {
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD });

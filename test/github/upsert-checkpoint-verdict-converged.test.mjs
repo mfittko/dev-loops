@@ -588,6 +588,33 @@ test("body-only: an unchanged head and a head moved by a base-only merge both po
   }, { prefix: "dev-loops-converged-bodyonly-ok-" });
 });
 
+test("a mixed code and PR-body converged post reads the body digests: unchanged refuses body_unchanged, an unrecorded read refuses body_read_unrecorded, a changed body posts", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("low", 1), bodyFinding("low", 2)];
+    const ctx = path.join(capOnRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
+    const run = async ({ liveBody, recorded = true }) => {
+      await mkdir(path.dirname(ctx), { recursive: true });
+      if (recorded) await writeFile(ctx, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256(DEFAULT_TEST_PR_BODY) }] }), "utf8");
+      else await rm(ctx, { force: true });
+      let out;
+      await withPriorRounds(3, async () => { out = await post(tempDir, { findings, converged: convergedInput(findings), root: capOnRoot, runChildOptions: { liveBody } }); });
+      await rm(ctx, { force: true });
+      return out;
+    };
+    const unchanged = await run({ liveBody: DEFAULT_TEST_PR_BODY });
+    assert.match(unchanged.error ?? "", /^body_unchanged:/);
+    assert.deepEqual(unchanged.puts, []);
+    const unrecorded = await run({ liveBody: EDITED_BODY, recorded: false });
+    assert.match(unrecorded.error ?? "", /^body_read_unrecorded:/);
+    assert.deepEqual(unrecorded.puts, []);
+    const changed = await run({ liveBody: EDITED_BODY });
+    assert.equal(changed.error, undefined);
+    assert.equal(changed.result.action, "updated");
+    assert.match(changed.body, /\*\*Verdict:\*\* clean/);
+    assert.match(changed.body, /\*\*Converged:\*\*/);
+  }, { prefix: "dev-loops-converged-mixed-body-" });
+});
+
 test("body-only: a missing cap-round context refuses body_read_unrecorded, not body_unchanged", async () => {
   await withTempDir(async (tempDir) => {
     const findings = [bodyFinding("medium", 1)];

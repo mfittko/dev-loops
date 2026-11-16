@@ -1,12 +1,12 @@
 // No refusal on the delta sequence path ends at an operator `rm` of a sequence marker: each names an agent-runnable next step.
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "bun:test";
 import { renderGuardHook } from "@dev-loops/core/loop/default-branch-guard";
 import { recoveryHint, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
-import { gateDeltaRecordPath } from "../../scripts/loop/_gate-delta-record.mjs";
+import { gateDeltaRecordPath, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { closeGateSequence } from "../../scripts/loop/close-gate-sequence.mjs";
 import { assertDeltaClearsFullPhase } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { SANCTIONED_COMMANDS } from "../../scripts/loop/sanctioned-commands.mjs";
@@ -20,7 +20,7 @@ const T0 = Date.parse("2026-11-01T10:00:00Z");
 const FORBIDDEN = [/\brm\b/i, /delete the marker/i, /deleting the marker/i, /ask the operator/i];
 const sanctionedNames = Object.values(SANCTIONED_COMMANDS).flatMap((group) => Object.values(group)).filter((file) => typeof file === "string").map((file) => path.basename(file));
 // A remedy names a sanctioned command (by its script name), one of the loop commands below, or a rerun of the refusing command.
-const LOOP_COMMANDS = ["gate close-sequence", "loop pre-push-delta", "check-pre-push-delta.mjs", "emit --phase"];
+const LOOP_COMMANDS = ["gate close-sequence", "loop pre-push-delta", "check-pre-push-delta.mjs", "emit --phase", "emit-fixer-work-order.mjs"];
 const RERUN = /\b[Rr]erun\b|[Rr]e-run|\bWait for\b|Pass --repo|Pass the --/u;
 const NAMES_AGENT_STEP = { test: (text) => RERUN.test(text) || [...sanctionedNames, ...LOOP_COMMANDS].some((name) => text.includes(name)) };
 const assertAgentStep = (label, text) => {
@@ -50,6 +50,53 @@ test("every close-sequence refusal names an agent step and none names a marker d
     assert.deepEqual(refusals.map((r) => r.refusal), ["sequence_absent", "baseline_unknown", "abandonment_unproven", "abandonment_unproven", "sequence_live", "fixer_running"]);
     for (const r of refusals) assertAgentStep(`close-sequence ${r.refusal}`, `${r.remedy}`);
   });
+});
+
+test("the under-lock recheck and unreadableLive refusals name an agent step and none names a marker delete or an operator", async () => {
+  const aged = () => Date.now() + 31 * 60_000; // past the dispatch grace of the marker just written
+  const sealed = (tmpRoot, ex, over) => writeSealedGateDeltaRecord(tmpRoot, HEAD, {
+    reviewBaselineHead: HEAD, candidateHead: CANDIDATE, actSetId: "0123456789abcdef", invocation: 3, outcome: "bounded_out", nextStep: "push_to_gate", items: [],
+    origin: { workOrderRef: ex.workOrderRef, workOrderDigest: "sha256:x", executionIdentity: ex.executionIdentity }, ...over,
+  });
+  // A busy lock makes the close wait; the wait callback rewrites the sealed record and frees the lock, so only the under-lock recheck sees it.
+  const lockWithRewrite = (tmpRoot, rewrite) => {
+    const lockDir = path.join(tmpRoot, "gate-delta", `${HEAD}.sequence-lock`);
+    mkdirSync(lockDir, { recursive: true });
+    return { waitMs: 5000, sleep: async () => { rewrite(); rmSync(lockDir, { recursive: true, force: true }); } };
+  };
+  const handedBack = (tmpRoot, ex) => {
+    const receipt = pullReceiptPath(tmpRoot, ex.workOrderRef);
+    mkdirSync(path.dirname(receipt), { recursive: true });
+    writeFileSync(receipt, JSON.stringify({ executionIdentity: ex.executionIdentity, pulledAt: new Date(T0 - 60 * 60_000).toISOString() }));
+    writeFileSync(ex.outputRef, "{}");
+  };
+  const refusals = [];
+  await withTempDir(async (tmpRoot) => { // BOUNDED_OUT rewritten under the lock
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    handedBack(tmpRoot, ex);
+    sealed(tmpRoot, ex, {});
+    refusals.push(await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), lock: lockWithRewrite(tmpRoot, () => sealed(tmpRoot, ex, { outcome: "needs_fix", nextStep: "fix_and_rereview" })) })));
+  });
+  for (const nextStep of ["push", "fix_and_rereview"]) await withTempDir(async (tmpRoot) => { // unreadableLive, with and without an execution
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, execution: ex });
+    handedBack(tmpRoot, ex);
+    sealed(tmpRoot, ex, { outcome: nextStep === "push" ? "locally_clear" : "needs_fix", nextStep });
+    refusals.push(await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged })));
+    writeFileSync(path.join(tmpRoot, "gate-delta", `${HEAD}.sequence`), "{not json");
+    refusals.push(await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged })));
+  });
+  await withTempDir(async (tmpRoot) => { // unreadableLive rewritten under the lock
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, execution: ex });
+    handedBack(tmpRoot, ex);
+    refusals.push(await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged, lock: lockWithRewrite(tmpRoot, () => sealed(tmpRoot, ex, { outcome: "needs_fix", nextStep: "fix_and_rereview" })) })));
+  });
+  assert.deepEqual(refusals.map((r) => r.refusal), Array(refusals.length).fill("sequence_live"));
+  assert.equal(refusals.length, 6);
+  assert.match(refusals[1].remedy, /--phase full/);
+  for (const [i, r] of refusals.entries()) assertAgentStep(`close-sequence recheck ${i}`, r.remedy);
 });
 
 test("every push-authority refusal text names an agent step and none names a marker delete or an operator", () => {
