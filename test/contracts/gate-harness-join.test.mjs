@@ -59,5 +59,5 @@ test("the join surfaces name the command and the notification join", async () =>
   assert.match(await readRepo("skills/docs/main-agent-contract.md"), /gate coordinator's completion notification is the join signal for its round and is never dismissed as a repeat/);
   assert.match(await readRepo("skills/docs/anti-patterns.md"), /on Claude Code, one foreground `[^`]*gate wait-for-units` call per wave/);
   assert.match(await readRepo(GATE_DOC), /completion is detected under Claude Code by `[^`]*gate wait-for-units`/);
-  assert.match(await readRepo(GATE_DOC), /`gate wait-for-units` is the one gate step that runs from the main checkout/);
+  assert.match(await readRepo(GATE_DOC), /`gate wait-for-units` runs from the lane's linked worktree like the other gate steps/);
 });
