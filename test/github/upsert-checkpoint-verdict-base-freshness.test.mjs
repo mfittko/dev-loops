@@ -56,7 +56,7 @@ function makeRunChild(posted, { isDraft = true, mutations = [] } = {}) {
   };
 }
 
-async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDraft = true } = {}) {
+async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDraft = true, omitVerdict = false } = {}) {
   const clean = verdict === "clean";
   const ledgerPath = path.join(tempDir, "ledger.json");
   await writeFile(ledgerPath, JSON.stringify({
@@ -67,7 +67,7 @@ async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDra
       : { severity: "medium", angle: "correctness", summary: "medium finding", judgeDisposition: "act", judgeRationale: "test" }],
   }), "utf8");
   const options = parseUpsertCheckpointVerdictCliArgs([
-    "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD, "--verdict", verdict,
+    "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD, ...(omitVerdict ? [] : ["--verdict", verdict]),
     "--findings-summary", "base freshness test", "--findings-ledger", ledgerPath,
     "--next-action", "mark ready for review", "--inline-reason", "base freshness test",
     "--findings-severity-counts", JSON.stringify(clean ? { high: 0, medium: 0, low: 1, question: 0, nit: 0 } : { high: 0, medium: 1, low: 0, question: 0, nit: 0 }),
@@ -131,4 +131,14 @@ test("a clean draft_gate post on a ready PR at a current base reaches the draft 
     const out = await postClean(tempDir, async () => ({ ok: true, status: "base_current", base: "main" }), { isDraft: false });
     assert.ok(out.mutations.some((m) => m.includes("convertPullRequestToDraft")), `expected a draft conversion, got ${JSON.stringify(out.mutations)} / ${out.error}`);
   }, { prefix: "dev-loops-base-freshness-ready-current-" });
+});
+
+test("a ready-PR draft_gate post with no --verdict and a clean ledger refuses at a stale base before any draft conversion", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await postClean(tempDir, async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: REMEDY }), { isDraft: false, omitVerdict: true });
+    assert.match(out.error, /^base_stale_integrate_first:/);
+    assert.equal(out.calls.length, 1);
+    assert.deepEqual(out.mutations, []);
+    assert.equal(out.posted.length, 0);
+  }, { prefix: "dev-loops-base-freshness-ready-noverdict-" });
 });

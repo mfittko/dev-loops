@@ -2858,10 +2858,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   };
   // GATE-EXEC-BASE-REFRESH (issue 2885): a clean draft_gate or pre_approval_gate never records at a head that lacks origin/<base>.
   // An injected runChild test double skips the fetch unless the test injects the checker too.
-  const refuseStaleBase = async () => {
+  const refuseStaleBase = async (verdict = options.verdict) => {
     const checkFreshness = checkBaseFreshness ?? (runChild === defaultRunChild ? defaultCheckBaseFreshness : null);
     const prBase = coordinationContext?.prData?.baseRefName;
-    if (options.verdict === "clean" && !isReviewGate && checkFreshness && typeof prBase === "string" && prBase.trim()) {
+    if (verdict === "clean" && !isReviewGate && checkFreshness && typeof prBase === "string" && prBase.trim()) {
       const stale = await staleBaseReason({ base: prBase.trim(), head: canonicalHeadSha, cwd: repoRoot, env, check: checkFreshness });
       if (stale) throw new Error(`${stale} A clean ${options.gate} verdict is not recorded at a stale base.`);
     }
@@ -2980,8 +2980,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       && !coordination.draftGateAlreadySatisfied
       && coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE)
     ) {
-      // Refuse before the transition mutates the PR (draft conversion and restore).
-      await refuseStaleBase();
+      // Refuse before the transition mutates the PR (draft conversion and restore). Without --verdict the ledger verdict stands in (shortcut: the ledger overallVerdict ignores judge act items, so a stale base may refuse early a post that would derive findings_present).
+      const earlyVerdict = options.verdict ?? (options.findingsLedger ? (await loadMatchingFindingsLedger(options, canonicalHeadSha)).overallVerdict : undefined);
+      await refuseStaleBase(earlyVerdict);
       return await postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild });
     }
     // Fail closed on a lagged draft-state read: we are re-entering FROM
