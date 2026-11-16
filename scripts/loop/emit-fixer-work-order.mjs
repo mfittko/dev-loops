@@ -573,18 +573,27 @@ export async function emitFixerWorkOrder({
   const verdictPosted = (m) => Boolean(m?.[gate]?.visible && m[gate].contractComplete === true);
   let carryMemo;
   const ledgerPath = (head) => path.resolve(resolveRepoRoot(cwd), buildLogPath({ repo, pr, gate, headSha: head, tmpRoot: tmpRoot || resolveGateArtifactTmpRoot(resolveRepoRoot(cwd)) }));
+  // A head with a ledger of its own (live, blocked, unreadable or retained) ran a round whose verdict is not the origin's: the seam carries nothing across it.
+  const currentHeadLedgerExists = () => {
+    const liveLedger = ledgerPath(headSha), retainedPrefix = `${path.basename(liveLedger, ".json")}.round-`;
+    return existsSync(liveLedger) || readdirSync(path.dirname(liveLedger)).some((n) => n.startsWith(retainedPrefix) && /\.round-\d+\.json$/.test(n));
+  };
   const carryOriginHead = () => carryMemo ??= (async () => {
     try {
-      // A head with a ledger of its own (live, blocked, unreadable or retained) ran a round whose verdict is not the origin's: the seam carries nothing across it.
-      const liveLedger = ledgerPath(headSha), retainedPrefix = `${path.basename(liveLedger, ".json")}.round-`;
-      if (existsSync(liveLedger) || readdirSync(path.dirname(liveLedger)).some((n) => n.startsWith(retainedPrefix) && /\.round-\d+\.json$/.test(n))) return null;
+      // The capture pins the live current-head ledger as absent, so a writer that creates it during the GitHub reads fails the publish recheck.
+      await capture.read(ledgerPath(headSha));
+      if (currentHeadLedgerExists()) return null;
       const closed = await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), includeRetainedCurrentHead: true, includeLiveCurrentHead: true, onUnreadable: () => { throw new Error("unreadable prior ledger"); } });
       if (closed.some((log) => String(log.headSha).trim().toLowerCase() === headSha)) return null;
       const originHead = closureFromHeadOf(closed);
       const baseRefName = (await fetchPr({ repo, pr }))?.baseRefName;
-      return originHead !== headSha && typeof baseRefName === "string" && baseRefName !== ""
+      const accepted = originHead !== headSha && typeof baseRefName === "string" && baseRefName !== ""
         && verdictPosted(await fetchVerdictMarkers({ repo, pr, headSha: originHead, gate, runtime: { env, ghCommand, runChild } }))
-        && await fixerEmitCarryAccepts({ originHead, headSha, baseRef: `origin/${baseRefName}`, repoRoot: cwd }) ? originHead : null;
+        && await fixerEmitCarryAccepts({ originHead, headSha, baseRef: `origin/${baseRefName}`, repoRoot: cwd });
+      if (!accepted) return null;
+      // Pin the origin ledger admitted here, and re-check current-head ledger absence after the pending reads (retained ledgers are not covered by the capture).
+      await capture.read(ledgerPath(originHead));
+      return currentHeadLedgerExists() ? null : originHead;
     } catch { return null; }
   })();
   if (actListFile && (gate === "draft_gate" || lowNitOnly)) {
@@ -853,6 +862,7 @@ export async function emitFixerWorkOrder({
   // A keyed plan records its parent execution; locateFixerUnit reports it stale once the parent is superseded or closed.
   await capture.write(tempPath, `${JSON.stringify(appendOnly ? { ...plan, parentExecutionIdentity: JSON.parse(originalBytes).executionIdentity } : plan, null, 2)}\n`);
   await capture.recheck();
+  if (carryMemo && await carryMemo && currentHeadLedgerExists()) throw new Refusal(`a gate round ledger appeared at ${headSha} while the work order was prepared; the carried verdict no longer authorizes a fixer, so re-run the emit`);
   rejectOriginalRetirement();
   recheckCandidate();
   // PRE-PUSH-DELTA-PUSH-AUTHORITY: the marker is written last so a refused emit never grants the push; only a full work order grants the fixer.

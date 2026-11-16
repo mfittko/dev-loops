@@ -3185,6 +3185,19 @@ test("issue 2752 slice 4: every fail-closed case keeps the verdict_not_posted re
   });
 });
 
+test("issue 2752 slice 4: a current-head ledger written while the verdict reads are pending refuses the carried emit", async () => {
+  await withFixture(async (fx) => {
+    const { merged, over } = await verdictCarryScenario(fx, { cap: 3 });
+    const base = over();
+    const fetchVerdictMarkers = async (args) => {
+      const result = await base.fetchVerdictMarkers(args);
+      await writeFile(path.join(fx.root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${merged}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: merged, verdict: "blocked", loggedAt: "2026-11-03T00:00:00.000Z", findings: [] }));
+      return result;
+    };
+    await assert.rejects(fx.emit({ ...base, fetchVerdictMarkers }), (e) => /verdict_not_posted|changed source identity|ledger appeared/.test(e.message));
+  });
+});
+
 test("issue 2752 slice 4: at the cap round the origin head's ledger decides the blocker check under an accepted seam", async () => {
   await withFixture(async (fx) => {
     const question = withFp({ ...ACT[0], severity: "question", summary: "which API shape", judgeFix: "" });
