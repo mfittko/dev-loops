@@ -136,6 +136,12 @@ export const INLINE_INTERPRETER_FORMS = [
   deny("env --split-string='node -e x'"),
   deny("sudo env -S 'node -e x'"),
   deny("env -i -S 'node -e x'"),
+  // any env split-string form denies: env runs its operand as a command line the gate cannot read
+  deny("env -iS 'node -e x'"),
+  deny("env -vS 'node -e x'"),
+  deny("env -S '-i node -e x'"),
+  deny("env -S 'A=1 node -e x'"),
+  deny("env -S 'ls'"),
   deny("cat > a.mjs <<<x"),
   deny("tee a.txt <<<x"),
   // an unquoted heredoc body of a data head is data: markdown lines are no shell; a substitution still runs
@@ -323,6 +329,9 @@ export const INLINE_INTERPRETER_FORMS = [
   ceiling("git rebase -ix 'true; node -e y' HEAD~1"),
   ceiling("python3 <<< 'x'"),
   ceiling("node 0<<< 'x'"),
+  // a dynamic here-string read by a file runner, and a gh subcommand that reads its body as shell
+  ceiling("bash <<< \"$(cat <<'EOF'\nls\nEOF\n)\""),
+  ceiling("gh alias set --shell x - <<'EOF'\nnode -e 1\nEOF"),
   // origin/main denied this; the head reads the here-string as a stdin payload (ceiling), reported by check-retro-tooling (operator decision 2)
   ceiling("node <<< x script.js"),
   // origin/main denied these pipe, dash and here-string variants; the head reads the stdin payload (ceiling, operator decision 2)

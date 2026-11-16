@@ -1746,15 +1746,16 @@ function wordOf(word) {
   return { value: word.parts.map(text).join(""), start: word.start, quoted: word.parts.some((p) => p.type === "SglQuoted" || p.type === "DblQuoted"), expandsToName, dynamic: word.parts.some(dynamic) };
 }
 
-/** REST starts at an `env` option: when it is `-S STR`, `-SSTR` or `--split-string[=]STR`, the words with STR split on whitespace in its place (env runs STR as a command line), else null. shortcut: a quote inside STR is not honored, so it splits on every space; a split inside a quoted word only adds words. */
-function envSplitWords(rest) {
-  const v = rest[0]?.value ?? "";
-  const attached = /^(?:-S|--split-string=)(.+)$/s.exec(v);
-  const separate = v === "-S" || v === "--split-string";
-  const text = attached ? attached[1] : separate ? rest[1]?.value : null;
-  if (text == null) return null;
-  const parts = text.split(/\s+/).filter(Boolean).map((value) => ({ value, start: rest[0].start, quoted: false, expandsToName: false, dynamic: false }));
-  return [...parts, ...rest.slice(separate ? 2 : 1)];
+/** Whether WORDS is `env` with a split-string option (`-S`, a cluster holding `S`, `--split-string`): env runs its operand as a command line the gate cannot read, so it denies. */
+function envSplitString(words) {
+  let w = words;
+  while (ENV_ASSIGNMENT_WORD_RE.test(w[0]?.value ?? "")) w = w.slice(1);
+  if ((w[0]?.value ?? "").split("/").pop() !== "env") return false;
+  for (const { value } of w.slice(1)) {
+    if (/^-[A-Za-z]*S/.test(value) || /^--split-string(=|$)/.test(value)) return true;
+    if (!value.startsWith("-")) return false;
+  }
+  return false;
 }
 
 const DURATION_WORD_RE = /^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?$/i;
@@ -1769,10 +1770,9 @@ function stripWordWrappers(words) {
       for (let v; (v = w[i]?.value) !== undefined && /^-{1,2}[\w-]+(?:=.*)?$/.test(v); i++) if (!v.includes("=") && DURATION_WORD_RE.test(w[i + 2]?.value ?? "") && !w[i + 1].value.startsWith("-")) i++; // an option value, when a duration follows it
       rest = DURATION_WORD_RE.test(w[i]?.value ?? "") ? w.slice(i + 1) : [];
     } else if (WRAPPER_BINARIES.has(head)) {
+      if (envSplitString(w)) return w; // stop at the `env -S` word: `visit` denies it
       rest = w.slice(1);
       while (rest[0]?.value.startsWith("-")) {
-        const split = head === "env" ? envSplitWords(rest) : null;
-        if (split) { rest = split; break; }
         const bare = /^(?:-[A-Za-z]|--[\w-]+)$/.test(rest[0].value);
         rest = rest.slice(1);
         if (bare && rest.length > 1 && !rest[0].value.startsWith("-") && !WRAPPER_FLAG_TARGETS.has(rest[0].value.replace(/^.*\//, ""))) rest = rest.slice(1);
@@ -1845,6 +1845,7 @@ function inspectShell(command, report = false, skipFirst = false) {
     for (const r of redirs) { if (isHeredoc(r)) stdin.heredoc ??= r.start; else if (r.op === R.WordHdoc) stdin.herestring ??= r.start; }
     const tails = [stripWordWrappers(words), stripExecPrefix(words)].filter((t) => t.length);
     if (skipping) { skipping = false; return; }
+    if (tails.some(envSplitString)) out.deny = true;
     for (const tail of tails) {
       // a head that bash expands first (ANSI-C quote, brace/glob) can name any binary: deny. A parameter expansion or substitution in the head is a reported ceiling.
       if (tail[0].expandsToName && tail[0].value !== "[") out.deny = true;
@@ -1886,7 +1887,9 @@ function inspectShell(command, report = false, skipFirst = false) {
     const unterminated = (r) => isHeredoc(r) && (!r.hdoc || (r.hdoc.parts.length > 0 && !(r.hdoc.parts.at(-1).type === "Lit" && r.hdoc.parts.at(-1).value.endsWith("\n"))));
     // a body is data when a top-level `gh` takes it unpiped (a PR or issue comment body; bash expands only `$()`, backticks and `${}` in it, and the walk reads those); any other host may write then run it, so its body stays read as shell
     // shortcut: only `gh` is a data head, widen the head set when another body-taking CLI shows up as a ceiling false positive
-    const bodyIsShell = !(head0 === "gh" && depth === 0 && !pipedOut.has(stmt));
+    // body-taking subcommands only: any other `gh` subcommand (`gh alias set --shell`) can run its body as shell
+    const ghData = /^(?:pr (?:comment|create|edit|review)|issue (?:comment|create|edit)|api)$/.test((tails[0] ?? []).slice(1).filter((w) => !w.value.startsWith("-")).slice(0, 2).map((w) => w.value).join(" ").replace(/^api .*/, "api"));
+    const bodyIsShell = !(head0 === "gh" && ghData && depth === 0 && !pipedOut.has(stmt));
     // a shell that reads a here-string built by a substitution runs text the gate cannot see
     if (FILE_RUNNER_HEAD_RE.test(head0) && redirs.some((r) => r.op === R.WordHdoc && wordOf(r.word).dynamic)) out.ceiling = true;
     if (redirs.some(unterminated) || (!dataHost && bodyIsShell && redirs.some((r) => heredocBody(r) !== null && formIn(heredocBody(r), false)))) out.ceiling = true;
