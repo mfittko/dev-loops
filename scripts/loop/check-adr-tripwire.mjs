@@ -63,6 +63,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { classifyWaiverReason } from "./adr-waiver-markers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { renderCliText } from "@dev-loops/core/loop/cli-command";
 
 const USAGE = `Usage: check-adr-tripwire.mjs --base <ref> [--head <ref>] [--pr-body-file <path>]
 
@@ -481,10 +482,10 @@ export function computeAdrTripwire({
     return `${t.path}: decision-shaped contract doc touched`;
   });
   if (waiver.standing && waiver.stale) {
-    reasons.push(`The standing-authorization waiver line does not name the evaluated head, has expired, or does not list every current trigger as a contract-doc in its paths=${headSha ? ` ${headSha}` : ""}; re-run \`dev-loops pr waive-adr-tripwire\` for the current head.`);
+    reasons.push(renderCliText(`The standing-authorization waiver line does not name the evaluated head, has expired, or does not list every current trigger as a contract-doc in its paths=${headSha ? ` ${headSha}` : ""}; re-run \`dev-loops pr waive-adr-tripwire\` for the current head.`));
   }
-  reasons.push(
-    "ADR tripwire: a decision-shaped surface was touched without adding/updating a docs/decisions/NNNN-*.md record and without a valid `adr-tripwire:allow <reason>` waiver in the PR body. Do not hand-write the waiver: run `dev-loops pr waive-adr-tripwire` (an operator can still add one in the GitHub UI).",
+  reasons.push(renderCliText(
+    "ADR tripwire: a decision-shaped surface was touched without adding/updating a docs/decisions/NNNN-*.md record and without a valid `adr-tripwire:allow <reason>` waiver in the PR body. Do not hand-write the waiver: run `dev-loops pr waive-adr-tripwire` (an operator can still add one in the GitHub UI)."),
   );
   return { ok: false, outcome: "block", satisfiedBy: null, triggers, adrFiles, waiver, reasons };
 }

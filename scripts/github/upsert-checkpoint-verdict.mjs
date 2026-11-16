@@ -64,6 +64,7 @@ import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerd
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 import { countPrOwnCommits as realCountPrOwnCommits } from "../loop/check-pre-push-delta.mjs";
+import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
 import { buildValidationResultsPath, countCompletedRounds, buildGateContextPath, prBodySha256, readGateContext, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
@@ -2052,10 +2053,10 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
       // clean current-head marker verdict and refuses on findings_present/blocked
       // or on unresolved gate-authored threads, so it is only an executable
       // remedy after a clean post.
-      const restoreHint = options.verdict === "clean"
+      const restoreHint = renderCliText(options.verdict === "clean"
         ? `run \`dev-loops pr restore-ready --repo ${options.repo} --pr ${options.pr}\` to restore ready`
         : `resolve the posted findings and restore ready through \`dev-loops pr ready-for-review\` ` +
-          `(or the dev-loop) — \`dev-loops pr restore-ready\` refuses on a non-clean verdict`;
+          `(or the dev-loop) — \`dev-loops pr restore-ready\` refuses on a non-clean verdict`);
       throw new Error(
         `draft_gate verdict was posted to ${options.repo}#${options.pr} (comment ${result.commentId ?? "?"}), ` +
         `but restoring the PR to ready failed; it may be left in draft. Do not re-post the gate — ${restoreHint}. ` +
@@ -2702,7 +2703,7 @@ export async function assertGateValidationArtifact({ repo, pr, gate, headSha, re
     if (stamped === expectedHead) return;
     problem = `is stamped with head ${stamped ?? "(none)"}, not the reviewed head ${expectedHead}`;
   }
-  throw new Error(
+  throw cliError(
     `Cannot post a fanout_fanin verdict for ${repo}#${pr} ${gate}: the validation artifact ${relPath} ${problem}. `
     + `Resolve the round's validation once before dispatching reviewers with dev-loops gate resolve-validation --profile <targeted|full-repository> --repo ${repo} --pr ${pr} --gate ${gate} --head-sha ${headSha} [--suite <name>]..., which writes this artifact through run-gate-validation.mjs. If the round resolved validation under an explicit --tmp-root, pass that path as --context-tmp-root instead of re-running (GATE-EXEC-VALIDATION-RESOLUTION).`,
   );
@@ -2982,7 +2983,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       && !prIsDraft
       && options._draftTransitionInProgress
     ) {
-      throw new Error(
+      throw cliError(
         `draft_gate self-heal for ${options.repo}#${options.pr} failed: the PR was converted to draft ` +
         `to post the verdict, but GitHub still reports it as non-draft on re-entry (draft-state read lagged ` +
         `the conversion mutation, or the conversion did not take). Not recursing. Re-run the draft_gate post ` +
@@ -3312,7 +3313,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       const actNote = ledgerVerdict !== preloadedFindingsLedger.overallVerdict
         ? ` The ledger's severity overallVerdict "${preloadedFindingsLedger.overallVerdict}" is composed with ${new Set(listOpenActItems([...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems]).map((f) => fingerprintFinding(f ?? {}))).size} open judge act item(s) (ADR 0089).`
         : "";
-      throw new Error(
+      throw cliError(
         `--verdict "${options.verdict}" for ${options.gate} @ ${canonicalHeadSha} contradicts the consolidated ledger's overallVerdict "${ledgerVerdict}" (from --findings-ledger "${options.findingsLedger}" for ${preloadedFindingsLedger.repo}#${preloadedFindingsLedger.pr} ${preloadedFindingsLedger.gate} @ ${preloadedFindingsLedger.headSha}).${actNote}${compositionNote} The verdict must match the fan-in consolidator's computed value composed with any deterministic gate blocker — GATE-COMMENT-VERDICT-VALUES (skills/docs/gate-review-comment-contract.md): "clean" = a fully judged round has an empty judge act list (a round with an unjudged finding also needs no blocking-severity finding); "findings_present" = a fully judged round has a non-empty judge act list, or a round with an unjudged finding has an issue at a blocking severity or a non-empty judge act list; "blocked" = the fan-in could not complete or a proven deterministic gate blocker (unchecked AC/DoD) prevents crossing. Re-run the gate fan-in (dev-loops gate consolidate-fanin) and let its overallVerdict flow through, or omit --verdict to post the composed verdict. A contradicting posted verdict is a contract breach this script refuses to record.`,
       );
     }

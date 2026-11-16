@@ -67,6 +67,7 @@ import { defaultFetchOrigin } from "./standing-authorization.mjs";
 import { createGitClient, main as validateChangelog } from "../docs/validate-changelog-completeness.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
 
 const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --result-path <path> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --handback --site-coverage <path> [--worktree <dir>]   (fixer handbackCheck run)
@@ -487,7 +488,7 @@ async function readPrBase(fetchPr, { repo, pr }) {
 // The coordinator routes the cap-round state back to extend-cap-round-chain and this tool, so no remedy here names it.
 const FIXER_REMEDY = "The cap round's open act items need a fix commit: commit it on the PR branch (the worktree HEAD is the PR head), then rerun the reviewer-only delta. When every open act item is a PR-body item (no file named), edit the PR body and post upsert-checkpoint-verdict.mjs --converged-json with { fixerCommit, actList, bodyOnly: true } instead (ADR 0271)";
 // A locally_clear record or an extension at the baseline means the act items are cleared: the next range starts at the chain end.
-const CHAIN_END_REMEDY = "The cap round's act items are already cleared: run dev-loops gate extend-cap-round-chain --repo <owner/name> --pr <n> (its refusal names the reviewer-only delta and the baseline to use)";
+const CHAIN_END_REMEDY = renderCliText("The cap round's act items are already cleared: run dev-loops gate extend-cap-round-chain --repo <owner/name> --pr <n> (its refusal names the reviewer-only delta and the baseline to use)");
 const REPLACEMENT_REMEDY = "node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr <this PR number> while this PR is still open";
 
 // ADR 0255 (decision 6, amended by ADR 0261): why a prior record at the baseline is protected from the reviewer-only run, or null. The same act set re-runs. A non-clearing record
@@ -618,7 +619,7 @@ export async function runCli(
     if (currentHead === baselineHead) throw new Error(`reviewer-only: worktree HEAD ${currentHead} equals the baseline; there is no code range to clear. ${FIXER_REMEDY}`);
     const root = tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree);
     // Checked under the sequence lock the fixer emission writes its marker under, here and again before the result write.
-    noMarker = () => { if (readSequenceMarker(root, baselineHead)) throw new Error(`reviewer-only: an active sequence marker exists for baseline ${baselineHead}; the fixer closes it when it pushes its commit; close an abandoned one with dev-loops gate close-sequence --head ${baselineHead} --repo <owner/name> --pr <n> and rerun`); };
+    noMarker = () => { if (readSequenceMarker(root, baselineHead)) throw cliError(`reviewer-only: an active sequence marker exists for baseline ${baselineHead}; the fixer closes it when it pushes its commit; close an abandoned one with dev-loops gate close-sequence --head ${baselineHead} --repo <owner/name> --pr <n> and rerun`); };
     // Read and classify under the sequence lock the result run and extend-cap-round-chain take: a record mid-write (seal removed, new record renamed) is never taken for an unsealed one.
     // A record that is not JSON (a crash during its write) refuses like any other unsealed leftover.
     // A candidate missing from the clone is not on the PR head's history.

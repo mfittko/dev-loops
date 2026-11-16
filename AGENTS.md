@@ -9,6 +9,7 @@
 - Main agent: read-only for all files tracked by the repository. All mutations flow through `dev-loop` async subagent. `skills/docs/main-agent-contract.md` is a mandatory baseline read alongside AGENTS.md (intentional exception to requiredReads-only loading for routed work; it defines the absolute delegation boundary that applies in all sessions).
 - Use feature branches, worktrees, and PRs; no direct commits to `main` except deliberate release/reconcile commits and pushes under ADR 0044 and [worktree guidance](skills/docs/worktree-guidance.md). Stable tag/publish approval remains operator-owned under the [release runbook](skills/docs/release-runbook.md).
 - Use `tmp/worktrees/<issue-or-branch-slug>/` for mutating local work; keep the main checkout for inspection.
+- Under Claude Code, run CLI calls and repo scripts as `dev-loops-run --repo-root <checkout> cli/index.mjs <ns> ...` or `dev-loops-run --repo-root <checkout> scripts/<path>`: the `Bash(dev-loops-run:*)` allow rule matches it. Do not run the bare `dev-loops <ns>` form or prefix `cd <checkout> &&` (`WORKTREE-SCRIPT-LAUNCHER-CWD`).
 - Always run `git fetch origin` before creating or reusing a worktree — never create from a stale `origin/main`.
 - Canonical guidance lives in `skills/docs/worktree-guidance.md`.
 - Operator principles (ADR 0270): `PURPOSE-STEER-NOT-TRAP` and `PURPOSE-DETERMINISTIC-FIT` in the [contract style guide](skills/docs/contract-style-guide.md), `MAIN-AGENT-OPERATOR-QUESTION-SCOPE` in the [main-agent contract](skills/docs/main-agent-contract.md).

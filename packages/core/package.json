@@ -37,6 +37,7 @@
     "./loop/bash-command-classify": "./src/loop/bash-command-classify.mjs",
     "./loop/bash-gate-decisions": "./src/loop/bash-gate-decisions.mjs",
     "./loop/child-launch-bound": "./src/loop/child-launch-bound.mjs",
+    "./loop/cli-command": "./src/loop/cli-command.mjs",
     "./loop/reviewer-unit-bound": "./src/loop/reviewer-unit-bound.mjs",
     "./loop/conductor-routing": "./src/loop/conductor-routing.mjs",
     "./loop/copilot-ci-status": "./src/loop/copilot-ci-status.mjs",

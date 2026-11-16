@@ -14,6 +14,7 @@ import { upsertCheckpointVerdict } from "./upsert-checkpoint-verdict.mjs";
 // caused (#1455).
 import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { cliError } from "@dev-loops/core/loop/cli-command";
 const USAGE = `Usage: reconcile-draft-gate.mjs --repo <owner/name> --pr <number>
 Optional/manual recovery tool for an already non-draft PR when you want to
 retroactively record clean \`draft_gate\` evidence.
@@ -194,7 +195,7 @@ function withFanoutRefusalGuidance(error, { repo, pr, headSha } = {}) {
   if (!isFanoutRefusalError(error)) return error;
   const repoArg = repo ? `--repo ${repo} --pr ${pr}` : "--repo <repo> --pr <pr>";
   const headShaArg = headSha || "<current head>";
-  return new Error(
+  return cliError(
     `${error.message} reconcile-draft-gate only completes for a PR under the light-mode threshold ` +
     `(it can only synthesize an inline verdict); this PR needs an actual fan-out gate run — run ` +
     `\`dev-loops pr convert-to-draft ${repoArg}\`, post \`dev-loops gate upsert-verdict ${repoArg} ` +

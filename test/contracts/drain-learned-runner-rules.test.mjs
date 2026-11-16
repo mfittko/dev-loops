@@ -286,7 +286,8 @@ test("WORKTREE-COMMIT-MSG-GUARD states the default merge subject and the agent n
 
 test("WORKTREE-SCRIPT-LAUNCHER-CWD pins the compound launcher form", async () => {
   const rule = sectionFrom(await readRepo(WORKTREE_DOC), "<!-- rule: WORKTREE-SCRIPT-LAUNCHER-CWD -->", "\n## ");
-  assert.ok(rule.includes("`cd <checkout> && dev-loops-run scripts/<path>`"));
+  assert.ok(rule.includes("`dev-loops-run --repo-root <checkout> scripts/<path>`"));
+  assert.ok(!rule.includes("`cd <checkout> && dev-loops-run"));
   assert.match(collapse(rule), /Each Bash call may start in another checkout/);
   assert.match(rule, /`GATE-EXEC-NO-CWD-DEPENDENCE`/);
 });
