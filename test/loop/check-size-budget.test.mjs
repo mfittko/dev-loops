@@ -198,6 +198,26 @@ test("runtime pins: exact normalized basenames have zero accounting under existi
   assert.ok(result.reasons.some((reason) => /SIZE-RUNTIME-PIN-ACCOUNTING/.test(reason)));
 });
 
+test("vendored and generated hook mirrors add 0 logic; look-alike paths still count", () => {
+  const logic = (file) => computeSizeBudget({ nameStatusOutput: `A\t${file}\n`, numstatOutput: numstatZ([[500, 0, file]]) }).wholeLogicLoc;
+  for (const file of [".claude/hooks/_vendor/sh-syntax/index.mjs", ".claude/hooks/_bash-command-classify.mjs", ".claude/hooks/_gate-round-retirement.mjs"]) {
+    assert.equal(logic(file), 0, file);
+  }
+  for (const file of [".claude/hooks/_not-a-mirror.mjs", ".claude/hooks/hand.mjs", ".claude\\hooks\\_bash-command-classify.mjs", "foo_vendor/x.mjs", "_vendor.mjs", "_vendor/x.mjs", "scripts/_vendor/x.mjs", "packages/core/src/_vendor/x.mjs"]) {
+    assert.equal(logic(file), 500, file);
+  }
+});
+
+test("vendored unknown-category file leaves unclassified accounting; tier-pattern reason names vendored files", () => {
+  const vendored = ".claude/hooks/_vendor/sh-syntax/main.wasm";
+  const result = computeSizeBudget({ nameStatusOutput: `M\ttools/build-runner\nM\t${vendored}\n`, numstatOutput: numstatZ([[1, 0, "tools/build-runner"], [900, 0, vendored]]) });
+  assert.equal(result.outcome, "block");
+  assert.ok(result.reasons.some((reason) => reason.includes("tools/build-runner") && !reason.includes("main.wasm")));
+  const tiered = computeSizeBudget({ nameStatusOutput: "M\t.claude/hooks/_vendor/sh-syntax/index.mjs\n", numstatOutput: numstatZ([[5, 0, ".claude/hooks/_vendor/sh-syntax/index.mjs"]]), sizeConfig: { tiers: { t1: { patterns: [".claude/hooks/**"] } } } });
+  assert.equal(tiered.outcome, "block");
+  assert.ok(tiered.reasons.some((reason) => reason.includes("configured t1/t3 pattern") && reason.includes("vendored")));
+});
+
 test("runtime pins: cannot dilute unknown source or waive its block", () => {
   for (const waived of [false, true]) {
     const result = computeSizeBudget({ nameStatusOutput: "M\ttools/build-runner\nM\t.node-version\n", numstatOutput: numstatZ([[1, 0, "tools/build-runner"], [100, 0, ".node-version"]]), waived });

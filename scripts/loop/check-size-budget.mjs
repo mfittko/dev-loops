@@ -16,7 +16,9 @@
  * content) contributes 0, reusing the classifier's own signal rather than
  * re-deriving one. Per SIZE-RUNTIME-PIN-ACCOUNTING, a file whose basename is in
  * `RUNTIME_PIN_BASENAMES` contributes 0 to source counters and `logicLoc`
- * regardless of category. `commentOnly` is the count of a code file's changed lines
+ * regardless of category. Likewise a vendored file (`.claude/hooks/_vendor/**`) or a
+ * generated hook mirror (an exact `HOOK_BUNDLE_TARGETS` path) contributes 0; the hook
+ * mirrors' `packages/core` sources still count. `commentOnly` is the count of a code file's changed lines
  * the comment-discipline guard's shared `isCommentLine` detector recognizes as
  * comments (the comment analogue of `testDiscount`); fail-closed, an
  * ambiguous/unparseable changed line is never a comment and stays logic.
@@ -40,6 +42,7 @@ import { parseArgs } from "node:util";
 import { analyzeDiff, classifyFile, matchesGlob, RUNTIME_PIN_BASENAMES } from "@dev-loops/core/analysis/diff-analyzer";
 import { loadDevLoopConfig, resolveClassifyRules } from "@dev-loops/core/config";
 
+import { HOOK_BUNDLE_TARGETS } from "../claude/generate-claude-assets.mjs";
 import { isCommentLine } from "./check-comment-discipline.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
@@ -301,7 +304,7 @@ export function computeSizeBudget({
   const unclassifiedPaths = [];
   // A configured t1/t3 pattern is an explicit operator signal that a path is
   // risk-slice/relaxed-tier; a matching file that classifies outside
-  // code/test, or is a runtime-pin file, still drops its LOC to 0 (docs/config/ci/asset/unknown all excluded
+  // code/test, or is excluded from LOC (a runtime pin, a vendored file or a generated hook mirror), still drops its LOC to 0 (docs/config/ci/asset/unknown all excluded
   // above), which would silently defeat that signal rather than the intended
   // "code the classifier does not recognize" gap.
   let tierPatternDroppedToZero = false;
@@ -309,16 +312,19 @@ export function computeSizeBudget({
   for (const file of files) {
     const category = classifyFile(file.path, rules);
     const changedLines = file.added + file.deleted;
-    const runtimePin = RUNTIME_PIN_BASENAMES.has(file.path.replaceAll("\\", "/").split("/").pop());
-    if (!runtimePin && category === "unknown") {
+    const segments = file.path.replaceAll("\\", "/").split("/");
+    const excludedFromLogic = RUNTIME_PIN_BASENAMES.has(segments.pop())
+      || file.path.startsWith(".claude/hooks/_vendor/")
+      || HOOK_BUNDLE_TARGETS.includes(file.path);
+    if (!excludedFromLogic && category === "unknown") {
       sourceChangedLines += changedLines;
       unclassifiedChangedLines += changedLines;
       if (changedLines > 0) unclassifiedPaths.push(file.path);
-    } else if (!runtimePin && (category === "code" || category === "test")) {
+    } else if (!excludedFromLogic && (category === "code" || category === "test")) {
       sourceChangedLines += changedLines;
     }
     let logic = 0;
-    if (!runtimePin && category === "code") {
+    if (!excludedFromLogic && category === "code") {
       // Comment-aware: discount changed lines the comment-discipline detector
       // recognizes as comments, clamped to [0, changedLines] so a diff-body vs
       // numstat count skew can never produce negative logic or discount more
@@ -326,7 +332,7 @@ export function computeSizeBudget({
       // full count, so a real-code change is scored exactly as before.
       const commentLines = Math.min(commentChangedLines.get(file.path) ?? 0, changedLines);
       logic = changedLines - commentLines;
-    } else if (!runtimePin && category === "test") logic = testDiscount * changedLines;
+    } else if (!excludedFromLogic && category === "test") logic = testDiscount * changedLines;
     else {
       if (changedLines > 0 && matchesAnyPattern(file.path, tierPatterns)) tierPatternDroppedToZero = true;
       continue; // docs/config/ci/asset/unknown excluded — covers generated/lockfile content
@@ -383,7 +389,7 @@ export function computeSizeBudget({
       );
     }
     if (tierPatternDroppedToZero) {
-      reasons.push("a configured t1/t3 pattern matched a file whose logic LOC would silently drop to 0 (it classifies outside code/test or is a runtime-pin file excluded from LOC); size budget cannot be computed safely — no waiver possible");
+      reasons.push("a configured t1/t3 pattern matched a file whose logic LOC would silently drop to 0 (it classifies outside code/test or is excluded from LOC as a runtime pin, a vendored file under .claude/hooks/_vendor/ or a generated hook mirror); size budget cannot be computed safely — no waiver possible");
     }
   }
   if (wholeLoc > absoluteHardLoc) {
