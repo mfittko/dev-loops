@@ -253,6 +253,9 @@ export const INLINE_INTERPRETER_FORMS = [
   // so an escaped head before a broken last line must not slip through.
   deny("node -e 'x"),
   deny("echo \"unterminated"),
+  // a zsh-only construct is a syntax-class error (`SH_SYNTAX_LANGUAGE`), not a `ParseError`: it denies like any parse failure
+  deny(": ${${x}}"),
+  deny("echo $((1.5))"),
   deny("git commit -m \"# `\nwhile :; do `true '`; 'sleep' 5; gh pr view 5; done\""),
   deny("git commit -m \"echo '`' ''' ; while :; do `true '`; 'sleep' 5; gh pr view 5; done\""),
   deny("git commit -m \"echo '$(echo ''')' ; echo 'while true; do gh pr view 5; sleep 5; done'\""),

@@ -179,6 +179,37 @@ test("an installed plugin without node_modules parses and denies: the vendored s
   }
 });
 
+test("the bash-gate hook fails closed in a managed repo when the parser fails to load or the classifier throws (ADR 0276)", () => {
+  const plugin = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-hooks-broken-"));
+  const repo = makeManagedConfigRepo(".devloops");
+  try {
+    const hooks = path.join(plugin, "hooks");
+    fs.cpSync(hooksDir, hooks, { recursive: true });
+    const run = (command) => spawnSync("node", [path.join(hooks, "pre-tool-use-bash-gate.mjs")], {
+      input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: repo }),
+      encoding: "utf8",
+      cwd: plugin,
+    });
+    const reason = (res) => {
+      assert.equal(res.status, 0, res.stderr);
+      return JSON.parse(res.stdout).hookSpecificOutput.permissionDecisionReason;
+    };
+    // a broken vendored entry stands in for a missing or broken wasm: the parse failure denies every command
+    fs.writeFileSync(path.join(hooks, "_vendor/sh-syntax/lib/sync/index.cjs"), "throw new Error('wasm gone');\n");
+    assert.match(reason(run("ls")), /OPS-NO-INLINE-INTERPRETER[\s\S]*parser failed to load: wasm gone/);
+    // a classifier that throws: the hook denies instead of exiting nonzero
+    fs.renameSync(path.join(hooks, "_bash-command-classify.mjs"), path.join(hooks, "_classify-orig.mjs"));
+    fs.writeFileSync(
+      path.join(hooks, "_bash-command-classify.mjs"),
+      "export * from \"./_classify-orig.mjs\";\nexport function commandContainsInlineInterpreter() { throw new Error(\"boom\"); }\n",
+    );
+    assert.match(reason(run("ls")), /OPS-NO-INLINE-INTERPRETER: the inline-interpreter classifier failed \(boom\)/);
+  } finally {
+    fs.rmSync(plugin, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("package.json files allowlist ships the plugin hooks", () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
   assert.ok(pkg.files.includes(".claude/hooks/"), "files allowlist must ship .claude/hooks/");

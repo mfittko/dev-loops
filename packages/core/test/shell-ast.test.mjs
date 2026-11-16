@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { test } from "bun:test";
 import { fileURLToPath } from "node:url";
 
@@ -51,8 +54,30 @@ test("parseShell returns a tree for the smoke-test shapes and { error } for an u
   assert.match(bad.error.message, /closing quote/);
 });
 
-test("parseShell rethrows an error that is not a ParseError", () => {
-  assert.throws(() => parseShell(undefined));
+test("parseShell returns { error } for a zsh-only construct (ShSyntaxError, not ParseError) and for a runtime failure; it never throws", () => {
+  for (const text of [": ${${x}}", "echo $((1.5))"]) {
+    const parsed = parseShell(text);
+    assert.equal(parsed.file, undefined, text);
+    assert.match(parsed.error.message, /zsh feature/, text);
+  }
+  // a non-syntax failure (here the library's InputError) is wrapped as a parse failure
+  assert.match(parseShell(undefined).error.message, /^the inline-interpreter parser failed: /);
+});
+
+test("parseShell returns { error } when sh-syntax fails to load, so the gate denies (fail closed)", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "shell-ast-load-"));
+  try {
+    // the hook mirror loads the vendored entry by a relative path; a throwing entry stands in for a missing or broken wasm
+    fs.copyFileSync(fileURLToPath(new URL("../../../.claude/hooks/_shell-ast.mjs", import.meta.url)), path.join(dir, "_shell-ast.mjs"));
+    fs.mkdirSync(path.join(dir, "_vendor/sh-syntax/lib/sync"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "_vendor/sh-syntax/lib/sync/index.cjs"), "throw new Error('wasm gone');\n");
+    const probe = `const { parseShell } = await import(${JSON.stringify(path.join(dir, "_shell-ast.mjs"))}); console.log(parseShell("ls").error.message);`;
+    const run = spawnSync(process.execPath, ["-e", probe], { encoding: "utf8" });
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(run.stdout.trim(), "the inline-interpreter parser failed to load: wasm gone");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("the walk reaches the simple commands of every nested construct (Q3)", () => {

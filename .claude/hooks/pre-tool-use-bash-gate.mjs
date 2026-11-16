@@ -106,7 +106,15 @@ const isExternalWrite = typeof command === "string" && commandContainsRawExterna
 const isStash = typeof command === "string" && commandContainsGitStash(command);
 // The six-guard-rule predicates (#1622) — each is decided (with scope + actor policy) inside
 // decideBashGate, so the hook must not short-circuit to allow before deciding them.
-const isInline = typeof command === "string" && commandContainsInlineInterpreter(command);
+let isInline = false;
+try {
+  isInline = typeof command === "string" && commandContainsInlineInterpreter(command);
+} catch (error) {
+  // a classifier throw must not exit the hook nonzero (every guard would fail open): deny in a managed repo (ADR 0276)
+  if (inManagedContext) {
+    emitDeny(`OPS-NO-INLINE-INTERPRETER: the inline-interpreter classifier failed (${error?.message ?? error}), so the gate cannot read this command. Use the editor tools (Write/Edit under Claude Code, write/edit under Pi).`);
+  }
+}
 const isSubIssue = typeof command === "string" && commandContainsSubIssueAdHocBypass(command, managedRepoSlug);
 const isReplyResolve =
   typeof command === "string" &&

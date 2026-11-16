@@ -9,17 +9,24 @@ let shSyntax;
 const load = () => (shSyntax ??= createRequire(import.meta.url)("sh-syntax/sync"));
 
 /**
- * Parse TEXT as Bash. A `ParseError` returns `{ error }`; any other error is a defect and propagates.
+ * Parse TEXT as Bash. Every failure returns `{ error }` so the gate's blanket deny on a parse failure applies (ADR 0276):
+ * a syntax-class error (`ShSyntaxError`: a `ParseError` or a zsh-only construct such as `${${x}}`) as thrown,
+ * a module or wasm load failure and any other runtime failure wrapped with a message that names the parser.
  * @param {string} text
  * @returns {{ file: object } | { error: Error }}
  */
 export function parseShell(text) {
-  const mod = load();
+  let mod;
+  try {
+    mod = load();
+  } catch (error) {
+    return { error: new Error(`the inline-interpreter parser failed to load: ${error?.message ?? error}`, { cause: error }) };
+  }
   try {
     return { file: mod.parse(text, { variant: mod.LangVariant.LangBash }) };
   } catch (error) {
-    if (error instanceof mod.ParseError) return { error };
-    throw error;
+    if (error instanceof mod.ShSyntaxError) return { error };
+    return { error: new Error(`the inline-interpreter parser failed: ${error?.message ?? error}`, { cause: error }) };
   }
 }
 
