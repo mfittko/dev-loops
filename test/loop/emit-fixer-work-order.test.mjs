@@ -3121,6 +3121,19 @@ test("issue 3105: a second cap-round fixer pass emits at the first pass's pushed
   });
 });
 
+test("issue 3105: a later cap-round pass emits only the cap round's act refs; an extra act item refuses round_cap_reached", async () => {
+  await withFixture(async (fx) => {
+    const { candidate, at } = await capRoundFirstPassPushed(fx);
+    const capList = JSON.parse(await readFile(fx.files.actList));
+    const extra = withFp({ ...ACT[0], severity: "medium", summary: "new finding after the cap round", judgeFix: "fix it" });
+    await writeFile(fx.files.actList, JSON.stringify([...capList, extra]));
+    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, ...at(candidate) }), (e) => e.refusal === "round_cap_reached" && /not a finding of the cap-round ledger/.test(e.message));
+    await writeFile(fx.files.actList, JSON.stringify(capList));
+    const ok = await fx.emit({ phase: "commit_only", deltaResult: undefined, ...at(candidate) });
+    assert.deepEqual(ok.workOrder.siteCoverage.map((r) => r.fingerprint), capList.map((f) => f.fingerprint));
+  });
+});
+
 test("issue 3105: a foreign commit after the first cap-round pass keeps round_cap_reached and names the chain-extension remedy", async () => {
   await withFixture(async (fx) => {
     const { at } = await capRoundFirstPassPushed(fx);

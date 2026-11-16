@@ -655,6 +655,12 @@ async function emitPlan({
       if (!existsSync(ledgerFile)) { const origin = await carryOriginHead(); if (origin) ledgerFile = ledgerPath(origin); }
       if (!existsSync(ledgerFile)) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} does not exist; failing closed at the cap round`);
       const { findings: ledgerFindings } = await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): ${m}; failing closed at the cap round`) });
+      // A later cap-round pass fixes only the cap round's findings: an act item outside the cap-round ledger would open a new round past the cap.
+      if (capRoundHead !== headSha) {
+        const capRefs = new Set(ledgerFindings.map(fingerprintFinding));
+        const extra = source.parsed.find((f) => !capRefs.has(fingerprintFinding(f)));
+        if (extra) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): act item ${JSON.stringify(extra.summary)} is not a finding of the cap-round ledger ${ledgerFile}; a later cap-round pass fixes only the cap round's act list`);
+      }
       const blockers = pastCapBlockers([...ledgerFindings, ...source.parsed], { round, cap });
       if (blockers.length > 0) {
         throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-SOFT-CAP): the cap round (cap ${cap}) composes blocked (${blockers.map((b) => b.item).join("; ")}); the verdict is blocked and no fixer order follows it`);
