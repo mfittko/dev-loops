@@ -1810,10 +1810,10 @@ test("buildPreMergeGateCheck accepts one reviewer for a single size-tier unit an
   });
   const check = (g) => buildPreMergeGateCheck(cleanEvidence(), 0, null, { required: true, requireProvenance: true, gates: [g] });
   const floorFailures = (r) => r.failures.filter((f) => f.includes("need provenance.distinctReviewers"));
-  const packed = check(gate({ contextUnitBound: [10] }));
+  const packed = check(gate({ contextUnitBound: { bounds: [10], tiered: false } }));
   assert.deepEqual(packed.failures, []);
   assert.equal(packed.ok, true);
-  assert.equal(floorFailures(check(gate({ contextUnitBound: [5] }))).length, 1);
+  assert.equal(floorFailures(check(gate({ contextUnitBound: { bounds: [5], tiered: false } }))).length, 1);
 });
 
 test("buildPreMergeGateCheck with requireProvenance ON fails closed when distinctReviewers < scaled fresh-angle floor", () => {
@@ -4798,9 +4798,43 @@ test("buildFanoutEnforcement selects and passes a one-reviewer ledger for a sing
       config, cwd: dir, hasFullLabel: false,
     });
     const gate = enforcement.gates.find((g) => g.name === "pre_approval_gate");
-    assert.deepEqual(gate.contextUnitBound, [10]);
+    assert.deepEqual(gate.contextUnitBound, { bounds: [10], tiered: false });
     assert.ok(gate.provenance, "selection accepts the one-reviewer tier ledger");
     assert.equal(gate.provenance.distinctReviewers, 1);
+    const result = buildPreMergeGateCheck({
+      currentHeadSha: headSha,
+      draftGate: { visible: true, verdict: "clean" },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
+    }, 0, null, enforcement);
+    assert.equal(result.ok, true, JSON.stringify(result.failures));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildFanoutEnforcement passes a one-reviewer ledger for a tier-5 single unit when the context records the applied tier (#3166)", async () => {
+  const { buildGateContextPath } = await import("../../scripts/github/_gate-artifact-paths.mjs");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-tier5-"));
+  try {
+    await writeFile(path.join(dir, ".devloops"), ["version: 1", "gates:", "  requireFanoutEvidence: true", "  requireFanoutProvenance: true", "  preApproval:", "    angles:", "      - a", "      - b", "      - name: pr-checklist", "        mandatory: true", "      - name: holistic", "        enabled: false", ""].join("\n"), "utf8");
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const headSha = "f".repeat(40);
+    const dispatchUnits = [{ name: "tier", group: "tier", angles: ["a", "b", "pr-checklist"] }];
+    const perAngle = ["a", "b", "pr-checklist"].map((angle) => ({ angle, reviewer: "review-a", group: "tier" }));
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-34");
+    await mkdir(ledgerDir, { recursive: true });
+    await writeFile(path.join(ledgerDir, `pre_approval_gate-${headSha}.json`), `${JSON.stringify({ gate: "pre_approval_gate", headSha, findings: [], provenance: { distinctReviewers: 1, dispatchUnits, perAngle } })}\n`, "utf8");
+    const contextPath = buildGateContextPath({ repo: "owner/repo", pr: 34, gate: "pre_approval_gate", headSha, tmpRoot: "tmp" });
+    await mkdir(path.dirname(path.join(dir, contextPath)), { recursive: true });
+    await writeFile(path.join(dir, contextPath), `${JSON.stringify({ fanout: { unitBound: 5, sizeTier: { tier: { maxWholeLogicLoc: 100, maxAnglesPerUnit: 5 } } } })}\n`, "utf8");
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 34, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: { visible: true, headSha, executionMode: "fanout_fanin" },
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const gate = enforcement.gates.find((g) => g.name === "pre_approval_gate");
+    assert.equal(gate.contextUnitBound.tiered, true);
+    assert.ok(gate.provenance, "selection accepts the tier-5 one-reviewer ledger");
     const result = buildPreMergeGateCheck({
       currentHeadSha: headSha,
       draftGate: { visible: true, verdict: "clean" },

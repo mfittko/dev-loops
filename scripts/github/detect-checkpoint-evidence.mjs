@@ -725,14 +725,15 @@ async function ledgerExistsInAny(checkouts, ledgerPath) {
  * emit-fanout-dispatch for the head.
  * Returns undefined (the default) for a ledger with no recorded dispatch units.
  */
-function corroboratedUnitBound(prov, contextUnitBounds) {
+const DEFAULT_CONTEXT_UNIT = { bounds: [REVIEWER_UNIT_MAX_ANGLES], tiered: false };
+function corroboratedUnitBound(prov, contextUnit) {
   if (prov?.dispatchUnits == null) return undefined;
   const ledgerBound = resolveReviewerUnitBound(prov.unitBound);
-  return ledgerBound > REVIEWER_UNIT_MAX_ANGLES && ![contextUnitBounds].flat().includes(ledgerBound) ? REVIEWER_UNIT_MAX_ANGLES : ledgerBound;
+  return ledgerBound > REVIEWER_UNIT_MAX_ANGLES && !contextUnit.bounds.includes(ledgerBound) ? REVIEWER_UNIT_MAX_ANGLES : ledgerBound;
 }
-// A corroborated size-tier bound (above the default) legitimately packs a small round into one unit, so one reviewer suffices there.
-function requiredFanoutReviewers(prov, contextUnitBounds) {
-  const tiered = (corroboratedUnitBound(prov, contextUnitBounds) ?? REVIEWER_UNIT_MAX_ANGLES) > REVIEWER_UNIT_MAX_ANGLES;
+// A corroborated applied size tier (context sizeTier.tier, independent of its numeric bound) legitimately packs a small round into one unit, so one reviewer suffices there.
+function requiredFanoutReviewers(prov, contextUnit) {
+  const tiered = (corroboratedUnitBound(prov, contextUnit) ?? REVIEWER_UNIT_MAX_ANGLES) > REVIEWER_UNIT_MAX_ANGLES || (prov?.dispatchUnits != null && contextUnit.tiered);
   return Math.max(tiered ? 1 : FANOUT_PROVENANCE_MIN_REVIEWERS, countFreshDispatchUnits(prov.perAngle));
 }
 /**
@@ -747,12 +748,15 @@ function requiredFanoutReviewers(prov, contextUnitBounds) {
  */
 async function readContextUnitBoundInAny(checkouts, contextPath) {
   const bounds = new Set();
+  let tiered = false;
   for (const root of checkouts) {
     try {
-      bounds.add(resolveReviewerUnitBound(JSON.parse(await readFile(path.resolve(root, contextPath), "utf8"))?.fanout?.unitBound));
+      const fanout = JSON.parse(await readFile(path.resolve(root, contextPath), "utf8"))?.fanout;
+      bounds.add(resolveReviewerUnitBound(fanout?.unitBound));
+      if (fanout?.sizeTier?.tier != null) tiered = true;
     } catch { /* absent or unreadable: try the next checkout */ }
   }
-  return bounds.size > 0 ? [...bounds] : [REVIEWER_UNIT_MAX_ANGLES];
+  return { bounds: bounds.size > 0 ? [...bounds] : [REVIEWER_UNIT_MAX_ANGLES], tiered };
 }
 /**
  * Read the recorded fan-out `provenance` object from a ledger across the
@@ -1125,7 +1129,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
     const angleFields = GATE_ANGLE_CONFIG[spec.name];
     const contextUnitBound = readProvenance
       ? await readContextUnitBoundInAny(checkouts, buildGateContextPath({ repo, pr, gate: spec.name, headSha, tmpRoot: "tmp" }))
-      : [REVIEWER_UNIT_MAX_ANGLES];
+      : DEFAULT_CONTEXT_UNIT;
     const provenance = readProvenance
       ? await readLedgerProvenanceInAny(checkouts, ledgerPath, {
         requireProvenance, rejectForeignAngles, ...angleFields, config: angleConfig, gateKey: spec.name, hasFullLabel, contextUnitBound,
