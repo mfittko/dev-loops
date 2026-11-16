@@ -88,6 +88,19 @@ export async function carryGateMarker(marker, { gate, currentHeadSha, baseRef, r
 }
 
 /**
+ * The fixer-emit carry seam (issue 2752 slice 4, GATE-EXEC-POST-BEFORE-FIX): true only when a verdict posted at
+ * `originHead` may stand for `headSha` because every PR blob is identical at both heads (no conflict hunks).
+ * It skips the gate-tooling rule, records nothing and returns no marker, so it never satisfies gate
+ * coordination or merge-pr (their validator recomputes with the tooling rule). Any failure is false.
+ */
+export async function fixerEmitCarryAccepts({ originHead, headSha, baseRef, repoRoot }) {
+  if (!originHead || !headSha || !baseRef) return false;
+  const evidence = await computeBaseMergeCarry({ prevHead: originHead, headSha, baseRef, repoRoot, ignoreGateTooling: true });
+  return evidence.decision === "carry_verdict"
+    && validateBaseMergeCarryEvidence(evidence, { expectedSourceHead: originHead, expectedNewHead: headSha, ignoreGateTooling: true }).ok;
+}
+
+/**
  * The single carry seam for both gate-evidence readers: resolves the PR base ref (gh, then the
  * REST fallback when the gh binary is missing) and runs carryGateMarker against the posted
  * carried-heads record. `runJson(args)` runs gh and parses JSON. `comments` is the issue-comment
