@@ -64,6 +64,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 // the target repoRoot. A non-vendored consumer's repoRoot has no scripts/ tree;
 // resolving there threw "Cannot find module" and disabled linkage resolution.
 // Matches the module-relative sibling pattern (ui-review-diagnose.mjs).
+const SPEC_CHANGE_READ_FAILED_REASON = "spec_change_read_failed";
 const DETECT_LINKED_ISSUE_PR_SCRIPT = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "../github/detect-linked-issue-pr.mjs",
@@ -936,10 +937,10 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
           issueReadiness = "needs_clarification";
           issueReadinessReason = SPEC_CHANGED_SINCE_GRILL_REASON;
         }
-      } catch {
+      } catch (error) {
         issueReadiness = "needs_clarification";
-        issueReadinessReason = SPEC_CHANGED_SINCE_GRILL_REASON;
-        warnings.push(`issueReadiness: using default "${issueReadiness}" — spec-change read failed`);
+        issueReadinessReason = SPEC_CHANGE_READ_FAILED_REASON;
+        warnings.push(`issueReadiness: using default "${issueReadiness}" — spec-change read failed: ${error?.message ?? error}`);
       }
     }
     // Single-contributor ownership gate: a failed read defaults to an empty
@@ -1524,6 +1525,18 @@ export function buildResolveDevLoopStartupResult(input, {
   const bundle = resolveAuthoritativeStartupResumeBundle(input);
   // GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL: every target preference stops and
   // routes back to the grill (prefer_local never reads issueReadiness).
+  if (issueReadinessReason === SPEC_CHANGE_READ_FAILED_REASON) {
+    const issue = input.currentState?.target?.issue;
+    return {
+      ...buildNeedsReconcileStartupResult(
+        bundle,
+        `The spec-change read for issue #${issue} failed (${SPEC_CHANGE_READ_FAILED_REASON}). Retry startup; check the warnings for the read error (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
+        pendingRetrospectives,
+      ),
+      issueReadiness: input.issueReadiness,
+      issueReadinessReason,
+    };
+  }
   if (issueReadinessReason === SPEC_CHANGED_SINCE_GRILL_REASON) {
     const issue = input.currentState?.target?.issue;
     return {

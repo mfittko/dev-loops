@@ -1555,11 +1555,14 @@ test("AC5 (3127): a failed spec-change read stops startup on prefer_local with a
     return buildAutoResolvedInput({ issue: 735, cwd: tempDir, env: { ...stub.env, ...resolverTestEnv() } });
   }, { prefix: "resolve-dev-loop-spec-read-failed-" });
   assert.equal(failed.issueReadiness, "needs_clarification");
-  assert.equal(failed.issueReadinessReason, "spec_changed_since_grill");
-  assert.ok(failed.warnings.some((w) => /spec-change read failed/.test(w)));
+  assert.equal(failed.issueReadinessReason, "spec_change_read_failed");
+  assert.ok(failed.warnings.some((w) => /spec-change read failed: \S/.test(w)));
   const routed = buildResolveDevLoopStartupResult({ ...failed, targetPreference: "prefer_local" }, { env: { ...resolverTestEnv(), DEVLOOPS_WORKTREE_BYPASS: "1" }, cwd: os.tmpdir() });
   assert.equal(routed.selectedStrategy, "none");
   assert.equal(routed.issueReadiness, "needs_clarification");
+  assert.equal(routed.issueReadinessReason, "spec_change_read_failed");
+  assert.match(routed.nextAction, /Retry startup/);
+  assert.doesNotMatch(routed.nextAction, /changed after/);
 });
 
 test("local-first phase-doc intake fires no tracker artifact / Copilot call before promotion (#953 AC3)", async () => {

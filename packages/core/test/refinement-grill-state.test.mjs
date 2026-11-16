@@ -359,6 +359,11 @@ test("AC1: only the latest results comment counts as the grill time", () => {
   assert.equal(detectSpecChangedSinceGrill({ comments }), false);
 });
 
+test("a counted comment and lastEditedAt equal to the results comment createdAt do not trigger the reason", () => {
+  const comments = [resultsComment(GRILL_AT), { body: "note", createdAt: GRILL_AT }];
+  assert.equal(detectSpecChangedSinceGrill({ comments, bodyLastEditedAt: GRILL_AT }), false);
+});
+
 test("AC2: a body lastEditedAt after the latest results comment triggers the reason; null or earlier does not", () => {
   const comments = [resultsComment(GRILL_AT)];
   assert.equal(grillStateFor({ comments, bodyLastEditedAt: AFTER }).reason, SPEC_CHANGED_SINCE_GRILL_REASON);

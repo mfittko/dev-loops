@@ -116,7 +116,7 @@ Required authoritative inputs:
   - `auto_continue_current` always resolves to `durable_auto`
 - `issueLinkageResolution` (`resolved_linked_pr` \| `resolved_no_open_pr` \| `not_applicable`)
   - required when `currentState.target.kind === issue`
-- `issueReadiness` (`ready` \| `needs_clarification` \| `not_applicable`) and `issueAssignmentState` (`unassigned` \| `assigned_to_copilot` \| `not_applicable`)
+- `issueReadiness` (`ready` \| `needs_clarification` \| `not_applicable`) and `issueAssignmentState` (`unassigned` \| `assigned_to_copilot` \| `not_applicable`); a `needs_clarification` result may carry `issueReadinessReason` (`spec_changed_since_grill` or `spec_change_read_failed`)
   - both required for Copilot-first issue targets with `issueLinkageResolution=resolved_no_open_pr`
 - `artifactState` (`open` \| `closed` \| `merged` \| `not_applicable`)
 - explicit resolved `loopState` (`unknown` is not authoritative input)
@@ -267,7 +267,7 @@ Do not create, read, or update `docs/phases/phase-<n>.md` for the same tracker-b
 
 For Copilot-first issue flows (`currentState.target.kind=issue`, `ownership=copilot`, and no linked PR), orchestration must resolve this seam from authoritative issue facts before follow-up routing:
 
-1. `issueReadiness=needs_clarification` → ask clarification questions and stop before assignment (`issueAssignmentSeam=needs_refinement`)
+1. `issueReadiness=needs_clarification` → ask clarification questions and stop before assignment (`issueAssignmentSeam=needs_refinement`); when `issueReadinessReason` is set, follow the startup `nextAction` instead: `spec_changed_since_grill` routes to a re-grill and `spec_change_read_failed` routes to a startup retry (`GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL`)
 2. `issueReadiness=ready` + `issueAssignmentState=unassigned` + `authorization=needs_confirmation` → ask for explicit assignment confirmation (`issueAssignmentSeam=ready_needs_assignment_confirmation`)
 3. `issueReadiness=ready` + `issueAssignmentState=unassigned` + `authorization=authorized` → assign `copilot-swe-agent` now before PR/bootstrap/watch follow-up (`issueAssignmentSeam=ready_assign_now`)
 4. `issueReadiness=ready` + `issueAssignmentState=assigned_to_copilot` → assignment seam satisfied; proceed to follow-up (`issueAssignmentSeam=assigned_to_copilot`)
