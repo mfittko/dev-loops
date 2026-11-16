@@ -3074,7 +3074,7 @@ test("ADR 0197: a PR-own change after the cap round keeps the round_cap_reached 
 // Issue 2752 slice 4 (PR 3223 shape): the verdict was posted at the origin head O, whose ledger is the only one (round 1); origin/main then moved and the branch merged it into M.
 // The act list belongs to O's ledger; M has none unless `mLedger` writes one ("findings_present" or "blocked"). `side` writes the ledger at a commit that is not an ancestor of M, `criss` builds a criss-cross merge base.
 // `handEdit` adds a hand edit of a PR path after the merge (a changed PR blob); it builds no conflict hunk, and no test here claims conflict-hunk coverage.
-async function verdictCarryScenario({ root, wt, files }, { baseFile = "main-only.md", baseContent = "main content\n", handEdit = false, side = false, criss = false, ownChangeAfterMerge = false, cap = 2, severity = "medium", mLedger = null, originFindings = null, priorRounds = 0 } = {}) {
+async function verdictCarryScenario({ root, wt, files }, { baseFile = "main-only.md", baseContent = "main content\n", handEdit = false, side = false, criss = false, ownChangeAfterMerge = false, cap = 2, severity = "medium", mLedger = null, originFindings = null, priorRounds = 0, corruptPrior = false } = {}) {
   await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: cap } } }));
   const medium = withFp({ ...ACT[0], severity, judgeFix: "guard the deref" });
   await writeFile(files.actList, JSON.stringify([medium]));
@@ -3096,6 +3096,7 @@ async function verdictCarryScenario({ root, wt, files }, { baseFile = "main-only
     const sha = String(i + 1).repeat(40);
     await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-01T00:00:0${i}.000Z`, findings: [] }));
   }
+  if (corruptPrior) await writeFile(path.join(dir, `draft_gate-${"d".repeat(40)}.json`), "{not json"); // an unparseable ledger at a later prior head
   const baseCommit = async () => {
     await mkdir(path.dirname(path.join(root, baseFile)), { recursive: true });
     await writeFile(path.join(root, baseFile), handEdit ? "main side\n" : baseContent);
@@ -3161,6 +3162,7 @@ test("issue 2752 slice 4: every fail-closed case keeps the verdict_not_posted re
     "merge followed by a hand edit of a PR path": { scenario: { handEdit: true } },
     "head with its own unposted findings_present ledger": { scenario: { mLedger: "findings_present" } },
     "head with its own blocked ledger": { scenario: { mLedger: "blocked" } },
+    "unreadable prior ledger at a later head": { scenario: { corruptPrior: true, cap: 4 } },
     "non-ancestor origin head": { scenario: { side: true } },
     "criss-cross merge base": { scenario: { criss: true } },
     "missing origin verdict": { scenario: {}, posted: "e".repeat(40) },
@@ -3170,7 +3172,7 @@ test("issue 2752 slice 4: every fail-closed case keeps the verdict_not_posted re
   for (const [name, { scenario, posted, baseRefName = "main" }] of Object.entries(cases)) {
     await withFixture(async (fx) => {
       // Cap 3 keeps round 2 below the cap, so the verdict check (not the cap-round ledger read) decides.
-      const { over } = await verdictCarryScenario(fx, { ...scenario, cap: 3 });
+      const { over } = await verdictCarryScenario(fx, { cap: 3, ...scenario });
       await assert.rejects(fx.emit(over(posted, baseRefName)), notPosted, name);
     });
   }
