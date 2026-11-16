@@ -18,7 +18,7 @@ Next to `COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK`, a Claude Code "wa
 
 ## Consequences
 
-- A fixer delivery wait call never blocks longer than the per-call cap, so the harness does not move it to the background.
+- The per-call cap bounds the watch budget of a fixer delivery wait call. The call also fetches its baseline before the clock starts and makes final API reads after the budget ends, so its wall time can exceed the cap by those reads. The margin between the 170 s cap and the 180 s harness limit absorbs them, and a call that still moves to the background follows the background rule in the Decision.
 - A capped call keeps its baseline across re-issues, so a push between two calls is reported and is not absorbed into a fresh baseline.
 - The fallback join of ADR 0223 still runs once with `--timeout 0` after the final completion notification. Pi needs no fallback.
 - Rejected: adopt `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`. It disables background features that dispatch relies on, and the workflow is harness-agnostic.
