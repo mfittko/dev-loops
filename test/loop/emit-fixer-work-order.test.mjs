@@ -3123,7 +3123,7 @@ async function capRoundFirstPassPushed(fx) {
   await writeFile(path.join(fx.root, ".git", "info", "exclude"), ".devloops.json\n");
   const first = await fx.prepareFull();
   assert.equal((await first.full()).workOrder.headSha, first.candidate);
-  await writeFile(fx.files.actList, JSON.stringify([fixedItem, openItem]));
+  await writeFile(fx.files.actList, JSON.stringify([openItem]));
   const at = (prHead) => ({ headSha: prHead, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: prHead, baseRefName: "main" }), fetchVerdictMarkers: verdictPostedAt(fx.head) });
   return { candidate: first.candidate, at };
 }
