@@ -45,6 +45,8 @@ function makeRunChild(posted, { isDraft = true, mutations = [] } = {}) {
     }
     if (a.includes("requested_reviewers")) return { code: 0, stdout: '{"users":[],"teams":[]}\n', stderr: "" };
     if (a.includes("api") && a.includes("user")) return { code: 0, stdout: '{"login":"gate-bot"}\n', stderr: "" };
+    if (a.includes("convertPullRequestToDraft")) return { code: 0, stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_1","isDraft":true}}}}' + "\n", stderr: "" };
+    if (a.includes("graphql") && a.includes("isDraft")) return { code: 0, stdout: '{"data":{"repository":{"pullRequest":{"id":"PR_1","isDraft":false}}}}' + "\n", stderr: "" };
     if (a.includes("graphql")) return { code: 0, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}\n', stderr: "" };
     if (a.includes("issues/17/comments") || a.includes("pulls/17/reviews") || a.includes("pulls/17/files")) return { code: 0, stdout: "[]\n", stderr: "" };
     if (a.includes("--json") && a.includes("headRefOid") && !a.includes("state") && !a.includes("statusCheckRollup")) return { code: 0, stdout: JSON.stringify({ headRefOid: HEAD }) + "\n", stderr: "" };
@@ -122,4 +124,11 @@ test("a clean draft_gate post on a ready PR refuses at a stale base before any d
     assert.deepEqual(out.mutations, []);
     assert.equal(out.posted.length, 0);
   }, { prefix: "dev-loops-base-freshness-ready-" });
+});
+
+test("a clean draft_gate post on a ready PR at a current base reaches the draft transition", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await postClean(tempDir, async () => ({ ok: true, status: "base_current", base: "main" }), { isDraft: false });
+    assert.ok(out.mutations.some((m) => m.includes("convertPullRequestToDraft")), `expected a draft conversion, got ${JSON.stringify(out.mutations)} / ${out.error}`);
+  }, { prefix: "dev-loops-base-freshness-ready-current-" });
 });
