@@ -108,7 +108,7 @@ function makeRunChild({ puts, existingReview = true, currentHead = FIX, body = e
   };
 }
 
-async function post(tempDir, { findings, converged, extraArgs = [], runChildOptions = {}, verdict, overallVerdict = "clean", root = repoRoot, ledgerPath = path.join(tempDir, "ledger.json") }) {
+async function post(tempDir, { findings, converged, extraArgs = [], runChildOptions = {}, verdict, overallVerdict = "clean", root = repoRoot, ledgerPath = path.join(tempDir, "ledger.json"), checkBaseFreshness }) {
   await writeFile(ledgerPath, JSON.stringify({
     repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, verdict: "clean", overallVerdict,
     loggedAt: "2026-10-20T00:00:00.000Z", findings,
@@ -129,7 +129,7 @@ async function post(tempDir, { findings, converged, extraArgs = [], runChildOpti
   const puts = [];
   try {
     const result = await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
-      env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: root, runChild: makeRunChild({ puts, ...runChildOptions }),
+      env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: root, runChild: makeRunChild({ puts, ...runChildOptions }), checkBaseFreshness,
       countPrOwnCommits: async () => runChildOptions.countThrows ? Promise.reject(new Error(typeof runChildOptions.countThrows === "string" ? runChildOptions.countThrows : "git fetch failed")) : String(runChildOptions.ownShas ?? "").split("\n").filter(Boolean).length,
     });
     return { result, body: puts.join("\n") };
@@ -149,6 +149,21 @@ test("an all-low/nit act list with a clean delta updates the comment at A to cle
     assert.match(body, new RegExp(`\\*\\*Reviewed head SHA:\\*\\* \`${A}\``));
     assert.match(body, new RegExp(`\\*\\*Converged:\\*\\* fixer \`${FIX}\` delta \`sha256:[a-f0-9]{64}\``));
   }, { prefix: "dev-loops-converged-ok-" });
+});
+
+// GATE-EXEC-BASE-REFRESH: a converged post checks the current PR head (the fixer commit), not the reviewed head A.
+test("a converged post checks base freshness at the fixer commit, so a merged base posts and a stale one refuses", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("low", 1)];
+    const heads = [];
+    const check = (stale) => async ({ base, head }) => { heads.push(head); return stale ? { ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: "R" } : { ok: true, status: "base_current", base }; };
+    const fresh = await post(tempDir, { findings, converged: convergedInput(findings), checkBaseFreshness: check(false) });
+    assert.equal(fresh.error, undefined);
+    assert.equal(fresh.result.action, "updated");
+    const stale = await post(tempDir, { findings, converged: convergedInput(findings), checkBaseFreshness: check(true) });
+    assert.match(stale.error, new RegExp(`^base_stale_integrate_first: head ${FIX} does not contain origin/main`));
+    assert.deepEqual(heads, [FIX, FIX]);
+  }, { prefix: "dev-loops-converged-base-" });
 });
 
 // ADR 0183: a fully judged round depends only on the act list, so an all-act round composes clean when it converges,
