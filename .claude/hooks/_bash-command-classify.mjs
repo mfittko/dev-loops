@@ -1752,9 +1752,11 @@ function envSplitString(words) {
   let w = words;
   while (ENV_ASSIGNMENT_WORD_RE.test(w[0]?.value ?? "")) w = w.slice(1);
   if ((w[0]?.value ?? "").split("/").pop() !== "env") return false;
-  for (const { value } of w.slice(1)) {
+  for (let i = 1; i < w.length; i++) {
+    const { value } = w[i];
     if (/^-[A-Za-z]*S/.test(value) || /^--split-string(=|$)/.test(value)) return true;
-    if (!value.startsWith("-")) return false;
+    if (/^(?:-[uCPa]|--(?:unset|chdir|argv0))$/.test(value)) i++; // the option's value is the next word
+    else if (!value.startsWith("-")) return false;
   }
   return false;
 }

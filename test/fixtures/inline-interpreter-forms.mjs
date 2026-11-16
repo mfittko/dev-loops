@@ -136,6 +136,10 @@ export const INLINE_INTERPRETER_FORMS = [
   deny("env --split-string='node -e x'"),
   deny("sudo env -S 'node -e x'"),
   deny("env -i -S 'node -e x'"),
+  deny("env -u FOO -S 'node -e x'"),
+  deny("env -C /w -S 'node -e x'"),
+  deny("env --unset FOO -S 'node -e x'"),
+  deny("env --chdir /w -S 'node -e x'"),
   // any env split-string form denies: env runs its operand as a command line the gate cannot read
   deny("env -iS 'node -e x'"),
   deny("env -vS 'node -e x'"),
