@@ -21,4 +21,4 @@ ADR 0096 requires the loop to integrate the base branch before every gate round.
 
 - A stale head cannot record passing validation or post a clean verdict. The remedy is to integrate the base and rerun the gate round.
 - The two seam families can disagree when a PR targets a branch other than the default branch. Each family checks its own base by design.
-- The preflight adds one git comparison to each seam. It needs a fetched `origin` ref, so a missing ref fails closed.
+- The preflight adds one git comparison to each seam.
