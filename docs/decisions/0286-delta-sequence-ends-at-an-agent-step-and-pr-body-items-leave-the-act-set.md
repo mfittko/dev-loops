@@ -30,6 +30,9 @@ Residuals:
 
 - A PR-body item is no longer checked inside the delta sequence. A body edit that does not resolve it surfaces in the next gate round.
 - `BOUNDED_OUT` relies on `origin` in the sealed record. A thread-route record carries no `origin`, so its sequence closes through `HEAD_MOVED` or `no_commit` as before.
-- A non-hex marker name cannot be passed to the CLI, which validates `--head` as a full SHA. The `MARKER_UNREADABLE` condition for that shape applies to the function and to a marker that carries a valid name but an unreadable body.
+- The CLI accepts `--head` as a full SHA or a safe marker file name (`^[A-Za-z0-9._-]{1,128}$`, never `.` or `..`), and a non-hex name routes only to `MARKER_UNREADABLE`. A marker with an empty name cannot be closed by the CLI.
+- The `MARKER_UNREADABLE` close checks the work order owner (`--repo` and `--pr`) like every other condition, and a receipt object with no parseable `pulledAt` counts its file mtime as the pull time.
+- A no-branch marker that names a pulled execution has no branch reflog activity signal, so only the pull time counts. A fixer still committing more than one grace after its pull reads as stopped and its marker closes. A handback requirement would leave a dead fixer's marker uncloseable, so the residual stays named.
+- A mixed code and PR-body act list at the cap round converges only when the live PR body digest differs from the reviewed `pr-body` read (`body_unchanged`, `body_read_unrecorded`), the check of the body-only route. Whether the edit resolves an item stays with the next gate round.
 - A file-less act item that is a code issue routes to the PR body, the ADR 0271 predicate. `startDeltaSequence` rejects an explicit ref that appears in both the body and the code sublist.
 - `MARKER_UNREADABLE` closes only once the marker is as old as the dispatch grace, like `FIXER_NEVER_PULLED`. A younger marker refuses `abandonment_unproven` with a rerun remedy.

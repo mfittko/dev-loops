@@ -210,16 +210,14 @@ export function startDeltaSequence({ reviewBaselineHead, actList, reviewerOnly =
   if (!nonEmpty(reviewBaselineHead)) throw new Error("delta sequence requires reviewBaselineHead");
   // A PR-body act item names no file, so the file-reading delta reviewer can never resolve it; the next gate round verifies the body (ADR 0271).
   // A thread item is exempt: its ref is the thread id the full-phase binding checks.
-  const codeList = Array.isArray(actList) ? actList.filter((entry) => !isDeltaBodyItem(entry)) : actList;
-  const bodyEntries = Array.isArray(actList) ? actList.filter(isDeltaBodyItem) : [];
-  const bodyItems = bodyEntries.length > 0 ? toDeltaActItems(bodyEntries).map((item) => item.ref) : [];
-  if (bodyItems.length > 0 && codeList.length === 0) {
+  // Number and validate the whole list once, so an auto ref `act-N` and an error index are the act list position every consumer sees.
+  const all = Array.isArray(actList) && actList.length > 0 ? toDeltaActItems(actList) : null;
+  const bodyItems = all ? all.filter((_, i) => isDeltaBodyItem(actList[i])).map((item) => item.ref) : [];
+  const codeItems = all ? all.filter((_, i) => !isDeltaBodyItem(actList[i])) : [];
+  if (bodyItems.length > 0 && codeItems.length === 0) {
     throw new Error(`delta_body_only_act_set: every act item names no file (PR-body items: ${bodyItems.join(", ")}), so no delta review runs. Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged verdict (upsert-checkpoint-verdict.mjs --converged-json with bodyOnly: true) at the cap round, or run the next gate round below the cap.`);
   }
-  const actItems = reviewerOnly && Array.isArray(codeList) && codeList.length === 0 ? [] : toDeltaActItems(codeList);
-  // Auto refs (`act-N`) restart per sublist, so only an explicit ref can collide.
-  const collision = bodyEntries.map((entry) => entry.ref).filter(nonEmpty).map((ref) => ref.trim()).find((ref) => actItems.some((item) => item.ref === ref));
-  if (collision) throw new Error(`act list has duplicate ref ${JSON.stringify(collision)} across the PR-body and code items`);
+  const actItems = all ? codeItems : reviewerOnly && Array.isArray(actList) && actList.length === 0 ? [] : toDeltaActItems(actList);
   const actSetId = createHash("sha256")
     .update(JSON.stringify(actItems.map((item) => {
       const { ref, angle, severity, file, line, summary } = item;
@@ -443,10 +441,11 @@ const isLowNitActList = (items) => Array.isArray(items) && items.length > 0
  * keeps today's full round. Convergence applies only at the cap round or later (`round` at or past a positive `cap`);
  * below the cap a low or nit act list goes to the fixer and the next full round runs.
  * Returns the converged marker the draft_gate comment at `headSha` records.
- * @param {{ gate?: string, headSha?: string, round?: number, cap?: number, roundActItems?: unknown, converged?: { fixerCommit?: string, actList?: unknown, deltaResult?: any } }} input
+ * @param {{ gate?: string, headSha?: string, round?: number, cap?: number, roundActItems?: unknown, converged?: { fixerCommit?: string, actList?: unknown, deltaResult?: any }, reviewedBodySha?: string|null, liveBodySha?: string }} input
+ * `reviewedBodySha` and `liveBodySha` are required when the act list holds PR-body items; the PR body must have changed.
  * @returns {{ fixerCommit: string, deltaDigest: string }}
  */
-export function composeConvergedDraftGate({ gate, headSha, round, cap, roundActItems, converged } = {}) {
+export function composeConvergedDraftGate({ gate, headSha, round, cap, roundActItems, converged, reviewedBodySha, liveBodySha } = {}) {
   if (gate !== "draft_gate") throw new Error(`converged verdict applies to draft_gate only, got ${JSON.stringify(gate)}`);
   if (cap > 0 && !isPastRoundCap(round, cap)) throw new Error(`converged verdict applies only at the cap round or later (round ${round}, cap ${cap}); below the cap a low or nit act list goes to the fixer and the next full round runs`);
   if (!FULL_SHA_RE.test(headSha ?? "")) throw new Error("converged verdict requires the full reviewed head sha");
@@ -460,7 +459,13 @@ export function composeConvergedDraftGate({ gate, headSha, round, cap, roundActI
     throw new Error("converged.actList must be the round's non-empty low/nit act list (same items as the posted act items)");
   }
   const result = converged.deltaResult;
-  const errors = validateDeltaResult(result, { sequence: startDeltaSequence({ reviewBaselineHead: headSha, actList: converged.actList }), membershipOnly: true });
+  const sequence = startDeltaSequence({ reviewBaselineHead: headSha, actList: converged.actList });
+  // The delta reviewer never sees a PR-body item, so a mixed list needs the narrow body-change fact of the body-only route.
+  if (sequence.bodyItems.length > 0) {
+    if (!reviewedBodySha) throw new Error(`body_read_unrecorded: the round act list holds PR-body items (${sequence.bodyItems.join(", ")}) and no cap-round context records a pr-body read at ${headSha}, so a body edit cannot be shown`);
+    if (reviewedBodySha === liveBodySha) throw new Error(`body_unchanged: the live PR body digest equals the reviewed pr-body read; edit the PR body for the PR-body items (${sequence.bodyItems.join(", ")}) first`);
+  }
+  const errors = validateDeltaResult(result, { sequence, membershipOnly: true });
   if (errors.length > 0) throw new Error(`converged.deltaResult is invalid: ${errors.join("; ")}`);
   if (result.outcome !== "locally_clear") throw new Error("converged.deltaResult must be locally_clear");
   // validateDeltaResult skips the outcome check under membershipOnly, so state it here.

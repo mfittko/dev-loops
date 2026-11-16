@@ -450,14 +450,13 @@ test("the grace is the runner TTL and DEVLOOPS_STALE_RUNNER_MAX_AGE_MS can only 
   }
 });
 
-test("a 41 hex char head is rejected as a non-full sha by the CLI and for the GitHub head", async () => {
+test("a 41 hex char head is rejected as a GitHub head and is a plain non-sha marker name for the CLI", async () => {
   await withTempDir(async (tmpRoot) => {
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat" });
     assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr("b".repeat(41)) }))).refusal, "abandonment_unproven");
     const result = spawnSync("node", [cli, "--head", "a".repeat(41), "--repo", "o/r", "--pr", "7"], { encoding: "utf8", cwd: tmpRoot });
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /usage/i);
-    assert.doesNotMatch(result.stdout, /sequence_absent/);
+    assert.doesNotMatch(result.stderr, /usage/i);
+    assert.match(result.stdout, /sequence_absent/);
   });
 });
 
@@ -770,4 +769,42 @@ test("an unreadable pull receipt older than the grace reads as an inactive fixer
     const result = await closeGateSequence(base(tmpRoot));
     assert.equal(result.condition, "HEAD_MOVED");
   });
+});
+
+test("an object receipt without a parseable pulledAt uses its file mtime: it refuses inside the grace and closes after it", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    const file = pullReceiptPath(tmpRoot, ex.workOrderRef);
+    mkdirSync(path.dirname(file), { recursive: true });
+    for (const body of ["{}", '{"pulledAt":"garbage"}']) {
+      writeFileSync(file, body);
+      const old = new Date(T0 - FIXER_GRACE_MS - 60_000);
+      utimesSync(file, new Date(T0 - 60_000), new Date(T0 - 60_000));
+      assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "fixer_running", body);
+      utimesSync(file, old, old);
+      assert.equal((await closeGateSequence(base(tmpRoot))).condition, "HEAD_MOVED", body);
+      writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    }
+  });
+});
+
+test("MARKER_UNREADABLE checks the work order owner: a no-branch marker of another PR refuses", async () => {
+  await withTempDir(async (tmpRoot) => {
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, execution: { ...execution(tmpRoot), workOrderRef: "fixer:o/r#8:head:f1-abcd1234" } });
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
+    assert.equal(result.refusal, "abandonment_unproven");
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("the CLI accepts a safe non-hex --head and refuses a path-like one", () => {
+  for (const head of ["../x", "a/b", ".", "..", "a b", ""]) {
+    const run = spawnSync("node", [cli, "--head", head, "--repo", "o/r", "--pr", "7"], { encoding: "utf8" });
+    assert.equal(run.status, 1, `--head ${JSON.stringify(head)}`);
+    assert.match(run.stderr, /usage/);
+  }
+  const ok = spawnSync("node", [cli, "--head", "not-a-sha", "--repo", "o/r", "--pr", "7"], { encoding: "utf8" });
+  assert.doesNotMatch(ok.stderr, /usage/);
+  assert.match(ok.stdout, /sequence_absent/);
 });

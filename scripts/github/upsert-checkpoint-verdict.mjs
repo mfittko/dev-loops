@@ -7,7 +7,7 @@ import { wrapOperatorOwnedPhrases } from "@dev-loops/core/github/operator-owned-
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isFullyJudged, isOpenActItem, isPastRoundCap, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, pastCapBlockers, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
-import { composeBodyOnlyConvergedDraftGate, composeConvergedDraftGate, convergedActItemKey } from "@dev-loops/core/loop/pre-push-delta-review";
+import { composeBodyOnlyConvergedDraftGate, composeConvergedDraftGate, convergedActItemKey, isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken, preflightFieldsSpec } from "../lib/jq-output.mjs";
 import { parseAllowedRefsCsv, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -2855,7 +2855,14 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         : await countPrOwnCommits(repoRoot, canonicalHeadSha, convergedInput.fixerCommit, live.baseRefName)
           .catch((err) => { if (err instanceof Error && err.message.startsWith("own_commit_in_range:")) throw err; throw new Error(`--converged-json bodyOnly: cannot count PR-own commits in ${canonicalHeadSha}..${convergedInput.fixerCommit}: ${err instanceof Error ? err.message : String(err)}`); });
       convergedMarker = composeBodyOnlyConvergedDraftGate({ ...composeInput, ownCommits });
-    } else convergedMarker = composeConvergedDraftGate(capacity);
+    } else {
+      // A mixed list holds PR-body items the delta reviewer never sees: pass the digests of the body-only route's body-change check.
+      const bodyDigests = roundActItems.some(isDeltaBodyItem) ? {
+        reviewedBodySha: await readReviewedBodySha256(options, canonicalHeadSha, repoRoot),
+        liveBodySha: prBodySha256((await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "body"], { env, ghCommand, runChild })).body),
+      } : {};
+      convergedMarker = composeConvergedDraftGate({ ...capacity, ...bodyDigests });
+    }
     return [];
   };
   // GATE-EXEC-BASE-REFRESH (issue 2885): a clean draft_gate or pre_approval_gate never records at a head that lacks origin/<base>.

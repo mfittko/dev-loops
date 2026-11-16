@@ -8,7 +8,11 @@
  * pulled within the dispatch grace, so no fixer ran and no commit on the branch is the fixer's),
  * BOUNDED_OUT (the sealed delta record of the baseline holds bounded_out/push_to_gate for the marker's
  * fixer execution and that fixer is not running, so the sequence finished and the full phase pushes)
- * and MARKER_UNREADABLE (the marker is unreadable, names no branch or has a baseline name that is not a full hex sha).
+ * and MARKER_UNREADABLE (the marker is unreadable, names no branch or has a baseline name that is not a full hex sha; --head then
+ * takes any safe marker file name, never a path). It closes only once the marker is as old as the dispatch grace, and only for the
+ * work order owner (--repo and --pr). Residuals: a marker whose name is empty cannot be closed here, and a no-branch marker that names
+ * a pulled execution loses the branch reflog activity signal, so only its pull time counts and a fixer still committing more than
+ * one grace after its pull reads as stopped.
  * A live sequence is never closed. Refusals: sequence_absent, baseline_unknown, sequence_live, fixer_running, abandonment_unproven.
  */
 import { spawnSync } from "node:child_process";
@@ -30,6 +34,8 @@ import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-r
 /** The grace is the runner-lock TTL, floored at the 30 minute default: DEVLOOPS_STALE_RUNNER_MAX_AGE_MS can only lengthen it, so a caller cannot close a live sequence early. */
 export const fixerGraceMs = () => Math.max(STALE_RUNNER_DEFAULT_MAX_AGE_MS, resolveStaleRunnerMaxAgeMs());
 const isFullSha = (sha) => normalizeFullHeadSha(sha) === sha;
+/** A full sha, or any other safe marker file name (never a path); a non-sha name routes only to MARKER_UNREADABLE. The empty name stays uncloseable. */
+const isSafeMarkerName = (name) => isFullSha(name) || (/^[A-Za-z0-9._-]{1,128}$/u.test(name) && name !== "." && name !== "..");
 
 const USAGE = `usage: close-gate-sequence.mjs --head <marker baseline sha> --repo <owner/name> --pr <number> [--help]\n\n${JQ_OUTPUT_USAGE}`;
 const refuse =(refusal, reason, remedy) => ({ ok: false, refusal, reason, remedy });
@@ -50,6 +56,7 @@ export const defaultActor = (env = process.env, lookup = userInfo) => {
 
 /** @param {{ tmpRoot: string, head: string, repo?: string, pr?: number, fetchPr?: Function, now?: () => number, actor?: string }} input */
 export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = viewPr, now = Date.now, actor = defaultActor(), hasCommit = localCommitExists, branchActivityMs = branchReflogMs, lock }) {
+  if (!isSafeMarkerName(head)) throw new Error(`close-sequence head ${JSON.stringify(head)} is not a full sha or a safe marker file name`);
   const marker = readSequenceMarker(tmpRoot, head);
   if (!marker) return refuse("sequence_absent", `no sequence marker exists for ${head}`, "Nothing to close here; the push block comes from another marker, so rerun with that marker's head.");
   const { executionIdentity, workOrderRef, outputRef } = marker.execution ?? {};
@@ -66,14 +73,14 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
     try { receipt = JSON.parse(readFileSync(receiptFile, "utf8")); receiptFound = true; } catch (error) {
       if (error?.code !== "ENOENT") { receiptFound = true; receiptMtime = mtimeMs(receiptFile) ?? NaN; }
     }
-    if (receiptFound && receiptMtime === null && (receipt === null || typeof receipt !== "object" || Array.isArray(receipt))) receiptMtime = mtimeMs(receiptFile) ?? NaN;
+    if (receiptFound && receiptMtime === null && (receipt === null || typeof receipt !== "object" || Array.isArray(receipt) || !Number.isFinite(Date.parse(receipt.pulledAt)))) receiptMtime = mtimeMs(receiptFile) ?? NaN;
   }
   const markerMtime = mtimeMs(sequenceMarkerPath(tmpRoot, head));
   const pulled = receiptFound; // any receipt object at the work order ref proves a pull, whatever its content
   const pulledAt = receiptMtime !== null ? receiptMtime : pulled ? Date.parse(receipt.pulledAt) : NaN;
   const grace = fixerGraceMs();
   // A fixer that pulled its work order is running unless it handed back (outputRef exists) or its last activity (the pull, or the last write to its branch reflog; a fixer that never commits shows only its pull) is older than the grace.
-  // An unparseable pulledAt makes the activity NaN, which reads as running (fail closed). The runner claim updatedAt is no signal: the closing coordinator heartbeats it itself.
+  // A receipt with no parseable pulledAt counts its file mtime as the pull time; a stat failure makes the activity NaN, which reads as running (fail closed). The runner claim updatedAt is no signal: the closing coordinator heartbeats it itself.
   // Evaluated again under the sequence lock: a fixer commit or handback during fetchPr or the lock wait must still refuse the close.
   const fixerRunning = () => pulled && mtimeMs(outputRef) === null && !(now() - Math.max(pulledAt, (marker.branch && branchActivityMs(marker.branch)) ?? -Infinity) >= grace)
     ? refuse("fixer_running", `fixer execution ${executionIdentity} pulled its work order, has not handed back, and was active within ${grace / 60000} minutes (activity-based: the pull or the last write to the fixer branch reflog)`, `Wait for the fixer to hand back, or for ${grace / 60000} minutes without fixer activity, then rerun.`)
@@ -81,6 +88,9 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   const runningBeforeFetch = fixerRunning();
   if (runningBeforeFetch) return runningBeforeFetch;
   if (!repo || !pr) return refuse("abandonment_unproven", "the sequence cannot be checked without --repo and --pr", "Rerun with --repo and --pr of the marker's PR.");
+  // The work order ref `fixer:<owner/name>#<pr>:...` names the marker's PR; a same-named branch in another repo or PR is no proof, for every close condition.
+  const owner = /^fixer:([^#:]+)#([0-9]+):/u.exec(workOrderRef ?? "");
+  if (owner && (owner[1] !== repo || Number(owner[2]) !== pr)) return refuse("abandonment_unproven", `the marker belongs to ${owner[1]}#${owner[2]}, not ${repo}#${pr}`, "Pass the --repo and --pr the marker names.");
   // An unreadable marker, one that names no branch and one whose baseline name is not a full hex sha prove nothing about the PR, so they close on their own condition (the fixer-running check above already passed).
   const markerUnreadable = marker.branch === undefined || !isFullSha(head);
   // The sealed delta record of this baseline bounded out for the marker's own fixer execution: the fixer handed back and the full phase pushes.
@@ -97,9 +107,6 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   else {
     const { pr: facts } = await fetchPr({ repo, pr, fields: "headRefOid,headRefName" });
     if (!isFullSha(facts.headRefOid ?? "")) return refuse("abandonment_unproven", `GitHub returned no valid head sha for PR #${pr}`, "Rerun when the PR head is readable.");
-    // The work order ref `fixer:<owner/name>#<pr>:...` names the marker's PR; a same-named branch in another repo or PR is no proof.
-    const owner = /^fixer:([^#:]+)#([0-9]+):/u.exec(workOrderRef ?? "");
-    if (owner && (owner[1] !== repo || Number(owner[2]) !== pr)) return refuse("abandonment_unproven", `the marker belongs to ${owner[1]}#${owner[2]}, not ${repo}#${pr}`, "Pass the --repo and --pr the marker names.");
     if (facts.headRefName !== marker.branch) return refuse("abandonment_unproven", `PR #${pr} head branch ${facts.headRefName} is not the marker branch ${marker.branch}`, "Pass the --pr whose head branch the marker names.");
     // Without a work order ref nothing ties the marker to this repo, so the baseline sha must be a commit here.
     if (!owner && facts.headRefOid !== head && !hasCommit(head)) return refuse("baseline_unknown", `the marker names no work order ref and its baseline ${head} is not a commit in this repository`, "Rerun the close from a checkout of the marker's repository.");
@@ -141,7 +148,7 @@ if (isDirectCliRun(import.meta.url)) {
   try {
     const { values } = parseArgs({ options: { head: { type: "string" }, repo: { type: "string" }, pr: { type: "string" }, help: { type: "boolean", short: "h" }, ...JQ_OUTPUT_PARSE_OPTIONS }, strict: true });
     if (values.help) { process.stdout.write(`${USAGE}\n`); process.exit(0); }
-    if (!isFullSha(values.head ?? "") || (values.pr !== undefined && !/^[1-9][0-9]*$/u.test(values.pr))) throw new Error(USAGE);
+    if (!isSafeMarkerName(values.head ?? "") || (values.pr !== undefined && !/^[1-9][0-9]*$/u.test(values.pr))) throw new Error(USAGE);
     // Validate the output flags before the close writes the record and removes the marker.
     const preflight = preflightJqFilter(values.jq) ?? preflightFieldsSpec(values.fields, { jq: values.jq, silent: values.silent });
     if (preflight !== undefined) process.exitCode = preflight;

@@ -15,6 +15,7 @@ import {
   resolveDeltaTrigger,
   startDeltaSequence,
   threadsToActList,
+  toDeltaActItems,
   validateDeltaResult,
 } from "../src/loop/pre-push-delta-review.mjs";
 import { consolidateFanin } from "../src/loop/gate-fanin.mjs";
@@ -308,7 +309,7 @@ describe("result schema", () => {
   test("rejects duplicate refs in the act list and in the result", () => {
     assert.throws(() => startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], ref: "x" }, { ...ACT_LIST[1], ref: "x" }] }), /duplicate ref "x"/);
     const body = { severity: "low", summary: "body only", judgeDisposition: "act", ref: "x" };
-    assert.throws(() => startDeltaSequence({ reviewBaselineHead: A, actList: [body, { ...ACT_LIST[0], ref: "x" }] }), /duplicate ref "x" across the PR-body and code items/);
+    assert.throws(() => startDeltaSequence({ reviewBaselineHead: A, actList: [body, { ...ACT_LIST[0], ref: "x" }] }), /duplicate ref "x"/);
     const dup = result({ actionableItems: [{ ref: "act-1", status: "resolved", evidence: ["e"] }, { ref: "act-1", status: "resolved", evidence: ["e"] }] });
     assert.match(validateDeltaResult(dup, { sequence: sequence() }).join("\n"), /"act-1" is a duplicate/);
   });
@@ -734,5 +735,23 @@ describe("the reviewer result shape", () => {
     assert.match(errors, /locally_clear requires every act item resolved/);
     assert.match(errors, /widenedReads\[0\] needs a path and a reason/);
     assert.deepEqual(deltaResultShapeErrors(result()), []);
+  });
+});
+
+describe("auto refs and errors use the full act list position", () => {
+  const codeNoRef = { severity: "medium", angle: "correctness", summary: "code", file: "src/a.mjs", line: 1, judgeDisposition: "act" };
+  const bodyNoRef = { severity: "low", angle: "spec", summary: "body", judgeDisposition: "act" };
+
+  test("the sequence, toDeltaActItems and the body refs agree on act-N for [body, code] without refs or fingerprints", () => {
+    const actList = [bodyNoRef, codeNoRef];
+    const seq = startDeltaSequence({ reviewBaselineHead: A, actList });
+    assert.deepEqual(seq.bodyItems, ["act-1"]);
+    assert.deepEqual(seq.actItems.map((item) => item.ref), ["act-2"]);
+    assert.equal(toDeltaActItems(actList)[1].ref, "act-2");
+  });
+
+  test("a validation error names the index in the act list", () => {
+    const actList = [codeNoRef, { ...codeNoRef, summary: "b" }, { summary: "x", judgeDisposition: "defer" }];
+    assert.throws(() => startDeltaSequence({ reviewBaselineHead: A, actList }), /act list entry 2 has judgeDisposition "defer"/);
   });
 });
