@@ -1584,6 +1584,24 @@ test("AC5 (3127): a failed spec-change read stops startup on prefer_local with a
   assert.equal(routed.issueReadinessReason, "spec_change_read_failed");
   assert.match(routed.nextAction, /Retry startup/);
   assert.doesNotMatch(routed.nextAction, /changed after/);
+  assert.ok(routed.warnings.some((w) => /spec-change read failed: \S/.test(w)));
+});
+
+test("AC5 (3127): the freshness check runs when the issue body has no AC heading", async () => {
+  const noAcBody = "Spec lives in a linked refinement document.\n";
+  const results = { body: "## 🔬 Grill / refinement results\n\nNo gaps were found.", createdAt: "2026-11-06T10:00:00Z" };
+  const changed = await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const stub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
+      { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: noAcBody }) },
+      { assertArgs: ["api", "graphql", "number=735", ".data.repository.issueOrPullRequest"],
+        stdout: JSON.stringify({ body: noAcBody, lastEditedAt: null, comments: { nodes: [results, { body: "Decision: widen scope.", createdAt: "2026-11-06T11:00:00Z" }] } }) },
+      { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
+    ], { matchMode: "claims" });
+    return buildAutoResolvedInput({ issue: 735, cwd: tempDir, env: { ...stub.env, ...resolverTestEnv() } });
+  }, { prefix: "resolve-dev-loop-spec-changed-noac-" });
+  assert.equal(changed.issueReadinessReason, "spec_changed_since_grill");
 });
 
 test("local-first phase-doc intake fires no tracker artifact / Copilot call before promotion (#953 AC3)", async () => {

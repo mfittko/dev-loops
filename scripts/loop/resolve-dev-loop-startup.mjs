@@ -929,8 +929,10 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       warnings.push(`issueReadiness: using default "${issueReadiness}" — gh issue view failed`);
     }
     // GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL: a ready spec that changed after
-    // its latest grill goes back to the grill.
-    if (issueReadiness === "ready") {
+    // its latest grill goes back to the grill. Runs regardless of the AC
+    // heading (linked refinement documents, edited-out headings); the existing
+    // readiness value is kept when no change is found.
+    {
       try {
         const facts = parseSpecChangeFacts(ghJson(buildSpecChangeFactsGhArgs({ repo, number: issue }), repoRoot, env));
         if (detectSpecChangedSinceGrill({ comments: facts.comments, bodyLastEditedAt: facts.lastEditedAt, commentsTruncated: facts.commentsTruncated })) {
@@ -1535,6 +1537,7 @@ export function buildResolveDevLoopStartupResult(input, {
       ),
       issueReadiness: input.issueReadiness,
       issueReadinessReason,
+      ...(input.warnings ? { warnings: input.warnings } : {}),
     };
   }
   if (issueReadinessReason === SPEC_CHANGED_SINCE_GRILL_REASON) {
