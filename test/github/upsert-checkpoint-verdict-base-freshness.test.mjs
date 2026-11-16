@@ -30,10 +30,12 @@ after(async () => {
   if (repoRoot) await rm(repoRoot, { recursive: true, force: true });
 });
 
-function makeRunChild(posted, { isDraft = true, mutations = [] } = {}) {
+const CLEAN_DRAFT_REVIEW = [{ id: 55, state: "COMMENTED", submitted_at: "2026-10-20T10:00:00Z", body: ["### Gate review: `draft_gate`", "", `**Reviewed head SHA:** \`${HEAD}\``, "**Verdict:** clean", "**Findings summary:** none", "**Next action:** mark ready"].join("\n"), html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-55", user: { login: "gate-bot" }, commit_id: HEAD }];
+
+function makeRunChild(posted, { isDraft = true, mutations = [], reviews = [] } = {}) {
   const prJson = JSON.stringify({
     number: 17, state: "OPEN", isDraft, headRefOid: HEAD, baseRefName: "main", body: DEFAULT_TEST_PR_BODY,
-    closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
+    closingIssuesReferences: [], reviews: reviews.length ? [{ author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", submittedAt: "2026-05-31T20:00:00Z", commit: { oid: HEAD } }] : [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
   }) + "\n";
   return async (cmd, args = [], _env, stdin = "") => {
     if (cmd === "git") return { code: 0, stdout: "", stderr: "" };
@@ -48,6 +50,7 @@ function makeRunChild(posted, { isDraft = true, mutations = [] } = {}) {
     if (a.includes("convertPullRequestToDraft")) return { code: 0, stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_1","isDraft":true}}}}' + "\n", stderr: "" };
     if (a.includes("graphql") && a.includes("isDraft")) return { code: 0, stdout: '{"data":{"repository":{"pullRequest":{"id":"PR_1","isDraft":false}}}}' + "\n", stderr: "" };
     if (a.includes("graphql")) return { code: 0, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}\n', stderr: "" };
+    if (a.includes("pulls/17/reviews") && reviews.length) return { code: 0, stdout: JSON.stringify(reviews) + "\n", stderr: "" };
     if (a.includes("issues/17/comments") || a.includes("pulls/17/reviews") || a.includes("pulls/17/files")) return { code: 0, stdout: "[]\n", stderr: "" };
     if (a.includes("--json") && a.includes("headRefOid") && !a.includes("state") && !a.includes("statusCheckRollup")) return { code: 0, stdout: JSON.stringify({ headRefOid: HEAD }) + "\n", stderr: "" };
     if (a.includes("--json") && a.includes("files") && !a.includes("statusCheckRollup")) return { code: 0, stdout: "src/db.mjs\n", stderr: "" };
@@ -56,18 +59,18 @@ function makeRunChild(posted, { isDraft = true, mutations = [] } = {}) {
   };
 }
 
-async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDraft = true, omitVerdict = false, rejectedMedium = false, partlyJudged = false } = {}) {
+async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDraft = true, omitVerdict = false, rejectedMedium = false, partlyJudged = false, gate = "draft_gate" } = {}) {
   const clean = verdict === "clean";
   const ledgerPath = path.join(tempDir, "ledger.json");
   await writeFile(ledgerPath, JSON.stringify({
-    repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD, verdict, overallVerdict: rejectedMedium ? "findings_present" : verdict,
+    repo: "owner/repo", pr: 17, gate, headSha: HEAD, verdict, overallVerdict: rejectedMedium ? "findings_present" : verdict,
     loggedAt: "2026-11-16T00:00:00.000Z",
     findings: partlyJudged ? [{ severity: "low", angle: "correctness", summary: "act finding", judgeDisposition: "act", judgeRationale: "test" }, { severity: "low", angle: "holistic", summary: "unjudged finding" }] : [rejectedMedium ? { severity: "medium", angle: "correctness", summary: "medium finding", judgeDisposition: "reject", judgeRationale: "test" } : clean
       ? { severity: "low", angle: "correctness", summary: "low finding", judgeDisposition: "reject", judgeRationale: "test" }
       : { severity: "medium", angle: "correctness", summary: "medium finding", judgeDisposition: "act", judgeRationale: "test" }],
   }), "utf8");
   const options = parseUpsertCheckpointVerdictCliArgs([
-    "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD, ...(omitVerdict ? [] : ["--verdict", verdict]),
+    "--repo", "owner/repo", "--pr", "17", "--gate", gate, "--head-sha", HEAD, ...(omitVerdict ? [] : ["--verdict", verdict]),
     "--findings-summary", "base freshness test", "--findings-ledger", ledgerPath,
     "--next-action", "mark ready for review", "--inline-reason", "base freshness test",
     "--findings-severity-counts", JSON.stringify(clean ? { high: 0, medium: 0, low: 1, question: 0, nit: 0 } : { high: 0, medium: 1, low: 0, question: 0, nit: 0 }),
@@ -77,7 +80,7 @@ async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDra
   const mutations = [];
   const check = async (input) => { calls.push(input); return checkBaseFreshness(input); };
   try {
-    const result = await upsertCheckpointVerdict(options, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild(posted, { isDraft, mutations }), checkBaseFreshness: check });
+    const result = await upsertCheckpointVerdict(options, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild(posted, { isDraft, mutations, reviews: gate === "pre_approval_gate" ? CLEAN_DRAFT_REVIEW : [] }), checkBaseFreshness: check });
     return { result, posted, calls, mutations };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error), posted, calls, mutations };
@@ -157,4 +160,22 @@ test("a ready-PR draft_gate post with a partly judged ledger that has an open ac
     const out = await postClean(tempDir, async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: REMEDY }), { isDraft: false, omitVerdict: true, partlyJudged: true });
     assert.equal(out.calls.length, 0);
   }, { prefix: "dev-loops-base-freshness-partly-judged-" });
+});
+
+const STALE = async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits: ["1234567 newer"], foreignFiles: [], remedy: REMEDY });
+
+test("a clean pre_approval_gate post at a stale base refuses and posts nothing", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await postClean(tempDir, STALE, { gate: "pre_approval_gate", isDraft: false });
+    assert.match(out.error, /^base_stale_integrate_first:/);
+    assert.equal(out.calls.length, 1);
+    assert.equal(out.posted.length, 0);
+  }, { prefix: "dev-loops-base-freshness-preapproval-" });
+});
+
+test("a clean review-gate post skips the stale-base check", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await postClean(tempDir, STALE, { gate: "review" });
+    assert.equal(out.calls.length, 0);
+  }, { prefix: "dev-loops-base-freshness-review-" });
 });
