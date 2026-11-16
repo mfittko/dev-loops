@@ -16,9 +16,9 @@
  * content) contributes 0, reusing the classifier's own signal rather than
  * re-deriving one. Per SIZE-RUNTIME-PIN-ACCOUNTING, a file whose basename is in
  * `RUNTIME_PIN_BASENAMES` contributes 0 to source counters and `logicLoc`
- * regardless of category. Likewise a vendored file (a `_vendor` path segment) or a
- * generated hook mirror (an exact `HOOK_BUNDLE_TARGETS` path) contributes 0; the mirror's
- * `packages/core` source still counts. `commentOnly` is the count of a code file's changed lines
+ * regardless of category. Likewise a vendored file (`.claude/hooks/_vendor/**`) or a
+ * generated hook mirror (an exact `HOOK_BUNDLE_TARGETS` path) contributes 0; the hook
+ * mirrors' `packages/core` sources still count. `commentOnly` is the count of a code file's changed lines
  * the comment-discipline guard's shared `isCommentLine` detector recognizes as
  * comments (the comment analogue of `testDiscount`); fail-closed, an
  * ambiguous/unparseable changed line is never a comment and stays logic.
@@ -313,18 +313,18 @@ export function computeSizeBudget({
     const category = classifyFile(file.path, rules);
     const changedLines = file.added + file.deleted;
     const segments = file.path.replaceAll("\\", "/").split("/");
-    const runtimePin = RUNTIME_PIN_BASENAMES.has(segments.pop())
-      || segments.includes("_vendor")
-      || HOOK_BUNDLE_TARGETS.includes(file.path.replaceAll("\\", "/"));
-    if (!runtimePin && category === "unknown") {
+    const excludedFromLogic = RUNTIME_PIN_BASENAMES.has(segments.pop())
+      || file.path.startsWith(".claude/hooks/_vendor/")
+      || HOOK_BUNDLE_TARGETS.includes(file.path);
+    if (!excludedFromLogic && category === "unknown") {
       sourceChangedLines += changedLines;
       unclassifiedChangedLines += changedLines;
       if (changedLines > 0) unclassifiedPaths.push(file.path);
-    } else if (!runtimePin && (category === "code" || category === "test")) {
+    } else if (!excludedFromLogic && (category === "code" || category === "test")) {
       sourceChangedLines += changedLines;
     }
     let logic = 0;
-    if (!runtimePin && category === "code") {
+    if (!excludedFromLogic && category === "code") {
       // Comment-aware: discount changed lines the comment-discipline detector
       // recognizes as comments, clamped to [0, changedLines] so a diff-body vs
       // numstat count skew can never produce negative logic or discount more
@@ -332,7 +332,7 @@ export function computeSizeBudget({
       // full count, so a real-code change is scored exactly as before.
       const commentLines = Math.min(commentChangedLines.get(file.path) ?? 0, changedLines);
       logic = changedLines - commentLines;
-    } else if (!runtimePin && category === "test") logic = testDiscount * changedLines;
+    } else if (!excludedFromLogic && category === "test") logic = testDiscount * changedLines;
     else {
       if (changedLines > 0 && matchesAnyPattern(file.path, tierPatterns)) tierPatternDroppedToZero = true;
       continue; // docs/config/ci/asset/unknown excluded — covers generated/lockfile content

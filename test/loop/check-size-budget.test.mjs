@@ -200,10 +200,10 @@ test("runtime pins: exact normalized basenames have zero accounting under existi
 
 test("vendored and generated hook mirrors add 0 logic; look-alike paths still count", () => {
   const logic = (file) => computeSizeBudget({ nameStatusOutput: `A\t${file}\n`, numstatOutput: numstatZ([[500, 0, file]]) }).wholeLogicLoc;
-  for (const file of [".claude/hooks/_vendor/sh-syntax/index.mjs", "_vendor/x.mjs", ".claude/hooks/_bash-command-classify.mjs", ".claude/hooks/_gate-round-retirement.mjs"]) {
+  for (const file of [".claude/hooks/_vendor/sh-syntax/index.mjs", ".claude/hooks/_bash-command-classify.mjs", ".claude/hooks/_gate-round-retirement.mjs"]) {
     assert.equal(logic(file), 0, file);
   }
-  for (const file of [".claude/hooks/_not-a-mirror.mjs", ".claude/hooks/hand.mjs", "foo_vendor/x.mjs", "_vendor.mjs"]) {
+  for (const file of [".claude/hooks/_not-a-mirror.mjs", ".claude/hooks/hand.mjs", ".claude\\hooks\\_bash-command-classify.mjs", "foo_vendor/x.mjs", "_vendor.mjs", "_vendor/x.mjs", "scripts/_vendor/x.mjs", "packages/core/src/_vendor/x.mjs"]) {
     assert.equal(logic(file), 500, file);
   }
 });
