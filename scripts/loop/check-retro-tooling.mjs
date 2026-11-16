@@ -175,7 +175,7 @@ export function analyzeTranscript(transcript) {
  */
 export function extractBashCommands(text) {
   return String(text ?? "").split(/\r?\n/).flatMap((line) => {
-    if (!line.startsWith("{")) return [line];
+    if (!line.trimStart().startsWith("{")) return [line];
     let entry;
     try { entry = JSON.parse(line); } catch { return [line]; }
     const content = entry?.message?.content;

@@ -322,7 +322,7 @@ test("--transcript accepts several Claude Code session transcripts and extracts 
   const session = (command) => `${JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "gh pr list" }, { type: "tool_use", name: "Bash", input: { command } }] } })}\n${JSON.stringify({ type: "user", message: { content: "gh api x" } })}\n`;
   const [a, b] = [join(dir, "a.jsonl"), join(dir, "b.jsonl")];
   writeFileSync(a, session("dev-loops loop info"));
-  writeFileSync(b, session("gh api repos/o/r"));
+  writeFileSync(b, `  ${session("gh api repos/o/r")}`); // indented JSONL line still parses as JSON
   const out = new PassThrough();
   let text = "";
   out.on("data", (chunk) => { text += chunk; });
