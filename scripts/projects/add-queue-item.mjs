@@ -31,8 +31,9 @@ Options:
                               (next_up) column without the full refinement
                               matrix (Acceptance criteria checklist + DoD
                               checklist + explicit Non-goals, or a linked
-                              refinement doc), divert it to the non-pickup
-                              park column instead of failing. Without --auto,
+                              refinement doc), or whose spec changed after its
+                              latest grill (spec_changed_since_grill), divert it to the
+                              non-pickup park column instead of failing. Without --auto,
                               the same case throws
                               MISSING_REFINEMENT_ARTIFACT.
   --help, -h                  Show this help.
@@ -54,7 +55,8 @@ Exit codes:
   1 — usage or argument error
   2 — GitHub API error / invalid --jq filter
   3 — project, field, column, or issue/PR not found
-  4 — issue targets the pickup column without a refinement artifact
+  4 — issue targets the pickup column without a refinement artifact, or whose
+      spec changed after its latest grill (spec_changed_since_grill)
       (MISSING_REFINEMENT_ARTIFACT; interactive only, --auto diverts instead)
 `.trim();
 

@@ -410,7 +410,18 @@ test("a milestone-move note counts; a bypass line does not exempt the target", (
 
 test("no dated results comment, or undated comments, never trigger the reason", () => {
   assert.equal(detectSpecChangedSinceGrill({ comments: [{ body: "note", createdAt: AFTER }], bodyLastEditedAt: AFTER }), false);
-  assert.equal(detectSpecChangedSinceGrill({ comments: [`## ${RESULTS_TITLE}`, "note"] }), false);
+  assert.equal(detectSpecChangedSinceGrill({ comments: [{ body: "note" }, "note"] }), false);
+});
+
+test("a results comment with no parseable createdAt fails closed", () => {
+  const heading = `## ${RESULTS_TITLE}\n\nNo gaps.`;
+  const counted = { body: "Decision: drop AC3", createdAt: AFTER };
+  for (const undated of [heading, { body: heading }, { body: heading, createdAt: "not-a-date" }]) {
+    assert.equal(detectSpecChangedSinceGrill({ comments: [undated, counted] }), true);
+    assert.equal(grillStateFor({ comments: [undated, counted] }).reason, "spec_changed_since_grill");
+  }
+  assert.equal(detectSpecChangedSinceGrill({ comments: [{ body: heading, createdAt: GRILL_AT }, counted] }), true);
+  assert.equal(detectSpecChangedSinceGrill({ comments: [{ body: heading, createdAt: GRILL_AT }] }), false);
 });
 
 test("normalizeGrillSnapshot forces specChangedSinceGrill to false without provenance", () => {

@@ -152,9 +152,9 @@ function timestampOrNull(value) {
 /**
  * True when the spec changed after the latest `🔬 Grill / refinement results`
  * comment: a counted (not loop-owned) comment was posted after it, or the body
- * `lastEditedAt` is after it. No dated results comment means false (the
- * provenance check owns that case), unless `commentsTruncated` says older comments
- * fell outside the read window: then the grill may be among them, so it fails closed. Pure.
+ * `lastEditedAt` is after it. No results comment means false (the
+ * provenance check owns that case). A results comment with no parseable `createdAt`, with none dated, fails closed, as does a
+ * `commentsTruncated` window (the grill may be among the older comments). Pure.
  *
  * @param {{comments?: Array<string|{body?: string, createdAt?: string}>, commentsTruncated?: boolean, bodyLastEditedAt?: string|null}} input
  * @returns {boolean}
@@ -162,14 +162,16 @@ function timestampOrNull(value) {
 export function detectSpecChangedSinceGrill({ comments = [], bodyLastEditedAt = null, commentsTruncated = false } = {}) {
   const list = Array.isArray(comments) ? comments : [];
   let latestGrill = null;
+  let undatedResults = false;
   for (const comment of list) {
     const body = commentBody(comment);
     const time = timestampOrNull(comment?.createdAt);
+    if (body !== null && time === null && isResultsComment(body)) undatedResults = true;
     if (body !== null && time !== null && isResultsComment(body) && (latestGrill === null || time > latestGrill)) {
       latestGrill = time;
     }
   }
-  if (latestGrill === null) return commentsTruncated === true;
+  if (latestGrill === null) return undatedResults || commentsTruncated === true;
   const edited = timestampOrNull(bodyLastEditedAt);
   if (edited !== null && edited > latestGrill) return true;
   return list.some((comment) => {
