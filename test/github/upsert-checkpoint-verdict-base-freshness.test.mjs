@@ -32,15 +32,16 @@ after(async () => {
 
 const CLEAN_DRAFT_REVIEW = [{ id: 55, state: "COMMENTED", submitted_at: "2026-10-20T10:00:00Z", body: ["### Gate review: `draft_gate`", "", `**Reviewed head SHA:** \`${HEAD}\``, "**Verdict:** clean", "**Findings summary:** none", "**Next action:** mark ready"].join("\n"), html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-55", user: { login: "gate-bot" }, commit_id: HEAD }];
 
-function makeRunChild(posted, { isDraft = true, mutations = [], reviews = [] } = {}) {
-  const prJson = JSON.stringify({
+function makeRunChild(posted, { isDraft: initialDraft = true, mutations = [], reviews = [] } = {}) {
+  let isDraft = initialDraft;
+  const prJson = () => JSON.stringify({
     number: 17, state: "OPEN", isDraft, headRefOid: HEAD, baseRefName: "main", body: DEFAULT_TEST_PR_BODY,
     closingIssuesReferences: [], reviews: reviews.length ? [{ author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", submittedAt: "2026-05-31T20:00:00Z", commit: { oid: HEAD } }] : [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
   }) + "\n";
   return async (cmd, args = [], _env, stdin = "") => {
     if (cmd === "git") return { code: 0, stdout: "", stderr: "" };
     const a = args.join(" ");
-    if (a.includes("convertPullRequestToDraft") || a.includes("pr ready")) mutations.push(a);
+    if (a.includes("convertPullRequestToDraft") || a.includes("pr ready")) { mutations.push(a); isDraft = a.includes("convertPullRequestToDraft"); }
     if (a.includes("pulls/17/reviews") && a.includes("-X POST")) {
       posted.push(String(stdin ?? ""));
       return { code: 0, stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n', stderr: "" };
@@ -54,12 +55,12 @@ function makeRunChild(posted, { isDraft = true, mutations = [], reviews = [] } =
     if (a.includes("issues/17/comments") || a.includes("pulls/17/reviews") || a.includes("pulls/17/files")) return { code: 0, stdout: "[]\n", stderr: "" };
     if (a.includes("--json") && a.includes("headRefOid") && !a.includes("state") && !a.includes("statusCheckRollup")) return { code: 0, stdout: JSON.stringify({ headRefOid: HEAD }) + "\n", stderr: "" };
     if (a.includes("--json") && a.includes("files") && !a.includes("statusCheckRollup")) return { code: 0, stdout: "src/db.mjs\n", stderr: "" };
-    if (a.includes("--json")) return { code: 0, stdout: prJson, stderr: "" };
+    if (a.includes("--json")) return { code: 0, stdout: prJson(), stderr: "" };
     return { code: 0, stdout: "{}\n", stderr: "" };
   };
 }
 
-async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDraft = true, omitVerdict = false, rejectedMedium = false, partlyJudged = false, actInFindingsJson = false, gate = "draft_gate" } = {}) {
+async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDraft = true, omitVerdict = false, rejectedMedium = false, partlyJudged = false, actInFindingsJson = false, rejectedInFindingsJson = false, gate = "draft_gate" } = {}) {
   const clean = verdict === "clean";
   const ledgerPath = path.join(tempDir, "ledger.json");
   await writeFile(ledgerPath, JSON.stringify({
@@ -70,10 +71,10 @@ async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDra
       : { severity: "medium", angle: "correctness", summary: "medium finding", judgeDisposition: "act", judgeRationale: "test" }],
   }), "utf8");
   const jsonPath = path.join(tempDir, "findings.json");
-  if (actInFindingsJson) await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [{ severity: "low", angle: "correctness", summary: "json act finding", judgeDisposition: "act", judgeRationale: "test" }] }]), "utf8");
+  if (actInFindingsJson || rejectedInFindingsJson) await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [{ severity: "low", angle: "correctness", summary: "json finding", judgeDisposition: actInFindingsJson ? "act" : "reject", judgeRationale: "test" }] }]), "utf8");
   const options = parseUpsertCheckpointVerdictCliArgs([
     "--repo", "owner/repo", "--pr", "17", "--gate", gate, "--head-sha", HEAD, ...(omitVerdict ? [] : ["--verdict", verdict]),
-    "--findings-summary", "base freshness test", "--findings-ledger", ledgerPath, ...(actInFindingsJson ? ["--findings-json", jsonPath] : []),
+    "--findings-summary", "base freshness test", "--findings-ledger", ledgerPath, ...(actInFindingsJson || rejectedInFindingsJson ? ["--findings-json", jsonPath] : []),
     "--next-action", "mark ready for review", "--inline-reason", "base freshness test",
     "--findings-severity-counts", JSON.stringify(clean ? { high: 0, medium: 0, low: 1, question: 0, nit: 0 } : { high: 0, medium: 1, low: 0, question: 0, nit: 0 }),
   ]);
@@ -189,4 +190,16 @@ test("a clean review-gate post skips the stale-base check", async () => {
     const out = await postClean(tempDir, STALE, { gate: "review" });
     assert.equal(out.calls.length, 0);
   }, { prefix: "dev-loops-base-freshness-review-" });
+});
+
+test("a ready-PR draft_gate post whose --findings-json adds only rejected items refuses at a stale base after the draft conversion, posts nothing and restores ready", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await postClean(tempDir, STALE, { isDraft: false, omitVerdict: true, rejectedInFindingsJson: true });
+    assert.match(out.error, /^base_stale_integrate_first:/);
+    assert.equal(out.calls.length, 1);
+    assert.equal(out.posted.length, 0);
+    const convert = out.mutations.findIndex((m) => m.includes("convertPullRequestToDraft"));
+    const restore = out.mutations.findIndex((m) => m.includes("pr ready"));
+    assert.ok(convert >= 0 && restore > convert, `expected a ready restore after the draft conversion, got ${JSON.stringify(out.mutations)}`);
+  }, { prefix: "dev-loops-base-freshness-findings-json-rejected-" });
 });
