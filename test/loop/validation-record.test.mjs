@@ -129,6 +129,14 @@ test("a suite that modifies a tracked file is incomplete", () => withFixture({},
   await assertIncomplete(repoRoot, headSha, /validation changed the worktree/);
 }));
 
+test("issue 2885: a stale-base head is incomplete and names the remedy", () => withFixture({}, async (repoRoot) => {
+  const headSha = await commit(repoRoot, { "docs/a.md": "# a\n" });
+  git(repoRoot, "commit", "-q", "--allow-empty", "-m", "newer base commit");
+  git(repoRoot, "push", "-q", "origin", "HEAD:refs/heads/main");
+  git(repoRoot, "reset", "-q", "--hard", headSha);
+  await assertIncomplete(repoRoot, headSha, /^base_stale_integrate_first: head [0-9a-f]{40} does not contain origin\/main; newer commits: [0-9a-f]+ newer base commit\. Merge origin\/main into the branch via scripts\/loop\/resolve-pr-conflicts\.mjs\. Never rebase a pushed branch\. Never force-push\./);
+}));
+
 test("--jq filters the JSON output", () => withFixture({}, async (repoRoot) => {
   await commit(repoRoot, { "docs/a.md": "# a\n" });
   const out = await run(repoRoot, "b".repeat(40), ["--jq", ".status"]);
