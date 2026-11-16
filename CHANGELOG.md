@@ -17,6 +17,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - The review-route judge dispatch is no longer denied for a prompt with surrounding whitespace; deny reasons now show a diagnostic, and a review post accepts a findings ledger alone (#3199)
+- The fixer delivery CI wait requests 540 s instead of 900 s, re-issues on `pending`, and never falls back to raw `gh pr checks` (#3099)
 
 ## 1.0.12-pre.2
 
