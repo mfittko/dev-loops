@@ -16,7 +16,9 @@
  * content) contributes 0, reusing the classifier's own signal rather than
  * re-deriving one. Per SIZE-RUNTIME-PIN-ACCOUNTING, a file whose basename is in
  * `RUNTIME_PIN_BASENAMES` contributes 0 to source counters and `logicLoc`
- * regardless of category. `commentOnly` is the count of a code file's changed lines
+ * regardless of category. Likewise a vendored file (a `_vendor` path segment) or a
+ * generated hook mirror (an exact `HOOK_BUNDLE_TARGETS` path) contributes 0; the mirror's
+ * `packages/core` source still counts. `commentOnly` is the count of a code file's changed lines
  * the comment-discipline guard's shared `isCommentLine` detector recognizes as
  * comments (the comment analogue of `testDiscount`); fail-closed, an
  * ambiguous/unparseable changed line is never a comment and stays logic.
@@ -40,6 +42,7 @@ import { parseArgs } from "node:util";
 import { analyzeDiff, classifyFile, matchesGlob, RUNTIME_PIN_BASENAMES } from "@dev-loops/core/analysis/diff-analyzer";
 import { loadDevLoopConfig, resolveClassifyRules } from "@dev-loops/core/config";
 
+import { HOOK_BUNDLE_TARGETS } from "../claude/generate-claude-assets.mjs";
 import { isCommentLine } from "./check-comment-discipline.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
@@ -309,7 +312,10 @@ export function computeSizeBudget({
   for (const file of files) {
     const category = classifyFile(file.path, rules);
     const changedLines = file.added + file.deleted;
-    const runtimePin = RUNTIME_PIN_BASENAMES.has(file.path.replaceAll("\\", "/").split("/").pop());
+    const segments = file.path.replaceAll("\\", "/").split("/");
+    const runtimePin = RUNTIME_PIN_BASENAMES.has(segments.pop())
+      || segments.includes("_vendor")
+      || HOOK_BUNDLE_TARGETS.includes(file.path.replaceAll("\\", "/"));
     if (!runtimePin && category === "unknown") {
       sourceChangedLines += changedLines;
       unclassifiedChangedLines += changedLines;

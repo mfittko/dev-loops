@@ -198,6 +198,16 @@ test("runtime pins: exact normalized basenames have zero accounting under existi
   assert.ok(result.reasons.some((reason) => /SIZE-RUNTIME-PIN-ACCOUNTING/.test(reason)));
 });
 
+test("vendored and generated hook mirrors add 0 logic; look-alike paths still count", () => {
+  const logic = (file) => computeSizeBudget({ nameStatusOutput: `A\t${file}\n`, numstatOutput: numstatZ([[500, 0, file]]) }).wholeLogicLoc;
+  for (const file of [".claude/hooks/_vendor/sh-syntax/index.mjs", "_vendor/x.mjs", ".claude/hooks/_bash-command-classify.mjs", ".claude/hooks/_gate-round-retirement.mjs"]) {
+    assert.equal(logic(file), 0, file);
+  }
+  for (const file of [".claude/hooks/_not-a-mirror.mjs", ".claude/hooks/hand.mjs", "foo_vendor/x.mjs", "_vendor.mjs"]) {
+    assert.equal(logic(file), 500, file);
+  }
+});
+
 test("runtime pins: cannot dilute unknown source or waive its block", () => {
   for (const waived of [false, true]) {
     const result = computeSizeBudget({ nameStatusOutput: "M\ttools/build-runner\nM\t.node-version\n", numstatOutput: numstatZ([[1, 0, "tools/build-runner"], [100, 0, ".node-version"]]), waived });
