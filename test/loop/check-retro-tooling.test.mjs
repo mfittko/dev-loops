@@ -339,6 +339,18 @@ test("a session transcript piped on stdin extracts its Bash commands and reports
   assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, ["gh: gh api repos/o/r"]);
 });
 
+test("a heredoc body is dropped only for a data host; a quote-blind or arithmetic << hides nothing", async () => {
+  const gh = "gh: gh api repos/o/r";
+  for (const command of ["bash <<'EOF'\ngh api repos/o/r\nEOF", "sh <<EOF\ngh api repos/o/r\nEOF", 'echo "a << b"\ngh api repos/o/r', "echo 'a <<b'\ngh api repos/o/r", "x=$((1<<n))\ngh api repos/o/r"]) {
+    const r = await runCli(["--json"], sessionLine(command));
+    assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, [gh], JSON.stringify(command));
+  }
+  for (const command of ["cat <<'EOF'\ngh api repos/o/r\nEOF", "tee out <<EOF\ngh text\nEOF"]) {
+    const r = await runCli(["--json"], sessionLine(command));
+    assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, [], JSON.stringify(command));
+  }
+});
+
 test("a session with no Bash commands is clean, not an empty transcript", async () => {
   const file = tmpFile(`${JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } })}\n`);
   const r = await runCli(["--json", "--transcript", file]);

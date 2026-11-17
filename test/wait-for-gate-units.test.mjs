@@ -578,7 +578,7 @@ test("--after is re-read on every poll: a reference replaced mid-wait makes an o
   });
 });
 
-test("the Pi blocking join and the Claude Code join resolve the round's own worktree tmp root when --tmp-root is omitted", async () => {
+test("the join used by both the Pi blocking join and the Claude Code join resolves the plan's worktree tmp root from the plan path when --tmp-root is omitted", async () => {
   await withDir(async (main) => {
     const worktree = path.join(main, "tmp", "worktrees", "x");
     const { planPath } = await seedPlan(worktree, [["g", ["a"]], ["h", ["b"]]]);
@@ -602,8 +602,9 @@ test("a plan with no tmp ancestor falls back to the cwd gate tmp root; an explic
   for (const root of ["t", "/repo/tmp/worktrees/x/tmp"]) assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", root]).tmpRoot, root);
 });
 
-test("an empty or whitespace-only --tmp-root is refused", () => {
-  for (const value of ["", "  "]) assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", value]), /--tmp-root must be a non-empty path/, JSON.stringify(value));
+test("an empty, whitespace-only or padded --tmp-root is refused", () => {
+  for (const value of ["", "  ", " /repo/tmp ", "/repo/tmp "]) assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", value]), /--tmp-root must be a non-empty path/, JSON.stringify(value));
+  assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "/repo/tmp"]).tmpRoot, "/repo/tmp");
 });
 
 const REPO = fileURLToPath(new URL("../", import.meta.url));

@@ -39,7 +39,7 @@ Outcomes (JSON on stdout): all_done (exit 0), timeout (exit 2), pending (exit 2)
   --judge-plan <path>  the round's judge-emit-plan.json; waits on the one judge unit
   --artifact <path>    single-unit join (COORDINATOR-SINGLE-CHILD-JOIN): waits until this file parses as JSON and carries its terminal field (outcome), or, with no terminal field, stays unchanged for ${ARTIFACT_STABLE_MS / 1000} seconds; excludes the plan flags and --tmp-root. For a full-phase fixer pass its joinRef (the final-on-write report).
   --after <path>       required with --artifact: an absolute path to a file written before the dispatch (the emitted fixer plan, or the delta reviewer's input.patchPath). An --artifact older than it is pending and the result reports stale: true.
-  --tmp-root <dir>     tmp root with the sentinels and retirement records (default: the gate tmp root resolved from the current directory; omit it)
+  --tmp-root <dir>     tmp root with the sentinels and retirement records (default: the nearest tmp directory above the plan path, else the gate tmp root resolved from the current directory; omit it)
   --timeout <seconds>  0 to ${MAX_TIMEOUT_MS / 1000} (default ${DEFAULT_TIMEOUT_MS / 1000}; 0 = single immediate check)
   --timeout-ms <n>     Deprecated alias for --timeout (milliseconds); warns on stderr. Passing both fails closed.`;
 
@@ -74,7 +74,7 @@ export function parseWaitArgs(argv) {
   }
   if ((values["emit-plan"] === undefined) === (values["judge-plan"] === undefined)) throw new Error("pass exactly one of --emit-plan, --judge-plan and --artifact");
   if (values["judge-plan"] !== undefined && values.unit !== undefined) throw new Error("--unit applies only to --emit-plan");
-  if (values["tmp-root"] !== undefined && values["tmp-root"].trim() === "") throw new Error("--tmp-root must be a non-empty path; omit the flag to use the round's own gate tmp root");
+  if (values["tmp-root"] !== undefined && (values["tmp-root"].trim() === "" || values["tmp-root"] !== values["tmp-root"].trim())) throw new Error("--tmp-root must be a non-empty path with no surrounding whitespace; omit the flag to use the round's own gate tmp root");
   return { emitPlan: values["emit-plan"], judgePlan: values["judge-plan"], units: values.unit, tmpRoot: values["tmp-root"] ?? planTmpRoot(values["emit-plan"] ?? values["judge-plan"]), timeoutMs, jq: values.jq, fields: values.fields, silent: values.silent };
 }
 

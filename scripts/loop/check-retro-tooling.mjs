@@ -187,25 +187,38 @@ export function extractBashCommands(text) {
 }
 
 /**
- * Reduce one multi-line Bash command to its logical lines: a trailing `\` joins the next line, and
- * heredoc body lines (after `<<[-]'TAG'` up to the TAG line) are dropped, so body text never reads as a command.
+ * Reduce one multi-line Bash command to its logical lines: a trailing `\` joins the next line, and the body of a data
+ * heredoc (the host is cat, tee or git commit) is dropped with its delimiter line, so body text never reads as a command.
+ * A heredoc fed to any other host (bash, sh, python) runs, so its body stays; so does every line of an incompletely tokenized command.
+ * Heredocs come from tokenizeShellCommand, which is quote-aware and reads `$(( ))` as arithmetic.
  * shortcut: a quoted multi-line argument still splits per line; upgrade when a real session shows it.
  */
 function collapseCommand(command) {
+  const tok = tokenizeShellCommand(command);
+  let text = command;
+  if (!tok.incomplete) {
+    const dropped = tok.segments.flatMap((seg) => (isDataHost(seg) ? seg.heredocs.filter((h) => h.closed) : []));
+    for (const h of dropped.sort((x, y) => y.bodyStart - x.bodyStart)) {
+      const end = text.indexOf("\n", h.bodyEnd + 1);
+      text = text.slice(0, h.bodyStart) + (end === -1 ? "" : text.slice(end));
+    }
+  }
   const out = [];
-  let tag = null;
   let joined = "";
-  for (const line of command.split(/\r?\n/)) {
-    if (tag !== null) { if (line.trim() === tag) tag = null; continue; }
+  for (const line of text.split(/\r?\n/)) {
     joined += line;
     if (joined.endsWith("\\")) { joined = `${joined.slice(0, -1)} `; continue; }
     out.push(joined);
-    tag = /(?<!<)<<(?!<)-?\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_]\w*))/.exec(joined)?.slice(1).find(Boolean) ?? null;
     joined = "";
   }
   if (joined) out.push(joined);
   return out.join("\n");
 }
+
+const isDataHost = (seg) => {
+  const [head, sub] = seg.words.map((w) => w.value);
+  return head === "cat" || head === "tee" || (head === "git" && sub === "commit");
+};
 
 function parseCliArgs(argv) {
   let values;
