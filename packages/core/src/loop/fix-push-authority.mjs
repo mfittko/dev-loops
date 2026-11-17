@@ -8,7 +8,6 @@
  */
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -16,12 +15,6 @@ export const sequenceMarkerPath = (tmpRoot, baselineHead) => path.join(tmpRoot, 
 
 /** The closure record of a sequence closed by close-gate-sequence; keyed by execution so a second close with another execution on one head keeps the first. An execution-less close writes `.none.json` and overwrites a prior execution-less record on the same head. */
 export const sequenceClosurePath = (tmpRoot, baselineHead, executionIdentity) => path.join(tmpRoot, "gate-delta", `${baselineHead}.sequence-closed.${executionIdentity ?? "none"}.json`);
-
-/** True when a closure record exists for the execution at any head; only ENOENT means not closed. */
-export const closureRecorded = async (root, heads, executionIdentity) => {
-  for (const head of new Set(heads)) if (await readFile(sequenceClosurePath(root, head, executionIdentity)).then(() => true, (error) => error?.code !== "ENOENT")) return true;
-  return false;
-};
 
 /**
  * Runs `fn` holding a lock per baseline head (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC), taken sorted and released in reverse.
