@@ -22,6 +22,7 @@ import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-co
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
+import { OUT_OF_BAND_WRITE } from "../github/_gate-artifact-seal.mjs";
 import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
@@ -1309,7 +1310,11 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap }) {
   if (open.length === 0) return null;
   // countCompletedRounds counts the round being posted, so the current head's round is one less.
   const round = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead: true }) - 1;
-  return { headSha: head, openActCount: open.length, blockers: isPastRoundCap(round, cap) ? pastCapBlockers(log.findings, { round, cap }) : [] };
+  // A fixer plan for this PR at this head means a commit_only / delta / full sequence is in flight: resume it, never re-emit.
+  const planPath = path.join(resolveGateArtifactTmpRoot(repoRoot), "gate-fixer", repoSlugFor(context.repo), `pr-${context.pr}`, "fixer-emit-plan.json");
+  const order = await readFile(planPath, "utf8").then((text) => JSON.parse(text)?.workOrder, () => null);
+  const fixerInFlight = order?.target?.repo === context.repo && order?.target?.pr === context.pr && String(order?.headSha ?? "").toLowerCase() === head;
+  return { headSha: head, openActCount: open.length, blockers: isPastRoundCap(round, cap) ? pastCapBlockers(log.findings, { round, cap }) : [], fixerInFlight };
 }
 
 export function buildGateCoordinationEvaluatorInput({
@@ -1472,7 +1477,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const draftRoundRefused = context.prData?.isDraft === true && !draftCapRoundFixed
     && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot, includeLiveCurrentHead: true }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), () => false);
   const draftOpenActList = context.prData?.isDraft === true && !draftCapRoundFixed
-    ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0 }).catch(() => null)
+    ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0 }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
     : null;
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
     context: evaluatorContext,

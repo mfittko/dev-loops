@@ -4800,6 +4800,24 @@ test("3105 AC15: a posted findings_present draft_gate verdict with an open act l
   assert.match(high.reason, /\[high\] x/);
   const moved = evaluatePrGateCoordination({ ...capped, draftOpenActList: { headSha: "cd".repeat(20), openActCount: 2, blockers: [] } });
   assert.equal(moved.agentRemedy.command, "dev-loops gate extend-cap-round-chain --repo o/r --pr 9");
+  const open = { headSha: head, openActCount: 2, blockers: [] };
+  // AC15 replaces only the no_clearing_record refusal: every other cap-round failure keeps its routing.
+  for (const failure of ["unsealed_record", "items_do_not_cover", "cap_round_unresolved", "baseline_orphaned", "chain_does_not_reach_head"]) {
+    const input = { ...capped, draftCapRoundFailure: failure };
+    const kept = evaluatePrGateCoordination({ ...input, draftOpenActList: open });
+    assert.deepEqual({ next: kept.nextAction, remedy: kept.agentRemedy, reason: kept.reason }, (({ nextAction, agentRemedy, reason }) => ({ next: nextAction, remedy: agentRemedy, reason }))(evaluatePrGateCoordination(input)), failure);
+    assert.equal(kept.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, failure);
+  }
+  // An in-flight fixer plan at this head is resumed, never re-emitted.
+  for (const shape of [{}, { draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record" }]) {
+    const inFlight = evaluatePrGateCoordination({ ...base, ...shape, draftOpenActList: { ...open, fixerInFlight: true } });
+    assert.notEqual(inFlight.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, inFlight.reason);
+    assert.equal(inFlight.nextAction, evaluatePrGateCoordination({ ...base, ...shape }).nextAction);
+  }
+  // A blocked verdict is no findings_present verdict, so the act list never routes to the fixer.
+  const blockedVerdict = { ...verdict, verdict: "blocked" };
+  const blocked = evaluatePrGateCoordination({ ...base, draftGate: blockedVerdict, draftGateMarker: blockedVerdict, draftOpenActList: open });
+  assert.notEqual(blocked.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, blocked.reason);
 });
 
 // Issue 3139: one next step on a ready PR without clean draft_gate evidence.

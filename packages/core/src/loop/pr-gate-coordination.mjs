@@ -1631,7 +1631,10 @@ function evaluatePrGateCoordinationCore(input = {}) {
     const actList = input.draftOpenActList;
     const headActList = !draftReady && draftGate.currentHead && draftGate.verdict === "findings_present"
       && /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && String(actList?.headSha ?? "").toLowerCase() === currentHeadSha.toLowerCase()
-      && Number.isInteger(actList.openActCount) && actList.openActCount > 0;
+      && Number.isInteger(actList.openActCount) && actList.openActCount > 0
+      // An in-flight fixer plan at this head is resumed, never re-emitted; at the cap, AC15 replaces only the no_clearing_record refusal.
+      && actList.fixerInFlight !== true
+      && (input.draftRoundRefused !== true || input.draftCapRoundFailure == null || input.draftCapRoundFailure === "no_clearing_record");
     const actBlockers = headActList && Array.isArray(actList.blockers) ? actList.blockers : [];
     if (headActList && actBlockers.length === 0) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK]);

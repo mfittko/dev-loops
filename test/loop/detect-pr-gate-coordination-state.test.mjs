@@ -4579,6 +4579,38 @@ test("3105 AC15: the detector derives the open act list from the current-head le
     assert.equal(result.ok, true);
     assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
     assert.match(result.agentRemedy.command, new RegExp(`emit-fixer-work-order\\.mjs --repo owner/repo --pr 10 --head-sha ${headSha} --phase commit_only`));
+    // A fixer plan for this PR at this head is in flight: a resume never re-emits it.
+    const fixerDir = path.join(tempDir, "tmp", "gate-fixer", "owner-repo", "pr-10");
+    await mkdir(fixerDir, { recursive: true });
+    const workOrder = { role: "fixer", phase: "commit_only", source: "act-list", gate: "draft_gate", target: { repo: "owner/repo", pr: 10 }, headSha, requiredReads: [] };
+    await writeFile(path.join(fixerDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder, workOrderDigest: workOrderDigest(workOrder), executionIdentity: "f1-0000abcd" }));
+    const resumed = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body }), { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, checkBaseFreshness: async () => STALE }));
+    assert.equal(resumed.ok, true);
+    assert.notEqual(resumed.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, resumed.reason);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// Issue 3105 AC15: at the cap round, a high act item without a judgeFix is a named human decision, so the act list keeps report_blocked.
+test("3105 AC15: a cap-round high act item without judgeFix reports blocked on an operator decision", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-act-list-cap-"));
+  try {
+    initGitFixture(tempDir, { branch: "main" });
+    await writeFile(path.join(tempDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+    const headSha = "abc1234567".repeat(4);
+    const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+    await mkdir(findings, { recursive: true });
+    const ledger = (head, loggedAt, list) => writeFile(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt, findings: list }), "utf8");
+    await ledger("1".repeat(40), "2026-11-15T00:00:00.000Z", [{ severity: "medium", summary: "round one", file: "src/a.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix a" }]);
+    await ledger(headSha, "2026-11-16T00:00:00.000Z", [{ severity: "high", summary: "decide the auth model", file: "src/x.mjs", line: 3, judgeDisposition: "act" }]);
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 high", nextAction: "fix" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
+    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+    assert.equal(result.blockedOn, "operator_decision");
+    assert.match(result.reason, /decide the auth model/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

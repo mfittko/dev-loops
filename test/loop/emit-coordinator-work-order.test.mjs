@@ -3,7 +3,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { runNode as runNodeHelper } from "../_helpers.mjs";
+import { execFileSync } from "node:child_process";
+import { runNode as runNodeHelper, withTempDir, writeGhStub } from "../_helpers.mjs";
+import { buildReadyStart } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
 
 const runNode = (args) => runNodeHelper(path.resolve("scripts/loop/emit-coordinator-work-order.mjs"), args);
 const resolverOutput = {
@@ -34,6 +36,28 @@ test("C1 C19 emit-coordinator-work-order prints the envelope-derived order with 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("3105 AC49: a readyStart startup output yields a coordinator order whose nextAction names loop gate-coordination", async () => {
+  await withTempDir(async (tempDir) => {
+    const git = (...args) => execFileSync("git", args, { cwd: tempDir, encoding: "utf8" }).trim();
+    git("init", "--quiet");
+    git("remote", "add", "origin", "git@github.com:mfittko/dev-loops.git");
+    git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--quiet", "--allow-empty", "-m", "init");
+    git("worktree", "add", "--quiet", "-b", "issue-3105", path.join(tempDir, "tmp", "worktrees", "issue-3105"));
+    const prData = {
+      number: 3239, url: "https://github.com/mfittko/dev-loops/pull/3239", headRefName: "issue-3105", headRefOid: git("rev-parse", "HEAD"),
+      headRepository: { name: "dev-loops" }, headRepositoryOwner: { login: "mfittko" }, state: "OPEN", isDraft: false, mergedAt: null, closingIssuesReferences: [{ number: 3105 }], body: "",
+    };
+    const ghStub = await writeGhStub(tempDir, [{ assertArgs: ["pr", "view", "3239"], stdout: JSON.stringify(prData) }], { matchMode: "claims" });
+    const readyStart = buildReadyStart({ repo: "mfittko/dev-loops", pr: 3239 });
+    const bundle = { ...resolverOutput.bundle, activeArtifact: { kind: "pr", issue: 3105, pr: 3239, branch: "issue-3105", phase: null }, selectedStrategy: "external_pr_followup", nextAction: readyStart.nextAction };
+    const input = path.join(tempDir, "startup.json");
+    await writeFile(input, JSON.stringify({ ok: true, nextAction: readyStart.nextAction, readyStart, bundle }));
+    const result = await runNodeHelper(path.resolve("scripts/loop/emit-coordinator-work-order.mjs"), ["--input", input, "--repo", "mfittko/dev-loops"], { cwd: tempDir, env: ghStub.env });
+    assert.equal(result.code, 0, result.stderr || result.stdout);
+    assert.match(JSON.parse(result.stdout).workOrder.handoff.nextAction, /loop gate-coordination --repo mfittko\/dev-loops --pr 3239/);
+  }, { prefix: "emit-coordinator-ready-" });
 });
 
 test("C1 emit-coordinator-work-order rejects brief, overrides and payload flags", async () => {
