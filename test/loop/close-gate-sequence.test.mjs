@@ -696,7 +696,6 @@ test("BOUNDED_OUT: a handed-back fixer with a sealed bounded_out record closes w
     assert.equal(result.ok, true);
     assert.equal(result.condition, "BOUNDED_OUT");
     assert.equal(result.nextStep, "push_to_gate");
-    assert.match(result.next, /--phase full/);
     assert.equal(JSON.parse(readFileSync(sequenceClosurePath(tmpRoot, HEAD, ex.executionIdentity), "utf8")).condition, "BOUNDED_OUT");
     assert.equal(readSequenceMarker(tmpRoot, HEAD), null);
   });
@@ -781,6 +780,30 @@ test("MARKER_UNREADABLE: a corrupt marker with a live sealed record of the basel
   });
 });
 
+test("MARKER_UNREADABLE: a corrupt marker with a sealed bounded_out push_to_gate record still closes and removes the marker", async () => {
+  await withTempDir(async (tmpRoot) => {
+    mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
+    writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
+    boundedRecord(tmpRoot, execution(tmpRoot));
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
+    assert.equal(result.condition, "MARKER_UNREADABLE");
+    assert.equal(existsSync(sequenceMarkerPath(tmpRoot, HEAD)), false);
+  });
+});
+
+test("MARKER_UNREADABLE: a no-branch marker with an execution stays sequence_live under an origin-less needs_fix record, and closes when the record names another execution", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, execution: ex });
+    handedBack(tmpRoot, ex);
+    boundedRecord(tmpRoot, ex, { outcome: "needs_fix", nextStep: "fix_and_rereview", origin: undefined });
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }))).refusal, "sequence_live");
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+    boundedRecord(tmpRoot, ex, { outcome: "needs_fix", nextStep: "fix_and_rereview", origin: { workOrderRef: ex.workOrderRef, workOrderDigest: "sha256:x", executionIdentity: "f1-other" } });
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }))).condition, "MARKER_UNREADABLE");
+  });
+});
+
 // A busy sequence lock makes the close wait; the wait callback rewrites the sealed record and frees the lock, so only the under-lock recheck can see the change.
 const rewriteWhileLocked = (tmpRoot, rewrite) => {
   const lockDir = path.join(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), `${HEAD}.sequence-lock`);
@@ -815,15 +838,15 @@ test("MARKER_UNREADABLE: a sealed record that appears between the first check an
   });
 });
 
-test("a case or whitespace variant of a full sha is a usage error and leaves the live marker", async () => {
+test("closeGateSequence rejects an unsafe --head name (case or whitespace variants, empty, dot, path, over 128 characters) and accepts a 128 character name", async () => {
   await withTempDir(async (tmpRoot) => {
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: execution(tmpRoot) });
     const mixed = `${HEAD.slice(0, 20)}${"A".repeat(20)}`;
-    for (const head of [HEAD.toUpperCase(), mixed, "", ".", "..", "../x", ` ${HEAD}`]) {
+    for (const head of [HEAD.toUpperCase(), mixed, "", ".", "..", "../x", ` ${HEAD}`, "a".repeat(129)]) {
       await assert.rejects(closeGateSequence(base(tmpRoot, { head, now: aged })), /not a full sha or a safe marker file name/, JSON.stringify(head));
     }
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
-    for (const head of [HEAD, "not-a-sha", "legacy.marker_1"]) await closeGateSequence(base(tmpRoot, { head, fetchPr: pr(HEAD) })); // accepted forms do not throw
+    for (const head of [HEAD, "not-a-sha", "legacy.marker_1", "a".repeat(128)]) await closeGateSequence(base(tmpRoot, { head, fetchPr: pr(HEAD) })); // accepted forms do not throw
   });
 });
 

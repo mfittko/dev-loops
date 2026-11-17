@@ -463,7 +463,7 @@ test("after a BOUNDED_OUT close at the baseline, the --phase full emission and i
     const closed = await closeGateSequence({ tmpRoot, head, repo: REPO, pr: PR, fetchPr: async () => ({ pr: { headRefOid: head, headRefName: branch } }) });
     assert.equal(closed.ok, true, closed.reason ?? closed.remedy);
     assert.equal(closed.condition, "BOUNDED_OUT");
-    assert.match(closed.next, /--phase full/);
+    assert.equal(closed.nextStep, "push_to_gate");
     const unit = await f.full();
     assert.equal(pull(unit, root).status, 0);
     assert.equal(readSequenceMarker(tmpRoot, head)?.fullGranted, true);

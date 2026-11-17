@@ -37,7 +37,6 @@ import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-r
 /** The grace is the runner-lock TTL, floored at the 30 minute default: DEVLOOPS_STALE_RUNNER_MAX_AGE_MS can only lengthen it, so a caller cannot close a live sequence early. */
 export const fixerGraceMs = () => Math.max(STALE_RUNNER_DEFAULT_MAX_AGE_MS, resolveStaleRunnerMaxAgeMs());
 const isFullSha = (sha) => normalizeFullHeadSha(sha) === sha;
-/** A full sha, or any other safe marker file name (never a path); a non-sha name routes only to MARKER_UNREADABLE. An empty name, a name over 128 characters or one with any other character stays uncloseable. */
 
 const USAGE = `usage: close-gate-sequence.mjs --head <marker baseline sha or marker file name> --repo <owner/name> --pr <number> [--help]\n\n${JQ_OUTPUT_USAGE}`;
 const refuse =(refusal, reason, remedy) => ({ ok: false, refusal, reason, remedy });
@@ -124,12 +123,12 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
       && record.origin?.workOrderRef === workOrderRef && record.origin?.executionIdentity === executionIdentity;
   };
   // A sealed record of this baseline that does not push (needs_fix, fix_and_rereview) keeps the sequence live, as on the branch path; rechecked under the lock.
-  // It must name the marker's own execution; a marker that names no execution (it did not parse) matches any such record of the baseline.
+  // A record with no origin (thread route, or act route without --fixer-plan) matches any marker; one with an origin must name the marker's own execution. A marker that names no execution (it did not parse) matches any such record of the baseline.
   const unreadableLive = () => {
     let record = null;
     try { record = readSealedGateDeltaRecord(tmpRoot, head); } catch { /* an unreadable record proves nothing */ }
     if (record?.nextStep !== undefined && record.nextStep !== "push_to_gate"
-      && (executionIdentity === undefined || (record.origin?.workOrderRef === workOrderRef && record.origin?.executionIdentity === executionIdentity))) {
+      && (executionIdentity === undefined || record.origin === undefined || (record.origin?.workOrderRef === workOrderRef && record.origin?.executionIdentity === executionIdentity))) {
       // A push record already cleared the sequence, so the next step is the full-phase emission, not another delta review.
       const remedy = record.nextStep === "push"
         ? "Run emit-fixer-work-order.mjs --phase full with the sealed --delta-result to emit the push order."
@@ -178,7 +177,7 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
       writeFileSync(`${file}.tmp`, `${JSON.stringify(record, null, 2)}\n`);
       renameSync(`${file}.tmp`, file);
       clearSequenceMarker(tmpRoot, head);
-      return { ok: true, ...record, recordPath: file, ...(condition === "BOUNDED_OUT" ? { nextStep: "push_to_gate", next: "The delta sequence bounded out and is closed: run emit-fixer-work-order.mjs --phase full with the sealed --delta-result to emit the push order." } : {}) };
+      return { ok: true, ...record, recordPath: file, ...(condition === "BOUNDED_OUT" ? { nextStep: "push_to_gate" } : {}) };
     }, lock);
   } catch (error) {
     if (error?.code === "SEQUENCE_LOCK_BUSY") return refuse("sequence_live", error.message, "Rerun close-sequence once the concurrent pull or emission finishes.");
