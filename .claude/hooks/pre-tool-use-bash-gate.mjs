@@ -149,18 +149,15 @@ function unwrappedCommandHeads(command) {
   });
 }
 
-// Segment-wide deny: a segment holding a `gh pr edit|create` body flag anywhere is a body write,
-// whatever its head or wrapper (setsid, stdbuf, ionice, `env -S'...'` are not in the wrapper table).
-// Only `echo`/`printf` as the real head, after known wrappers unwrap, is exempt; all else fails closed.
-const SEGMENT_BODY_WRITE = /gh\s+pr\s+(?:edit|create)\b.*(?:--body|\s-[bF](?:\s|$))/s;
-const ECHO_HEAD = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:\S*\/)?(?:echo|printf)(?:\s|$)/;
+// Token deny: the whole command is a body write when its tokens, across all segments and pipes and
+// in any order, hold `gh`, `pr`, `edit|create` and a body flag (`--body*`, or a short cluster with
+// `b`/`F`: `-b`, `-bx`, `-b=x`, `-Fwaiver.md`, `-db`). No head, wrapper or echo exemption: fails closed.
 function segmentHoldsBodyWrite(command) {
-  return tokenizeShellCommand(command).segments.some(({ words, end }) => {
-    if (!words.length || !SEGMENT_BODY_WRITE.test(words.map((word) => word.value).join(" "))) return false;
-    const source = command.slice(words[0].start, end);
-    const heads = unwrappedCommandHeads(source);
-    return !(heads.length ? heads : [source]).every((head) => ECHO_HEAD.test(head));
-  });
+  const tokens = tokenizeShellCommand(command).segments.flatMap(({ words }) =>
+    words.flatMap((word) => word.value.split(/[\s=]+/).filter(Boolean)));
+  const has = (test) => tokens.some((token) => test(token));
+  return has((t) => /^(?:-S)?gh$/.test(t)) && has((t) => t === "pr") && has((t) => t === "edit" || t === "create") &&
+    has((t) => t.startsWith("--body") || /^-[^-]*[bF]/.test(t));
 }
 
 let repoRoot = null;

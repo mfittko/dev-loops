@@ -119,6 +119,21 @@ for (const command of [
     `cd . ${separator} sudo -u root -n gh api -X PATCH repos/o/r/pulls/5 -f body=x`,
   ]),
   "nice -n 5 gh pr edit 5 --body x",
+  // Whole-command deny: any order, any body-flag spelling, print and quoted forms included.
+  "gh -R o/r pr edit 5 --body x",
+  "gh pr -R o/r edit 5 --body x",
+  "gh pr edit 5 -bx",
+  "gh pr edit 5 -b=x",
+  "gh pr edit 5 -Fwaiver.md",
+  "gh pr edit 5 -db x",
+  "echo gh pr edit 5 --body x | sh",
+  "echo gh pr edit 5 --body x",
+  "printf '%s' 'cd . && timeout 30 gh pr edit 5 --body x'",
+  "sudo -n echo gh pr edit 5 --body x",
+  "setsid -f gh pr edit 5 --body x",
+  "stdbuf -oL gh pr create --body x",
+  "ionice -c3 gh pr edit 5 -F waiver.md",
+  "env -i gh pr edit 5 --body-file f",
   "time -p gh api -X PATCH repos/o/r/issues/5 --field body=x",
 ]) {
   test(`PR/issue body write is denied for every Claude actor: ${command}`, async () => {
@@ -141,13 +156,9 @@ test("non-body writes and reads remain allowed by the pre-check", async () => {
       "timeout 30 gh api repos/o/r/pulls/5",
       "nice -n 5 gh pr edit 5 --add-label needs-review",
       "time -p gh pr view 5 --json body",
-      "timeout 30 echo gh pr edit 5 --body x",
-      "echo gh pr edit 5 --body x",
+      "gh pr view 5",
       "env -P /usr/bin echo hi",
       "timeout inf echo hi",
-      "timeout 30 /bin/echo gh pr edit 5 --body x",
-      "sudo -n echo gh api -X PATCH repos/o/r/pulls/5 -f body=x",
-      "printf '%s' 'cd . && timeout 30 gh pr edit 5 --body x'",
     ]) {
       assert.equal(bash(root, command, undefined).decision, "allow", command);
     }
