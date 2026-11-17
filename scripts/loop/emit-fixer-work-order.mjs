@@ -19,7 +19,7 @@ import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement"
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
 import { deltaCoverageBinding, isDeltaBodyItem, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { normalizeFixerDispositionHandoff, REVIEW_NODE_ID_PATTERN } from "@dev-loops/core/loop/fixer-disposition";
-import { readSequenceMarker, sequenceClosurePath, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { closureRecorded, readSequenceMarker, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, fixerReportPath, materializationHash, registerWorkOrderRole, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
@@ -1045,11 +1045,6 @@ const readPlanFile = (planPath) => readJson(planPath).catch((err) => {
 });
 
 const closedText = (executionIdentity) => `fixer execution ${executionIdentity} belongs to a gate fix sequence that was closed as abandoned`;
-/** True when a closure record exists for the execution at any head; only ENOENT means not closed. */
-const closureRecorded = async (root, heads, executionIdentity) => {
-  for (const head of new Set(heads)) if (await readFile(sequenceClosurePath(root, head, executionIdentity)).then(() => true, (error) => error?.code !== "ENOENT")) return true;
-  return false;
-};
 
 // Closure authenticates the original delivery even after a branch rewrite; pulls keep ancestry admission.
 export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false }) {

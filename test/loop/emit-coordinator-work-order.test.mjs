@@ -38,7 +38,7 @@ test("C1 C19 emit-coordinator-work-order prints the envelope-derived order with 
   }
 });
 
-test("3105 AC49: a readyStart startup output yields a coordinator order whose nextAction names loop gate-coordination", async () => {
+test("3105 AC49: the coordinator order passes the bundle nextAction through, here the loop gate-coordination command", async () => {
   await withTempDir(async (tempDir) => {
     const git = (...args) => execFileSync("git", args, { cwd: tempDir, encoding: "utf8" }).trim();
     git("init", "--quiet");

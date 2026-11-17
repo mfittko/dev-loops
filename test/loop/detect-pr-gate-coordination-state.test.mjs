@@ -27,7 +27,7 @@ import { PR_CHECKPOINT, PR_CHECKPOINT_ACTION, shouldGuardCopilotReviewRequest, e
 import { loadDevLoopConfig, resolveGateConfig, resolveRefinementConfig } from "@dev-loops/core/config";
 import { evaluateUiDesignerReviewScoping, DESIGNER_REVIEW_SATISFIED_OUTCOME } from "../../packages/core/src/loop/ui-designer-review-scoping.mjs";
 import { buildPlanFilePromotionMarker, buildPromotionPrBody } from "@dev-loops/core/loop/plan-file-promote-contract";
-import { pullReceiptPath, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { fixerReportPath, pullReceiptPath, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 
 const scriptPath = path.resolve("scripts/loop/detect-pr-gate-coordination-state.mjs");
@@ -4593,11 +4593,10 @@ test("3105 AC15: the detector derives the open act list from the current-head le
     // The detector's tmp root is realpath-resolved, so the plan path is matched by its suffix.
     assert.ok(resumed.agentRemedy.command.startsWith(`dev-loops gate wait-for-units --artifact ${outputRef} --after `), resumed.agentRemedy.command);
     assert.ok(resumed.agentRemedy.command.endsWith(path.relative(tempDir, planPath)), resumed.agentRemedy.command);
-    // A handed-back plan at the same head proves nothing: the route emits the fixer again.
+    // A handed-back plan at the same head made no progress: re-emitting would loop, so the earlier routing applies.
     await writeFile(outputRef, "{}");
     const handedBack = await detect();
-    assert.equal(handedBack.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, handedBack.reason);
-    assert.match(handedBack.agentRemedy.command, /emit-fixer-work-order\.mjs/);
+    assert.notEqual(handedBack.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, handedBack.reason);
     // A digest-mismatched plan surfaces in the reason instead of nulling the act list.
     await writeFile(planPath, JSON.stringify({ workOrder, workOrderDigest: "0".repeat(64), executionIdentity: "f1-0000abcd" }));
     const broken = await detect();
@@ -4606,6 +4605,91 @@ test("3105 AC15: the detector derives the open act list from the current-head le
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+// Issue 3105 AC15: the in-flight probe and the act-list shape edge cases of resolveDraftOpenActList.
+describe("3105 AC15: resolveDraftOpenActList edge cases", () => {
+  const headSha = "abc1234567".repeat(4);
+  const setup = async (findings) => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-act-edge-"));
+    initGitFixture(tempDir, { branch: "main" });
+    const findingsDir = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+    await mkdir(findingsDir, { recursive: true });
+    await writeFile(path.join(findingsDir, `draft_gate-${headSha}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha, verdict: "findings_present", loggedAt: "2026-11-16T00:00:00.000Z", findings }), "utf8");
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 medium", nextAction: "fix" });
+    const fixerDir = path.join(tempDir, "tmp", "gate-fixer", "owner-repo", "pr-10");
+    await mkdir(fixerDir, { recursive: true });
+    const detect = async () => detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body }), { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, checkBaseFreshness: async () => STALE }));
+    // A plan file; `keyed` names the sibling file and its parent execution.
+    const writePlan = async ({ phase = "commit_only", repo = "owner/repo", executionIdentity = "f1-0000abcd", handedBack = false, keyedParent } = {}) => {
+      const outputRef = path.join(fixerDir, executionIdentity, "fixer-disposition.json");
+      await mkdir(path.dirname(outputRef), { recursive: true });
+      if (handedBack) await writeFile(outputRef, "{}");
+      const workOrder = { role: "fixer", phase, source: "act-list", gate: "draft_gate", target: { repo, pr: 10 }, headSha, outputRefs: [outputRef], requiredReads: [] };
+      const planPath = path.join(fixerDir, keyedParent ? `fixer-emit-plan.${executionIdentity}.json` : "fixer-emit-plan.json");
+      await writeFile(planPath, JSON.stringify({ workOrder, workOrderDigest: workOrderDigest(workOrder), executionIdentity, ...(keyedParent ? { parentExecutionIdentity: keyedParent } : {}) }));
+      return { outputRef, planPath };
+    };
+    return { tempDir, detect, writePlan };
+  };
+  const act = { severity: "medium", summary: "fix x", file: "src/x.mjs", line: 3, judgeDisposition: "act" };
+
+  test("an all-PR-body act list keeps the earlier routing; a mixed list goes to the fixer", async () => {
+    const body = await setup([{ severity: "medium", summary: "PR body lacks non-goals", judgeDisposition: "act" }]);
+    try {
+      assert.notEqual((await body.detect()).nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+    } finally { await rm(body.tempDir, { recursive: true, force: true }); }
+    const mixed = await setup([{ severity: "medium", summary: "PR body lacks non-goals", judgeDisposition: "act" }, act]);
+    try {
+      assert.equal((await mixed.detect()).nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+    } finally { await rm(mixed.tempDir, { recursive: true, force: true }); }
+  });
+
+  test("a full-phase plan in flight joins its outputRef report", async () => {
+    const fixture = await setup([act]);
+    try {
+      const { outputRef } = await fixture.writePlan({ phase: "full" });
+      const result = await fixture.detect();
+      assert.ok(result.agentRemedy.command.startsWith(`dev-loops gate wait-for-units --artifact ${fixerReportPath(outputRef)} --after `), result.agentRemedy.command);
+    } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+  });
+
+  test("a plan whose repo differs only in case is still in flight", async () => {
+    const fixture = await setup([act]);
+    try {
+      await fixture.writePlan({ repo: "Owner/Repo" });
+      assert.match((await fixture.detect()).agentRemedy.command, /^dev-loops gate wait-for-units /);
+    } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+  });
+
+  test("a plan of another repo is not in flight", async () => {
+    const fixture = await setup([act]);
+    try {
+      await fixture.writePlan({ repo: "other/repo" });
+      assert.match((await fixture.detect()).agentRemedy.command, /emit-fixer-work-order\.mjs/);
+    } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+  });
+
+  test("a plan whose sequence was closed as abandoned reopens the emission route", async () => {
+    const fixture = await setup([act]);
+    try {
+      await fixture.writePlan();
+      await mkdir(path.join(fixture.tempDir, "tmp", "gate-delta"), { recursive: true });
+      await writeFile(path.join(fixture.tempDir, "tmp", "gate-delta", `${headSha}.sequence-closed.f1-0000abcd.json`), "{}");
+      assert.match((await fixture.detect()).agentRemedy.command, /emit-fixer-work-order\.mjs/);
+    } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+  });
+
+  test("a running keyed plan beside a handed-back canonical plan is resumed with its own planPath", async () => {
+    const fixture = await setup([act]);
+    try {
+      await fixture.writePlan({ handedBack: true });
+      const keyed = await fixture.writePlan({ executionIdentity: "f2-0000abcd", keyedParent: "f1-0000abcd" });
+      const result = await fixture.detect();
+      assert.ok(result.agentRemedy.command.startsWith(`dev-loops gate wait-for-units --artifact ${keyed.outputRef} --after `), result.agentRemedy.command);
+      assert.ok(result.agentRemedy.command.endsWith("fixer-emit-plan.f2-0000abcd.json"), result.agentRemedy.command);
+    } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+  });
 });
 
 // Issue 3105 AC15: at the cap round, a high act item without a judgeFix is a named human decision, so the act list keeps report_blocked.

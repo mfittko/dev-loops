@@ -12,7 +12,9 @@ import {
 } from "../_core-helpers.mjs";
 import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
-import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
+import { closureRecorded } from "@dev-loops/core/loop/fix-push-authority";
+import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { isSanctionedCopilotReviewerLogin } from "@dev-loops/core/github/comment-trust";
 import { buildSnapshotFromPrFacts, DISPOSITION, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateEarlySurface } from "./early-surface-checks.mjs";
@@ -1307,30 +1309,54 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap }) {
   const logs = await readClosedPriorRoundLogs(options, { repoRoot, includeLiveCurrentHead: true, includeRetainedCurrentHead: true });
   const log = logs.filter((entry) => String(entry.headSha).trim().toLowerCase() === head).at(-1);
   const open = log?.verdict === "findings_present" ? listOpenActItems(log.findings) : [];
-  if (open.length === 0) return null;
+  // The emitter refuses an all-PR-body act list (delta_body_only_act_set), so that list keeps the earlier routing.
+  if (open.length === 0 || open.every(isDeltaBodyItem)) return null;
   // countCompletedRounds counts the round being posted, so the current head's round is one less.
   const round = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead: true }) - 1;
   const blockers = isPastRoundCap(round, cap) ? pastCapBlockers(log.findings, { round, cap }) : [];
-  // A plan for this PR at this baseline head whose fixer has not handed back (close-gate-sequence's predicate) is in flight: resume it, never re-emit.
-  // A handed-back, crashed or abandoned plan proves nothing, so the fixer route stays open.
-  const planPath = path.join(resolveGateArtifactTmpRoot(repoRoot), "gate-fixer", repoSlugFor(context.repo), `pr-${context.pr}`, "fixer-emit-plan.json");
-  let plan;
-  try {
-    // Only ENOENT means no plan; an unreadable, unparsable or digest-mismatched plan surfaces as readFixerDispositionEvidence reports it.
-    try { plan = JSON.parse(await readFile(planPath)); } catch (error) { if (error?.code !== "ENOENT") throw error; }
+  // A plan for this PR at this baseline head whose fixer has not handed back and whose sequence is not closed (close-gate-sequence's predicate) is in flight: resume it, never re-emit.
+  // A closed or crashed-without-closure plan has no hand-back, so only a recorded closure reopens the emission route.
+  const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
+  const dir = path.join(tmpRoot, "gate-fixer", repoSlugFor(context.repo), `pr-${context.pr}`);
+  const planPath = path.join(dir, "fixer-emit-plan.json");
+  // Only ENOENT means no plan; an unreadable, unparsable or digest-mismatched plan surfaces as readFixerDispositionEvidence reports it.
+  const readPlan = async (file) => {
+    let plan;
+    try { plan = JSON.parse(await readFile(file)); } catch (error) { if (error?.code !== "ENOENT") throw error; }
     if (plan !== undefined && (!plan?.workOrder || workOrderDigest(plan.workOrder) !== plan.workOrderDigest)) throw new Error("active fixer plan does not match its workOrderDigest; re-emit it");
+    return plan;
+  };
+  const atHead = (order) => repoSlugEquals(order?.target?.repo, context.repo) && order?.target?.pr === context.pr
+    && String(order?.authority?.reviewBaselineHead ?? order?.headSha ?? "").toLowerCase() === head;
+  const handedBack = (order) => typeof order?.outputRefs?.[0] === "string" && order.outputRefs[0].length > 0 && existsSync(order.outputRefs[0]);
+  const running = async (plan) => atHead(plan?.workOrder) && typeof plan.workOrder.outputRefs?.[0] === "string" && plan.workOrder.outputRefs[0].length > 0 && !handedBack(plan.workOrder)
+    && !(await closureRecorded(tmpRoot, [plan.workOrder.headSha, plan.workOrder.authority?.reviewBaselineHead].filter(Boolean), plan.executionIdentity));
+  let canonical;
+  let resume;
+  try {
+    canonical = await readPlan(planPath);
+    if (await running(canonical)) resume = { plan: canonical, file: planPath };
+    // The same-head no-commit re-emission writes a keyed sibling beside the canonical plan; a running one is resumed with its own planPath and joinRef.
+    if (!resume && canonical && atHead(canonical.workOrder)) {
+      const keyed = (await readdir(dir).catch(() => [])).filter((name) => /^fixer-emit-plan\.f\d+-[0-9a-f]{8}\.json$/.test(name)).sort();
+      for (const name of keyed) {
+        const plan = await readPlan(path.join(dir, name));
+        if (plan?.parentExecutionIdentity === canonical.executionIdentity && await running(plan)) resume = { plan, file: path.join(dir, name) };
+      }
+    }
   } catch (error) {
     return { headSha: head, openActCount: open.length, blockers, fixerInFlight: false, fixerPlanError: `unverified_active_fixer: ${error instanceof Error ? error.message : String(error)}` };
   }
-  const order = plan?.workOrder;
-  const outputRef = order?.outputRefs?.[0];
-  const fixerInFlight = order?.target?.repo === context.repo && order?.target?.pr === context.pr
-    && String(order?.authority?.reviewBaselineHead ?? order?.headSha ?? "").toLowerCase() === head
-    && typeof outputRef === "string" && outputRef.length > 0 && !existsSync(outputRef);
-  if (!fixerInFlight) return { headSha: head, openActCount: open.length, blockers, fixerInFlight };
+  if (!resume) {
+    // A fixer that handed back at this head without moving it made no progress: re-emitting the same order would loop with no round counting toward the cap, so the earlier routing applies.
+    if (atHead(canonical?.workOrder) && handedBack(canonical.workOrder)) return null;
+    return { headSha: head, openActCount: open.length, blockers, fixerInFlight: false };
+  }
+  const order = resume.plan.workOrder;
+  const outputRef = order.outputRefs[0];
   // The emitter's joinRef: a full-phase fixer's final-on-write report, else the hand-back itself (ADR 0223).
   const fixerJoinRef = order.phase === "full" && order.source !== "ci-failure" ? fixerReportPath(outputRef) : outputRef;
-  return { headSha: head, openActCount: open.length, blockers, fixerInFlight, fixerPlanPath: planPath, fixerJoinRef };
+  return { headSha: head, openActCount: open.length, blockers, fixerInFlight: true, fixerPlanPath: resume.file, fixerJoinRef };
 }
 
 export function buildGateCoordinationEvaluatorInput({

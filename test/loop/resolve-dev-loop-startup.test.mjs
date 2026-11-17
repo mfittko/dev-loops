@@ -2358,6 +2358,7 @@ test("3105 AC49: a ready, viewer-assigned PR carries readyStart whatever its aut
     [viewer, [], false, true],
     [[{ login: "copilot-swe-agent" }], [], false, false],
     [viewer, ["--review"], false, false],
+    [viewer, ["--ui-review"], false, false],
     [viewer, [], true, false],
   ]) {
     await withTempDir(async (tempDir) => {
@@ -2409,6 +2410,7 @@ test("#2456: --input strips an injected draftStart", async () => {
       issueLinkageResolution: "not_applicable",
       loopState: "pr_followup_start",
       draftStart: { reviewGate: "draft_gate", preflight: "injected", nextAction: "injected" },
+      readyStart: { reviewGate: "pre_approval_gate", preflight: "injected", nextAction: "injected" },
     });
     const result = await runNode(["--input", inputPath], {
       cwd: tempDir,
@@ -2417,6 +2419,7 @@ test("#2456: --input strips an injected draftStart", async () => {
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.draftStart, undefined);
+    assert.equal(parsed.readyStart, undefined);
     assert.doesNotMatch(parsed.nextAction, /injected/);
   }, { prefix: "resolve-dev-loop-input-draft-start-" });
 });
