@@ -2285,21 +2285,24 @@ export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, 
   return (await clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge, covering, allowUnsealedEnd })).ends;
 }
 
-/** The chain ends and every head the sealed clearing chains of the cap round `capHead` visit after it (each seeded merge, each record candidate head and each chain end), from one walk: each start's end is collected in the same loop that fills the heads, so a record rewrite cannot split them. */
+/** The chain ends and every head the sealed clearing chains of the cap round `capHead` visit after it (each seeded merge, each record candidate head and each chain end), from one walk: each start's end is collected in the same loop that fills the heads, so a record rewrite cannot split them. `candidates` is the subset of record candidate heads from that loop. */
 export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, covering = () => true, allowUnsealedEnd = false }) {
   const { starts, seedHeads } = await capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
   const ends = [];
   // The heads the seed proof visited stay in the set even if a concurrent rewrite changes a record before the traversal below.
   const heads = new Set(seedHeads);
+  // `candidates` holds only record candidate heads; `heads` also holds the seeded base-only merges (record baselines).
+  const candidates = new Set();
   // `covering` drops a start that does not name every act item of the cap round (the emitter seam passes none).
   for (const start of starts.filter(covering)) {
     const seededFrom = normalizeSha(start.reviewBaselineHead);
     if (seededFrom && seededFrom !== normalizeSha(capHead)) heads.add(seededFrom);
     // The end and the visited heads come from one read of each record, in the shared clearingChainEnd.
-    const last = clearingChainEnd(tmpRoot, start, heads, { allowUnsealedEnd });
+    const last = clearingChainEnd(tmpRoot, start, candidates, { allowUnsealedEnd });
     if (last) ends.push(last);
   }
-  return { ends, heads: [...heads] };
+  for (const head of candidates) heads.add(head);
+  return { ends, heads: [...heads], candidates: [...candidates] };
 }
 
 // Extension values a sealed clearing record may carry to prove a clean cap round (ADR 0250 records `docs_tests_only`).
