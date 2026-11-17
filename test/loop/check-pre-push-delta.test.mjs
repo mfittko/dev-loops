@@ -22,7 +22,7 @@ import { decidePiToolCall } from "../../extension/readonly-role-gate.ts";
 
 setDefaultTimeout(30000); // most cases seed a real git repo and run the CLI; the 5 s default fails under load
 
-const ACT = { ref: "act-1", severity: "low", angle: "correctness", summary: "s", judgeDisposition: "act" };
+const ACT = { ref: "act-1", severity: "low", angle: "correctness", summary: "s", file: "src/a.mjs", judgeDisposition: "act" };
 const FP = fingerprintFinding(ACT);
 const ACT_LIST = [{ ...ACT, fingerprint: FP }];
 async function runCli(argv, seam) {
@@ -1063,6 +1063,16 @@ test("a reviewer-only baseline that is a base-only merge of a non-clean cap-roun
   } finally { cleanup(repo); }
 });
 
+test("a reviewer-only run over an all-body cap-round ledger with a later PR-own commit runs the input run with an empty code act set and prints bodyItems", async () => {
+  const repo = reviewerOnlyRepo();
+  try {
+    const bodyAct = { severity: "low", summary: "body gap", angle: "spec", judgeDisposition: "act", judgeTitle: "Body" };
+    const out = await runDeltaCli([...reviewerOnlyArgs(repo, [bodyAct]), "--spec-identity", "spec@1", "--result-path", path.join(repo.dir, "r.json")], seam);
+    assert.deepEqual(out.input.actItems, []);
+    assert.deepEqual(out.bodyItems, [fingerprintFinding(bodyAct)]);
+  } finally { cleanup(repo); }
+});
+
 test("AC3: a reviewer-only result with a medium or high finding, or a residue claim, does not seal a clearing record", async () => {
   const repo = reviewerOnlyRepo();
   try {
@@ -1933,4 +1943,23 @@ test("AC11: countPrOwnCommits is 0 for a base-only merge range and counts PR-own
   try {
     assert.ok(await countPrOwnCommits(merged.dir, merged.mergeHead, merged.head, "main", deps) >= 2, "a non-base-only merge and its side commit count");
   } finally { cleanup(merged); }
+});
+
+const BODY_ACT = (n) => { const item = { ref: `body-${n}`, severity: "low", angle: "spec", summary: `PR body finding ${n}`, judgeDisposition: "act" }; return { ...item, fingerprint: fingerprintFinding(item) }; };
+
+test("the input run prints the dropped PR-body refs as bodyItems and builds the reviewer input from the code items only", async () => {
+  const { dir } = fixture();
+  const actList = path.join(dir, "mixed-act-list.json");
+  fs.writeFileSync(actList, JSON.stringify([ACT_LIST[0], BODY_ACT(1), BODY_ACT(2)]));
+  const out = await runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], headAt(B));
+  assert.deepEqual(out.bodyItems, ["body-1", "body-2"]);
+  assert.deepEqual(out.input.actItems.map((item) => item.ref), ["act-1"]);
+  assert.equal(out.input.actSetId, startDeltaSequence({ reviewBaselineHead: A, actList: ACT_LIST }).actSetId);
+});
+
+test("an all-body act list refuses delta_body_only_act_set with the edit-pr and converged-json remedy", async () => {
+  const { dir } = fixture();
+  const actList = path.join(dir, "body-act-list.json");
+  fs.writeFileSync(actList, JSON.stringify([BODY_ACT(1), BODY_ACT(2)]));
+  await assert.rejects(runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], headAt(B)), /delta_body_only_act_set[^]*edit-pr\.mjs[^]*--converged-json/);
 });

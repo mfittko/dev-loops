@@ -51,6 +51,7 @@ import {
   isInRoundRewrite,
   resolveCapRoundFixed,
   clearingChainLastCandidates,
+  capRoundCovers,
   clearingChainWalk,
   readGateContext,
   renderBriefingEvidence,
@@ -9502,6 +9503,24 @@ test("clearingChainWalk keeps the seed-proof heads when a sealed record is rewri
   }
 });
 
+test("clearingChainWalk candidates hold record candidate heads only, not a seeded base-only merge baseline", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const M = "7".repeat(40);
+    const E = "6".repeat(40);
+    await seedClosedRounds(repoRoot, 66, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    await writeDeltaRecord(repoRoot, A, B);
+    await writeDeltaRecord(repoRoot, M, E);
+    const merge = async (args) => args.fromHead === B && args.head === M;
+    const walk = await clearingChainWalk({ tmpRoot: path.join(repoRoot, "tmp"), capHead: A, repo: "owner/repo", pr: 66, baseRefName: "main", repoRoot, baseOnlyMerge: merge });
+    assert.ok(walk.heads.includes(M), "the seeded merge M is a visited head");
+    assert.ok(!walk.candidates.includes(M), "the seeded merge M is a record baseline, not a candidate");
+    assert.deepEqual([...walk.candidates].sort(), [B, E].sort());
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // A sealed A to B to C chain whose B record loses its seal has no trusted end: B is not reported as the chain end.
 test("clearingChainWalk and clearingChainLastCandidates return no end when a mid-chain record is unsealed", async () => {
   const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
@@ -10625,4 +10644,11 @@ test("pre_approval_gate refusal on a ready PR with no cap round (the real resolv
     process.exitCode = priorExitCode;
     await rm(repoRoot, { recursive: true, force: true });
   }
+});
+
+test("capRoundCovers filters body items on the kept representative, so a cluster led by a file-less member is covered by an empty record", () => {
+  const A = "a".repeat(40);
+  const base = { severity: "low", angle: "correctness", judgeDisposition: "act", clusterId: 0 };
+  const findings = [{ ...base, summary: "body claim" }, { ...base, summary: "code claim", files: ["src/a.mjs"] }];
+  assert.equal(capRoundCovers({ log: { verdict: "findings_present", headSha: A, findings } }, undefined)({ items: [] }), true);
 });

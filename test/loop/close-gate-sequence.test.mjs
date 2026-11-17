@@ -1,6 +1,6 @@
 // close-gate-sequence: a sanctioned close of an abandoned fix sequence; a live sequence is never closable.
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +11,7 @@ import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../../cli/index.mjs";
 import { branchReflogMs, closeGateSequence, defaultActor, fixerGraceMs, localCommitExists } from "../../scripts/loop/close-gate-sequence.mjs";
 import { SANCTIONED_COMMANDS } from "../../scripts/loop/sanctioned-commands.mjs";
+import { writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { withTempDir } from "../_helpers.mjs";
 
 // Pin the grace to the default: the 60 second activity offsets below must fall inside it whatever the host exports.
@@ -24,6 +25,7 @@ const MOVED = "b".repeat(40);
 const T0 = Date.parse("2026-11-01T10:00:00Z");
 const execution = (dir) => ({ executionIdentity: "f1-abcd1234", workOrderRef: "fixer:o/r#7:head:f1-abcd1234", outputRef: path.join(dir, "out.json") });
 const pr = (oid, name = "feat") => async () => ({ pr: { headRefOid: oid, headRefName: name } });
+const aged = () => Date.now() + FIXER_GRACE_MS + 60_000; // a marker written now is past the dispatch grace
 const base = (tmpRoot, extra = {}) => ({ tmpRoot, head: HEAD, repo: "o/r", pr: 7, actor: "tester", now: () => T0, fetchPr: pr(MOVED), branchActivityMs: () => null, ...extra }); // no host git state: tests that need activity inject it
 const pull = (tmpRoot, ex, pulledAt) => {
   const file = pullReceiptPath(tmpRoot, ex.workOrderRef);
@@ -107,7 +109,7 @@ test("a pull receipt older than the grace blocks FIXER_NEVER_PULLED: sequence_li
   });
 });
 
-test("a receipt file that parses to null reads as a running fixer, never FIXER_NEVER_PULLED", async () => {
+test("a receipt file that parses to null reads as a pull at its mtime: running inside the grace, never FIXER_NEVER_PULLED after it", async () => {
   await withTempDir(async (tmpRoot) => {
     const ex = execution(tmpRoot);
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
@@ -115,9 +117,12 @@ test("a receipt file that parses to null reads as a running fixer, never FIXER_N
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, "null");
     const mtime = statSync(sequenceMarkerPath(tmpRoot, HEAD)).mtimeMs;
-    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: () => mtime + FIXER_GRACE_MS + 1000 }));
-    assert.equal(result.refusal, "fixer_running");
-    assert.ok(result.remedy);
+    const receiptMtime = statSync(file).mtimeMs;
+    const running = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: () => receiptMtime + 60_000 }));
+    assert.equal(running.refusal, "fixer_running");
+    assert.ok(running.remedy);
+    const aged = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: () => Math.max(mtime, receiptMtime) + FIXER_GRACE_MS + 1000 }));
+    assert.equal(aged.refusal, "sequence_live");
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
   });
 });
@@ -214,8 +219,6 @@ test("unproven abandonment is refused: no execution, no branch, no PR, wrong bra
       [await closeGateSequence(base(tmpRoot, { fetchPr: pr(MOVED, "other") })), "abandonment_unproven"],
       [await closeGateSequence(base(tmpRoot, { head: MOVED })), "sequence_absent"],
     ];
-    writeSequenceMarker({ tmpRoot, baselineHead: HEAD });
-    refusals.push([await closeGateSequence(base(tmpRoot)), "abandonment_unproven"]);
     for (const [result, code] of refusals) {
       assert.equal(result.refusal, code);
       assert.ok(typeof result.remedy === "string" && result.remedy !== "");
@@ -224,10 +227,19 @@ test("unproven abandonment is refused: no execution, no branch, no PR, wrong bra
   });
 });
 
+test("writeSequenceMarker writes atomically: the marker parses and no tmp sibling remains", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const file = writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat" });
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).baselineHead, HEAD);
+    assert.deepEqual(readdirSync(path.dirname(file)), [path.basename(file)]);
+  });
+});
+
 test("recoveryHint names the close command", () => {
   const hint = recoveryHint("a".repeat(40), "/x/gate-delta/h.sequence", "feat");
   assert.ok(hint.includes("dev-loops-run cli/index.mjs gate close-sequence --head <baseline sha> --repo <owner/name> --pr <number>"));
   assert.doesNotMatch(hint, /close-gate-sequence\.mjs/);
+  assert.ok(recoveryHint("not-a-sha", "/x/gate-delta/not-a-sha.sequence", undefined).includes("gate close-sequence --head not-a-sha --repo <owner/name>"));
 });
 
 const lockPath = (tmpRoot) => `${path.join(tmpRoot, "gate-delta", HEAD)}.sequence-lock`;
@@ -462,14 +474,13 @@ test("the grace is the runner TTL and DEVLOOPS_STALE_RUNNER_MAX_AGE_MS can only 
   }
 });
 
-test("a 41 hex char head is rejected as a non-full sha by the CLI and for the GitHub head", async () => {
+test("a 41 hex char head is rejected as a GitHub head and is a plain non-sha marker name for the CLI", async () => {
   await withTempDir(async (tmpRoot) => {
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat" });
     assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr("b".repeat(41)) }))).refusal, "abandonment_unproven");
     const result = spawnSync("node", [cli, "--head", "a".repeat(41), "--repo", "o/r", "--pr", "7"], { encoding: "utf8", cwd: tmpRoot });
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /usage/i);
-    assert.doesNotMatch(result.stdout, /sequence_absent/);
+    assert.doesNotMatch(result.stderr, /usage/i);
+    assert.match(result.stdout, /sequence_absent/);
   });
 });
 
@@ -492,23 +503,28 @@ test("a pull older than the grace with the head moved closes as HEAD_MOVED", asy
   });
 });
 
-test("an unparseable pulledAt or a garbage receipt reads as a running fixer", async () => {
+test("an unparseable pulledAt or a garbage receipt reads as a running fixer inside the grace", async () => {
   await withTempDir(async (tmpRoot) => {
     const ex = execution(tmpRoot);
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
     pull(tmpRoot, ex, "not a date");
+    const receipt = pullReceiptPath(tmpRoot, ex.workOrderRef);
+    const pin = () => utimesSync(receipt, (T0 - 60_000) / 1000, (T0 - 60_000) / 1000); // the receipt mtime is the pull time, so pin it relative to the injected clock
+    pin();
     assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "fixer_running");
-    writeFileSync(pullReceiptPath(tmpRoot, ex.workOrderRef), "{garbage");
+    writeFileSync(receipt, "{garbage");
+    pin();
     assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "fixer_running");
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
   });
 });
 
-test("a malformed marker or an invalid PR head sha is abandonment_unproven", async () => {
+test("a malformed marker closes as MARKER_UNREADABLE; an invalid PR head sha is abandonment_unproven", async () => {
   await withTempDir(async (tmpRoot) => {
     mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
     writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
-    assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "abandonment_unproven");
+    assert.equal((await closeGateSequence(base(tmpRoot, { now: aged }))).condition, "MARKER_UNREADABLE");
+    assert.equal(existsSync(sequenceMarkerPath(tmpRoot, HEAD)), false);
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat" });
     assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr("HEAD~1") }))).refusal, "abandonment_unproven");
   });
@@ -678,5 +694,377 @@ test("localCommitExists ignores an inherited GIT_DIR that points at another repo
     } finally {
       if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved;
     }
+  });
+});
+
+// A sealed delta record of the marker's own fixer execution, as `--result` writes it after a downgrade at invocation 3.
+const boundedRecord = (tmpRoot, ex, over = {}) => writeSealedGateDeltaRecord(tmpRoot, HEAD, {
+  reviewBaselineHead: HEAD, candidateHead: MOVED, actSetId: "0123456789abcdef", invocation: 3, outcome: "bounded_out", nextStep: "push_to_gate", items: [],
+  origin: { workOrderRef: ex.workOrderRef, workOrderDigest: "sha256:x", executionIdentity: ex.executionIdentity }, ...over,
+});
+// The fixer pulled its order, committed and handed back: the output exists and the pull is old.
+const handedBack = (tmpRoot, ex) => { pull(tmpRoot, ex, new Date(T0 - 60_000).toISOString()); writeFileSync(ex.outputRef, "{}"); };
+
+test("BOUNDED_OUT: a handed-back fixer with a sealed bounded_out record closes with the full-phase next step", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    handedBack(tmpRoot, ex);
+    boundedRecord(tmpRoot, ex);
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD) }));
+    assert.equal(result.ok, true);
+    assert.equal(result.condition, "BOUNDED_OUT");
+    assert.equal(result.nextStep, "push_to_gate");
+    assert.equal(JSON.parse(readFileSync(sequenceClosurePath(tmpRoot, HEAD, ex.executionIdentity), "utf8")).condition, "BOUNDED_OUT");
+    assert.equal(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("BOUNDED_OUT: a needs_fix record, a record of another execution or an unsealed record stays sequence_live", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    handedBack(tmpRoot, ex);
+    boundedRecord(tmpRoot, ex, { outcome: "needs_fix", nextStep: "fix_and_rereview" });
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD) }))).refusal, "sequence_live");
+    boundedRecord(tmpRoot, ex, { origin: { workOrderRef: "fixer:o/r#7:head:f2-abcd1234", workOrderDigest: "sha256:x", executionIdentity: "f2-abcd1234" } });
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD) }))).refusal, "sequence_live");
+    boundedRecord(tmpRoot, ex);
+    rmSync(`${path.join(tmpRoot, "gate-delta", HEAD)}.json.seal`);
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD) }))).refusal, "sequence_live");
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("BOUNDED_OUT: a fixer active inside the grace is fixer_running", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    pull(tmpRoot, ex, new Date(T0 - 60_000).toISOString());
+    boundedRecord(tmpRoot, ex);
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD) }))).refusal, "fixer_running");
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("MARKER_UNREADABLE: an unreadable marker, a marker with no branch and a non-hex baseline name close and remove the marker", async () => {
+  await withTempDir(async (tmpRoot) => {
+    mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
+    writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }))).condition, "MARKER_UNREADABLE");
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD });
+    const noBranch = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
+    assert.equal(noBranch.condition, "MARKER_UNREADABLE");
+    assert.ok(existsSync(noBranch.recordPath));
+    writeSequenceMarker({ tmpRoot, baselineHead: "not-a-sha", branch: "feat" });
+    assert.equal((await closeGateSequence(base(tmpRoot, { head: "not-a-sha", fetchPr: pr(HEAD), now: aged }))).condition, "MARKER_UNREADABLE");
+    assert.equal(readSequenceMarker(tmpRoot, "not-a-sha"), null);
+  });
+});
+
+test("MARKER_UNREADABLE: a no-branch marker with a needs_fix sealed record for its own execution stays sequence_live", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, execution: ex });
+    handedBack(tmpRoot, ex);
+    boundedRecord(tmpRoot, ex, { outcome: "needs_fix", nextStep: "fix_and_rereview" });
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }))).refusal, "sequence_live");
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("MARKER_UNREADABLE: a record with next step push names the full-phase emission, not another delta review", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, execution: ex });
+    handedBack(tmpRoot, ex);
+    boundedRecord(tmpRoot, ex, { outcome: "locally_clear", nextStep: "push" });
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
+    assert.equal(result.refusal, "sequence_live");
+    assert.match(result.reason, /the sealed delta record of/);
+    assert.match(result.remedy, /emit-fixer-work-order\.mjs --phase full --repo \S+ --pr \d+ --head-sha \S+ [^`]*--delta-result <sealed delta result> --harness <claude\|pi\|codex>`/);
+    assert.match(result.remedy, /already emitted, returns it unchanged and rewrites the marker as granted/);
+    assert.doesNotMatch(result.remedy, /\brm\b|operator/);
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("MARKER_UNREADABLE: a needs_fix record whose seal is missing (a rewrite in progress) stays sequence_live", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, execution: ex });
+    handedBack(tmpRoot, ex);
+    const recordPath = boundedRecord(tmpRoot, ex, { outcome: "needs_fix", nextStep: "fix_and_rereview" });
+    rmSync(`${recordPath}.seal`);
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
+    assert.equal(result.refusal, "sequence_live");
+    assert.match(result.reason, /the unsealed delta record of/);
+  });
+});
+
+test("MARKER_UNREADABLE: a corrupt marker with a live sealed record of the baseline stays sequence_live", async () => {
+  await withTempDir(async (tmpRoot) => {
+    mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
+    writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
+    boundedRecord(tmpRoot, execution(tmpRoot), { outcome: "needs_fix", nextStep: "fix_and_rereview" });
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
+    assert.equal(result.refusal, "sequence_live");
+    assert.match(result.remedy, /pre-push delta review/);
+    assert.equal(existsSync(sequenceMarkerPath(tmpRoot, HEAD)), true);
+  });
+});
+
+test("MARKER_UNREADABLE: a corrupt marker with a sealed bounded_out push_to_gate record still closes and removes the marker", async () => {
+  await withTempDir(async (tmpRoot) => {
+    mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
+    writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
+    boundedRecord(tmpRoot, execution(tmpRoot));
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
+    assert.equal(result.condition, "MARKER_UNREADABLE");
+    assert.equal(existsSync(sequenceMarkerPath(tmpRoot, HEAD)), false);
+  });
+});
+
+test("MARKER_UNREADABLE: a no-branch marker with an execution stays sequence_live under an origin-less needs_fix record, and closes when the record names another execution", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, execution: ex });
+    handedBack(tmpRoot, ex);
+    boundedRecord(tmpRoot, ex, { outcome: "needs_fix", nextStep: "fix_and_rereview", origin: undefined });
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }))).refusal, "sequence_live");
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+    boundedRecord(tmpRoot, ex, { outcome: "needs_fix", nextStep: "fix_and_rereview", origin: { workOrderRef: ex.workOrderRef, workOrderDigest: "sha256:x", executionIdentity: "f1-other" } });
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }))).condition, "MARKER_UNREADABLE");
+  });
+});
+
+// A busy sequence lock makes the close wait; the wait callback rewrites the sealed record and frees the lock, so only the under-lock recheck can see the change.
+const rewriteWhileLocked = (tmpRoot, rewrite) => {
+  const lockDir = path.join(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), `${HEAD}.sequence-lock`);
+  mkdirSync(lockDir, { recursive: true });
+  return { waitMs: 5000, sleep: async () => { rewrite(); rmSync(lockDir, { recursive: true, force: true }); } };
+};
+
+test("BOUNDED_OUT: a delta record rewritten between the first check and the lock is sequence_live and the marker survives", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    handedBack(tmpRoot, ex);
+    boundedRecord(tmpRoot, ex);
+    const lock = rewriteWhileLocked(tmpRoot, () => boundedRecord(tmpRoot, ex, { outcome: "needs_fix", nextStep: "fix_and_rereview" }));
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), lock }));
+    assert.equal(result.refusal, "sequence_live");
+    assert.match(result.reason, /changed while it was checked/);
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("MARKER_UNREADABLE: a sealed record that appears between the first check and the lock is sequence_live and the marker survives", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, execution: ex });
+    handedBack(tmpRoot, ex);
+    const lock = rewriteWhileLocked(tmpRoot, () => boundedRecord(tmpRoot, ex, { outcome: "needs_fix", nextStep: "fix_and_rereview" }));
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged, lock }));
+    assert.equal(result.refusal, "sequence_live");
+    assert.match(result.reason, /next step fix_and_rereview/);
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("closeGateSequence rejects an unsafe --head name (case or whitespace variants, empty, dot, path, over 128 characters) and accepts a 128 character name", async () => {
+  await withTempDir(async (tmpRoot) => {
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: execution(tmpRoot) });
+    const mixed = `${HEAD.slice(0, 20)}${"A".repeat(20)}`;
+    for (const head of [HEAD.toUpperCase(), mixed, "", ".", "..", "../x", "a/b", "-x", "--head", undefined, null, ` ${HEAD}`, "a".repeat(129)]) {
+      await assert.rejects(closeGateSequence(base(tmpRoot, { head, now: aged })), /not a full sha or a safe marker file name/, JSON.stringify(head));
+    }
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+    for (const head of [HEAD, "not-a-sha", "legacy.marker_1", "corrupt.name", "a-b_c.d", "a".repeat(128)]) await closeGateSequence(base(tmpRoot, { head, fetchPr: pr(HEAD) })); // accepted forms do not throw
+  });
+});
+
+test("MARKER_UNREADABLE waits out the dispatch grace: a young marker refuses with a rerun remedy and survives", async () => {
+  await withTempDir(async (tmpRoot) => {
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD });
+    const mtime = statSync(sequenceMarkerPath(tmpRoot, HEAD)).mtimeMs;
+    const young = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: () => mtime + FIXER_GRACE_MS - 1000 }));
+    assert.equal(young.refusal, "abandonment_unproven");
+    assert.match(young.remedy, /Rerun close-sequence after/);
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: () => mtime + FIXER_GRACE_MS + 1000 }))).condition, "MARKER_UNREADABLE");
+  });
+});
+
+test("MARKER_UNREADABLE needs --repo and --pr and still honors a running fixer", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, execution: ex });
+    assert.equal((await closeGateSequence(base(tmpRoot, { pr: undefined, now: aged }))).refusal, "abandonment_unproven");
+    pull(tmpRoot, ex, new Date(T0 - 60_000).toISOString());
+    assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "fixer_running");
+  });
+});
+
+test("an unreadable pull receipt older than the grace reads as an inactive fixer", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    const file = pullReceiptPath(tmpRoot, ex.workOrderRef);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, "{garbage");
+    const old = new Date(T0 - FIXER_GRACE_MS - 60_000);
+    utimesSync(file, old, old);
+    const result = await closeGateSequence(base(tmpRoot));
+    assert.equal(result.condition, "HEAD_MOVED");
+  });
+});
+
+test("an object receipt without a parseable pulledAt uses its file mtime: it refuses inside the grace and closes after it", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    const file = pullReceiptPath(tmpRoot, ex.workOrderRef);
+    mkdirSync(path.dirname(file), { recursive: true });
+    for (const body of ["{}", '{"pulledAt":"garbage"}']) {
+      writeFileSync(file, body);
+      const old = new Date(T0 - FIXER_GRACE_MS - 60_000);
+      utimesSync(file, new Date(T0 - 60_000), new Date(T0 - 60_000));
+      assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "fixer_running", body);
+      utimesSync(file, old, old);
+      assert.equal((await closeGateSequence(base(tmpRoot))).condition, "HEAD_MOVED", body);
+      writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    }
+  });
+});
+
+test("MARKER_UNREADABLE checks the work order owner: a no-branch marker of another PR refuses", async () => {
+  await withTempDir(async (tmpRoot) => {
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, execution: { ...execution(tmpRoot), workOrderRef: "fixer:o/r#8:head:f1-abcd1234" } });
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
+    assert.equal(result.refusal, "abandonment_unproven");
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("the CLI accepts a safe non-hex --head and refuses a path-like one", async () => {
+  await withTempDir(async (tmpRoot) => {
+  for (const head of ["../x", "a/b", ".", "..", "a b", ""]) {
+    const run = spawnSync("node", [cli, "--head", head, "--repo", "o/r", "--pr", "7"], { encoding: "utf8", cwd: tmpRoot });
+    assert.equal(run.status, 1, `--head ${JSON.stringify(head)}`);
+    assert.match(run.stderr, /usage/);
+  }
+  const ok = spawnSync("node", [cli, "--head", "not-a-sha", "--repo", "o/r", "--pr", "7"], { encoding: "utf8", cwd: tmpRoot });
+  assert.doesNotMatch(ok.stderr, /usage/);
+  assert.match(ok.stdout, /sequence_absent/);
+  });
+});
+
+test("MARKER_UNREADABLE recovers the fixer execution from the PR's emit plan: a pulled fixer that has not handed back refuses, a handed-back one closes", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    const planDir = path.join(tmpRoot, "gate-fixer", "o-r", "pr-7");
+    mkdirSync(planDir, { recursive: true });
+    const plan = (headSha) => writeFileSync(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ ...ex, workOrder: { headSha, outputRefs: [ex.outputRef], mutationAuthority: { branch: "feat" } } }));
+    mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
+    writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
+    // The marker is past the grace, the fixer pulled within it and has not handed back.
+    pull(tmpRoot, ex, new Date(Date.now() + 120_000).toISOString());
+    plan(MOVED);
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }))).condition, "MARKER_UNREADABLE", "a plan for another baseline proves nothing");
+    writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
+    plan(HEAD);
+    const running = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
+    assert.equal(running.refusal, "fixer_running");
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+    writeFileSync(ex.outputRef, "{}");
+    const closed = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
+    assert.equal(closed.condition, "MARKER_UNREADABLE");
+    // The record is keyed by the recovered execution, which is where pull admission looks (closureRecorded), so a later pull refuses stale_dispatch.
+    assert.equal(closed.executionIdentity, ex.executionIdentity);
+    assert.equal(closed.recordPath, sequenceClosurePath(tmpRoot, HEAD, ex.executionIdentity));
+    assert.equal(existsSync(sequenceClosurePath(tmpRoot, HEAD, ex.executionIdentity)), true);
+  });
+});
+
+test("MARKER_UNREADABLE treats an emit plan with a malformed identity as no plan: the record is keyed none and nothing is written outside gate-delta", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = { ...execution(tmpRoot), executionIdentity: "x/../../../evil" };
+    const planDir = path.join(tmpRoot, "gate-fixer", "o-r", "pr-7");
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ ...ex, workOrder: { headSha: HEAD, outputRefs: [ex.outputRef], mutationAuthority: { branch: "feat" } } }));
+    mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
+    writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
+    const closed = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
+    assert.equal(closed.condition, "MARKER_UNREADABLE");
+    assert.equal(closed.recordPath, sequenceClosurePath(tmpRoot, HEAD, undefined));
+    assert.equal(path.dirname(closed.recordPath), path.dirname(sequenceMarkerPath(tmpRoot, HEAD)));
+    assert.equal(existsSync(path.resolve(tmpRoot, "..", "evil.json")), false);
+  });
+});
+
+test("recoveryHint renders a concrete --head only for a name the CLI accepts", () => {
+  const upper = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+  assert.match(recoveryHint(upper, "/m", "feat"), /--head <baseline sha>/);
+  assert.match(recoveryHint("not-a-sha", "/m", "feat"), /--head not-a-sha /);
+  // A dash-leading name is rejected by the CLI parser as an option value, so the hint renders the placeholder.
+  assert.match(recoveryHint("-x", "/m", "feat"), /--head <baseline sha>/);
+});
+
+test("MARKER_UNREADABLE refuses abandonment_unproven when the emit plan for the baseline belongs to another PR, and leaves the marker", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = { ...execution(tmpRoot), workOrderRef: "fixer:o/r#8:head:f1-abcd1234" };
+    const planDir = path.join(tmpRoot, "gate-fixer", "o-r", "pr-8");
+    mkdirSync(planDir, { recursive: true });
+    // Stray files at both levels sort before o-r and must not abort the scan.
+    writeFileSync(path.join(tmpRoot, "gate-fixer", "body.md"), "x");
+    writeFileSync(path.join(tmpRoot, "gate-fixer", "o-r", "note.txt"), "x");
+    writeFileSync(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ ...ex, workOrder: { headSha: HEAD, outputRefs: [ex.outputRef], mutationAuthority: { branch: "feat" } } }));
+    mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
+    writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
+    pull(tmpRoot, ex, new Date(Date.now() + 120_000).toISOString()); // the PR 8 fixer pulled recently and has not handed back
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged })); // --pr 7
+    assert.equal(result.refusal, "abandonment_unproven");
+    assert.match(result.reason, /o\/r#8/);
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("MARKER_UNREADABLE prefers a running foreign plan over this PR's handed-back plan: it refuses abandonment_unproven and names the foreign owner", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const writePlan = (prNumber, ex) => {
+      const planDir = path.join(tmpRoot, "gate-fixer", "o-r", `pr-${prNumber}`);
+      mkdirSync(planDir, { recursive: true });
+      writeFileSync(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ ...ex, workOrder: { headSha: HEAD, outputRefs: [ex.outputRef], mutationAuthority: { branch: "feat" } } }));
+    };
+    const own = execution(tmpRoot);
+    const foreign = { executionIdentity: "f2-abcd1234", workOrderRef: "fixer:o/r#8:head:f2-abcd1234", outputRef: path.join(tmpRoot, "out-8.json") };
+    writePlan(7, own);
+    writeFileSync(own.outputRef, "{}"); // this PR's fixer handed back
+    writePlan(8, foreign); // the PR 8 fixer has not handed back
+    mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
+    writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged })); // --pr 7
+    assert.equal(result.refusal, "abandonment_unproven");
+    assert.match(result.reason, /o\/r#8/);
+    assert.match(result.reason, /f2-abcd1234/);
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("MARKER_UNREADABLE with no own plan and a handed-back foreign plan refuses abandonment_unproven naming the owner, and does not close keyed none", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const foreign = { executionIdentity: "f3-abcd1234", workOrderRef: "fixer:o/r#8:head:f3-abcd1234", outputRef: path.join(tmpRoot, "out-8.json") };
+    const planDir = path.join(tmpRoot, "gate-fixer", "o-r", "pr-8");
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ ...foreign, workOrder: { headSha: HEAD, outputRefs: [foreign.outputRef], mutationAuthority: { branch: "feat" } } }));
+    writeFileSync(foreign.outputRef, "{}"); // the PR 8 fixer handed back
+    mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
+    writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged })); // --pr 7, no own plan
+    assert.equal(result.refusal, "abandonment_unproven");
+    assert.match(result.reason, /o\/r#8/);
+    assert.equal(existsSync(sequenceClosurePath(tmpRoot, HEAD, undefined)), false);
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
   });
 });

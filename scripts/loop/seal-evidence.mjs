@@ -9,7 +9,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { sealEvidence } from "@dev-loops/core/loop/evidence-seal";
+import { EvidenceSealError, sealEvidence } from "@dev-loops/core/loop/evidence-seal";
+import { deltaResultShapeErrors } from "@dev-loops/core/loop/pre-push-delta-review";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
@@ -18,6 +19,7 @@ const USAGE = `Usage: seal-evidence.mjs --kind delta --file <path> [--tmp-root <
 
 Seals the reviewer's result file to its producing run. Run it right after writing the file.
 ${JQ_OUTPUT_USAGE}
+A shape error (an unknown status, a bare-string widenedReads entry) or an outcome that contradicts the item statuses (locally_clear with a cannot_verify item) refuses evidence_malformed before the seal: correct the file and run the command again.
 Exit codes: 0 sealed, 2 refused (typed reason: evidence_run_missing, evidence_foreign_run, evidence_malformed) or bad input.`;
 
 export function runCli(argv = process.argv.slice(2), { stdout = process.stdout, cwd = process.cwd() } = {}) {
@@ -28,6 +30,8 @@ export function runCli(argv = process.argv.slice(2), { stdout = process.stdout, 
   const bytes = readFileSync(file);
   const parsed = JSON.parse(bytes.toString("utf8"));
   const tmpRoot = values["tmp-root"] ? path.resolve(cwd, values["tmp-root"]) : resolveGateArtifactTmpRoot(cwd);
+  const shapeErrors = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? deltaResultShapeErrors(parsed) : [];
+  if (shapeErrors.length > 0) throw new EvidenceSealError("evidence_malformed", `${shapeErrors.join("; ")}; correct ${values.file} and run seal-evidence again (nothing was sealed)`);
   const sealed = sealEvidence(tmpRoot, file, parsed, bytes);
   process.exitCode = emitResult({ ok: true, sealed }, { jq: values.jq, silent: values.silent, fields: values.fields, stdout });
 }

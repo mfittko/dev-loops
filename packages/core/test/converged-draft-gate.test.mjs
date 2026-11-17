@@ -117,6 +117,15 @@ describe("composeConvergedDraftGate", () => {
   });
 });
 
+describe("composeConvergedDraftGate with PR-body items", () => {
+  const items = [act("low", 1), { severity: "low", angle: "pr-description", summary: "low body finding", judgeDisposition: "act" }];
+  test("a mixed list refuses body_unchanged and body_read_unrecorded, and converges with a changed body", () => {
+    assert.throws(() => compose(items, converged(items), { reviewedBodySha: "old", liveBodySha: "old" }), /body_unchanged/);
+    assert.throws(() => compose(items, converged(items), { liveBodySha: "new" }), /body_read_unrecorded/);
+    assert.equal(compose(items, converged(items), { reviewedBodySha: "old", liveBodySha: "new" }).fixerCommit, FIX);
+  });
+});
+
 describe("composeBodyOnlyConvergedDraftGate", () => {
   const bodyItem = (severity, n, extra = {}) => ({ severity, angle: "pr-description", summary: `${severity} body finding ${n}`, judgeDisposition: "act", judgeFix: "edit the body", ...extra });
   const bodyOnly = (roundActItems, extra = {}) => composeBodyOnlyConvergedDraftGate({
