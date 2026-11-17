@@ -13,6 +13,7 @@ import {
 import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { isSanctionedCopilotReviewerLogin } from "@dev-loops/core/github/comment-trust";
 import { buildSnapshotFromPrFacts, DISPOSITION, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateEarlySurface } from "./early-surface-checks.mjs";
@@ -22,6 +23,7 @@ import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-co
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
+import { OUT_OF_BAND_WRITE } from "../github/_gate-artifact-seal.mjs";
 import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
@@ -29,7 +31,8 @@ import {
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
-import { countCompletedRounds, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
+import { countCompletedRounds, readClosedPriorRoundLogs, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
+import { isPastRoundCap, listOpenActItems, normalizeSeverity, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
 import { workOrderDigest } from "../github/_work-order-protocol.mjs";
@@ -1289,6 +1292,33 @@ export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = pr
   return false;
 }
 
+/**
+ * Issue 3105 AC15 (ADR 0288): the open act list of the current head's live draft_gate ledger, or null.
+ * Null when the head has no live ledger with an open act item, when every open item is a PR-body item, past the cap (cap > 0 and round > cap), and when every open item is a nit outside draft round 1.
+ * `blockers` are the GATE-EXEC-SOFT-CAP blockers of the cap round; below the cap every act item goes to the fixer.
+ * A hand-edited sealed ledger throws OUT_OF_BAND_WRITE.
+ */
+export async function resolveDraftOpenActList(context, { repoRoot, cap }) {
+  const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
+  if (!/^[0-9a-f]{40,64}$/.test(head)) return null;
+  const options = { repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: head };
+  // The live ledger at the current head is that head's latest round; retained same-head rounds are earlier rounds.
+  const logs = await readClosedPriorRoundLogs(options, { repoRoot, includeLiveCurrentHead: true });
+  const log = logs.find((entry) => String(entry.headSha).trim().toLowerCase() === head);
+  // The posted verdict is findings_present (the evaluator checks it); a legacy ledger may persist `clean` beside open act items.
+  const open = log ? listOpenActItems(log.findings) : [];
+  // The emitter refuses an all-PR-body act list (delta_body_only_act_set), so that list keeps the earlier routing.
+  if (open.length === 0 || open.every(isDeltaBodyItem)) return null;
+  // countCompletedRounds counts the round being posted, so the live ledger's round is one less.
+  const round = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead: true }) - 1;
+  // Past the cap the emitter refuses every act list (round_cap_reached), so that round keeps the earlier routing.
+  if (cap > 0 && round > cap) return null;
+  // The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so that list keeps the earlier routing.
+  const severities = open.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity]));
+  if (round !== 1 && severities.every((s) => normalizeSeverity(s) === "nit")) return null;
+  return { headSha: head, openActCount: open.length, blockers: isPastRoundCap(round, cap) ? pastCapBlockers(log.findings, { round, cap }) : [] };
+}
+
 // Builds the exact input object passed to evaluatePrGateCoordination.
 // Exported (and used by detectPrGateCoordinationState below, not duplicated)
 // so a test can assert the real production wiring — e.g. that
@@ -1306,6 +1336,7 @@ export function buildGateCoordinationEvaluatorInput({
   draftCapRoundFixed = false,
   draftRoundRefused = false,
   draftCapRoundFailure = null,
+  draftOpenActList = null,
 }) {
   return {
     repo: context.repo,
@@ -1370,6 +1401,7 @@ export function buildGateCoordinationEvaluatorInput({
     draftCapRoundFixed,
     draftRoundRefused,
     draftCapRoundFailure,
+    draftOpenActList,
     ...(earlySurface ?? {}),
   };
 }
@@ -1451,6 +1483,9 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure } = await resolveDraftCapRoundFact(context, { repoRoot, resolve: runtime.resolveCapRoundFixed ?? resolveCapRoundFixed });
   const draftRoundRefused = context.prData?.isDraft === true && !draftCapRoundFixed
     && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot, includeLiveCurrentHead: true }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), () => false);
+  const draftOpenActList = context.prData?.isDraft === true && !draftCapRoundFixed
+    ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0 }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
+    : null;
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
     context: evaluatorContext,
     maxCopilotRounds,
@@ -1469,6 +1504,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     draftCapRoundFixed,
     draftRoundRefused,
     draftCapRoundFailure,
+    draftOpenActList,
   }));
   // Copilot review request guard: when Copilot has reviewed the PR but no
   // formal review request was made, block pre-approval gate entry. Only
