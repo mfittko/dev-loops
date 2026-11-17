@@ -95,6 +95,8 @@ for (const command of [
   "xargs -d , gh pr edit 5 --body x",
   "timeout inf gh pr edit 5 --body x",
   "env -S 'gh pr edit 5 --body x'",
+  "env -S 'timeout 30 gh pr edit 5 --body x'",
+  "env -S 'sudo -n gh pr edit 5 --body x'",
   "timeout 300 gh api -X PATCH repos/o/r/pulls/5 -f body=x",
   "timeout -k 5 60 gh api -X PATCH repos/o/r/issues/5 --input body.json",
   "FOO=1 timeout 60 gh pr edit 5 --body x",

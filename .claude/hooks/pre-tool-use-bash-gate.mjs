@@ -130,7 +130,7 @@ function unwrappedCommandHeads(command) {
         const option = words[i++].value;
         if (option === "--") break;
         if (WRAPPER_VALUE_OPTIONS[wrapper].includes(option)) {
-          if (wrapper === "env" && (option === "-S" || option === "--split-string") && i < words.length) extra.push(words[i].value);
+          if (wrapper === "env" && (option === "-S" || option === "--split-string") && i < words.length) extra.push(words[i].value, ...unwrappedCommandHeads(words[i].value));
           i++;
         } else if (!(WRAPPER_FLAG_OPTIONS[wrapper] ?? []).includes(option)) unknown = true;
       }
