@@ -1226,6 +1226,23 @@ test("push authority: a corrupt marker after a full emission is re-granted only 
   });
 });
 
+test("push authority: the idempotent --phase full re-emission refuses once local HEAD moved past the original full order's candidate", async () => {
+  await withFixture(async ({ wt, root, head, prepareFull }) => {
+    const f = await prepareFull();
+    const unit = await f.full();
+    const markerRoot = resolveGateArtifactTmpRoot(root);
+    const corrupt = () => writeFile(path.join(markerRoot, "gate-delta", `${head}.sequence`), "{not json");
+    // HEAD at the original candidate: the re-emission returns the same order.
+    await corrupt();
+    assert.equal((await f.full()).workOrderDigest, unit.workOrderDigest);
+    // HEAD past the reviewed candidate: the re-emission refuses and leaves the marker ungranted.
+    await corrupt();
+    git(wt, "commit", "-q", "--allow-empty", "-m", "past the reviewed candidate");
+    await assert.rejects(f.full());
+    assert.equal(readSequenceMarker(markerRoot, head)?.fullGranted, false);
+  });
+});
+
 test("delta gate: a --phase full refusal for a HEAD past the record candidate names the head_moved closure", async () => {
   await withFixture(async ({ wt, prepareFull }) => {
     const f = await prepareFull({ bounded: true });

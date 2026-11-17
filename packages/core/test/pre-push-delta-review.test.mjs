@@ -750,6 +750,13 @@ describe("the reviewer result shape", () => {
     assert.match(deltaResultShapeErrors(result({ actionableItems: [item()] })).join(), /ref is missing/);
     assert.match(deltaResultShapeErrors(result({ actionableItems: [item("a"), item("a")] })).join(), /duplicate/);
   });
+
+  test("deltaResultShapeErrors refuses a non-string or empty skipReason, or a skipReason without residueOf, before the seal", () => {
+    const finding = (extra) => ({ severity: "low", summary: "s", evidence: ["e"], ...extra });
+    for (const bad of [{ skipReason: 7, residueOf: "act-1" }, { skipReason: "", residueOf: "act-1" }, { skipReason: "out of scope" }]) {
+      assert.match(deltaResultShapeErrors(result({ newFindings: [finding(bad)] })).join(), /newFindings\[0\]\.skipReason needs residueOf and a non-empty reason/, JSON.stringify(bad));
+    }
+  });
 });
 
 describe("auto refs and errors use the full act list position", () => {

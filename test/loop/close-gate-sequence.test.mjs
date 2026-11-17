@@ -767,7 +767,7 @@ test("MARKER_UNREADABLE: a record with next step push names the full-phase emiss
     const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
     assert.equal(result.refusal, "sequence_live");
     assert.match(result.reason, /the sealed delta record of/);
-    assert.match(result.remedy, /emit-fixer-work-order\.mjs --phase full --repo \S+ --pr \d+ --head-sha \S+ [^`]*--delta-result <sealed delta result>`/);
+    assert.match(result.remedy, /emit-fixer-work-order\.mjs --phase full --repo \S+ --pr \d+ --head-sha \S+ [^`]*--delta-result <sealed delta result> --harness \S+`/);
     assert.match(result.remedy, /already emitted, returns it unchanged and rewrites the marker as granted/);
     assert.doesNotMatch(result.remedy, /\brm\b|operator/);
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
@@ -1033,6 +1033,23 @@ test("MARKER_UNREADABLE prefers a running foreign plan over this PR's handed-bac
     assert.equal(result.refusal, "abandonment_unproven");
     assert.match(result.reason, /o\/r#8/);
     assert.match(result.reason, /f2-abcd1234/);
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("MARKER_UNREADABLE with no own plan and a handed-back foreign plan refuses abandonment_unproven naming the owner, and does not close keyed none", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const foreign = { executionIdentity: "f3-abcd1234", workOrderRef: "fixer:o/r#8:head:f3-abcd1234", outputRef: path.join(tmpRoot, "out-8.json") };
+    const planDir = path.join(tmpRoot, "gate-fixer", "o-r", "pr-8");
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ ...foreign, workOrder: { headSha: HEAD, outputRefs: [foreign.outputRef], mutationAuthority: { branch: "feat" } } }));
+    writeFileSync(foreign.outputRef, "{}"); // the PR 8 fixer handed back
+    mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
+    writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged })); // --pr 7, no own plan
+    assert.equal(result.refusal, "abandonment_unproven");
+    assert.match(result.reason, /o\/r#8/);
+    assert.equal(existsSync(sequenceClosurePath(tmpRoot, HEAD, undefined)), false);
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
   });
 });

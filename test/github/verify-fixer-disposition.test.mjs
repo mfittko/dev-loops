@@ -1492,6 +1492,27 @@ test("site coverage riding a fingerprinted thread entry satisfies the act item's
   });
 });
 
+test("a PR-body act item with a siteQuery in a mixed act list needs no site coverage; the code item's coverage suffices", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [
+      { threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled", fingerprint: "fp1", returnedSites: ["s"], sites: [{ site: "s", status: "fixed" }] },
+    ], { actList: [
+      { ref: "body-1", severity: "medium", summary: "b", judgeDisposition: "act", siteQuery: "git grep -n y" },
+      { fingerprint: "fp1", severity: "high", summary: "s", file: "src/a.mjs", judgeDisposition: "act", siteQuery: "git grep -n x" },
+    ] });
+    const { deps } = runtime([
+      threadsCallEntry([
+        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, authorAssociation: "OWNER", author: { login: "gate-bot", __typename: "User" } }] } },
+      ]),
+      { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "gate" })}\n` },
+      compareEntry(FIX_SHA, "identical"),
+    ], repoRoot);
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+    assert.equal(result.complete, true);
+  });
+});
+
+
 // ---------------------------------------------------------------------------
 // main-anchored checkpoint and receipt root
 // ---------------------------------------------------------------------------
