@@ -2,12 +2,12 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { test } from "bun:test";
+import { afterAll, test } from "bun:test";
 import { renderGuardHook } from "@dev-loops/core/loop/default-branch-guard";
 import { recoveryHint, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
 import { gateDeltaRecordPath, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
-import { closeGateSequence } from "../../scripts/loop/close-gate-sequence.mjs";
+import { closeGateSequence, fixerGraceMs } from "../../scripts/loop/close-gate-sequence.mjs";
 import { assertDeltaClearsFullPhase } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { SANCTIONED_COMMANDS } from "../../scripts/loop/sanctioned-commands.mjs";
 import { withTempDir } from "../_helpers.mjs";
@@ -16,6 +16,10 @@ const HEAD = "a".repeat(40);
 const MOVED = "b".repeat(40);
 const CANDIDATE = "c".repeat(40);
 const T0 = Date.parse("2026-11-01T10:00:00Z");
+// A host value above the default grace would make the aged timestamps below fall inside the grace.
+const HOST_STALE_MAX_AGE = process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+delete process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+afterAll(() => { if (HOST_STALE_MAX_AGE !== undefined) process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = HOST_STALE_MAX_AGE; });
 
 const FORBIDDEN = [/\brm\b/i, /delete the marker/i, /deleting the marker/i, /ask the operator/i];
 const sanctionedNames = Object.values(SANCTIONED_COMMANDS).flatMap((group) => Object.values(group)).filter((file) => typeof file === "string").map((file) => path.basename(file));
@@ -53,7 +57,7 @@ test("every close-sequence refusal names an agent step and none names a marker d
 });
 
 test("the under-lock recheck and unreadableLive refusals name an agent step and none names a marker delete or an operator", async () => {
-  const aged = () => Date.now() + 31 * 60_000; // past the dispatch grace of the marker just written
+  const aged = () => Date.now() + fixerGraceMs() + 60_000; // past the dispatch grace of the marker just written
   const sealed = (tmpRoot, ex, over) => writeSealedGateDeltaRecord(tmpRoot, HEAD, {
     reviewBaselineHead: HEAD, candidateHead: CANDIDATE, actSetId: "0123456789abcdef", invocation: 3, outcome: "bounded_out", nextStep: "push_to_gate", items: [],
     origin: { workOrderRef: ex.workOrderRef, workOrderDigest: "sha256:x", executionIdentity: ex.executionIdentity }, ...over,

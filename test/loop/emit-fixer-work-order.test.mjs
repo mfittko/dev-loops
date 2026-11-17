@@ -447,6 +447,22 @@ test("a closure record at the review baseline head retires a full emission whose
   });
 });
 
+test("after a BOUNDED_OUT close at the baseline, the --phase full emission and its pull stay admissible", async () => {
+  const { closeGateSequence } = await import("../../scripts/loop/close-gate-sequence.mjs");
+  await withFixture(async ({ root, head, prepareFull }) => {
+    const f = await prepareFull({ bounded: true });
+    const tmpRoot = path.join(root, "tmp");
+    const { branch } = readSequenceMarker(tmpRoot, head);
+    const closed = await closeGateSequence({ tmpRoot, head, repo: REPO, pr: PR, fetchPr: async () => ({ pr: { headRefOid: head, headRefName: branch } }) });
+    assert.equal(closed.ok, true, closed.reason ?? closed.remedy);
+    assert.equal(closed.condition, "BOUNDED_OUT");
+    assert.match(closed.next, /--phase full/);
+    const unit = await f.full();
+    assert.equal(pull(unit, root).status, 0);
+    assert.equal(readSequenceMarker(tmpRoot, head)?.fullGranted, true);
+  });
+});
+
 test("THREAD no_commit and head_moved close an authenticated sequence and allow the next push", async () => {
   const { checkFixPushAuthority } = await import("../../scripts/loop/check-fix-push-authority.mjs");
   for (const move of ["none", "descendant", "amended"]) await withFixture(async ({ root, wt, head, files, emit }) => {
