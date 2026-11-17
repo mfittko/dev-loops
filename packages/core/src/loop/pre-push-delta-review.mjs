@@ -350,6 +350,8 @@ export function deltaResultShapeErrors(result, { checkOutcome = true } = {}) {
     if (!VALID_SEVERITIES.has(normalizeSeverity(f?.severity))) errors.push(`newFindings[${i}].severity ${JSON.stringify(f?.severity)} is unknown`);
     if (!nonEmpty(f?.summary)) errors.push(`newFindings[${i}].summary is required`);
     if (!nonEmptyStrings(f?.evidence)) errors.push(`newFindings[${i}].evidence[] must be non-empty strings`);
+    // null is an absent optional field
+    if (f?.skipReason != null && (!nonEmpty(f.skipReason) || !nonEmpty(f.residueOf))) errors.push(`newFindings[${i}].skipReason needs residueOf and a non-empty reason`);
   }
   if (!Array.isArray(r.widenedReads)) errors.push("widenedReads[] is required (empty when nothing was widened)");
   else for (const [i, read] of r.widenedReads.entries()) {
@@ -402,7 +404,6 @@ export function validateDeltaResult(result, { sequence, siteCoverage = [], valid
   for (const [i, f] of (findings ?? []).entries()) {
     // null is an absent optional field
     if (f?.residueOf != null && !expectedRefs.has(f.residueOf)) errors.push(`newFindings[${i}].residueOf ${JSON.stringify(f.residueOf)} is not in the act set`);
-    if (f?.skipReason != null && (!nonEmpty(f.skipReason) || !nonEmpty(f.residueOf))) errors.push(`newFindings[${i}].skipReason needs residueOf and a non-empty reason`);
     if (!membershipOnly && nonEmpty(f?.skipReason) && expectedRefs.has(f.residueOf)) {
       const actItem = sequence.actItems.find((item) => item.ref === f.residueOf);
       const recorded = recordedSkipReason(validationCoverage, actItem.fingerprint ?? actItem.ref, typeof f.site === "string" ? f.site : null);

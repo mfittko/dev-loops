@@ -796,7 +796,9 @@ async function emitPlan({
     if (prior?.phase === "full" && prior.source === "act-list" && prior.authority?.reviewBaselineHead === headSha && prior.gate === gate
       && prior.target?.repo === repo && prior.target.pr === Number(pr) && prior.authority.sourceDigest === jsonContentDigest(source.parsed)
       && prior.mutationAuthority?.branch === prState.headRefName && JSON.stringify(prior.mutationAuthority.allowedPaths) === JSON.stringify(paths)
-      && prior.requiredReads?.some((read) => read.kind === "delta-result" && read.sha256 === delta.read.sha256)) {
+      && prior.requiredReads?.some((read) => read.kind === "delta-result" && read.sha256 === delta.read.sha256)
+      // The branch must still sit at the candidate the original full order reviewed; a later commit needs a new Delta.
+      && gitIn(cwd, "rev-parse", "HEAD").trim() === prior.headSha) {
       await authenticateOriginalPlan({ plan: original, canonical: planPath, emissionTmpRoot: path.resolve(tmpRoot), receiptTmpRoot,
         read: async (file) => { const bytes = await capture.read(file); if (!bytes) throw Object.assign(new Error(`missing ${file}`), { code: "ENOENT" }); return bytes; } });
       const markerRoot = resolveGateArtifactTmpRoot(cwd), outputRef = prior.outputRefs[0];

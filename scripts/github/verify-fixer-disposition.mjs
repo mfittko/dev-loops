@@ -613,7 +613,8 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     const dispositionCoverage = handoff.dispositions.filter((entry) => entry.fingerprint && (entry.sites || entry.returnedSites || entry.noSitesReason));
     if (completion && dispositionCoverage.length) throw new Error("disposition-level coverage cannot override authenticated completion input");
     const coverage = [...(handoff.siteCoverage ?? []), ...dispositionCoverage];
-    const gaps = siteCoverageGaps(toDeltaActItems(actList), coverage, residualRefs);
+    // A PR-body item leaves the delta act set (ADR 0271), so its coverage is not required here either; the next gate round verifies the body.
+    const gaps = siteCoverageGaps(toDeltaActItems(actList).filter((_, i) => !isDeltaBodyItem(actList[i])), coverage, residualRefs);
     if (gaps.length > 0) throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: the disposition handoff leaves site coverage incomplete: ${gaps.join("; ")}`);
   }
   if (completion && (!actList || !deltaStatuses)) throw new Error("completion requires semantic ACT and Delta authorities");

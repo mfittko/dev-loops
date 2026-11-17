@@ -83,14 +83,17 @@ const planExecutionFor = (tmpRoot, repo, pr, head) => {
   // Per-entry failures (a stray top-level file makes readdirSync throw ENOTDIR) skip that entry only, so the scan still reaches every real plan.
   const dirs = (dir) => { try { return readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name); } catch { return []; } };
   const root = path.join(tmpRoot, "gate-fixer");
+  let handedBack;
   for (const slug of dirs(root)) {
     for (const prDir of dirs(path.join(root, slug))) {
       if (!/^pr-[0-9]+$/u.test(prDir)) continue;
       const other = readPlanExecution(path.join(root, slug, prDir, "fixer-emit-plan.json"), head);
       if (other && mtimeMs(other.outputRef) === null) return { ...other, foreign: true };
+      // An own plan or no plan at all must not hide a handed-back plan of another PR: the marker is still not this PR's.
+      if (other && !handedBack && !(slug === repoSlugFor(repo) && prDir === `pr-${pr}`)) handedBack = { ...other, foreign: true };
     }
   }
-  return own;
+  return own ?? handedBack;
 };
 
 /** @param {{ tmpRoot: string, head: string, repo?: string, pr?: number, fetchPr?: Function, now?: () => number, actor?: string }} input */
