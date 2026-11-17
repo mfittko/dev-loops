@@ -148,7 +148,16 @@ function unwrappedCommandHeads(command) {
             extra.push(joined, ...unwrappedCommandHeads(joined));
           }
           i++;
-        } else if (!(WRAPPER_FLAG_OPTIONS[wrapper] ?? []).includes(option)) unknown = true;
+        } else if (!(WRAPPER_FLAG_OPTIONS[wrapper] ?? []).includes(option)) {
+          unknown = true;
+          // The unknown option word may carry the command (`-iS'<cmd>'`, `--split='<cmd>'`): add its value after the first quote or `=`.
+          const word = words[i - 1];
+          const at = command.slice(word.start, word.end).search(/['"=]/);
+          if (at >= 0) {
+            const joined = [word.value.slice(at + (command[word.start + at] === "=" ? 1 : 0)), i < words.length ? command.slice(words[i].start, end) : ""].join(" ").trim();
+            extra.push(joined, ...unwrappedCommandHeads(joined));
+          }
+        }
       }
       if (/^g?timeout$/.test(wrapper) && !unknown) {
         if (!/^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?$/i.test(words[i]?.value ?? "")) unknown = true;

@@ -105,6 +105,10 @@ for (const command of [
   "env --split-string='gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
   "env --split-string='gh api -X PATCH repos/o/r/issues/5 --field body=x'",
   "env -S 'gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
+  // An env option the parser does not fully recognize fails closed.
+  "env -iS'gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
+  "env --split='gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
+  "env --split gh api -X PATCH repos/o/r/pulls/5 -f body=x",
   "setsid gh pr edit 5 --body x",
   "stdbuf -oL gh pr edit 5 --body x",
   "ionice -c3 gh pr edit 5 --body x",
