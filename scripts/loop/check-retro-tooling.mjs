@@ -17,8 +17,10 @@
  *
  * Input source (how the harness feeds it):
  *   Newline-delimited shell commands — one top-level command per line — as the
- *   agent actually invoked them. Pass via a file (`--transcript <path>`) or pipe
- *   on stdin. Each line is one Bash-tool invocation's command string.
+ *   agent actually invoked them, or a Claude Code session transcript (JSONL) whose
+ *   Bash tool_use commands are extracted. Pass either form via a file
+ *   (`--transcript <path>`) or pipe it on stdin; both paths run the same extraction.
+ *   Each line is one Bash-tool invocation's command string.
  *
  * ALLOWED (NOT a violation):
  *   - dev-loops subcommands and `node scripts/....mjs` invocations. Those scripts
@@ -63,14 +65,15 @@ import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
 import { isPayloadWord, scanInlineInterpreter, stripLeadingWrappers, tokenizeShellCommand } from "@dev-loops/core/loop/bash-command-classify";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]
+const USAGE = `Usage: node scripts/loop/check-retro-tooling.mjs [--transcript <path>]... [--json]
 
-Reads a newline-delimited transcript of agent shell commands (from --transcript
-or stdin) and reports agent-level raw gh/python/node -e calls (internal-tooling-only
+Reads a newline-delimited transcript of agent shell commands, or Claude Code
+session transcripts (JSONL), from each --transcript or stdin and reports agent-level raw gh/python/node -e calls (internal-tooling-only
 rule, issue #982).
 
 Options:
-  --transcript <path>   File of newline-delimited commands (default: read stdin)
+  --transcript <path>   Repeatable. A file of newline-delimited commands, or a Claude Code session
+                        transcript (JSONL) whose Bash tool commands are extracted. Default: read stdin
   --json                Emit machine-readable JSON (default: human summary)
 
 ${JQ_OUTPUT_USAGE}
@@ -143,6 +146,9 @@ function classifySegment(rawSegment) {
   return { kind: "clean" };
 }
 
+// collapseCommand's marker line for a command holding a heredoc it cannot prove to be data.
+const UNPROVEN_HEREDOC = "\u0000unproven-heredoc:";
+
 /**
  * Analyze a transcript of newline-delimited shell commands.
  *
@@ -156,6 +162,10 @@ export function analyzeTranscript(transcript) {
   for (const raw of lines) {
     const line = raw.trim();
     if (line.length === 0 || line.startsWith("#")) continue;
+    if (line.startsWith(UNPROVEN_HEREDOC)) {
+      violations.push(`unproven heredoc: ${line.slice(UNPROVEN_HEREDOC.length)}`);
+      continue;
+    }
     for (const segment of splitSegments(line)) {
       const result = classifySegment(segment);
       if (result.kind === "violation") {
@@ -168,13 +178,93 @@ export function analyzeTranscript(transcript) {
   return { violations, allowedWriteOps, internalToolingOnly: violations.length === 0 };
 }
 
+/**
+ * A Claude Code session transcript is JSONL; its Bash tool_use inputs are the commands. A line that is
+ * not a JSON object stays a plain command line, so a newline-delimited transcript passes unchanged.
+ */
+export function extractBashCommands(text) {
+  return String(text ?? "").split(/\r?\n/).flatMap((line) => {
+    if (!line.trimStart().startsWith("{")) return [line];
+    let entry;
+    try { entry = JSON.parse(line); } catch { return [line]; }
+    const content = entry?.message?.content;
+    if (!Array.isArray(content)) return [];
+    return content.filter((part) => part?.type === "tool_use" && part.name === "Bash" && typeof part.input?.command === "string").map((part) => collapseCommand(part.input.command));
+  }).join("\n");
+}
+
+// A trailing `\` continues the line only when the tokenizer still sees it as a word: a comment (full-line or trailing) swallows it.
+function continues(line) {
+  const words = tokenizeShellCommand(line).segments.at(-1)?.words;
+  return Boolean(words?.length) && /(?:^|[^\\])(?:\\\\)*\\$/.test(words.at(-1).raw); // an even run of backslashes is escaped backslashes, not a continuation
+}
+
+/**
+ * Reduce one multi-line Bash command to its logical lines: a trailing `\` joins the next line, and the body of a data
+ * heredoc (the host is cat, tee or git commit) is dropped with its delimiter line, so body text never reads as a command.
+ * A heredoc fed to any other host (bash, sh, python) is reported as an unproven heredoc, as is any incompletely tokenized command holding `<<`.
+ * Heredocs come from tokenizeShellCommand, which is quote-aware and reads `$(( ))` as arithmetic.
+ * A command whose later logical line starts with `#` is reported as an unproven heredoc, because the line analyzer cannot tell a comment from text inside a quoted argument.
+ * shortcut: a quoted multi-line argument still splits per line; upgrade when a real session shows it.
+ */
+function collapseCommand(command) {
+  const tok = tokenizeShellCommand(command);
+  let text = command;
+  // Fail closed: an unterminated heredoc runs to end of input and its body may expand, so any incomplete parse holding `<<` is reported.
+  if (tok.incomplete && command.includes("<<")) return `${UNPROVEN_HEREDOC}${command.split("\n")[0]}`;
+  if (!tok.incomplete) {
+    const dropped = tok.segments.flatMap((seg) => dataHeredocs(seg, tok.segments.length === 1));
+    // Fail closed: a closed heredoc that is not provably data (any host, quoted or not, at any substitution depth) is never proven clean.
+    // The shell may expand its body, and the line analyzer cannot tell a literal `#` from a comment there, so the command is reported.
+    const allHeredocs = (segments) => segments.flatMap((seg) => [...seg.heredocs, ...seg.words.flatMap((w) => w.subs.flatMap((sub) => allHeredocs(sub.segments)))]);
+    if (allHeredocs(tok.segments).some((h) => h.closed && !dropped.includes(h))) return `${UNPROVEN_HEREDOC}${command.split("\n")[0]}`;
+    for (const h of dropped.sort((x, y) => y.bodyStart - x.bodyStart)) {
+      // An empty body with an empty delimiter puts bodyEnd on the delimiter line's own newline; any other bodyEnd precedes the delimiter line.
+      const end = text.indexOf("\n", h.delimiter === "" && h.bodyEnd === h.bodyStart ? h.bodyEnd : h.bodyEnd + 1);
+      text = text.slice(0, h.bodyStart) + (end === -1 ? "" : text.slice(end));
+    }
+  }
+  // Fail closed: a `#` after `$(` or a backtick (data heredoc bodies already dropped) may be a literal inside a substitution, not a comment; the line splitter cannot tell. Coarse on purpose.
+  if (/(?:\$\(|`)[\s\S]*#/.test(text)) return `${UNPROVEN_HEREDOC}${command.split("\n")[0]}`;
+  const out = [];
+  let joined = "";
+  for (const line of text.split(/\r?\n/)) {
+    joined += line;
+    if (joined.endsWith("\\") && continues(joined)) { joined = `${joined.slice(0, -1)} `; continue; }
+    out.push(joined);
+    joined = "";
+  }
+  if (joined) out.push(joined);
+  // Fail closed: a later logical line that starts with `#` may be text inside a quoted argument, and the line analyzer would skip a call on it. Coarse on purpose.
+  if (out.slice(1).some((l) => l.trim().startsWith("#"))) return `${UNPROVEN_HEREDOC}${command.split("\n")[0]}`;
+  return out.join("\n");
+}
+
+/**
+ * The closed heredocs of SEG whose body is data. Mirrors the shared dataHeredocs rule in bash-command-classify (not exported):
+ * a bare cat, tee or git commit head with no env-assignment, substitution, process-substitution or `-c`/alias word, no pipe onward,
+ * and a quoted delimiter or a body with no `$(`, backtick or `${ `. A cat or tee counts only as the lone segment, because a later segment may run the file it writes.
+ */
+function dataHeredocs(seg, alone) {
+  const [head, sub] = seg.words.map((w) => w.value);
+  const host = ((head === "cat" || head === "tee") && alone) || (head === "git" && sub === "commit" && !seg.words.some((w) => /^(?:-c|--config)|alias\./i.test(w.value)));
+  if (!host || seg.pipedOut || seg.words.some((w) => /^[A-Za-z_]\w*=/.test(w.raw) || /[<>]\(/.test(w.raw) || /[<>]\(/.test(w.value))) return [];
+  const isData = (h) => h.closed && (h.quoted || !/\$\(|`|\$\{[\s|]/.test(h.body.replace(/\\\n/g, "")));
+  const subs = seg.words.flatMap((w) => w.subs);
+  if (subs.length === 0) return seg.heredocs.filter(isData);
+  // `git commit -m "$(cat <<'EOF' ... EOF)"`: one substitution holding one bare, substitution-free cat segment is data, as in the shared rule
+  const [inner] = subs[0].segments;
+  if (head !== "git" || subs.length !== 1 || subs[0].segments.length !== 1 || inner.pipedOut || inner.words[0]?.value !== "cat" || inner.words.some((w) => w.subs.length > 0 || />|[<>]\(/.test(w.raw))) return [];
+  return inner.heredocs.filter(isData);
+}
+
 function parseCliArgs(argv) {
   let values;
   try {
     ({ values } = parseArgs({
       args: argv,
       options: {
-        transcript: { type: "string" },
+        transcript: { type: "string", multiple: true },
         json: { type: "boolean" },
         help: { type: "boolean", short: "h" },
         ...JQ_OUTPUT_PARSE_OPTIONS,
@@ -204,10 +294,10 @@ export async function run(argv, { stdout, stderr, stdin = process.stdin }) {
     stdout.write(`${USAGE}\n`);
     return 0;
   }
-  const transcript = values.transcript
-    ? readFileSync(values.transcript, "utf8")
-    : await readStdin(stdin);
-  if (transcript.trim().length === 0) throw new Error("empty transcript");
+  const raw = values.transcript ? values.transcript.map((file) => readFileSync(file, "utf8")).join("\n") : await readStdin(stdin);
+  // Empty means no input at all; a session with no Bash commands extracts to nothing and is clean.
+  if (raw.trim().length === 0) throw new Error("empty transcript");
+  const transcript = extractBashCommands(raw);
 
   const { violations, allowedWriteOps, internalToolingOnly } = analyzeTranscript(transcript);
 
