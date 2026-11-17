@@ -45,6 +45,7 @@ import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-reso
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { verifyFreshHumanApproval, projectSubmittedReviewFacts } from "@dev-loops/core/loop/merge-approval";
 import { countUnresolvedHumanChangesRequested, resolveSizeBudgetHumanApprovalRequired } from "@dev-loops/core/loop/size-budget-merge-gate";
+import { computePatchIdWhenIntegrated } from "./_patch-id.mjs";
 import { parseHeadDeclaredKeys } from "./head-declared-keys-schema.mjs";
 const USAGE = `Usage: detect-checkpoint-evidence.mjs --repo <owner/name> --pr <number>
 Fetch the live PR head SHA and visible PR issue comments, then summarize the
@@ -378,7 +379,8 @@ function normalizeGateMarkerSummary(summary) {
  * True when at least one non-bot human login present in `reviews`/`comments`
  * has a fresh, head-pinned approval per the sanctioned resolver
  * `verifyFreshHumanApproval` (merge-approval.mjs): a head-pinned APPROVED
- * review OR a head-pinned "approve merge <headSha>" comment authored by that
+ * review OR a head-pinned "approve merge <headSha>" comment (or an
+ * "approve merge <sha> patch-id <patchId>" comment) authored by that
  * SAME login. `buildPreMergeGateCheck` has no single named approver to check
  * (unlike merge-pr.mjs's `--human-approved-by`), so this tries every distinct
  * human login the two streams surface against the one existing resolver
@@ -470,7 +472,8 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
   // size failure would add no signal. sizeTouchesT1 is remapped to touchesT1
   // (see size-budget-merge-gate.mjs's own naming note). The human approval
   // signal accepts EITHER a human APPROVED review OR a head-pinned
-  // "approve merge <headSha>" operator comment — see anyFreshHumanApproval
+  // "approve merge <headSha>" or patch-id "approve merge <sha> patch-id <id>"
+  // operator comment — see anyFreshHumanApproval
   // above — so a solo-owner PR (which GitHub forbids from self-APPROVED) is
   // never unsatisfiable.
   if (preApprovalEstablished) {
@@ -494,7 +497,7 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
       failures.push(
         evidence.reviewsReadFailed === true
           ? "size-budget merge gate cannot verify human approval/unresolved CHANGES_REQUESTED state for this escalated/T1 PR: PR reviews could not be read (fail closed)"
-          : "size-budget requires a human APPROVED review OR a head-pinned \"approve merge <headSha>\" operator comment, with zero unresolved CHANGES_REQUESTED, for this escalated/T1 PR",
+          : "size-budget requires a human APPROVED review OR a head-pinned \"approve merge <headSha>\" operator comment (or an \"approve merge <sha> patch-id <patch-id>\" comment matching the current diff), with zero unresolved CHANGES_REQUESTED, for this escalated/T1 PR",
       );
     }
   }
@@ -1479,7 +1482,11 @@ async function main() {
     const draftClean = result.draftGate.visible && result.draftGate.verdict === "clean";
     const capRoundFixed = !draftClean && (githubCapFixed || (Boolean(options.baseRefName)
       && Boolean(await resolveCapRoundFixed({ repo: result.repo, pr: result.pr, headSha: result.currentHeadSha, baseRefName: options.baseRefName, anyHead: true }, { repoRoot: resolveRepoRoot(process.cwd()) }).catch(() => null))));
-    const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement, { skipFanoutLedgerCheck: options.skipFanoutLedgerCheck === true, capRoundFixed, patchId: options.patchId ?? null });
+    // Without --patch-id (the CI path) the detector derives it itself when the head contains origin/<base> (ADR 0279); any git error leaves head-only matching.
+    const patchId = options.patchId ?? (options.baseRefName
+      ? computePatchIdWhenIntegrated({ base: `origin/${options.baseRefName}`, head: result.currentHeadSha, repoRoot: resolveRepoRoot(process.cwd()) })
+      : null);
+    const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement, { skipFanoutLedgerCheck: options.skipFanoutLedgerCheck === true, capRoundFixed, patchId });
     const evidenceState = deriveEvidenceState(result, preMergeGateCheck, capRoundFixed);
     // reviews/comments are raw size-budget-gate input facts (comments carry
     // FULL PR comment bodies) consumed internally by buildPreMergeGateCheck

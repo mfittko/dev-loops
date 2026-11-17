@@ -463,3 +463,18 @@ test("head-declared-keys is the only job that checks out a PR head, with no perm
     assert.ok(fetch.run.includes("node scripts/github/fetch-head-declared-keys.mjs"), "default-branch code only");
   }
 });
+
+// ADR 0279: the CI detector derives the approval patch-id, so both detector steps get the PR base branch name
+// (through env, never spliced) after an objects-only fetch of the PR head.
+test("gate-evidence detector steps pass --base-ref-name from a fetched PR head so a patch-id approval clears the size gate in CI", async () => {
+  const workflow = parseYaml(await readRepo(".github/workflows/gate-evidence.yml"));
+  for (const job of [workflow.jobs["gate-evidence-runner"], workflow.jobs["gate-evidence-reporter"]].filter(Boolean)) {
+    const detect = job.steps.find((s) => typeof s.run === "string" && s.run.includes("detect-checkpoint-evidence.mjs"));
+    assert.equal(detect.env.PR_BASE_REF, "${{ steps.pr_git.outputs.base_ref }}");
+    assert.ok(detect.run.includes('base_args=(--base-ref-name "$PR_BASE_REF")') && detect.run.includes('"${base_args[@]}"'));
+    const fetchStep = job.steps.find((s) => s.id === "pr_git");
+    assert.ok(job.steps.indexOf(fetchStep) < job.steps.indexOf(detect), "the fetch precedes the detector");
+    assert.equal(fetchStep["continue-on-error"], true);
+    assert.ok(fetchStep.run.includes('refs/pull/${PR_NUMBER}/head'));
+  }
+});
