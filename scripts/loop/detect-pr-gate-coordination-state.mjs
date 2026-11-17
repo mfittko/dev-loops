@@ -1313,6 +1313,8 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap }) {
   if (open.length === 0 || open.every(isDeltaBodyItem)) return null;
   // countCompletedRounds counts the round being posted, so the current head's round is one less.
   const round = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead: true }) - 1;
+  // Past the cap the emitter refuses every act list (round_cap_reached), so that round keeps the earlier routing.
+  if (cap > 0 && round > cap) return null;
   const blockers = isPastRoundCap(round, cap) ? pastCapBlockers(log.findings, { round, cap }) : [];
   // A plan for this PR at this baseline head whose fixer has not handed back and whose sequence is not closed (close-gate-sequence's predicate) is in flight: resume it, never re-emit.
   // A closed or crashed-without-closure plan has no hand-back, so only a recorded closure reopens the emission route.
@@ -1337,12 +1339,17 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap }) {
     canonical = await readPlan(planPath);
     if (await running(canonical)) resume = { plan: canonical, file: planPath };
     // The same-head no-commit re-emission writes a keyed sibling beside the canonical plan; a running one is resumed with its own planPath and joinRef.
-    if (!resume && canonical && atHead(canonical.workOrder)) {
-      const keyed = (await readdir(dir).catch(() => [])).filter((name) => /^fixer-emit-plan\.f\d+-[0-9a-f]{8}\.json$/.test(name)).sort();
+    // Like locateFixerUnit: a parent closed by close-gate-sequence leaves no keyed unit in flight, and a newer keyed sibling of the same parent supersedes an older one.
+    if (!resume && canonical && atHead(canonical.workOrder)
+      && !(await closureRecorded(tmpRoot, [canonical.workOrder.headSha, canonical.workOrder.authority?.reviewBaselineHead].filter(Boolean), canonical.executionIdentity))) {
+      const emittedAt = (name) => Number(/^fixer-emit-plan\.f(\d+)-/.exec(name)?.[1]) || 0;
+      const keyed = (await readdir(dir).catch(() => [])).filter((name) => /^fixer-emit-plan\.f\d+-[0-9a-f]{8}\.json$/.test(name)).sort((a, b) => emittedAt(a) - emittedAt(b));
+      let newest;
       for (const name of keyed) {
         const plan = await readPlan(path.join(dir, name));
-        if (plan?.parentExecutionIdentity === canonical.executionIdentity && await running(plan)) resume = { plan, file: path.join(dir, name) };
+        if (plan?.parentExecutionIdentity === canonical.executionIdentity) newest = { plan, name };
       }
+      if (newest && await running(newest.plan)) resume = { plan: newest.plan, file: path.join(dir, newest.name) };
     }
   } catch (error) {
     return { headSha: head, openActCount: open.length, blockers, fixerInFlight: false, fixerPlanError: `unverified_active_fixer: ${error instanceof Error ? error.message : String(error)}` };

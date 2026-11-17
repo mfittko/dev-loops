@@ -4680,6 +4680,27 @@ describe("3105 AC15: resolveDraftOpenActList edge cases", () => {
     } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
   });
 
+  test("a keyed plan whose parent sequence was closed is not resumed", async () => {
+    const fixture = await setup([act]);
+    try {
+      await fixture.writePlan({ handedBack: true });
+      await fixture.writePlan({ executionIdentity: "f2-0000abcd", keyedParent: "f1-0000abcd" });
+      await mkdir(path.join(fixture.tempDir, "tmp", "gate-delta"), { recursive: true });
+      await writeFile(path.join(fixture.tempDir, "tmp", "gate-delta", `${headSha}.sequence-closed.f1-0000abcd.json`), "{}");
+      assert.doesNotMatch((await fixture.detect()).agentRemedy?.command ?? "", /wait-for-units/);
+    } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+  });
+
+  test("an older unreturned keyed plan superseded by a newer handed-back sibling is not in flight", async () => {
+    const fixture = await setup([act]);
+    try {
+      await fixture.writePlan({ handedBack: true });
+      await fixture.writePlan({ executionIdentity: "f2-0000abcd", keyedParent: "f1-0000abcd" });
+      await fixture.writePlan({ executionIdentity: "f3-0000abcd", keyedParent: "f1-0000abcd", handedBack: true });
+      assert.doesNotMatch((await fixture.detect()).agentRemedy?.command ?? "", /wait-for-units/);
+    } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+  });
+
   test("a running keyed plan beside a handed-back canonical plan is resumed with its own planPath", async () => {
     const fixture = await setup([act]);
     try {
@@ -4693,27 +4714,49 @@ describe("3105 AC15: resolveDraftOpenActList edge cases", () => {
 });
 
 // Issue 3105 AC15: at the cap round, a high act item without a judgeFix is a named human decision, so the act list keeps report_blocked.
-test("3105 AC15: a cap-round high act item without judgeFix reports blocked on an operator decision", async () => {
+// `priorRounds` closed ledgers precede the current head's ledger, so the current head's round is priorRounds + 1.
+async function detectCapFixture({ cap, priorRounds, finding }) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-act-list-cap-"));
   try {
     initGitFixture(tempDir, { branch: "main" });
-    await writeFile(path.join(tempDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+    await writeFile(path.join(tempDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: cap } } }));
     const headSha = "abc1234567".repeat(4);
     const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
     await mkdir(findings, { recursive: true });
     const ledger = (head, loggedAt, list) => writeFile(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt, findings: list }), "utf8");
-    await ledger("1".repeat(40), "2026-11-15T00:00:00.000Z", [{ severity: "medium", summary: "round one", file: "src/a.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix a" }]);
-    await ledger(headSha, "2026-11-16T00:00:00.000Z", [{ severity: "high", summary: "decide the auth model", file: "src/x.mjs", line: 3, judgeDisposition: "act" }]);
-    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 high", nextAction: "fix" });
+    for (let i = 1; i <= priorRounds; i += 1) await ledger(String(i).repeat(40), `2026-11-15T00:0${i}:00.000Z`, [{ severity: "medium", summary: `round ${i}`, file: "src/a.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix a" }]);
+    await ledger(headSha, "2026-11-16T00:00:00.000Z", [{ file: "src/x.mjs", line: 3, judgeDisposition: "act", ...finding }]);
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
     const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
-    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
-    assert.equal(result.ok, true);
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
-    assert.equal(result.blockedOn, "operator_decision");
-    assert.match(result.reason, /decide the auth model/);
+    return await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+}
+
+test("3105 AC15: a cap-round high act item without judgeFix reports blocked on an operator decision", async () => {
+  const result = await detectCapFixture({ cap: 2, priorRounds: 1, finding: { severity: "high", summary: "decide the auth model" } });
+  assert.equal(result.ok, true);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+  assert.equal(result.blockedOn, "operator_decision");
+  assert.match(result.reason, /decide the auth model/);
+});
+
+// Pins the round offset: the cap round is the one at which a high without judgeFix blocks.
+test("3105 AC15: a cap-round high act item with judgeFix goes to the fixer", async () => {
+  const result = await detectCapFixture({ cap: 2, priorRounds: 1, finding: { severity: "high", summary: "fix the auth check", judgeFix: "add the check" } });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
+});
+
+test("3105 AC15: a high act item without judgeFix one round below the cap goes to the fixer", async () => {
+  const result = await detectCapFixture({ cap: 3, priorRounds: 1, finding: { severity: "high", summary: "decide the auth model" } });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
+});
+
+// The emitter refuses every act list past the cap (round_cap_reached), so no fixer route follows it.
+test("3105 AC15: a past-cap current-head round does not route to the emitter", async () => {
+  const result = await detectCapFixture({ cap: 2, priorRounds: 2, finding: { severity: "medium", summary: "fix x", judgeFix: "fix x" } });
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
 });
 
 describe("GATE-EXEC-BASE-REFRESH coordination", () => {
