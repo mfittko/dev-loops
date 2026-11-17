@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 import { existsSync } from "node:fs";
 import { access, open, readFile, readdir } from "node:fs/promises";
 import os from "node:os";
@@ -1996,6 +1997,7 @@ export async function runCli(
   process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   runCli().catch((error) => {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;

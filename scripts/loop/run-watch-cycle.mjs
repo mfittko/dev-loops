@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 import { spawn } from "node:child_process";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -812,6 +813,7 @@ export async function runCli(
   return emitResult(result, { jq: options.jq, silent: options.silent, stdout });
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   runCli().then((code) => {
     if (typeof code === "number") {
       process.exitCode = code;

@@ -36,7 +36,7 @@ export function isTrustedCommentAuthor({ login, type, association } = {}, { allo
   if (name.length === 0) return false;
   const isBot = (typeof type === "string" && type.toLowerCase() === "bot") || /\[bot\]$/i.test(name);
   if (allowCopilot && SANCTIONED_COPILOT_REVIEWER.test(name) && isBot) return true;
-  // ADR 0273: the GitHub Actions bot, matched exactly, is trusted on every surface with no opt-in.
+  // Trusted by default; `trust.githubActionsBot: false` turns it off (ADR 0290).
   if (trustConfig.githubActionsBot && GITHUB_ACTIONS_BOT.test(name) && isBot) return true;
   if (isConfiguredReviewer(name, typeof type === "string" && type.toLowerCase() === "bot")) return true;
   // Exact sanctioned logins with a non-Bot type stay untrusted; a lookalike such as `copilot-fan` or `github-actions-fan` is judged by association.
@@ -58,3 +58,8 @@ export const UNTRUSTED_COMMENT_REMEDY = "a maintainer (OWNER, MEMBER or COLLABOR
 
 /** Remedy for a skipped PR conversation comment, which has no thread to reply to or resolve. */
 export const UNTRUSTED_CONVERSATION_COMMENT_REMEDY = "a maintainer (OWNER, MEMBER or COLLABORATOR) restates the request in their own comment";
+
+/** Association-only trust: a configured `trust.reviewers` login never passes here, so it cannot approve a merge or source a review-body fix (ADR 0290). */
+export function isTrustedAssociation(association) {
+  return TRUSTED_ASSOCIATIONS.has(typeof association === "string" ? association.toUpperCase() : "");
+}

@@ -37,8 +37,8 @@ import { captureParsedReviewThreads } from "../github/_review-thread-mutations.m
 import { resolveAuthenticatedLogin, runGhJson } from "../github/post-gate-findings.mjs";
 import { listRestPrReviews, normalizePrReviewsPayload, prReviewsApiArgs } from "../github/_gate-finding-surface.mjs";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
-import { isSanctionedCopilotReviewerLogin, isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
-import { isTrustedDispositionAuthor, resolveLatestCopilotReview } from "../github/_copilot-body-disposition.mjs";
+import { isSanctionedCopilotReviewerLogin, isTrustedAssociation, isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
+import { resolveLatestCopilotReview } from "../github/_copilot-body-disposition.mjs";
 import { isCommitContainedByHead } from "../github/_commit-containment.mjs";
 import { selectActThreadBinding } from "../github/_fixer-act-thread-bindings.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
@@ -165,7 +165,7 @@ async function loadReviewBodySnapshot({ repo, pr, reviewId, headSha, fetchReview
     if (review.commit_id !== headSha) throw new Refusal(`Copilot review ${reviewId} is on ${review.commit_id}, not the PR head ${headSha}; a Copilot body on an older head is stale, re-review the head and pass the new node id, or use --threads-file`);
   } else {
     if (isBotType(review.user) || /\[bot\]$/i.test(login)) throw new Refusal(`review ${reviewId} is by the bot ${login}; only a trusted human or the Copilot reviewer is a fixer source; pass a review by one of them, or use --threads-file`);
-    if (!isTrustedDispositionAuthor(review)) throw new Refusal(`review ${reviewId} is by ${login || "an unknown author"} with association ${review.author_association}; only an OWNER, MEMBER or COLLABORATOR review is a fixer source; pass such a review's node id, or use --threads-file`);
+    if (login === "" || !isTrustedAssociation(review.author_association)) throw new Refusal(`review ${reviewId} is by ${login || "an unknown author"} with association ${review.author_association}; only an OWNER, MEMBER or COLLABORATOR review is a fixer source; pass such a review's node id, or use --threads-file`);
     if (typeof review.commit_id !== "string") throw new Refusal(`review ${reviewId} has no commit_id; re-review the head and pass the new node id, or use --threads-file`);
     const contained = await isCommitContainedByHead({ repo, commitSha: review.commit_id, headSha }, runtime);
     if (!contained.contained) throw new Refusal(`review ${reviewId} is on commit ${review.commit_id}, which the PR head ${headSha} does not contain: ${contained.reason}; re-review the head and pass the new node id, or use --threads-file`);

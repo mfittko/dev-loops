@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatCliError } from "../_core-helpers.mjs";
@@ -124,6 +125,7 @@ export async function runCli(
 }
 const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectRun) {
+  loadCommentTrustConfigOrExit();
   runCli()
     .then((server) => {
       if (server) {

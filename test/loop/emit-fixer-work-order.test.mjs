@@ -9,6 +9,7 @@ import { cp, link, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, test } from "bun:test";
+import { setCommentTrustConfig } from "@dev-loops/core/github/comment-trust";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
 import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
 import { startDeltaSequence, toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
@@ -1600,6 +1601,8 @@ test("AC4: the review source refuses an unknown review, a wrong state, an empty 
     for (const type of ["bot", "BOT"]) await refuses([reviewFor(head, { user: { login: "github-actions", type } })], /by the bot github-actions/);
     await refuses([reviewFor(head, { author_association: "CONTRIBUTOR" })], /association CONTRIBUTOR/);
     await refuses([reviewFor(head, { user: { login: "copilot-lookalike", type: "User" }, author_association: "NONE" })], /association NONE|only an OWNER/);
+    setCommentTrustConfig({ reviewers: ["alice"] });
+    try { await refuses([reviewFor(head, { author_association: "NONE" })], /association NONE/); } finally { setCommentTrustConfig(); }
     await refuses([reviewFor(head, { commit_id: "d".repeat(40) })], /does not contain/, { runChild: compareAs("diverged") });
     // A human review on an earlier commit of the PR stays valid.
     const earlier = await emitReview(emit, [reviewFor(head, { commit_id: "d".repeat(40) })], { runChild: compareAs("ahead") });

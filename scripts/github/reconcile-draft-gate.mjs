@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -328,5 +329,6 @@ async function main() {
   }
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   await main();
 }

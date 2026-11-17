@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -429,6 +430,7 @@ export async function runCli(
 }
 const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectRun) {
+  loadCommentTrustConfigOrExit();
   runCli().catch((error) => {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;

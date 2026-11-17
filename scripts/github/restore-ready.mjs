@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
@@ -68,6 +69,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   main().then((code) => { process.exitCode = code; }).catch((error) => {
     process.stderr.write(`${formatCliError(error, { usage: USAGE })}\n`);
     process.exitCode = 1;

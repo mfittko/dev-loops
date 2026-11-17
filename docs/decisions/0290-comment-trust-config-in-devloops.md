@@ -4,7 +4,7 @@
 
 Accepted, 2026-11-17 ([issue 3198](https://github.com/mfittko/dev-loops/issues/3198)).
 
-Extends [ADR 0238](./0238-comment-text-from-non-maintainers-never-reaches-an-agent.md) as amended by [ADR 0240](./0240-copilot-reviewer-matched-by-exact-login.md), and [ADR 0273](./0273-github-actions-bot-is-a-trusted-comment-author.md). Those records stay unedited.
+Extends [ADR 0238](./0238-comment-text-from-non-maintainers-never-reaches-an-agent.md) as amended by [ADR 0240](./0240-copilot-reviewer-matched-by-exact-login.md), [ADR 0248](./0248-detector-evidence-trust-filter.md) and [ADR 0273](./0273-github-actions-bot-is-a-trusted-comment-author.md). Those records stay unedited.
 
 ## Context
 
@@ -34,5 +34,7 @@ The read fetches `origin/<default branch>` first, because a stale local ref woul
 ## Consequences
 
 - A repo trusts its review apps without a maintainer association, and can opt out of the GitHub Actions bot trust.
-- `isNonHumanAuthor` in merge approval still excludes every Bot, so a `trust.reviewers` login never approves a merge.
-- The review-body fixer rule is unchanged.
+- `isNonHumanAuthor` in merge approval still excludes every Bot, so a `trust.reviewers` login never approves a merge. The size-budget human approval counts only entries with a maintainer association.
+- A `trust.reviewers` login is not a review-body fixer source. Only a trusted human by maintainer association or the sanctioned Copilot reviewer is.
+- The trust read binds to the origin of the cwd checkout, or to `--repo-root` where a script has that option. It does not bind to the `--repo` argument, so run a script from a checkout of the repo it inspects.
+- `packages/core/bin/parse-review-threads.mjs` runs with the built-in defaults and does not load the config.
