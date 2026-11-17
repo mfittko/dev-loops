@@ -16,7 +16,7 @@ test("the join rule is defined once and keeps the Pi blocking join", async () =>
 
 test("the rule names the command, its outcomes and the stall stop", async () => {
   const text = await rule();
-  assert.match(text, /gate wait-for-units --emit-plan <path> \[--unit <scope>\]\.\.\. --tmp-root/);
+  assert.match(text, /gate wait-for-units --emit-plan <path> \[--unit <scope>\]\.\.\.`/);
   assert.match(text, /--judge-plan/);
   assert.match(text, /`all_done`/);
   assert.match(text, /three consecutive `timeout` outcomes with the same `missing` scopes.*`units_stalled`/);
