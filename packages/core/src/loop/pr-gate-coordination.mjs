@@ -1632,11 +1632,12 @@ function evaluatePrGateCoordinationCore(input = {}) {
     const headActList = !draftReady && draftGate.currentHead && draftGate.verdict === "findings_present"
       && /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && String(actList?.headSha ?? "").toLowerCase() === currentHeadSha.toLowerCase()
       && Number.isInteger(actList.openActCount) && actList.openActCount > 0
-      // An in-flight fixer plan at this head is resumed, never re-emitted; at the cap, AC15 replaces only the no_clearing_record refusal.
-      && actList.fixerInFlight !== true
-      && (input.draftRoundRefused !== true || input.draftCapRoundFailure == null || input.draftCapRoundFailure === "no_clearing_record");
+      // At the cap, AC15 replaces only the no_clearing_record refusal; an unknown (null) cap-round failure fails closed.
+      && (input.draftRoundRefused !== true || input.draftCapRoundFailure === "no_clearing_record");
     const actBlockers = headActList && Array.isArray(actList.blockers) ? actList.blockers : [];
     if (headActList && actBlockers.length === 0) {
+      // A fixer that has not handed back at this head is resumed, never re-emitted, and never bypassed by a draft_gate round or base integration.
+      const inFlight = actList.fixerInFlight === true && typeof actList.fixerPlanPath === "string" && typeof actList.fixerJoinRef === "string";
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK]);
       pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, ...draftReviewForbidden]);
       return buildResult({
@@ -1652,11 +1653,18 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK,
-        ...remedyOrOperator(input, (r, n) => ({
-          command: `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo ${r} --pr ${n} --head-sha ${currentHeadSha} --phase commit_only --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>`,
-          summary: "Emit the fixer work order for the open act list (the judge-pass --out file of this head's round) and dispatch it.",
-        })),
-        reason: `The PR is still draft and the current head carries a posted \`draft_gate\` \`findings_present\` verdict with ${actList.openActCount} open act item(s) and no round-cap blocker, so the fixer runs before any further round or base integration.`,
+        ...(inFlight
+          ? { agentRemedy: {
+            command: `dev-loops gate wait-for-units --artifact ${actList.fixerJoinRef} --after ${actList.fixerPlanPath}`,
+            summary: `Resume the in-flight fixer sequence of ${actList.fixerPlanPath}: join its hand-back, then continue that sequence; never re-emit it.`,
+          } }
+          : remedyOrOperator(input, (r, n) => ({
+            command: `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo ${r} --pr ${n} --head-sha ${currentHeadSha} --phase commit_only --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>`,
+            summary: "Emit the fixer work order for the open act list (the judge-pass --out file of this head's round) and dispatch it.",
+          }))),
+        reason: inFlight
+          ? `The PR is still draft, the current head carries a posted \`draft_gate\` \`findings_present\` verdict with ${actList.openActCount} open act item(s), and the fixer of ${actList.fixerPlanPath} has not handed back, so resume that sequence before any further round or base integration.`
+          : `The PR is still draft and the current head carries a posted \`draft_gate\` \`findings_present\` verdict with ${actList.openActCount} open act item(s) and no round-cap blocker, so the fixer runs before any further round or base integration.${typeof actList.fixerPlanError === "string" ? ` The existing fixer plan is unusable (${actList.fixerPlanError}); the emission replaces it.` : ""}`,
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,

@@ -34,7 +34,7 @@ import { countCompletedRounds, readClosedPriorRoundLogs, resolveCapRoundFixed, r
 import { isPastRoundCap, listOpenActItems, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
-import { workOrderDigest } from "../github/_work-order-protocol.mjs";
+import { fixerReportPath, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { loadDeliveredHandoff, verifyFixerDisposition } from "../github/verify-fixer-disposition.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "../github/_gate-finding-surface.mjs";
@@ -1310,11 +1310,27 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap }) {
   if (open.length === 0) return null;
   // countCompletedRounds counts the round being posted, so the current head's round is one less.
   const round = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead: true }) - 1;
-  // A fixer plan for this PR at this head means a commit_only / delta / full sequence is in flight: resume it, never re-emit.
+  const blockers = isPastRoundCap(round, cap) ? pastCapBlockers(log.findings, { round, cap }) : [];
+  // A plan for this PR at this baseline head whose fixer has not handed back (close-gate-sequence's predicate) is in flight: resume it, never re-emit.
+  // A handed-back, crashed or abandoned plan proves nothing, so the fixer route stays open.
   const planPath = path.join(resolveGateArtifactTmpRoot(repoRoot), "gate-fixer", repoSlugFor(context.repo), `pr-${context.pr}`, "fixer-emit-plan.json");
-  const order = await readFile(planPath, "utf8").then((text) => JSON.parse(text)?.workOrder, () => null);
-  const fixerInFlight = order?.target?.repo === context.repo && order?.target?.pr === context.pr && String(order?.headSha ?? "").toLowerCase() === head;
-  return { headSha: head, openActCount: open.length, blockers: isPastRoundCap(round, cap) ? pastCapBlockers(log.findings, { round, cap }) : [], fixerInFlight };
+  let plan;
+  try {
+    // Only ENOENT means no plan; an unreadable, unparsable or digest-mismatched plan surfaces as readFixerDispositionEvidence reports it.
+    try { plan = JSON.parse(await readFile(planPath)); } catch (error) { if (error?.code !== "ENOENT") throw error; }
+    if (plan !== undefined && (!plan?.workOrder || workOrderDigest(plan.workOrder) !== plan.workOrderDigest)) throw new Error("active fixer plan does not match its workOrderDigest; re-emit it");
+  } catch (error) {
+    return { headSha: head, openActCount: open.length, blockers, fixerInFlight: false, fixerPlanError: `unverified_active_fixer: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  const order = plan?.workOrder;
+  const outputRef = order?.outputRefs?.[0];
+  const fixerInFlight = order?.target?.repo === context.repo && order?.target?.pr === context.pr
+    && String(order?.authority?.reviewBaselineHead ?? order?.headSha ?? "").toLowerCase() === head
+    && typeof outputRef === "string" && outputRef.length > 0 && !existsSync(outputRef);
+  if (!fixerInFlight) return { headSha: head, openActCount: open.length, blockers, fixerInFlight };
+  // The emitter's joinRef: a full-phase fixer's final-on-write report, else the hand-back itself (ADR 0223).
+  const fixerJoinRef = order.phase === "full" && order.source !== "ci-failure" ? fixerReportPath(outputRef) : outputRef;
+  return { headSha: head, openActCount: open.length, blockers, fixerInFlight, fixerPlanPath: planPath, fixerJoinRef };
 }
 
 export function buildGateCoordinationEvaluatorInput({

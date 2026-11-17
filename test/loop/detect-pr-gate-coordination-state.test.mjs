@@ -4579,14 +4579,30 @@ test("3105 AC15: the detector derives the open act list from the current-head le
     assert.equal(result.ok, true);
     assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
     assert.match(result.agentRemedy.command, new RegExp(`emit-fixer-work-order\\.mjs --repo owner/repo --pr 10 --head-sha ${headSha} --phase commit_only`));
-    // A fixer plan for this PR at this head is in flight: a resume never re-emits it.
     const fixerDir = path.join(tempDir, "tmp", "gate-fixer", "owner-repo", "pr-10");
-    await mkdir(fixerDir, { recursive: true });
-    const workOrder = { role: "fixer", phase: "commit_only", source: "act-list", gate: "draft_gate", target: { repo: "owner/repo", pr: 10 }, headSha, requiredReads: [] };
-    await writeFile(path.join(fixerDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder, workOrderDigest: workOrderDigest(workOrder), executionIdentity: "f1-0000abcd" }));
-    const resumed = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body }), { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, checkBaseFreshness: async () => STALE }));
+    const planPath = path.join(fixerDir, "fixer-emit-plan.json");
+    const outputRef = path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json");
+    await mkdir(path.dirname(outputRef), { recursive: true });
+    const workOrder = { role: "fixer", phase: "commit_only", source: "act-list", gate: "draft_gate", target: { repo: "owner/repo", pr: 10 }, headSha, outputRefs: [outputRef], requiredReads: [] };
+    await writeFile(planPath, JSON.stringify({ workOrder, workOrderDigest: workOrderDigest(workOrder), executionIdentity: "f1-0000abcd" }));
+    const detect = async () => detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body }), { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, checkBaseFreshness: async () => STALE }));
+    // The plan's fixer has not handed back: resume that sequence, never integrate the base or re-emit.
+    const resumed = await detect();
     assert.equal(resumed.ok, true);
-    assert.notEqual(resumed.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, resumed.reason);
+    assert.equal(resumed.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, resumed.reason);
+    // The detector's tmp root is realpath-resolved, so the plan path is matched by its suffix.
+    assert.ok(resumed.agentRemedy.command.startsWith(`dev-loops gate wait-for-units --artifact ${outputRef} --after `), resumed.agentRemedy.command);
+    assert.ok(resumed.agentRemedy.command.endsWith(path.relative(tempDir, planPath)), resumed.agentRemedy.command);
+    // A handed-back plan at the same head proves nothing: the route emits the fixer again.
+    await writeFile(outputRef, "{}");
+    const handedBack = await detect();
+    assert.equal(handedBack.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, handedBack.reason);
+    assert.match(handedBack.agentRemedy.command, /emit-fixer-work-order\.mjs/);
+    // A digest-mismatched plan surfaces in the reason instead of nulling the act list.
+    await writeFile(planPath, JSON.stringify({ workOrder, workOrderDigest: "0".repeat(64), executionIdentity: "f1-0000abcd" }));
+    const broken = await detect();
+    assert.match(broken.agentRemedy.command, /emit-fixer-work-order\.mjs/);
+    assert.match(broken.reason, /unverified_active_fixer: active fixer plan does not match its workOrderDigest/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

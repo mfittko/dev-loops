@@ -4808,12 +4808,21 @@ test("3105 AC15: a posted findings_present draft_gate verdict with an open act l
     assert.deepEqual({ next: kept.nextAction, remedy: kept.agentRemedy, reason: kept.reason }, (({ nextAction, agentRemedy, reason }) => ({ next: nextAction, remedy: agentRemedy, reason }))(evaluatePrGateCoordination(input)), failure);
     assert.equal(kept.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, failure);
   }
-  // An in-flight fixer plan at this head is resumed, never re-emitted.
+  // An unknown (null) cap-round failure at the cap fails closed: the act list never replaces the refusal.
+  const unknown = evaluatePrGateCoordination({ ...base, draftRoundRefused: true, draftCapRoundFailure: null, draftOpenActList: open });
+  assert.equal(unknown.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, unknown.reason);
+  // A fixer that has not handed back at this head is resumed through its join, never re-emitted.
+  const resume = { fixerInFlight: true, fixerPlanPath: "/t/gate-fixer/o-r/pr-9/fixer-emit-plan.json", fixerJoinRef: "/t/gate-fixer/o-r/pr-9/f1-0000abcd/fixer-disposition.json" };
   for (const shape of [{}, { draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record" }]) {
-    const inFlight = evaluatePrGateCoordination({ ...base, ...shape, draftOpenActList: { ...open, fixerInFlight: true } });
-    assert.notEqual(inFlight.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, inFlight.reason);
-    assert.equal(inFlight.nextAction, evaluatePrGateCoordination({ ...base, ...shape }).nextAction);
+    const inFlight = evaluatePrGateCoordination({ ...base, ...shape, draftOpenActList: { ...open, ...resume } });
+    assert.equal(inFlight.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, inFlight.reason);
+    assert.equal(inFlight.agentRemedy.command, `dev-loops gate wait-for-units --artifact ${resume.fixerJoinRef} --after ${resume.fixerPlanPath}`);
+    assert.match(inFlight.agentRemedy.summary, /fixer-emit-plan\.json/);
   }
+  // An unusable plan surfaces in the reason and the route still emits the fixer.
+  const broken = evaluatePrGateCoordination({ ...base, draftOpenActList: { ...open, fixerInFlight: false, fixerPlanError: "unverified_active_fixer: bad digest" } });
+  assert.equal(broken.agentRemedy.command, fixer);
+  assert.match(broken.reason, /unverified_active_fixer: bad digest/);
   // A blocked verdict is no findings_present verdict, so the act list never routes to the fixer.
   const blockedVerdict = { ...verdict, verdict: "blocked" };
   const blocked = evaluatePrGateCoordination({ ...base, draftGate: blockedVerdict, draftGateMarker: blockedVerdict, draftOpenActList: open });
