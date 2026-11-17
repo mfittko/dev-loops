@@ -347,7 +347,8 @@ if (isSegmentBodyWrite) {
     "ADR-TRIPWIRE-STANDING-WAIVER: this command holds the gh, pr, edit or create and body-flag tokens (or a brace expansion too large to read), so it is blocked as a raw PR body write. " +
     "Write a PR body through the launcher: `dev-loops-run cli/index.mjs pr create` or `dev-loops-run cli/index.mjs pr edit` (it refuses a hand-written adr-tripwire:allow line). " +
     "Edit an issue body through `dev-loops-run cli/index.mjs issue edit`. " +
-    "If the launcher command itself was denied because its title or body text holds the word gh, rephrase the title or move the text into the body file.",
+    "If the launcher command itself was denied because its title or body text holds the word gh, rephrase the title or move the text into the body file. " +
+    "If a data word with many comma brace groups (a JSON or jq argument) tripped the size limit, write the data to a file and pass it with `--input <file>` or `-F field=@<file>`.",
   );
 }
 emitAllow();

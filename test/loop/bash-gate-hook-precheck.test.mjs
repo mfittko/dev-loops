@@ -240,7 +240,9 @@ test("a word with many brace groups is decided fast and fails closed", async () 
       `gh api repos/o/r/issues/5/comments -f body='${json}'`,
     ]) {
       const started = Date.now();
-      assert.equal(bash(root, command, undefined).decision, "deny", command);
+      const { decision, reason } = bash(root, command, undefined);
+      assert.equal(decision, "deny", command);
+      if (command.startsWith("gh api")) assert.match(reason, /--input <file>/, "an over-cap deny names a usable exit");
       assert.ok(Date.now() - started < 10000, `${command.slice(0, 40)} must decide quickly`);
     }
   });
