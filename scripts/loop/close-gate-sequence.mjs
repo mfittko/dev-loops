@@ -25,7 +25,7 @@ import { userInfo } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { clearSequenceMarker, isSafeMarkerName, isValidBranchName, readSequenceMarker, sequenceClosurePath, sequenceMarkerPath, withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
+import { clearSequenceMarker, isSafeMarkerName, isValidBranchName, readSequenceMarker, sequenceClosurePath, sequenceMarkerPath, validExecution, withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightFieldsSpec, preflightJqFilter } from "../lib/jq-output.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
@@ -64,9 +64,11 @@ const readPlanExecution = (file, head) => {
     const order = plan?.workOrder;
     const baseline = order?.authority?.reviewBaselineHead ?? order?.headSha;
     const outputRef = order?.outputRefs?.[0];
-    if (baseline !== head || typeof plan.executionIdentity !== "string" || typeof plan.workOrderRef !== "string" || typeof outputRef !== "string") return undefined;
+    // The marker's own predicate: a malformed identity or empty ref proves nothing and names no path.
+    const execution = validExecution({ executionIdentity: plan.executionIdentity, workOrderRef: plan.workOrderRef, outputRef });
+    if (baseline !== head || !execution) return undefined;
     const branch = order.mutationAuthority?.branch;
-    return { executionIdentity: plan.executionIdentity, workOrderRef: plan.workOrderRef, outputRef, ...(isValidBranchName(branch) ? { branch } : {}) };
+    return { ...execution, ...(isValidBranchName(branch) ? { branch } : {}) };
   } catch { return undefined; }
 };
 

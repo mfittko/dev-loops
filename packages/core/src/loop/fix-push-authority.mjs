@@ -119,7 +119,7 @@ const EXECUTION_IDENTITY = /^f[0-9]+-[0-9a-f]{8}$/u;
 const isNonEmptyString = (v) => typeof v === "string" && v !== "";
 
 /** The marker's fixer execution only when well formed (identity of the emitter's shape, non-empty refs); else undefined, so it proves nothing and names no path. */
-const validExecution = (e) => e && typeof e === "object" && typeof e.executionIdentity === "string" && EXECUTION_IDENTITY.test(e.executionIdentity) && isNonEmptyString(e.workOrderRef) && isNonEmptyString(e.outputRef) ? e : undefined;
+export const validExecution = (e) => e && typeof e === "object" && typeof e.executionIdentity === "string" && EXECUTION_IDENTITY.test(e.executionIdentity) && isNonEmptyString(e.workOrderRef) && isNonEmptyString(e.outputRef) ? e : undefined;
 
 /** The marker for a baseline head, or null when none exists (ENOENT only). A malformed or unreadable marker reads as active, not granted (fail closed). */
 export function readSequenceMarker(tmpRoot, baselineHead) {

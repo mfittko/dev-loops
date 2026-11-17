@@ -957,6 +957,22 @@ test("MARKER_UNREADABLE recovers the fixer execution from the PR's emit plan: a 
   });
 });
 
+test("MARKER_UNREADABLE treats an emit plan with a malformed identity as no plan: the record is keyed none and nothing is written outside gate-delta", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = { ...execution(tmpRoot), executionIdentity: "x/../../../evil" };
+    const planDir = path.join(tmpRoot, "gate-fixer", "o-r", "pr-7");
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ ...ex, workOrder: { headSha: HEAD, outputRefs: [ex.outputRef], mutationAuthority: { branch: "feat" } } }));
+    mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
+    writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
+    const closed = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
+    assert.equal(closed.condition, "MARKER_UNREADABLE");
+    assert.equal(closed.recordPath, sequenceClosurePath(tmpRoot, HEAD, undefined));
+    assert.equal(path.dirname(closed.recordPath), path.dirname(sequenceMarkerPath(tmpRoot, HEAD)));
+    assert.equal(existsSync(path.resolve(tmpRoot, "..", "evil.json")), false);
+  });
+});
+
 test("recoveryHint renders a concrete --head only for a name the CLI accepts", () => {
   const upper = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
   assert.match(recoveryHint(upper, "/m", "feat"), /--head <baseline sha>/);
