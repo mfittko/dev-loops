@@ -390,3 +390,9 @@ test("a trailing comment ending in a backslash does not join the next command li
     assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, ["gh: gh api repos/o/r"], command);
   }
 });
+
+test("a word ending in an escaped backslash does not join the next command line", async () => {
+  const r = await runCli(["--json"], sessionLine("echo C:\\\\\\\\\ngh api repos/o/r"));
+  assert.equal(r.status, 1);
+  assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, ["gh: gh api repos/o/r"]);
+});

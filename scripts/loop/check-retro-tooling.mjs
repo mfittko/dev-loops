@@ -189,7 +189,7 @@ export function extractBashCommands(text) {
 // A trailing `\` continues the line only when the tokenizer still sees it as a word: a comment (full-line or trailing) swallows it.
 function continues(line) {
   const words = tokenizeShellCommand(line).segments.at(-1)?.words;
-  return Boolean(words?.length) && words.at(-1).raw.endsWith("\\");
+  return Boolean(words?.length) && /(?:^|[^\\])(?:\\\\)*\\$/.test(words.at(-1).raw); // an even run of backslashes is escaped backslashes, not a continuation
 }
 
 /**
