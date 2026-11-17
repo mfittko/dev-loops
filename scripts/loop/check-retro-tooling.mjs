@@ -202,7 +202,7 @@ function continues(line) {
 /**
  * Reduce one multi-line Bash command to its logical lines: a trailing `\` joins the next line, and the body of a data
  * heredoc (the host is cat, tee or git commit) is dropped with its delimiter line, so body text never reads as a command.
- * A heredoc fed to any other host (bash, sh, python) runs, so its body stays; so does every line of an incompletely tokenized command.
+ * A heredoc fed to any other host (bash, sh, python) is reported as an unproven heredoc, as is any incompletely tokenized command holding `<<`.
  * Heredocs come from tokenizeShellCommand, which is quote-aware and reads `$(( ))` as arithmetic.
  * A command whose later logical line starts with `#` is reported as an unproven heredoc, because the line analyzer cannot tell a comment from text inside a quoted argument.
  * shortcut: a quoted multi-line argument still splits per line; upgrade when a real session shows it.
