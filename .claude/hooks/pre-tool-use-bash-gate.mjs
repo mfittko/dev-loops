@@ -70,7 +70,6 @@ import {
   extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
   normalizeGitHubRepoSlug,
-  tokenizeShellCommand,
 } from "./_bash-command-classify.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
@@ -137,10 +136,11 @@ function braceExpansions(value) {
 
 function segmentHoldsBodyWrite(command) {
   let overCap = false;
-  // A substitution's inner words are parsed with quotes removed (`$(gh pr "edit" ...)`), so read them too.
-  const allWords = (segments) => segments.flatMap(({ words }) => words.flatMap((word) => [word, ...word.subs.flatMap((sub) => allWords(sub.segments))]));
-  const tokens = allWords(tokenizeShellCommand(command).segments).flatMap((word) =>
-    [...(braceExpansions(word.value) ?? (overCap = true, [])), ...word.value.split(/[\s=$(){},`]+/).filter(Boolean)
+  // Normalize the raw text once: delete quotes and backslash, turn substitution and shell punctuation into spaces
+  // (braces and commas stay for the brace rules below), so `$(gh pr "edit" ...)` and `ed"it"` need no parser.
+  const words = command.replace(/['"\\]/g, "").replace(/[`$();|&<>\s]+/g, " ").split(" ").filter(Boolean);
+  const tokens = words.flatMap((word) =>
+    [...(braceExpansions(word) ?? (overCap = true, [])), ...word.split(/[\s=$(){},`]+/).filter(Boolean)
       // `${G:-gh}` leaves `G:-gh`: also keep the default value. Needs a leading name, so `--body`/`-b` are untouched.
       .flatMap((t) => [t, t.replace(/^[A-Za-z_]\w*:?[-+]/, "")])]);
   const has = (test) => tokens.some((token) => test(token));
