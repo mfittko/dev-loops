@@ -4819,6 +4819,21 @@ test("3105 AC15: a posted findings_present draft_gate verdict with an open act l
   assert.equal(blocked.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, blocked.reason);
 });
 
+test("3105 AC15: an eligible open act list wins over a BEHIND-only refresh, and a real conflict still resolves first", () => {
+  const head = "ab".repeat(20);
+  const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict, draftOpenActList: { headSha: head, openActCount: 2, blockers: [] } };
+  const behind = evaluatePrGateCoordination({ ...base, mergeStateStatus: "BEHIND", mergeable: "MERGEABLE" });
+  assert.equal(behind.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, behind.reason);
+  for (const merge of [{ mergeStateStatus: "DIRTY", mergeable: "CONFLICTING" }, { mergeStateStatus: "BEHIND", mergeable: "CONFLICTING" }]) {
+    const conflict = evaluatePrGateCoordination({ ...base, ...merge });
+    assert.equal(conflict.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS, JSON.stringify(merge));
+  }
+  // Without an eligible act list, BEHIND keeps its refresh.
+  const noList = evaluatePrGateCoordination({ ...base, draftOpenActList: undefined, mergeStateStatus: "BEHIND", mergeable: "MERGEABLE" });
+  assert.equal(noList.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS, noList.reason);
+});
+
 // Issue 3139: one next step on a ready PR without clean draft_gate evidence.
 test("a ready PR without clean draft evidence names reconcile_draft_gate alone when no cap round failed, and the cap-round exit alone when one did", () => {
   const base = { pr: 9, repo: "o/r", currentHeadSha: "abc123456789", prDraft: false, lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", sameHeadCleanConverged: true, draftGate: { visible: false } };

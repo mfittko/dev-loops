@@ -1342,7 +1342,18 @@ function evaluatePrGateCoordinationCore(input = {}) {
     });
   }
 
-  if (hasBlockedMergeStatus(mergeStateStatus) || mergeable === "CONFLICTING" || conflictFiles.length > 0) {
+  // Issue 3105 AC15 (ADR 0288): the open draft_gate act list at the current head; the fixer route below consumes it.
+  const actList = input.draftOpenActList;
+  const headActList = !draftReady && draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"
+    && /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && String(actList?.headSha ?? "").toLowerCase() === currentHeadSha.toLowerCase()
+    && Number.isInteger(actList.openActCount) && actList.openActCount > 0
+    // At the cap, AC15 replaces only the no_clearing_record refusal; an unknown (null) cap-round failure fails closed.
+    && (input.draftRoundRefused !== true || input.draftCapRoundFailure === "no_clearing_record");
+  const actBlockers = headActList && Array.isArray(actList.blockers) ? actList.blockers : [];
+  // An eligible draft act list wins over a BEHIND-only refresh; a real conflict (CONFLICTING, DIRTY, conflict files) still resolves first.
+  const actListWinsOverBehind = mergeStateStatus === "BEHIND" && mergeable !== "CONFLICTING" && conflictFiles.length === 0
+    && headActList && actBlockers.length === 0 && (prDraft || effectiveLifecycleState === STATE.PR_DRAFT);
+  if (!actListWinsOverBehind && (hasBlockedMergeStatus(mergeStateStatus) || mergeable === "CONFLICTING" || conflictFiles.length > 0)) {
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS]);
     pushUnique(forbiddenActions, CONFLICT_FORBIDDEN_ACTIONS);
     return buildResult({
@@ -1628,13 +1639,6 @@ function evaluatePrGateCoordinationCore(input = {}) {
     }
 
     // Issue 3105 AC15 (ADR 0288): a posted findings_present verdict at the current head with an open act list goes to the fixer, not to another round.
-    const actList = input.draftOpenActList;
-    const headActList = !draftReady && draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"
-      && /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && String(actList?.headSha ?? "").toLowerCase() === currentHeadSha.toLowerCase()
-      && Number.isInteger(actList.openActCount) && actList.openActCount > 0
-      // At the cap, AC15 replaces only the no_clearing_record refusal; an unknown (null) cap-round failure fails closed.
-      && (input.draftRoundRefused !== true || input.draftCapRoundFailure === "no_clearing_record");
-    const actBlockers = headActList && Array.isArray(actList.blockers) ? actList.blockers : [];
     if (headActList && actBlockers.length === 0) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK]);
       pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, ...draftReviewForbidden]);

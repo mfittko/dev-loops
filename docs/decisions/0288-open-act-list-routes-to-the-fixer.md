@@ -20,6 +20,6 @@ Amends [ADR 0208](./0208-draft-cap-round-fixed-goes-ready.md), [ADR 0224](./0224
 
 ## Consequences
 
-- The fixer runs before a repeated round, a cap-round refusal or a base integration.
+- The fixer runs before a repeated round, a cap-round refusal, a base integration or a `BEHIND`-only refresh. A real conflict (`CONFLICTING`, `DIRTY` or conflict files) still resolves first.
 - The base freshness step runs only on a gate-run action, so the fixer route skips it. The fix push re-checks the base.
 - `GATE-EXEC-SOFT-CAP` in `skills/docs/gate-review-sub-loop-contract.md` states the route.
