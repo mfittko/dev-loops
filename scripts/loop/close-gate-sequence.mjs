@@ -151,16 +151,16 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   // A sealed record of this baseline that does not push (needs_fix, fix_and_rereview) keeps the sequence live, as on the branch path; rechecked under the lock.
   // A record with no origin (thread route, or act route without --fixer-plan) matches any marker; one with an origin must name the marker's own execution. A marker that names no execution (it did not parse) matches any such record of the baseline.
   const unreadableLive = () => {
-    let record = null;
+    let record = null, sealed = false;
     // Liveness fails closed: a record with a missing or mismatched seal (a rewrite in progress deletes the seal first) still blocks the close; only a record that cannot be parsed proves nothing.
-    try { record = readSealedGateDeltaRecord(tmpRoot, head) ?? readGateDeltaRecord(tmpRoot, head); } catch { /* an unreadable record proves nothing */ }
+    try { record = readSealedGateDeltaRecord(tmpRoot, head); sealed = record !== null; record ??= readGateDeltaRecord(tmpRoot, head); } catch { /* an unreadable record proves nothing */ }
     if (record?.nextStep !== undefined && record.nextStep !== "push_to_gate"
       && (executionIdentity === undefined || record.origin === undefined || (record.origin?.workOrderRef === workOrderRef && record.origin?.executionIdentity === executionIdentity))) {
-      // A push record already cleared the sequence. The remedy is the already emitted full order, or the emit-fixer-work-order.mjs --phase full --delta-result <sealed result> emission, which rewrites the marker.
+      // A push record already cleared the sequence. The remedy is the --phase full emission with the sealed result: it emits the full order, or, when that order was already emitted, re-grants it and rewrites the unreadable marker.
       const remedy = record.nextStep === "push"
-        ? "Finish the full-phase order already emitted for this head (push its candidate; the head move then closes the sequence). If no full order was emitted, emit it with `emit-fixer-work-order.mjs --phase full --delta-result <sealed result>`, which rewrites the marker itself."
+        ? `Run \`dev-loops-run scripts/loop/emit-fixer-work-order.mjs --phase full --repo ${repo} --pr ${pr} --head-sha ${head} --act-list-file <act list> --gate <gate> --allowed-path <path> --delta-result <sealed delta result>\` with the act list, gate, allowed paths and sealed delta result of this sequence. It emits the full order, or, when that order was already emitted, returns it unchanged and rewrites the marker as granted; the full-phase fixer then pushes its candidate.`
         : "Finish the sequence with the pre-push delta review (dev-loops loop pre-push-delta).";
-      return refuse("sequence_live", `the sealed delta record of ${head} ${executionIdentity === undefined ? "" : `names the fixer execution ${executionIdentity} and `}has next step ${record.nextStep}`, remedy);
+      return refuse("sequence_live", `the ${sealed ? "sealed" : "unsealed"} delta record of ${head} ${executionIdentity === undefined ? "" : `names the fixer execution ${executionIdentity} and `}has next step ${record.nextStep}`, remedy);
     }
     return null;
   };

@@ -719,7 +719,7 @@ async function emitPlan({
     try { verifyEvidence(tmpRoot, abs(deltaResult), delta.parsed, delta.read.sha256); } catch (error) { throw new Refusal(`delta result ${deltaResult} refused (GATE-EXEC-EVIDENCE-SEALED): ${error.message}; re-run the delta review in this order: a fresh reviewer-input run, the reviewer writes and seals the result, then check-pre-push-delta.mjs --result, then rerun this emit`); }
     // The delta result must belong to this act list and this head (its pinned review baseline).
     const errors = validateDeltaResult(delta.parsed, { sequence: startDeltaSequence({ reviewBaselineHead: headSha, actList: source.parsed }), membershipOnly: true });
-    if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}; rerun the check-pre-push-delta.mjs --result step for this act list and baseline, then rerun this emit`);
+    if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}; re-run the delta review for this act list and baseline in this order: a fresh reviewer-input run, the reviewer writes and seals the result, then check-pre-push-delta.mjs --result, then rerun this emit`);
   }
   await capture.read(gateDeltaRecordPath(tmpRoot, headSha));
   // ADR 0235: a commit_only thread-route re-dispatch carries the delta record's findings as act items.
@@ -791,6 +791,28 @@ async function emitPlan({
     const original = JSON.parse(originalBytes), prior = original.workOrder;
     const receiptTmpRoot = resolveGateArtifactTmpRoot(cwd);
     const origin = { workOrderRef: original.workOrderRef, workOrderDigest: original.workOrderDigest, executionIdentity: original.executionIdentity };
+    // Idempotent re-emission (a corrupt or lost marker after a full emission): the current full plan for this baseline, act source, authority
+    // and byte-identical sealed --delta-result is returned unchanged and only its granted marker is rewritten. Any other full plan falls through to the refusal below.
+    if (prior?.phase === "full" && prior.source === "act-list" && prior.authority?.reviewBaselineHead === headSha && prior.gate === gate
+      && prior.target?.repo === repo && prior.target.pr === Number(pr) && prior.authority.sourceDigest === jsonContentDigest(source.parsed)
+      && prior.mutationAuthority?.branch === prState.headRefName && JSON.stringify(prior.mutationAuthority.allowedPaths) === JSON.stringify(paths)
+      && prior.requiredReads?.some((read) => read.kind === "delta-result" && read.sha256 === delta.read.sha256)) {
+      await authenticateOriginalPlan({ plan: original, canonical: planPath, emissionTmpRoot: path.resolve(tmpRoot), receiptTmpRoot,
+        read: async (file) => { const bytes = await capture.read(file); if (!bytes) throw Object.assign(new Error(`missing ${file}`), { code: "ENOENT" }); return bytes; } });
+      const markerRoot = resolveGateArtifactTmpRoot(cwd), outputRef = prior.outputRefs[0];
+      try {
+        await withSequenceLock(markerRoot, [headSha], () => {
+          // A marker that names another execution belongs to another sequence; only an unreadable marker or this plan's own is rewritten.
+          const current = readSequenceMarker(markerRoot, headSha);
+          if (current?.execution && current.execution.executionIdentity !== original.executionIdentity) throw new Refusal(`the marker for ${headSha} names fixer execution ${current.execution.executionIdentity}, not the full order ${original.executionIdentity}; close that sequence with scripts/loop/close-gate-sequence.mjs, then re-emit`);
+          writeSequenceMarker({ tmpRoot: markerRoot, baselineHead: headSha, fullGranted: true, branch: prState.headRefName, execution: { executionIdentity: original.executionIdentity, workOrderRef: original.workOrderRef, outputRef } });
+        });
+      } catch (error) {
+        if (error?.code === "SEQUENCE_LOCK_BUSY") throw new WorkOrderRefusal("sequence_lock_busy", `sequence_lock_busy: ${error.message}; the marker was not rewritten, so re-run the emit once the concurrent close or pull finishes`, true);
+        throw error;
+      }
+      return { ...original, planPath, joinRef: fixerReportPath(outputRef), fixerModel: resolveRoleModel(config, { role: "fixer", harness: "claude" }) };
+    }
     if (prior?.phase !== "commit_only" || prior.source !== "act-list" || prior.headSha !== headSha || prior.gate !== gate
       || prior.target?.repo !== repo || prior.target.pr !== Number(pr) || prior.authority?.sourceDigest !== jsonContentDigest(source.parsed)
       || prior.mutationAuthority?.branch !== prState.headRefName || prior.mutationAuthority.repo !== repo || prior.mutationAuthority.pr !== Number(pr)

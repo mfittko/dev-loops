@@ -766,7 +766,10 @@ test("MARKER_UNREADABLE: a record with next step push names the full-phase emiss
     boundedRecord(tmpRoot, ex, { outcome: "locally_clear", nextStep: "push" });
     const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
     assert.equal(result.refusal, "sequence_live");
-    assert.match(result.remedy, /full-phase order already emitted/);
+    assert.match(result.reason, /the sealed delta record of/);
+    assert.match(result.remedy, /emit-fixer-work-order\.mjs --phase full --repo \S+ --pr \d+ --head-sha \S+ [^`]*--delta-result <sealed delta result>`/);
+    assert.match(result.remedy, /already emitted, returns it unchanged and rewrites the marker as granted/);
+    assert.doesNotMatch(result.remedy, /\brm\b|operator/);
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
   });
 });
@@ -778,7 +781,9 @@ test("MARKER_UNREADABLE: a needs_fix record whose seal is missing (a rewrite in 
     handedBack(tmpRoot, ex);
     const recordPath = boundedRecord(tmpRoot, ex, { outcome: "needs_fix", nextStep: "fix_and_rereview" });
     rmSync(`${recordPath}.seal`);
-    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }))).refusal, "sequence_live");
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
+    assert.equal(result.refusal, "sequence_live");
+    assert.match(result.reason, /the unsealed delta record of/);
   });
 });
 

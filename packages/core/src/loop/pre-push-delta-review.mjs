@@ -393,7 +393,7 @@ export function validateDeltaResult(result, { sequence, siteCoverage = [], valid
   const seen = new Set();
   for (const [i, item] of (items ?? []).entries()) {
     if (!expectedRefs.has(item?.ref)) errors.push(`actionableItems[${i}].ref ${JSON.stringify(item?.ref)} is not in the act set`);
-    else if (seen.has(item.ref)) errors.push(`actionableItems[${i}].ref ${JSON.stringify(item.ref)} is a duplicate`);
+    // A duplicate ref is reported once, by deltaResultShapeErrors above.
     else seen.add(item.ref);
   }
   for (const ref of expectedRefs) if (!seen.has(ref)) errors.push(`act item ${ref} has no status`);

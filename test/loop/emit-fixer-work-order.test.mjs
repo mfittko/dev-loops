@@ -1198,6 +1198,34 @@ test("delta gate: a sealed locally_clear result with a cannot_verify item, downg
   });
 });
 
+test("push authority: a corrupt marker after a full emission is re-granted only by the same-head, same-delta-result --phase full re-emission", async () => {
+  await withFixture(async ({ root, head, files, prepareFull }) => {
+    const f = await prepareFull();
+    const unit = await f.full();
+    const markerRoot = resolveGateArtifactTmpRoot(root);
+    const corrupt = () => writeFile(path.join(markerRoot, "gate-delta", `${head}.sequence`), "{not json");
+    await corrupt();
+    assert.equal(readSequenceMarker(markerRoot, head)?.fullGranted, false, "a corrupt marker fails closed for push authority");
+    // A different head refuses and leaves the marker ungranted.
+    await assert.rejects(f.full({ headSha: f.fixing, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: f.fixing }), fetchVerdictMarkers: verdictPostedAt(f.fixing) }));
+    assert.equal(readSequenceMarker(markerRoot, head)?.fullGranted, false);
+    // The same head and byte-identical sealed delta result return the emitted full order unchanged and rewrite the marker as granted.
+    const again = await f.full();
+    assert.equal(again.workOrderRef, unit.workOrderRef);
+    assert.equal(again.workOrderDigest, unit.workOrderDigest);
+    const marker = readSequenceMarker(markerRoot, head);
+    assert.equal(marker?.fullGranted, true);
+    assert.equal(marker?.execution?.executionIdentity, unit.executionIdentity);
+    assert.equal(pull(again, root).status, 0);
+    // A different sealed delta result of the same act set refuses and leaves a corrupt marker ungranted (a fresh producer run, last because it supersedes the first run's seal).
+    await corrupt();
+    const other = path.join(path.dirname(files.delta), "delta-result-other.json");
+    await writeFile(other, JSON.stringify({ ...f.result, runId: undefined, widenedReads: [{ path: "x", reason: "other review" }] }));
+    await assert.rejects(f.full({ deltaResult: other }), /original commit_only source or mutation authority differs/);
+    assert.equal(readSequenceMarker(markerRoot, head)?.fullGranted, false);
+  });
+});
+
 test("delta gate: a --phase full refusal for a HEAD past the record candidate names the head_moved closure", async () => {
   await withFixture(async ({ wt, prepareFull }) => {
     const f = await prepareFull({ bounded: true });

@@ -311,7 +311,7 @@ describe("result schema", () => {
     const body = { severity: "low", summary: "body only", judgeDisposition: "act", ref: "x" };
     assert.throws(() => startDeltaSequence({ reviewBaselineHead: A, actList: [body, { ...ACT_LIST[0], ref: "x" }] }), /duplicate ref "x"/);
     const dup = result({ actionableItems: [{ ref: "act-1", status: "resolved", evidence: ["e"] }, { ref: "act-1", status: "resolved", evidence: ["e"] }] });
-    assert.match(validateDeltaResult(dup, { sequence: sequence() }).join("\n"), /"act-1" is a duplicate/);
+    assert.equal(validateDeltaResult(dup, { sequence: sequence() }).filter((error) => /"act-1" is a duplicate/.test(error)).length, 1);
   });
 
   test("suffixes a repeated ledger fingerprint instead of rejecting the act list", () => {
