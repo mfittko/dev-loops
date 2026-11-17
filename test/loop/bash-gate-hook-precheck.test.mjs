@@ -122,6 +122,11 @@ for (const command of [
   // Whole-command deny: any order, any body-flag spelling, print and quoted forms included.
   "gh -R o/r pr edit 5 --body x",
   "gh pr -R o/r edit 5 --body x",
+  "{gh,x} pr edit 5 --body x",
+  "gh pr {edit,view} 5 --body x",
+  "gh pr edit 5 --{body,x} y",
+  "${G:-gh} pr edit 5 --body x",
+  "${G-gh} pr edit 5 --body x",
   "gh pr edit 5 -bx",
   "gh pr edit 5 -b=x",
   "gh pr edit 5 -Fwaiver.md",

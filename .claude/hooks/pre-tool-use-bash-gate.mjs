@@ -12,6 +12,8 @@
  *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
  *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
+ *   - in a managed repo the whole command is denied when its tokens (any segment, any order; brace and
+ *     `${VAR:-x}` forms split) hold `gh`, `pr`, `edit|create` and a body flag (`segmentHoldsBodyWrite`); fails closed.
  *   - raw `gh pr edit` / `gh pr create` body writes (`--body`/`--body-file`/`-b`/`-F`) and `gh api` body writes to
  *     `pulls/<n>` or `issues/<n>` (a `body` field via `-f`/`-F`/`--field`/`--raw-field`, an
  *     `--input` payload, or a `gh api graphql` `updatePullRequest`) — blocked actor-independently
@@ -151,11 +153,19 @@ function unwrappedCommandHeads(command) {
 
 // Token deny: the whole command is a body write when its tokens, across all segments and pipes and
 // in any order, hold `gh`, `pr`, `edit|create` and a body flag (`--body*`, or a short cluster with
-// `b`/`F`: `-b`, `-bx`, `-b=x`, `-Fwaiver.md`, `-db`). `$(`, `)` and backticks split tokens so a
-// command substitution is seen, and `gh` matches by basename (`/usr/bin/gh`). No head, wrapper or echo exemption: fails closed.
+// `b`/`F`: `-b`, `-bx`, `-b=x`, `-Fwaiver.md`, `-db`). `$(`, `)`, backticks, braces and commas split tokens so a
+// command substitution or brace expansion is seen, a `${VAR:-gh}` default counts as a token, and `gh` matches by basename (`/usr/bin/gh`). No head, wrapper or echo exemption: fails closed.
+// `--{body,x}` expands to `--body`, `--x`: one innermost group per pass (shortcut: nested groups need repeated passes).
+function braceExpansions(value) {
+  const m = /^(.*)\{([^{}]*,[^{}]*)\}(.*)$/s.exec(value);
+  return m ? m[2].split(",").flatMap((alt) => braceExpansions(m[1] + alt + m[3])) : [value];
+}
+
 function segmentHoldsBodyWrite(command) {
   const tokens = tokenizeShellCommand(command).segments.flatMap(({ words }) =>
-    words.flatMap((word) => word.value.split(/[\s=$()`]+/).filter(Boolean)));
+    words.flatMap((word) => [...braceExpansions(word.value), ...word.value.split(/[\s=$(){},`]+/).filter(Boolean)
+      // `${G:-gh}` leaves `G:-gh`: also keep the default value. Needs a leading name, so `--body`/`-b` are untouched.
+      .flatMap((t) => [t, t.replace(/^[A-Za-z_]\w*:?[-+]/, "")])]));
   const has = (test) => tokens.some((token) => test(token));
   return has((t) => /^(?:-S)?gh$/.test(t.split("/").pop())) && has((t) => t === "pr") && has((t) => t === "edit" || t === "create") &&
     has((t) => t.startsWith("--body") || /^-[^-]*[bF]/.test(t));
