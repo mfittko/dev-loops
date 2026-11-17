@@ -62,6 +62,7 @@ import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 import { clusterFindings, clustersFromStampedIds, dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
+import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DELTA_CLEARING_NEXT_STEPS, listGateDeltaRecords, readGateDeltaRecord, readSealedGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { captureMainRelativeChangedFilesSince, isBaseOnlyMergeSince, runGitCommand } from "../lib/git-delta.mjs";
 import { existsSync } from "node:fs";
@@ -2285,21 +2286,24 @@ export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, 
   return (await clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge, covering, allowUnsealedEnd })).ends;
 }
 
-/** The chain ends and every head the sealed clearing chains of the cap round `capHead` visit after it (each seeded merge, each record candidate head and each chain end), from one walk: each start's end is collected in the same loop that fills the heads, so a record rewrite cannot split them. */
+/** The chain ends and every head the sealed clearing chains of the cap round `capHead` visit after it (each seeded merge, each record candidate head and each chain end), from one walk: each start's end is collected in the same loop that fills the heads, so a record rewrite cannot split them. `candidates` is the subset of record candidate heads from that loop. */
 export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, covering = () => true, allowUnsealedEnd = false }) {
   const { starts, seedHeads } = await capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
   const ends = [];
   // The heads the seed proof visited stay in the set even if a concurrent rewrite changes a record before the traversal below.
   const heads = new Set(seedHeads);
+  // `candidates` holds only record candidate heads; `heads` also holds the seeded base-only merges (record baselines).
+  const candidates = new Set();
   // `covering` drops a start that does not name every act item of the cap round (the emitter seam passes none).
   for (const start of starts.filter(covering)) {
     const seededFrom = normalizeSha(start.reviewBaselineHead);
     if (seededFrom && seededFrom !== normalizeSha(capHead)) heads.add(seededFrom);
     // The end and the visited heads come from one read of each record, in the shared clearingChainEnd.
-    const last = clearingChainEnd(tmpRoot, start, heads, { allowUnsealedEnd });
+    const last = clearingChainEnd(tmpRoot, start, candidates, { allowUnsealedEnd });
     if (last) ends.push(last);
   }
-  return { ends, heads: [...heads] };
+  for (const head of candidates) heads.add(head);
+  return { ends, heads: [...heads], candidates: [...candidates] };
 }
 
 // Extension values a sealed clearing record may carry to prove a clean cap round (ADR 0250 records `docs_tests_only`).
@@ -2310,7 +2314,9 @@ const CLEAN_CAP_EXTENSIONS = new Set(["docs_tests_only", "delta_covered"]);
  */
 export const capRoundCovers = (capRound, tmpRoot) => (record) => {
   const refs = new Set((Array.isArray(record.items) ? record.items : []).map((i) => String(i?.ref)));
-  const actRefs = [...new Set(capRoundActRefs(capRound.log.findings, capRound.log.headSha).values())];
+  // A PR-body act item never enters a delta record (startDeltaSequence drops it), so the record cannot name its ref.
+  // The delta act list carries each cluster's kept representative only, so the body-item filter reads that representative, as startDeltaSequence does.
+  const actRefs = [...new Set(capRoundActList(capRound.log.findings, capRound.log.headSha).filter((e) => !isDeltaBodyItem(e)).map((e) => e.ref))];
   // A clean cap round has no act item, so only a record whose extension is in CLEAN_CAP_EXTENSIONS proves it (ADR 0250 for docs_tests_only):
   // the first record carries one, or a clearing chain over later heads reaches one.
   if (isCleanCapRound(capRound)) {
