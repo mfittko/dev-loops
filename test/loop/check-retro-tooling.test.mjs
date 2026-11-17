@@ -343,11 +343,20 @@ test("a heredoc body is dropped only for a data host; a quote-blind or arithmeti
   const gh = "gh: gh api repos/o/r";
   for (const command of ["bash <<'EOF'\ngh api repos/o/r\nEOF", "sh <<EOF\ngh api repos/o/r\nEOF", 'echo "a << b"\ngh api repos/o/r', "echo 'a <<b'\ngh api repos/o/r", "x=$((1<<n))\ngh api repos/o/r", "cat <<EOF | bash\ngh api repos/o/r\nEOF", "cat > /tmp/x.sh <<'EOF'\ngh api repos/o/r\nEOF\nbash /tmp/x.sh", "cat <<'EOF' > x.sh && bash x.sh\ngh api repos/o/r\nEOF", "cat <<'EOF' > run.sh\ngh api repos/o/r\nEOF\nbash run.sh", "cat <<EOF\n$(gh api repos/o/r)\nEOF", "cat <<EOF\n# $(gh api repos/o/r)\nEOF", "cat <<EOF\nx # $(gh api repos/o/r)\nEOF", 'git commit -m "$(cat <<EOF\n# $(gh api repos/o/r)\nEOF\n)"', "git commit -F - <<''\n\ngh api repos/o/r\n"]) {
     const r = await runCli(["--json"], sessionLine(command));
-    assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, [gh], JSON.stringify(command));
+    assert.equal(JSON.parse(r.stdout).internalToolingOnly, false, JSON.stringify(command));
+    assert.ok(JSON.parse(r.stdout).rawCallViolations.some((v) => v === gh || v.startsWith("unproven heredoc:")), JSON.stringify(command));
   }
   for (const command of ["cat <<'EOF'\ngh api repos/o/r\nEOF", "tee out <<EOF\ngh text\nEOF"]) {
     const r = await runCli(["--json"], sessionLine(command));
     assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, [], JSON.stringify(command));
+  }
+});
+
+test("a heredoc that is not provably data fails closed: mid-line #, nested heredoc, escaped substitution after #", async () => {
+  for (const command of ["cat <<EOF\nx # $(gh api repos/o/r)\nEOF", 'git commit -m "$(cat <<EOF\n# $(gh api repos/o/r)\nEOF\n)"', "cat <<EOF\n# \\$(x) $(gh api repos/o/r)\nEOF", "cat <<EOF\n# `gh api repos/o/r`\nEOF", "dev-loops-run x <<EOF\nplain\nEOF"]) {
+    const r = await runCli(["--json"], sessionLine(command));
+    assert.equal(r.status, 1, JSON.stringify(command));
+    assert.match(JSON.parse(r.stdout).rawCallViolations[0], /^unproven heredoc: /, JSON.stringify(command));
   }
 });
 

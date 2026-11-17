@@ -146,6 +146,9 @@ function classifySegment(rawSegment) {
   return { kind: "clean" };
 }
 
+// collapseCommand's marker line for a command holding a heredoc it cannot prove to be data.
+const UNPROVEN_HEREDOC = "\u0000unproven-heredoc:";
+
 /**
  * Analyze a transcript of newline-delimited shell commands.
  *
@@ -159,6 +162,10 @@ export function analyzeTranscript(transcript) {
   for (const raw of lines) {
     const line = raw.trim();
     if (line.length === 0 || line.startsWith("#")) continue;
+    if (line.startsWith(UNPROVEN_HEREDOC)) {
+      violations.push(`unproven heredoc: ${line.slice(UNPROVEN_HEREDOC.length)}`);
+      continue;
+    }
     for (const segment of splitSegments(line)) {
       const result = classifySegment(segment);
       if (result.kind === "violation") {
@@ -204,13 +211,10 @@ function collapseCommand(command) {
   let text = command;
   if (!tok.incomplete) {
     const dropped = tok.segments.flatMap((seg) => dataHeredocs(seg, tok.segments.length === 1));
-    // The shell expands an unquoted body before anything reads it, so a `# $(...)` line there runs: blank its `#` (same length) so the line is not skipped as a comment.
-    // Every `#` before a substitution on a line is literal heredoc text, mid-line too; heredocs opened inside a substitution count as well.
+    // Fail closed: a closed heredoc that is not provably data (any host, quoted or not, at any substitution depth) is never proven clean.
+    // The shell may expand its body, and the line analyzer cannot tell a literal `#` from a comment there, so the command is reported.
     const allHeredocs = (segments) => segments.flatMap((seg) => [...seg.heredocs, ...seg.words.flatMap((w) => w.subs.flatMap((sub) => allHeredocs(sub.segments)))]);
-    for (const h of allHeredocs(tok.segments)) {
-      if (!h.closed || h.quoted || dropped.includes(h)) continue;
-      text = text.slice(0, h.bodyStart) + text.slice(h.bodyStart, h.bodyEnd).replace(/#(?=.*(?:\$\(|`))/g, " ") + text.slice(h.bodyEnd);
-    }
+    if (allHeredocs(tok.segments).some((h) => h.closed && !dropped.includes(h))) return `${UNPROVEN_HEREDOC}${command.split("\n")[0]}`;
     for (const h of dropped.sort((x, y) => y.bodyStart - x.bodyStart)) {
       // An empty body with an empty delimiter puts bodyEnd on the delimiter line's own newline; any other bodyEnd precedes the delimiter line.
       const end = text.indexOf("\n", h.delimiter === "" && h.bodyEnd === h.bodyStart ? h.bodyEnd : h.bodyEnd + 1);
