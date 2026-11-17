@@ -47,30 +47,61 @@ const isWorkerAgentType = (agentType) =>
   typeof agentType === "string" && WORKER_AGENT_TYPES.has(agentType.startsWith("dev-loops:") ? agentType.slice("dev-loops:".length) : agentType);
 
 /**
- * The read-only judge holds Bash only to pull its work order (ADR 0106) and run its decision check. The pull command
+ * The read-only judge holds Bash only to pull its work order (ADR 0106), run its decision check and run the read-only search commands (ADR 0269). The pull command
  * is the dispatch envelope's pull line with shell-inert values, so chaining, redirection and
  * substitution cannot match.
  */
 export const JUDGE_AGENT_TYPE = "judge";
 const IDENTITY_PATTERN = EXECUTION_IDENTITY_RE.source.slice(1, -1);
-const PULL_VALUE = "[A-Za-z0-9][\\w.:/#-]*";
-// The one sanctioned pull line: the short form (ADR 0115) or the 3-flag form that step 1 still
-// emits (issue 2560 drops it).
-const PULL_LINE = `dev-loops-run scripts/github/pull-work-order\\.mjs (?:(${IDENTITY_PATTERN})|--ref (${PULL_VALUE}) --digest (${PULL_VALUE}) --execution (${PULL_VALUE}))`;
+// The one sanctioned pull line: the short form that carries the execution identity alone (ADR 0115).
+const PULL_LINE = `dev-loops-run scripts/github/pull-work-order\\.mjs (${IDENTITY_PATTERN})`;
 const SANCTIONED_WORK_ORDER_PULL_RE = new RegExp(`^${PULL_LINE}$`);
 // The judge's read-only check of its own decision file, run before it hands back.
 const JUDGE_DECISION_CHECK_RE = /^dev-loops-run scripts\/loop\/check-judge-decision\.mjs --file [\w.\/#-]*tmp\/gate-judge\/[\w.\/#-]+\.json$/;
 export const isJudgeDecisionCheckLine = (command) => typeof command === "string" && JUDGE_DECISION_CHECK_RE.test(command.trim()) && !command.includes("..");
+// The judge's read-only search path (issue 3092): `grep -n`, `rg -n`, `git show` and `git diff` with no shell
+// metacharacter outside quotes, no expansion inside double quotes, and no flag that writes or runs a program.
+const JUDGE_SEARCH_PREFIX_RE = /^(?:grep -n|rg -n|git show|git diff)(?: |$)/;
+// Git accepts a unique long-option abbreviation, so deny every prefix of a denied name that is 3+ characters (`--out`, `--ext-dif`); a bare `--text` stays allowed.
+const JUDGE_SEARCH_DENIED_LONG = ["output", "ext-diff", "textconv", "pre", "hostname-bin"];
+const hasDeniedLongFlag = (line) => [...line.matchAll(/(?:^|\s)--([^\s=]+)/g)].some(([, name]) => name.length >= 3 && name !== "text" && JUDGE_SEARCH_DENIED_LONG.some((denied) => denied.startsWith(name)));
+// `git diff` only as a commit-to-commit form (a `a..b` range or two revisions): a worktree diff refreshes the index.
+// Without `--` a second token may be a path, so each of two bare revisions must look like a revision.
+const REVISION_RE = /^(?:[0-9a-f]{6,40}|HEAD|main|origin\/[\w.\/-]+)(?:[~^]\d*)*$/;
+// A range is `a..b` or `a...b` with a revision on each side, so a path such as `agents/../agents` is not a range.
+const isRange = (a) => { const sides = a.split(/\.\.\.?/); return sides.length === 2 && sides.every((s) => REVISION_RE.test(s)); };
+// A diff option outside this list must be stuck as `--opt=value`: git may take the next token as its argument (`-S HEAD..HEAD`),
+// which leaves no revision and runs an index-refreshing worktree diff.
+const DIFF_NOARG_FLAG_RE = /^(?:-[pubwRMC]|-U\d+|--(?:no-ext-diff|no-textconv|patch|stat|numstat|shortstat|name-only|name-status|raw|summary|no-color|color|minimal|histogram|patience|check))$/;
+function isCommitDiff(line) {
+  if (!line.startsWith("git diff")) return true;
+  const args = line.slice(8).replace(/['"]/g, "").trim().split(/\s+/).filter(Boolean);
+  const end = args.indexOf("--");
+  const front = end < 0 ? args : args.slice(0, end);
+  if (front.some((a) => a.startsWith("-") && !a.includes("=") && !DIFF_NOARG_FLAG_RE.test(a))) return false;
+  const revs = front.filter((a) => !a.startsWith("-"));
+  return revs.some(isRange) || (revs.length === 2 && revs.every((a) => REVISION_RE.test(a)));
+}
+export function isJudgeSearchLine(command) {
+  if (typeof command !== "string") return false;
+  const line = command.trim();
+  if (!JUDGE_SEARCH_PREFIX_RE.test(line) || hasDeniedLongFlag(line.replace(/['"]/g, "")) || /[\r\n]|\\"/.test(line) || !isCommitDiff(line)) return false;
+  let quote = null;
+  for (const ch of line) {
+    if (quote) { if (ch === quote) quote = null; else if (quote === '"' && (ch === "$" || ch === "`")) return false; } else if (ch === "'" || ch === '"') quote = ch;
+    else if (/[;&|<>(){}\\$`*?[]/.test(ch)) return false;
+  }
+  return quote === null;
+}
 const FIXER_IDENTITY_TOKEN_RE = /\bf\d+-[0-9a-f]{8}\b/;
 
 /**
- * Of the exact trimmed sanctioned pull line: `{ executionIdentity }` for the short form,
- * `{ workOrderRef, workOrderDigest, executionIdentity }` for the 3-flag form; else null.
+ * Of the exact trimmed sanctioned pull line: `{ executionIdentity }`; else null.
  */
 export function parseSanctionedPullLine(command) {
   const match = typeof command === "string" ? SANCTIONED_WORK_ORDER_PULL_RE.exec(command.trim()) : null;
   if (!match) return null;
-  return match[1] ? { executionIdentity: match[1] } : { workOrderRef: match[2], workOrderDigest: match[3], executionIdentity: match[4] };
+  return { executionIdentity: match[1] };
 }
 
 /** True when `command` references pull-work-order and carries a fixer execution identity token, in any shell segment. */
@@ -79,7 +110,7 @@ export const isFixerPullAttempt = (command) => typeof command === "string" && co
 /**
  * Decide whether a PreToolUse Bash command must be blocked by a dev-loop gate boundary.
  *
- * The `judge` agent (plugin-namespaced or bare) may run ONLY the sanctioned work-order pull and the decision check;
+ * The `judge` agent (plugin-namespaced or bare) may run ONLY the sanctioned work-order pull, the decision check and the read-only search commands (ADR 0269);
  * every other command, including test/build entrypoints, is denied fail-closed.
  *
  * The gated-command inventory — each command with its rationale inline at its check — lives in
@@ -137,13 +168,13 @@ export function decideBashGate({
     return { decision: "deny", reason: unresolve.reason };
   }
   if (normalizeAgentType(agentType) === JUDGE_AGENT_TYPE) {
-    return parseSanctionedPullLine(command) || isJudgeDecisionCheckLine(command) ? ALLOW : {
+    return parseSanctionedPullLine(command) || isJudgeDecisionCheckLine(command) || isJudgeSearchLine(command) ? ALLOW : {
       decision: "deny",
       reason:
         "Judge read-only boundary (agents/judge.agent.md, ADR 0106): the judge may run only its " +
-        "dispatched `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line (or its emitted 3-flag form), " +
+        "dispatched `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line, " +
         "alone, with no chaining, redirection or substitution, or `dev-loops-run scripts/loop/check-judge-decision.mjs --file tmp/gate-judge/<path>.json`. Read " +
-        "files with `Read` (always available), plus Grep and Glob when available; never run shell, test or build commands.",
+        "files with `Read` (it accepts offset and limit), or search with read-only `grep -n`, `rg -n`, `git show` or `git diff`, with the pattern in single quotes (so `|` and `$` inside it pass), glob characters (`*`, `?`, `[`) only inside single quotes, `git diff` only as a range such as `origin/main...HEAD` or two revisions, no redirection, pipe, chaining, substitution or write flag; `Read` reaches any file the search refuses; never run other shell, test or build commands.",
     };
   }
   // The fixer's binding is recorded only for the exact pull line (ADR 0107), so a modified one denies with the fix.
@@ -153,7 +184,6 @@ export function decideBashGate({
       reason:
         "Fixer pull boundary (agents/fixer.agent.md, ADR 0107): the fixer's grant binding is recorded only for the exact " +
         `dispatched pull line. Run it again exactly as dispatched: \`dev-loops-run scripts/github/pull-work-order.mjs ${command.match(FIXER_IDENTITY_TOKEN_RE)[0]}\`, ` +
-        "or the emitted 3-flag line (`--ref`, `--digest`, `--execution`) when your dispatch carried that form, " +
         "alone, with no prefix, suffix, redirect, chaining or `cd`.",
     };
   }
@@ -567,7 +597,7 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
     decision: "deny",
     reason:
       `Fixer mutation boundary (agents/fixer.agent.md, ADR 0107): refusing to write ${JSON.stringify(targetPath)}: ${why}. ` +
-      "Run the dispatched `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line (or its emitted 3-flag form) first. " +
+      "Run the dispatched `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line first. " +
       "A fixer writes only its work order's outputRef and files under mutationAuthority.allowedPaths in a checkout of mutationAuthority.branch.",
   });
   if (typeof targetPath !== "string" || !targetPath.startsWith("/")) return deny("the target path is missing or relative");
@@ -596,20 +626,35 @@ const GATE_ROUND_CHILD_ROLES = new Set(["review", "judge"]);
 // quoting or wrapping. A prose pre-PR or delta brief may quote a token but runs no pull. ponytail: a shape gate; a ref or identity assembled from
 // shell variables at runtime evades it, and the digest-verified pull stays the integrity boundary.
 const GATE_UNIT_TOKEN_RE = new RegExp(`\\b(?:review|judge|fixer):[\\w.-]+\\/[\\w.-]+#\\d+:|\\b${IDENTITY_PATTERN}\\b`);
-// The exact `buildDispatchPointer` text (scripts/github/_work-order-protocol.mjs) around either pull line form;
-// the identity prefix or the ref prefix names the role.
+// The exact `buildDispatchPointer` text (scripts/github/_work-order-protocol.mjs) around the pull line;
+// the identity prefix names the role.
 const DISPATCH_POINTER_RE = new RegExp(`^Run \`${PULL_LINE}\`; follow its printed work order exactly\\. Exit 1: report its JSON verbatim, stop\\.$`);
 const IDENTITY_PREFIX = { review: "r", judge: "j" };
+// Surrounding whitespace is ignored (a relayed prompt often gains a trailing newline); any other difference stays denied.
 const isDispatchPointer = (prompt, role) => {
-  const match = typeof prompt === "string" && Buffer.byteLength(prompt) <= DISPATCH_POINTER_MAX_BYTES ? DISPATCH_POINTER_RE.exec(prompt) : null;
-  return Boolean(match) && (match[1] ? match[1][0] === IDENTITY_PREFIX[role] : match[2].startsWith(`${role}:`));
+  const match = typeof prompt === "string" && Buffer.byteLength(prompt) <= DISPATCH_POINTER_MAX_BYTES ? DISPATCH_POINTER_RE.exec(prompt.trim()) : null;
+  return Boolean(match) && match[1][0] === IDENTITY_PREFIX[role];
 };
 
 // The standalone `review` gate runs no gate-coordinator judge phase: the dev-loop agent itself dispatches that
-// gate's judge (skills/review/SKILL.md Phase 3.5). Only an exact emitted judge pointer whose ref names gate `review`
-// is exempt; lifecycle-gate judge dispatches stay denied.
-const isStandaloneReviewJudgePointer = (prompt) =>
-  isDispatchPointer(prompt, "judge") && /--ref judge:[^ ]+#\d+:review:/.test(prompt);
+// gate's judge (skills/review/SKILL.md Phase 3.5). Only an exact emitted judge pointer whose work-order ref names gate `review`
+// is exempt; the short pointer carries no ref, so the caller resolves it through the execution index (ADR 0267,
+// amends ADR 0179) and passes it as `judgeWorkOrderRef`. Lifecycle-gate and unresolved judge dispatches stay denied.
+const isStandaloneReviewJudgePointer = (prompt, judgeWorkOrderRef) =>
+  isDispatchPointer(prompt, "judge") && typeof judgeWorkOrderRef === "string" && /^judge:[^ ]+#\d+:review:/.test(judgeWorkOrderRef);
+
+// Deny-reason diagnostic: which check failed, never more than 120 prompt characters (JSON-escaped).
+const dispatchDiagnostic = (prompt, role, judgeWorkOrderRef) => {
+  const text = typeof prompt === "string" ? prompt : "";
+  const bytes = Buffer.byteLength(text);
+  const shape = DISPATCH_POINTER_RE.exec(text.trim());
+  const parts = [`received ${bytes} bytes (cap ${DISPATCH_POINTER_MAX_BYTES})`, `pointer shape after trim: ${shape && shape[1][0] === IDENTITY_PREFIX[role] ? "match" : "no match"}`];
+  if (role === "judge") {
+    const gate = typeof judgeWorkOrderRef === "string" ? /^judge:[^ ]+#\d+:([a-z_]+):/.exec(judgeWorkOrderRef)?.[1] : null;
+    parts.push(gate ? `execution index resolved to gate ${gate}` : "execution identity not resolved through the execution index");
+  }
+  return ` Diagnostic: ${parts.join("; ")}; prompt starts ${JSON.stringify(text.slice(0, 120))}.`;
+};
 
 /**
  * Decide whether a PreToolUse Agent/Task dispatch must be denied (GATE-EXEC-GATE-COORDINATOR,
@@ -623,10 +668,11 @@ const isStandaloneReviewJudgePointer = (prompt) =>
  * @param {string|null} [params.callerAgentType] - Hook payload `agent_type` of the caller.
  * @param {string|null} [params.targetAgentType] - `tool_input.subagent_type` of the dispatch.
  * @param {string|null} [params.prompt] - `tool_input.prompt` of the dispatch.
+ * @param {string|null} [params.judgeWorkOrderRef] - The judge pointer's `workOrderRef`, resolved through the execution index; absent when the identity has no entry.
  * @param {string|null} [params.agentOverrides] - `DEVLOOPS_AGENT_OVERRIDES` (comma-separated roles rendered by the launcher).
  * @returns {HookDecision}
  */
-export function decideAgentDispatch({ callerAgentType = null, targetAgentType = null, prompt = null, agentOverrides = null }) {
+export function decideAgentDispatch({ callerAgentType = null, targetAgentType = null, prompt = null, agentOverrides = null, judgeWorkOrderRef = null }) {
   // A launcher-rendered CLI agent replaces only the bare role name, so a namespaced dispatch would bypass it.
   if (typeof targetAgentType === "string" && targetAgentType.startsWith("dev-loops:") && typeof agentOverrides === "string") {
     const bare = normalizeAgentType(targetAgentType);
@@ -643,12 +689,13 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
   const target = normalizeAgentType(targetAgentType);
   const gateChild = GATE_ROUND_CHILD_ROLES.has(target);
   if (caller === DEV_LOOP_AGENT_TYPE && gateChild &&
-    ((target === "judge" && !isStandaloneReviewJudgePointer(prompt)) || (typeof prompt === "string" && /pull-work-order/.test(prompt) && GATE_UNIT_TOKEN_RE.test(prompt) && target !== "judge"))) {
+    ((target === "judge" && !isStandaloneReviewJudgePointer(prompt, judgeWorkOrderRef)) || (typeof prompt === "string" && /pull-work-order/.test(prompt) && GATE_UNIT_TOKEN_RE.test(prompt) && target !== "judge"))) {
     return {
       decision: "deny",
       reason:
         `GATE_COORDINATOR_REQUIRED: GATE-EXEC-GATE-COORDINATOR denied this \`${target}\` dispatch from the dev-loop coordinator. ` +
-        "Dispatch one `gate-coordinator` agent for the gate round; it dispatches the round's review and judge agents and returns the typed round result.",
+        "Dispatch one `gate-coordinator` agent for the gate round; it dispatches the round's review and judge agents and returns the typed round result." +
+        dispatchDiagnostic(prompt, target, judgeWorkOrderRef),
     };
   }
   if (caller !== GATE_COORDINATOR_AGENT_TYPE) return ALLOW;
@@ -665,6 +712,6 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
     decision: "deny",
     reason:
       `GATE_DISPATCH_NOT_VERBATIM: GATE-EXEC-GATE-COORDINATOR denied this \`${target}\` dispatch: the prompt is not an emitted \`${target}:\` dispatchPrompt. ` +
-      "Relay the emitter's dispatchPrompt byte for byte, with no added prose, no `cd` wrapper and no extra flags. A same-head retry recovers through GATE-EXEC-ROUND-RETIREMENT and a fresh round.",
+      "Relay the emitter's dispatchPrompt byte for byte (surrounding whitespace is ignored), with no added prose, no `cd` wrapper and no extra flags. A same-head retry recovers through GATE-EXEC-ROUND-RETIREMENT and a fresh round." + dispatchDiagnostic(prompt, target, judgeWorkOrderRef),
   };
 }

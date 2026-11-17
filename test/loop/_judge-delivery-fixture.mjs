@@ -19,7 +19,7 @@ const readOf = (kind, file, text) => ({ kind, path: file, sha256: createHash("sh
 // Writes both reads from one body and points sources.fetchLivePrBody at that same body.
 export async function bindEvidenceToPrBody(root, sources, body, issueBody = null) {
   const { repo, pr, gate, headSha } = sources;
-  const evidence = renderBriefingEvidence({ repo, pr, gate, headSha, issueRef: issueBody ? "#2883" : null, issueBody }).text;
+  const evidence = renderBriefingEvidence({ repo, pr, gate, headSha, worktreeRoot: sources.cwd, issueRef: issueBody ? "#2883" : null, issueBody }).text;
   const prBody = renderPrBodyRead(body);
   await mkdir(path.join(root, "judge-fixture"), { recursive: true });
   await writeFile(path.join(root, "judge-fixture", "evidence.md"), evidence);

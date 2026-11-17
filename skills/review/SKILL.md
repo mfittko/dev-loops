@@ -75,8 +75,8 @@ this skill dispatches the `review` agents directly.
    spawned via the plain Agent tool, NOT a general-purpose agent — per
    resolved dispatch unit (`resolveFanoutGroups`), each given only its
    compact `dispatchPrompt`: the one-line instruction to run
-   the pull CLI with concrete values (the emitted 3-flag line, or the short
-   line `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>`,
+   the pull CLI with concrete values (the line
+   `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>`,
    ADR 0115). The reviewer runs it
    and follows the pulled work order, which references the identical neutral
    evidence and carries its angle prompts — unchanged from draft/
@@ -152,7 +152,7 @@ this skill dispatches the `review` agents directly.
    [...]` posts the SINGLE visible PR review surface
    (`GATE-COMMENT-SINGLE-SURFACE`) straight from that ledger — no CI wait, no
    coordination-context read, no auto-resolve, no forbidden-action check
-   (those are draft/pre-approval-only machinery `review` never touches). `--next-action` is optional on the `review` gate; any value passed is ignored, and the gate derives the next action from the judge act list (`GATE-COMMENT-REQUIRED-FIELDS`). See
+   (those are draft/pre-approval-only machinery `review` never touches). On `--gate review`, `--findings-ledger` alone suffices; `--findings-summary`, `--findings-file` and `--findings-json` are not required. `--next-action` is optional on the `review` gate; any value passed is ignored, and the gate derives the next action from the judge act list (`GATE-COMMENT-REQUIRED-FIELDS`). See
    [Checkpoint Verdict Comment Contract](../docs/gate-review-comment-contract.md#review-gate-submit-modes-1840)
    for the `--submit` vocabulary. `approve`/`request-changes`/`discard`
    additionally REQUIRE `--interactive-confirm` (#1888/#1912) — fail closed

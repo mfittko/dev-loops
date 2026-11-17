@@ -4,6 +4,8 @@
 
 Accepted — 2026-09-29 ([issue 2506](https://github.com/mfittko/dev-loops/issues/2506))
 
+Amended by [0285](./0285-repo-root-is-the-only-named-launcher-form.md), which makes the `--repo-root` form the only named launcher form.
+
 ## Context
 
 In the dev-loops repository, a PR changes the toolchain that gates it. The session hooks load from the main checkout. The gate scripts run from the checkout that `dev-loops-run` resolves from the shell cwd. Every gate step also reads its cwd for the diff, the config and the `tmp/` bundle. A PR that adds or changes a gate script, a gate config default or a hook-consumed shape therefore could not always gate itself.

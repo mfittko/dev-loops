@@ -4782,6 +4782,58 @@ test("draft round-cap refusal for a chain-extendable condition carries the exten
   assert.equal(evaluatePrGateCoordination({ ...base, repo: undefined, draftCapRoundFailure: "no_clearing_record" }).blockedOn, BLOCKED_ON.OPERATOR_DECISION);
 });
 
+test("3105 AC15: a posted findings_present draft_gate verdict with an open act list and no blocker routes to the fixer", () => {
+  const head = "ab".repeat(20);
+  const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict };
+  const fixer = `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo o/r --pr 9 --head-sha ${head} --phase commit_only --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>`;
+  // PR 3221 (round 2, 5 act items) and PR 3239 (cap round, no high, no fixer pass); the PR 3234 stale-base shape is the detector case.
+  for (const shape of [{ draftOpenActList: { headSha: head, openActCount: 5, blockers: [] } }, { draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record", draftOpenActList: { headSha: head, openActCount: 2, blockers: [] } }]) {
+    const result = evaluatePrGateCoordination({ ...base, ...shape });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
+    assert.equal(result.agentRemedy.command, fixer);
+    assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+  }
+  const capped = { ...base, draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record" };
+  const high = evaluatePrGateCoordination({ ...capped, draftOpenActList: { headSha: head, openActCount: 1, blockers: [{ kind: "round_cap_reached", reason: "new_act", item: "[high] x (new_act)" }] } });
+  assert.deepEqual({ next: high.nextAction, on: high.blockedOn, remedy: high.agentRemedy }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION, remedy: undefined });
+  assert.match(high.reason, /\[high\] x/);
+  const moved = evaluatePrGateCoordination({ ...capped, draftOpenActList: { headSha: "cd".repeat(20), openActCount: 2, blockers: [] } });
+  assert.equal(moved.agentRemedy.command, "dev-loops gate extend-cap-round-chain --repo o/r --pr 9");
+  const open = { headSha: head, openActCount: 2, blockers: [] };
+  // AC15 replaces only the no_clearing_record refusal: every other cap-round failure keeps its routing.
+  for (const failure of ["unsealed_record", "items_do_not_cover", "cap_round_unresolved", "baseline_orphaned", "chain_does_not_reach_head"]) {
+    const input = { ...capped, draftCapRoundFailure: failure };
+    const kept = evaluatePrGateCoordination({ ...input, draftOpenActList: open });
+    assert.deepEqual({ next: kept.nextAction, remedy: kept.agentRemedy, reason: kept.reason }, (({ nextAction, agentRemedy, reason }) => ({ next: nextAction, remedy: agentRemedy, reason }))(evaluatePrGateCoordination(input)), failure);
+    assert.equal(kept.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, failure);
+  }
+  // An unknown (null) cap-round failure at the cap fails closed: the act list never replaces the refusal.
+  const unknown = evaluatePrGateCoordination({ ...base, draftRoundRefused: true, draftCapRoundFailure: null, draftOpenActList: open });
+  assert.equal(unknown.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, unknown.reason);
+  // A blocked verdict is no findings_present verdict, so the act list never changes its routing.
+  const blockedVerdict = { ...verdict, verdict: "blocked" };
+  const blockedInput = { ...base, draftGate: blockedVerdict, draftGateMarker: blockedVerdict };
+  const blocked = evaluatePrGateCoordination({ ...blockedInput, draftOpenActList: open });
+  assert.equal(blocked.nextAction, evaluatePrGateCoordination(blockedInput).nextAction, blocked.reason);
+  assert.equal(blocked.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, blocked.reason);
+});
+
+test("3105 AC15: an eligible open act list wins over a BEHIND-only refresh, and a real conflict still resolves first", () => {
+  const head = "ab".repeat(20);
+  const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict, draftOpenActList: { headSha: head, openActCount: 2, blockers: [] } };
+  const behind = evaluatePrGateCoordination({ ...base, mergeStateStatus: "BEHIND", mergeable: "MERGEABLE" });
+  assert.equal(behind.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, behind.reason);
+  for (const merge of [{ mergeStateStatus: "DIRTY", mergeable: "CONFLICTING" }, { mergeStateStatus: "BEHIND", mergeable: "CONFLICTING" }]) {
+    const conflict = evaluatePrGateCoordination({ ...base, ...merge });
+    assert.equal(conflict.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS, JSON.stringify(merge));
+  }
+  // Without an eligible act list, BEHIND keeps its refresh.
+  const noList = evaluatePrGateCoordination({ ...base, draftOpenActList: undefined, mergeStateStatus: "BEHIND", mergeable: "MERGEABLE" });
+  assert.equal(noList.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS, noList.reason);
+});
+
 // Issue 3139: one next step on a ready PR without clean draft_gate evidence.
 test("a ready PR without clean draft evidence names reconcile_draft_gate alone when no cap round failed, and the cap-round exit alone when one did", () => {
   const base = { pr: 9, repo: "o/r", currentHeadSha: "abc123456789", prDraft: false, lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", sameHeadCleanConverged: true, draftGate: { visible: false } };

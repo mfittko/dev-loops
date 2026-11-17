@@ -116,6 +116,14 @@ test("copilot review gates keep phase-specific angle ownership in one canonical 
   }
 });
 
+test("reviewer and judge reference the canonical PR validation reporting policy", async () => {
+  for (const [path, minimum] of [["agents/review.agent.md", 2], ["agents/judge.agent.md", 1]]) {
+    const references = extractRuleReferences(await readRepo(path), path);
+    assert.ok(references.filter(({ id }) => id === "OPS-PR-VALIDATION-STABLE-EVIDENCE").length >= minimum,
+      `${path} must reference the validation reporting policy at each review boundary`);
+  }
+});
+
 function assertValidationPolicyReference(template) {
   const section = parseMarkdownSections(template).find(({ level, name }) => level === 2 && name.toLowerCase() === "validation");
   assert.ok(section, "PR template must contain a Validation section");

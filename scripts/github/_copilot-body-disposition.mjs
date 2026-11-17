@@ -29,6 +29,9 @@ import path from "node:path";
 import { isCommitContainedByHead } from "./_commit-containment.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
 
+// Synthetic angle name of the judge finding built from a Copilot review body (not a gate angle).
+export const COPILOT_BODY_ANGLE = "copilot-body";
+
 // File the gate detector writes the body finding to and the judge emit pins.
 export const copilotBodyJudgePath = ({ tmpRoot, repo, pr, headSha }) => {
   if (!/^[1-9][0-9]*$/.test(String(pr))) throw new Error(`copilotBodyJudgePath: pr must be a positive integer, got ${pr}`);
@@ -157,7 +160,7 @@ export function buildJudgeFinding(review) {
   const firstLine = text.split("\n").map((line) => line.trim()).find((line) => line && !line.startsWith("#"));
   const severity = classifyCopilotReviewBodyDisposition(review?.state, review?.body) === COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK ? "low" : "medium";
   // The full body is preserved; only the summary is bounded.
-  return { angle: "copilot-body", findings: [{ severity, summary: (firstLine ?? "Copilot review body feedback").slice(0, 300), recommendation: text }] };
+  return { angle: COPILOT_BODY_ANGLE, findings: [{ severity, summary: (firstLine ?? "Copilot review body feedback").slice(0, 300), recommendation: text }] };
 }
 
 const BODY_ONLY_BLOCKING_DISPOSITIONS = new Set([
@@ -281,7 +284,7 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
           ...(record.reasonCode ? { reasonCode: record.reasonCode, reason: record.reason } : {}),
           markerLine: currentReviewId ? markerLineFor(currentReviewId, headSha) : null,
         },
-        judgeFinding: { angle: "copilot-body", findings: currentReviews.flatMap((r) => buildJudgeFinding(r).findings) },
+        judgeFinding: { angle: COPILOT_BODY_ANGLE, findings: currentReviews.flatMap((r) => buildJudgeFinding(r).findings) },
       };
   }
   const { review, ambiguousBlockingTie, blockingReviews } = resolveLatestCopilotReview({ reviews: reviewSummary?.effectiveCopilotReviews });
@@ -300,7 +303,7 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
         markerLine: null,
       },
       // Every tied blocking body reaches the judge: no marker can clear a tie.
-      judgeFinding: { angle: "copilot-body", findings: blockingReviews.flatMap((r) => buildJudgeFinding(r).findings) },
+      judgeFinding: { angle: COPILOT_BODY_ANGLE, findings: blockingReviews.flatMap((r) => buildJudgeFinding(r).findings) },
     };
   }
   const reviewId = review.id !== null && review.id !== undefined ? String(review.id) : null;

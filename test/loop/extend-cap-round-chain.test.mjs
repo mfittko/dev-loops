@@ -467,7 +467,7 @@ test("a clean cap round plus a logic commit refuses logic_commit_in_range and wr
 test("a clean cap round at the PR head writes no record, and an orphaned cap-round head still refuses baseline_orphaned", async () => {
   const { root, A } = await cleanCapFixture();
   try {
-    // At the cap-round head the round is the head being posted (no cap round yet): the clean draft_gate verdict path applies, and nothing is written.
+    // The cap round resolves at the PR head (ADR 0265): the clean draft_gate verdict path applies, nothing is written, and the tool refuses no_cap_round_chain because the cap-round head is not a strict ancestor of the head.
     const clean = await extend(root, A);
     assert.equal(clean.reason, "no_cap_round_chain");
     assert.match(clean.detail, /no covering sealed cap-round clearing chain/);
@@ -556,6 +556,23 @@ test("a clean-verdict cap round whose act item a sealed fixer record resolved ex
     const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
     const result = await extend(root, D);
     assert.deepEqual({ ...result }, { ok: true, action: "chain_extended", chainEnd: B, candidateHead: D, files: ["docs/d.md"] });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a mixed cap round (one code item, one PR-body item) is fixed by a sealed record that names only the code ref", async () => {
+  const { root, A, B } = await capFixture();
+  try {
+    const code = { severity: "medium", summary: "guard missing", files: ["src/a.mjs"], line: 1, angle: "correctness", judgeDisposition: "act", judgeTitle: "Guard", judgeFix: "add" };
+    const body = { severity: "low", summary: "body gap", angle: "spec", judgeDisposition: "act", judgeTitle: "Body" };
+    const ledger = path.join(root, "tmp", "gate-findings", "owner-repo", `pr-${PR}`, `draft_gate-${A}.json`);
+    await writeFile(ledger, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: A, verdict: "findings_present", loggedAt: "2026-11-04T00:00:00.000Z", findings: [code, body] }), "utf8");
+    const recordPath = gateDeltaRecordPath(path.join(root, "tmp"), A);
+    rmSync(recordPath, { force: true });
+    rmSync(`${recordPath}.seal`, { force: true });
+    writeSealedGateDeltaRecord(path.join(root, "tmp"), A, { reviewBaselineHead: A, candidateHead: B, outcome: "locally_clear", nextStep: "push_to_gate", items: [{ ref: fingerprintFinding(code), status: "resolved" }] });
+    assert.ok(await proof(root, B), "the body ref is not required in the record");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

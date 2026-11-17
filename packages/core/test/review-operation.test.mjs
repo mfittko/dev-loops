@@ -241,7 +241,7 @@ describe("resolveOperationReviewerRole — payload shape", () => {
     const config = {
       gates: { draft: { angles: [{ name: ANGLE, persona: "test-persona", model: "claude-x" }] } },
     };
-    const result = resolveOperationReviewerRole({ config, errors: [] }, { operation: "draft_gate", angle: ANGLE, harness: "claude" });
+    const result = resolveOperationReviewerRole({ config, errors: [] }, { operation: "draft_gate", angle: ANGLE, harness: "pi" });
     assert.equal(result.model, "claude-x");
   });
 });

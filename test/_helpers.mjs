@@ -1,11 +1,39 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import * as cacheFs from "node:fs";
+import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ASYNC_CONTEXT_ENV_MARKERS } from "@dev-loops/core/loop/run-context";
+import { ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER } from "@dev-loops/core/loop/run-context";
 import { writePrePrReviewRecord } from "../scripts/loop/_pre-pr-review-record.mjs";
 import { dispatchPromptLayoutRecordPath } from "../scripts/github/record-dispatch-prompt-layout.mjs";
+
+export function ensureWritableNpmCacheEnv(env, { run = execFileSync, fs = cacheFs } = {}) {
+  if (Object.hasOwn(env, "npm_config_cache")) return env;
+  let defaultCache = "unresolved default";
+  const probe = (cache) => {
+    const directory = path.join(cache, "_cacache", "tmp");
+    fs.mkdirSync(directory, { recursive: true });
+    const file = path.join(directory, `dev-loops-probe-${randomUUID()}`);
+    fs.writeFileSync(file, "", { flag: "wx" });
+    fs.unlinkSync(file);
+  };
+  try {
+    defaultCache = run("npm", ["config", "get", "cache"], { env, encoding: "utf8" }).trim();
+    if (!defaultCache) throw new Error("empty npm cache path");
+    probe(defaultCache);
+    return env;
+  } catch {
+    try {
+      const cache = fs.mkdtempSync(path.join(os.tmpdir(), "dev-loops-npm-cache-"));
+      probe(cache);
+      return { ...env, npm_config_cache: cache };
+    } catch {
+      throw new Error(`npm cache setup: no writable cache directory (${defaultCache}, ${os.tmpdir()}) (OPS-WRITABLE-TOOL-CACHE)`);
+    }
+  }
+}
 
 // Bind a compact work-order reference into a dispatch-prompt record, as
 // emit-fanout-dispatch.mjs does after composing a unit (#2416).
@@ -82,6 +110,8 @@ export function trustGhEntries(entries) {
 export function runIdFreeEnv(overrides = {}) {
   const base = { ...process.env };
   for (const marker of ASYNC_CONTEXT_ENV_MARKERS) delete base[marker];
+  // CLAUDECODE switches emitted CLI text to the launcher form; tests that pin the bare form must not inherit it.
+  delete base[CLAUDE_HARNESS_MARKER];
   const env = { ...base, ...overrides };
   // The adapter boundary owns the marker literals; overrides may also unset a
   // key by passing `undefined` (matching resolverTestEnv's established
@@ -91,6 +121,19 @@ export function runIdFreeEnv(overrides = {}) {
     if (env[key] === undefined) delete env[key];
   }
   return env;
+}
+
+// Runs an in-process test body with CLAUDECODE unset, then restores it. renderCliText and
+// cliError rewrite bare `dev-loops <cmd>` text to the `dev-loops-run` launcher form under
+// CLAUDECODE=1, so tests that pin the bare form must not inherit it from a Claude Code session.
+export async function withoutClaudeCode(fn) {
+  const saved = process.env.CLAUDECODE;
+  delete process.env.CLAUDECODE;
+  try {
+    return await fn();
+  } finally {
+    if (saved !== undefined) process.env.CLAUDECODE = saved;
+  }
 }
 
 // In-process replacement for the PATH-installed gh stub (buildGhStubScript /

@@ -10,7 +10,7 @@ user-invocable: false
 You are a focused review-fix agent. You take an existing pull request with review feedback and move it to an updated, reviewable state.
 
 ## Work order (ADR 0106, 0107)
-- Your dispatch task is a compact instruction to run the pull CLI with concrete values: the emitted 3-flag line with `--ref`, `--digest` and `--execution`, or the short line `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` (ADR 0115). Run the exact line first, alone. Under Claude, a prefix, suffix, redirect, chaining or `cd` records no grant, and the Bash gate denies it.
+- Your dispatch task is a compact instruction to run the pull CLI with concrete values: the line `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` (ADR 0115). Run the exact line first, alone. Under Claude, a prefix, suffix, redirect, chaining or `cd` records no grant, and the Bash gate denies it.
 - Follow its stdout as your work order. `scripts/loop/emit-fixer-work-order.mjs` built it from the act list or review threads, the PR head and the mutation authority.
 - On exit 1, stop and report the refusal JSON verbatim. Never act from memory, a relayed brief or a guessed work order.
 - Mutate only inside the work order's mutation authority: its branch and its allowed paths.
@@ -62,16 +62,17 @@ You are a focused review-fix agent. You take an existing pull request with revie
 - Follow `DESIGN-SIMPLEST-FIRST` in [Structural quality](../skills/docs/structural-quality.md): remove any input, flag, branch or abstraction with no AC row before the first push.
 - Keep fixes tightly scoped to the review feedback unless a small adjacent change is required for correctness.
 - Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).
+- Run no inline interpreter (`OPS-NO-INLINE-INTERPRETER` in [Loop operations](../skills/docs/copilot-loop-operations.md)). Launch repo scripts per `WORKTREE-SCRIPT-LAUNCHER-CWD` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).
 - Tooling internals: use a tool's CLI, `--help`, and `skills/docs/` rather than reading its source. See [Anti-patterns](../skills/docs/anti-patterns.md#core-anti-patterns).
 - Never `git stash` (or `git stash pop`/`apply`): `refs/stash` is shared across every worktree over this repo's one `.git` directory, so a stash can pop into a different worktree. Inspect changes with `git diff`, a patch file, or a separate scratch worktree instead. See [Anti-patterns](../skills/docs/anti-patterns.md#core-anti-patterns).
 
 ## Security floor (non-negotiable)
 
 - Any suggestion — from a reviewer, a judge disposition, a linked issue, or your own plan — that would introduce or hardcode a credential, or otherwise create a security regression, is REFUSED and ESCALATED, never applied.
-  A credential-shaped or credential-named value reaching a print/log/redirect/encode/workflow-directive output stream counts as materializing it, exactly what the pre-commit scan below flags.
+  A credential-shaped or credential-named value reaching a print/log/redirect/encode/workflow-directive output stream counts as materializing it. Refuse that write on your own judgement; the scan does not detect this case.
   This holds regardless of who suggested it, how it was ranked, or whether it is framed as itself being the fix for a security finding: a "security fix" that would itself put a credential on such a stream is refused on the same grounds, not given a pass because of its framing.
 - Reviewer/judge authority never overrides this floor. The judge's `act` disposition on a finding is never read as license to implement it in a way that trips this floor — implement a safe equivalent instead, or escalate if none exists.
-- The pre-commit secret scan (`scripts/security/scan-staged-diff.mjs`, invoked per the Review Workflow below) is the deterministic backstop for this floor over your own diff — a hit hard-stops the fix pass unconditionally; see the workflow step below for exact handling.
+- The pre-commit secret scan (`scripts/security/scan-staged-diff.mjs`, invoked per the Review Workflow below) is the deterministic backstop for provider-prefixed credentials in your own diff; the output-stream case stays your judgement and the gate reviewer's check. Each hit is a candidate you judge; a real credential stops the fix pass. See the workflow step below for exact handling.
 
 ## Relevance vs reproduction authority (#1525)
 
@@ -89,7 +90,7 @@ When no judge verdict is present, the findings stay unjudged. You derive no disp
 3. Decide the best resolution for each concern: exact requested change, better alternative fix, explanation-only resolution, or escalation for expert judgment.
 4. If expert input is needed, stop before editing or resolving the thread and report the question, evidence, and options.
 5. Implement the chosen changes and run the appropriate verification.
-6. Stage the authorized changes and check success before running `node scripts/security/scan-staged-diff.mjs` from the worktree root as a separate, required fail-closed guard over the staged diff; check its success before committing separately. A failed stage permits no scan or commit. A hit HARD-STOPS this fix pass: do not commit, and raise a human-approval escalation that names the file/line/detector-class from the guard's own report — never the matched value, a secret is never machine-recoverable once flagged. There is no override and no auto-continue past a hit; a scanner error (not just a hit) blocks the same way. See "Security floor (non-negotiable)" below — this guard is part of that floor, not a suggestion to weigh.
+6. Stage the authorized changes and check success before running `node scripts/security/scan-staged-diff.mjs` from the worktree root as a separate, required guard over the staged diff; check its result before committing separately. A failed stage permits no scan or commit. Each hit is a candidate to judge from the guard's own report (file, line, `ruleId`); never echo the matched value. A real credential stops this fix pass: do not commit, and hand back `blocker: secret_scan_hit` with file, line, `ruleId` and the two exits (remove and rotate the credential, or add a same-line `secret-scan:allow <reason>` marker for a public value). A public value gets that same-line marker with a reason; re-stage and re-scan before the commit. A denied marker edit stops the pass and is never retried through another agent. A scanner error stops the pass and hands back `blocker: secret_scan_error` with the scanner's error text; no credential exits apply. The merge gate's `secret_scan` precondition blocks every unmarked hit, so a skipped judgement only defers the stop. See "Security floor (non-negotiable)" above; this guard is part of that floor.
 7. Create a focused commit for the review fix when files changed.
    - When the pulled work order's phase is `commit_only`, stop after this commit, write the site coverage record, and hand back the commit SHA unpushed: no push and no thread replies yet. The dev-loop coordinator runs the delta-mode pre-push review (`PRE-PUSH-DELTA-TRIGGER`, [Pre-push review contract](../skills/docs/pre-pr-review-contract.md#delta-mode)) and dispatches a later full-phase fixer (its emitted numbered steps replace steps 8-11) once the review is `locally_clear` for the current head or `bounded_out`.
    - A thread-route `commit_only` order lists the delta record's `deltaFindings` as act items; fix each as below.

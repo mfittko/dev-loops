@@ -21,11 +21,124 @@ const withDir = (fn) => withTempDir(async (dir) => fn(await realpath(dir)), { pr
 const node = (script, args, cwd, env) => spawnSync("node", [path.resolve(script), ...args], { cwd, encoding: "utf8", ...(env ? { env } : {}) });
 // The emitter's default live PR body read goes through gh; stub it with the fixture body.
 const ghEnv = async (dir, body = "Declared scope: fix the finding.\n") => (await writeGhStub(dir, [{ stdout: JSON.stringify({ body }) }], { repeatLastOnOverflow: true })).env;
-const pull = (plan, cwd, over = {}) => node("scripts/github/pull-work-order.mjs", [
-  "--ref", over.ref ?? plan.workOrderRef, "--digest", over.digest ?? plan.workOrderDigest, "--execution", over.execution ?? plan.executionIdentity,
-], cwd);
+const pull = (plan, cwd, over = {}) => node("scripts/github/pull-work-order.mjs", [over.execution ?? plan.executionIdentity], cwd);
 const refusal = (result) => (assert.equal(result.status, 1, result.stderr), JSON.parse(result.stdout).refusal);
 const seed = (root, over = {}) => seedJudgeSources(root, { headSha: HEAD, ...over });
+
+test("grounded optional discovery is delivered, root-bound and digest-bound", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const plan = await emitJudgeWorkOrder(sources);
+    const result = pull(plan, root);
+    assert.equal(result.status, 0, result.stderr);
+    const delivered = JSON.parse(await readFile(plan.planPath, "utf8")).workOrder;
+    assert.match(delivered.executionRules.widening, /GATE-EXEC-JUDGE-GROUNDED-DISCOVERY/);
+    for (const locator of ["executionRules.contract", "worktree:"]) assert.ok(delivered.executionRules.widening.includes(locator));
+    assert.ok(result.stdout.includes(`Widening: ${delivered.executionRules.widening}.\n`));
+    const changed = structuredClone(delivered);
+    changed.executionRules.widening = "";
+    assert.notEqual(workOrderDigest(changed), plan.workOrderDigest);
+    await rm(path.join(root, sources.specFile));
+    assert.equal(refusal(pull(plan, root)), "stale_dispatch");
+  });
+});
+
+test("grounded discovery uses the pinned reviewed worktree across pull cwd and relocated evidence", async () => {
+  await withDir(async (pullRoot) => withDir(async (artifactRoot) => withDir(async (appRoot) => {
+    const sources = await seed(pullRoot);
+    const relocated = await seed(artifactRoot);
+    await bindEvidenceToPrBody(artifactRoot, { ...relocated, cwd: appRoot }, "Declared scope: fix the finding.\n");
+    const plan = await emitJudgeWorkOrder({ ...sources, tmpRoot: path.join(artifactRoot, "tmp") });
+    const result = await pullWorkOrder({ execution: plan.executionIdentity, cwd: pullRoot,
+      tmpRoots: [path.join(artifactRoot, "tmp")], receiptTmpRoot: path.join(pullRoot, "tmp") });
+    assert.equal(result.workOrderText, await readFile(plan.promptPath, "utf8"));
+    const evidenceRead = plan.workOrder.requiredReads.find((read) => read.kind === "evidence");
+    const evidence = await readFile(evidenceRead.path, "utf8");
+    assert.ok(evidence.includes(`worktree: ${appRoot}\n`));
+    assert.notEqual(appRoot, pullRoot);
+    assert.notEqual(appRoot, path.dirname(path.join(artifactRoot, "tmp")));
+    assert.ok(result.workOrderText.includes(`Widening: ${plan.workOrder.executionRules.widening}`));
+    await writeFile(evidenceRead.path, evidence.replace(appRoot, pullRoot));
+    await assert.rejects(pullWorkOrder({ execution: plan.executionIdentity, cwd: pullRoot,
+      tmpRoots: [path.join(artifactRoot, "tmp")], receiptTmpRoot: path.join(pullRoot, "tmp") }),
+    (err) => err.refusal === "stale_dispatch");
+  })));
+});
+
+test("grounded discovery grounds a present optional candidate and never supplies an absent one", async () => {
+  await withDir(async (pullRoot) => withDir(async (artifactRoot) => withDir(async (appRoot) => {
+    const sources = await seed(pullRoot);
+    const relocated = await seed(artifactRoot);
+    await bindEvidenceToPrBody(artifactRoot, { ...relocated, cwd: appRoot }, "Declared scope: fix the finding.\n");
+    const present = path.join(appRoot, "docs", "present-optional.md");
+    const absent = path.join(appRoot, "docs", "absent-optional.md");
+    await mkdir(path.dirname(present), { recursive: true });
+    await writeFile(present, "optional context\n");
+    const plan = await emitJudgeWorkOrder({ ...sources, tmpRoot: path.join(artifactRoot, "tmp") });
+    const result = await pullWorkOrder({ execution: plan.executionIdentity, cwd: pullRoot,
+      tmpRoots: [path.join(artifactRoot, "tmp")], receiptTmpRoot: path.join(pullRoot, "tmp") });
+    const evidenceRead = plan.workOrder.requiredReads.find((read) => read.kind === "evidence");
+    const root = /^worktree: (.+)$/m.exec((await readFile(evidenceRead.path, "utf8")).split("\n\n")[1])[1];
+    assert.equal(root, appRoot);
+    assert.equal(await readFile(path.join(root, "docs", "present-optional.md"), "utf8"), "optional context\n");
+    await assert.rejects(readFile(path.join(root, "docs", "absent-optional.md"), "utf8"), { code: "ENOENT" });
+    assert.ok(!plan.workOrder.requiredReads.some((read) => [present, absent].includes(read.path)));
+    assert.ok(!result.workOrderText.includes("absent-optional.md"));
+    assert.match(result.workOrderText, /GATE-EXEC-JUDGE-GROUNDED-DISCOVERY/);
+  })));
+});
+
+test("grounded discovery preserves the neutral and Claude judge tool boundaries", async () => {
+  const neutral = await readFile(path.resolve("agents/judge.agent.md"), "utf8");
+  const claude = await readFile(path.resolve(".claude/agents/judge.md"), "utf8");
+  assert.match(neutral, /^tools: read, search, bash, write$/m);
+  assert.match(claude, /^tools: Read, Grep, Glob, Bash, Write$/m);
+  for (const text of [neutral, claude]) assert.match(text, /<!-- rule-ref: GATE-EXEC-JUDGE-GROUNDED-DISCOVERY -->/);
+});
+
+test("the work order states the judge's allowed search commands and the Read offset and limit (issue 3092)", async () => {
+  await withDir(async (root) => {
+    const plan = await emitJudgeWorkOrder(await seed(root));
+    const text = await readFile(plan.promptPath, "utf8");
+    assert.match(text, /Search with read-only `grep -n`, `rg -n`, `git show` and `git diff`/);
+    assert.match(text, /`git diff` only as a range such as `origin\/main\.\.\.HEAD` or two revisions/);
+    assert.match(text, /glob characters only inside single quotes/);
+    assert.match(text, /Read accepts offset and limit/);
+    assert.match(text, /On Claude Code and Pi, Bash otherwise runs only the work-order pull and `check-judge-decision\.mjs`\. The Codex after-pull setup governs Codex\./);
+    assert.doesNotMatch(text, /Grep|Glob/);
+  });
+});
+
+test("the work-order search line names both harnesses (issue 3092, #1086)", async () => {
+  await withDir(async (root) => {
+    const text = await readFile((await emitJudgeWorkOrder(await seed(root))).promptPath, "utf8");
+    assert.match(text, /On Claude Code, Bash search/);
+    assert.match(text, /On Pi, use the native read, grep and find tools/);
+  });
+});
+
+test("cited rule IDs reach the judge with their text and owning doc (issue 3092)", async () => {
+  await withDir(async (root) => {
+    await mkdir(path.join(root, "judge-fixture"), { recursive: true });
+    const findingsFile = "judge-fixture/ledger.json";
+    await writeFile(path.join(root, findingsFile), JSON.stringify({ overallVerdict: "findings_present", findings: [
+      { severity: "low", summary: "violates STYLE-SINGLE-OWNER and GATE-EXEC-LOW-FIX-UNTIL-CAP and NOT-A-REGISTERED-RULE-ID and GATE-EXEC-LOW-FIX-UNTIL-CAP again" }] }));
+    const plan = await emitJudgeWorkOrder(await seed(root, { findingsFile }));
+    assert.deepEqual(plan.workOrder.citedRules.map((rule) => rule.id).sort(), ["GATE-EXEC-LOW-FIX-UNTIL-CAP", "STYLE-SINGLE-OWNER"]);
+    const rule = plan.workOrder.citedRules.find((r) => r.id === "GATE-EXEC-LOW-FIX-UNTIL-CAP");
+    assert.equal(rule.doc, "skills/docs/gate-review-sub-loop-contract.md");
+    assert.match(rule.text, /The fixer fixes a `low` at the `draft_gate` in every round/);
+    const text = await readFile(plan.promptPath, "utf8");
+    assert.match(text, /## Cited rules/);
+    assert.match(text, /\| `GATE-EXEC-LOW-FIX-UNTIL-CAP` \| skills\/docs\/gate-review-sub-loop-contract\.md \| .*The fixer fixes a `low`/);
+    const row = text.split("\n").find((line) => line.startsWith("| `STYLE-SINGLE-OWNER`"));
+    assert.equal(row.split(/(?<!\\)\|/).length - 2, 3);
+    assert.doesNotMatch(row, /\\\|\s*\|$/);
+    const none = await emitJudgeWorkOrder(await seed(root));
+    assert.deepEqual(none.workOrder.citedRules, []);
+    assert.doesNotMatch(await readFile(none.promptPath, "utf8"), /## Cited rules/);
+  });
+});
 
 test("Codex bootstrap precedes every pinned read and binds contracts to the emitting toolchain", async () => {
   await withDir(async (root) => {
@@ -126,9 +239,10 @@ test("J2: every dispatch is the fixed compact pointer under the shared cap, reus
     const plan = await emitJudgeWorkOrder(await seed(root));
     const { workOrderRef, workOrderDigest: digest, executionIdentity } = plan;
     assert.equal(plan.dispatchPrompt, buildDispatchPointer({ workOrderRef, workOrderDigest: digest, executionIdentity }));
+    assert.equal(plan.dispatchPrompt, `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${plan.executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`);
     const worst = { workOrderRef: `judge:${"o".repeat(39)}/${"r".repeat(40)}#99999:pre_approval_gate:${"f".repeat(64)}:j1790000000000-abcdef12`, workOrderDigest: "f".repeat(64), executionIdentity: "j1790000000000-abcdef12" };
     assert.ok(Buffer.byteLength(buildDispatchPointer(worst)) <= DISPATCH_POINTER_MAX_BYTES);
-    assert.throws(() => buildDispatchPointer({ ...worst, workOrderRef: `${workOrderRef} and also check X` }), /not shell-safe/);
+    assert.throws(() => buildDispatchPointer({ ...worst, executionIdentity: `${executionIdentity} and also check X` }), /EXECUTION_IDENTITY_RE/);
     assert.deepEqual(JSON.parse(await readFile(executionIndexPath(path.join(root, "tmp"), executionIdentity), "utf8")), { executionIdentity, workOrderRef, workOrderDigest: digest, emitterRoot: TOOLCHAIN_ROOT });
     const saved = JSON.parse(await readFile(plan.planPath, "utf8"));
     assert.equal(saved.dispatchPrompt, plan.dispatchPrompt);
@@ -141,13 +255,11 @@ test("J2: every dispatch is the fixed compact pointer under the shared cap, reus
   });
 });
 
-test("J3: the right identity pulls and writes a judge receipt; wrong digest, execution, role or payload refuse", async () => {
+test("J3: the right identity pulls and writes a judge receipt; unknown execution, role or payload refuse", async () => {
   await withDir(async (root) => {
     const plan = await emitJudgeWorkOrder(await seed(root));
     const receiptTmpRoot = path.join(root, "tmp");
-    assert.equal(refusal(pull(plan, root, { digest: "0".repeat(64) })), "dispatch_reference_mismatch");
-    assert.equal(refusal(pull(plan, root, { execution: `${plan.executionIdentity}9` })), "dispatch_identity_mismatch");
-    assert.equal(refusal(pull(plan, root, { ref: plan.workOrderRef.replace(/^judge:/, "review:") })), "dispatch_reference_mismatch");
+    assert.equal(refusal(pull(plan, root, { execution: "j1790000000001-abcdef12" })), "dispatch_reference_mismatch");
     assert.equal((await verifyPullReceipt({ receiptTmpRoot, role: "judge", ...plan })).reason, "receipt_missing");
     assert.equal(pull(plan, root).status, 0);
     assert.equal((await verifyPullReceipt({ receiptTmpRoot, role: "judge", ...plan })).ok, true);
@@ -155,6 +267,8 @@ test("J3: the right identity pulls and writes a judge receipt; wrong digest, exe
     // A malformed payload that still reproduces its digest refuses before adjudication.
     const { requiredReads, ...malformed } = plan.workOrder;
     await writeFile(plan.planPath, JSON.stringify({ ...plan, workOrder: malformed, workOrderDigest: workOrderDigest(malformed) }));
+    const indexFile = executionIndexPath(receiptTmpRoot, plan.executionIdentity);
+    await writeFile(indexFile, JSON.stringify({ ...JSON.parse(await readFile(indexFile, "utf8")), workOrderDigest: workOrderDigest(malformed) }));
     assert.equal(refusal(pull({ ...plan, workOrderDigest: workOrderDigest(malformed) }, root)), "invalid_work_order");
   });
 });

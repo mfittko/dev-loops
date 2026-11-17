@@ -3,7 +3,7 @@
 // (recorded dispatch membership). Kept in one import-cycle-free module: the
 // emitter imports both writers, so the writers cannot import the emitter.
 import { createHash } from "node:crypto";
-import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { gateScopePrefix } from "./_gate-names.mjs";
 
 /**
@@ -97,7 +97,7 @@ export function normalizeUnitAngles(unit) {
  * group or an auto-chunked leftover `group:...` bundle, resolveFanoutGroups
  * draws no distinction between the two for dispatch purposes (ADR 0048's
  * grouped-dispatch-default) — shares ONE reviewer, capped at
- * `REVIEWER_UNIT_MAX_ANGLES` via an ordered cap-split. Only a genuine
+ * the round's recorded unit bound (`resolveReviewerUnitBound`, 5 when absent) via an ordered cap-split. Only a genuine
  * single-angle unit dispatches as a singleton. The merge guard
  * (`fanoutReviewerPairingError` in `@dev-loops/core/loop/gate-fanin`) is the
  * fail-closed authority: it re-derives this round's base units independently
@@ -112,9 +112,11 @@ export function normalizeUnitAngles(unit) {
  * singleton. Pure.
  * @param {{ name: string, angles: string[] }[]} units resolveFanoutGroups output
  * @param {Set<string>} configuredGroupNames configured gates.fanout.groups names
+ * @param {number} [unitBound] the round's recorded unit bound; absent means 5
  * @returns {{ name: string, angles: string[], group: string|null }[]}
  */
-export function expandDispatchUnits(units, configuredGroupNames) {
+export function expandDispatchUnits(units, configuredGroupNames, unitBound) {
+  const bound = resolveReviewerUnitBound(unitBound);
   const unitList = Array.isArray(units) ? units : [];
   // Disambiguate a split sub-unit's name against every configured group name
   // AND every OTHER unit resolved this round (a configured group's name and an
@@ -133,13 +135,13 @@ export function expandDispatchUnits(units, configuredGroupNames) {
       // deterministically splits into ordered ≤cap sub-units, each with a
       // distinct, collision-disambiguated `<name>-part<n>` name. Every sub-unit
       // records the RESOLVED unit's own name as `group`.
-      if (angles.length <= REVIEWER_UNIT_MAX_ANGLES) {
+      if (angles.length <= bound) {
         // An already-expanded unit (a pending sub-unit) keeps its recorded `group`.
         out.push({ name: unit.name, angles, group: hasGroup(unit) ? unit.group : unit.name });
       } else {
-        for (let i = 0; i < angles.length; i += REVIEWER_UNIT_MAX_ANGLES) {
-          const chunk = angles.slice(i, i + REVIEWER_UNIT_MAX_ANGLES);
-          const n = i / REVIEWER_UNIT_MAX_ANGLES + 1;
+        for (let i = 0; i < angles.length; i += bound) {
+          const chunk = angles.slice(i, i + bound);
+          const n = i / bound + 1;
           out.push({ name: splitSubUnitName(unit.name, n, collisionNames), angles: chunk, group: unit.name });
         }
       }
@@ -160,7 +162,7 @@ const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 
 /**
  * Pack whole base units (expandDispatchUnits output) into at most `maxUnits`
- * units of at most `REVIEWER_UNIT_MAX_ANGLES` angles: first-fit decreasing by
+ * units of at most the recorded unit bound of angles: first-fit decreasing by
  * angle count, ties broken by unit name. A base unit is never split. EVERY
  * bin's name (including a one-member bin) is the full SHA-256 digest of its
  * canonical sorted member-name array, under a reserved `packed:sha256:`
@@ -170,6 +172,7 @@ const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
  * fits. Deterministic, pure.
  * @param {{ name: string, angles: string[] }[]} baseUnits
  * @param {number} maxUnits
+ * @param {number} [unitBound] the round's recorded unit bound; absent means 5
  * @returns {{ name: string, angles: string[] }[]|null}
  */
 const PACKED_UNIT_PREFIX = "packed:sha256:";
@@ -184,14 +187,15 @@ export function packedUnitName(memberNames) {
   return `${PACKED_UNIT_PREFIX}${createHash("sha256").update(canonicalMembers, "utf8").digest("hex")}`;
 }
 
-export function packDispatchUnits(baseUnits, maxUnits) {
+export function packDispatchUnits(baseUnits, maxUnits, unitBound) {
+  const bound = resolveReviewerUnitBound(unitBound);
   const order = baseUnits
     .map((unit) => ({ name: unit.name, angles: normalizeUnitAngles(unit) }))
     .sort((a, b) => b.angles.length - a.angles.length || byName(a, b));
   const bins = [];
   for (const unit of order) {
-    if (unit.angles.length > REVIEWER_UNIT_MAX_ANGLES) return null;
-    const bin = bins.find((candidate) => candidate.size + unit.angles.length <= REVIEWER_UNIT_MAX_ANGLES);
+    if (unit.angles.length > bound) return null;
+    const bin = bins.find((candidate) => candidate.size + unit.angles.length <= bound);
     if (bin) {
       bin.members.push(unit);
       bin.size += unit.angles.length;

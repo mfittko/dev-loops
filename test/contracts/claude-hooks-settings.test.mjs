@@ -169,7 +169,7 @@ test("bash-gate hook passes through non-gh-pr-ready commands", () => {
 });
 
 test("bash-gate hook lets the judge run only its work-order pull; shell, test and build commands are denied (ADR 0106)", () => {
-  const pull = "dev-loops-run scripts/github/pull-work-order.mjs --ref judge:o/r#7:pre_approval_gate:abc:j1-aa --digest ab12 --execution j1-aa";
+  const pull = "dev-loops-run scripts/github/pull-work-order.mjs j1790000000000-abcdef12";
   const decide = (command, agent_type = "dev-loops:judge") =>
     runHook("pre-tool-use-bash-gate.mjs", { tool_name: "Bash", tool_input: { command }, cwd: repoRoot, agent_type }).json?.hookSpecificOutput?.permissionDecision ?? "allow";
   assert.equal(decide(pull), "allow");
@@ -867,6 +867,44 @@ test("agent-guard hook denies a dev-loop gate-pointer review dispatch, allows a 
   const allowed = run("Review PR 7.");
   assert.equal(allowed.code, 0);
   assert.equal(allowed.json, null, "no deny output for a main-session dispatch");
+});
+
+test("agent-guard hook resolves a short judge pointer through the execution index: only a review-gate ref is allowed (ADR 0267)", () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agent-guard-judge-index-")));
+  try {
+    for (const args of [["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "init"]]) {
+      const result = gitFixture(args, root);
+      assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
+    }
+    const id = (n) => `j179000000000${n}-abcdef12`;
+    const seed = (identity, workOrderRef) => {
+      fs.mkdirSync(path.join(root, "tmp", "work-order-executions"), { recursive: true });
+      fs.writeFileSync(path.join(root, "tmp", "work-order-executions", `${identity}.json`), JSON.stringify({ executionIdentity: identity, workOrderRef, workOrderDigest: "sha256:ab" }));
+    };
+    seed(id(1), `judge:o/r#7:review:${"a".repeat(40)}:${id(1)}`);
+    seed(id(2), `judge:o/r#7:pre_approval_gate:${"a".repeat(40)}:${id(2)}`);
+    const decide = (identity) => runHook("pre-tool-use-agent-guard.mjs", {
+      tool_name: "Agent",
+      tool_input: { subagent_type: "dev-loops:judge", description: "judge", prompt: `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${identity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.` },
+      cwd: root,
+      agent_type: "dev-loops:dev-loop",
+    }).json?.hookSpecificOutput?.permissionDecision ?? "allow";
+    assert.equal(decide(id(1)), "allow", "review-gate ref resolved through the index");
+    assert.equal(decide(id(2)), "deny", "lifecycle-gate ref");
+    assert.equal(decide(id(3)), "deny", "identity with no index entry");
+    // The guard refuses what the pull refuses: conflicting entries across checkouts, and a malformed entry.
+    const wt = path.join(root, "wt");
+    const added = gitFixture(["worktree", "add", "-q", "-b", "wt", wt], root);
+    assert.equal(added.status, 0, added.stderr);
+    fs.mkdirSync(path.join(wt, "tmp", "work-order-executions"), { recursive: true });
+    seed(id(4), `judge:o/r#7:review:${"a".repeat(40)}:${id(4)}`);
+    fs.writeFileSync(path.join(wt, "tmp", "work-order-executions", `${id(4)}.json`), JSON.stringify({ executionIdentity: id(4), workOrderRef: `judge:o/r#7:pre_approval_gate:${"a".repeat(40)}:${id(4)}`, workOrderDigest: "sha256:ab" }));
+    assert.equal(decide(id(4)), "deny", "conflicting entries across checkouts");
+    fs.writeFileSync(path.join(root, "tmp", "work-order-executions", `${id(5)}.json`), JSON.stringify({ executionIdentity: id(5), workOrderRef: `judge:o/r#7:review:${"a".repeat(40)}:${id(5)}` }));
+    assert.equal(decide(id(5)), "deny", "malformed entry without a digest");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -9,9 +9,8 @@ import { NATIVE_PI_PARENT_SESSION_MARKER, isNativePiAsyncContext } from '@dev-lo
  * must not import the Claude hook seam, so the sanctioned pull line is rebuilt from the shared identity
  * regex; a test pins parity with the Claude gate's `parseSanctionedPullLine`.
  */
-const PULL_VALUE = '[A-Za-z0-9][\\w.:/#-]*';
 const SANCTIONED_PULL_RE = new RegExp(
-  `^dev-loops-run scripts/github/pull-work-order\\.mjs (?:${EXECUTION_IDENTITY_RE.source.slice(1, -1)}|--ref ${PULL_VALUE} --digest ${PULL_VALUE} --execution ${PULL_VALUE})$`,
+  `^dev-loops-run scripts/github/pull-work-order\\.mjs ${EXECUTION_IDENTITY_RE.source.slice(1, -1)}$`,
 );
 const parseSanctionedPullLine = (command: string) => SANCTIONED_PULL_RE.test(command.trim());
 const JUDGE_DECISION_CHECK_RE = /^dev-loops-run scripts\/loop\/check-judge-decision\.mjs --file [\w.\/#-]*tmp\/gate-judge\/[\w.\/#-]+\.json$/;
@@ -40,6 +39,7 @@ const SHELL_ACTIVE_RE = /[;&|<>`$\n\r(){}\\'"*?[\]]/;
 
 // The reviewer contract's mandated sentinel and bound-escape scripts, and its `cd <worktree> && ...` prefix.
 const REVIEWER_SCRIPT_RE = /^dev-loops-run (?:--repo-root [\w.\/-]+ )?scripts\/(?:github\/(?:verify-fresh-review-context|emit-reviewer-blocked)|loop\/seal-evidence)\.mjs(?: .*)?$/;
+const QUOTED_REPO_ROOT_RE = /^(dev-loops-run --repo-root )"[\w. \/-]+" /;
 const CD_PREFIX_RE = /^cd (?:"[\w./-]+"|[\w./-]+) && /;
 const GIT_C_RE = /^git -C (?:"[\w./-]+"|[\w./-]+) /;
 // Flags that make an allowed program execute another program or write a file. Git accepts unique prefixes, so match prefixes.
@@ -84,7 +84,8 @@ const CUT_RE = /^-c\d+-\d+$/;
 
 function isReadSearchCommand(rawCommand: string): boolean {
   // Strip the mandated `cd <path> && ` and `git -C <path> ` forms first; their paths allow safe characters only.
-  const command = rawCommand.trim().replace(CD_PREFIX_RE, '').replace(GIT_C_RE, 'git ');
+  // A double-quoted --repo-root path (spaces allowed, no shell-active characters) is swapped for a bare placeholder before the shell-active check.
+  const command = rawCommand.trim().replace(CD_PREFIX_RE, '').replace(GIT_C_RE, 'git ').replace(QUOTED_REPO_ROOT_RE, '$1x ');
   if (/[\n\r]/.test(command)) return false;
   if (REVIEWER_SCRIPT_RE.test(command) && !SHELL_ACTIVE_RE.test(command)) return true;
   const words = tokenize(command);

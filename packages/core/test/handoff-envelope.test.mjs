@@ -1100,7 +1100,7 @@ test("cwd: worktreeCwd is canonicalized to the same single spelling", () => {
 });
 
 // ===========================================================================
-// 13. Unit coordinator report points (issue 2532, amended by issue 2955)
+// 13. Unit coordinator report points (issue 2532, amended by issues 2955 and 3069)
 // ===========================================================================
 
 test("unitBoundaries: a unit without a PR reports at the draft PR and after the gate verdict", () => {

@@ -76,16 +76,19 @@ duplicate the map into prose — reference the module.
 A contract test (`test/contracts/sanctioned-commands-exist.test.mjs`) asserts
 every mapped wrapper exists on disk and fails closed if one is renamed/removed.
 
-## Unit coordinator boundaries (issue 2532, amended by issue 2955)
+## Unit coordinator boundaries (issue 2532, amended by issues 2955 and 3069)
 
-A coordinator continues past a report point. `unitBoundaries` tells it where to report, so no orchestrator
-brief has to restate the boundary:
+A coordinator continues past the `draft_pr_opened` report point. The end of a gate round and the
+end of a fix pass are run-ending cases under `COORDINATOR-ROUND-BOUNDARY-HANDBACK` in the
+[main-agent contract](main-agent-contract.md), so the coordinator hands back there and does not
+continue. `unitBoundaries` tells the coordinator where to report, so no orchestrator brief has to
+restate the boundary:
 
 - `reportAfter` lists the deterministic report points for this route, in order, from the closed
   set `draft_pr_opened` (a unit that owns no PR yet, so opening the draft PR is its report point) and
   `gate_verdict_posted` (a unit that posts a gate verdict of its own reports after it).
   **The list is ordered and each point is reported when reached**: a unit that carries both reports at the draft PR it opens and continues,
-  and reports at the verdict boundary once the unit runs its gate round already owning that PR.
+  and reports and hands back at the verdict boundary once the unit runs its gate round already owning that PR.
   The validator refuses a list that reverses that order, so the draft PR is always reported first.
   It also refuses a set that contradicts the envelope's own target (`deriveTarget`), in both
   directions: a target that owns no PR must carry `draft_pr_opened` first, because opening that
@@ -96,7 +99,7 @@ brief has to restate the boundary:
   `gate_verdict_posted` as a recorded naming approximation
   (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`): `final_approval` runs a gate round
   but posts no verdict of its own. An `issue_intake` unit reports at `draft_pr_opened`, continues on
-  the PR route, and then reports at `gate_verdict_posted`, in order.
+  the PR route, and then reports at `gate_verdict_posted` and hands back, in order.
 - `resume` names the authoritative re-resolution a replacement coordinator runs (`kind: loop_startup` plus
   whichever of the target's `issue`, `pr`, `branch` and `phase` values are set). It is **not** an
   exclusive selector, and no XOR or precedence rule applies to it: `deriveUnitBoundaries` copies
@@ -130,7 +133,7 @@ brief has to restate the boundary:
   conversation** and the previous coordinator never writes or summarizes the next brief.
 - `resume` has a recorded consumer and acceptance linkage even though no code reads it. Its
   consumers are specified rather than coded: the
-  [Main Agent Contract](main-agent-contract.md#unit-coordinator-boundaries-issue-2532-amended-by-issue-2955) and
+  [Main Agent Contract](main-agent-contract.md#unit-coordinator-boundaries-issue-2532-amended-by-issues-2955-and-3069) and
   `agents/dev-loop.agent.md` both name `unitBoundaries.resume` as the identity a replacement coordinator
   re-resolves, and `docs/decisions/0181-unit-coordinator-handback-boundaries.md` records why the
   field exists. Its acceptance linkage is issue 2532's Scope row ("Startup and the existing
@@ -142,7 +145,7 @@ brief has to restate the boundary:
   names the brief's other fields; it is not an exclusive field list, so the row requires an
   emitted resume identity rather than excluding one. The report-point re-resolve rule for a
   continuing coordinator lives in the
-  [Main Agent Contract](main-agent-contract.md#unit-coordinator-boundaries-issue-2532-amended-by-issue-2955).
+  [Main Agent Contract](main-agent-contract.md#unit-coordinator-boundaries-issue-2532-amended-by-issues-2955-and-3069).
 
 The field is absent where the route has no unit to report from: a terminal reconciliation envelope
 (`stopRules` are already terminal), a read-only `review` or `ui_review` round (one round, no
@@ -230,8 +233,8 @@ interface HandoffEnvelope {
   cwd: string | null;
   worktreeRequired: boolean;
 
-  // issue 2532: the deterministic points at which THIS unit coordinator reports status and continues;
-  // it hands back only at a real stop. Target+strategy derived, so it is
+  // issue 2532: the deterministic points at which THIS unit coordinator reports status and continues at draft_pr_opened;
+  // it hands back at gate_verdict_posted under COORDINATOR-ROUND-BOUNDARY-HANDBACK. Target+strategy derived, so it is
   // byte-stable; absent on a terminal reconciliation envelope (its stopRules are terminal).
   unitBoundaries?: {
     reportAfter: Array<"draft_pr_opened" | "gate_verdict_posted">;

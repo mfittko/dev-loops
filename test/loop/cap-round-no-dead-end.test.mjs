@@ -64,7 +64,7 @@ function scenario({ clean, sequence, merges, fix, docs, orphaned = false, unread
 
 // The end state of every combination. null: non-blocked (mark_ready_for_review or run_pre_approval_gate). Otherwise the expected block, with the proof failure and a trace pattern naming why.
 const BLOCKS = {
-  head_equals_baseline: { failure: null, trace: /equals the baseline|no_cap_round_chain/ },
+  head_equals_baseline: { failure: "no_clearing_record", trace: /equals the baseline|no_cap_round_chain/ },
   active_sequence_marker: { failure: "no_clearing_record", trace: /active sequence marker/ },
   act_items_open: { failure: "no_clearing_record", trace: /needs_fix|no PR-own commit/ },
   chain_reaches_head: { failure: "items_do_not_cover", trace: /chain_reaches_head/ },

@@ -67,6 +67,7 @@ import { defaultFetchOrigin } from "./standing-authorization.mjs";
 import { createGitClient, main as validateChangelog } from "../docs/validate-changelog-completeness.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
 
 const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --result-path <path> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --handback --site-coverage <path> [--worktree <dir>]   (fixer handbackCheck run)
@@ -77,7 +78,7 @@ const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha
 
 Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
 
-  --act-list <path>       The judge-pass --out act list the fix resolves
+  --act-list <path>       The judge-pass --out act list the fix resolves. An act item that names no file (a PR-body item) leaves the act set and is printed as bodyItems, a top-level field of the input-run output that is present only when at least one act item was dropped; edit the PR body through scripts/github/edit-pr.mjs and the next gate round verifies it. An act list of only such items refuses delta_body_only_act_set, except on the --reviewer-only route, where it yields an empty code act set and prints bodyItems
   --threads-file <path>   Thread route, in place of --act-list: successful list-review-threads --unresolved-only
                           output for --repo/--pr. Each unresolved thread is one act item; its ref is the threadId.
   --repo <owner/name>     Required with --threads-file and --reviewer-only
@@ -399,7 +400,23 @@ function fetchAndResolveBase(worktree, base, { revParse, fetchBase }) {
   try { fetchBase(base, { repoRoot }); } catch (error) { throw new Error(`reviewer-only: git fetch origin ${base} failed (${error?.message}); cannot trust the local origin/${base} ref. Run \`git fetch origin ${base}\` and rerun`); }
   try { revParse(worktree, `origin/${base}`); } catch { throw new Error(`reviewer-only: origin/${base} does not exist in ${worktree}; run \`git fetch origin ${base}\` and rerun`); }
 }
-async function reviewerOnlyBase(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base }) {
+// The PR-own commit count of baseline..head under the reviewer-only rules: non-merge commits origin/<base> lacks plus non-base-only merges.
+// The body-only converged post (ADR 0271) asks the same question, so it calls this instead of counting on its own.
+export async function countPrOwnCommits(worktree, baseline, head, base, { revParse = gitRevParse, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, fetchBase = defaultFetchOrigin, isAncestor = gitIsAncestor } = {}) {
+  fetchAndResolveBase(worktree, base, { revParse, fetchBase });
+  // A head that does not descend from the baseline (reset or force-pushed backward) has an empty baseline..head range, which must not read as "no PR-own commit".
+  if (baseline !== head && !isAncestor(worktree, baseline, head)) throw new Error(`own_commit_in_range: ${head} does not descend from the reviewed head ${baseline}; the head moved backward or sideways, so the range holds code the cap round never reviewed`);
+  const { ownCommits, resolvedMerges } = await reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base });
+  return ownCommits + resolvedMerges.length;
+}
+async function reviewerOnlyBase(worktree, baseline, head, deps) {
+  const { base } = deps;
+  const { ownCommits, resolvedPaths, resolvedMerges } = await reviewerOnlyRange(worktree, baseline, head, deps);
+  // A conflict-resolution merge is a PR-own change even with no non-merge commit of its own.
+  if (ownCommits === 0 && resolvedPaths.length === 0) throw new Error(`reviewer-only: ${baseline}..${head} holds no PR-own commit that origin/${base} lacks; there is no code range to clear. ${FIXER_REMEDY}`);
+  return { base, resolvedPaths, resolvedMerges };
+}
+async function reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base }) {
   const repoRoot = resolveRepoRoot(worktree);
 
   const ownCommits = revList(worktree, baseline, head, ["--no-merges", `^origin/${base}`]).length;
@@ -410,13 +427,11 @@ async function reviewerOnlyBase(worktree, baseline, head, { revParse, baseOnlyMe
     const parents = spawnSync("git", ["-C", repoRoot, "rev-list", "--parents", "-n", "1", merge], { encoding: "utf8", env: gitEnvNoDirOverrides() });
     const shown = parents.status === 0 && parents.stdout.trim().split(" ").length === 3
       ? gitRemergeShow(repoRoot, merge, ["--name-only", "-z"], "utf8") : null;
-    if (shown?.status !== 0) throw new Error(`non_base_only_merge: merge ${merge} in ${baseline}..${head} ${shown || parents.status !== 0 ? "has a resolution diff or parents that cannot be read" : `is an octopus merge (${parents.stdout.trim().split(" ").length - 1} parents)`} (${((shown ?? parents).stderr ?? "").trim() || (shown ?? parents).error?.message}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${REPLACEMENT_REMEDY}`);
+    if (shown?.status !== 0) throw new Error(`non_base_only_merge: merge ${merge} in ${baseline}..${head} ${shown || parents.status !== 0 ? "has a resolution diff or parents that cannot be read" : `is an octopus merge (${parents.stdout.trim().split(" ").length - 1} parents)`} (${((shown ?? parents).stderr ?? "").trim() || (shown ?? parents).error?.message}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
     resolvedPaths.push(...shown.stdout.split("\0").filter(Boolean));
     resolvedMerges.push(merge);
   }
-  // A conflict-resolution merge is a PR-own change even with no non-merge commit of its own.
-  if (ownCommits === 0 && resolvedPaths.length === 0) throw new Error(`reviewer-only: ${baseline}..${head} holds no PR-own commit that origin/${base} lacks; there is no code range to clear. ${FIXER_REMEDY}`);
-  return { base, resolvedPaths, resolvedMerges };
+  return { ownCommits, resolvedPaths, resolvedMerges };
 }
 
 async function authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor, { closureOnly = false } = {}) {
@@ -471,10 +486,11 @@ async function readPrBase(fetchPr, { repo, pr }) {
 
 // Remedies the reviewer-only refusals name (each command exists in the CLI registry; the conformance walk checks it).
 // The coordinator routes the cap-round state back to extend-cap-round-chain and this tool, so no remedy here names it.
-const FIXER_REMEDY = "The cap round's open act items need a fix commit: commit it on the PR branch (the worktree HEAD is the PR head), then rerun the reviewer-only delta";
+const FIXER_REMEDY = "The cap round's open act items need a fix commit: commit it on the PR branch (the worktree HEAD is the PR head), then rerun the reviewer-only delta. When every open act item is a PR-body item (no file named), edit the PR body and post upsert-checkpoint-verdict.mjs --converged-json with { fixerCommit, actList, bodyOnly: true } instead (ADR 0271)";
 // A locally_clear record or an extension at the baseline means the act items are cleared: the next range starts at the chain end.
-const CHAIN_END_REMEDY = "The cap round's act items are already cleared: run dev-loops gate extend-cap-round-chain --repo <owner/name> --pr <n> (its refusal names the reviewer-only delta and the baseline to use)";
-const REPLACEMENT_REMEDY = "node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr <this PR number> while this PR is still open";
+// Both render at use time so the form follows CLAUDECODE at the refusal, like the sibling call-time cliError.
+const chainEndRemedy = () => renderCliText("The cap round's act items are already cleared: run dev-loops gate extend-cap-round-chain --repo <owner/name> --pr <n> (its refusal names the reviewer-only delta and the baseline to use)");
+const replacementRemedy = () => renderCliText("node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr <this PR number> while this PR is still open");
 
 // ADR 0255 (decision 6, amended by ADR 0261): why a prior record at the baseline is protected from the reviewer-only run, or null. The same act set re-runs. A non-clearing record
 // (the fixer's needs_fix) is taken over whatever its ref set or candidate: it is never clearing evidence, and the takeover continues its invocation count. Only a locally_clear
@@ -484,13 +500,13 @@ function priorRecordRefusal(prior, { sequence, currentHead, isAncestor, isSealed
   if (!prior) return null;
   const offHistory = typeof prior.candidateHead !== "string" || !isAncestor(prior.candidateHead, currentHead);
   // No chain end remains when the cleared record's candidate is off the PR head's history (decision 6). A refusal without a remedy names the rm step (the caller adds it).
-  const cleared = (reason) => ({ reason, remedy: offHistory ? REPLACEMENT_REMEDY : CHAIN_END_REMEDY });
+  const cleared = (reason) => ({ reason, remedy: offHistory ? replacementRemedy() : chainEndRemedy() });
   if (prior.extension) return cleared("carries an extension");
   if (prior.actSetId === sequence.actSetId) return null;
   if (prior.outcome !== "locally_clear" && isSealed()) return null;
   const refs = (list) => [...new Set((list ?? []).map((item) => item?.ref))].sort().join("\n");
   // The chain-end remedy fits only a record whose items cover the derived refs (both empty at a chain end): another ref set leaves the cap round uncovered, so extend-cap-round-chain would refuse it.
-  if (prior.outcome === "locally_clear") return refs(prior.items) === refs(sequence.actItems) ? cleared("is locally_clear for another act set") : { reason: "is locally_clear for another act set and covers another set of act refs", remedy: REPLACEMENT_REMEDY };
+  if (prior.outcome === "locally_clear") return refs(prior.items) === refs(sequence.actItems) ? cleared("is locally_clear for another act set") : { reason: "is locally_clear for another act set and covers another set of act refs", remedy: replacementRemedy() };
   if (refs(prior.items) !== refs(sequence.actItems) || offHistory) return { reason: offHistory ? "names a candidate that is not on the PR head's history" : "covers another set of act refs" };
   return null;
 }
@@ -604,7 +620,7 @@ export async function runCli(
     if (currentHead === baselineHead) throw new Error(`reviewer-only: worktree HEAD ${currentHead} equals the baseline; there is no code range to clear. ${FIXER_REMEDY}`);
     const root = tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree);
     // Checked under the sequence lock the fixer emission writes its marker under, here and again before the result write.
-    noMarker = () => { if (readSequenceMarker(root, baselineHead)) throw new Error(`reviewer-only: an active sequence marker exists for baseline ${baselineHead}; the fixer closes it when it pushes its commit; close an abandoned one with dev-loops gate close-sequence --head ${baselineHead} --repo <owner/name> --pr <n> and rerun`); };
+    noMarker = () => { if (readSequenceMarker(root, baselineHead)) throw cliError(`reviewer-only: an active sequence marker exists for baseline ${baselineHead}; the fixer closes it when it pushes its commit; close an abandoned one with dev-loops gate close-sequence --head ${baselineHead} --repo <owner/name> --pr <n> and rerun`); };
     // Read and classify under the sequence lock the result run and extend-cap-round-chain take: a record mid-write (seal removed, new record renamed) is never taken for an unsealed one.
     // A record that is not JSON (a crash during its write) refuses like any other unsealed leftover.
     // A candidate missing from the clone is not on the PR head's history.
@@ -620,13 +636,13 @@ export async function runCli(
       refusal ??= priorRecordRefusal(priorRecord, { sequence, currentHead, isAncestor: onHistory, isSealed });
       if (refusal) {
         const unsealed = priorRecord === undefined || !isSealed();
-        throw new Error(`reviewer-only: ${unsealed ? "unsealed_record: " : ""}the delta record for baseline ${baselineHead} ${refusal.reason} and is never overwritten. ${unsealed || !refusal.remedy ? `${unsealed ? "Its seal does not match; if it is a leftover" : "If it is stale"}${refusal.reason.includes("history") ? " (run git fetch origin <candidate> first; if it is still absent)" : ""}, run \`rm -f ${shellQuote(gateDeltaRecordPath(root, baselineHead))} ${shellQuote(`${gateDeltaRecordPath(root, baselineHead)}.seal`)}\` and rerun (this restarts the invocation count), or restart on a replacement PR: ${REPLACEMENT_REMEDY}` : refusal.remedy}`);
+        throw new Error(`reviewer-only: ${unsealed ? "unsealed_record: " : ""}the delta record for baseline ${baselineHead} ${refusal.reason} and is never overwritten. ${unsealed || !refusal.remedy ? `${unsealed ? "Its seal does not match; if it is a leftover" : "If it is stale"}${refusal.reason.includes("history") ? " (run git fetch origin <candidate> first; if it is still absent)" : ""}, run \`rm -f ${shellQuote(gateDeltaRecordPath(root, baselineHead))} ${shellQuote(`${gateDeltaRecordPath(root, baselineHead)}.seal`)}\` and rerun (this restarts the invocation count), or restart on a replacement PR: ${replacementRemedy()}` : refusal.remedy}`);
       }
     });
     // The invocation bound of 3 counts the reviewer-only records at this baseline; a takeover continues the prior record's count.
     const expected = (Number.isInteger(priorRecord?.invocation) ? priorRecord.invocation : 0) + 1;
     // A locally_clear record that used the last invocation cleared its act items: the chain-end route applies, not the replacement-PR restart.
-    if (expected > DELTA_MAX_INVOCATIONS) throw new Error(priorRecord?.outcome === "locally_clear" && onHistory(priorRecord.candidateHead, currentHead) ? `reviewer-only: the locally_clear record for baseline ${baselineHead} used the last invocation and is never overwritten. ${CHAIN_END_REMEDY}` : `reviewer-only: the invocation bound of ${DELTA_MAX_INVOCATIONS} is reached for baseline ${baselineHead}; bounded_out, restart_on_replacement_pr: ${REPLACEMENT_REMEDY}`);
+    if (expected > DELTA_MAX_INVOCATIONS) throw new Error(priorRecord?.outcome === "locally_clear" && onHistory(priorRecord.candidateHead, currentHead) ? `reviewer-only: the locally_clear record for baseline ${baselineHead} used the last invocation and is never overwritten. ${chainEndRemedy()}` : `reviewer-only: the invocation bound of ${DELTA_MAX_INVOCATIONS} is reached for baseline ${baselineHead}; bounded_out, restart_on_replacement_pr: ${replacementRemedy()}`);
     if (options.result && options.invocation !== expected) throw new Error(`reviewer-only: --invocation ${options.invocation} is not the next invocation ${expected} for baseline ${baselineHead}`);
     const { base, resolvedPaths, resolvedMerges } = await reviewerOnlyBase(options.worktree, baselineHead, currentHead, { revParse, baseOnlyMerge, revList, base: prBase });
     baseBranch = base;
@@ -634,13 +650,13 @@ export async function runCli(
     if (ownPaths.length === 0) throw new Error(`reviewer-only: the PR-own commits in ${baselineHead}..${currentHead} change no file; there is no code range to clear. ${FIXER_REMEDY}`);
     // The reviewer reads this plain patch: an empty one (an empty conflict resolution, net-reverting commits) cannot be judged.
     reviewerPatch = Buffer.from(diffPatch(options.worktree, baselineHead, currentHead, ownPaths));
-    if (!reviewerPatch.length) throw new Error(`empty_resolution_patch: the PR-own range ${baselineHead}..${currentHead} leaves an empty patch the reviewer cannot read. Only the replacement-PR restart remains: ${REPLACEMENT_REMEDY}`);
+    if (!reviewerPatch.length) throw new Error(`empty_resolution_patch: the PR-own range ${baselineHead}..${currentHead} leaves an empty patch the reviewer cannot read. Only the replacement-PR restart remains: ${replacementRemedy()}`);
     // The cumulative diff shows a conflict merge's final content only: append what the resolution changed against the automatic remerge, so a dropped base-side change is visible.
     reviewerPatch = Buffer.concat([reviewerPatch, ...resolvedMerges.map((merge) => remergeSection(resolveRepoRoot(options.worktree), merge))]);
   }
   if (reviewerPatch) {
     const unnamed = gitlinkPaths(options.worktree, baselineHead, currentHead, ownPaths).filter((file) => !patchNamesFile(reviewerPatch, file));
-    if (unnamed.length) throw new Error(`gitlink_not_in_patch: the PR-own range ${baselineHead}..${currentHead} changes the gitlink path(s) ${unnamed.join(", ")} that the reviewer patch does not name, so the reviewer cannot judge them. Only the replacement-PR restart remains: ${REPLACEMENT_REMEDY}`);
+    if (unnamed.length) throw new Error(`gitlink_not_in_patch: the PR-own range ${baselineHead}..${currentHead} changes the gitlink path(s) ${unnamed.join(", ")} that the reviewer patch does not name, so the reviewer cannot judge them. Only the replacement-PR restart remains: ${replacementRemedy()}`);
   }
   // The CLI runs before the push, so the fix is unpushed by construction.
   const fixCommitted = currentHead !== sequence.reviewBaselineHead;
@@ -746,7 +762,7 @@ export async function runCli(
       if (!readBack?.equals(reviewerPatch)) throw new Error(`reviewer-only: the range ${baselineHead}..${currentHead} now differs from the patch the reviewer read (${readPatch}); origin/${baseBranch} or the branch moved after the input run. Rerun the input run (without --result) and have the reviewer judge the new patch`);
       // Only a locally_clear result writes a clearing step: a bounded_out must not read as push_to_gate (ADR 0255).
       if (decision.outcome === "bounded_out") decision = { ...decision, nextStep: "restart_on_replacement_pr" };
-      if (priorRecord?.outcome === "locally_clear" && !decision.locallyClear) throw new Error(`reviewer-only: the locally_clear record for baseline ${baselineHead} is not replaced by a non-clearing result and is never overwritten. ${CHAIN_END_REMEDY}`);
+      if (priorRecord?.outcome === "locally_clear" && !decision.locallyClear) throw new Error(`reviewer-only: the locally_clear record for baseline ${baselineHead} is not replaced by a non-clearing result and is never overwritten. ${chainEndRemedy()}`);
     }
     // Local evidence for the emitter and the fixed-reply guard; never a gate verdict.
     const write = () => writeGateDeltaRecord({
@@ -777,7 +793,7 @@ export async function runCli(
       writeFileSync(patchPath, reviewerPatch ?? diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead, ownPaths));
     }
     // The target binds the log's repo and pr: authenticateCoverage's for a plan, --repo/--pr for the reviewer-only route; without one the chain path refuses.
-    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE, sealCommand: deltaSealCommand(options.resultPath, tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), options.worktree) }), ...buildDeltaInput({ sequence, candidateHead: currentHead, runId, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles, staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
+    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE, sealCommand: deltaSealCommand(options.resultPath, tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), options.worktree) }), ...buildDeltaInput({ sequence, candidateHead: currentHead, runId, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles, staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) }, ...(sequence.bodyItems.length > 0 ? { bodyItems: sequence.bodyItems } : {}) };
     // Every input run opens its own unsealed record, so a re-run of the producer at the same heads can seal again. Last step: only a successful input run moves the pointer.
     if (!options.handback) createEvidenceRun(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), { reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead, actSetId: sequence.actSetId, runId }, path.resolve(options.worktree, options.resultPath));
   }

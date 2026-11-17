@@ -71,15 +71,16 @@ If the current issue/PR/local state is materially unclear, contradictory, off-tr
 
 If local facts, GitHub facts, and helper/state-machine output do not agree well enough to choose the next step confidently, stop and ask for human direction.
 
-## Unit coordinator report points (issue 2532, amended by issue 2955)
+## Unit coordinator report points (issue 2532, amended by issues 2955 and 3069)
 
-You run the cycle until a real stop. The envelope's `unitBoundaries` names your report points,
+You run one step: up to your first gate-round end, fix-pass end or other run-ending case. The envelope's `unitBoundaries` names your report points,
 derived from the target and route, never from a predecessor's prose. `reportAfter` is an
-ordered list. At each listed report point you reach, in order, record status through existing
+ordered list. At the `draft_pr_opened` report point, record status through existing
 evidence (PR comment or gate ledger), re-resolve authoritative state with `unitBoundaries.resume`
-and **continue**. Re-resolving is a read of current state through the resume identity. A
+and **continue**. At `gate_verdict_posted`, hand back under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`.
+Re-resolving is a read of current state through the resume identity. A
 pull-dispatched coordinator keeps the pulled work order as its digest-pinned authority and builds no
-new envelope. After draft PR creation or a verdict, it adopts the new PR identity for state reads
+new envelope. After draft PR creation, it adopts the new PR identity for state reads
 and gate calls under the same assigned task. A unit that owns no PR yet reaches `draft_pr_opened` when it opens its draft PR;
 a unit that already owns a PR reaches `gate_verdict_posted` after posting its own gate verdict. Do
 not wait for a report point your own route cannot reach. An envelope with no `unitBoundaries`
@@ -88,12 +89,13 @@ omits the field entirely rather than sending an empty list, and the validator re
 `reportAfter`. One entry is a **recorded naming approximation**: `final_approval` runs a gate round but posts
 no verdict of its own, and still carries `gate_verdict_posted`
 (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`). An `issue_intake` unit reports at
-`draft_pr_opened`, continues on the PR route, and then reports at `gate_verdict_posted`, in order.
+`draft_pr_opened`, continues on the PR route, and then hands back at `gate_verdict_posted` under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`.
 
 Hand back only at the run-ending cases in Unit coordinator boundaries of the
-[Main-agent contract](../skills/docs/main-agent-contract.md): `final_approval_ready`, a stop that
+[Main-agent contract](../skills/docs/main-agent-contract.md): `final_approval_ready`, the end of a
+gate round, the end of a fix pass, a stop that
 needs a decision, the route's own terminal completion, a changed route, a lockout, genuine
-recovery, an unavailable actor, a runtime constraint, or explicit operator direction. The issue-to-PR re-target caused by the unit's own draft PR is a continuation, not a changed route. The orchestrator never runs `loop startup`: it only emits and dispatches a replacement's
+recovery, an unavailable actor, a runtime constraint, or explicit operator direction. The issue-to-PR re-target caused by the unit's own draft PR is a continuation, not a changed route. At a gate-round end or a fix-pass end, join every worker you dispatched, run `validate-coordinator-handback.mjs`, release your runner claim only after exit 0 and hand back the typed packet (`pr`, `head`, `nextAction`, `workerRunning`) under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`; never continue into the next round. The orchestrator never runs `loop startup`: it only emits and dispatches a replacement's
 work order from the startup-output path you name. The replacement re-resolves
 `unitBoundaries.resume` against authoritative state. That field carries the unit's own identities
 exactly as the producer emitted them, whichever of `issue`, `pr`, `branch` and `phase` the target
@@ -150,17 +152,17 @@ All delegation MUST originate from the handoff envelope: the envelope's `nextAct
 
 The pi-subagents skill is parent-only, so delegated subagents do not receive orchestration patterns. This section exists as the minimal locally-enforced subset needed for correct delegation — it is not a restatement of the full policy. The `dev-loop` skill owns all procedural rules; this section only declares the invariants the agent MUST follow when it cannot defer to the skill:
 - One writer thread; `async: true` default; `context: "fresh"` for reviewers.
-- Every sub-loop (refine, implement, gate review round, fixer) runs in its own dedicated fresh-context agent. A gate review round runs in one gate coordinator per round, dispatched as the `gate-coordinator` agent, which owns reviewer fan-out, fan-in, and judge (`GATE-EXEC-GATE-COORDINATOR` in [Gate Review Sub-Loop Contract](../skills/docs/gate-review-sub-loop-contract.md)). The coordinator reads only the gate coordinator's typed round result, as `GATE-EXEC-GATE-COORDINATOR` lists it. An agent dispatched to run one of these sub-loops executes it as its assigned bounded task. The coordinator keeps its own context thin and performs no sub-loop work inline.
+- Every sub-loop (refine, implement, gate review round, fixer) runs in its own dedicated fresh-context agent. A gate review round runs in one gate coordinator per round, dispatched as the `gate-coordinator` agent (on Claude Code only, dispatch per `MAIN-CLAUDE-DISPATCH-MODEL` in [Main Agent Contract](../skills/docs/main-agent-contract.md) with `dev-loops-run cli/index.mjs gate resolve-role --role gate-coordinator --harness claude`, and do the same for each other sub-delegate role; Pi uses its own configured models), which owns reviewer fan-out, fan-in, and judge (`GATE-EXEC-GATE-COORDINATOR` in [Gate Review Sub-Loop Contract](../skills/docs/gate-review-sub-loop-contract.md)). The coordinator reads only the gate coordinator's typed round result, as `GATE-EXEC-GATE-COORDINATOR` lists it. An agent dispatched to run one of these sub-loops executes it as its assigned bounded task. The coordinator keeps its own context thin and performs no sub-loop work inline.
 - No child subagent spawning beyond assigned fan-out work. Only the `gate-coordinator` agent dispatches the round's `review` agents and judge (`GATE-EXEC-GATE-COORDINATOR`). The standalone `--review` route is the exception: its gate coordinator runs no judge phase, and the `dev-loop` agent dispatches the Phase 3.5 judge after the gate coordinator returns (`REVIEW-GATE-JUDGE-PHASE` in [Gate review comment contract](../skills/docs/gate-review-comment-contract.md#review-gate-judge-phase); procedure in [Review skill](../skills/review/SKILL.md)).
 - Bounded tasks with concrete scope, exit conditions, and validation expectations.
 - On Claude Code, your pauses and your one `SubagentHandback` follow `COORDINATOR-HANDBACK-ONE-REPORT` in [Main-agent contract](../skills/docs/main-agent-contract.md), and the child-in-flight report follows `GATE-EXEC-HARNESS-JOIN` in [Gate Review Sub-Loop Contract](../skills/docs/gate-review-sub-loop-contract.md).
 - Awaiting any wait the run depends on (a gate coordinator, a judge, a fixer, a reviewer, a CI-green wait, or a Copilot-review wait) is a synchronous join, never a detached background wait that ends the turn. On Pi, join a nested subagent child (gate coordinator/judge/fixer/reviewer) with a blocking dispatch (`async: false`) or one `bg_wait` nonBlocking subscription. On Claude Code, the gate coordinator joins a round's reviewer and judge units with a foreground `dev-loops-run cli/index.mjs gate wait-for-units` join, re-issued on `pending` per `GATE-EXEC-BOUNDED-WAIT-CAP`, and you join the gate coordinator and developer through their completion notification, which is the join signal and is never dismissed as a repeat (read the round-result hand-back text on every wake; an interim or "has not reported yet" notification means the child is still in flight). Join a CI-green or Copilot-review wait with the bounded foreground probe in the next bullet. Never sleep-poll for any of them. On Pi and for a CI-green or Copilot-review wait, never end the turn to await one. On Claude Code, ending the turn to receive a gate coordinator or developer completion notification is the `GATE-EXEC-HARNESS-JOIN` join for that edge. On Claude Code, join the fixer and the delta reviewer with `gate wait-for-units --artifact <hand-back path> --after <reference path>` in the same turn (the fixer's `joinRef` with the emitted plan as reference, the delta reviewer's `--result` path with its `input.patchPath` as reference), and never end the turn before it returns (`COORDINATOR-SINGLE-CHILD-JOIN`). The one exception: a full-phase fixer join that times out follows `COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK`. See `END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](../skills/docs/anti-patterns.md) and the dev-loop SKILL's gate fan-out dispatch discipline guard rules (#1907) for the full contract. Join rule: `GATE-EXEC-HARNESS-JOIN`.
 - Waiting for Copilot review or CI: run a bounded FOREGROUND inline probe (`probe-copilot-review.mjs` / `wait-pr-checks.mjs` with an explicit `--timeout <seconds>`), never any `while`/`until`/`for` loop that runs `sleep` (foreground or backgrounded) or a bare-`&` backgrounded probe (#2065). Claude Code never joins a bare-`&` shell-backgrounded wait, so it orphans past the stop; the PreToolUse Bash-gate denies it for the coordinator and every subagent, actor-independently and fail-closed (a `SubagentStop` background-shell reaper safety-net is tracked as follow-up #2296).
 
-Dispatch guidance: a reviewer or judge dispatch is exactly the emitted `dispatchPrompt`. Its pulled work order carries the spec pointer, and its agent definition cites the rules it needs. A worker or fixer dispatch names the linked issue and states "The issue body is the spec; read it." On the lightweight `pr_body` path the PR body is the spec, and the dispatch names the PR instead. A dispatch never restates issue-specific spec. It cites rules by rule ID, never by copied text, and cites each rule only to the roles that need it:
+Dispatch guidance: a reviewer or judge dispatch is exactly the emitted `dispatchPrompt`. Its pulled work order carries the spec pointer, and its agent definition cites the rules it needs. A worker dispatch (developer, docs, quality) names the linked issue and states "The issue body is the spec; read it." A fixer dispatch is exactly the `dispatchPayload` that `scripts/loop/emit-fixer-work-order.mjs` prints (its pull line), never a prose brief. On the lightweight `pr_body` path the PR body is the spec, and the dispatch names the PR instead. A dispatch never restates issue-specific spec. It cites rules by rule ID, never by copied text, and cites each rule only to the roles that need it:
 - agents that dispatch children, such as a gate coordinator: `GATE-EXEC-HARNESS-JOIN`;
-- editing workers (developer, fixer, docs): `WORKTREE-NONINTERACTIVE-FILE-OPS` and `OPS-NO-INLINE-INTERPRETER`;
-- script runners (any role that runs repo scripts; a reviewer or judge gets it through its agent definition): `WORKTREE-SCRIPT-LAUNCHER-CWD`.
+- editing workers (developer, docs): `WORKTREE-NONINTERACTIVE-FILE-OPS` and `OPS-NO-INLINE-INTERPRETER` (a fixer gets both through its agent definition; a reviewer and judge get only `WORKTREE-NONINTERACTIVE-FILE-OPS` that way);
+- script runners (any role that runs repo scripts; a reviewer, judge or fixer gets it through its agent definition): `WORKTREE-SCRIPT-LAUNCHER-CWD`.
 
 A worker, reviewer, judge or fixer dispatches no children and receives no join rule.
 

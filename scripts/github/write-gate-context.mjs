@@ -29,13 +29,13 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, findAngleEntry, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, findAngleEntry, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveFanoutSizeTier, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveGateDispatchMode, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { VERIFIED_ITEMS_ANGLES, baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves, validateAngleResult } from "@dev-loops/core/loop/gate-fanin";
 import { anchorBaseRef, normalizeBaseBranch } from "../lib/anchor-base-ref.mjs";
 import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-write-remote-freshness-guard.mjs";
-import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { REVIEWER_UNIT_MAX_ANGLES, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 import { retireGateRound } from "./retire-gate-round.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -62,6 +62,7 @@ import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 import { clusterFindings, clustersFromStampedIds, dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
+import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DELTA_CLEARING_NEXT_STEPS, listGateDeltaRecords, readGateDeltaRecord, readSealedGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { captureMainRelativeChangedFilesSince, isBaseOnlyMergeSince, runGitCommand } from "../lib/git-delta.mjs";
 import { existsSync } from "node:fs";
@@ -1428,7 +1429,7 @@ export function renderBriefingPrefix({
   lines.push("");
   const findingsDir = path.join(worktreeRoot, buildGateReviewsDir({ repo, pr, gate, headSha }));
   lines.push(
-    `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${worktreeRoot}" && dev-loops-run scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${worktreeRoot}" ...\` and every file read via an absolute path under ${worktreeRoot}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
+    `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as \`dev-loops-run --repo-root "${worktreeRoot}" scripts/github/verify-fresh-review-context.mjs ...\` (\`--repo-root\` runs it with cwd at this worktree) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${worktreeRoot}" ...\` and every file read via an absolute path under ${worktreeRoot}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
   );
   lines.push("");
   lines.push(
@@ -1520,6 +1521,7 @@ function renderCapRoundResidueLines(residue) {
  *
  * @param {object} input
  * @param {string|null} [input.issueRef] — label for the linked-issue section heading (e.g. a single issue-reference label, or a comma-joined multi-issue list)
+ * @param {string|null} [input.worktreeRoot] — reviewed application checkout, independent of artifact storage
  * @param {string|null} [input.issueBody] — single-issue body, rendered under `issueRef` with no `### <label>` sub-heading. Ignored when `issueSections` is given.
  * @param {{label: string, body: string}[]|null} [input.issueSections] — per-issue bodies for a multi-issue PR (structured, never pre-joined): each renders as a renderer-emitted `### <label>` line OUTSIDE any fence, followed by that issue's OWN pickFence-sized fenced block. Takes precedence over `issueBody` when non-empty.
  * @param {string|null} [input.diffOutput] — filtered diff text, when captured; sizes the pointer (prefixMode, diffBytes), never inlined
@@ -1540,7 +1542,7 @@ function renderCapRoundResidueLines(residue) {
  * @returns {{ text: string, prefixMode: "inline"|"pointer", diffBytes: number }}
  */
 export function renderBriefingEvidence({
-  repo, pr, gate, headSha,
+  repo, pr, gate, headSha, worktreeRoot = null,
   issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null, changedFiles = [], excludedFiles = [], adjacentCode = null,
   validationResultsPath = null,
@@ -1561,6 +1563,7 @@ export function renderBriefingEvidence({
   lines.push(`pr: #${pr}`);
   lines.push(`gate: ${gate}`);
   lines.push(`head: ${headSha}`);
+  if (worktreeRoot) lines.push(`worktree: ${worktreeRoot}`);
   lines.push(`prefixMode: ${prefixMode}`);
   lines.push("");
   const hasIssueSections = Array.isArray(issueSections) && issueSections.length > 0;
@@ -2054,7 +2057,7 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
     // A stamped ledger that never finished (an aborted or intermediate write) is no round at any head, current or earlier.
     if (log.roundIdentity !== undefined && log.roundIdentity?.completed !== true) continue;
     if (!retained && (sha.startsWith(head) || head.startsWith(sha)) && isInRoundRewrite(log, options.roundIdentity)) continue;
-    // The live ledger ranks above every retained round of its head; retained rounds order by their number.
+    // Rounds order by loggedAt, then head, then retained number; the live ledger (Infinity) sorts last among rounds of equal loggedAt and head.
     const retainedNumber = /\.round-(\d+)\.json$/.exec(name);
     rounds.push({ sha, loggedAt: typeof log.loggedAt === "string" ? log.loggedAt : "", round: retainedNumber ? Number(retainedNumber[1]) : Infinity, log });
   }
@@ -2178,11 +2181,11 @@ export function capRoundActList(findings, headSha) {
 export const isCleanCapRound = (capRound) => capRound?.log?.verdict === "clean" && capRoundActRefs(capRound.log.findings, capRound.log.headSha).size === 0;
 
 /**
- * The cap round of a draft_gate (ADR 0208): the last closed ledger when the completed rounds (the head being posted excluded) reached the cap and
+ * The cap round of a draft_gate (ADR 0208): the last closed ledger when the completed rounds reached the cap (the count includes a finished live ledger at the current head; an unfinished or in-rewrite ledger never counts) and
  * that ledger is `findings_present` or `clean` (ADR 0250: a clean cap round has no act ref; its `residue` holds only `capClosed` items). Returns `{ log, residue }` or null. `residue` is the cap round's act items and `capClosed` items as
  * `{ fingerprint, file, line, title, disposition }`, the input `pre_approval_gate` receives.
- * The candidate set is the closed prior rounds plus the retained rounds of the current head. The live current-head ledger is the round being posted
- * (the head excluded, as in the round count), so it is never the cap-round authority and the latest retained round at the head is.
+ * The candidate set is the closed prior rounds plus the retained rounds of the current head. A finished live ledger at the current head counts and can be the cap round
+ * (a PR-body-only edit leaves the head unchanged), the same count the coordination detector uses (`includeLiveCurrentHead`).
  */
 export async function resolveCapRound(options, { repoRoot, onFailClosed = () => {} }) {
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
@@ -2190,10 +2193,10 @@ export async function resolveCapRound(options, { repoRoot, onFailClosed = () => 
   const draft = { ...options, gate: "draft_gate" };
   // The findings ledger is main-anchored: never read it from a relocated --tmp-root.
   const ledger = { ...draft, tmpRoot: undefined };
-  if (!(cap > 0) || await countCompletedRounds(ledger, { repoRoot }) - 1 < cap) return null;
+  if (!(cap > 0) || await countCompletedRounds(ledger, { repoRoot, includeLiveCurrentHead: true }) - 1 < cap) return null;
   // An unreadable ledger counts toward the cap but readClosedPriorRoundLogs drops it, so the cap-round authority could be an earlier round: fail closed.
   let unreadable = 0;
-  const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, includeRetainedCurrentHead: true, onUnreadable: () => { unreadable += 1; } })).at(-1);
+  const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, includeLiveCurrentHead: true, includeRetainedCurrentHead: true, onUnreadable: () => { unreadable += 1; } })).at(-1);
   // The persisted severity verdict can read `clean` for judge-act mediums whose posted review composes findings_present: an open act item makes the round a cap round too.
   if (unreadable > 0 || !log || (log.verdict !== "findings_present" && log.verdict !== "clean" && listOpenActItems(log.findings).length === 0)) { onFailClosed(); return null; }
   // An act item the sealed cap-round delta record marks resolved is fixed, not residue; with no verifiable record every act item stays.
@@ -2283,21 +2286,24 @@ export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, 
   return (await clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge, covering, allowUnsealedEnd })).ends;
 }
 
-/** The chain ends and every head the sealed clearing chains of the cap round `capHead` visit after it (each seeded merge, each record candidate head and each chain end), from one walk: each start's end is collected in the same loop that fills the heads, so a record rewrite cannot split them. */
+/** The chain ends and every head the sealed clearing chains of the cap round `capHead` visit after it (each seeded merge, each record candidate head and each chain end), from one walk: each start's end is collected in the same loop that fills the heads, so a record rewrite cannot split them. `candidates` is the subset of record candidate heads from that loop. */
 export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, covering = () => true, allowUnsealedEnd = false }) {
   const { starts, seedHeads } = await capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
   const ends = [];
   // The heads the seed proof visited stay in the set even if a concurrent rewrite changes a record before the traversal below.
   const heads = new Set(seedHeads);
+  // `candidates` holds only record candidate heads; `heads` also holds the seeded base-only merges (record baselines).
+  const candidates = new Set();
   // `covering` drops a start that does not name every act item of the cap round (the emitter seam passes none).
   for (const start of starts.filter(covering)) {
     const seededFrom = normalizeSha(start.reviewBaselineHead);
     if (seededFrom && seededFrom !== normalizeSha(capHead)) heads.add(seededFrom);
     // The end and the visited heads come from one read of each record, in the shared clearingChainEnd.
-    const last = clearingChainEnd(tmpRoot, start, heads, { allowUnsealedEnd });
+    const last = clearingChainEnd(tmpRoot, start, candidates, { allowUnsealedEnd });
     if (last) ends.push(last);
   }
-  return { ends, heads: [...heads] };
+  for (const head of candidates) heads.add(head);
+  return { ends, heads: [...heads], candidates: [...candidates] };
 }
 
 // Extension values a sealed clearing record may carry to prove a clean cap round (ADR 0250 records `docs_tests_only`).
@@ -2308,7 +2314,9 @@ const CLEAN_CAP_EXTENSIONS = new Set(["docs_tests_only", "delta_covered"]);
  */
 export const capRoundCovers = (capRound, tmpRoot) => (record) => {
   const refs = new Set((Array.isArray(record.items) ? record.items : []).map((i) => String(i?.ref)));
-  const actRefs = [...new Set(capRoundActRefs(capRound.log.findings, capRound.log.headSha).values())];
+  // A PR-body act item never enters a delta record (startDeltaSequence drops it), so the record cannot name its ref.
+  // The delta act list carries each cluster's kept representative only, so the body-item filter reads that representative, as startDeltaSequence does.
+  const actRefs = [...new Set(capRoundActList(capRound.log.findings, capRound.log.headSha).filter((e) => !isDeltaBodyItem(e)).map((e) => e.ref))];
   // A clean cap round has no act item, so only a record whose extension is in CLEAN_CAP_EXTENSIONS proves it (ADR 0250 for docs_tests_only):
   // the first record carries one, or a clearing chain over later heads reaches one.
   if (isCleanCapRound(capRound)) {
@@ -2511,10 +2519,10 @@ function normalizeCarriedAnglesArg(carriedAngles) {
  * @param {import("@dev-loops/core/config").DevLoopConfig|null} config
  * @param {"draft"|"preApproval"} configGate
  * @param {string[]} resolvedAngles
- * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string>, carriedAngles?: Iterable<string>, env?: Record<string, string|undefined>, singleWave?: boolean }} [options] — `env` defaults to `process.env`; injectable so a caller-boundary test can pin the harness deterministically instead of depending on the ambient environment. `singleWave` (default true) enables packing and the capacity refusal; the review gate passes false.
- * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number, preflight: object, pendingGroups: { name: string, angles: string[] }[], pendingWavePlan: { name: string, angles: string[] }[][] }}
+ * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string>, carriedAngles?: Iterable<string>, env?: Record<string, string|undefined>, singleWave?: boolean, unitBound?: number, sizeOutcome?: object|null, changedFiles?: string[]|null, harness?: string, recordedSizeTier?: object }} [options] — `env` defaults to `process.env`; injectable so a caller-boundary test can pin the harness deterministically instead of depending on the ambient environment. `singleWave` (default true) enables packing and the capacity refusal; the review gate passes false. `unitBound` is the same-head context's recorded bound, kept on resume; absent means the default, and a bound above the default survives only when a size tier applies. `harness` (default the env harness) drives the tier model partition. `recordedSizeTier` is the same-head context's `fanout.sizeTier`, reused when size evidence is unavailable.
+ * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number, unitBound: number, preflight: object, pendingGroups: { name: string, angles: string[] }[], pendingWavePlan: { name: string, angles: string[] }[][] }}
  */
-export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null, env = process.env, singleWave = true } = {}) {
+export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null, env = process.env, singleWave = true, unitBound: requestedUnitBound, sizeOutcome = null, changedFiles = null, harness: requestedHarness, recordedSizeTier: priorSizeTier } = {}) {
   // Angle-pool order, as the pairing guard re-derives it: auto-chunk
   // boundaries must not depend on the order the angles arrived in.
   const catalogOrder = resolveGateAngleContract(config, configGate).pool ?? [];
@@ -2583,7 +2591,7 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // derived from the full resolved-angle grouping, NEVER from the
   // completed/carried-filtered pending set: packDispatchUnits is a pure function
   // of its input, so wave 1 and every same-head resume derive the IDENTICAL
-  // packed units and the recorded membership (readContextDispatchUnits) still
+  // packed units and the recorded membership (readContextFanout + dispatchUnitsFromFanout) still
   // admits the reviewers the completed wave was dispatched under — re-deriving
   // the grouping from a shrunk pending set re-planned a different membership and
   // refused a legitimate resume. The pending/shortfall subset is then whatever
@@ -2595,9 +2603,69 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // `singleWave: false` (the standalone review gate, whose full-PR angle set
   // exceeds single-wave capacity) keeps the multi-wave plan unchanged.
   const perAngleMode = config?.gates?.fanout?.mode === "per-angle";
-  if (singleWave && !sequential && !perAngleMode) {
+  let unitBound = resolveReviewerUnitBound(requestedUnitBound);
+  // ADR 0278 size tier: an eligible small round packs whole base units, per
+  // resolved model, into units of at most the tier's bound. This replaces the
+  // single-wave packing below; verification re-derives the unpacked base units.
+  // An applied tier still packs under `sequential: true`; only the wave scheduler serializes the units.
+  // A classifiable round that light mode would run inline reaches fan-out only through an inline escalation, so it is treated as escalated and keeps existing grouping. An unclassifiable file forces full fan-out without escalation, so that round records unclassifiable_diff instead.
+  const classifyRules = resolveClassifyRules(config);
+  const unclassifiable = Array.isArray(changedFiles) && changedFiles.some((f) => classifyFile(f, classifyRules) === "unknown");
+  const escalated = !unclassifiable && Array.isArray(changedFiles) && changedFiles.length > 0 && resolveGateDispatchMode(config, configGate, { changedFiles, sizeOutcome, hasFullLabel: fullLabel }).mode === "inline";
+  let tierDecision = resolveFanoutSizeTier(config, singleWave ? configGate : "review", { sizeOutcome, changedFiles, hasFullLabel: fullLabel, escalated });
+  // A same-head rebuild without size evidence reuses the recorded applied tier, so the membership wave 1 dispatched on stays round-stable; any other reason re-derives.
+  let reusedTier = false;
+  if (tierDecision.reason === "size_outcome_unavailable" || tierDecision.reason === "changed_files_unavailable") {
+    const recorded = priorSizeTier?.tier;
+    const configured = (config?.gates?.fanout?.sizeTiers ?? []).find((t) => t.maxWholeLogicLoc === recorded?.maxWholeLogicLoc && t.maxAnglesPerUnit === recorded?.maxAnglesPerUnit);
+    const presentLoc = sizeOutcome?.wholeLogicLoc;
+    // Only absent evidence, or valid evidence within the recorded tier with unavailable changed files, reuses it. Present malformed evidence and evidence above the tier re-derive.
+    const fits = sizeOutcome == null
+      || (tierDecision.reason === "changed_files_unavailable" && typeof presentLoc === "number" && Number.isFinite(presentLoc) && presentLoc >= 0 && presentLoc <= configured?.maxWholeLogicLoc);
+    if (configured && fits) {
+      tierDecision = { tier: configured, reason: "size_tier_applied" };
+      reusedTier = true;
+    }
+  }
+  const sizeTierReasons = [tierDecision.reason];
+  let tierPacked = false;
+  if (tierDecision.tier) {
+    const tierBound = resolveReviewerUnitBound(tierDecision.tier.maxAnglesPerUnit);
+    const tierNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
+    const carried = new Set(carriedAnglesList.map((a) => baseAngleName(a).trim().toLowerCase()));
+    const dispatchable = groups.filter((g) => !(Array.isArray(g?.angles) && g.angles.length > 0 && g.angles.every((a) => carried.has(baseAngleName(String(a)).trim().toLowerCase()))));
+    const harness = requestedHarness ?? resolveRuntimeHarness(env);
+    const modelOf = (angle) => (config ? resolveRoleModel(config, { role: angle, harness, kind: "angle", gate: singleWave ? configGate : undefined }) : null);
+    const byModel = new Map();
+    let mixedBaseUnit = false;
+    for (const unit of expandDispatchUnits(dispatchable, tierNames, tierBound)) {
+      const models = new Set(unit.angles.map(modelOf));
+      if (models.size > 1) mixedBaseUnit = true;
+      const key = [...models][0] ?? null;
+      byModel.set(key, [...(byModel.get(key) ?? []), unit]);
+    }
+    if (byModel.size === 0 || mixedBaseUnit) {
+      sizeTierReasons[0] = mixedBaseUnit ? "mixed_model_base_unit" : "no_dispatchable_units";
+    } else {
+      // shortcut: first-fit decreasing is not guaranteed minimal for every set, upgrade when a measured case needs exact bin packing.
+      const packed = [...byModel.values()].flatMap((units) => packDispatchUnits(units, Infinity, tierBound));
+      if (singleWave && !sequential && expandDispatchUnits(packed, tierNames, tierBound).length > effectiveConcurrency) {
+        // Keep the single-wave guarantee: the existing path below packs to one wave or throws GATE-EXEC-FANOUT-CAPACITY.
+        sizeTierReasons[0] = "over_concurrency";
+      } else {
+        groups = packed;
+        unitBound = tierBound;
+        tierPacked = true;
+        if (byModel.size > 1) sizeTierReasons.push("model_partition");
+        if ([...byModel.values()].some((units) => units.reduce((n, u) => n + u.angles.length, 0) > tierBound)) sizeTierReasons.push("unit_bound_reached");
+      }
+    }
+  }
+  // No tier backs a recorded bound above the default, so existing grouping never inherits one from an earlier tiered build at this head.
+  if (!tierPacked) unitBound = Math.min(unitBound, REVIEWER_UNIT_MAX_ANGLES);
+  if (!tierPacked && singleWave && !sequential && !perAngleMode) {
     const configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
-    const baseUnits = expandDispatchUnits(groups, configuredGroupNames);
+    const baseUnits = expandDispatchUnits(groups, configuredGroupNames, unitBound);
     if (baseUnits.length > effectiveConcurrency) {
       // The DISPATCHABLE set: the resolved units minus every group whose angles
       // are ALL carried forward — a set fixed for the whole round (proven for
@@ -2610,7 +2678,7 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
       // reviewerBudgetPreflight strips carried angles from pendingGroups, issue 2511).
       const carriedKeys = new Set(carriedAnglesList.map((a) => baseAngleName(a).trim().toLowerCase()));
       const dispatchableGroups = groups.filter((g) => !(Array.isArray(g?.angles) && g.angles.length > 0 && g.angles.every((a) => carriedKeys.has(baseAngleName(String(a)).trim().toLowerCase()))));
-      const dispatchableUnits = expandDispatchUnits(dispatchableGroups, configuredGroupNames);
+      const dispatchableUnits = expandDispatchUnits(dispatchableGroups, configuredGroupNames, unitBound);
       if (dispatchableUnits.length > 0) {
         // Pack the DISPATCHABLE set, NEVER the full resolved set. The full set
         // still holds every fully-carried base unit, so packing it and
@@ -2622,15 +2690,15 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
         // are round-stable (proven for this head), so packing them out keeps
         // this a round-stable packing input: a same-head resume re-derives the
         // IDENTICAL units (the growing COMPLETED set is still excluded).
-        const packedDispatchable = dispatchableUnits.length > effectiveConcurrency ? packDispatchUnits(dispatchableUnits, effectiveConcurrency) : null;
+        const packedDispatchable = dispatchableUnits.length > effectiveConcurrency ? packDispatchUnits(dispatchableUnits, effectiveConcurrency, unitBound) : null;
         if (dispatchableUnits.length > effectiveConcurrency && packedDispatchable === null) {
           // The dispatchable plan itself cannot fit one wave: refuse and name
           // the set actually counted (the resolved count and the fresh subset)
           // so a carry-forward round is never mislabeled as all-fresh.
           const resolvedAngleCount = baseUnits.reduce((sum, unit) => sum + unit.angles.length, 0);
           const freshAngleCount = dispatchableUnits.reduce((sum, unit) => sum + unit.angles.filter((a) => !carriedKeys.has(baseAngleName(String(a)).trim().toLowerCase())).length, 0);
-          const capacity = effectiveConcurrency * REVIEWER_UNIT_MAX_ANGLES;
-          throw new Error(`GATE-EXEC-FANOUT-CAPACITY: refusing — the round resolves ${resolvedAngleCount} angles (${freshAngleCount} fresh, ${resolvedAngleCount - freshAngleCount} carried forward) in ${dispatchableUnits.length} base dispatch units that do not fit one wave of effective maxConcurrent ${effectiveConcurrency} units x ${REVIEWER_UNIT_MAX_ANGLES} angles (capacity ${capacity}); raise gates.fanout.maxConcurrent, disable angles, or rely on dynamic pruning to shrink the round`);
+          const capacity = effectiveConcurrency * unitBound;
+          throw new Error(`GATE-EXEC-FANOUT-CAPACITY: refusing — the round resolves ${resolvedAngleCount} angles (${freshAngleCount} fresh, ${resolvedAngleCount - freshAngleCount} carried forward) in ${dispatchableUnits.length} base dispatch units that do not fit one wave of effective maxConcurrent ${effectiveConcurrency} units x ${unitBound} angles (capacity ${capacity}); raise gates.fanout.maxConcurrent, disable angles, or rely on dynamic pruning to shrink the round`);
         }
         // Emit the dispatchable plan — it IS what will be dispatched, so it is
         // what the recorded membership must name. Packed base units when
@@ -2648,11 +2716,16 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // cap-split dispatch units (each a subset of one recorded unit), never the
   // unsplit group: stripping before the split moved angles across a part boundary.
   const dispatchGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
-  const preflight = reviewerBudgetPreflight(expandDispatchUnits(groups, dispatchGroupNames), availableReviewers, { completedAngles, carriedAngles: carriedAnglesList });
+  const preflight = reviewerBudgetPreflight(expandDispatchUnits(groups, dispatchGroupNames, unitBound), availableReviewers, { completedAngles, carriedAngles: carriedAnglesList, unitBound });
   const wavePlan = scheduleFanoutWaves(groups, effectiveConcurrency);
   const pendingGroups = preflight.pendingGroups;
   const pendingWavePlan = scheduleFanoutWaves(pendingGroups, effectiveConcurrency);
-  return { groups, wavePlan, sequential, maxAnglesPerGroup, maxConcurrent, effectiveConcurrency, preflight, pendingGroups, pendingWavePlan };
+  // The plan's size-tier record (AC4): only present when sizeTiers is configured, so a repo without the key keeps today's artifact shape.
+  const wholeLogicLoc = Number.isFinite(sizeOutcome?.wholeLogicLoc) ? sizeOutcome.wholeLogicLoc : (reusedTier && Number.isFinite(priorSizeTier?.wholeLogicLoc) ? priorSizeTier.wholeLogicLoc : null);
+  const sizeTier = Array.isArray(config?.gates?.fanout?.sizeTiers)
+    ? { wholeLogicLoc, tier: tierPacked ? tierDecision.tier : null, angleCount: groups.reduce((n, g) => n + g.angles.length, 0), unitCount: expandDispatchUnits(groups, dispatchGroupNames, unitBound).length, reasons: sizeTierReasons }
+    : undefined;
+  return { groups, wavePlan, sequential, maxAnglesPerGroup, maxConcurrent, effectiveConcurrency, unitBound, ...(sizeTier ? { sizeTier } : {}), preflight, pendingGroups, pendingWavePlan };
 }
 
 export function buildGateContextArtifact(options) {
@@ -3095,6 +3168,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       pr: options.pr,
       gate: options.gate,
       headSha: options.headSha,
+      worktreeRoot: reviewedWorktreeRoot(options.headSha, { repoRoot }),
       issueRef: options.acceptanceCriteria ?? null,
       issueBody: options.issueBody ?? null,
       issueSections: options.issueSections ?? null,
@@ -3282,9 +3356,13 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   const prefixHash = createHash("sha256").update(prefixBytes).digest("hex");
 
   // Request plan: angles partition by concrete resolved model via
-  // resolveRoleModel(config, { role: angle, harness, kind: "angle" }) — the
-  // SAME dispatch-time resolution a fan-out actually dispatches on (config
-  // override → per-angle tier → built-in tier → null=inherit), unlike
+  // resolveRoleModel(config, { role: angle, harness, kind: "angle" }), the
+  // dispatch-time resolution of a size-tier unit and of a Pi/Codex fan-out. On
+  // Claude a unit OUTSIDE a size tier whose angles resolve to different models
+  // dispatches at the `review` role model (contract Per-angle Claude model
+  // tiers), so the per-angle models recorded here can differ from what that
+  // unit uses. The Claude default is `models.roles.review` / `models.roleTiers.review`,
+  // then the high tier (ADR 0278). (angle model on Pi → angle tier → built-in tier → null=inherit), unlike
   // resolveReviewerRole's `.model`, which ignores `tier` and can merge/split
   // groups wrongly. Harness defaults to the active runtime (override via
   // options.harness). Without a config every angle resolves to inherit
@@ -3310,7 +3388,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   const pendingAngles = pendingAngleNames ? angleUniverse.filter((a) => pendingAngleNames.has(a)) : angleUniverse;
   const angleModels = pendingAngles.map((angle) => ({
     angle,
-    model: options.config ? resolveRoleModel(options.config, { role: angle, harness, kind: "angle" }) : null,
+    model: !options.config ? null : resolveRoleModel(options.config, { role: angle, harness, kind: "angle", gate: options.gate === "review" ? undefined : resolveGateAngleCatalogKey(options.gate) }),
   }));
   // Harness capability, routed through the canonical 4-dimension model
   // (breakpointControl/barrierSignal/cacheTtlControl/usageTelemetry) — a
@@ -3474,10 +3552,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   if (prBodyRead && options.fanoutDispatch?.pendingGroups) {
     const priorBodySha256 = options.carriedPriorBodySha256 !== undefined ? options.carriedPriorBodySha256 : await readPriorPrBodySha256(options, { repoRoot });
     // The earlier round dispatched its recorded groups (packed under its own carried set), so the in-flight check reads that membership, never this build's.
-    const priorFanout = options.carriedPriorGroups !== undefined ? { groups: options.carriedPriorGroups, preflight: { carriedAngles: options.carriedPriorCarriedAngles } } : (await readGateContext(options, { repoRoot }).catch(() => null))?.fanout;
+    const priorFanout = options.carriedPriorGroups !== undefined ? { groups: options.carriedPriorGroups, unitBound: options.carriedPriorUnitBound, preflight: { carriedAngles: options.carriedPriorCarriedAngles } } : (await readGateContext(options, { repoRoot }).catch(() => null))?.fanout;
     const priorCarriedAngles = priorFanout?.preflight?.carriedAngles ?? [];
     const priorGroups = Array.isArray(priorFanout?.groups) ? priorFanout.groups : options.fanoutDispatch.groups ?? [];
-    priorBodyState = { priorBodySha256, priorCarriedAngles, priorGroups };
+    // Groups from the current fanout take the current bound; groups from a prior context take that context's recorded bound.
+    const priorUnitBound = Array.isArray(priorFanout?.groups) ? priorFanout.unitBound : options.fanoutDispatch.unitBound;
+    priorBodyState = { priorBodySha256, priorCarriedAngles, priorGroups, priorUnitBound };
     if (priorBodySha256 !== prBodyRead.sha256) {
       const { names: liveSentinels, scanError } = await scanLiveSentinels();
       if (scanError !== null) {
@@ -3529,7 +3609,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       const keyOf = (angle) => String(angle).trim().toLowerCase();
       const pendingKeys = new Set(options.fanoutDispatch.pendingGroups.flatMap((unit) => (Array.isArray(unit?.angles) ? unit.angles : []).map(keyOf)));
       const covered = new Set();
-      for (const group of expandDispatchUnits(priorGroups, configuredGroupNames)) {
+      for (const group of expandDispatchUnits(priorGroups, configuredGroupNames, priorUnitBound)) {
         if (!Array.isArray(group?.angles)) continue;
         const unit = { ...group, angles: group.angles.filter((angle) => !priorCarried.has(keyOf(angle))) };
         unit.angles.forEach((angle) => covered.add(keyOf(angle)));
@@ -3614,7 +3694,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         // pointer/hash/plan without the failed path before publishing a marker.
         process.stderr.write(`[gate-context] full-diff capture failed (continuing without scope.diffPath): ${error.message}\n`);
         await rm(fullPath, { force: true });
-        return await writeGateContext({ ...options, diffPath: null, diffToWrite: null, carriedPrBodyBaselineSha256: prBodyBaselineSha256, ...(priorBodyState ? { carriedPriorBodySha256: priorBodyState.priorBodySha256, carriedPriorCarriedAngles: priorBodyState.priorCarriedAngles, carriedPriorGroups: priorBodyState.priorGroups } : {}) }, { repoRoot });
+        return await writeGateContext({ ...options, diffPath: null, diffToWrite: null, carriedPrBodyBaselineSha256: prBodyBaselineSha256, ...(priorBodyState ? { carriedPriorBodySha256: priorBodyState.priorBodySha256, carriedPriorCarriedAngles: priorBodyState.priorCarriedAngles, carriedPriorGroups: priorBodyState.priorGroups, carriedPriorUnitBound: priorBodyState.priorUnitBound } : {}) }, { repoRoot });
       }
     }
     if (pendingFilteredDiff) await writeFile(path.resolve(repoRoot, pendingFilteredDiff.path), pendingFilteredDiff.text, "utf8");
@@ -3808,7 +3888,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
   const angleState = await readBodyAwareAngleState({ ...input, tmpRoot, carriedAngles: input.carriedAngles ?? null }, { repoRoot });
   const completedAngles = input.completedAngles ?? angleState.completedAngles;
-  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: angleState.carriedAngles, singleWave: !isReviewGate });
+  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: angleState.carriedAngles, singleWave: !isReviewGate, unitBound: await recordedUnitBound(input, repoRoot), sizeOutcome: input.sizeOutcome, changedFiles, harness: input.harness ?? resolveRuntimeHarness(), recordedSizeTier: await recordedSizeTier(input, repoRoot) });
 
   const writeResult = await writeGateContext(
     {
@@ -3851,6 +3931,16 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
  * @param {{ repoRoot?: string }} [options]
  * @returns {Promise<object|null>}
  */
+/** The size-tier record the same-head context artifact recorded (`fanout.sizeTier`); undefined when no readable artifact records one. */
+async function recordedSizeTier(input, repoRoot) {
+  return (await readGateContext(input, { repoRoot }).catch(() => null))?.fanout?.sizeTier;
+}
+
+/** The unit bound the same-head context artifact recorded (`fanout.unitBound`); undefined when no readable artifact records one. */
+async function recordedUnitBound(input, repoRoot) {
+  return (await readGateContext(input, { repoRoot }).catch(() => null))?.fanout?.unitBound;
+}
+
 export async function readGateContext(input, { repoRoot = process.cwd() } = {}) {
   const contextPath = buildGateContextPath({
     repo: input.repo,
@@ -3889,6 +3979,7 @@ export async function readGateContext(input, { repoRoot = process.cwd() } = {}) 
  * @param {{ repoRoot: string }} opts
  */
 export function assertWorktreeAtHead(headSha, { repoRoot }) {
+  // reviewedWorktreeRoot (below) is the non-throwing sibling used by the briefing evidence.
   // Fail-closed self-guard: the abbreviation prefix-match below (declared must be a
   // prefix of the full-length HEAD) FALSE-ACCEPTS an
   // empty/too-short `headSha` (an empty string is a prefix of every HEAD). The sole
@@ -3924,6 +4015,21 @@ export function assertWorktreeAtHead(headSha, { repoRoot }) {
     throw new Error(
       `worktree HEAD ${actualHead} does not match --head-sha ${declared}: the current working directory is the WRONG worktree for this PR, so \`git diff <base>...HEAD\` would resolve the WRONG diff. cd into the worktree checked out at ${declared} and re-run.`,
     );
+  }
+}
+
+/**
+ * Absolute git toplevel of `repoRoot` when its HEAD is the reviewed head, else null.
+ * The briefing evidence names a worktree only when verified, never a bare cwd.
+ */
+export function reviewedWorktreeRoot(headSha, { repoRoot }) {
+  try {
+    const git = (...args) => execFileSync("git", args, { cwd: repoRoot, encoding: "utf8", env: gitEnvWithoutDirOverrides(), stdio: ["ignore", "pipe", "ignore"] }).trim();
+    const declared = String(headSha).trim().toLowerCase();
+    if (!/^[0-9a-f]{7,64}$/.test(declared) || !git("rev-parse", "HEAD").toLowerCase().startsWith(declared)) return null;
+    return git("rev-parse", "--show-toplevel");
+  } catch {
+    return null;
   }
 }
 
@@ -4233,7 +4339,7 @@ export async function main(
     const cap = resolveGateConfig(config, "draft").maxReviewRounds ?? 0;
     if (options.gate === "draft_gate") {
       const round = await countCompletedRounds({ ...options, tmpRoot: undefined }, { repoRoot, includeLiveCurrentHead: true });
-      if (isRoundRefused(round, cap)) throw new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs; after the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`.`);
+      if (isRoundRefused(round, cap)) throw new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs; after the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`. When every open act item is a PR-body item, edit the PR body and post \`upsert-checkpoint-verdict.mjs --converged-json\` with \`{ fixerCommit, actList, bodyOnly: true }\` instead (ADR 0271).`);
     }
     // AC6 (issue 2885): every dispatch runs the freshness check against the PR's own base branch (baseRefName),
     // whatever --base is (absent, SHA, revision, remote ref). draft_gate and pre_approval_gate refuse (no artifact) on anything but base_current; the review gate records the status and continues; base_unresolved refuses on every gate.
@@ -4429,7 +4535,7 @@ export async function main(
       const angleState = await readBodyAwareAngleState({ ...options, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });
       const { completedAngles } = angleState;
       options.carriedAngles = angleState.carriedAngles;
-      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles, singleWave: options.gate !== "review" });
+      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles, singleWave: options.gate !== "review", unitBound: await recordedUnitBound(options, repoRoot), sizeOutcome, changedFiles: options.changedFiles, harness: options.harness, recordedSizeTier: await recordedSizeTier(options, repoRoot) });
     }
     const result = await writeGateContext(options, { repoRoot });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });

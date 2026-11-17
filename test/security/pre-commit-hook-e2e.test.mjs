@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -32,15 +32,12 @@ function git(cwd, args, env = {}) {
 function commitAttempt(dir, file, content, env = {}) {
   fs.writeFileSync(path.join(dir, file), content);
   git(dir, ["add", file]);
-  try {
-    // No --quiet: a hook's own stdout is what leaks through git commit's
-    // stdout, so keeping the commit summary visible alongside it lets the
-    // "no scanner JSON noise" assertion below tell the two apart.
-    const stdout = git(dir, ["commit", "-m", `add ${file}`], env);
-    return { blocked: false, stdout, stderr: "" };
-  } catch (err) {
-    return { blocked: true, stdout: String(err.stdout ?? ""), stderr: String(err.stderr ?? "") };
-  }
+  // No --quiet: a hook's own stdout is what leaks through git commit's
+  // stdout, so keeping the commit summary visible alongside it lets the
+  // "no scanner JSON noise" assertion below tell the two apart. spawnSync
+  // keeps stderr on success too: the hook's warnings land there.
+  const result = spawnSync("git", ["commit", "-m", `add ${file}`], { cwd: dir, encoding: "utf8", env: { ...BASE_GIT_ENV, ...env } });
+  return { blocked: result.status !== 0, stdout: result.stdout, stderr: result.stderr };
 }
 
 /**
@@ -94,43 +91,47 @@ test("pre-commit hook e2e: a clean staged diff commits normally", async () => {
   }
 });
 
-test("pre-commit hook e2e: a planted literal credential is blocked by the REAL hook, value never echoed", async () => {
+test("pre-commit hook e2e: a planted literal credential WARNS with file/line/rule on stderr and commits (exit 0), value never echoed", async () => {
   const dir = await repoFixtureWithScanner();
-  const credentialValue = join("ghp_", "C".repeat(20), "d3");
+  const credentialValue = join("ghp_", "C".repeat(34), "d3");
   try {
     const result = commitAttempt(dir, "config.sh", `export TOKEN="${credentialValue}"\n`);
-    assert.equal(result.blocked, true, "expected the planted credential to block the commit");
-    assert.match(result.stderr, /literal-credential/);
-    assert.match(result.stderr, /config\.sh/);
+    assert.equal(result.blocked, false, `a hit must warn, not block: ${result.stderr}`);
+    const candidates = JSON.parse(result.stderr.slice(0, result.stderr.indexOf("\nsecret-scan:"))).hits;
+    assert.deepEqual(candidates.map(({ file, line, ruleId }) => ({ file, line, ruleId })), [
+      { file: "config.sh", line: 1, ruleId: "@secretlint/secretlint-rule-github" },
+    ]);
+    assert.match(result.stderr, /secret-scan: candidates or a scanner error above \(warning only; the merge gate blocks\)/);
     assert.ok(!result.stdout.includes(credentialValue), "stdout must never contain the matched value");
     assert.ok(!result.stderr.includes(credentialValue), "stderr must never contain the matched value");
-    // Refusal must be the only effect: nothing recorded.
-    assert.equal(git(dir, ["rev-list", "--count", "HEAD"]).trim(), "1");
+    assert.equal(git(dir, ["rev-list", "--count", "HEAD"]).trim(), "2");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-test(`pre-commit hook e2e: ${GUARD_OVERRIDE_ENV}=1 does NOT bypass the secret scan (only the default-branch guard)`, async () => {
+test(`pre-commit hook e2e: ${GUARD_OVERRIDE_ENV}=1 does NOT silence the secret-scan warning`, async () => {
   const dir = await repoFixtureWithScanner();
-  const credentialValue = join("ghp_", "D".repeat(20), "e4");
+  const credentialValue = join("ghp_", "D".repeat(34), "e4");
   try {
     const result = commitAttempt(dir, "config.sh", `export TOKEN="${credentialValue}"\n`, { [GUARD_OVERRIDE_ENV]: "1" });
-    assert.equal(result.blocked, true, "the release override must never silence a secret-scan hit");
+    assert.equal(result.blocked, false);
+    assert.match(result.stderr, /secretlint-rule-github/);
     assert.ok(!result.stderr.includes(credentialValue));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-test("pre-commit hook e2e: a scanner internal error fails closed and blocks even a clean diff", async () => {
+test("pre-commit hook e2e: a scanner internal error prints to stderr and the commit proceeds", async () => {
   const dir = await repoFixtureWithScanner();
   try {
-    // Corrupt the scanner so it throws instead of scanning — the "scanner
-    // internal error" case. A perfectly clean staged diff must still block.
+    // Corrupt the scanner so it throws instead of scanning.
     await writeFile(path.join(dir, "scripts", "security", "scan-staged-diff.mjs"), "throw new Error('scanner boom');\n");
     const result = commitAttempt(dir, "clean.txt", "nothing sensitive here\n");
-    assert.equal(result.blocked, true, "a broken scanner must fail CLOSED, not silently allow the commit");
+    assert.equal(result.blocked, false, `the hook warns; the merge gate blocks: ${result.stderr}`);
+    assert.match(result.stderr, /scanner boom/);
+    assert.match(result.stderr, /secret-scan: candidates or a scanner error above/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

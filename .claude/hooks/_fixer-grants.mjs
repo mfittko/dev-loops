@@ -44,6 +44,31 @@ export function listCheckouts(dir) {
   }
 }
 
+/**
+ * The `workOrderRef` the execution index of any checkout of `dir`'s repository holds for `executionIdentity`
+ * (ADR 0267), or null for an unknown identity. Mirrors the pull's resolveExecutionIndex: null as well for an
+ * identity failing EXECUTION_IDENTITY_RE and for any unreadable, malformed or conflicting entry.
+ */
+export function resolveIndexedWorkOrderRef(executionIdentity, dir) {
+  if (!EXECUTION_IDENTITY_RE.test(String(executionIdentity))) return null;
+  let found = null;
+  for (const { root } of listCheckouts(dir)) {
+    let text;
+    try {
+      text = readFileSync(executionIndexPath(path.join(root, "tmp"), executionIdentity), "utf8");
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      return null;
+    }
+    let entry = null;
+    try { entry = JSON.parse(text); } catch { /* refused below */ }
+    if (entry?.executionIdentity !== executionIdentity || typeof entry.workOrderRef !== "string" || typeof entry.workOrderDigest !== "string") return null;
+    if (found && (found.workOrderRef !== entry.workOrderRef || found.workOrderDigest !== entry.workOrderDigest)) return null;
+    found ??= entry;
+  }
+  return found?.workOrderRef ?? null;
+}
+
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 // A fixer execution: the shared identity pattern with an `f` prefix and no `-u<n>` unit suffix.
 export const isFixerExecution = (id) => typeof id === "string" && id[0] === "f" && !id.includes("-u") && EXECUTION_IDENTITY_RE.test(id);
@@ -60,13 +85,12 @@ const bindingPath = (mainRoot, workOrderRef, workOrderDigest, executionIdentity)
 
 /**
  * `{ workOrderRef, workOrderDigest, executionIdentity }` of an exact sanctioned fixer pull line. The
- * 3-flag line carries them with a `fixer:` ref. The short line (ADR 0115) resolves them through the
- * execution index under `<mainRoot>/tmp`. Null for any other command, an `r`/`j` identity, a missing
- * or unreadable entry, an entry for another execution or a non-`fixer:` ref.
+ * short line (ADR 0115) resolves them through the execution index under `<mainRoot>/tmp`. Null for any
+ * other command, an `r`/`j` identity, a missing or unreadable entry, an entry for another execution or a
+ * non-`fixer:` ref.
  */
 export function parseFixerPullCommand(command, mainRoot) {
   const line = parseSanctionedPullLine(command);
-  if (line?.workOrderRef) return line.workOrderRef.startsWith("fixer:") ? line : null;
   const executionIdentity = line?.executionIdentity;
   if (!isFixerExecution(executionIdentity)) return null;
   try {
@@ -81,7 +105,7 @@ export function parseFixerPullCommand(command, mainRoot) {
 /**
  * Record that `agentId` pulls `workOrderRef`. Keyed by the ref, digest and execution hash, so a replacement
  * fixer re-pulling the same unit takes the binding over. The marker is written before the pull runs,
- * so it also carries the pull's `--digest`: boundTo honors it only when that digest equals the
+ * so it also carries the index entry's digest: boundTo honors it only when that digest equals the
  * receipt's, and a pull that the digest check refuses never takes over or revokes a receipt's grant.
  * A non-string or empty agentId records nothing.
  */

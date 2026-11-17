@@ -2,7 +2,84 @@
 
 All notable changes to this project will be documented in this file.
 
-## 1.0.11-pre.1
+## 1.0.12-pre.5
+
+### Changed
+
+- Under Claude Code, emitted work orders, remedies and refusals name CLI calls as `dev-loops-run --repo-root <checkout> cli/index.mjs ...` (#3105)
+
+### Fixed
+
+- A bounded-out delta sequence closes with `gate close-sequence`, so no manual marker delete remains; PR-body act items leave the delta act set (#2447)
+- `gate close-sequence --head` accepts a full SHA or a safe marker file name; an unreadable marker closes as `MARKER_UNREADABLE` once old enough with no fixer running (#2447)
+- `gate close-sequence` refuses `abandonment_unproven` when the marker's emit plan belongs to another PR (#2447)
+- `seal-evidence --kind delta` refuses a malformed or contradicting result with `evidence_malformed` before it seals (#2447)
+- A draft_gate cap round now accepts a second or later fixer pass at a head its sealed clearing chain reaches, so the remaining act items are no longer stranded (#3105)
+- `loop startup --pr` on a ready PR you own now points at the gate-coordination pre-flight, whatever the PR author (#3105)
+- A draft PR with an open draft_gate act list at its head now routes to the fixer instead of another round, a cap-round block or a base integration (#3105)
+
+## 1.0.12-pre.4
+
+### Added
+
+- An opt-in `gates.fanout.sizeTiers` setting packs more review angles per reviewer unit for small changes, and Claude review angles can follow their own model tier (#3166)
+
+### Changed
+
+- Validation, `pr reconcile-draft` and clean gate verdict posts refuse a head that lacks the current base with `base_stale_integrate_first` and the merge remedy (#2885)
+- The fixer work-order emitter accepts a gate verdict from an earlier head when the PR files are byte-identical, and does not carry one across a head that ran its own gate round (#2752)
+- A comment or body edit after the latest grill results returns `spec_changed_since_grill`, and an undated results comment fails closed the same way; startup and the pickup gate act on it (#3127)
+- An existing `gates.<gate>.angles[].tier` now applies on Claude review dispatch, and a concrete angle `model` now applies on Pi only (#3166)
+- On Pi and Claude, the angle model lookup now prefers the dispatching gate's own `gates.<gate>.angles[]` entry over an earlier gate's (#3166)
+- With `gates.requireFanoutProvenance`, the `distinctReviewers` floor drops to `max(1, units)` only for a corroborated size tier with `gates.fanout.sizeTiers` set, else `max(2, units)` (#3166)
+
+### Fixed
+
+- The size budget skips `.claude/hooks/_vendor/**` and the generated hook mirror files from unclassified-source accounting and whole-PR logic LOC, so a vendored dependency swap can open a PR (#3231)
+
+## 1.0.12-pre.3
+
+### Changed
+
+- The generated pre-commit hook prints secret-scan candidates to stderr and no longer blocks the commit; the merge gate's `secret_scan` precondition blocks (#1858)
+- The secret scan uses `@secretlint/core` instead of home-built heuristics, and `merge-pr.mjs` refuses a merge whose diff adds a detected secret (#1858)
+- `scanDiffText` from `@dev-loops/core/security/secret-scan` is now async and returns a Promise (#1858)
+- Findings and `scan-staged-diff.mjs` `hits[]` entries carry `ruleId` instead of `detectorClass`, and `file` and `line` can be null (#1858)
+- `scanLineText`, `shannonEntropy` and `DETECTOR_CLASSES` are removed from `@dev-loops/core/security/secret-scan` (#1858)
+- A unit coordinator hands back at the end of every gate round and every fix pass, and a fresh coordinator re-resolves state for the next step (#3069)
+- A judged findings log persists `findings_present` over an open act item; a write without `--judge-verdict` refuses while a round has an unconsumed judge verdict (#3105)
+
+### Fixed
+
+- The review-route judge dispatch is no longer denied for a prompt with surrounding whitespace; deny reasons now show a diagnostic, and a review post accepts a findings ledger alone (#3199)
+- The fixer delivery CI wait requests 540 s instead of 900 s, re-issues on `pending`, and never falls back to raw `gh pr checks` (#3099)
+
+## 1.0.12-pre.2
+
+### Added
+
+- A cap round of only PR-body act items clears with no commit through `--converged-json` with `bodyOnly: true`; refusals name the exit (#3105)
+
+### Changed
+
+- Work-order emitters write the short pull pointer, and the 3-flag form is refused; re-emit in-flight rounds after upgrading (#2560)
+- Claude Code judge searches read-only with `grep -n`, `rg -n`, `git show` and commit-to-commit `git diff`; its refusal names these; its work order carries cited rule text (#3092)
+- Reviewer-unit bound consumers read one recorded per-round bound (missing means 5) and accept a recorded packed unit above five angles, with a per-angle budget step (#3166)
+- Review threads from the exact `github-actions` bot are now trusted and reach the fixer; repos whose workflows echo fork text into comments should read ADR 0273 (#3198)
+
+### Fixed
+
+- Claude Code dispatch passes the model that `.devloops` sets for each role tier, so low-tier roles stop running on Opus (#3133)
+- A clean draft_gate verdict names `mark ready for review` as its next action, not a Copilot request refused on a draft PR; evidence-only act findings render labelled on every findings surface (#3197)
+
+## 1.0.12-pre.1
+
+### Fixed
+
+- A clean draft_gate cap round fixed by a PR-body-only edit no longer reports cap_round_unresolved (#3178)
+- Runtime-pin maintenance passes size accounting while runtime changes still invalidate clean reviews; unknown-source refusals name the affected files (#3178)
+
+## 1.0.11
 
 ### Added
 
@@ -11,12 +88,24 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- The Bash gate deny reason names incomplete input (an unterminated quote, $( or backtick substitution, heredoc, or substitution nesting that is too deep) (#2442)
+- CI refreshes Bun shard timing weights from complete trusted default-branch runs, with a committed bootstrap fallback (#3163)
 - In-flight reports name each `joinRef`; a hand-back that lists children in flight is interim and a repeat of a consumed one is a duplicate (#1963)
 - `RELEASE-POST-RELEASE-RECURRING-STEPS` now runs prose cleanup first (#3074)
 - `scripts/docs/prose-inventory.mjs` keeps a sentence together after `vs.` and ignores an inherited `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` (#3074)
 
 ### Fixed
 
+- Issue and PR startup recover the same linked PR, closing issue, author ownership and authorized draft-gate continuation (#3144)
+- Read-only review envelopes preserve startup's exemption for PRs closing multiple issues (#3144)
+- Coordinator handoff recovers PR-body authority for ready issue-less PRs after validating their live bodies (#3144)
+- npm smoke tests use writable caches, and CI log retrieval avoids the GitHub CLI run-log cache (#3165)
+- Stable PR validation outcomes remain allowed; upgrade the dev-loops package or plugin to receive the narrowed reviewer and judge guidance in older installations (#3173)
+- Judges ground optional file reads in authenticated paths or bounded filename discovery, keeping missing-material and integrity stops intact (#3176)
+- The angle carry-forward resolver no longer fails closed on the synthetic copilot-body finding in a prior findings log (#3183)
+- Ready-path regression coverage now requires successful non-carried verdict handling without querying CI (#3072)
+- README purpose checks accept harmless paragraph layout changes while still enforcing the exact purpose statement (#3072)
+- Run the draft-gate self-heal ESM regression under Node and assert the CLI runtime so Bun cannot silently replace its Node-specific coverage (#3072)
 - One operator-owned-line registry makes every comment writer refuse the approve, waiver and Copilot operator lines (#2410)
 - Gate writers wrap an operator-owned phrase in reviewer or judge free text in a code span instead of refusing the round; the no-core gate verdict fallback keeps the refusal (#2410)
 - Pre-push delta: lifecycle refusals become findings, one docs validator list, same-candidate re-emission and handback refusal (#2447)

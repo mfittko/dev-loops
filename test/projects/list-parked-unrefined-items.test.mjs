@@ -17,7 +17,7 @@ const UNREFINED_BODY = "Just some prose describing a problem. No ACs, no DoD.";
 // runChild stub: drives list-queue-items (GraphQL) AND the per-issue
 // `gh issue view … --json body` body fetch. `columns` maps a Status column
 // name to its items; `bodies` maps an issue number to its body Markdown.
-function boardRunChild({ columns = {}, bodies = {}, optionNames = ["Backlog", "Next Up", "In Progress", "Done"] } = {}) {
+function boardRunChild({ columns = {}, bodies = {}, specFacts = {}, optionNames = ["Backlog", "Next Up", "In Progress", "Done"] } = {}) {
   const options = optionNames.map((name, i) => ({ id: `O_${i}`, name }));
   const nodes = [];
   for (const [status, items] of Object.entries(columns)) {
@@ -43,6 +43,11 @@ function boardRunChild({ columns = {}, bodies = {}, optionNames = ["Backlog", "N
       return { code: 0, stdout: JSON.stringify({ body }), stderr: "" };
     }
     const query = argv.find((a) => a.startsWith("query=")) ?? "";
+    if (query.includes("issueOrPullRequest")) {
+      // spec-change facts read (gh applies the --jq to the node)
+      const number = Number(argv.find((a) => a.startsWith("number=")).slice("number=".length));
+      return { code: 0, stdout: JSON.stringify(specFacts[number] ?? {}), stderr: "" };
+    }
     const json = (data) => ({ code: 0, stdout: JSON.stringify({ data }), stderr: "" });
     if (query.includes("projectsV2(first")) {
       return json({ user: { projectsV2: { nodes: [{ id: "P_1", number: 7, title: "Board" }], pageInfo: { hasNextPage: false, endCursor: null } } } });
@@ -136,6 +141,19 @@ describe("list-parked-unrefined-items (#1258 discovery helper)", () => {
       bodies: { 42: UNREFINED_BODY, 43: REFINED_BODY },
     }));
     assert.deepEqual(r.items.map((i) => i.issueNumber), [42]);
+  });
+
+  it("lists a refined issue whose spec changed after its latest grill (3127)", async () => {
+    const results = { body: "## 🔬 Grill / refinement results\n\nNo gaps were found.", createdAt: "2026-11-06T10:00:00Z" };
+    const r = await run(boardRunChild({
+      columns: { Backlog: [{ issueNumber: 43, title: "Changed" }, { issueNumber: 44, title: "Clean" }] },
+      bodies: { 43: REFINED_BODY, 44: REFINED_BODY },
+      specFacts: {
+        43: { comments: { nodes: [results, { body: "Decision: add X.", createdAt: "2026-11-06T11:00:00Z" }] } },
+        44: { comments: { nodes: [results] } },
+      },
+    }));
+    assert.deepEqual(r.items.map((i) => [i.issueNumber, i.finding]), [[43, "spec_changed_since_grill"]]);
   });
 
   it("excludes PRs (the refinement gate is issue-only) — no body fetch for them", async () => {

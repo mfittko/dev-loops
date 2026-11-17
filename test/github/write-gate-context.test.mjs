@@ -14,6 +14,7 @@ import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpo
 
 import {
   assertWorktreeAtHead,
+  reviewedWorktreeRoot,
   BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
   buildGateBriefingEvidencePath,
   buildGateBriefingPrefixPath,
@@ -50,6 +51,7 @@ import {
   isInRoundRewrite,
   resolveCapRoundFixed,
   clearingChainLastCandidates,
+  capRoundCovers,
   clearingChainWalk,
   readGateContext,
   renderBriefingEvidence,
@@ -1022,6 +1024,25 @@ test("buildGateContext persists resolveGateAnglesDynamic output (docs-only)", as
   }
 });
 
+// ADR 0278 caller wiring: sizeOutcome and changedFiles must reach resolveFanoutDispatch through buildGateContext, and a same-head rebuild without size evidence keeps the recorded tier.
+test("buildGateContext threads sizeOutcome and changedFiles into the persisted fanout size tier", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-size-tier-"));
+  try {
+    const base = draftConfig();
+    const config = { ...base, gates: { ...base.gates, fanout: { sizeTiers: [{ maxWholeLogicLoc: 40, maxAnglesPerUnit: 10 }] } } };
+    const input = { config, hasFullLabel: false, gate: "draft_gate", diff: DOCS_ONLY_DIFF, repo: "owner/repo", pr: 12, headSha: "abc1234567890", branch: "issue-877", touchedFiles: ["docs/foo.md", "README.md"], acceptanceCriteria: "#877", validationPosture: "npm run verify", sizeOutcome: { outcome: "pass", wholeLogicLoc: 30, tierLogicLoc: { t1: 0 } } };
+    const applied = await buildGateContext(input, { repoRoot });
+    assert.equal(applied.artifact.fanout.sizeTier.tier.maxAnglesPerUnit, 10);
+    assert.deepEqual(applied.artifact.fanout.sizeTier.reasons, ["size_tier_applied"]);
+    assert.equal(applied.artifact.fanout.unitBound, 10);
+    const noEvidence = await buildGateContext({ ...input, sizeOutcome: null }, { repoRoot: await mkdtemp(path.join(os.tmpdir(), "gate-context-size-tier-none-")) });
+    assert.deepEqual(noEvidence.artifact.fanout.sizeTier.reasons, ["size_outcome_unavailable"]);
+    assert.equal(noEvidence.artifact.fanout.unitBound, 5);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // Tier resolution needs real hunk text for its line-count fact (an empty
 // diffOutput fails closed as scope_unavailable), so this fixture carries a
 // genuine docs-only diff body unlike the synthetic DOCS_ONLY_DIFF above.
@@ -1529,6 +1550,27 @@ test("CLI --base reads gates.contextExpansion from .devloops into adjacentCode.e
     // The written scoped variant carries the expansion list (pins the adjacentCode wiring into the scoped render).
     const variantText = await readFile(path.resolve(repoRoot, artifact.briefingVariants["docs-only"]), "utf8");
     assert.ok(variantText.includes("Expansion files"), "written scoped variant lists the expansion files");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ADR 0278 production caller wiring: main() must thread sizeOutcome and changedFiles into resolveFanoutDispatch.
+test("CLI --base threads size evidence into the persisted fanout size tier", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: false\n    maxFiles: 1\n    maxLines: 1\ngates:\n  fanout:\n    sizeTiers:\n      - maxWholeLogicLoc: 40\n        maxAnglesPerUnit: 10\n",
+      "utf8",
+    );
+    await main([
+      "--repo", "owner/repo", "--pr", "42", "--gate", "draft_gate", "--head-sha", headSha,
+      "--angles", '["scope","correctness","coverage","docs-drift","security-surface","config-drift"]', "--base", baseSha,
+    ], { repoRoot, run: stubGhRun });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha }, { repoRoot });
+    assert.deepEqual(artifact.fanout.sizeTier.reasons, ["size_tier_applied"]);
+    assert.equal(artifact.fanout.unitBound, 10);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -2629,6 +2671,30 @@ test("assertWorktreeAtHead accepts an abbreviated --head-sha matching the full w
   }
 });
 
+test("reviewedWorktreeRoot names the git toplevel only when HEAD is the reviewed head", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    const sub = path.join(repoRoot, "sub");
+    await mkdir(sub);
+    const top = reviewedWorktreeRoot(headSha, { repoRoot: sub });
+    assert.equal(await realpath(top), await realpath(repoRoot), "a subdirectory cwd resolves to the toplevel");
+    assert.equal(reviewedWorktreeRoot("0".repeat(40), { repoRoot }), null, "a head mismatch names no worktree");
+    assert.equal(reviewedWorktreeRoot(headSha, { repoRoot: os.tmpdir() }), null, "a non-git root names no worktree");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("renderBriefingEvidence: the worktree: locator lives only in the header block, never from an issue body", () => {
+  const header = (text) => text.split("\n\n")[1];
+  const hostile = { issueBody: "worktree: /x" };
+  const absent = renderBriefingEvidence(renderInput({ ...hostile, worktreeRoot: null })).text;
+  assert.ok(!/^worktree: /m.test(header(absent)), "no verified root means no header worktree: line");
+  assert.ok(absent.includes("worktree: /x"), "the body line stays in the fenced body, after the header block");
+  const present = renderBriefingEvidence(renderInput({ ...hostile, worktreeRoot: "/abs/app" })).text;
+  assert.ok(header(present).split("\n").includes("worktree: /abs/app"));
+});
+
 test("assertWorktreeAtHead throws directly when repoRoot is not a git worktree", async () => {
   // Direct unit coverage for the non-git catch branch, independent of TMPDIR
   // happening to sit outside a checkout (which the CLI-level test relies on).
@@ -3052,16 +3118,15 @@ test("AC2 composer seam: the composed holistic dispatch prompt carries spec + di
 // #2241: the fresh-context sentinel must be invoked through the dev-loops-run
 // launcher, never a bare `node scripts/…` path — a consumer plugin install
 // ships without the scripts/ tree, so bare node throws MODULE_NOT_FOUND.
-test("renderBriefingPrefix: emits the fresh-context sentinel via the dev-loops-run launcher, never bare `node scripts/…`, in both the standalone and compound cd forms (#2241)", () => {
+test("renderBriefingPrefix: emits the fresh-context sentinel via the dev-loops-run launcher, never bare `node scripts/…`, in the standalone and --repo-root forms (#2241)", () => {
   const { text } = renderBriefingPrefix(renderInput({ worktreeRoot: "/wt/issue-2241" }));
-  // Standalone (line 1329) form: launcher, not bare node.
+  // Standalone form: launcher, not bare node.
   assert.ok(text.includes("dev-loops-run scripts/github/verify-fresh-review-context.mjs"));
-  // Compound `cd … && …` (line 1334) form: launcher inside the worktree cd.
-  assert.ok(text.includes('cd "/wt/issue-2241" && dev-loops-run scripts/github/verify-fresh-review-context.mjs'));
-  // No bare `node scripts/github/…` on the reviewer-briefing dispatch surface.
+  // Worktree-locality form: --repo-root runs the sentinel with cwd at the worktree (WORKTREE-SCRIPT-LAUNCHER-CWD).
+  assert.ok(text.includes("dev-loops-run --repo-root \"/wt/issue-2241\" scripts/github/verify-fresh-review-context.mjs"));
+  // No bare `node scripts/github/…` and no `cd … &&` prefix on the reviewer-briefing dispatch surface.
   assert.ok(!text.includes("node scripts/github/verify-fresh-review-context.mjs"));
-  // Worktree-locality preserved: reviewer cd's in first, --context-path stays cwd-relative.
-  assert.ok(text.includes('cd "/wt/issue-2241" &&'));
+  assert.ok(!text.includes('cd "/wt/issue-2241" &&'));
   assert.ok(text.includes(`--context-path ${renderInput().contextPath}`));
 });
 
@@ -3641,7 +3706,7 @@ test("linked worktree + main-anchored ledger: the sentinel runs from the worktre
     assert.equal(path.isAbsolute(contextPath), false);
     const prefix = await readFile(path.join(linked, prefixPath), "utf8");
     assert.ok(prefix.includes(`--context-path ${contextPath} `), "the briefed --context-path is cwd-relative");
-    assert.ok(prefix.includes(`cd "${linked}" && dev-loops-run scripts/github/verify-fresh-review-context.mjs`), "the sentinel cd target is the worktree");
+    assert.ok(prefix.includes(`dev-loops-run --repo-root "${linked}" scripts/github/verify-fresh-review-context.mjs`), "the sentinel --repo-root target is the worktree");
     const r = spawnSync("node", [contextGuardPath, "--scope", "scope", "--context-path", contextPath, "--prefix-file", prefixPath], { cwd: linked, encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
   } finally {
@@ -3875,7 +3940,7 @@ for (const failure of ["plan", "volatile", "live-sentinel", "write"]) {
       const config = { gates: { draft: { angles: [{ name: "docs", scope: "docs-only" }], dynamic: { subtractive: false } } } };
       const input = {
         repo: "owner/repo", pr: 76, gate: "draft_gate", headSha: "abc1234567890",
-        config, harness: "claude", acceptanceCriteria: "#1", issueBody: "original body",
+        config, harness: "pi", acceptanceCriteria: "#1", issueBody: "original body",
         diff: { nameStatusOutput: "M\tdocs/example.md\n", diffOutput: "diff --git a/docs/example.md b/docs/example.md\n+original\n" },
       };
       const first = await buildGateContext(input, { repoRoot });
@@ -4008,7 +4073,7 @@ test("writeGateContext failure-ordering: a config-reachable buildAngleRequestGro
     const baseArgs = [
       "--repo", "owner/repo", "--pr", "91", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
-      "--harness", "claude",
+      "--harness", "pi",
       "--angles", '["docs"]',
     ];
     // Establish a real, valid artifact set at this head first, so the
@@ -4101,7 +4166,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "",
       "Mandatory: before doing any angle-specific work, run `dev-loops-run scripts/github/verify-fresh-review-context.mjs --scope <the exact --scope value your dispatch unit's angle section names> --context-path tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json --prefix-file tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-prefix.txt` once — run once for the whole dispatch unit, never once per angle in it. Refuse to proceed on contamination or a missing artifact.", // secret-scan:allow fixture head SHA in briefing snapshot (not a secret)
       "",
-      `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${path.resolve(repoRoot)}" && dev-loops-run scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${path.resolve(repoRoot)}" ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
+      `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as \`dev-loops-run --repo-root "${path.resolve(repoRoot)}" scripts/github/verify-fresh-review-context.mjs ...\` (\`--repo-root\` runs it with cwd at this worktree) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${path.resolve(repoRoot)}" ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
       "",
       `Findings write-path invariant: WRITE each per-angle findings artifact to the ABSOLUTE path \`${path.resolve(repoRoot)}/tmp/gate-reviews/owner-repo/pr-80/draft_gate-${options.headSha}/<angle>.json\` (\`<angle>\` = your angle name) under THIS worktree's tmp/, never the primary checkout's. Cwd-relative \`tmp/...\` resolves against whatever checkout the command started in — a per-angle artifact written to the primary checkout's tmp/ is invisible to fan-in and fails the gate as missing evidence. Author it with the file-write tool (the \`write\` builtin, \`Write\` on Claude Code), never a shell write (redirect, heredoc, \`tee\`, or an inline script): the Claude Code auto-mode classifier denies a Bash write of a findings artifact. A \`blocked\` result goes through \`dev-loops-run scripts/github/emit-reviewer-blocked.mjs\` instead. Do NOT pin \`--tmp-root "${path.resolve(repoRoot)}/tmp"\` on the findings-log LEDGER writer (\`write-gate-findings-log.mjs\`): the ledger is anchored at the MAIN worktree automatically so the orchestrator's merge can read it and it survives worktree pruning — pinning it to this worktree loses it on prune and refuses the merge for missing provenance.`,
       "",
@@ -6046,6 +6111,17 @@ test("#1601 resolveFanoutDispatch: auto-chunks ungrouped angles + emits a bounde
   assert.deepEqual(plan.wavePlan[0].map((u) => u.name), ["group:a+b", "group:c+d", "e"]);
 });
 
+test("resolveFanoutDispatch drops a recorded unit bound above 5 that no size tier backs and defaults an absent one to 5", () => {
+  const angles = ["a", "b", "c", "d", "e", "f"];
+  const config = { version: 1, gates: { fanout: { groups: [{ name: "wide", angles }] } } };
+  const dropped = resolveFanoutDispatch(config, "draft", angles, { env: {}, unitBound: 10 });
+  assert.equal(dropped.unitBound, 5);
+  assert.deepEqual(dropped.pendingGroups.map((g) => g.angles.length), [5, 1]);
+  const dflt = resolveFanoutDispatch(config, "draft", angles, { env: {} });
+  assert.equal(dflt.unitBound, 5);
+  assert.deepEqual(dflt.pendingGroups.map((g) => g.angles.length), [5, 1]);
+});
+
 test("#2414 resolveFanoutDispatch: units above the cap pack first-fit decreasing into one wave", () => {
   const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 2, maxConcurrent: 2 } } };
   const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d", "e"], { fullLabel: false, env: {} });
@@ -6648,7 +6724,7 @@ test("main(): the --angles path resolves the request plan's models from an on-di
     await main([
       "--repo", "owner/repo", "--pr", "58", "--gate", "draft_gate",
       "--head-sha", headSha,
-      "--harness", "claude",
+      "--harness", "pi",
       "--angles", '["correctness","docs"]',
     ], { repoRoot, run: stubGhRun });
 
@@ -6682,7 +6758,7 @@ test("buildGateContext threads input.config into the persisted request plan's re
     const result = await buildGateContext(
       {
         config,
-        harness: "claude",
+        harness: "pi",
         gate: "draft_gate",
         diff: DOCS_ONLY_DIFF,
         repo: "owner/repo",
@@ -6994,7 +7070,7 @@ test("writeGateContext request-plan partitions angles by concrete resolved model
     const options = parseWriteGateContextCliArgs([
       "--repo", "owner/repo", "--pr", "82", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
-      "--harness", "claude",
+      "--harness", "pi",
       "--angles", '["correctness","security","docs"]',
     ]);
     options.config = angleModelConfig();
@@ -7029,6 +7105,27 @@ test("writeGateContext request-plan resolves a bare no-override angle to its dis
 
     assert.equal(result.requestPlan.requestGroups.length, 1);
     assert.equal(result.requestPlan.requestGroups[0].model, "opus");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("Claude and Pi plans record the per-angle tier model (ADR 0278 amends ADR 0266)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-claude-review-"));
+  try {
+    for (const [harness, expectedModel] of [["claude", "sonnet"], ["pi", "pi-low"]]) {
+      const options = parseWriteGateContextCliArgs([
+        "--repo", "owner/repo", "--pr", "87", "--gate", "draft_gate",
+        "--head-sha", "abc1234567891", "--angles", '["correctness"]',
+        "--harness", harness,
+      ]);
+      options.config = {
+        models: { tiers: { low: { claude: "sonnet", pi: "pi-low" }, high: { claude: "opus", pi: "pi-high" } } },
+        gates: { draft: { angles: [{ name: "correctness", tier: "low" }] } },
+      };
+      const result = await writeGateContext(options, { repoRoot });
+      assert.equal(result.requestPlan.requestGroups[0].model, expectedModel, harness);
+    }
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -7155,13 +7252,13 @@ test("writeGateContext request-plan honors a per-angle tier override (harness-aw
     const options = parseWriteGateContextCliArgs([
       "--repo", "owner/repo", "--pr", "87", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
-      "--harness", "claude",
+      "--harness", "pi",
       "--angles", '["docs"]',
     ]);
-    // Built-in low and high are both opus on claude; a distinct low id makes
-    // the per-angle tier override observable.
+    // Built-in Pi tiers are null; a concrete low id makes the per-angle tier
+    // override observable.
     options.config = {
-      models: { tiers: { low: { claude: "sonnet" } } },
+      models: { tiers: { low: { pi: "sonnet" } } },
       gates: { draft: { angles: [{ name: "docs", tier: "low" }] } },
     };
     const result = await writeGateContext(options, { repoRoot });
@@ -8982,6 +9079,55 @@ test("resolveCapRound treats a cap round whose persisted verdict is clean as a c
   }
 });
 
+test("resolveCapRound counts a finished live current-head ledger as the cap round (issue 3178)", async () => {
+  const { repoRoot } = await makeBaseDiffRepo();
+  try {
+    const head = "8".repeat(40);
+    const opts = { repo: "owner/repo", pr: 64, headSha: head };
+    await seedClosedRounds(repoRoot, 64, ["1".repeat(40), "2".repeat(40), "3".repeat(40), head]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-64", `draft_gate-${head}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    await writeFile(ledger, JSON.stringify({ ...log, verdict: "clean", findings: [] }), "utf8");
+    const capRound = await resolveCapRound(opts, { repoRoot });
+    assert.ok(capRound, "a clean cap round at the current head resolves");
+    assert.deepEqual(capRound.residue, []);
+    assert.equal(capRound.log.headSha, head);
+    // The seeded findings_present ledger keeps its open act finding: the residue lists it.
+    await writeFile(ledger, JSON.stringify(log), "utf8");
+    const withFindings = await resolveCapRound(opts, { repoRoot });
+    assert.ok(withFindings, "a findings_present cap round at the current head resolves");
+    assert.deepEqual(withFindings.residue.map((i) => [i.title, i.disposition]), [["Guard is missing", "act"]]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("resolveCapRound does not count an unfinished or in-rewrite live current-head ledger (issue 3178)", async () => {
+  const { repoRoot } = await makeBaseDiffRepo();
+  try {
+    const head = "8".repeat(40);
+    const opts = { repo: "owner/repo", pr: 64, headSha: head };
+    await seedClosedRounds(repoRoot, 64, ["1".repeat(40), "2".repeat(40), "3".repeat(40), head]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-64", `draft_gate-${head}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const { roundIdentity: _stamp, ...unstamped } = log;
+    for (const variant of [
+      { ...log, roundIdentity: { completed: false } },
+      { ...unstamped, findings: [{ severity: "low", title: "t", file: "a.js", line: 1 }] },
+    ]) {
+      await writeFile(ledger, JSON.stringify(variant), "utf8");
+      assert.equal(await resolveCapRound(opts, { repoRoot }), null, "only 3 other rounds are complete");
+    }
+    // An unreadable live ledger fails closed.
+    await writeFile(ledger, "{ not json", "utf8");
+    let failedClosed = false;
+    assert.equal(await resolveCapRound(opts, { repoRoot, onFailClosed: () => { failedClosed = true; } }), null);
+    assert.equal(failedClosed, true, "an unparseable live current-head ledger calls onFailClosed");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolveCapRoundFixed refuses a clearing record that does not name every cap-round act item", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
@@ -9352,6 +9498,24 @@ test("clearingChainWalk keeps the seed-proof heads when a sealed record is rewri
     const walk = await clearingChainWalk({ tmpRoot: path.join(repoRoot, "tmp"), capHead: A, repo: "owner/repo", pr: 66, baseRefName: "main", repoRoot, baseOnlyMerge: merge });
     assert.ok(walk.heads.includes(C), "C was proven by the seed walk before the rewrite");
     assert.ok(walk.ends.includes(E), "the seeded M to E chain still ends at E");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("clearingChainWalk candidates hold record candidate heads only, not a seeded base-only merge baseline", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const M = "7".repeat(40);
+    const E = "6".repeat(40);
+    await seedClosedRounds(repoRoot, 66, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    await writeDeltaRecord(repoRoot, A, B);
+    await writeDeltaRecord(repoRoot, M, E);
+    const merge = async (args) => args.fromHead === B && args.head === M;
+    const walk = await clearingChainWalk({ tmpRoot: path.join(repoRoot, "tmp"), capHead: A, repo: "owner/repo", pr: 66, baseRefName: "main", repoRoot, baseOnlyMerge: merge });
+    assert.ok(walk.heads.includes(M), "the seeded merge M is a visited head");
+    assert.ok(!walk.candidates.includes(M), "the seeded merge M is a record baseline, not a candidate");
+    assert.deepEqual([...walk.candidates].sort(), [B, E].sort());
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -10107,7 +10271,7 @@ test("a PR-body spec edit refuses when the caller supplied an acceptance-criteri
   }
 });
 
-test("resolveCapRound at the current head returns the retained round at H, never the ledger of an earlier head (issue 3080 AC7)", async () => {
+test("resolveCapRound at the current head returns the finished live ledger at H, never the ledger of an earlier head, and orders by loggedAt over retained rounds (issues 3080 AC7, 3178)", async () => {
   const { repoRoot } = await makeBaseDiffRepo();
   try {
     const head = "8".repeat(40);
@@ -10116,13 +10280,18 @@ test("resolveCapRound at the current head returns the retained round at H, never
     await writeFile(path.join(dir, `draft_gate-${head}.round-1.json`), JSON.stringify({
       repo: "owner/repo", pr: 71, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: "2026-11-05T00:00:00.000Z", findings: [],
     }), "utf8");
-    // A live ledger at H is the round being posted (the head excluded, as in the round count), so the retained round stays the cap-round authority.
+    // A finished live ledger at H counts (issue 3178), so it is the latest round at H and the cap-round authority.
     await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
       repo: "owner/repo", pr: 71, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: "2026-11-06T00:00:00.000Z", findings: [],
     }), "utf8");
     const round = await resolveCapRound({ repo: "owner/repo", pr: 71, headSha: head }, { repoRoot });
     assert.equal(round.log.headSha, head);
-    assert.equal(round.log.loggedAt, "2026-11-05T00:00:00.000Z", "the retained round, not the live ledger");
+    assert.equal(round.log.loggedAt, "2026-11-06T00:00:00.000Z", "the finished live ledger at H, not an earlier head's");
+    await writeFile(path.join(dir, `draft_gate-${head}.round-1.json`), JSON.stringify({
+      repo: "owner/repo", pr: 71, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: "2026-11-07T00:00:00.000Z", findings: [],
+    }), "utf8");
+    const later = await resolveCapRound({ repo: "owner/repo", pr: 71, headSha: head }, { repoRoot });
+    assert.equal(later.log.loggedAt, "2026-11-07T00:00:00.000Z", "ordering is by loggedAt first: a retained round logged after the live ledger wins");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -10329,6 +10498,36 @@ test("a full-diff capture failure on an unchanged-body rebuild keeps the prior b
   }
 });
 
+for (const [label, carry] of [
+  ["the fallback branch reads the bound of the current fanout", {}],
+  ["the full-diff-failure recursion carries the prior bound", { carriedPriorGroups: [{ name: "design", angles: ["scope", "srp", "ocp", "lsp", "isp", "dip"] }], carriedPriorUnitBound: 10, carriedPriorCarriedAngles: [], carriedPriorBodySha256: null }],
+]) {
+  test(`a body-only rebuild refuses a prior bound-10 6-angle unit while it is in flight: ${label}`, async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-prior-bound-"));
+    try {
+      const angles = ["scope", "srp", "ocp", "lsp", "isp", "dip"];
+      const config = draftConfig({ dynamicAngles: false, angles, mandatoryAngles: [] });
+      config.gates.draft.angles = config.gates.draft.angles.map((entry) => ({ ...(typeof entry === "string" ? { name: entry } : entry), prompt: (entry.name ?? entry) === "scope" ? "The PR description is the contract." : "Review the diff." }));
+      config.gates.fanout = { groups: [{ name: "design", angles }] };
+      const groups = [{ name: "design", angles }];
+      const options = {
+        ...parseWriteGateContextCliArgs(["--repo", "owner/repo", "--pr", "90", "--gate", "draft_gate", "--head-sha", BODY_RERUN_SHA, "--angles", JSON.stringify(angles)]),
+        config, prBody: "Edited",
+        fanoutDispatch: { groups, pendingGroups: groups, unitBound: 10, preflight: { carriedAngles: [] } },
+        ...carry,
+      };
+      // The unit is a whole 6-angle unit at bound 10; at bound 5 it would re-split into -part1/-part2 and miss this live sentinel.
+      const sentinel = path.join(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-group-design-${BODY_RERUN_SHA}.json`);
+      await mkdir(path.dirname(sentinel), { recursive: true });
+      await writeFile(sentinel, "{}\n", "utf8");
+      await assert.rejects(writeGateContext(options, { repoRoot }), /GATE-EXEC-BODY-ONLY-RERUN.*unit draft-gate-group-design is in flight/s);
+      assert.ok(existsSync(sentinel), "the live sentinel stays");
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+}
+
 test("the sticky pr-body baseline survives a failed context write (issue 3080 AC14)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-body-sticky-"));
   try {
@@ -10445,4 +10644,11 @@ test("pre_approval_gate refusal on a ready PR with no cap round (the real resolv
     process.exitCode = priorExitCode;
     await rm(repoRoot, { recursive: true, force: true });
   }
+});
+
+test("capRoundCovers filters body items on the kept representative, so a cluster led by a file-less member is covered by an empty record", () => {
+  const A = "a".repeat(40);
+  const base = { severity: "low", angle: "correctness", judgeDisposition: "act", clusterId: 0 };
+  const findings = [{ ...base, summary: "body claim" }, { ...base, summary: "code claim", files: ["src/a.mjs"] }];
+  assert.equal(capRoundCovers({ log: { verdict: "findings_present", headSha: A, findings } }, undefined)({ items: [] }), true);
 });

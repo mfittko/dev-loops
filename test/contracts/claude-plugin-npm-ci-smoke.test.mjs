@@ -16,12 +16,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { ensureWritableNpmCacheEnv } from "../_helpers.mjs";
+
+const npmEnv = ensureWritableNpmCacheEnv(process.env);
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const claudeDir = path.join(repoRoot, ".claude");
 
 const NETWORK_FAILURE_RE = /ENOTFOUND|ETIMEDOUT|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|socket hang up|network|ERR_SOCKET|registry\.npmjs\.org.*(unreachable|timeout)/i;
-const npmRegistryProbe = spawnSync("npm", ["view", "yaml", "version"], { encoding: "utf8", timeout: 15_000 });
+const npmRegistryProbe = spawnSync("npm", ["view", "yaml", "version"], { env: npmEnv, encoding: "utf8", timeout: 15_000 });
 const npmRegistryProbeDetail = `${npmRegistryProbe.stderr ?? ""}${npmRegistryProbe.stdout ?? ""}${npmRegistryProbe.error?.message ?? ""}`;
 const NPM_REGISTRY_TRANSIENTLY_UNAVAILABLE =
   !process.env.CI && npmRegistryProbe.status !== 0 && NETWORK_FAILURE_RE.test(npmRegistryProbeDetail);
@@ -46,7 +49,7 @@ const firstPartyPinnedVersion = (() => {
   }
 })();
 const firstPartyProbe = firstPartyPinnedVersion
-  ? spawnSync("npm", ["view", `dev-loops@${firstPartyPinnedVersion}`, "version"], { encoding: "utf8", timeout: 15_000 })
+  ? spawnSync("npm", ["view", `dev-loops@${firstPartyPinnedVersion}`, "version"], { env: npmEnv, encoding: "utf8", timeout: 15_000 })
   : null;
 const firstPartyProbeDetail = firstPartyProbe
   ? `${firstPartyProbe.stderr ?? ""}${firstPartyProbe.stdout ?? ""}${firstPartyProbe.error?.message ?? ""}`
@@ -69,6 +72,7 @@ test.skipIf(NPM_REGISTRY_TRANSIENTLY_UNAVAILABLE || FIRST_PARTY_VERSION_UNPUBLIS
 
       const result = spawnSync("npm", ["ci", "--ignore-scripts", "--loglevel=error", "--no-audit", "--no-fund"], {
         cwd: tmpRoot,
+        env: npmEnv,
         encoding: "utf8",
         timeout: 100_000,
       });
