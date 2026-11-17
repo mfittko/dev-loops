@@ -29,7 +29,8 @@ import {
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
-import { countCompletedRounds, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
+import { countCompletedRounds, readClosedPriorRoundLogs, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
+import { isPastRoundCap, listOpenActItems, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
 import { workOrderDigest } from "../github/_work-order-protocol.mjs";
@@ -1294,6 +1295,23 @@ export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = pr
 // so a test can assert the real production wiring — e.g. that
 // unresolvedThreadCount is threaded from context.snapshot rather than a test
 // re-implementing this object literal.
+/**
+ * Issue 3105 AC15: the open act list of the current head's draft_gate ledger, or null when the head has no findings_present ledger with an open act item.
+ * `blockers` are the GATE-EXEC-SOFT-CAP blockers of a round at or past the cap; below the cap every act item goes to the fixer.
+ */
+export async function resolveDraftOpenActList(context, { repoRoot, cap }) {
+  const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
+  if (!/^[0-9a-f]{40,64}$/.test(head)) return null;
+  const options = { repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: head };
+  const logs = await readClosedPriorRoundLogs(options, { repoRoot, includeLiveCurrentHead: true, includeRetainedCurrentHead: true });
+  const log = logs.filter((entry) => String(entry.headSha).trim().toLowerCase() === head).at(-1);
+  const open = log?.verdict === "findings_present" ? listOpenActItems(log.findings) : [];
+  if (open.length === 0) return null;
+  // countCompletedRounds counts the round being posted, so the current head's round is one less.
+  const round = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead: true }) - 1;
+  return { headSha: head, openActCount: open.length, blockers: isPastRoundCap(round, cap) ? pastCapBlockers(log.findings, { round, cap }) : [] };
+}
+
 export function buildGateCoordinationEvaluatorInput({
   context,
   maxCopilotRounds,
@@ -1306,6 +1324,7 @@ export function buildGateCoordinationEvaluatorInput({
   draftCapRoundFixed = false,
   draftRoundRefused = false,
   draftCapRoundFailure = null,
+  draftOpenActList = null,
 }) {
   return {
     repo: context.repo,
@@ -1370,6 +1389,7 @@ export function buildGateCoordinationEvaluatorInput({
     draftCapRoundFixed,
     draftRoundRefused,
     draftCapRoundFailure,
+    draftOpenActList,
     ...(earlySurface ?? {}),
   };
 }
@@ -1451,6 +1471,9 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure } = await resolveDraftCapRoundFact(context, { repoRoot, resolve: runtime.resolveCapRoundFixed ?? resolveCapRoundFixed });
   const draftRoundRefused = context.prData?.isDraft === true && !draftCapRoundFixed
     && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot, includeLiveCurrentHead: true }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), () => false);
+  const draftOpenActList = context.prData?.isDraft === true && !draftCapRoundFixed
+    ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0 }).catch(() => null)
+    : null;
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
     context: evaluatorContext,
     maxCopilotRounds,
@@ -1469,6 +1492,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     draftCapRoundFixed,
     draftRoundRefused,
     draftCapRoundFailure,
+    draftOpenActList,
   }));
   // Copilot review request guard: when Copilot has reviewed the PR but no
   // formal review request was made, block pre-approval gate entry. Only

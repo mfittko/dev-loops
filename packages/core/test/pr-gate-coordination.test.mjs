@@ -4782,6 +4782,26 @@ test("draft round-cap refusal for a chain-extendable condition carries the exten
   assert.equal(evaluatePrGateCoordination({ ...base, repo: undefined, draftCapRoundFailure: "no_clearing_record" }).blockedOn, BLOCKED_ON.OPERATOR_DECISION);
 });
 
+test("3105 AC15: a posted findings_present draft_gate verdict with an open act list and no blocker routes to the fixer", () => {
+  const head = "ab".repeat(20);
+  const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict };
+  const fixer = `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo o/r --pr 9 --head-sha ${head} --phase commit_only --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>`;
+  // PR 3221 (round 2, 5 act items) and PR 3239 (cap round, no high, no fixer pass); the PR 3234 stale-base shape is the detector case.
+  for (const shape of [{ draftOpenActList: { headSha: head, openActCount: 5, blockers: [] } }, { draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record", draftOpenActList: { headSha: head, openActCount: 2, blockers: [] } }]) {
+    const result = evaluatePrGateCoordination({ ...base, ...shape });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
+    assert.equal(result.agentRemedy.command, fixer);
+    assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+  }
+  const capped = { ...base, draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record" };
+  const high = evaluatePrGateCoordination({ ...capped, draftOpenActList: { headSha: head, openActCount: 1, blockers: [{ kind: "round_cap_reached", reason: "new_act", item: "[high] x (new_act)" }] } });
+  assert.deepEqual({ next: high.nextAction, on: high.blockedOn, remedy: high.agentRemedy }, { next: PR_CHECKPOINT_ACTION.REPORT_BLOCKED, on: BLOCKED_ON.OPERATOR_DECISION, remedy: undefined });
+  assert.match(high.reason, /\[high\] x/);
+  const moved = evaluatePrGateCoordination({ ...capped, draftOpenActList: { headSha: "cd".repeat(20), openActCount: 2, blockers: [] } });
+  assert.equal(moved.agentRemedy.command, "dev-loops gate extend-cap-round-chain --repo o/r --pr 9");
+});
+
 // Issue 3139: one next step on a ready PR without clean draft_gate evidence.
 test("a ready PR without clean draft evidence names reconcile_draft_gate alone when no cap round failed, and the cap-round exit alone when one did", () => {
   const base = { pr: 9, repo: "o/r", currentHeadSha: "abc123456789", prDraft: false, lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", sameHeadCleanConverged: true, draftGate: { visible: false } };

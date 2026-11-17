@@ -4563,6 +4563,27 @@ async function runBaseFreshnessFixture({ checkBaseFreshness, isDraft = true, wit
 
 const STALE = { ok: false, error: "base_stale_integrate_first", base: "main", newerCommits: ["abc1 newer"], remedy: "REMEDY-TEXT" };
 
+// Issue 3105 AC15, the PR 3234 shape: a posted findings_present verdict and its ledger's open act list at a stale head go to the fixer first.
+test("3105 AC15: the detector derives the open act list from the current-head ledger and routes the fixer before base integration", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-act-list-"));
+  try {
+    initGitFixture(tempDir, { branch: "main" });
+    const headSha = "abc1234567".repeat(4);
+    const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+    await mkdir(findings, { recursive: true });
+    const act = { severity: "medium", summary: "fix x", file: "src/x.mjs", line: 3, judgeDisposition: "act" };
+    await writeFile(path.join(findings, `draft_gate-${headSha}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha, verdict: "findings_present", loggedAt: "2026-11-16T00:00:00.000Z", findings: [act] }), "utf8");
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 medium", nextAction: "fix" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
+    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, checkBaseFreshness: async () => STALE }));
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
+    assert.match(result.agentRemedy.command, new RegExp(`emit-fixer-work-order\\.mjs --repo owner/repo --pr 10 --head-sha ${headSha} --phase commit_only`));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 describe("GATE-EXEC-BASE-REFRESH coordination", () => {
   it("stale head at run_draft_gate routes to resolve_merge_conflicts", async () => {
     let args;
