@@ -32,7 +32,7 @@ import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { viewPr } from "../github/view-pr.mjs";
 import { pullReceiptPath } from "../github/_work-order-protocol.mjs";
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
-import { readSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
+import { readGateDeltaRecord, readSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { STALE_RUNNER_DEFAULT_MAX_AGE_MS, resolveStaleRunnerMaxAgeMs } from "./_stale-runner-detection.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 
@@ -78,7 +78,8 @@ const readPlanExecution = (file, head) => {
  */
 const planExecutionFor = (tmpRoot, repo, pr, head) => {
   const own = readPlanExecution(path.join(tmpRoot, "gate-fixer", repoSlugFor(repo), `pr-${pr}`, "fixer-emit-plan.json"), head);
-  if (own) return own;
+  // A handed-back own plan (its outputRef exists) must not hide another plan of the same baseline whose fixer has not handed back and may own the marker.
+  if (own && mtimeMs(own.outputRef) === null) return own;
   // Per-entry failures (a stray top-level file makes readdirSync throw ENOTDIR) skip that entry only, so the scan still reaches every real plan.
   const dirs = (dir) => { try { return readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name); } catch { return []; } };
   const root = path.join(tmpRoot, "gate-fixer");
@@ -86,10 +87,10 @@ const planExecutionFor = (tmpRoot, repo, pr, head) => {
     for (const prDir of dirs(path.join(root, slug))) {
       if (!/^pr-[0-9]+$/u.test(prDir)) continue;
       const other = readPlanExecution(path.join(root, slug, prDir, "fixer-emit-plan.json"), head);
-      if (other) return { ...other, foreign: true };
+      if (other && mtimeMs(other.outputRef) === null) return { ...other, foreign: true };
     }
   }
-  return undefined;
+  return own;
 };
 
 /** @param {{ tmpRoot: string, head: string, repo?: string, pr?: number, fetchPr?: Function, now?: () => number, actor?: string }} input */
@@ -151,12 +152,13 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   // A record with no origin (thread route, or act route without --fixer-plan) matches any marker; one with an origin must name the marker's own execution. A marker that names no execution (it did not parse) matches any such record of the baseline.
   const unreadableLive = () => {
     let record = null;
-    try { record = readSealedGateDeltaRecord(tmpRoot, head); } catch { /* an unreadable record proves nothing */ }
+    // Liveness fails closed: a record with a missing or mismatched seal (a rewrite in progress deletes the seal first) still blocks the close; only a record that cannot be parsed proves nothing.
+    try { record = readSealedGateDeltaRecord(tmpRoot, head) ?? readGateDeltaRecord(tmpRoot, head); } catch { /* an unreadable record proves nothing */ }
     if (record?.nextStep !== undefined && record.nextStep !== "push_to_gate"
       && (executionIdentity === undefined || record.origin === undefined || (record.origin?.workOrderRef === workOrderRef && record.origin?.executionIdentity === executionIdentity))) {
-      // A push record already cleared the sequence, so the next step is the full-phase emission, not another delta review.
+      // A push record already cleared the sequence. Full emission refuses while the marker is unreadable, so the remedy is the already emitted full order, or a rewritten marker.
       const remedy = record.nextStep === "push"
-        ? "Run emit-fixer-work-order.mjs --phase full with the sealed --delta-result to emit the push order."
+        ? "Finish the full-phase order already emitted for this head (push its candidate; the head move then closes the sequence). If no full order was emitted, the full emission refuses while the marker is unreadable: rerun the pre-push delta --result step to rewrite the marker first."
         : "Finish the sequence with the pre-push delta review (dev-loops loop pre-push-delta).";
       return refuse("sequence_live", `the sealed delta record of ${head} ${executionIdentity === undefined ? "" : `names the fixer execution ${executionIdentity} and `}has next step ${record.nextStep}`, remedy);
     }

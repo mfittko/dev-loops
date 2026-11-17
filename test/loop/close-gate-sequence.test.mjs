@@ -766,9 +766,19 @@ test("MARKER_UNREADABLE: a record with next step push names the full-phase emiss
     boundedRecord(tmpRoot, ex, { outcome: "locally_clear", nextStep: "push" });
     const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
     assert.equal(result.refusal, "sequence_live");
-    assert.match(result.remedy, /emit-fixer-work-order\.mjs --phase full/);
-    assert.match(result.remedy, /--delta-result/);
+    assert.match(result.remedy, /full-phase order already emitted/);
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("MARKER_UNREADABLE: a needs_fix record whose seal is missing (a rewrite in progress) stays sequence_live", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, execution: ex });
+    handedBack(tmpRoot, ex);
+    const recordPath = boundedRecord(tmpRoot, ex, { outcome: "needs_fix", nextStep: "fix_and_rereview" });
+    rmSync(`${recordPath}.seal`);
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }))).refusal, "sequence_live");
   });
 });
 

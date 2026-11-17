@@ -744,6 +744,12 @@ describe("the reviewer result shape", () => {
     }
     assert.deepEqual(deltaResultShapeErrors(result({ actionableItems: [{ ref: "act-0", status: "resolved", evidence: ["x"] }] })), []);
   });
+
+  test("deltaResultShapeErrors refuses a missing or duplicate act item ref before the seal", () => {
+    const item = (ref) => ({ ...(ref ? { ref } : {}), status: "resolved", evidence: ["x"] });
+    assert.match(deltaResultShapeErrors(result({ actionableItems: [item()] })).join(), /ref is missing/);
+    assert.match(deltaResultShapeErrors(result({ actionableItems: [item("a"), item("a")] })).join(), /duplicate/);
+  });
 });
 
 describe("auto refs and errors use the full act list position", () => {

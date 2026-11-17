@@ -335,7 +335,12 @@ export function deltaResultShapeErrors(result, { checkOutcome = true } = {}) {
   if (!result || typeof result !== "object") return ["result must be an object"];
   const r = /** @type {any} */ (result);
   if (!Array.isArray(r.actionableItems)) errors.push("actionableItems[] is required");
+  const seenRefs = new Set();
   for (const [i, item] of (Array.isArray(r.actionableItems) ? r.actionableItems : []).entries()) {
+    // A missing or duplicate ref would pass the seal and fail membership validation later, so refuse it before the seal.
+    if (!nonEmpty(item?.ref)) errors.push(`actionableItems[${i}].ref is missing`);
+    else if (seenRefs.has(item.ref)) errors.push(`actionableItems[${i}].ref ${JSON.stringify(item.ref)} is a duplicate`);
+    else seenRefs.add(item.ref);
     if (item?.status === undefined) errors.push(`actionableItems[${i}].status is missing`);
     else if (!DELTA_ITEM_STATUSES.includes(item.status)) errors.push(`actionableItems[${i}].status ${JSON.stringify(item.status)} is unknown`);
     if (!nonEmptyStrings(item?.evidence)) errors.push(`actionableItems[${i}].evidence[] must be non-empty strings`);
