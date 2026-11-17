@@ -165,6 +165,8 @@ for (const command of [
   "sudo gh api graphql -f query=mutation{updatePullRequest}",
   "gh api graphql -f query='mutation{updatePullRequest(input:{pullRequestId:\"x\"}){clientMutationId}}'",
   "gh api graphql -f query=mutation{updateIssue}",
+  "caffeinate gh api graphql -f query='mutation{u:updatePullRequest(input:{pullRequestId:\"x\",body:\"y\"}){clientMutationId}}'",
+  "sudo gh api graphql -f query='mutation{a:updateIssue(input:{id:\"x\",body:\"y\"}){clientMutationId}}'",
   // A comma-less group nested in a comma group still expands.
   "gh pr edit 5 --bo{dy,x{y}} hello",
   "gh pr edit 5 --{body,x{y}} hello",
@@ -272,6 +274,15 @@ test("an unclosed brace followed by a long comma run is decided fast and denies"
     const { decision } = bash(root, `echo 'x{${",".repeat(400000)}'; gh pr edit 5 --body x`, undefined);
     assert.equal(decision, "deny");
     assert.ok(Date.now() - started < 10000, "the brace scan must be linear");
+  });
+});
+
+test("a 64-way prefix with a huge final group denies before allocating the alternatives", async () => {
+  await withManagedRepo(async (root) => {
+    const started = Date.now();
+    const { decision } = bash(root, `echo ${"{a,b}".repeat(6)}{${",".repeat(2500000)}}; gh pr edit 5 --body x`, undefined);
+    assert.equal(decision, "deny");
+    assert.ok(Date.now() - started < 10000, "the cap must hold before allocation");
   });
 });
 

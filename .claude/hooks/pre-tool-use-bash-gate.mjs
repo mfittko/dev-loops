@@ -12,8 +12,8 @@
  *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
  *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
- *   - in a managed repo the whole command is denied when its tokens (any segment, any order; brace and
- *     `${VAR:-x}` forms split) hold `gh`, `pr`, `edit|create` and a body flag, or `gh`, `api` and a body
+ *   - in a managed repo the whole command is denied when its tokens (any segment, any order; comma brace groups and
+ *     `${VAR:-x}` forms split; a sequence group `{x..y}` stays outside the token model) hold `gh`, `pr`, `edit|create` and a body flag, or `gh`, `api` and a body
  *     field or `--input`, or `gh`, `api`, `graphql` and `updatePullRequest`, `updateIssue` or `body`
  *     (`segmentHoldsBodyWrite`); fails closed. Accepted false positive: a command
  *     that holds those tokens as data (a title or note that says gh) is denied too.
@@ -94,7 +94,7 @@ if (fixerPull) recordFixerAgentBinding(mainRoot, { agentId: input?.agent_id, ...
 // in any order, hold `gh`, `pr`, `edit|create` and a body flag (`--body*`, or a short cluster with
 // `b`/`F`: `-b`, `-bx`, `-b=x`, `-Fwaiver.md`, `-db`), or hold `gh`, `api` and a body field (`-f body=`,
 // `-F body=`, `--field body=`, `--raw-field body=`) or `--input`, or `gh`, `api`, `graphql` and `updatePullRequest`/`updateIssue`/`body`. `$(`, `)`, backticks, braces and commas split tokens so a
-// command substitution or brace expansion is seen, a `${VAR:-gh}` default counts as a token, and `gh` matches by basename (`/usr/bin/gh`). No head, wrapper or echo exemption: fails closed.
+// command substitution or comma brace group is seen (a sequence group `{x..y}` stays literal), a `${VAR:-gh}` default counts as a token, and `gh` matches by basename (`/usr/bin/gh`). No head, wrapper or echo exemption: fails closed.
 // A process wrapper needs no parser: the rules read every token of the command.
 // `--{body,x}` expands to `--body`, `--x`: one innermost comma group per pass; a comma-less group nested in it stays literal.
 // The product of the group sizes is exponential, so a word past BRACE_EXPANSION_CAP returns null and the caller fails closed.
@@ -103,7 +103,10 @@ function braceExpansions(value) {
   let words = [value];
   for (;;) {
     let expanded = false;
+    let total = 0;
+    let over = false;
     words = words.flatMap((word) => {
+      if (over) return [];
       // Linear scan for the first innermost `{...,...}` group; a regex here backtracks quadratically on an unclosed `{`.
       // A stack keeps the enclosing group when a comma-less group closes inside it (`--bo{dy,x{y}}`).
       const stack = [];
@@ -118,11 +121,16 @@ function braceExpansions(value) {
           if (group?.comma) { open = group.at; end = k; }
         }
       }
-      if (end < 0) return [word];
+      if (end < 0) { total++; return [word]; }
       expanded = true;
+      // Count the alternatives before building them: the cap holds before allocation, not after the pass.
+      let alts = 1;
+      for (let k = word.indexOf(",", open); k >= 0 && k < end; k = word.indexOf(",", k + 1)) alts++;
+      total += alts;
+      if (total > BRACE_EXPANSION_CAP) { over = true; return []; }
       return word.slice(open + 1, end).split(",").map((alt) => word.slice(0, open) + alt + word.slice(end + 1));
     });
-    if (words.length > BRACE_EXPANSION_CAP) return null;
+    if (over) return null;
     if (!expanded) return words;
   }
 }
@@ -140,7 +148,7 @@ function segmentHoldsBodyWrite(command) {
     has((t) => t.startsWith("--body") || /^-[^-]*[bF]/.test(t))) ||
     (has((t) => t === "api") && (has((t) => t.startsWith("--input")) ||
       (has((t) => /^(?:-[fF]|--(?:raw-)?field)$/.test(t)) && has((t) => t === "body")) || has((t) => /^-[fF]body$/.test(t)) ||
-      (has((t) => t === "graphql") && has((t) => t === "updatePullRequest" || t === "updateIssue" || t === "body"))));
+      (has((t) => t === "graphql") && has((t) => /update(?:PullRequest|Issue)/.test(t) || t === "body"))));
 }
 
 let repoRoot = null;
@@ -285,7 +293,8 @@ if (decision.decision === "deny") {
 }
 if (isSegmentBodyWrite) {
   emitDeny(
-    "ADR-TRIPWIRE-STANDING-WAIVER: this command holds the gh, pr, edit or create and body-flag tokens, or the gh, api and body-field (or --input) tokens, or a brace expansion too large to read, so it is blocked as a raw PR or issue body write. " +
+    "ADR-TRIPWIRE-STANDING-WAIVER: this command holds the gh, pr, edit or create and body-flag tokens, or the gh, api and body-field (or --input) tokens, or the gh, api, graphql and updatePullRequest, updateIssue or body tokens, or a brace expansion too large to read, so it is blocked as a raw PR or issue body write. " +
+    "To read a body, use `gh pr view <n> --json body`. " +
     "Write a PR body through the launcher: `dev-loops-run cli/index.mjs pr create` or `dev-loops-run cli/index.mjs pr edit` (it refuses a hand-written adr-tripwire:allow line). " +
     "Edit an issue body through `dev-loops-run cli/index.mjs issue edit`. " +
     "If the launcher command itself was denied because its title or body text holds the word gh, rephrase the title or move the text into the body file. " +
