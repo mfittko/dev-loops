@@ -209,6 +209,8 @@ function continues(line) {
 function collapseCommand(command) {
   const tok = tokenizeShellCommand(command);
   let text = command;
+  // Fail closed: an unterminated heredoc runs to end of input and its body may expand, so any incomplete parse holding `<<` is reported.
+  if (tok.incomplete && command.includes("<<")) return `${UNPROVEN_HEREDOC}${command.split("\n")[0]}`;
   if (!tok.incomplete) {
     const dropped = tok.segments.flatMap((seg) => dataHeredocs(seg, tok.segments.length === 1));
     // Fail closed: a closed heredoc that is not provably data (any host, quoted or not, at any substitution depth) is never proven clean.
@@ -221,6 +223,8 @@ function collapseCommand(command) {
       text = text.slice(0, h.bodyStart) + (end === -1 ? "" : text.slice(end));
     }
   }
+  // Fail closed: a `#` after `$(` or a backtick (data heredoc bodies already dropped) may be a literal inside a substitution, not a comment; the line splitter cannot tell. Coarse on purpose.
+  if (/(?:\$\(|`)[\s\S]*#/.test(text)) return `${UNPROVEN_HEREDOC}${command.split("\n")[0]}`;
   const out = [];
   let joined = "";
   for (const line of text.split(/\r?\n/)) {

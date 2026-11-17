@@ -360,6 +360,16 @@ test("a heredoc that is not provably data fails closed: mid-line #, nested hered
   }
 });
 
+test("fails closed: an unclosed heredoc, and a # after $( or a backtick outside any heredoc", async () => {
+  for (const command of ["cat <<EOF\n# $(gh api repos/o/r)", 'echo "$(date)\n# $(gh api repos/o/r)"', "echo \"`date`\n# `gh api repos/o/r`\""]) {
+    const r = await runCli(["--json"], sessionLine(command));
+    assert.equal(r.status, 1, JSON.stringify(command));
+    assert.match(JSON.parse(r.stdout).rawCallViolations[0], /^unproven heredoc: /, JSON.stringify(command));
+  }
+  const clean = await runCli(["--json"], sessionLine("git commit -m \"$(cat <<'EOF'\n# heading\nbody\nEOF\n)\""));
+  assert.deepEqual(JSON.parse(clean.stdout).rawCallViolations, []);
+});
+
 test("a git commit -m substitution holding one cat heredoc is data; any other substitution keeps its body", async () => {
   const body = "fix\ngh api is no longer used";
   const clean = await runCli(["--json"], sessionLine(`git commit -m "$(cat <<'EOF'\n${body}\nEOF\n)"`));
