@@ -634,7 +634,8 @@ async function emitPlan({
           const { ends, candidates } = await clearingChainWalk({ tmpRoot: resolveGateArtifactTmpRoot(cwd), capHead: fromHead, repo, pr, baseRefName, repoRoot: cwd });
           // A second or later cap-round fixer pass: a record candidate head of the sealed clearing chain (ADR 0254/0261) is covered by a sealed clearing record of the cap round since the cap-round head (ADR 0287 residual risk).
           // A seeded base-only merge (a record baseline) is no candidate: the base-only loop below decides it.
-          if (candidates.includes(headSha)) { gitIn(cwd, "merge-base", "--is-ancestor", fromHead, headSha); baseOnly = true; laterPass = true; }
+          // A retained current-head ledger (a write that stopped after the live file was claimed) can hold a blocked round: fail closed like the carry seam.
+          if (candidates.includes(headSha)) { if (currentHeadLedgerExists()) throw new Error("retained current-head ledger"); gitIn(cwd, "merge-base", "--is-ancestor", fromHead, headSha); baseOnly = true; laterPass = true; }
           else for (const from of [...ends, fromHead]) {
             if (!from || from === headSha) continue; // a chain end equal to the head is no merge base: it would read as a base-only merge and fail open
             if (await isBaseOnlyMergeSince({ fromHead: from, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd })) { baseOnly = true; break; }
