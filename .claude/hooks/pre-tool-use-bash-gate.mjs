@@ -149,6 +149,20 @@ function unwrappedCommandHeads(command) {
   });
 }
 
+// Segment-wide deny: a segment holding a `gh pr edit|create` body flag anywhere is a body write,
+// whatever its head or wrapper (setsid, stdbuf, ionice, `env -S'...'` are not in the wrapper table).
+// Only `echo`/`printf` as the real head, after known wrappers unwrap, is exempt; all else fails closed.
+const SEGMENT_BODY_WRITE = /gh\s+pr\s+(?:edit|create)\b.*(?:--body|\s-[bF](?:\s|$))/s;
+const ECHO_HEAD = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:\S*\/)?(?:echo|printf)(?:\s|$)/;
+function segmentHoldsBodyWrite(command) {
+  return tokenizeShellCommand(command).segments.some(({ words, end }) => {
+    if (!words.length || !SEGMENT_BODY_WRITE.test(words.map((word) => word.value).join(" "))) return false;
+    const source = command.slice(words[0].start, end);
+    const heads = unwrappedCommandHeads(source);
+    return !(heads.length ? heads : [source]).every((head) => ECHO_HEAD.test(head));
+  });
+}
+
 let repoRoot = null;
 let repoSlug = null;
 try {
@@ -209,7 +223,8 @@ const isTimeoutWrapped = typeof command === "string" && commandContainsTimeoutWr
 const bodyWriteHeads = typeof command === "string" ? [command, ...unwrappedCommandHeads(command)] : [];
 const hasRawPrBodyWrite = (view) =>
   commandContainsRawPrBodyEdit(view, managedRepoSlug) || commandContainsRawPrBodyApiWrite(view, managedRepoSlug);
-const isBodyWrite = bodyWriteHeads.some(hasRawPrBodyWrite);
+const isSegmentBodyWrite = inManagedContext && typeof command === "string" && segmentHoldsBodyWrite(command);
+const isBodyWrite = isSegmentBodyWrite || bodyWriteHeads.some(hasRawPrBodyWrite);
 // COORDINATOR-VERIFY-BOUNDARY (#2082) — actor-scoped inside decideBashGate (agentType is
 // "dev-loop" or "gate-coordinator"), so the quick pre-check here only detects the command shape; the hook must not
 // short-circuit to allow before the decider applies the actor + enforceCoordinator scoping.
@@ -300,5 +315,10 @@ for (const head of bodyWriteHeads.slice(1)) {
   if (unwrappedDecision.decision === "deny") {
     emitDeny(unwrappedDecision.reason);
   }
+}
+if (isSegmentBodyWrite) {
+  // The decider denies the canonical body-write shape for every actor; borrow its reason.
+  const segmentDecision = decideBashGate({ ...bashGateFacts, command: "gh pr edit 1 --body x" });
+  if (segmentDecision.decision === "deny") emitDeny(segmentDecision.reason);
 }
 emitAllow();
