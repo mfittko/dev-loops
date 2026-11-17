@@ -716,7 +716,7 @@ async function emitPlan({
   const delta = deltaResult ? await readSource("delta-result", abs(deltaResult), capture) : threadRecordPath && existsSync(threadRecordPath) ? await readSource("delta-result", threadRecordPath, capture) : null;
   if (delta && deltaResult) {
     // Verify the seal before any other use of the result, so an edited result gets the typed evidence refusal.
-    try { verifyEvidence(tmpRoot, abs(deltaResult), delta.parsed, delta.read.sha256); } catch (error) { throw new Refusal(`delta result ${deltaResult} refused (GATE-EXEC-EVIDENCE-SEALED): ${error.message}; re-run the delta review so the reviewer writes a new result, then run check-pre-push-delta.mjs --result and seal-evidence on it, then rerun this emit`); }
+    try { verifyEvidence(tmpRoot, abs(deltaResult), delta.parsed, delta.read.sha256); } catch (error) { throw new Refusal(`delta result ${deltaResult} refused (GATE-EXEC-EVIDENCE-SEALED): ${error.message}; re-run the delta review in this order: a fresh reviewer-input run, the reviewer writes and seals the result, then check-pre-push-delta.mjs --result, then rerun this emit`); }
     // The delta result must belong to this act list and this head (its pinned review baseline).
     const errors = validateDeltaResult(delta.parsed, { sequence: startDeltaSequence({ reviewBaselineHead: headSha, actList: source.parsed }), membershipOnly: true });
     if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}; rerun the check-pre-push-delta.mjs --result step for this act list and baseline, then rerun this emit`);
