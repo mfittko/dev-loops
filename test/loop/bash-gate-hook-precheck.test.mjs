@@ -87,6 +87,14 @@ for (const command of [
   // options are spelled out per wrapper, because a `timeout` duration and a `nice -n N` level
   // are the only wrapper arguments that are not flags.
   "timeout 300 gh pr edit 5 --body-file waiver.md",
+  // Fail closed on a wrapper option or duration the parser cannot place.
+  "env -P /usr/bin gh pr edit 5 --body x",
+  "exec -a n gh pr edit 5 --body x",
+  "sudo -r x gh pr edit 5 --body x",
+  "sudo -t x gh pr edit 5 --body x",
+  "xargs -d , gh pr edit 5 --body x",
+  "timeout inf gh pr edit 5 --body x",
+  "env -S 'gh pr edit 5 --body x'",
   "timeout 300 gh api -X PATCH repos/o/r/pulls/5 -f body=x",
   "timeout -k 5 60 gh api -X PATCH repos/o/r/issues/5 --input body.json",
   "FOO=1 timeout 60 gh pr edit 5 --body x",
@@ -125,6 +133,9 @@ test("non-body writes and reads remain allowed by the pre-check", async () => {
       "nice -n 5 gh pr edit 5 --add-label needs-review",
       "time -p gh pr view 5 --json body",
       "timeout 30 echo gh pr edit 5 --body x",
+      "echo gh pr edit 5 --body x",
+      "env -P /usr/bin echo hi",
+      "timeout inf echo hi",
       "timeout 30 /bin/echo gh pr edit 5 --body x",
       "sudo -n echo gh api -X PATCH repos/o/r/pulls/5 -f body=x",
       "printf '%s' 'cd . && timeout 30 gh pr edit 5 --body x'",

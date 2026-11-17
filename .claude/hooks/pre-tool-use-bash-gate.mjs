@@ -97,6 +97,15 @@ const WRAPPER_VALUE_OPTIONS = {
   command: [],
   exec: [],
 };
+// Options known to take no value. An option in neither table is unknown: fail closed on it.
+const WRAPPER_FLAG_OPTIONS = {
+  sudo: ["-n", "--non-interactive", "-E", "--preserve-env", "-H", "-b", "-k", "-K", "-S", "-A", "-B"],
+  env: ["-i", "--ignore-environment", "-0", "--null", "-v", "--debug"],
+  xargs: ["-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose", "-x", "-p"],
+  time: ["-p", "-v", "-l"],
+  timeout: ["--foreground", "--preserve-status", "-v", "--verbose"],
+  gtimeout: ["--foreground", "--preserve-status", "-v", "--verbose"],
+};
 
 /**
  * Read each executable segment through its process wrappers. The tokenizer keeps quoted data
@@ -113,15 +122,24 @@ function unwrappedCommandHeads(command) {
       if (!Object.hasOwn(WRAPPER_VALUE_OPTIONS, wrapper)) break;
       wrapped = true;
       i++;
+      // Fail closed: an option or duration this parser cannot place makes every later token of
+      // the segment a candidate head, and `env -S` hides the command inside its quoted value.
+      let unknown = false;
+      const extra = [];
       while (i < words.length && words[i].value.startsWith("-")) {
         const option = words[i++].value;
         if (option === "--") break;
-        if (WRAPPER_VALUE_OPTIONS[wrapper].includes(option)) i++;
+        if (WRAPPER_VALUE_OPTIONS[wrapper].includes(option)) {
+          if (wrapper === "env" && (option === "-S" || option === "--split-string") && i < words.length) extra.push(words[i].value);
+          i++;
+        } else if (!(WRAPPER_FLAG_OPTIONS[wrapper] ?? []).includes(option)) unknown = true;
       }
-      if (/^g?timeout$/.test(wrapper)) {
-        if (!/^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?$/i.test(words[i]?.value ?? "")) return [];
-        i++;
+      if (/^g?timeout$/.test(wrapper) && !unknown) {
+        if (!/^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?$/i.test(words[i]?.value ?? "")) unknown = true;
+        else i++;
       }
+      if (unknown) return [...extra, ...words.slice(i).map((word) => command.slice(word.start, end))];
+      if (extra.length) return [...extra, ...(i < words.length ? [command.slice(words[i].start, end)] : [])];
     }
     return wrapped && i < words.length ? [command.slice(words[i].start, end)] : [];
   });
