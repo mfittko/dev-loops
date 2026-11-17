@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { parseRepoSlugParts } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId, resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
+import { renderCliText } from "@dev-loops/core/loop/cli-command";
 import { WATCH_KINDS } from "@dev-loops/core/loop/watcher-exclusivity";
 import {
   loadStateFile as loadSharedStateFile,
@@ -1153,7 +1154,7 @@ export async function releaseAsyncRunnerOwnership({
       exitSignals: [],
       filePath: null,
       // RUNNER-HANDOFF-TEARDOWN: a terminal stop with no env run id releases nothing (the state is not read).
-      remedy: `If you claimed this PR, run dev-loops-run cli/index.mjs loop runner-coordination handoff --repo ${normalizeRepoSlug(repo)} --pr ${normalizePr(pr)} --run-id <the id used at claim> to release the claim (\`handoff_noop\` with no owner, \`ownership_lost\` with a foreign owner; neither writes state).`,
+      remedy: renderCliText(`If you claimed this PR, run node <dev-loops-package-root>/cli/index.mjs loop runner-coordination handoff --repo ${normalizeRepoSlug(repo)} --pr ${normalizePr(pr)} --run-id <the id used at claim> to release the claim (\`handoff_noop\` with no owner, \`ownership_lost\` with a foreign owner; neither writes state).`, { env }),
     };
   }
   const filePath = defaultRunnerCoordinationFilePathForTarget({ repo, pr }, cwd);

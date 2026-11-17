@@ -2256,7 +2256,9 @@ test("a skipped automatic release names the explicit handoff command", async () 
   try {
     const skipped = await releaseAsyncRunnerOwnership({ repo: "owner/repo", pr: 17, env: {}, cwd });
     assert.equal(skipped.status, "skipped_no_async_run_id");
-    assert.match(skipped.remedy, /run dev-loops-run cli\/index\.mjs loop runner-coordination handoff --repo owner\/repo --pr 17 --run-id/);
+    assert.match(skipped.remedy, /run node <dev-loops-package-root>\/cli\/index\.mjs loop runner-coordination handoff --repo owner\/repo --pr 17 --run-id/);
+    const claude = await releaseAsyncRunnerOwnership({ repo: "owner/repo", pr: 17, env: { CLAUDECODE: "1" }, cwd });
+    assert.match(claude.remedy, /run dev-loops-run --repo-root <checkout> cli\/index\.mjs loop runner-coordination handoff --repo owner\/repo --pr 17 --run-id/);
     assert.match(skipped.remedy, /`handoff_noop` with no owner, `ownership_lost` with a foreign owner/);
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
