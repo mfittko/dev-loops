@@ -27,6 +27,7 @@ import { loadDevLoopConfig, resolveRefinement } from "@dev-loops/core/config";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 const USAGE = `Usage: inspect-run.mjs --repo <owner/name> --pr <number>
 Read-only run inspection for the Copilot PR outer-loop family.
 Produces a single JSON snapshot describing the current state of one
@@ -428,6 +429,7 @@ export async function runCli(
 }
 const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectRun) {
+  loadCommentTrustConfigOrExit();
   runCli().catch((error) => {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;

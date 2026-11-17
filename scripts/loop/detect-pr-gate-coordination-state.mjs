@@ -52,6 +52,7 @@ import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 // Gate-coordination terminal stop actions where the dev-loop run is completing
 // or stopping (success OR stop). The runner-coordination lock is auto-released
 // at these boundaries so a fresh re-dispatch on the same PR acquires the lock
@@ -1663,5 +1664,6 @@ async function main() {
   }
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   await main();
 }

@@ -6,6 +6,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { isTrustedGraphqlComment, UNTRUSTED_COMMENT_REMEDY } from "@dev-loops/core/github/comment-trust";
 import { authorMatchesFilter } from "./_review-thread-mutations.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 // Dedicated query: unlike capture-review-threads.mjs's REVIEW_THREADS_QUERY
 // (which fetches ALL comments per thread), this tool needs only the FIRST
@@ -326,6 +327,7 @@ export async function runCli(
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   runCli().then((code) => {
     if (typeof code === "number") {
       process.exitCode = code;

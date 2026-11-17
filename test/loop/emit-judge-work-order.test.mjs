@@ -11,14 +11,17 @@ import { buildGateContextPath, buildLogPath } from "../../scripts/github/_gate-a
 import { renderPrBodyRead } from "../../scripts/github/write-gate-context.mjs";
 import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
-import { withTempDir, writeGhStub } from "../_helpers.mjs";
+import { ensureTrustConfigCheckout, initGitFixture, withTempDir, writeGhStub } from "../_helpers.mjs";
 import { TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { bindEvidenceToPrBody, seedJudgeSources } from "./_judge-delivery-fixture.mjs";
 import { SPEC_AUTHORITY_OUTCOME_VALUES, SPEC_AUTHORITY_VERDICT_SCHEMA, validateSpecAuthorityVerdict } from "../../packages/core/src/loop/spec-authority.mjs";
 
 const HEAD = "d".repeat(40);
 const withDir = (fn) => withTempDir(async (dir) => fn(await realpath(dir)), { prefix: "dev-loops-judge-wo-" });
-const node = (script, args, cwd, env) => spawnSync("node", [path.resolve(script), ...args], { cwd, encoding: "utf8", ...(env ? { env } : {}) });
+const node = (script, args, cwd, env) => {
+  ensureTrustConfigCheckout(cwd, path.resolve(script));
+  return spawnSync("node", [path.resolve(script), ...args], { cwd, encoding: "utf8", ...(env ? { env } : {}) });
+};
 // The emitter's default live PR body read goes through gh; stub it with the fixture body.
 const ghEnv = async (dir, body = "Declared scope: fix the finding.\n") => (await writeGhStub(dir, [{ stdout: JSON.stringify({ body }) }], { repeatLastOnOverflow: true })).env;
 const pull = (plan, cwd, over = {}) => node("scripts/github/pull-work-order.mjs", [over.execution ?? plan.executionIdentity], cwd);
@@ -341,7 +344,7 @@ test("J3: a round retired from another checkout refuses as stale_dispatch on pul
 test("J3: an emission from a checkout subdirectory lands under the checkout root and pulls", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
-    assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
+    initGitFixture(root);
     const sub = path.join(root, "scripts");
     await mkdir(sub);
     const rel = (p) => path.join("..", p);

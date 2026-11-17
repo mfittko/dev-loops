@@ -31,6 +31,7 @@ import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, 
 import { isFindingsLogName, resolveGateRound } from "../github/_gate-finding-surface.mjs";
 import { RULE_ID_CITATION_RE, collectContractMarkdownFiles, extractRuleDefinitions } from "../docs/validate-rule-ownership.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 
 const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--round <n>] [--tmp-root <path>] [--operator-focus-file <path>]
 Derives the judge's work order from the round's authoritative inputs: the consolidated
@@ -413,6 +414,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   try {
     process.exitCode = await main();
   } catch (err) {

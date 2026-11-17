@@ -14,6 +14,7 @@ import {
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { waitWithHeartbeat } from "./_watch-heartbeat.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 const REMOVED_FLAGS = new Set([
   "--poll-interval-ms",
@@ -451,6 +452,7 @@ export async function runCli(
   return emitResult(result, { jq: options.jq, silent: options.silent, stdout });
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   runCli().then((code) => {
     if (typeof code === "number") {
       process.exitCode = code;

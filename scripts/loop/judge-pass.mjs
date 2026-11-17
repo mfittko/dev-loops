@@ -53,6 +53,7 @@ import {
   emitResult,
   matchJqOutputToken,
 } from "../lib/jq-output.mjs";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 
 const USAGE = `Usage: judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --findings-file <path> --judge-verdict <path> --judge-plan <path> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>] [--tmp-root <path>]
 
@@ -1202,6 +1203,7 @@ function main() {
     process.exitCode = 1;
     return;
   }
+  loadCommentTrustConfigOrExit();
   judgePassCli(opts)
     .then((payload) => {
       process.exitCode = emitResult(payload, { jq: opts.jq, silent: opts.silent });

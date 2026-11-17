@@ -16,6 +16,7 @@ import { verifyPolicyChangeApproval as realVerifyPolicyChangeApproval, policyCha
 import { evaluateCommentDiscipline as realEvaluateCommentDiscipline } from "./check-comment-discipline.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 
 const USAGE = `Usage:
   pre-pr-ready-gate.mjs --repo <owner/name> --pr <number>
@@ -351,6 +352,7 @@ export async function runCli(argv = process.argv.slice(2), runtime = {}) {
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   runCli().catch((error) => {
                 process.stderr.write(`${formatCliError(error, { usage: USAGE })}\n`);
     process.exitCode = 1;

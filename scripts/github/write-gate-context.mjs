@@ -66,6 +66,7 @@ import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DELTA_CLEARING_NEXT_STEPS, listGateDeltaRecords, readGateDeltaRecord, readSealedGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { captureMainRelativeChangedFilesSince, isBaseOnlyMergeSince, runGitCommand } from "../lib/git-delta.mjs";
 import { existsSync } from "node:fs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 /**
  * Up-front gate-ORDERING tripwire (pure). Given the target gate and the raw
@@ -4546,5 +4547,6 @@ export async function main(
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   await main();
 }

@@ -13,7 +13,7 @@ export function renderUntrustedSkipNote(headSha, skipped) {
   return [
     untrustedSkipNoteMarker(headSha),
     `Skipped ${skipped.length} review thread(s) from non-maintainers at ${String(headSha).slice(0, 7)} (authors: ${logins.join(", ")}). Their text is not read by any agent.`,
-    `Remedy: ${UNTRUSTED_COMMENT_REMEDY}.`,
+    `Remedy: ${UNTRUSTED_COMMENT_REMEDY}, or the repo lists the login under \`trust.reviewers\` in \`.devloops\` on the default branch.`,
   ].join("\n");
 }
 

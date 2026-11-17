@@ -37,6 +37,7 @@ import { authenticateOriginalPlan } from "./_fixer-emission-evidence.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
 import { observeHeadCiSignals } from "./observe-head-ci.mjs";
 import { normalizeHeadScopedCiContract } from "@dev-loops/core/loop/copilot-ci-status";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 // Provenance mark: the sha256 of the report bytes --construct wrote, kept beside the report.
 const RESIDUAL_REPLY_MARKER = "Residual delta status:";
@@ -1148,5 +1149,6 @@ async function main() {
 export { loadDeliveredHandoff };
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   await main();
 }

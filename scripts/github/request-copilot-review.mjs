@@ -22,6 +22,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { resolveCopilotReviewRequestStatus } from "../loop/_copilot-review-request-status.mjs";
 import { getLastCopilotReviewHeadSha, resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "../loop/_copilot-convergence-carry.mjs";
 import { resolveCurrentHeadBodyFeedback } from "./_copilot-body-disposition.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const BLOCKED_BY_COPILOT_COMMENT_STATUS = "blocked_by_copilot_comment";
 const SUPPRESSED_SAME_HEAD_CLEAN_STATUS = "suppressed_same_head_clean";
 const ROUND_CAP_REACHED_STATUS = "round_cap_reached";
@@ -1071,6 +1072,7 @@ export async function runCli(
   setExitCode(emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: silentOk }));
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   runCli().catch((error) => {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;

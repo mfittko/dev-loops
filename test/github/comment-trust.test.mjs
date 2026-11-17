@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { test } from "bun:test";
+import { afterEach, test } from "bun:test";
 
-import { isTrustedCommentAuthor, isTrustedGraphqlComment, isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
+import { isTrustedCommentAuthor, isTrustedGraphqlComment, isTrustedRestComment, setCommentTrustConfig } from "@dev-loops/core/github/comment-trust";
 import { parseReviewThreads, parseUnresolvedThreadBodies } from "@dev-loops/core/github/review-threads";
 import { threadsToActList } from "@dev-loops/core/loop/pre-push-delta-review";
 import { fetchAllReviewThreadsWithSkips } from "../../scripts/github/list-review-threads.mjs";
@@ -176,4 +176,38 @@ test("ADR 0273: exact github-actions login with a non-Bot type is untrusted; loo
   const { threads, skipped } = await fetchAllReviewThreadsWithSkips({ repo: "o/r", pr: 1 }, { runChild: async () => ({ code: 0, stdout: payload, stderr: "" }) });
   assert.equal(threads.length, 1);
   assert.deepEqual(skipped, []);
+});
+
+afterEach(() => setCommentTrustConfig());
+
+test("configured reviewers: plain and [bot] entries on both adapters; threads reach the fixer", async () => {
+  setCommentTrustConfig({ reviewers: ["reviewdog[bot]", "External-Reviewer"] });
+  const actor = (login, type, association = "NONE") => isTrustedCommentAuthor({ login, type, association });
+  assert.equal(actor("external-reviewer", "User"), true);
+  assert.equal(actor("ReviewDog[bot]", "Bot"), true);
+  assert.equal(actor("reviewdog[bot]", "User"), false);
+  assert.equal(actor("reviewdog-fan[bot]", "Bot"), false);
+  assert.equal(actor("external-reviewer", "Bot"), true);
+  assert.equal(actor("external-reviewer[bot]", "Bot"), true);
+  assert.equal(isTrustedGraphqlComment({ author: { login: "reviewdog[bot]", __typename: "Bot" }, authorAssociation: "NONE" }), true);
+  assert.equal(isTrustedRestComment({ user: { login: "external-reviewer", type: "User" }, author_association: "NONE" }), true);
+  const bot = { login: "reviewdog[bot]", __typename: "Bot" };
+  const node1 = node("TR", { ...comment("c1", "reviewdog", "NONE", "Lint finding"), author: bot });
+  const parsed = parseReviewThreads({ threads: [node1] });
+  assert.equal(parsed.summary.unresolvedThreads, 1);
+  assert.equal(parsed.skippedUntrusted.length, 0);
+  const payload = JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [node1] } } } } });
+  const { threads, skipped } = await fetchAllReviewThreadsWithSkips({ repo: "o/r", pr: 1 }, { runChild: async () => ({ code: 0, stdout: payload, stderr: "" }) });
+  assert.equal(threads.length, 1);
+  assert.deepEqual(skipped, []);
+});
+
+test("the allowlist only adds trust; githubActionsBot false removes only the default bot trust", () => {
+  setCommentTrustConfig({ githubActionsBot: false, reviewers: [] });
+  assert.equal(isTrustedCommentAuthor({ login: "github-actions[bot]", type: "Bot", association: "NONE" }), false);
+  assert.equal(isTrustedCommentAuthor({ login: "maint", type: "User", association: "OWNER" }), true);
+  assert.equal(isTrustedGraphqlComment({ viewerDidAuthor: true, author: { login: "x", __typename: "Bot" }, authorAssociation: "NONE" }), true);
+  assert.equal(isTrustedCommentAuthor({ login: "copilot-pull-request-reviewer[bot]", type: "Bot", association: "NONE" }, { allowCopilot: true }), true);
+  setCommentTrustConfig();
+  assert.equal(isTrustedCommentAuthor({ login: "github-actions[bot]", type: "Bot", association: "NONE" }), true);
 });

@@ -1935,6 +1935,25 @@
       "additionalProperties": false,
       "description": "Operator-recorded standing human authorizations (adrTripwireWaiver), read only from the default branch's .devloops."
     },
+    "trust": {
+      "type": "object",
+      "properties": {
+        "githubActionsBot": {
+          "type": "boolean",
+          "description": "Trust the exact github-actions[bot] comment author (default true); false turns the default bot trust off."
+        },
+        "reviewers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9-]{1,39}(?:\\[bot\\])?$"
+          },
+          "description": "Exact, case-insensitive logins trusted as comment authors; a [bot] entry also requires type Bot."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Extra trusted comment authors (githubActionsBot, reviewers), read only from the default branch's .devloops."
+    },
     "classify": {
       "type": "object",
       "properties": {

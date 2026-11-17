@@ -43,6 +43,7 @@ import { isCommitContainedByHead } from "../github/_commit-containment.mjs";
 import { selectActThreadBinding } from "../github/_fixer-act-thread-bindings.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { renderCliText } from "@dev-loops/core/loop/cli-command";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 
 const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path> | --review-id <review node id> | --ci-file <path>) [--completion-only] [--delta-result <path>] [--allowed-path <repo-relative path>]... [--operator-focus-file <path>] [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
@@ -1235,6 +1236,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   try {
     process.exitCode = await main();
   } catch (err) {

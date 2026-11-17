@@ -30,6 +30,7 @@ import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
 import { resolveCurrentHeadBodyFeedback } from "../github/_copilot-body-disposition.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 const USAGE = `Usage:
   detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>
   detect-copilot-loop-state.mjs --input <path>
@@ -440,6 +441,7 @@ export async function runCli(
   }, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   runCli().catch((error) => {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;

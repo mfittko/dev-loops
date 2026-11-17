@@ -41,6 +41,7 @@ import { defaultFetchOrigin } from "../loop/standing-authorization.mjs";
 import { waiveAdrTripwire as defaultWaiveAdrTripwire } from "./waive-adr-tripwire.mjs";
 import { findAdrNumberCollisions } from "../docs/validate-decision-records.mjs";
 import { scanDiffText } from "@dev-loops/core/security/secret-scan";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 const VALID_METHODS = new Set(["squash", "merge", "rebase"]);
 
@@ -1095,5 +1096,6 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   process.exitCode = await main();
 }

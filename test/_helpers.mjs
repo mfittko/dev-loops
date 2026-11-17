@@ -380,6 +380,20 @@ export function initGitFixture(dir, { remote, branch, commit = "init" } = {}) {
 }
 
 /**
+ * Give a repo with a commit a local bare `origin` (kept inside `.git`) whose default branch is the
+ * current branch, so the entry scripts' default-branch trust-config read resolves offline.
+ */
+export function addLocalOrigin(dir) {
+  const branch = runGitFixture(dir, ["branch", "--show-current"]);
+  const bare = path.join(runGitFixture(dir, ["rev-parse", "--absolute-git-dir"]), "fake-origin.git");
+  runGitFixture(dir, ["init", "-q", "--bare", bare]);
+  runGitFixture(dir, ["remote", "add", "origin", bare]);
+  runGitFixture(dir, ["push", "-q", "origin", `HEAD:refs/heads/${branch}`]);
+  runGitFixture(dir, ["fetch", "-q", "origin"]);
+  runGitFixture(dir, ["remote", "set-head", "origin", branch]);
+}
+
+/**
  * @param {string} workDir — an existing empty directory (e.g. a mkdtemp result)
  * @param {{
  *   baseBranch?: string,
@@ -422,7 +436,24 @@ export function repeatedLinesContent(count, { prefix = "const x" } = {}) {
   return `${lines.join("\n")}\n`;
 }
 
+/**
+ * The entry scripts read the trust config from the default branch of the cwd checkout. Make a fixture cwd
+ * resolvable offline: a non-git dir becomes a repo, and a repo with a commit but no `origin` gets a local one.
+ */
+export function ensureTrustConfigCheckout(cwd, scriptPath) {
+  if (typeof cwd !== "string" || !existsSync(cwd) || (scriptPath && !(existsSync(scriptPath) && cacheFs.readFileSync(scriptPath, "utf8").includes("loadCommentTrustConfigOrExit();")))) return;
+  const git = (...args) => spawnSync("git", args, { cwd, encoding: "utf8", env: GIT_FIXTURE_ENV });
+  if (git("rev-parse", "--git-dir").status !== 0) {
+    initGitFixture(cwd, { branch: "main" });
+    addLocalOrigin(cwd);
+    return;
+  }
+  if (git("remote", "get-url", "origin").status === 0 || git("rev-parse", "--verify", "HEAD").status !== 0) return;
+  if (git("branch", "--show-current").stdout.trim()) addLocalOrigin(cwd);
+}
+
 export function runNode(scriptPath, args = [], options = {}) {
+  ensureTrustConfigCheckout(options.cwd ?? process.cwd(), scriptPath);
   return new Promise((resolve, reject) => {
     const child = spawn(options.execPath ?? process.execPath, [scriptPath, ...args], {
       cwd: options.cwd,

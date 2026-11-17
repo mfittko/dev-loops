@@ -14,6 +14,7 @@ import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from ".
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { isGhBinaryMissing, restGraphqlJson } from "./_gh-rest-fallback.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 export const REVIEW_THREADS_QUERY = [
   "query($owner: String!, $name: String!, $pr: Int!, $after: String) {",
   "  repository(owner: $owner, name: $name) {",
@@ -328,6 +329,7 @@ export async function runCli(
   return emitResult(payload, { jq: options.jq, silent: options.silent, stdout });
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   runCli().then((code) => {
     if (typeof code === "number") {
       process.exitCode = code;

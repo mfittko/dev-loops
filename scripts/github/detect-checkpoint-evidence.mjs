@@ -46,6 +46,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { verifyFreshHumanApproval, projectSubmittedReviewFacts } from "@dev-loops/core/loop/merge-approval";
 import { countUnresolvedHumanChangesRequested, resolveSizeBudgetHumanApprovalRequired } from "@dev-loops/core/loop/size-budget-merge-gate";
 import { parseHeadDeclaredKeys } from "./head-declared-keys-schema.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const USAGE = `Usage: detect-checkpoint-evidence.mjs --repo <owner/name> --pr <number>
 Fetch the live PR head SHA and visible PR issue comments, then summarize the
 latest valid draft-gate and pre-approval checkpoint verdict comments. Always fail
@@ -1550,5 +1551,6 @@ async function main() {
   }
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   await main();
 }

@@ -1009,6 +1009,15 @@ const StandingAuthorizationsConfig = z.strictObject({
   adrTripwireWaiver: z.unknown().optional().describe("Standing authorization for the ADR tripwire waiver writer: { grantedBy (GitHub login), grantedAt (ISO date), expires (ISO date, at most 90 days after grantedAt), reason (non-empty) }. Read only from the default branch's .devloops."),
 });
 
+/**
+ * `trust`: extra comment authors trusted by the shared predicate. Read only from
+ * the default branch's `.devloops` by scripts/github/_comment-trust-config.mjs.
+ */
+export const TrustConfig = z.strictObject({
+  githubActionsBot: z.boolean().describe("Trust the exact github-actions[bot] comment author (default true); false turns the default bot trust off.").optional(),
+  reviewers: z.array(z.string().regex(/^[A-Za-z0-9-]{1,39}(?:\[bot\])?$/, "a GitHub login (A-Z, a-z, 0-9, -; 1 to 39 characters) with an optional [bot] suffix")).describe("Exact, case-insensitive logins trusted as comment authors; a [bot] entry also requires type Bot.").optional(),
+});
+
 /** Internal path whitelist for internal-only PR detection — flat array of regex strings */
 const InternalPatternsConfig = z.array(z.string().trim().min(1)).min(1);
 
@@ -1061,6 +1070,7 @@ export const DevLoopConfigSchema = z.strictObject({
   uiReview: UiReviewConfig.optional(),
   postMerge: PostMergeConfig.optional(),
   standingAuthorizations: StandingAuthorizationsConfig.optional(),
+  trust: TrustConfig.optional(),
   classify: ClassifyConfig.optional(),
   validation: ValidationConfig.optional(),
   changelog: ChangelogConfig.optional(),
@@ -1141,6 +1151,7 @@ export const FileConfigSchema = z.strictObject({
   uiReview: UiReviewConfig.partial().describe("UI-review route recipes: per-project run/boot, dev-login, driven flows, and caps.").optional(),
   postMerge: PostMergeConfig.partial().describe("Post-merge local hook actions (postMerge.actions): consumer-declared commands run sequentially, in order, after a merge succeeds — optionally scoped to changed-file substrings (onlyIfChanged) and polled for readiness (verify).").optional(),
   standingAuthorizations: StandingAuthorizationsConfig.describe("Operator-recorded standing human authorizations (adrTripwireWaiver), read only from the default branch's .devloops.").optional(),
+  trust: TrustConfig.describe("Extra trusted comment authors (githubActionsBot, reviewers), read only from the default branch's .devloops.").optional(),
   classify: ClassifyConfig.optional(),
   validation: ValidationConfig.optional(),
   changelog: ChangelogConfig.optional(),

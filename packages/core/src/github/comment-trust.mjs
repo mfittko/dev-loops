@@ -8,6 +8,20 @@ const SANCTIONED_COPILOT_REVIEWER = /^(?:copilot-pull-request-reviewer(?:\[bot\]
 
 const GITHUB_ACTIONS_BOT = /^github-actions(?:\[bot\])?$/i;
 
+const BUILTIN_TRUST_CONFIG = Object.freeze({ githubActionsBot: true, reviewers: Object.freeze([]) });
+let trustConfig = BUILTIN_TRUST_CONFIG;
+
+/** Sets the process-scoped trust config once per entry script; a missing key takes the built-in default. */
+export function setCommentTrustConfig({ githubActionsBot = true, reviewers = [] } = {}) {
+  trustConfig = Object.freeze({ githubActionsBot, reviewers: Object.freeze(reviewers.map((entry) => entry.toLowerCase())) });
+}
+
+// A plain entry matches the login and, for a Bot, the `<login>[bot]` form; a `[bot]` entry also needs type Bot.
+function isConfiguredReviewer(name, isBot) {
+  const lower = name.toLowerCase();
+  return trustConfig.reviewers.some((entry) => (entry.endsWith("[bot]") ? isBot && lower === entry : lower === entry || (isBot && lower === `${entry}[bot]`)));
+}
+
 /** Exact match on the sanctioned Copilot reviewer login; `copilot-helper[bot]` and other lookalikes are false. */
 export function isSanctionedCopilotReviewerLogin(login) {
   return typeof login === "string" && SANCTIONED_COPILOT_REVIEWER.test(login);
@@ -23,7 +37,8 @@ export function isTrustedCommentAuthor({ login, type, association } = {}, { allo
   const isBot = (typeof type === "string" && type.toLowerCase() === "bot") || /\[bot\]$/i.test(name);
   if (allowCopilot && SANCTIONED_COPILOT_REVIEWER.test(name) && isBot) return true;
   // ADR 0273: the GitHub Actions bot, matched exactly, is trusted on every surface with no opt-in.
-  if (GITHUB_ACTIONS_BOT.test(name) && isBot) return true;
+  if (trustConfig.githubActionsBot && GITHUB_ACTIONS_BOT.test(name) && isBot) return true;
+  if (isConfiguredReviewer(name, typeof type === "string" && type.toLowerCase() === "bot")) return true;
   // Exact sanctioned logins with a non-Bot type stay untrusted; a lookalike such as `copilot-fan` or `github-actions-fan` is judged by association.
   if (SANCTIONED_COPILOT_REVIEWER.test(name) || GITHUB_ACTIONS_BOT.test(name) || isBot) return false;
   return TRUSTED_ASSOCIATIONS.has(typeof association === "string" ? association.toUpperCase() : "");

@@ -17,6 +17,7 @@ import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refi
 import { sanitizeInline } from "./post-gate-findings.mjs";
 import { findOperatorOwnedLineRefusal } from "@dev-loops/core/github/operator-owned-lines";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 const USAGE = `Usage: ready-for-review.mjs --repo <owner/name> --pr <number> [--waive-size-budget --reason <text> [--approved-by <human>]]
 Wrapper around gh pr ready that enforces gate-evidence validation and the
@@ -341,5 +342,6 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   main().then(c => { process.exitCode = c; }).catch(e => { process.stderr.write(`${formatCliError(e, { usage: USAGE })}\n`); process.exitCode = 1; });
 }

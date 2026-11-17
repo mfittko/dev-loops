@@ -29,6 +29,7 @@ import {
   DEFAULT_POLL_INTERVAL_MS,
   COPILOT_REVIEW_WAIT_TIMEOUT_MS,
 } from "@dev-loops/core/loop/policy-constants";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 const VALID_WATCH_STATUSES = new Set(["changed", "timeout", "idle"]);
 const REMOVED_FLAGS = new Set([
   "--force-rerequest-review",
@@ -1050,6 +1051,7 @@ export async function runCli(
   return emitResult(result, { jq: options.jq, silent: options.silent, stdout });
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   runCli().then((code) => {
     if (typeof code === "number") {
       process.exitCode = code;

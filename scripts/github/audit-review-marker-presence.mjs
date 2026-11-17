@@ -33,6 +33,7 @@ import { flattenPaginatedSlurp, runGhJson } from "./post-gate-findings.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { hasLocatableShape } from "@dev-loops/core/loop/gate-fanin";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 const USAGE = `Usage: audit-review-marker-presence.mjs --repo <owner/name> --pr <number> [--head-sha <sha>] [--findings-ledger <path>]
 Advisory-only check (issue #1899): scans the PR review stream for a
@@ -236,6 +237,7 @@ async function main() {
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   const exitCode = await main();
   process.exit(exitCode ?? 0);
 }

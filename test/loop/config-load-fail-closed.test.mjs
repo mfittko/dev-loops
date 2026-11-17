@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, test } from "bun:test";
-import { initGitFixture, runIdFreeEnv } from "../_helpers.mjs";
+import { addLocalOrigin, initGitFixture, runIdFreeEnv } from "../_helpers.mjs";
 
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
@@ -39,6 +39,7 @@ beforeAll(() => {
   writeFileSync(path.join(fixture, ".devloops"), "version: 1\nfutureKnob: true\n");
   writeFileSync(path.join(fixture, "in.json"), "{}");
   initGitFixture(fixture);
+  addLocalOrigin(fixture);
 });
 afterAll(() => rmSync(fixture, { recursive: true, force: true }));
 

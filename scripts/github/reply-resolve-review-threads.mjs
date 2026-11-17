@@ -18,6 +18,7 @@ import {
   validateResolutionMessage,
 } from "./_review-thread-mutations.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const USAGE = `Usage: reply-resolve-review-threads.mjs --repo <owner/name> --pr <number> [--author <login>] (((--message <text> | stdin) --disposition <fixed|deferred|rejected>) | --message-map <path>) [--resolve]
 Reply to all matching unresolved review threads on one PR and optionally resolve them.
 A message source is always required, in one of two mutually exclusive modes:
@@ -533,6 +534,7 @@ export async function runCli(
   }), { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit();
   runCli().catch((error) => {
     process.stderr.write(`${JSON.stringify(toCliFailurePayload(error))}\n`);
     process.exitCode = 1;

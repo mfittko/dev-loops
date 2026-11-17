@@ -26,7 +26,7 @@ import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs"
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
-import { makeGhMock, runIdFreeEnv, withTempDir, withoutClaudeCode } from "../_helpers.mjs";
+import { addLocalOrigin, makeGhMock, runIdFreeEnv, withTempDir, withoutClaudeCode } from "../_helpers.mjs";
 import { TOOLCHAIN_ROOT, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { sealDeltaFixture } from "./_seal-fixture.mjs";
 
@@ -213,6 +213,7 @@ async function withFixture(fn) {
       git(seed, "commit", "-q", "--allow-empty", "-m", "c1");
       initialHistory.head = git(seed, "rev-parse", "HEAD");
       git(seed, "checkout", "-q", "main");
+      addLocalOrigin(seed);
     })();
     await initialHistory.ready;
     await cp(path.join(initialHistory.root, ".git"), path.join(root, ".git"), { recursive: true });
