@@ -218,11 +218,11 @@ function collapseCommand(command) {
 /**
  * The closed heredocs of SEG whose body is data. Mirrors the shared dataHeredocs rule in bash-command-classify (not exported):
  * a bare cat, tee or git commit head with no env-assignment, substitution, process-substitution or `-c`/alias word, no pipe onward,
- * and a quoted delimiter or a body with no `$(`, backtick or `${ `. A tee writes a file, so it counts only as the lone segment.
+ * and a quoted delimiter or a body with no `$(`, backtick or `${ `. A cat or tee counts only as the lone segment, because a later segment may run the file it writes.
  */
 function dataHeredocs(seg, alone) {
   const [head, sub] = seg.words.map((w) => w.value);
-  const host = head === "cat" || (head === "tee" && alone) || (head === "git" && sub === "commit" && !seg.words.some((w) => /^(?:-c|--config)|alias\./i.test(w.value)));
+  const host = ((head === "cat" || head === "tee") && alone) || (head === "git" && sub === "commit" && !seg.words.some((w) => /^(?:-c|--config)|alias\./i.test(w.value)));
   if (!host || seg.pipedOut || seg.words.some((w) => /^[A-Za-z_]\w*=/.test(w.raw) || /[<>]\(/.test(w.raw) || /[<>]\(/.test(w.value))) return [];
   const isData = (h) => h.closed && (h.quoted || !/\$\(|`|\$\{[\s|]/.test(h.body.replace(/\\\n/g, "")));
   const subs = seg.words.flatMap((w) => w.subs);

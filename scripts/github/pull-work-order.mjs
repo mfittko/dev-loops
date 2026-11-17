@@ -27,8 +27,9 @@ the exact emitted work order, and write a pull receipt under the MAIN checkout's
 tmp/work-order-receipts/. The ref's "<role>:" prefix selects the role adapter; the
 work order's header "role" must match it. --tmp-root pins where emitted work orders
 are searched (default: tmp/ of every checkout of this repo, current checkout first).
-Refusals (stdout JSON, exit 1): dispatch_reference_mismatch (retryable: re-dispatch
-the SAME unit with its canonical reference), dispatch_identity_mismatch,
+Refusals (stdout JSON, exit 1): dispatch_reference_mismatch (retryable: a caller that
+passed --tmp-root re-runs with no --tmp-root, otherwise re-dispatch the SAME unit
+with its canonical reference), dispatch_identity_mismatch,
 stale_dispatch, sequence_lock_busy (fixer pulls only; retryable: re-run the same
 pull), unknown_role, invalid_work_order, semantic_identity_mismatch,
 local_materialization_integrity_failure.
