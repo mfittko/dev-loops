@@ -370,6 +370,18 @@ test("fails closed: an unclosed heredoc, and a # after $( or a backtick outside 
   assert.deepEqual(JSON.parse(clean.stdout).rawCallViolations, []);
 });
 
+test("a later line starting with # fails closed; a data heredoc # line and a leading comment stay clean", async () => {
+  for (const command of ['echo "a\n# x"; gh api repos/o/r', "echo 'a\n#' && gh api repos/o/r", "ls\n  # note\nls"]) {
+    const r = await runCli(["--json"], sessionLine(command));
+    assert.equal(r.status, 1, JSON.stringify(command));
+    assert.match(JSON.parse(r.stdout).rawCallViolations[0], /^unproven heredoc: /, JSON.stringify(command));
+  }
+  for (const command of ["# lead comment", "ls -la", "cat <<'EOF'\n# heading\ngh api repos/o/r\nEOF", "git commit -m \"$(cat <<'EOF'\nsubject\n\n# not a command\nEOF\n)\""]) {
+    const r = await runCli(["--json"], sessionLine(command));
+    assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, [], JSON.stringify(command));
+  }
+});
+
 test("a git commit -m substitution holding one cat heredoc is data; any other substitution keeps its body", async () => {
   const body = "fix\ngh api is no longer used";
   const clean = await runCli(["--json"], sessionLine(`git commit -m "$(cat <<'EOF'\n${body}\nEOF\n)"`));

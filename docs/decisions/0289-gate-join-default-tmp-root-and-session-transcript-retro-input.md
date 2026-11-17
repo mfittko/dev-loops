@@ -26,4 +26,4 @@ Under Claude Code auto mode, the classifier denies gate joins that a subagent ru
 
 ## Residual risk
 
-The extraction splits a quoted multi-line argument per line, so such an argument can read as extra commands. A heredoc fed to any host other than the listed data hosts keeps its body, so a body line can read as a command. Both cases keep text rather than drop it, so they can add false findings. This PR does not show that a gate join from a Claude Code auto-mode subagent passes with no operator step. Only a live run can show it, and the tracking issue stays open until it does.
+A heredoc fed to any host other than the listed data hosts is reported as an unproven heredoc. A multi-line command with a later logical line that starts with `#` is also reported as an unproven heredoc, because the line analyzer cannot tell a comment from text inside a quoted argument. Both rules over-report, which AC5 accepts. This PR does not show that a gate join from a Claude Code auto-mode subagent passes with no operator step. Only a live run can show it, and the tracking issue stays open until it does.

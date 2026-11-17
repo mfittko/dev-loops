@@ -204,6 +204,7 @@ function continues(line) {
  * heredoc (the host is cat, tee or git commit) is dropped with its delimiter line, so body text never reads as a command.
  * A heredoc fed to any other host (bash, sh, python) runs, so its body stays; so does every line of an incompletely tokenized command.
  * Heredocs come from tokenizeShellCommand, which is quote-aware and reads `$(( ))` as arithmetic.
+ * A command whose later logical line starts with `#` is reported as an unproven heredoc, because the line analyzer cannot tell a comment from text inside a quoted argument.
  * shortcut: a quoted multi-line argument still splits per line; upgrade when a real session shows it.
  */
 function collapseCommand(command) {
@@ -234,6 +235,8 @@ function collapseCommand(command) {
     joined = "";
   }
   if (joined) out.push(joined);
+  // Fail closed: a later logical line that starts with `#` may be text inside a quoted argument, and the line analyzer would skip a call on it. Coarse on purpose.
+  if (out.slice(1).some((l) => l.trim().startsWith("#"))) return `${UNPROVEN_HEREDOC}${command.split("\n")[0]}`;
   return out.join("\n");
 }
 
