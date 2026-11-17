@@ -304,3 +304,15 @@ test("a word with many brace groups is decided fast and fails closed", async () 
     }
   });
 });
+
+test("a quoted body-write word inside a command substitution still denies", async () => {
+  await withManagedRepo(async (root) => {
+    for (const command of [
+      'echo $(gh pr "edit" 5 --body x)',
+      'echo $(gh api repos/o/r/pulls/5 -f "body=x")',
+      'echo "$(echo $(gh pr "edit" 5 --body x))"',
+    ]) {
+      assert.equal(bash(root, command, undefined).decision, "deny", command);
+    }
+  });
+});

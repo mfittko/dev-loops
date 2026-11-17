@@ -137,10 +137,12 @@ function braceExpansions(value) {
 
 function segmentHoldsBodyWrite(command) {
   let overCap = false;
-  const tokens = tokenizeShellCommand(command).segments.flatMap(({ words }) =>
-    words.flatMap((word) => [...(braceExpansions(word.value) ?? (overCap = true, [])), ...word.value.split(/[\s=$(){},`]+/).filter(Boolean)
+  // A substitution's inner words are parsed with quotes removed (`$(gh pr "edit" ...)`), so read them too.
+  const allWords = (segments) => segments.flatMap(({ words }) => words.flatMap((word) => [word, ...word.subs.flatMap((sub) => allWords(sub.segments))]));
+  const tokens = allWords(tokenizeShellCommand(command).segments).flatMap((word) =>
+    [...(braceExpansions(word.value) ?? (overCap = true, [])), ...word.value.split(/[\s=$(){},`]+/).filter(Boolean)
       // `${G:-gh}` leaves `G:-gh`: also keep the default value. Needs a leading name, so `--body`/`-b` are untouched.
-      .flatMap((t) => [t, t.replace(/^[A-Za-z_]\w*:?[-+]/, "")])]));
+      .flatMap((t) => [t, t.replace(/^[A-Za-z_]\w*:?[-+]/, "")])]);
   const has = (test) => tokens.some((token) => test(token));
   // `-S`/`-iS` before `gh` covers `env -Sgh` / `env -iSgh`, where the split-string value joins the option cluster.
   if (overCap || !has((t) => /^(?:-[A-Za-z]*S)?gh$/.test(t.split("/").pop()))) return overCap;
