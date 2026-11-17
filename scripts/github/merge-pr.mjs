@@ -547,8 +547,10 @@ export function defaultComputePatchId({ base, head, repoRoot }) {
     // A scratch git dir over the repo's objects has no info/attributes, which --attr-source cannot override; attributes then come from the head tree only (ADR 0279).
     scratch = mkdtempSync(path.join(tmpdir(), "patch-id-"));
     git(["init", "-q", "--bare", "--template=", scratch]); // --template= keeps a global init.templateDir from seeding info/attributes
-    const scratchEnv = { ...env, GIT_DIR: scratch, GIT_ALTERNATE_OBJECT_DIRECTORIES: objects };
-    const diff = execFileSync("git", [`--attr-source=${headSha}`, "-c", "core.attributesFile=/dev/null", "-c", "core.quotePath=true", "-c", "diff.interHunkContext=0", "-c", "diff.indentHeuristic=true", "-c", "diff.suppressBlankEmpty=false", "diff", "-U3", "--submodule=short", "--no-color", "--no-ext-diff", "--no-textconv", "--binary", "--no-renames", "--diff-algorithm=myers", "--src-prefix=a/", "--dst-prefix=b/", `${baseSha}...${headSha}`], { cwd: scratch, env: scratchEnv, maxBuffer: 512 * 1024 * 1024 });
+    // No ambient config reaches the diff: global and system files are off and every GIT_CONFIG_PARAMETERS / GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n entry is dropped.
+    const ambient = Object.fromEntries(Object.entries(env).filter(([key]) => !/^GIT_CONFIG_(PARAMETERS|COUNT|KEY_\d+|VALUE_\d+)$/.test(key)));
+    const scratchEnv = { ...ambient, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_DIR: scratch, GIT_ALTERNATE_OBJECT_DIRECTORIES: objects };
+    const diff = execFileSync("git", [`--attr-source=${headSha}`, "-c", "core.attributesFile=/dev/null", "-c", "core.quotePath=true", "-c", "diff.interHunkContext=0", "-c", "diff.indentHeuristic=true", "-c", "diff.suppressBlankEmpty=false", "diff", "-U3", "--submodule=short", "--ignore-submodules=none", "--no-color", "--no-ext-diff", "--no-textconv", "--binary", "--no-renames", "--diff-algorithm=myers", "--src-prefix=a/", "--dst-prefix=b/", `${baseSha}...${headSha}`], { cwd: scratch, env: scratchEnv, maxBuffer: 512 * 1024 * 1024 });
     const out = execFileSync("git", ["patch-id", "--verbatim"], { cwd: scratch, env: scratchEnv, input: diff, encoding: "utf8" });
     return out.trim().split(/\s+/)[0] || null;
   } catch {

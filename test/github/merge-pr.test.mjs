@@ -1486,6 +1486,24 @@ test("defaultComputePatchId binds position and bytes, ignores local diff config 
       if (prevTpl === undefined) delete process.env.GIT_TEMPLATE_DIR; else process.env.GIT_TEMPLATE_DIR = prevTpl;
     }
     assert.equal(defaultComputePatchId({ base: "origin/no-such-ref", head: "HEAD", repoRoot: dir }), null, "a git error fails closed");
+    const gitlinkId = (branch, sha) => {
+      git("checkout", "-q", "-B", branch, "refs/remotes/origin/main");
+      git("update-index", "--add", "--cacheinfo", `160000,${sha},sub`);
+      git("commit", "-q", "-m", branch);
+      return defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir });
+    };
+    const prevEnv = { c: process.env.GIT_CONFIG_COUNT, k: process.env.GIT_CONFIG_KEY_0, v: process.env.GIT_CONFIG_VALUE_0 };
+    Object.assign(process.env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "diff.ignoreSubmodules", GIT_CONFIG_VALUE_0: "all" });
+    try {
+      const g1 = gitlinkId("g1", "1".repeat(40));
+      const g2 = gitlinkId("g2", "2".repeat(40));
+      assert.ok(g1 && g2);
+      assert.notEqual(g1, g2, "a gitlink-only change keeps distinct ids under an injected diff.ignoreSubmodules=all");
+    } finally {
+      for (const [name, value] of [["GIT_CONFIG_COUNT", prevEnv.c], ["GIT_CONFIG_KEY_0", prevEnv.k], ["GIT_CONFIG_VALUE_0", prevEnv.v]]) {
+        if (value === undefined) delete process.env[name]; else process.env[name] = value;
+      }
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
