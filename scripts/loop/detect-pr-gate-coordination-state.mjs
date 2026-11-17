@@ -1294,7 +1294,7 @@ export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = pr
 
 /**
  * Issue 3105 AC15 (ADR 0288): the open act list of the current head's live draft_gate ledger, or null.
- * Null when the head has no findings_present ledger with an open act item, when every open item is a PR-body item, and past the cap (cap > 0 and round > cap).
+ * Null when the head has no live ledger with an open act item, when every open item is a PR-body item, and past the cap (cap > 0 and round > cap).
  * `blockers` are the GATE-EXEC-SOFT-CAP blockers of the cap round; below the cap every act item goes to the fixer.
  * A hand-edited sealed ledger throws OUT_OF_BAND_WRITE.
  */
