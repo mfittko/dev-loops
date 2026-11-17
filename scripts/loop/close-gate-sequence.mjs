@@ -89,7 +89,7 @@ const planExecutionFor = (tmpRoot, repo, pr, head) => {
       if (!/^pr-[0-9]+$/u.test(prDir)) continue;
       const other = readPlanExecution(path.join(root, slug, prDir, "fixer-emit-plan.json"), head);
       if (other && mtimeMs(other.outputRef) === null) return { ...other, foreign: true };
-      // An own plan or no plan at all must not hide a handed-back plan of another PR: the marker is still not this PR's.
+      // Another PR's plan whose fixer has not handed back returns at once. Otherwise the handed-back own plan wins (`own ?? handedBack`); a handed-back plan of another PR applies only when this PR has no plan.
       if (other && !handedBack && !(slug === repoSlugFor(repo) && prDir === `pr-${pr}`)) handedBack = { ...other, foreign: true };
     }
   }
@@ -161,7 +161,7 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
       && (executionIdentity === undefined || record.origin === undefined || (record.origin?.workOrderRef === workOrderRef && record.origin?.executionIdentity === executionIdentity))) {
       // A push record already cleared the sequence. The remedy is the --phase full emission with the sealed result: it emits the full order, or, when that order was already emitted, re-grants it and rewrites the unreadable marker.
       const remedy = record.nextStep === "push"
-        ? `Run \`dev-loops-run scripts/loop/emit-fixer-work-order.mjs --phase full --repo ${repo} --pr ${pr} --head-sha ${head} --act-list-file <act list> --gate <gate> --allowed-path <path> --delta-result <sealed delta result> --harness claude\` with the act list, gate, allowed paths and sealed delta result of this sequence. It emits the full order, or, when that order was already emitted, returns it unchanged and rewrites the marker as granted; the full-phase fixer then pushes its candidate.`
+        ? `Run \`dev-loops-run scripts/loop/emit-fixer-work-order.mjs --phase full --repo ${repo} --pr ${pr} --head-sha ${head} --act-list-file <act list> --gate <gate> --allowed-path <path> --delta-result <sealed delta result> --harness <claude|pi|codex>\` with the act list, gate, allowed paths and sealed delta result of this sequence. It emits the full order, or, when that order was already emitted, returns it unchanged and rewrites the marker as granted; the full-phase fixer then pushes its candidate.`
         : "Finish the sequence with the pre-push delta review (dev-loops loop pre-push-delta).";
       return refuse("sequence_live", `the ${sealed ? "sealed" : "unsealed"} delta record of ${head} ${executionIdentity === undefined ? "" : `names the fixer execution ${executionIdentity} and `}has next step ${record.nextStep}`, remedy);
     }

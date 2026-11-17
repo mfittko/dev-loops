@@ -793,12 +793,14 @@ async function emitPlan({
     const origin = { workOrderRef: original.workOrderRef, workOrderDigest: original.workOrderDigest, executionIdentity: original.executionIdentity };
     // Idempotent re-emission (a corrupt or lost marker after a full emission): the current full plan for this baseline, act source, authority
     // and byte-identical sealed --delta-result is returned unchanged and only its granted marker is rewritten. Any other full plan falls through to the refusal below.
-    if (prior?.phase === "full" && prior.source === "act-list" && prior.authority?.reviewBaselineHead === headSha && prior.gate === gate
+    const sameFullOrder = prior?.phase === "full" && prior.source === "act-list" && prior.authority?.reviewBaselineHead === headSha && prior.gate === gate
       && prior.target?.repo === repo && prior.target.pr === Number(pr) && prior.authority.sourceDigest === jsonContentDigest(source.parsed)
       && prior.mutationAuthority?.branch === prState.headRefName && JSON.stringify(prior.mutationAuthority.allowedPaths) === JSON.stringify(paths)
-      && prior.requiredReads?.some((read) => read.kind === "delta-result" && read.sha256 === delta.read.sha256)
-      // The branch must still sit at the candidate the original full order reviewed; a later commit needs a new Delta.
-      && gitIn(cwd, "rev-parse", "HEAD").trim() === prior.headSha) {
+      && prior.requiredReads?.some((read) => read.kind === "delta-result" && read.sha256 === delta.read.sha256);
+    if (sameFullOrder) {
+      // The branch must still sit at the candidate the original full order reviewed; a later commit needs a new Delta, so push authority fails closed.
+      const localHead = gitIn(cwd, "rev-parse", "HEAD").trim();
+      if (localHead !== prior.headSha) throw new Refusal(`full_order_head_moved: local HEAD ${localHead} moved past the full order's reviewed candidate ${prior.headSha}, so the full order is not re-granted and the marker was not rewritten; re-run the commit_only emission (emit-fixer-work-order.mjs --phase commit_only) at the new HEAD, then run the delta review (dev-loops loop pre-push-delta) before --phase full`);
       await authenticateOriginalPlan({ plan: original, canonical: planPath, emissionTmpRoot: path.resolve(tmpRoot), receiptTmpRoot,
         read: async (file) => { const bytes = await capture.read(file); if (!bytes) throw Object.assign(new Error(`missing ${file}`), { code: "ENOENT" }); return bytes; } });
       const markerRoot = resolveGateArtifactTmpRoot(cwd), outputRef = prior.outputRefs[0];
