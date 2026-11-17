@@ -970,6 +970,9 @@ test("MARKER_UNREADABLE refuses abandonment_unproven when the emit plan for the 
     const ex = { ...execution(tmpRoot), workOrderRef: "fixer:o/r#8:head:f1-abcd1234" };
     const planDir = path.join(tmpRoot, "gate-fixer", "o-r", "pr-8");
     mkdirSync(planDir, { recursive: true });
+    // Stray files at both levels sort before o-r and must not abort the scan.
+    writeFileSync(path.join(tmpRoot, "gate-fixer", "body.md"), "x");
+    writeFileSync(path.join(tmpRoot, "gate-fixer", "o-r", "note.txt"), "x");
     writeFileSync(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ ...ex, workOrder: { headSha: HEAD, outputRefs: [ex.outputRef], mutationAuthority: { branch: "feat" } } }));
     mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
     writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
