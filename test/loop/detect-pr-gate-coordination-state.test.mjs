@@ -4565,7 +4565,7 @@ async function runBaseFreshnessFixture({ checkBaseFreshness, isDraft = true, wit
 const STALE = { ok: false, error: "base_stale_integrate_first", base: "main", newerCommits: ["abc1 newer"], remedy: "REMEDY-TEXT" };
 
 // Issue 3105 AC15: a fixture with a posted findings_present verdict at a stale draft head; `ledgers` maps a ledger file suffix to its findings and loggedAt.
-async function actListFixture(ledgers) {
+async function actListFixture(ledgers, { nextAction = "fix" } = {}) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-act-list-"));
   initGitFixture(tempDir, { branch: "main" });
   const headSha = "abc1234567".repeat(4);
@@ -4574,7 +4574,7 @@ async function actListFixture(ledgers) {
   for (const [suffix, { findings, verdict = "findings_present", loggedAt = "2026-11-16T00:00:00.000Z" }] of Object.entries(ledgers)) {
     await writeSealed(path.join(findingsDir, `draft_gate-${headSha}${suffix}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha, verdict, loggedAt, findings }));
   }
-  const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 medium", nextAction: "fix" });
+  const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 medium", nextAction });
   const detect = async () => detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body }), { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, checkBaseFreshness: async () => STALE }));
   return { tempDir, headSha, findingsDir, detect };
 }
@@ -4592,6 +4592,20 @@ test("3105 AC15: the detector derives the open act list from the current-head le
   } finally {
     await rm(fixture.tempDir, { recursive: true, force: true });
   }
+});
+
+test("3105 AC15: a head-matching marker without a next action keeps the base integration", async () => {
+  const fixture = await actListFixture({ "": { findings: [ACT] } }, { nextAction: "" });
+  try {
+    assert.equal((await fixture.detect()).nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS);
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+});
+
+test("3105 AC15: a legacy ledger with verdict clean and an open act item goes to the fixer", async () => {
+  const fixture = await actListFixture({ "": { findings: [ACT], verdict: "clean" } });
+  try {
+    assert.equal((await fixture.detect()).nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
 });
 
 test("3105 AC15: an all-PR-body act list keeps the base integration; a mixed list goes to the fixer", async () => {

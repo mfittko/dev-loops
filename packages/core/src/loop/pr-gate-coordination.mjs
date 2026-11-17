@@ -1629,7 +1629,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
 
     // Issue 3105 AC15 (ADR 0288): a posted findings_present verdict at the current head with an open act list goes to the fixer, not to another round.
     const actList = input.draftOpenActList;
-    const headActList = !draftReady && draftGate.currentHead && draftGate.verdict === "findings_present"
+    const headActList = !draftReady && draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"
       && /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && String(actList?.headSha ?? "").toLowerCase() === currentHeadSha.toLowerCase()
       && Number.isInteger(actList.openActCount) && actList.openActCount > 0
       // At the cap, AC15 replaces only the no_clearing_record refusal; an unknown (null) cap-round failure fails closed.

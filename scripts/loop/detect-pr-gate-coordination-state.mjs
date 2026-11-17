@@ -1305,7 +1305,8 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap }) {
   // The live ledger at the current head is that head's latest round; retained same-head rounds are earlier rounds.
   const logs = await readClosedPriorRoundLogs(options, { repoRoot, includeLiveCurrentHead: true });
   const log = logs.find((entry) => String(entry.headSha).trim().toLowerCase() === head);
-  const open = log?.verdict === "findings_present" ? listOpenActItems(log.findings) : [];
+  // The posted verdict is findings_present (the evaluator checks it); a legacy ledger may persist `clean` beside open act items.
+  const open = log ? listOpenActItems(log.findings) : [];
   // The emitter refuses an all-PR-body act list (delta_body_only_act_set), so that list keeps the earlier routing.
   if (open.length === 0 || open.every(isDeltaBodyItem)) return null;
   // countCompletedRounds counts the round being posted, so the live ledger's round is one less.
