@@ -101,6 +101,10 @@ for (const command of [
   "env -S timeout 30 gh pr edit 5 --body x",
   "env -S'gh pr edit 5 --body x'",
   "env --split-string='gh pr edit 5 --body x'",
+  "env -S'gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
+  "env --split-string='gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
+  "env --split-string='gh api -X PATCH repos/o/r/issues/5 --field body=x'",
+  "env -S 'gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
   "setsid gh pr edit 5 --body x",
   "stdbuf -oL gh pr edit 5 --body x",
   "ionice -c3 gh pr edit 5 --body x",
@@ -171,6 +175,7 @@ test("non-body writes and reads remain allowed by the pre-check", async () => {
       "nice -n 5 gh pr edit 5 --add-label needs-review",
       "time -p gh pr view 5 --json body",
       "gh pr view 5",
+      "env -S'gh pr view 5'",
       "setsid gh pr view 5",
       "gh pr list",
       "gh issue view 5",
@@ -227,6 +232,15 @@ test("the sanctioned writer is denied when its title holds the word gh (known fa
     assert.equal(decision, "deny");
     assert.match(reason, /ADR-TRIPWIRE-STANDING-WAIVER/);
     assert.match(reason, /rephrase the title/);
+  });
+});
+
+test("an unclosed brace followed by a long comma run is decided fast and denies", async () => {
+  await withManagedRepo(async (root) => {
+    const started = Date.now();
+    const { decision } = bash(root, `echo 'x{${",".repeat(400000)}'; gh pr edit 5 --body x`, undefined);
+    assert.equal(decision, "deny");
+    assert.ok(Date.now() - started < 10000, "the brace scan must be linear");
   });
 });
 

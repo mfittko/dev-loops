@@ -136,7 +136,12 @@ function unwrappedCommandHeads(command) {
       while (i < words.length && words[i].value.startsWith("-")) {
         const option = words[i++].value;
         if (option === "--") break;
-        if (WRAPPER_VALUE_OPTIONS[wrapper].includes(option)) {
+        // Joined `-S<v>` / `--split-string=<v>`: the option word itself carries the command.
+        const joinedSplit = wrapper === "env" ? /^(?:-S|--split-string=)(.+)$/s.exec(option) : null;
+        if (joinedSplit) {
+          const joined = [joinedSplit[1], i < words.length ? command.slice(words[i].start, end) : ""].join(" ").trim();
+          extra.push(joined, ...unwrappedCommandHeads(joined));
+        } else if (WRAPPER_VALUE_OPTIONS[wrapper].includes(option)) {
           if (wrapper === "env" && (option === "-S" || option === "--split-string") && i < words.length) {
             // The -S value splits into the command's leading words; the segment's remaining words are its tail.
             const joined = [words[i].value, i + 1 < words.length ? command.slice(words[i + 1].start, end) : ""].join(" ").trim();
@@ -168,10 +173,19 @@ function braceExpansions(value) {
   for (;;) {
     let expanded = false;
     words = words.flatMap((word) => {
-      const m = /^(.*)\{([^{}]*,[^{}]*)\}(.*)$/s.exec(word);
-      if (!m) return [word];
+      // Linear scan for the first innermost `{...,...}` group; a regex here backtracks quadratically on an unclosed `{`.
+      let open = -1;
+      let comma = false;
+      let end = -1;
+      for (let k = 0; k < word.length && end < 0; k++) {
+        const c = word[k];
+        if (c === "{") { open = k; comma = false; }
+        else if (c === ",") comma ||= open >= 0;
+        else if (c === "}") { if (open >= 0 && comma) end = k; else { open = -1; comma = false; } }
+      }
+      if (end < 0) return [word];
       expanded = true;
-      return m[2].split(",").map((alt) => m[1] + alt + m[3]);
+      return word.slice(open + 1, end).split(",").map((alt) => word.slice(0, open) + alt + word.slice(end + 1));
     });
     if (words.length > BRACE_EXPANSION_CAP) return null;
     if (!expanded) return words;
