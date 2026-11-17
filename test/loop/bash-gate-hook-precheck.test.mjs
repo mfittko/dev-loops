@@ -214,6 +214,7 @@ test("non-body writes and reads remain allowed by the pre-check", async () => {
       "echo {a} {x,y}",
       "gh api repos/o/r/pulls/5",
       "gh api graphql -f query='query{viewer{login}}'",
+      "gh api graphql -F query=@q.graphql",
     ]) {
       assert.equal(bash(root, command, undefined).decision, "allow", command);
     }
