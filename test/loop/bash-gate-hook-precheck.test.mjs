@@ -314,6 +314,8 @@ test("a quoted body-write word inside a command substitution still denies", asyn
       'echo $(gh pr ed"it" 5 --body x)',
       'echo `gh pr edit 5 --body x`',
       'gh api repos/o/r/issues/5 -f "body=x"',
+      "timeout 5 gh pr $'\\x65dit' 5 --body x",
+      "echo $(gh pr $'\\145dit' 5 --body x)",
     ]) {
       assert.equal(bash(root, command, undefined).decision, "deny", command);
     }
