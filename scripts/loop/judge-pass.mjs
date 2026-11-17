@@ -1203,7 +1203,7 @@ function main() {
     process.exitCode = 1;
     return;
   }
-  loadCommentTrustConfigOrExit();
+  loadCommentTrustConfigOrExit({ repoRoot: opts.repoRoot });
   judgePassCli(opts)
     .then((payload) => {
       process.exitCode = emitResult(payload, { jq: opts.jq, silent: opts.silent });

@@ -22,6 +22,8 @@ The config is read only from `.devloops` on `origin/<default branch>` through `r
 
 Load outcomes fail closed. No `.devloops` or no `trust` key applies the built-in defaults. An unresolved default branch, a failed fetch, an unreadable file or an invalid `trust` block refuses the run with a typed error, because defaults would silently undo a `githubActionsBot: false` opt-out.
 
+The read fetches `origin/<default branch>` first, because a stale local ref would undo a `githubActionsBot: false` opt-out. The cost is one network round trip per entry-script start, and an offline run refuses.
+
 ## Alternatives rejected
 
 - Reading `trust` from the PR head or the worktree. A PR could grant itself trust.

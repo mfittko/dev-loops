@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, test } from "bun:test";
 
 import { isTrustedCommentAuthor, setCommentTrustConfig } from "@dev-loops/core/github/comment-trust";
-import { CommentTrustConfigError, loadCommentTrustConfig } from "../../scripts/github/_comment-trust-config.mjs";
+import { CommentTrustConfigError, loadCommentTrustConfig, loadCommentTrustConfigOrExit } from "../../scripts/github/_comment-trust-config.mjs";
 
 afterEach(() => setCommentTrustConfig());
 
@@ -72,6 +72,16 @@ test("an unresolved default branch, a failed fetch, an unreadable file and an in
     refusal({ defaultBranch: "main", fetchOrigin: () => { throw new Error("offline"); } });
     refusal({ defaultBranch: "main", git: gitFailingOn("show") });
     refusal({ defaultBranch: "main" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadCommentTrustConfigOrExit reads the config from the repoRoot option, not the cwd", () => {
+  const { dir } = repoWithDefaultBranch("version: 1\ntrust:\n  reviewers:\n    - from-root\n");
+  try {
+    loadCommentTrustConfigOrExit({ repoRoot: dir, defaultBranch: "main", fetchOrigin: noFetch });
+    assert.equal(isTrustedCommentAuthor(ghUser("from-root")), true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
