@@ -186,6 +186,12 @@ export function extractBashCommands(text) {
   }).join("\n");
 }
 
+// A trailing `\` continues the line only when the tokenizer still sees it as a word: a comment (full-line or trailing) swallows it.
+function continues(line) {
+  const words = tokenizeShellCommand(line).segments.at(-1)?.words;
+  return Boolean(words?.length) && words.at(-1).raw.endsWith("\\");
+}
+
 /**
  * Reduce one multi-line Bash command to its logical lines: a trailing `\` joins the next line, and the body of a data
  * heredoc (the host is cat, tee or git commit) is dropped with its delimiter line, so body text never reads as a command.
@@ -207,7 +213,7 @@ function collapseCommand(command) {
   let joined = "";
   for (const line of text.split(/\r?\n/)) {
     joined += line;
-    if (joined.endsWith("\\") && !joined.trimStart().startsWith("#")) { joined = `${joined.slice(0, -1)} `; continue; }
+    if (joined.endsWith("\\") && continues(joined)) { joined = `${joined.slice(0, -1)} `; continue; }
     out.push(joined);
     joined = "";
   }

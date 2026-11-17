@@ -382,3 +382,11 @@ test("a comment line ending in a backslash does not join the next command line",
   assert.equal(r.status, 1);
   assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, ["gh: gh api repos/o/r"]);
 });
+
+test("a trailing comment ending in a backslash does not join the next command line", async () => {
+  for (const command of ["echo hi # note \\\ngh api repos/o/r", "echo a \\\n# x \\\ngh api repos/o/r"]) {
+    const r = await runCli(["--json"], sessionLine(command));
+    assert.equal(r.status, 1, command);
+    assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, ["gh: gh api repos/o/r"], command);
+  }
+});
