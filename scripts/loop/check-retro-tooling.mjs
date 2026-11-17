@@ -204,8 +204,14 @@ function collapseCommand(command) {
   let text = command;
   if (!tok.incomplete) {
     const dropped = tok.segments.flatMap((seg) => dataHeredocs(seg, tok.segments.length === 1));
+    // The shell expands an unquoted body before anything reads it, so a `# $(...)` line there runs: blank its `#` (same length) so the line is not skipped as a comment.
+    for (const h of tok.segments.flatMap((seg) => seg.heredocs)) {
+      if (!h.closed || h.quoted || dropped.includes(h)) continue;
+      text = text.slice(0, h.bodyStart) + text.slice(h.bodyStart, h.bodyEnd).replace(/^(\s*)#(?=.*(?:\$\(|`))/gm, "$1 ") + text.slice(h.bodyEnd);
+    }
     for (const h of dropped.sort((x, y) => y.bodyStart - x.bodyStart)) {
-      const end = text.indexOf("\n", h.bodyEnd + 1);
+      // An empty body with an empty delimiter puts bodyEnd on the delimiter line's own newline; any other bodyEnd precedes the delimiter line.
+      const end = text.indexOf("\n", h.delimiter === "" && h.bodyEnd === h.bodyStart ? h.bodyEnd : h.bodyEnd + 1);
       text = text.slice(0, h.bodyStart) + (end === -1 ? "" : text.slice(end));
     }
   }
