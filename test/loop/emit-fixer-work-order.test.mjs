@@ -21,6 +21,7 @@ import { classifyValidationCommand } from "@dev-loops/core/loop/validation-class
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, materializationHash, pullReceiptPath, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
+import { readSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
@@ -257,7 +258,7 @@ async function withFixture(fn) {
       const restore = await syncRecordItems(over);
       try { return await emitRaw(over); } finally { await restore(); }
     };
-    const prepareFull = async ({ bounded = false, siteCoverage, nodes = [], allowedPaths = [], login = "bot", emitter = emit } = {}) => {
+    const prepareFull = async ({ bounded = false, cannotVerify = false, siteCoverage, nodes = [], allowedPaths = [], login = "bot", emitter = emit, baseline = head } = {}) => {
       const act = JSON.parse(await readFile(files.actList));
       const prior = await emitter({ phase: "commit_only", deltaResult: undefined, allowedPaths });
       assert.equal(pull(prior, root).status, 0);
@@ -267,11 +268,11 @@ async function withFixture(fn) {
       await mkdir(path.dirname(prior.workOrder.outputRefs[0]), { recursive: true });
       await writeFile(prior.workOrder.outputRefs[0], JSON.stringify({ headSha: fixing, siteCoverage }));
       const log = path.join(path.dirname(files.actList), "findings.json");
-      await writeFile(log, JSON.stringify({ headSha: head, provenance: { perAngle: [{ angle: "correctness" }] } }));
-      const args = ["--act-list", files.actList, "--baseline", head, "--worktree", wt, "--fixer-plan", prior.planPath, "--site-coverage", prior.workOrder.outputRefs[0]];
+      await writeFile(log, JSON.stringify({ headSha: baseline, provenance: { perAngle: [{ angle: "correctness" }] } }));
+      const args = ["--act-list", files.actList, "--baseline", baseline, "--worktree", wt, "--fixer-plan", prior.planPath, "--site-coverage", prior.workOrder.outputRefs[0]];
       const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", log, "--result-path", path.join(path.dirname(log), "delta-result.json")], { stdout: { write() {} } });
-      const result = { ...input.input.resultShape, actionableItems: input.input.actItems.map(({ ref }) => ({ ref, status: "resolved", evidence: ["focused check"] })), newFindings: [], widenedReads: [], outcome: "locally_clear" };
-      if (bounded) { git(wt, "commit", "-q", "--allow-empty", "-m", "candidate B"); result.outcome = "bounded_out"; }
+      const result = { ...input.input.resultShape, actionableItems: input.input.actItems.map(({ ref }) => ({ ref, status: cannotVerify ? "cannot_verify" : "resolved", evidence: ["focused check"] })), newFindings: [], widenedReads: [], outcome: "locally_clear" };
+      if (bounded) { git(wt, "commit", "-q", "--allow-empty", "-m", "candidate B"); result.outcome = cannotVerify ? "locally_clear" : "bounded_out"; }
       await writeFile(files.delta, JSON.stringify(result));
       sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta);
       assert.equal((await runCli([...args, "--result", files.delta, "--invocation", bounded ? "3" : "1"], { stdout: { write() {} } })).nextStep, bounded ? "push_to_gate" : "push");
@@ -399,6 +400,22 @@ test("a commit_only emit under a held head lock refuses sequence_lock_busy and l
   });
 });
 
+test("a commit_only emit for an all-body act list refuses delta_body_only_act_set and writes no marker", async () => {
+  const { sequenceMarkerPath } = await import("@dev-loops/core/loop/fix-push-authority");
+  await withFixture(async ({ root, head, files, emit }) => {
+    await writeFile(files.actList, JSON.stringify([withFp({ severity: "high", angle: "correctness", summary: "PR body claims an unshipped route", judgeDisposition: "act" })]));
+    await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), (error) => error.refusal === "delta_body_only_act_set" && /edit-pr\.mjs/.test(error.message));
+    assert.equal(existsSync(sequenceMarkerPath(path.join(root, "tmp"), head)), false);
+  });
+});
+
+test("a commit_only emit for a malformed file-less act list refuses with the act-list error, not delta_body_only_act_set", async () => {
+  await withFixture(async ({ files, emit }) => {
+    await writeFile(files.actList, JSON.stringify([withFp({ severity: "high", angle: "correctness", summary: "x", judgeDisposition: "defer" })]));
+    await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), (error) => error.refusal !== "delta_body_only_act_set" && /judgeDisposition/.test(error.message));
+  });
+});
+
 test("after a close of execution A, a new execution B on the same head stays pullable", async () => {
   const { closeGateSequence } = await import("../../scripts/loop/close-gate-sequence.mjs");
   const { readSequenceMarker } = await import("@dev-loops/core/loop/fix-push-authority");
@@ -434,6 +451,22 @@ test("a closure record at the review baseline head retires a full emission whose
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, "{}");
     assert.equal(refusal(pull(unit, root)), "stale_dispatch");
+  });
+});
+
+test("after a BOUNDED_OUT close at the baseline, the --phase full emission and its pull stay admissible", async () => {
+  const { closeGateSequence } = await import("../../scripts/loop/close-gate-sequence.mjs");
+  await withFixture(async ({ root, head, prepareFull }) => {
+    const f = await prepareFull({ bounded: true });
+    const tmpRoot = path.join(root, "tmp");
+    const { branch } = readSequenceMarker(tmpRoot, head);
+    const closed = await closeGateSequence({ tmpRoot, head, repo: REPO, pr: PR, fetchPr: async () => ({ pr: { headRefOid: head, headRefName: branch } }) });
+    assert.equal(closed.ok, true, closed.reason ?? closed.remedy);
+    assert.equal(closed.condition, "BOUNDED_OUT");
+    assert.equal(closed.nextStep, "push_to_gate");
+    const unit = await f.full();
+    assert.equal(pull(unit, root).status, 0);
+    assert.equal(readSequenceMarker(tmpRoot, head)?.fullGranted, true);
   });
 });
 
@@ -981,7 +1014,7 @@ const THREE = { ...THREADS, threads: ["T1", "T2", "T3"].map((threadId, i) => ({ 
 
 test("F1: a judge-act finding below the inline floor still reaches the work order through the act list", async () => {
   await withFixture(async ({ files, emit }) => {
-    const lowAct = [{ severity: "nit", angle: "naming", summary: "rename the local", judgeDisposition: "act" }].map(withFp);
+    const lowAct = [{ severity: "nit", angle: "naming", summary: "rename the local", file: "src/a.mjs", line: 3, judgeDisposition: "act" }].map(withFp);
     await writeFile(files.actList, JSON.stringify(lowAct));
     const { workOrder } = await emit({ deltaResult: undefined, phase: "commit_only" });
     assert.equal(workOrder.source, "act-list");
@@ -1150,6 +1183,71 @@ test("delta gate: invocation-three decision clears the actual candidate with a s
     assert.equal(unit.workOrder.authority.reviewBaselineHead, head);
     await rm(recordPath);
     await assert.rejects(f.full(), (err) => err.message.includes(recordPath) && /commit_only/.test(err.message));
+  });
+});
+
+test("delta gate: a sealed locally_clear result with a cannot_verify item, downgraded to bounded_out at invocation 3, still emits the full phase and grants the marker", async () => {
+  await withFixture(async ({ head, root, recordPath, prepareFull }) => {
+    const f = await prepareFull({ bounded: true, cannotVerify: true });
+    assert.equal(f.result.outcome, "locally_clear");
+    const record = JSON.parse(await readFile(recordPath));
+    assert.deepEqual([record.outcome, record.nextStep, record.invocation], ["bounded_out", "push_to_gate", 3]);
+    const unit = await f.full();
+    assert.equal(unit.workOrder.phase, "full");
+    assert.equal(readSequenceMarker(resolveGateArtifactTmpRoot(root), head)?.fullGranted, true);
+  });
+});
+
+test("push authority: a corrupt marker after a full emission is re-granted only by the same-head, same-delta-result --phase full re-emission", async () => {
+  await withFixture(async ({ root, head, files, prepareFull }) => {
+    const f = await prepareFull();
+    const unit = await f.full();
+    const markerRoot = resolveGateArtifactTmpRoot(root);
+    const corrupt = () => writeFile(path.join(markerRoot, "gate-delta", `${head}.sequence`), "{not json");
+    await corrupt();
+    assert.equal(readSequenceMarker(markerRoot, head)?.fullGranted, false, "a corrupt marker fails closed for push authority");
+    // A different head refuses and leaves the marker ungranted.
+    await assert.rejects(f.full({ headSha: f.fixing, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: f.fixing }), fetchVerdictMarkers: verdictPostedAt(f.fixing) }));
+    assert.equal(readSequenceMarker(markerRoot, head)?.fullGranted, false);
+    // The same head and byte-identical sealed delta result return the emitted full order unchanged and rewrite the marker as granted.
+    const again = await f.full();
+    assert.equal(again.workOrderRef, unit.workOrderRef);
+    assert.equal(again.workOrderDigest, unit.workOrderDigest);
+    const marker = readSequenceMarker(markerRoot, head);
+    assert.equal(marker?.fullGranted, true);
+    assert.equal(marker?.execution?.executionIdentity, unit.executionIdentity);
+    assert.equal(pull(again, root).status, 0);
+    // A different sealed delta result of the same act set refuses and leaves a corrupt marker ungranted (a fresh producer run, last because it supersedes the first run's seal).
+    await corrupt();
+    const other = path.join(path.dirname(files.delta), "delta-result-other.json");
+    await writeFile(other, JSON.stringify({ ...f.result, runId: undefined, widenedReads: [{ path: "x", reason: "other review" }] }));
+    await assert.rejects(f.full({ deltaResult: other }), /original commit_only source or mutation authority differs/);
+    assert.equal(readSequenceMarker(markerRoot, head)?.fullGranted, false);
+  });
+});
+
+test("push authority: the idempotent --phase full re-emission refuses once local HEAD moved past the original full order's candidate", async () => {
+  await withFixture(async ({ wt, root, head, prepareFull }) => {
+    const f = await prepareFull();
+    const unit = await f.full();
+    const markerRoot = resolveGateArtifactTmpRoot(root);
+    const corrupt = () => writeFile(path.join(markerRoot, "gate-delta", `${head}.sequence`), "{not json");
+    // HEAD at the original candidate: the re-emission returns the same order.
+    await corrupt();
+    assert.equal((await f.full()).workOrderDigest, unit.workOrderDigest);
+    // HEAD past the reviewed candidate: the re-emission refuses and leaves the marker ungranted.
+    await corrupt();
+    git(wt, "commit", "-q", "--allow-empty", "-m", "past the reviewed candidate");
+    await assert.rejects(f.full(), /full_order_head_moved: [^]*re-run the commit_only emission [^]*at the new HEAD, then run the delta review \(dev-loops loop pre-push-delta\)/);
+    assert.equal(readSequenceMarker(markerRoot, head)?.fullGranted, false);
+  });
+});
+
+test("delta gate: a --phase full refusal for a HEAD past the record candidate names the head_moved closure", async () => {
+  await withFixture(async ({ wt, prepareFull }) => {
+    const f = await prepareFull({ bounded: true });
+    git(wt, "commit", "-q", "--allow-empty", "-m", "past the candidate");
+    await assert.rejects(f.full(), /head_moved[^]*push_to_gate/);
   });
 });
 
@@ -2461,7 +2559,7 @@ for (const route of ["THREAD", "ACT", "HISTORICAL_CONSTRUCT", "LEGACY", "AUTHORI
     const oldEmitter = await import(pathToFileURL(oldEmitterPath).href);
     await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_OLD" }] }));
     await writeRecord({ items: [{ ref: "PRRT_OLD", status: "resolved" }] });
-    const warning = withFp({ severity: "low", angle: "correctness", summary: "residual warning", judgeDisposition: "act", siteQuery: "query", rejectedForms: ["--warning"] });
+    const warning = withFp({ severity: "low", angle: "correctness", summary: "residual warning", file: "src/w.mjs", judgeDisposition: "act", siteQuery: "query", rejectedForms: ["--warning"] });
     const legacy = route === "LEGACY";
     const pattern = "readValidationEvidence|requireBinding|validationResultsPath|prefix-file";
     const act = legacy ? [{ ...ACT[0], siteQuery: pattern }] : [...ACT, warning];
@@ -2810,10 +2908,10 @@ test("regenerate: the rule names the launcher form for claude and the bare node 
 // ---------------------------------------------------------------------------
 
 const SKELETON_ACT = [
-  { severity: "high", angle: "correctness", summary: "doc lag", judgeDisposition: "act", siteQuery: "git grep -n lag", statedSurfaces: ["docs/a.md", "docs/b.md"], acceptedForms: ["--x"] },
-  { severity: "low", angle: "correctness", summary: "unqueried", judgeDisposition: "act" },
-  { severity: "low", angle: "correctness", summary: "query only", judgeDisposition: "act", siteQuery: "git grep -n q" },
-  { severity: "low", angle: "correctness", summary: "matcher", judgeDisposition: "act", siteQuery: "git grep -n m", acceptedForms: ["--a=b"], rejectedForms: ["keep spacing"] },
+  { severity: "high", angle: "correctness", summary: "doc lag", file: "src/s.mjs", judgeDisposition: "act", siteQuery: "git grep -n lag", statedSurfaces: ["docs/a.md", "docs/b.md"], acceptedForms: ["--x"] },
+  { severity: "low", angle: "correctness", summary: "unqueried", file: "src/s.mjs", judgeDisposition: "act" },
+  { severity: "low", angle: "correctness", summary: "query only", file: "src/s.mjs", judgeDisposition: "act", siteQuery: "git grep -n q" },
+  { severity: "low", angle: "correctness", summary: "matcher", file: "src/s.mjs", judgeDisposition: "act", siteQuery: "git grep -n m", acceptedForms: ["--a=b"], rejectedForms: ["keep spacing"] },
 ].map(withFp);
 const [FP_DOC, , FP_QUERY, FP_REJ] = SKELETON_ACT.map((f) => f.fingerprint);
 
@@ -2865,8 +2963,8 @@ test("handbackCheck is machine-local: two commit_only emissions with different e
 test("the skeleton merges a shared fingerprint and dedupes repeated site texts", async () => {
   await withFixture(async ({ files, emit }) => {
     await writeFile(files.actList, JSON.stringify([
-      { severity: "low", angle: "correctness", summary: "one", judgeDisposition: "act", siteQuery: "q1", statedSurfaces: ["a.md", "a.md", "--x"], acceptedForms: ["--x"] },
-      { severity: "low", angle: "holistic", summary: "one", judgeDisposition: "act", siteQuery: "q2", statedSurfaces: ["b.md", "a.md"] },
+      { severity: "low", angle: "correctness", summary: "one", file: "a.mjs", line: 1, judgeDisposition: "act", siteQuery: "q1", statedSurfaces: ["a.md", "a.md", "--x"], acceptedForms: ["--x"] },
+      { severity: "low", angle: "holistic", summary: "one", file: "a.mjs", line: 1, judgeDisposition: "act", siteQuery: "q2", statedSurfaces: ["b.md", "a.md"] },
     ].map(withFp)));
     const { workOrder } = await emit({ phase: "commit_only", deltaResult: undefined });
     assert.equal(workOrder.siteCoverage.length, 1);
@@ -2988,7 +3086,7 @@ for (const form of ["foreign-route", "two-matching"]) test(`complete THREAD --co
 });
 
 // ADR 0197 (#2937 S4b): the cap round (cap 2) ran at `head`; origin/main then moved and the branch merged it.
-async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfterMerge = false, fixerCommitBeforeMerge = false, secondCandidate = false, baseMergeBeforeFixer = false } = {}) {
+async function writeCapRoundLedgers({ root, wt, head, files }) {
   await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
   const medium = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
   await writeFile(files.actList, JSON.stringify([medium]));
@@ -2997,6 +3095,18 @@ async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfter
   for (const [sha, loggedAt] of [["d".repeat(40), "2026-11-01T00:00:00.000Z"], [head, "2026-11-02T00:00:00.000Z"]]) {
     await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt, findings: sha === head ? [medium] : [] }));
   }
+}
+
+// A sealed clearing delta record from -> to under the fixture's gate tmp root.
+async function sealClearingRecord(root, from, to) {
+  const text = JSON.stringify({ reviewBaselineHead: from, candidateHead: to, nextStep: "push_to_gate", outcome: "locally_clear", items: [] });
+  await mkdir(path.join(root, "tmp", "gate-delta"), { recursive: true });
+  await writeFile(path.join(root, "tmp", "gate-delta", `${from}.json`), text);
+  await writeFile(path.join(root, "tmp", "gate-delta", `${from}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`);
+}
+
+async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfterMerge = false, fixerCommitBeforeMerge = false, secondCandidate = false, baseMergeBeforeFixer = false } = {}) {
+  await writeCapRoundLedgers({ root, wt, head, files });
   let ledgerlessBase;
   if (baseMergeBeforeFixer) {
     // Chain starts at a ledgerless base-only merge M0 of the cap-round head: A -> M0 -> B (sealed M0 -> B) -> M.
@@ -3012,12 +3122,7 @@ async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfter
     await writeFile(path.join(wt, "fixer.md"), "fixer change\n");
     git(wt, "add", "fixer.md");
     git(wt, "commit", "-q", "-m", "fixer commit");
-    const seal = async (from, to) => {
-      const text = JSON.stringify({ reviewBaselineHead: from, candidateHead: to, nextStep: "push_to_gate", outcome: "locally_clear", items: [] });
-      await mkdir(path.join(root, "tmp", "gate-delta"), { recursive: true });
-      await writeFile(path.join(root, "tmp", "gate-delta", `${from}.json`), text);
-      await writeFile(path.join(root, "tmp", "gate-delta", `${from}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`);
-    };
+    const seal = (from, to) => sealClearingRecord(root, from, to);
     const b1 = git(wt, "rev-parse", "HEAD");
     await seal(ledgerlessBase ?? head, b1);
     if (secondCandidate) {
@@ -3048,6 +3153,16 @@ test("ADR 0197: a base-only merge after the cap round does not consume the closu
     const { over } = await capRoundThenBaseMerge(fx, {});
     const result = await fx.emit(over);
     assert.equal(result.workOrder.source, "act-list");
+  });
+});
+
+test("issue 3105: the later-pass act-ref bound does not apply on the ADR 0197 base-only merge path", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await capRoundThenBaseMerge(fx, {});
+    const capList = JSON.parse(await readFile(fx.files.actList));
+    const extra = withFp({ ...ACT[0], severity: "medium", summary: "act item outside the cap-round ledger", judgeFix: "fix it" });
+    await writeFile(fx.files.actList, JSON.stringify([...capList, extra]));
+    assert.equal((await fx.emit(over)).workOrder.source, "act-list");
   });
 });
 
@@ -3091,6 +3206,82 @@ test("ADR 0197: a PR-own change after the cap round keeps the round_cap_reached 
   await withFixture(async (fx) => {
     const { over } = await capRoundThenBaseMerge(fx, { ownChangeAfterMerge: true });
     await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
+  });
+});
+
+// Issue 3105 (PR 3237 shape): the first cap-round fixer pass fixed part of the act list and pushed; the PR head is its candidate C, with no ledger of its own.
+async function capRoundFirstPassPushed(fx) {
+  await writeCapRoundLedgers(fx);
+  // The cap-round ledger holds two findings; the first pass fixes only the first, so the second stays open for the later pass.
+  const [fixedItem] = JSON.parse(await readFile(fx.files.actList));
+  const openItem = withFp({ ...ACT[0], severity: "medium", summary: "finding left for the second pass", judgeFix: "fix it" });
+  const ledger = path.join(fx.root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${fx.head}.json`);
+  await writeFile(ledger, JSON.stringify({ ...JSON.parse(await readFile(ledger)), findings: [fixedItem, openItem] }));
+  // The full phase needs a clean worktree, so the untracked cap config is ignored.
+  await writeFile(path.join(fx.root, ".git", "info", "exclude"), ".devloops.json\n");
+  const first = await fx.prepareFull();
+  assert.equal((await first.full()).workOrder.headSha, first.candidate);
+  await writeFile(fx.files.actList, JSON.stringify([openItem]));
+  const at = (prHead) => ({ headSha: prHead, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: prHead, baseRefName: "main" }), fetchVerdictMarkers: verdictPostedAt(fx.head) });
+  return { candidate: first.candidate, at };
+}
+
+test("issue 3105: a second cap-round fixer pass emits at the first pass's pushed head, and its full phase pushes", async () => {
+  await withFixture(async (fx) => {
+    const { candidate, at } = await capRoundFirstPassPushed(fx);
+    const second = await fx.prepareFull({ baseline: candidate, emitter: (over) => fx.emit({ ...over, ...at(candidate) }) });
+    assert.equal(second.prior.workOrder.headSha, candidate);
+    const unit = await second.full(at(candidate));
+    assert.equal(unit.workOrder.headSha, second.candidate);
+    assert.equal(unit.workOrder.authority.reviewBaselineHead, candidate);
+    assert.equal(pull(unit, fx.root).status, 0);
+  });
+});
+
+test("issue 3105: a later cap-round pass emits only the cap round's act refs; an extra act item refuses round_cap_reached", async () => {
+  await withFixture(async (fx) => {
+    const { candidate, at } = await capRoundFirstPassPushed(fx);
+    const capList = JSON.parse(await readFile(fx.files.actList));
+    const extra = withFp({ ...ACT[0], severity: "medium", summary: "new finding after the cap round", judgeFix: "fix it" });
+    await writeFile(fx.files.actList, JSON.stringify([...capList, extra]));
+    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, ...at(candidate) }), (e) => e.refusal === "round_cap_reached" && /not a finding of the cap-round ledger/.test(e.message));
+    await writeFile(fx.files.actList, JSON.stringify(capList));
+    const ok = await fx.emit({ phase: "commit_only", deltaResult: undefined, ...at(candidate) });
+    assert.deepEqual(ok.workOrder.siteCoverage.map((r) => r.fingerprint), capList.map((f) => f.fingerprint));
+  });
+});
+
+test("issue 3105: a later cap-round pass refuses an act item that the cap-round ledger closed with a judge reject", async () => {
+  await withFixture(async (fx) => {
+    const { candidate, at } = await capRoundFirstPassPushed(fx);
+    const [item] = JSON.parse(await readFile(fx.files.actList));
+    const ledger = path.join(fx.root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${fx.head}.json`);
+    const written = JSON.parse(await readFile(ledger));
+    await writeFile(ledger, JSON.stringify({ ...written, findings: [{ ...item, judgeDisposition: "reject" }] }));
+    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, ...at(candidate) }), (e) => e.refusal === "round_cap_reached" && /not a finding of the cap-round ledger/.test(e.message));
+  });
+});
+
+test("issue 3105: a foreign commit after the first cap-round pass keeps round_cap_reached and names the chain-extension remedy", async () => {
+  await withFixture(async (fx) => {
+    const { at } = await capRoundFirstPassPushed(fx);
+    git(fx.wt, "commit", "-q", "--allow-empty", "-m", "foreign commit");
+    const foreign = git(fx.wt, "rev-parse", "HEAD");
+    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, ...at(foreign) }), (e) => e.refusal === "round_cap_reached" && /gate extend-cap-round-chain --repo/.test(e.message));
+    // Under Claude the remedy renders in the dev-loops-run launcher form (WORKTREE-SCRIPT-LAUNCHER-CWD).
+    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, harness: "claude", ...at(foreign) }), (e) => e.refusal === "round_cap_reached" && /dev-loops-run [^;]*extend-cap-round-chain --repo/.test(e.message));
+  });
+});
+
+test("issue 3105: a chain candidate head that does not descend from the cap-round head refuses round_cap_reached", async () => {
+  await withFixture(async (fx) => {
+    const { candidate, at } = await capRoundFirstPassPushed(fx);
+    // A parentless commit with the candidate's tree: the sealed chain reaches it, but the cap-round head is not its ancestor.
+    const orphan = git(fx.wt, "commit-tree", `${candidate}^{tree}`, "-m", "orphan chain head");
+    await sealClearingRecord(fx.root, candidate, orphan);
+    git(fx.wt, "update-ref", "HEAD", orphan); // same tree, so the worktree stays clean
+    // The ancestor check throws before the chain-miss flag is set, so the refusal carries no chain-extension remedy.
+    await assert.rejects(fx.emit({ phase: "commit_only", deltaResult: undefined, ...at(orphan) }), (e) => e.refusal === "round_cap_reached" && !/extend-cap-round-chain/.test(e.message));
   });
 });
 
@@ -3326,14 +3517,16 @@ function stripExecution({ execution, ...marker }) {
   return marker;
 }
 
-test("ADR 0218: a clearing chain that ends at the head itself does not read as a base-only merge (round_cap_reached)", async () => {
+test("ADR 0218 / issue 3105: a sealed chain that ends at the head is the cap round; without the seal the head does not read as a base-only merge (round_cap_reached)", async () => {
   await withFixture(async (fx) => {
     const { merged, over } = await capRoundThenBaseMerge(fx, { ownChangeAfterMerge: true });
-    // A sealed record head -> merged makes the chain end equal to the head; a PR-own change sits in that range, so the refusal stands.
+    // A sealed record head -> merged makes the chain end equal to the head: the PR-own change in that range is a sealed cap-round fix.
     const text = JSON.stringify({ reviewBaselineHead: fx.head, candidateHead: merged, nextStep: "push_to_gate", outcome: "locally_clear", items: [] });
     await mkdir(path.join(fx.root, "tmp", "gate-delta"), { recursive: true });
     await writeFile(path.join(fx.root, "tmp", "gate-delta", `${fx.head}.json`), text);
     await writeFile(path.join(fx.root, "tmp", "gate-delta", `${fx.head}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`);
+    assert.equal((await fx.emit(over)).workOrder.source, "act-list");
+    await rm(path.join(fx.root, "tmp", "gate-delta", `${fx.head}.json.seal`));
     await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
   });
 });
