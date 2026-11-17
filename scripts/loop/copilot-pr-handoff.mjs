@@ -5,6 +5,7 @@ import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from ".
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "./_copilot-convergence-carry.mjs";
 import { resolvePrConflicts } from "./resolve-pr-conflicts.mjs";
+import { parseCopilotBodyDispositionMarker, parseReviewBodyDispositionMarkers } from "../github/_copilot-body-disposition.mjs";
 import { isTrustedRestComment, UNTRUSTED_CONVERSATION_COMMENT_REMEDY } from "@dev-loops/core/github/comment-trust";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
@@ -352,6 +353,11 @@ export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env
       // Skip if comment body is a gate verdict comment (system action, not operator input)
       const body = typeof comment?.body === "string" ? comment.body : "";
       if (body.includes("Gate review:") || body.includes("**draft_gate**") || body.includes("**pre_approval_gate**") || isGateMachineArtifactBody(body)) {
+        continue;
+      }
+      // The loop's own fixer disposition markers are tool output, whatever login `gh` posts under.
+      // shortcut: markers are not matched to loop records, a pasted marker silences a comment; upgrade if abused.
+      if (parseReviewBodyDispositionMarkers(body).length > 0 || parseCopilotBodyDispositionMarker(body)?.fixSha) {
         continue;
       }
       humanComments.push({
