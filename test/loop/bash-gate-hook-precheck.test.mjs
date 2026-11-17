@@ -80,14 +80,10 @@ for (const command of [
   "gh api -X PATCH repos/o/r/issues/5 --field body=x",
   "gh api -X PATCH repos/o/r/pulls/5 --input body.json",
   "gh api graphql -f query=mutation{updatePullRequest}",
-  // A wrapper prefix must not hide the shape from the pre-check: the shared `SHELL_EXEC_PREFIX`
-  // tolerates env-assignment / `command` / `env` / path prefixes but no wrapper, so the hook
-  // reads the wrapper-unwrapped head beside the raw one. Without that, the nominate-then-decide
-  // path fails open on the wrapped form of a shape the pre-check already names. The wrapper
-  // options are spelled out per wrapper, because a `timeout` duration and a `nice -n N` level
-  // are the only wrapper arguments that are not flags.
+  // A wrapper prefix must not hide the shape from the pre-check. The hook has no wrapper parser:
+  // the whole-command token rule reads every token, so any wrapper spelling reaches the deny.
   "timeout 300 gh pr edit 5 --body-file waiver.md",
-  // Fail closed on a wrapper option or duration the parser cannot place.
+  // An unplaceable wrapper option or duration changes nothing: the token rule ignores the wrapper.
   "env -P /usr/bin gh pr edit 5 --body x",
   "exec -a n gh pr edit 5 --body x",
   "sudo -r x gh pr edit 5 --body x",
@@ -165,6 +161,10 @@ for (const command of [
   "gh api -X PATCH repos/o/r/pulls/5 --raw-field body=x",
   "gh api -X PATCH repos/o/r/pulls/5 -fbody=x",
   "gh api -f body=x -X PATCH repos/o/r/pulls/5",
+  // The graphql body-write token rule: gh, api, graphql and updatePullRequest/updateIssue/body.
+  "sudo gh api graphql -f query=mutation{updatePullRequest}",
+  "gh api graphql -f query='mutation{updatePullRequest(input:{pullRequestId:\"x\"}){clientMutationId}}'",
+  "gh api graphql -f query=mutation{updateIssue}",
   // A comma-less group nested in a comma group still expands.
   "gh pr edit 5 --bo{dy,x{y}} hello",
   "gh pr edit 5 --{body,x{y}} hello",
@@ -211,6 +211,7 @@ test("non-body writes and reads remain allowed by the pre-check", async () => {
       "xargs -d x echo hi",
       "echo {a} {x,y}",
       "gh api repos/o/r/pulls/5",
+      "gh api graphql -f query='query{viewer{login}}'",
     ]) {
       assert.equal(bash(root, command, undefined).decision, "allow", command);
     }

@@ -14,7 +14,8 @@
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
  *   - in a managed repo the whole command is denied when its tokens (any segment, any order; brace and
  *     `${VAR:-x}` forms split) hold `gh`, `pr`, `edit|create` and a body flag, or `gh`, `api` and a body
- *     field or `--input` (`segmentHoldsBodyWrite`); fails closed. Accepted false positive: a command
+ *     field or `--input`, or `gh`, `api`, `graphql` and `updatePullRequest`, `updateIssue` or `body`
+ *     (`segmentHoldsBodyWrite`); fails closed. Accepted false positive: a command
  *     that holds those tokens as data (a title or note that says gh) is denied too.
  *   - raw `gh pr edit` body writes (`--body`/`--body-file`/`-b`/`-F`; `gh pr create` is covered by the token rule above only) and `gh api` body writes to
  *     `pulls/<n>` or `issues/<n>` (a `body` field via `-f`/`-F`/`--field`/`--raw-field`, an
@@ -92,7 +93,7 @@ if (fixerPull) recordFixerAgentBinding(mainRoot, { agentId: input?.agent_id, ...
 // Token deny: the whole command is a body write when its tokens, across all segments and pipes and
 // in any order, hold `gh`, `pr`, `edit|create` and a body flag (`--body*`, or a short cluster with
 // `b`/`F`: `-b`, `-bx`, `-b=x`, `-Fwaiver.md`, `-db`), or hold `gh`, `api` and a body field (`-f body=`,
-// `-F body=`, `--field body=`, `--raw-field body=`) or `--input`. `$(`, `)`, backticks, braces and commas split tokens so a
+// `-F body=`, `--field body=`, `--raw-field body=`) or `--input`, or `gh`, `api`, `graphql` and `updatePullRequest`/`updateIssue`/`body`. `$(`, `)`, backticks, braces and commas split tokens so a
 // command substitution or brace expansion is seen, a `${VAR:-gh}` default counts as a token, and `gh` matches by basename (`/usr/bin/gh`). No head, wrapper or echo exemption: fails closed.
 // A process wrapper needs no parser: the rules read every token of the command.
 // `--{body,x}` expands to `--body`, `--x`: one innermost comma group per pass; a comma-less group nested in it stays literal.
@@ -138,7 +139,8 @@ function segmentHoldsBodyWrite(command) {
   return (has((t) => t === "pr") && has((t) => t === "edit" || t === "create") &&
     has((t) => t.startsWith("--body") || /^-[^-]*[bF]/.test(t))) ||
     (has((t) => t === "api") && (has((t) => t.startsWith("--input")) ||
-      (has((t) => /^(?:-[fF]|--(?:raw-)?field)$/.test(t)) && has((t) => t === "body")) || has((t) => /^-[fF]body$/.test(t))));
+      (has((t) => /^(?:-[fF]|--(?:raw-)?field)$/.test(t)) && has((t) => t === "body")) || has((t) => /^-[fF]body$/.test(t)) ||
+      (has((t) => t === "graphql") && has((t) => t === "updatePullRequest" || t === "updateIssue" || t === "body"))));
 }
 
 let repoRoot = null;
