@@ -409,6 +409,13 @@ test("a commit_only emit for an all-body act list refuses delta_body_only_act_se
   });
 });
 
+test("a commit_only emit for a malformed file-less act list refuses with the act-list error, not delta_body_only_act_set", async () => {
+  await withFixture(async ({ files, emit }) => {
+    await writeFile(files.actList, JSON.stringify([withFp({ severity: "high", angle: "correctness", summary: "x", judgeDisposition: "defer" })]));
+    await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), (error) => error.refusal !== "delta_body_only_act_set" && /judgeDisposition/.test(error.message));
+  });
+});
+
 test("after a close of execution A, a new execution B on the same head stays pullable", async () => {
   const { closeGateSequence } = await import("../../scripts/loop/close-gate-sequence.mjs");
   const { readSequenceMarker } = await import("@dev-loops/core/loop/fix-push-authority");

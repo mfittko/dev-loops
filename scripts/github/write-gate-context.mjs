@@ -2315,7 +2315,8 @@ const CLEAN_CAP_EXTENSIONS = new Set(["docs_tests_only", "delta_covered"]);
 export const capRoundCovers = (capRound, tmpRoot) => (record) => {
   const refs = new Set((Array.isArray(record.items) ? record.items : []).map((i) => String(i?.ref)));
   // A PR-body act item never enters a delta record (startDeltaSequence drops it), so the record cannot name its ref.
-  const actRefs = [...new Set([...capRoundActRefs(capRound.log.findings, capRound.log.headSha)].filter(([f]) => !isDeltaBodyItem(f)).map(([, ref]) => ref))];
+  // The delta act list carries each cluster's kept representative only, so the body-item filter reads that representative, as startDeltaSequence does.
+  const actRefs = [...new Set(capRoundActList(capRound.log.findings, capRound.log.headSha).filter((e) => !isDeltaBodyItem(e)).map((e) => e.ref))];
   // A clean cap round has no act item, so only a record whose extension is in CLEAN_CAP_EXTENSIONS proves it (ADR 0250 for docs_tests_only):
   // the first record carries one, or a clearing chain over later heads reaches one.
   if (isCleanCapRound(capRound)) {

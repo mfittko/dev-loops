@@ -921,6 +921,17 @@ test("MARKER_UNREADABLE recovers the fixer execution from the PR's emit plan: a 
     assert.equal(running.refusal, "fixer_running");
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
     writeFileSync(ex.outputRef, "{}");
-    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }))).condition, "MARKER_UNREADABLE");
+    const closed = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged }));
+    assert.equal(closed.condition, "MARKER_UNREADABLE");
+    // The record is keyed by the recovered execution, which is where pull admission looks (closureRecorded), so a later pull refuses stale_dispatch.
+    assert.equal(closed.executionIdentity, ex.executionIdentity);
+    assert.equal(closed.recordPath, sequenceClosurePath(tmpRoot, HEAD, ex.executionIdentity));
+    assert.equal(existsSync(sequenceClosurePath(tmpRoot, HEAD, ex.executionIdentity)), true);
   });
+});
+
+test("recoveryHint renders a concrete --head only for a name the CLI accepts", () => {
+  const upper = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+  assert.match(recoveryHint(upper, "/m", "feat"), /--head <baseline sha>/);
+  assert.match(recoveryHint("not-a-sha", "/m", "feat"), /--head not-a-sha /);
 });

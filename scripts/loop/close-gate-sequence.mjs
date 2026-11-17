@@ -23,7 +23,7 @@ import { userInfo } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { clearSequenceMarker, readSequenceMarker, sequenceClosurePath, sequenceMarkerPath, withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
+import { clearSequenceMarker, isSafeMarkerName, readSequenceMarker, sequenceClosurePath, sequenceMarkerPath, withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightFieldsSpec, preflightJqFilter } from "../lib/jq-output.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
@@ -38,9 +38,6 @@ import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-r
 export const fixerGraceMs = () => Math.max(STALE_RUNNER_DEFAULT_MAX_AGE_MS, resolveStaleRunnerMaxAgeMs());
 const isFullSha = (sha) => normalizeFullHeadSha(sha) === sha;
 /** A full sha, or any other safe marker file name (never a path); a non-sha name routes only to MARKER_UNREADABLE. An empty name, a name over 128 characters or one with any other character stays uncloseable. */
-const isSafeMarkerName = (name) => normalizeFullHeadSha(name) !== null
-  ? isFullSha(name) // a case or whitespace variant of a full sha opens the real marker on a case-insensitive filesystem, so it is no non-hex name
-  : /^[A-Za-z0-9._-]{1,128}$/u.test(name) && name !== "." && name !== "..";
 
 const USAGE = `usage: close-gate-sequence.mjs --head <marker baseline sha or marker file name> --repo <owner/name> --pr <number> [--help]\n\n${JQ_OUTPUT_USAGE}`;
 const refuse =(refusal, reason, remedy) => ({ ok: false, refusal, reason, remedy });
@@ -169,14 +166,14 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
       // A concurrent re-emit rewrote the marker while the PR was read: that is a new sequence, never close it (compare-and-delete: identity and mtime).
       const current = readSequenceMarker(tmpRoot, head);
       if (current?.execution?.executionIdentity !== executionIdentity || mtimeMs(sequenceMarkerPath(tmpRoot, head)) !== markerMtime) return refuse("sequence_live", `the marker for ${head} changed while it was checked`, "Rerun close-sequence; a re-emitted marker starts a live sequence.");
-      const record = { baselineHead: head, executionIdentity: executionIdentity ?? null, condition, actor, closedAt: new Date(now()).toISOString() };
+      const record = { baselineHead: head, executionIdentity: runningIdentity ?? null, condition, actor, closedAt: new Date(now()).toISOString() };
       // The last pull receipt recheck precedes the record write, so a refused close leaves no record.
       const pulledAfterRead = pulledMeanwhile() ?? fixerRunning();
       if (pulledAfterRead) return pulledAfterRead;
       if (condition === "BOUNDED_OUT" && !boundedOut()) return refuse("sequence_live", `the delta record for ${head} changed while it was checked`, "Rerun close-sequence.");
       if (condition === "MARKER_UNREADABLE") { const live = unreadableLive(); if (live) return live; }
       // Record first, marker second: a failed write leaves the marker in place.
-      const file = sequenceClosurePath(tmpRoot, head, executionIdentity);
+      const file = sequenceClosurePath(tmpRoot, head, runningIdentity);
       mkdirSync(path.dirname(file), { recursive: true });
       writeFileSync(`${file}.tmp`, `${JSON.stringify(record, null, 2)}\n`);
       renameSync(`${file}.tmp`, file);
