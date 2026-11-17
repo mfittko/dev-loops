@@ -93,9 +93,14 @@ for (const command of [
   "/usr/bin/timeout 60 gh api repos/o/r/pulls/5 --field body=x",
   "sudo gh pr edit 5 --body 'text with an adr-tripwire:allow line'",
   "sudo -n gh api -X PATCH repos/o/r/pulls/5 -f body=x",
-  // A wrapper flag's own value sits exactly where a boolean flag leaves the command, so
-  // `sudo -u root gh …` must be read through the one head past the unwrapped one.
+  // Separate option values must be consumed before later wrapper options are read.
   "sudo -u root gh api -X PATCH repos/o/r/pulls/5 -f body=x",
+  "sudo -u root -n gh pr edit 5 --body-file waiver.md",
+  "sudo -u root -n gh api -X PATCH repos/o/r/pulls/5 -f body=x",
+  ...["&&", "||", ";", "|", "&", "\n"].flatMap((separator) => [
+    `cd . ${separator} timeout 30 gh pr edit 5 --body x`,
+    `cd . ${separator} sudo -u root -n gh api -X PATCH repos/o/r/pulls/5 -f body=x`,
+  ]),
   "nice -n 5 gh pr edit 5 --body x",
   "time -p gh api -X PATCH repos/o/r/issues/5 --field body=x",
 ]) {
@@ -119,6 +124,10 @@ test("non-body writes and reads remain allowed by the pre-check", async () => {
       "timeout 30 gh api repos/o/r/pulls/5",
       "nice -n 5 gh pr edit 5 --add-label needs-review",
       "time -p gh pr view 5 --json body",
+      "timeout 30 echo gh pr edit 5 --body x",
+      "timeout 30 /bin/echo gh pr edit 5 --body x",
+      "sudo -n echo gh api -X PATCH repos/o/r/pulls/5 -f body=x",
+      "printf '%s' 'cd . && timeout 30 gh pr edit 5 --body x'",
     ]) {
       assert.equal(bash(root, command, undefined).decision, "allow", command);
     }

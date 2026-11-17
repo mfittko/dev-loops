@@ -65,6 +65,7 @@ import {
   extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
   normalizeGitHubRepoSlug,
+  tokenizeShellCommand,
 } from "./_bash-command-classify.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
@@ -84,41 +85,46 @@ const mainRoot = isFixer && parseSanctionedPullLine(command) ? listCheckouts(cwd
 const fixerPull = mainRoot ? parseFixerPullCommand(command, mainRoot) : null;
 if (fixerPull) recordFixerAgentBinding(mainRoot, { agentId: input?.agent_id, ...fixerPull });
 
-// A process wrapper whose own options sit between it and the command it runs, so a segment's real
-// command head is not its first token: `SHELL_EXEC_PREFIX` (the prefix every head-anchored
-// predicate shares) tolerates `NAME=value` assignments, the `env`/`command`/`exec` words and a
-// binary path, but no wrapper. Names the same wrapper set the classifier's `stripLeadingWrappers`
-// recognises (`sudo`, `env`, `xargs`, `time`, `nice`, `command`) plus `timeout`, and spells out the
-// two wrappers whose own argument is not a flag: `timeout [-s SIG] [-k DUR] <duration>` and
-// `nice -n <N>`. Ceiling: an outer wrapper's flag that takes a SEPARATE value in front of a SECOND
-// wrapper (`sudo -u root nice -n 5 gh …`) stops the unwrap at that value token.
-const WRAPPER_HEAD_RE = new RegExp(
-  "^" +
-    "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*" +
-    "(?:" +
-      "(?:\\S*/)?g?timeout\\s+(?:-{1,2}[\\w-]+(?:=\\S+|\\s+(?:\\d[\\w.]*|[A-Z]+))?\\s+)*\\d[\\w.]*\\s+" +
-      "|(?:\\S*/)?nice\\s+(?:-n\\s*\\S+\\s+|--adjustment(?:=\\S+|\\s+\\S+)\\s+)?" +
-      "|(?:\\S*/)?(?:sudo|env|xargs|time|nice|command)\\s+(?:-{1,2}[\\w-]+(?:=\\S+)?\\s+|--\\s+)*" +
-    ")*" +
-    "(?:\\S*/)?",
-  "i",
-);
+// Consume option values only while reading a wrapper, never by dropping a possible executable.
+const WRAPPER_VALUE_OPTIONS = {
+  sudo: ["-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C", "--close-from", "-T", "--command-timeout", "-D", "--chdir", "-R", "--chroot"],
+  env: ["-u", "--unset", "-C", "--chdir", "-S", "--split-string"],
+  xargs: ["-a", "--arg-file", "-E", "-I", "-L", "--max-lines", "-n", "--max-args", "-P", "--max-procs", "-s", "--max-chars"],
+  time: ["-f", "--format", "-o", "--output"],
+  nice: ["-n", "--adjustment"],
+  timeout: ["-s", "--signal", "-k", "--kill-after"],
+  gtimeout: ["-s", "--signal", "-k", "--kill-after"],
+  command: [],
+  exec: [],
+};
 
 /**
- * The heads a head-anchored predicate must read for a command: its wrapper-unwrapped head, plus
- * the head one token later. The second head exists because a wrapper flag's own value sits exactly
- * where a boolean flag leaves the command (`sudo -n gh api …` leaves `gh api …`, `sudo -u root gh
- * api …` leaves `root gh api …`), and the predicate is its own arbiter: only a head that really
- * starts with the caller's command can match, so one extra head costs one predicate call to close
- * the arity question. Over-report is the safe direction.
+ * Read each executable segment through its process wrappers. The tokenizer keeps quoted data
+ * and heredoc bodies from becoming executable segments; offsets preserve the original gh flags.
  * @param {string} command @returns {string[]}
  */
 function unwrappedCommandHeads(command) {
-  const trimmed = command.trim();
-  const remainder = trimmed.replace(WRAPPER_HEAD_RE, "").trim();
-  if (!remainder || remainder === trimmed) return [];
-  const tokens = remainder.split(/\s+/);
-  return tokens.length > 1 ? [remainder, tokens.slice(1).join(" ")] : [remainder];
+  return tokenizeShellCommand(command).segments.flatMap(({ words, end }) => {
+    let i = 0;
+    let wrapped = false;
+    while (i < words.length) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i].value)) { i++; continue; }
+      const wrapper = words[i].value.split("/").pop();
+      if (!Object.hasOwn(WRAPPER_VALUE_OPTIONS, wrapper)) break;
+      wrapped = true;
+      i++;
+      while (i < words.length && words[i].value.startsWith("-")) {
+        const option = words[i++].value;
+        if (option === "--") break;
+        if (WRAPPER_VALUE_OPTIONS[wrapper].includes(option)) i++;
+      }
+      if (/^g?timeout$/.test(wrapper)) {
+        if (!/^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?$/i.test(words[i]?.value ?? "")) return [];
+        i++;
+      }
+    }
+    return wrapped && i < words.length ? [command.slice(words[i].start, end)] : [];
+  });
 }
 
 let repoRoot = null;
