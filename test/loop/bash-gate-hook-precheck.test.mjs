@@ -93,6 +93,8 @@ for (const command of [
   "env -S 'gh pr edit 5 --body x'",
   "env -S 'timeout 30 gh pr edit 5 --body x'",
   "env -S 'sudo -n gh pr edit 5 --body x'",
+  "GH pr edit 5 --body x",
+  "sudo GH api -X PATCH repos/o/r/pulls/5 -f body=x",
   "env -S 'A=1' timeout 30 gh pr edit 5 --body x",
   "env -S timeout 30 gh pr edit 5 --body x",
   "env -S'gh pr edit 5 --body x'",

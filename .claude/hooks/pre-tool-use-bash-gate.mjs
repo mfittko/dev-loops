@@ -150,14 +150,15 @@ function segmentHoldsBodyWrite(command) {
     [...(braceExpansions(word) ?? (overCap = true, [])).flatMap((e) => [e, ...splitWord(e)]), ...splitWord(word)
       // `${G:-gh}` leaves `G:-gh`: also keep the default value. Needs a leading name, so `--body`/`-b` are untouched.
       .flatMap((t) => [t, t.replace(/^[A-Za-z_]\w*:?[-+]/, "")])]);
-  const has = (test) => tokens.some((token) => test(token));
+  // Tokens are lower-cased: on case-insensitive filesystems `GH` runs the real gh. Every pattern below is lower-case.
+  const has = (test) => tokens.some((token) => test(token.toLowerCase()));
   // `-S`/`-iS` before `gh` covers `env -Sgh` / `env -iSgh`, where the split-string value joins the option cluster.
-  if (overCap || !has((t) => /^(?:-[A-Za-z]*S)?gh$/.test(t.split("/").pop()))) return overCap;
+  if (overCap || !has((t) => /^(?:-[a-z]*s)?gh$/.test(t.split("/").pop()))) return overCap;
   return (has((t) => t === "pr") && has((t) => t === "edit" || t === "create") &&
-    has((t) => t.startsWith("--body") || /^-[^-]*[bF]/.test(t))) ||
+    has((t) => t.startsWith("--body") || /^-[^-]*[bf]/.test(t))) ||
     (has((t) => t === "api") && (has((t) => t.startsWith("--input")) ||
-      (has((t) => /^(?:-[fF]|--(?:raw-)?field)$/.test(t)) && has((t) => t === "body")) || has((t) => /^-[fF]body$/.test(t)) ||
-      (has((t) => t === "graphql") && has((t) => /update(?:PullRequest|Issue)/.test(t) || t === "body"))));
+      (has((t) => /^(?:-f|--(?:raw-)?field)$/.test(t)) && has((t) => t === "body")) || has((t) => /^-fbody$/.test(t)) ||
+      (has((t) => t === "graphql") && has((t) => /update(?:pullrequest|issue)/.test(t) || t === "body"))));
 }
 
 let repoRoot = null;
