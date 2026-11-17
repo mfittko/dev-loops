@@ -351,6 +351,16 @@ test("a heredoc body is dropped only for a data host; a quote-blind or arithmeti
   }
 });
 
+test("a git commit -m substitution holding one cat heredoc is data; any other substitution keeps its body", async () => {
+  const body = "fix\ngh api is no longer used";
+  const clean = await runCli(["--json"], sessionLine(`git commit -m "$(cat <<'EOF'\n${body}\nEOF\n)"`));
+  assert.deepEqual(JSON.parse(clean.stdout).rawCallViolations, []);
+  for (const command of [`git commit -m "$(cat > f <<'EOF'\ngh api repos/o/r\nEOF\n)"`, `git commit -m "$(cat <<EOF\n$(gh api repos/o/r)\nEOF\n)"`]) {
+    const r = await runCli(["--json"], sessionLine(command));
+    assert.notDeepEqual(JSON.parse(r.stdout).rawCallViolations, [], JSON.stringify(command));
+  }
+});
+
 test("a session with no Bash commands is clean, not an empty transcript", async () => {
   const file = tmpFile(`${JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } })}\n`);
   const r = await runCli(["--json", "--transcript", file]);

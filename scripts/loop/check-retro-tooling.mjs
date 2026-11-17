@@ -223,8 +223,14 @@ function collapseCommand(command) {
 function dataHeredocs(seg, alone) {
   const [head, sub] = seg.words.map((w) => w.value);
   const host = head === "cat" || (head === "tee" && alone) || (head === "git" && sub === "commit" && !seg.words.some((w) => /^(?:-c|--config)|alias\./i.test(w.value)));
-  if (!host || seg.pipedOut || seg.words.some((w) => w.subs.length > 0 || /^[A-Za-z_]\w*=/.test(w.raw) || /[<>]\(/.test(w.raw) || /[<>]\(/.test(w.value))) return [];
-  return seg.heredocs.filter((h) => h.closed && (h.quoted || !/\$\(|`|\$\{[\s|]/.test(h.body.replace(/\\\n/g, ""))));
+  if (!host || seg.pipedOut || seg.words.some((w) => /^[A-Za-z_]\w*=/.test(w.raw) || /[<>]\(/.test(w.raw) || /[<>]\(/.test(w.value))) return [];
+  const isData = (h) => h.closed && (h.quoted || !/\$\(|`|\$\{[\s|]/.test(h.body.replace(/\\\n/g, "")));
+  const subs = seg.words.flatMap((w) => w.subs);
+  if (subs.length === 0) return seg.heredocs.filter(isData);
+  // `git commit -m "$(cat <<'EOF' ... EOF)"`: one substitution holding one bare, substitution-free cat segment is data, as in the shared rule
+  const [inner] = subs[0].segments;
+  if (head !== "git" || subs.length !== 1 || subs[0].segments.length !== 1 || inner.pipedOut || inner.words[0]?.value !== "cat" || inner.words.some((w) => w.subs.length > 0 || />|[<>]\(/.test(w.raw))) return [];
+  return inner.heredocs.filter(isData);
 }
 
 function parseCliArgs(argv) {
