@@ -150,11 +150,10 @@ function unwrappedCommandHeads(command) {
           i++;
         } else if (!(WRAPPER_FLAG_OPTIONS[wrapper] ?? []).includes(option)) {
           unknown = true;
-          // The unknown option word may carry the command (`-iS'<cmd>'`, `--split='<cmd>'`): add its value after the first quote or `=`.
-          const word = words[i - 1];
-          const at = command.slice(word.start, word.end).search(/['"=]/);
-          if (at >= 0) {
-            const joined = [word.value.slice(at + (command[word.start + at] === "=" ? 1 : 0)), i < words.length ? command.slice(words[i].start, end) : ""].join(" ").trim();
+          // The unknown option word may carry the command (`-iS<cmd>`, `-iS'<cmd>'`, `--split='<cmd>'`): read its unquoted value after the `--x=` prefix or the short cluster up to its first `S`.
+          const carried = /^(?:--[^=]*=|-[^-]*?S)(.*)$/s.exec(option);
+          if (carried) {
+            const joined = [carried[1], i < words.length ? command.slice(words[i].start, end) : ""].join(" ").trim();
             extra.push(joined, ...unwrappedCommandHeads(joined));
           }
         }

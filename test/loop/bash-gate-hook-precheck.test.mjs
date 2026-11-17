@@ -107,6 +107,8 @@ for (const command of [
   "env -S 'gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
   // An env option the parser does not fully recognize fails closed.
   "env -iS'gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
+  "env -iSgh api -X PATCH repos/o/r/pulls/5 -f body=x",
+  "env -i\\S'gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
   "env --split='gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
   "env --split gh api -X PATCH repos/o/r/pulls/5 -f body=x",
   "setsid gh pr edit 5 --body x",
