@@ -155,6 +155,10 @@ test("retirement lookup ignores only absence and propagates unreadable or malfor
     assert.throws(lookup, SyntaxError);
     await writeFile(record, JSON.stringify({ gate: GATE, retiredAt: new Date(1).toISOString() }));
     assert.equal(lookup(), "round-1");
+    await writeFile(path.join(retired, "a-stray-file.json"), "{}");
+    assert.equal(lookup(), "round-1", "a stray file beside the rounds is debris");
+    await rm(path.join(retired, "round-1"), { recursive: true });
+    assert.equal(lookup(), null, "only the stray file remains");
   });
 });
 

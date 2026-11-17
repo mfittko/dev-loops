@@ -19,10 +19,12 @@ export const ANY_SCOPE = Symbol("any-scope");
 export function findRetirementAfter(tmpRoot, gate, headSha, emittedAtMs, scope = null) {
   const retiredRoot = path.join(tmpRoot, "retired-gate-rounds", headSha);
   let rounds = [];
-  try { rounds = readdirSync(retiredRoot); } catch (error) {
+  try { rounds = readdirSync(retiredRoot, { withFileTypes: true }); } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
-  for (const round of rounds) {
+  for (const entry of rounds) {
+    if (!entry.isDirectory()) continue; // a stray file is debris, never a round
+    const round = entry.name;
     let text;
     try {
       text = readFileSync(path.join(retiredRoot, round, "retirement.json"), "utf8");
