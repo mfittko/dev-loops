@@ -105,12 +105,6 @@ for (const command of [
   "env --split-string='gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
   "env --split-string='gh api -X PATCH repos/o/r/issues/5 --field body=x'",
   "env -S 'gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
-  // An env option the parser does not fully recognize fails closed.
-  "env -iS'gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
-  "env -iSgh api -X PATCH repos/o/r/pulls/5 -f body=x",
-  "env -i\\S'gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
-  "env --split='gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
-  "env --split gh api -X PATCH repos/o/r/pulls/5 -f body=x",
   "setsid gh pr edit 5 --body x",
   "stdbuf -oL gh pr edit 5 --body x",
   "ionice -c3 gh pr edit 5 --body x",
@@ -167,6 +161,23 @@ for (const command of [
   });
 }
 
+// The gate fails closed: a wrapper option word the parser does not fully recognize denies the whole command, never extracts from it.
+for (const command of [
+  "env -iS'gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
+  "env -iSgh api -X PATCH repos/o/r/pulls/5 -f body=x",
+  "env -i\\S'gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
+  "env --split='gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
+  "env --split gh api -X PATCH repos/o/r/pulls/5 -f body=x",
+  "env -x gh pr view 5",
+  "env -P /usr/bin echo hi",
+]) {
+  test(`an unknown wrapper option is denied: ${command}`, async () => {
+    await withManagedRepo(async (root) => {
+      denyForEveryActor(root, command, /BASH-GATE-UNKNOWN-WRAPPER-OPTION.*Drop the option, or spell out/s);
+    });
+  });
+}
+
 test("non-body writes and reads remain allowed by the pre-check", async () => {
   await withManagedRepo(async (root) => {
     // Naming the shapes must not turn the pre-check into a blanket deny: a read that merely
@@ -185,7 +196,6 @@ test("non-body writes and reads remain allowed by the pre-check", async () => {
       "setsid gh pr view 5",
       "gh pr list",
       "gh issue view 5",
-      "env -P /usr/bin echo hi",
       "timeout inf echo hi",
     ]) {
       assert.equal(bash(root, command, undefined).decision, "allow", command);

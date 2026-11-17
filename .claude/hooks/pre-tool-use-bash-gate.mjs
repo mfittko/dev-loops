@@ -119,6 +119,7 @@ const WRAPPER_FLAG_OPTIONS = {
  * and heredoc bodies from becoming executable segments; offsets preserve the original gh flags.
  * @param {string} command @returns {string[]}
  */
+let unknownWrapperOption = false; // set when a wrapper carries an option word neither table lists
 function unwrappedCommandHeads(command) {
   return tokenizeShellCommand(command).segments.flatMap(({ words, end }) => {
     let i = 0;
@@ -148,14 +149,12 @@ function unwrappedCommandHeads(command) {
             extra.push(joined, ...unwrappedCommandHeads(joined));
           }
           i++;
+        } else if (WRAPPER_VALUE_OPTIONS[wrapper].some((o) => option.length > o.length && option.startsWith(o.length === 2 ? o : `${o}=`))) {
+          // A value joined to its known option (`-oL`, `--user=root`): the value is part of this word.
         } else if (!(WRAPPER_FLAG_OPTIONS[wrapper] ?? []).includes(option)) {
-          unknown = true;
-          // The unknown option word may carry the command (`-iS<cmd>`, `-iS'<cmd>'`, `--split='<cmd>'`): read its unquoted value after the `--x=` prefix or the short cluster up to its first `S`.
-          const carried = /^(?:--[^=]*=|-[^-]*?S)(.*)$/s.exec(option);
-          if (carried) {
-            const joined = [carried[1], i < words.length ? command.slice(words[i].start, end) : ""].join(" ").trim();
-            extra.push(joined, ...unwrappedCommandHeads(joined));
-          }
+          // Fail closed, never extract: the option word may carry the command, so the whole command is denied.
+          unknownWrapperOption = true;
+          return extra;
         }
       }
       if (/^g?timeout$/.test(wrapper) && !unknown) {
@@ -272,7 +271,8 @@ const bodyWriteHeads = typeof command === "string" ? [command, ...unwrappedComma
 const hasRawPrBodyWrite = (view) =>
   commandContainsRawPrBodyEdit(view, managedRepoSlug) || commandContainsRawPrBodyApiWrite(view, managedRepoSlug);
 const isSegmentBodyWrite = inManagedContext && typeof command === "string" && segmentHoldsBodyWrite(command);
-const isBodyWrite = isSegmentBodyWrite || bodyWriteHeads.some(hasRawPrBodyWrite);
+const isUnknownWrapperOption = inManagedContext && unknownWrapperOption;
+const isBodyWrite = isSegmentBodyWrite || isUnknownWrapperOption || bodyWriteHeads.some(hasRawPrBodyWrite);
 // COORDINATOR-VERIFY-BOUNDARY (#2082) — actor-scoped inside decideBashGate (agentType is
 // "dev-loop" or "gate-coordinator"), so the quick pre-check here only detects the command shape; the hook must not
 // short-circuit to allow before the decider applies the actor + enforceCoordinator scoping.
@@ -371,6 +371,12 @@ if (isSegmentBodyWrite) {
     "Edit an issue body through `dev-loops-run cli/index.mjs issue edit`. " +
     "If the launcher command itself was denied because its title or body text holds the word gh, rephrase the title or move the text into the body file. " +
     "If a data word with many comma brace groups (a JSON or jq argument) tripped the size limit, write the data to a file and pass it with `--input <file>` or `-F field=@<file>`.",
+  );
+}
+if (isUnknownWrapperOption) {
+  emitDeny(
+    "BASH-GATE-UNKNOWN-WRAPPER-OPTION: a wrapper (env, sudo, timeout, nice and similar) carries an option word the gate cannot fully read, and that word may hide the command it runs, so the whole command is denied. " +
+    "Drop the option, or spell out a known option in its separate form (for example `env -S 'cmd'` or `env -i`).",
   );
 }
 emitAllow();
