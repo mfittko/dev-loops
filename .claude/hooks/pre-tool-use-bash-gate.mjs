@@ -12,7 +12,7 @@
  *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
  *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
- *   - raw `gh pr edit` body writes (`--body`/`--body-file`/`-b`/`-F`) and `gh api` body writes to
+ *   - raw `gh pr edit` / `gh pr create` body writes (`--body`/`--body-file`/`-b`/`-F`) and `gh api` body writes to
  *     `pulls/<n>` or `issues/<n>` (a `body` field via `-f`/`-F`/`--field`/`--raw-field`, an
  *     `--input` payload, or a `gh api graphql` `updatePullRequest`) — blocked actor-independently
  *     (`ADR-TRIPWIRE-STANDING-WAIVER`): the sanctioned launcher writers are the only route for these
@@ -151,12 +151,13 @@ function unwrappedCommandHeads(command) {
 
 // Token deny: the whole command is a body write when its tokens, across all segments and pipes and
 // in any order, hold `gh`, `pr`, `edit|create` and a body flag (`--body*`, or a short cluster with
-// `b`/`F`: `-b`, `-bx`, `-b=x`, `-Fwaiver.md`, `-db`). No head, wrapper or echo exemption: fails closed.
+// `b`/`F`: `-b`, `-bx`, `-b=x`, `-Fwaiver.md`, `-db`). `$(`, `)` and backticks split tokens so a
+// command substitution is seen, and `gh` matches by basename (`/usr/bin/gh`). No head, wrapper or echo exemption: fails closed.
 function segmentHoldsBodyWrite(command) {
   const tokens = tokenizeShellCommand(command).segments.flatMap(({ words }) =>
-    words.flatMap((word) => word.value.split(/[\s=]+/).filter(Boolean)));
+    words.flatMap((word) => word.value.split(/[\s=$()`]+/).filter(Boolean)));
   const has = (test) => tokens.some((token) => test(token));
-  return has((t) => /^(?:-S)?gh$/.test(t)) && has((t) => t === "pr") && has((t) => t === "edit" || t === "create") &&
+  return has((t) => /^(?:-S)?gh$/.test(t.split("/").pop())) && has((t) => t === "pr") && has((t) => t === "edit" || t === "create") &&
     has((t) => t.startsWith("--body") || /^-[^-]*[bF]/.test(t));
 }
 

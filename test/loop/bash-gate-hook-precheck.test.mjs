@@ -135,6 +135,10 @@ for (const command of [
   "ionice -c3 gh pr edit 5 -F waiver.md",
   "env -i gh pr edit 5 --body-file f",
   "time -p gh api -X PATCH repos/o/r/issues/5 --field body=x",
+  "x=$(gh pr edit 5 --body x)",
+  "echo $(gh pr edit 5 --body x)",
+  "`echo gh` pr edit 5 --body x",
+  "/usr/bin/gh pr -R o/r edit 5 --body x",
 ]) {
   test(`PR/issue body write is denied for every Claude actor: ${command}`, async () => {
     await withManagedRepo(async (root) => {
@@ -157,6 +161,8 @@ test("non-body writes and reads remain allowed by the pre-check", async () => {
       "nice -n 5 gh pr edit 5 --add-label needs-review",
       "time -p gh pr view 5 --json body",
       "gh pr view 5",
+      "gh pr list",
+      "gh issue view 5",
       "env -P /usr/bin echo hi",
       "timeout inf echo hi",
     ]) {
