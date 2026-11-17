@@ -92,7 +92,7 @@ async function resolveExecutionIndex(execution, tmpRoots, cwd) {
       found ??= entry;
     }
   }
-  if (!found) throw new WorkOrderRefusal("dispatch_reference_mismatch", `execution ${execution} matches no emitted execution index entry under the searched tmp roots ${tmpRoots.join(", ")}; the default tmp root is ${defaultTmpRoot(cwd)}, so re-run any pull or join with no --tmp-root, or re-dispatch the SAME unit with its emitted dispatchPrompt`, true);
+  if (!found) throw new WorkOrderRefusal("dispatch_reference_mismatch", `execution ${execution} matches no emitted execution index entry under the searched tmp roots ${tmpRoots.join(", ")}; the default tmp root is ${defaultTmpRoot(cwd)}; a caller that passed --tmp-root re-runs with no --tmp-root, and otherwise re-dispatches the SAME unit with its emitted dispatchPrompt`, true);
   return found;
 }
 

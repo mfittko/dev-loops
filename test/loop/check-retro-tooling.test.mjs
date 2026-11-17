@@ -330,3 +330,27 @@ test("--transcript accepts several Claude Code session transcripts and extracts 
   assert.equal(code, 1);
   assert.deepEqual(JSON.parse(text).rawCallViolations, ["gh: gh api repos/o/r"]);
 });
+
+const sessionLine = (...commands) => `${JSON.stringify({ type: "assistant", message: { content: commands.map((command) => ({ type: "tool_use", name: "Bash", input: { command } })) } })}\n`;
+
+test("a session transcript piped on stdin extracts its Bash commands and reports the gh violation", async () => {
+  const r = await runCli(["--json"], sessionLine("gh api repos/o/r"));
+  assert.equal(r.status, 1);
+  assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, ["gh: gh api repos/o/r"]);
+});
+
+test("a session with no Bash commands is clean, not an empty transcript", async () => {
+  const file = tmpFile(`${JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } })}\n`);
+  const r = await runCli(["--json", "--transcript", file]);
+  assert.equal(r.status, 0);
+  assert.equal(JSON.parse(r.stdout).internalToolingOnly, true);
+});
+
+test("a multi-line session command is one unit: heredoc bodies drop and continuations join", async () => {
+  const heredoc = "git commit -F - <<'EOF'\nfix\ngh api is no longer used\nEOF";
+  const r = await runCli(["--json"], sessionLine(heredoc, "dev-loops loop info \\\n  --json"));
+  assert.equal(r.status, 0, r.stdout);
+  assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, []);
+  const real = await runCli(["--json"], sessionLine("git commit -F - <<EOF\nx\nEOF\ngh api repos/o/r"));
+  assert.deepEqual(JSON.parse(real.stdout).rawCallViolations, ["gh: gh api repos/o/r"]);
+});

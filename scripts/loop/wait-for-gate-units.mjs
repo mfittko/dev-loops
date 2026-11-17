@@ -74,7 +74,14 @@ export function parseWaitArgs(argv) {
   }
   if ((values["emit-plan"] === undefined) === (values["judge-plan"] === undefined)) throw new Error("pass exactly one of --emit-plan, --judge-plan and --artifact");
   if (values["judge-plan"] !== undefined && values.unit !== undefined) throw new Error("--unit applies only to --emit-plan");
-  return { emitPlan: values["emit-plan"], judgePlan: values["judge-plan"], units: values.unit, tmpRoot: values["tmp-root"] ?? resolveGateArtifactTmpRoot(process.cwd()), timeoutMs, jq: values.jq, fields: values.fields, silent: values.silent };
+  if (values["tmp-root"] !== undefined && values["tmp-root"].trim() === "") throw new Error("--tmp-root must be a non-empty path; omit the flag to use the round's own gate tmp root");
+  return { emitPlan: values["emit-plan"], judgePlan: values["judge-plan"], units: values.unit, tmpRoot: values["tmp-root"] ?? planTmpRoot(values["emit-plan"] ?? values["judge-plan"]), timeoutMs, jq: values.jq, fields: values.fields, silent: values.silent };
+}
+
+// The round's sentinels and retirement records sit under the tmp that holds its plan (a linked worktree's tmp, not the main checkout's).
+function planTmpRoot(planPath) {
+  for (let dir = path.dirname(path.resolve(planPath)); dir !== path.dirname(dir); dir = path.dirname(dir)) if (path.basename(dir) === "tmp") return dir;
+  return resolveGateArtifactTmpRoot(process.cwd());
 }
 
 async function readPlan(planPath) {

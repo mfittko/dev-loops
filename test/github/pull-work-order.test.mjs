@@ -845,6 +845,7 @@ test("a pull with a custom-root execution refuses naming the searched roots and 
     const body = refusal(run("pull-work-order.mjs", [unit.executionIdentity, "--tmp-root", custom], root));
     assert.equal(body.refusal, "dispatch_reference_mismatch");
     assert.match(body.message ?? body.error ?? JSON.stringify(body), new RegExp(`searched tmp roots ${custom.replaceAll(".", "\\.")}; the default tmp root is ${resolveGateArtifactTmpRoot(root).replaceAll(".", "\\.")}`));
+    assert.match(JSON.stringify(body), /a caller that passed --tmp-root re-runs with no --tmp-root, and otherwise re-dispatches the SAME unit/);
     assert.equal(pull(unit, root).status, 0);
   });
 });

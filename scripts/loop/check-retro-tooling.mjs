@@ -17,8 +17,10 @@
  *
  * Input source (how the harness feeds it):
  *   Newline-delimited shell commands — one top-level command per line — as the
- *   agent actually invoked them. Pass via a file (`--transcript <path>`) or pipe
- *   on stdin. Each line is one Bash-tool invocation's command string.
+ *   agent actually invoked them, or a Claude Code session transcript (JSONL) whose
+ *   Bash tool_use commands are extracted. Pass either form via a file
+ *   (`--transcript <path>`) or pipe it on stdin; both paths run the same extraction.
+ *   Each line is one Bash-tool invocation's command string.
  *
  * ALLOWED (NOT a violation):
  *   - dev-loops subcommands and `node scripts/....mjs` invocations. Those scripts
@@ -180,8 +182,29 @@ export function extractBashCommands(text) {
     try { entry = JSON.parse(line); } catch { return [line]; }
     const content = entry?.message?.content;
     if (!Array.isArray(content)) return [];
-    return content.filter((part) => part?.type === "tool_use" && part.name === "Bash" && typeof part.input?.command === "string").map((part) => part.input.command);
+    return content.filter((part) => part?.type === "tool_use" && part.name === "Bash" && typeof part.input?.command === "string").map((part) => collapseCommand(part.input.command));
   }).join("\n");
+}
+
+/**
+ * Reduce one multi-line Bash command to its logical lines: a trailing `\` joins the next line, and
+ * heredoc body lines (after `<<[-]'TAG'` up to the TAG line) are dropped, so body text never reads as a command.
+ * shortcut: a quoted multi-line argument still splits per line; upgrade when a real session shows it.
+ */
+function collapseCommand(command) {
+  const out = [];
+  let tag = null;
+  let joined = "";
+  for (const line of command.split(/\r?\n/)) {
+    if (tag !== null) { if (line.trim() === tag) tag = null; continue; }
+    joined += line;
+    if (joined.endsWith("\\")) { joined = `${joined.slice(0, -1)} `; continue; }
+    out.push(joined);
+    tag = /(?<!<)<<(?!<)-?\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_]\w*))/.exec(joined)?.slice(1).find(Boolean) ?? null;
+    joined = "";
+  }
+  if (joined) out.push(joined);
+  return out.join("\n");
 }
 
 function parseCliArgs(argv) {
@@ -220,10 +243,10 @@ export async function run(argv, { stdout, stderr, stdin = process.stdin }) {
     stdout.write(`${USAGE}\n`);
     return 0;
   }
-  const transcript = values.transcript
-    ? values.transcript.map((file) => extractBashCommands(readFileSync(file, "utf8"))).join("\n")
-    : await readStdin(stdin);
-  if (transcript.trim().length === 0) throw new Error("empty transcript");
+  const raw = values.transcript ? values.transcript.map((file) => readFileSync(file, "utf8")).join("\n") : await readStdin(stdin);
+  // Empty means no input at all; a session with no Bash commands extracts to nothing and is clean.
+  if (raw.trim().length === 0) throw new Error("empty transcript");
+  const transcript = extractBashCommands(raw);
 
   const { violations, allowedWriteOps, internalToolingOnly } = analyzeTranscript(transcript);
 

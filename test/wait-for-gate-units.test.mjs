@@ -578,11 +578,32 @@ test("--after is re-read on every poll: a reference replaced mid-wait makes an o
   });
 });
 
-test("the join resolves the same gate tmp root on every harness when --tmp-root is omitted", () => {
-  const expected = resolveGateArtifactTmpRoot(process.cwd());
-  assert.equal(parseWaitArgs(["--emit-plan", "a"]).tmpRoot, expected);
-  assert.equal(parseWaitArgs(["--judge-plan", "a"]).tmpRoot, expected);
-  assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t"]).tmpRoot, "t");
+test("the Pi blocking join and the Claude Code join resolve the round's own worktree tmp root when --tmp-root is omitted", async () => {
+  await withDir(async (main) => {
+    const worktree = path.join(main, "tmp", "worktrees", "x");
+    const { planPath } = await seedPlan(worktree, [["g", ["a"]], ["h", ["b"]]]);
+    await setMtime(planPath, 100);
+    const wtTmp = path.join(worktree, "tmp");
+    await writeJson(path.join(wtTmp, `checkpoint-context-sentinel-g-${HEAD}.json`), {});
+    const parsed = parseWaitArgs(["--emit-plan", planPath, "--unit", "g"]);
+    assert.equal(parsed.tmpRoot, wtTmp);
+    assert.equal(parseWaitArgs(["--judge-plan", planPath]).tmpRoot, wtTmp);
+    const opts = { ...parsed, receiptTmpRoot: wtTmp, ...fakeClock() };
+    const running = await waitForUnits({ ...opts, timeoutMs: 1 });
+    assert.equal(running.outcome, "timeout");
+    assert.equal(running.missing[0].state, "running");
+    await writeJson(path.join(wtTmp, "retired-gate-rounds", HEAD, "round-1", "retirement.json"), { gate: GATE, retiredAt: new Date(200000).toISOString() });
+    assert.equal((await waitForUnits(opts)).outcome, "round_retired");
+  });
+});
+
+test("a plan with no tmp ancestor falls back to the cwd gate tmp root; an explicit --tmp-root wins", () => {
+  assert.equal(parseWaitArgs(["--emit-plan", "/no-such-root/plan.json"]).tmpRoot, resolveGateArtifactTmpRoot(process.cwd()));
+  for (const root of ["t", "/repo/tmp/worktrees/x/tmp"]) assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", root]).tmpRoot, root);
+});
+
+test("an empty or whitespace-only --tmp-root is refused", () => {
+  for (const value of ["", "  "]) assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", value]), /--tmp-root must be a non-empty path/, JSON.stringify(value));
 });
 
 const REPO = fileURLToPath(new URL("../", import.meta.url));
