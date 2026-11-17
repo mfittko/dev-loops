@@ -32,7 +32,7 @@ import {
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
 import { countCompletedRounds, readClosedPriorRoundLogs, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
-import { isPastRoundCap, listOpenActItems, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
+import { isPastRoundCap, listOpenActItems, normalizeSeverity, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
 import { workOrderDigest } from "../github/_work-order-protocol.mjs";
@@ -1313,6 +1313,9 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap }) {
   const round = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead: true }) - 1;
   // Past the cap the emitter refuses every act list (round_cap_reached), so that round keeps the earlier routing.
   if (cap > 0 && round > cap) return null;
+  // The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so that list keeps the earlier routing.
+  const severities = open.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity]));
+  if (round !== 1 && severities.every((s) => normalizeSeverity(s) === "nit")) return null;
   return { headSha: head, openActCount: open.length, blockers: isPastRoundCap(round, cap) ? pastCapBlockers(log.findings, { round, cap }) : [] };
 }
 
