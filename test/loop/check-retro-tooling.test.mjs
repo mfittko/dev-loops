@@ -376,3 +376,9 @@ test("a multi-line session command is one unit: heredoc bodies drop and continua
   const real = await runCli(["--json"], sessionLine("git commit -F - <<EOF\nx\nEOF\ngh api repos/o/r"));
   assert.deepEqual(JSON.parse(real.stdout).rawCallViolations, ["gh: gh api repos/o/r"]);
 });
+
+test("a comment line ending in a backslash does not join the next command line", async () => {
+  const r = await runCli(["--json"], sessionLine("# note \\\ngh api repos/o/r"));
+  assert.equal(r.status, 1);
+  assert.deepEqual(JSON.parse(r.stdout).rawCallViolations, ["gh: gh api repos/o/r"]);
+});

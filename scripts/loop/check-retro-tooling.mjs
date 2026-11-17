@@ -207,7 +207,7 @@ function collapseCommand(command) {
   let joined = "";
   for (const line of text.split(/\r?\n/)) {
     joined += line;
-    if (joined.endsWith("\\")) { joined = `${joined.slice(0, -1)} `; continue; }
+    if (joined.endsWith("\\") && !joined.trimStart().startsWith("#")) { joined = `${joined.slice(0, -1)} `; continue; }
     out.push(joined);
     joined = "";
   }
