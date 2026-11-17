@@ -140,9 +140,9 @@ function segmentHoldsBodyWrite(command) {
   // Normalize the raw text once: delete quotes and backslash, turn substitution and shell punctuation into spaces
   // (braces and commas stay for the brace rules below), so `$(gh pr "edit" ...)` and `ed"it"` need no parser.
   // The tokenizer's decoded word values (ANSI-C `$'\x65dit'` becomes `edit`, also inside substitutions) join the set.
-  // Backtick substitutions are not in `subs`: tokenize each terminated tick's text too (the text between the backticks; nested ticks recurse).
+  // Backtick substitutions are not in `subs`: tokenize each terminated tick's text too (the text between the backticks, unescaped as bash does: \` \$ \\ lose the backslash; nested ticks recurse).
   const decodedWords = (segments) => segments.flatMap((s) => s.words.flatMap((w) => [w.value, ...decodedWords(w.subs.flatMap((x) => x.segments))]));
-  const decodedOf = (text) => { const t = tokenizeShellCommand(text); return [...decodedWords(t.segments), ...t.ticks.flatMap((k) => decodedOf(k.slice(1, -1)))]; };
+  const decodedOf = (text) => { const t = tokenizeShellCommand(text); return [...decodedWords(t.segments), ...t.ticks.flatMap((k) => decodedOf(k.slice(1, -1).replace(/\\([`$\\])/g, "$1")))]; };
   const words = [...command.replace(/['"\\]/g, "").replace(/[`$();|&<>\s]+/g, " ").split(" "),
     ...decodedOf(command)].filter(Boolean);
   const splitWord = (w) => w.split(/[\s=$(){},`]+/).filter(Boolean);
