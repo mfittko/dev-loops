@@ -197,7 +197,7 @@ function collapseCommand(command) {
   const tok = tokenizeShellCommand(command);
   let text = command;
   if (!tok.incomplete) {
-    const dropped = tok.segments.flatMap((seg) => (isDataHost(seg) ? seg.heredocs.filter((h) => h.closed) : []));
+    const dropped = tok.segments.flatMap((seg) => dataHeredocs(seg, tok.segments.length === 1));
     for (const h of dropped.sort((x, y) => y.bodyStart - x.bodyStart)) {
       const end = text.indexOf("\n", h.bodyEnd + 1);
       text = text.slice(0, h.bodyStart) + (end === -1 ? "" : text.slice(end));
@@ -215,10 +215,17 @@ function collapseCommand(command) {
   return out.join("\n");
 }
 
-const isDataHost = (seg) => {
+/**
+ * The closed heredocs of SEG whose body is data. Mirrors the shared dataHeredocs rule in bash-command-classify (not exported):
+ * a bare cat, tee or git commit head with no env-assignment, substitution, process-substitution or `-c`/alias word, no pipe onward,
+ * and a quoted delimiter or a body with no `$(`, backtick or `${ `. A tee writes a file, so it counts only as the lone segment.
+ */
+function dataHeredocs(seg, alone) {
   const [head, sub] = seg.words.map((w) => w.value);
-  return head === "cat" || head === "tee" || (head === "git" && sub === "commit");
-};
+  const host = head === "cat" || (head === "tee" && alone) || (head === "git" && sub === "commit" && !seg.words.some((w) => /^(?:-c|--config)|alias\./i.test(w.value)));
+  if (!host || seg.pipedOut || seg.words.some((w) => w.subs.length > 0 || /^[A-Za-z_]\w*=/.test(w.raw) || /[<>]\(/.test(w.raw) || /[<>]\(/.test(w.value))) return [];
+  return seg.heredocs.filter((h) => h.closed && (h.quoted || !/\$\(|`|\$\{[\s|]/.test(h.body.replace(/\\\n/g, ""))));
+}
 
 function parseCliArgs(argv) {
   let values;
