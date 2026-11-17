@@ -1009,3 +1009,25 @@ test("MARKER_UNREADABLE refuses abandonment_unproven when the emit plan for the 
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
   });
 });
+
+test("MARKER_UNREADABLE prefers a running foreign plan over this PR's handed-back plan: it refuses abandonment_unproven and names the foreign owner", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const writePlan = (prNumber, ex) => {
+      const planDir = path.join(tmpRoot, "gate-fixer", "o-r", `pr-${prNumber}`);
+      mkdirSync(planDir, { recursive: true });
+      writeFileSync(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ ...ex, workOrder: { headSha: HEAD, outputRefs: [ex.outputRef], mutationAuthority: { branch: "feat" } } }));
+    };
+    const own = execution(tmpRoot);
+    const foreign = { executionIdentity: "f2-abcd1234", workOrderRef: "fixer:o/r#8:head:f2-abcd1234", outputRef: path.join(tmpRoot, "out-8.json") };
+    writePlan(7, own);
+    writeFileSync(own.outputRef, "{}"); // this PR's fixer handed back
+    writePlan(8, foreign); // the PR 8 fixer has not handed back
+    mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
+    writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged })); // --pr 7
+    assert.equal(result.refusal, "abandonment_unproven");
+    assert.match(result.reason, /o\/r#8/);
+    assert.match(result.reason, /f2-abcd1234/);
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});

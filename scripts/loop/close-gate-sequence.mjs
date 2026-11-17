@@ -156,9 +156,9 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
     try { record = readSealedGateDeltaRecord(tmpRoot, head) ?? readGateDeltaRecord(tmpRoot, head); } catch { /* an unreadable record proves nothing */ }
     if (record?.nextStep !== undefined && record.nextStep !== "push_to_gate"
       && (executionIdentity === undefined || record.origin === undefined || (record.origin?.workOrderRef === workOrderRef && record.origin?.executionIdentity === executionIdentity))) {
-      // A push record already cleared the sequence. The remedy is the already emitted full order, or the sealed --delta-result full emission, which rewrites the marker.
+      // A push record already cleared the sequence. The remedy is the already emitted full order, or the emit-fixer-work-order.mjs --phase full --delta-result <sealed result> emission, which rewrites the marker.
       const remedy = record.nextStep === "push"
-        ? "Finish the full-phase order already emitted for this head (push its candidate; the head move then closes the sequence). If no full order was emitted, emit it with the sealed --delta-result full emission, which rewrites the marker itself."
+        ? "Finish the full-phase order already emitted for this head (push its candidate; the head move then closes the sequence). If no full order was emitted, emit it with `emit-fixer-work-order.mjs --phase full --delta-result <sealed result>`, which rewrites the marker itself."
         : "Finish the sequence with the pre-push delta review (dev-loops loop pre-push-delta).";
       return refuse("sequence_live", `the sealed delta record of ${head} ${executionIdentity === undefined ? "" : `names the fixer execution ${executionIdentity} and `}has next step ${record.nextStep}`, remedy);
     }
