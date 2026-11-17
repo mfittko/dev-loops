@@ -19,7 +19,7 @@ const BASELINE = "0123456789abcd";
 function deltaResult() {
   const sequence = startDeltaSequence({
     reviewBaselineHead: BASELINE,
-    actList: [{ severity: "medium", angle: "correctness", summary: "s", judgeDisposition: "act", fingerprint: "b1a52cfd23cd9144" }],
+    actList: [{ severity: "medium", angle: "correctness", summary: "s", file: "src/a.mjs", judgeDisposition: "act", fingerprint: "b1a52cfd23cd9144" }],
   });
   return {
     reviewBaselineHead: BASELINE,
@@ -83,7 +83,7 @@ test("checkpoint evidence: a delta result beside the findings ledger leaves the 
     // A ledger with an open act item: merge is refused until the gate re-runs.
     await writeFile(ledgerPath, JSON.stringify({
       repo: "owner/repo", pr: 42, gate: "pre_approval_gate", headSha: HEAD, verdict: "findings_present", overallVerdict: "findings_present", executionMode: "fanout_fanin",
-      findings: [{ severity: "medium", angle: "correctness", summary: "retry loop never backs off", judgeDisposition: "act" }],
+      findings: [{ severity: "medium", angle: "correctness", summary: "retry loop never backs off", file: "src/a.mjs", judgeDisposition: "act" }],
     }));
     const before = await probe(repo);
     assert.equal(before.check.ok, false);

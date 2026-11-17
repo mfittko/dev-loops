@@ -17,7 +17,7 @@ import { VALID_SEVERITIES, normalizeSeverity, hasSeverityText, pastCapBlockers }
 import { EvidenceSealError, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
-import { deltaCoverageBinding, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
+import { deltaCoverageBinding, isDeltaBodyItem, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { normalizeFixerDispositionHandoff, REVIEW_NODE_ID_PATTERN } from "@dev-loops/core/loop/fixer-disposition";
 import { readSequenceMarker, sequenceClosurePath, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
@@ -65,6 +65,7 @@ check-pre-push-delta --result), and any non-clearing record for the head refuses
 the PR's own head branch (gh pr view headRefName) and the --allowed-path selectors
 (default "." = the whole repository). A PR head other than --head-sha refuses.
 An --act-list-file source also refuses with verdict_not_posted until the --gate verdict review for --head-sha is posted on the PR (GATE-EXEC-POST-BEFORE-FIX; post it with dev-loops gate upsert-verdict --findings-ledger).
+An --act-list-file of only PR-body items refuses --phase commit_only with delta_body_only_act_set and writes no marker.
 A commit_only or full emission writes its sequence marker under the head's sequence lock (the keyed no-commit re-emission below writes none); while a concurrent close or pull holds that lock it refuses with sequence_lock_busy (retryable: no work order was made current, re-run the same emit once the close or pull finishes).
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
 (default: the main checkout's tmp/; an explicit --tmp-root inside a linked worktree is refused) and prints
@@ -317,7 +318,7 @@ const itemPairs = (items) => [...new Set((Array.isArray(items) ? items : []).map
 
 // The commit_only phase commits unpushed; the delta review then decides whether `full` may push.
 // `delta` is the parsed --delta-result (act-list route); `threads` the unresolved threads (thread route).
-function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidateHead, coverageBinding }) {
+export function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidateHead, coverageBinding }) {
   const recordPath = gateDeltaRecordPath(tmpRoot, headSha);
   const record = readGateDeltaRecord(tmpRoot, headSha);
   const next = "emit --phase commit_only, run the delta review (dev-loops loop pre-push-delta), then emit --phase full";
@@ -336,11 +337,15 @@ function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidat
       throw new Refusal(`--phase full refused: the --delta-result's item statuses differ from the delta record ${recordPath}, so it is not the result that decision used; pass the clearing result (${next})`);
     }
     if (candidateHead) {
+      // HEAD moved past the reviewed candidate: the full phase cannot push it, and the authenticated head_moved closure routes it to a gate round.
+      if (record.reviewBaselineHead === headSha && record.candidateHead !== candidateHead) {
+        throw new Refusal(`--phase full refused: HEAD ${candidateHead} is past the delta record's reviewed candidate ${record.candidateHead}; close the sequence with the authenticated head_moved closure (run check-pre-push-delta.mjs with --fixer-plan and --site-coverage; outcome head_moved, nextStep push_to_gate), then run the full gate round`);
+      }
       if (record.reviewBaselineHead !== headSha || record.candidateHead !== candidateHead
         || !(record.outcome === "bounded_out" && record.nextStep === "push_to_gate" && record.invocation === 3)
           && !(record.outcome === "locally_clear" && record.nextStep === "push" && delta.outcome === "locally_clear"
             && delta.candidateHead === candidateHead && Number.isInteger(record.invocation) && record.invocation >= 1 && record.invocation <= 3)) {
-        throw new Refusal("--phase full refused: Delta decision does not clear the actual candidate and reviewed baseline");
+        throw new Refusal(`--phase full refused: Delta decision does not clear the actual candidate and reviewed baseline; ${next}`);
       }
       deltaCoverageBinding(delta, coverageBinding);
       deltaCoverageBinding(record, coverageBinding);
@@ -348,7 +353,7 @@ function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidat
     return;
   }
   if (!record) throw new Refusal(`--phase full with --threads-file needs a delta record at ${recordPath} from a thread-route delta review: ${next}`);
-  if (record.candidateHead !== candidateHead) throw new Refusal("--phase full refused: THREAD delta candidateHead differs from the committed candidate");
+  if (record.candidateHead !== candidateHead) throw new Refusal(`--phase full refused: THREAD delta candidateHead differs from the committed candidate; review the committed candidate (${next})`);
   const threadIds = new Set(threads.map((thread) => thread.threadId));
   const refs = (Array.isArray(record.items) ? record.items : []).map((item) => item?.ref);
   const unbound = refs.filter((ref) => !threadIds.has(ref));
@@ -681,6 +686,10 @@ async function emitPlan({
   if (badFingerprint) {
     throw new Refusal(`act list ${actListFile} has an act item (${JSON.stringify(badFingerprint.summary)}) whose fingerprint is ${badFingerprint.fingerprint === undefined ? "missing" : "not the canonical fingerprintFinding value"}; re-run judge-pass to regenerate it`);
   }
+  // An all-body act list has no delta review (ADR 0286), so its commit_only marker could never be closed by an agent step: refuse before any marker write.
+  if (actListFile && phase === "commit_only" && source.parsed.every(isDeltaBodyItem)) {
+    try { startDeltaSequence({ reviewBaselineHead: headSha, actList: source.parsed }); } catch (error) { throw error.message.startsWith("delta_body_only_act_set:") ? new WorkOrderRefusal("delta_body_only_act_set", error.message) : new Refusal(error.message); }
+  }
   const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined, { allowItems: true });
   if (operatorFocusRaw?.items && !actListFile) throw new OperatorFocusRefusal("GATE-EXEC-OPERATOR-FOCUS: operator focus items need an --act-list-file source; a threads source accepts a round only");
   const operatorFocus = actListFile ? bindOperatorFocusItems(operatorFocusRaw, source.parsed) : operatorFocusRaw;
@@ -707,10 +716,10 @@ async function emitPlan({
   const delta = deltaResult ? await readSource("delta-result", abs(deltaResult), capture) : threadRecordPath && existsSync(threadRecordPath) ? await readSource("delta-result", threadRecordPath, capture) : null;
   if (delta && deltaResult) {
     // Verify the seal before any other use of the result, so an edited result gets the typed evidence refusal.
-    try { verifyEvidence(tmpRoot, abs(deltaResult), delta.parsed, delta.read.sha256); } catch (error) { throw new Refusal(`delta result ${deltaResult} refused (GATE-EXEC-EVIDENCE-SEALED): ${error.message}`); }
+    try { verifyEvidence(tmpRoot, abs(deltaResult), delta.parsed, delta.read.sha256); } catch (error) { throw new Refusal(`delta result ${deltaResult} refused (GATE-EXEC-EVIDENCE-SEALED): ${error.message}; re-run the delta review in this order: a fresh reviewer-input run, the reviewer writes and seals the result, then check-pre-push-delta.mjs --result, then rerun this emit`); }
     // The delta result must belong to this act list and this head (its pinned review baseline).
     const errors = validateDeltaResult(delta.parsed, { sequence: startDeltaSequence({ reviewBaselineHead: headSha, actList: source.parsed }), membershipOnly: true });
-    if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}`);
+    if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}; re-run the delta review for this act list and baseline in this order: a fresh reviewer-input run, the reviewer writes and seals the result, then check-pre-push-delta.mjs --result, then rerun this emit`);
   }
   await capture.read(gateDeltaRecordPath(tmpRoot, headSha));
   // ADR 0235: a commit_only thread-route re-dispatch carries the delta record's findings as act items.
@@ -782,6 +791,32 @@ async function emitPlan({
     const original = JSON.parse(originalBytes), prior = original.workOrder;
     const receiptTmpRoot = resolveGateArtifactTmpRoot(cwd);
     const origin = { workOrderRef: original.workOrderRef, workOrderDigest: original.workOrderDigest, executionIdentity: original.executionIdentity };
+    // Idempotent re-emission (a corrupt or lost marker after a full emission): the current full plan for this baseline, act source, authority
+    // and byte-identical sealed --delta-result is returned unchanged and only its granted marker is rewritten. Any other full plan falls through to the refusal below.
+    const sameFullOrder = prior?.phase === "full" && prior.source === "act-list" && prior.authority?.reviewBaselineHead === headSha && prior.gate === gate
+      && prior.target?.repo === repo && prior.target.pr === Number(pr) && prior.authority.sourceDigest === jsonContentDigest(source.parsed)
+      && prior.mutationAuthority?.branch === prState.headRefName && JSON.stringify(prior.mutationAuthority.allowedPaths) === JSON.stringify(paths)
+      && prior.requiredReads?.some((read) => read.kind === "delta-result" && read.sha256 === delta.read.sha256);
+    if (sameFullOrder) {
+      // The branch must still sit at the candidate the original full order reviewed; a later commit needs a new Delta, so push authority fails closed.
+      const localHead = gitIn(cwd, "rev-parse", "HEAD").trim();
+      if (localHead !== prior.headSha) throw new Refusal(`full_order_head_moved: local HEAD ${localHead} moved past the full order's reviewed candidate ${prior.headSha}, so the full order is not re-granted and the marker was not rewritten; re-run the commit_only emission (emit-fixer-work-order.mjs --phase commit_only) at the new HEAD, then run the delta review (dev-loops loop pre-push-delta) before --phase full`);
+      await authenticateOriginalPlan({ plan: original, canonical: planPath, emissionTmpRoot: path.resolve(tmpRoot), receiptTmpRoot,
+        read: async (file) => { const bytes = await capture.read(file); if (!bytes) throw Object.assign(new Error(`missing ${file}`), { code: "ENOENT" }); return bytes; } });
+      const markerRoot = resolveGateArtifactTmpRoot(cwd), outputRef = prior.outputRefs[0];
+      try {
+        await withSequenceLock(markerRoot, [headSha], () => {
+          // A marker that names another execution belongs to another sequence; only an unreadable marker or this plan's own is rewritten.
+          const current = readSequenceMarker(markerRoot, headSha);
+          if (current?.execution && current.execution.executionIdentity !== original.executionIdentity) throw new Refusal(`the marker for ${headSha} names fixer execution ${current.execution.executionIdentity}, not the full order ${original.executionIdentity}; close that sequence with scripts/loop/close-gate-sequence.mjs, then re-emit`);
+          writeSequenceMarker({ tmpRoot: markerRoot, baselineHead: headSha, fullGranted: true, branch: prState.headRefName, execution: { executionIdentity: original.executionIdentity, workOrderRef: original.workOrderRef, outputRef } });
+        });
+      } catch (error) {
+        if (error?.code === "SEQUENCE_LOCK_BUSY") throw new WorkOrderRefusal("sequence_lock_busy", `sequence_lock_busy: ${error.message}; the marker was not rewritten, so re-run the emit once the concurrent close or pull finishes`, true);
+        throw error;
+      }
+      return { ...original, planPath, joinRef: fixerReportPath(outputRef), fixerModel: resolveRoleModel(config, { role: "fixer", harness: "claude" }) };
+    }
     if (prior?.phase !== "commit_only" || prior.source !== "act-list" || prior.headSha !== headSha || prior.gate !== gate
       || prior.target?.repo !== repo || prior.target.pr !== Number(pr) || prior.authority?.sourceDigest !== jsonContentDigest(source.parsed)
       || prior.mutationAuthority?.branch !== prState.headRefName || prior.mutationAuthority.repo !== repo || prior.mutationAuthority.pr !== Number(pr)
