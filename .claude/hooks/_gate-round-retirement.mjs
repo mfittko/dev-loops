@@ -24,7 +24,7 @@ export function findRetirementAfter(tmpRoot, gate, headSha, emittedAtMs, scope =
     if (error?.code !== "ENOENT") throw error;
   }
   for (const entry of rounds) {
-    if (!entry.isDirectory()) continue; // a stray file is debris, never a round
+    if (!entry.isDirectory()) continue; // only real round dirs count: stray files and symlinks are debris (retire-gate-round.mjs writes real dirs)
     const round = entry.name;
     let text;
     try {

@@ -139,7 +139,7 @@ test("semantic mutation refuses as semantic_identity_mismatch; a materialization
   });
 });
 
-test("retirement lookup ignores only absence and propagates unreadable or malformed authority", async () => {
+test("retirement lookup ignores absence and stray non-directory entries, and propagates unreadable or malformed authority", async () => {
   await withDir(async (root) => {
     const lookup = () => findRetirementAfter(root, GATE, HEAD, 0);
     const retired = path.join(root, "retired-gate-rounds", HEAD);
