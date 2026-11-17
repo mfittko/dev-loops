@@ -14,7 +14,7 @@
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
  *   - in a managed repo the whole command is denied when its tokens (any segment, any order; brace and
  *     `${VAR:-x}` forms split) hold `gh`, `pr`, `edit|create` and a body flag (`segmentHoldsBodyWrite`); fails closed.
- *   - raw `gh pr edit` / `gh pr create` body writes (`--body`/`--body-file`/`-b`/`-F`) and `gh api` body writes to
+ *   - raw `gh pr edit` body writes (`--body`/`--body-file`/`-b`/`-F`; `gh pr create` is covered by the token rule above only) and `gh api` body writes to
  *     `pulls/<n>` or `issues/<n>` (a `body` field via `-f`/`-F`/`--field`/`--raw-field`, an
  *     `--input` payload, or a `gh api graphql` `updatePullRequest`) — blocked actor-independently
  *     (`ADR-TRIPWIRE-STANDING-WAIVER`): the sanctioned launcher writers are the only route for these
@@ -94,6 +94,9 @@ const WRAPPER_VALUE_OPTIONS = {
   xargs: ["-a", "--arg-file", "-E", "-I", "-L", "--max-lines", "-n", "--max-args", "-P", "--max-procs", "-s", "--max-chars"],
   time: ["-f", "--format", "-o", "--output"],
   nice: ["-n", "--adjustment"],
+  stdbuf: ["-i", "--input", "-o", "--output", "-e", "--error"],
+  ionice: ["-c", "--class", "-n", "--classdata", "-p", "--pid", "-P", "--pgid", "-u", "--uid"],
+  setsid: [],
   timeout: ["-s", "--signal", "-k", "--kill-after"],
   gtimeout: ["-s", "--signal", "-k", "--kill-after"],
   command: [],
@@ -105,6 +108,8 @@ const WRAPPER_FLAG_OPTIONS = {
   env: ["-i", "--ignore-environment", "-0", "--null", "-v", "--debug"],
   xargs: ["-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose", "-x", "-p"],
   time: ["-p", "-v", "-l"],
+  ionice: ["-t", "--ignore"],
+  setsid: ["-c", "--ctty", "-f", "--fork", "-w", "--wait"],
   timeout: ["--foreground", "--preserve-status", "-v", "--verbose"],
   gtimeout: ["--foreground", "--preserve-status", "-v", "--verbose"],
 };
@@ -155,19 +160,32 @@ function unwrappedCommandHeads(command) {
 // in any order, hold `gh`, `pr`, `edit|create` and a body flag (`--body*`, or a short cluster with
 // `b`/`F`: `-b`, `-bx`, `-b=x`, `-Fwaiver.md`, `-db`). `$(`, `)`, backticks, braces and commas split tokens so a
 // command substitution or brace expansion is seen, a `${VAR:-gh}` default counts as a token, and `gh` matches by basename (`/usr/bin/gh`). No head, wrapper or echo exemption: fails closed.
-// `--{body,x}` expands to `--body`, `--x`: one innermost group per pass (shortcut: nested groups need repeated passes).
+// `--{body,x}` expands to `--body`, `--x`: one innermost group per pass.
+// The product of the group sizes is exponential, so a word past BRACE_EXPANSION_CAP returns null and the caller fails closed.
+const BRACE_EXPANSION_CAP = 64;
 function braceExpansions(value) {
-  const m = /^(.*)\{([^{}]*,[^{}]*)\}(.*)$/s.exec(value);
-  return m ? m[2].split(",").flatMap((alt) => braceExpansions(m[1] + alt + m[3])) : [value];
+  let words = [value];
+  for (;;) {
+    let expanded = false;
+    words = words.flatMap((word) => {
+      const m = /^(.*)\{([^{}]*,[^{}]*)\}(.*)$/s.exec(word);
+      if (!m) return [word];
+      expanded = true;
+      return m[2].split(",").map((alt) => m[1] + alt + m[3]);
+    });
+    if (words.length > BRACE_EXPANSION_CAP) return null;
+    if (!expanded) return words;
+  }
 }
 
 function segmentHoldsBodyWrite(command) {
+  let overCap = false;
   const tokens = tokenizeShellCommand(command).segments.flatMap(({ words }) =>
-    words.flatMap((word) => [...braceExpansions(word.value), ...word.value.split(/[\s=$(){},`]+/).filter(Boolean)
+    words.flatMap((word) => [...(braceExpansions(word.value) ?? (overCap = true, [])), ...word.value.split(/[\s=$(){},`]+/).filter(Boolean)
       // `${G:-gh}` leaves `G:-gh`: also keep the default value. Needs a leading name, so `--body`/`-b` are untouched.
       .flatMap((t) => [t, t.replace(/^[A-Za-z_]\w*:?[-+]/, "")])]));
   const has = (test) => tokens.some((token) => test(token));
-  return has((t) => /^(?:-S)?gh$/.test(t.split("/").pop())) && has((t) => t === "pr") && has((t) => t === "edit" || t === "create") &&
+  return overCap || has((t) => /^(?:-S)?gh$/.test(t.split("/").pop())) && has((t) => t === "pr") && has((t) => t === "edit" || t === "create") &&
     has((t) => t.startsWith("--body") || /^-[^-]*[bF]/.test(t));
 }
 
@@ -325,8 +343,11 @@ for (const head of bodyWriteHeads.slice(1)) {
   }
 }
 if (isSegmentBodyWrite) {
-  // The decider denies the canonical body-write shape for every actor; borrow its reason.
-  const segmentDecision = decideBashGate({ ...bashGateFacts, command: "gh pr edit 1 --body x" });
-  if (segmentDecision.decision === "deny") emitDeny(segmentDecision.reason);
+  emitDeny(
+    "ADR-TRIPWIRE-STANDING-WAIVER: this command holds the gh, pr, edit or create and body-flag tokens (or a brace expansion too large to read), so it is blocked as a raw PR body write. " +
+    "Write a PR body through the launcher: `dev-loops-run cli/index.mjs pr create` or `dev-loops-run cli/index.mjs pr edit` (it refuses a hand-written adr-tripwire:allow line). " +
+    "Edit an issue body through `dev-loops-run cli/index.mjs issue edit`. " +
+    "If the launcher command itself was denied because its title or body text holds the word gh, rephrase the title or move the text into the body file.",
+  );
 }
 emitAllow();

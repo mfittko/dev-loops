@@ -138,6 +138,11 @@ for (const command of [
   "setsid -f gh pr edit 5 --body x",
   "stdbuf -oL gh pr create --body x",
   "ionice -c3 gh pr edit 5 -F waiver.md",
+  "setsid gh api -X PATCH repos/o/r/pulls/5 -f body=x",
+  "stdbuf -oL gh api -X PATCH repos/o/r/pulls/5 -f body=x",
+  "stdbuf -o L gh api -X PATCH repos/o/r/pulls/5 -f body=x",
+  "ionice -c 3 gh api -X PATCH repos/o/r/issues/5 --field body=x",
+  "setsid -f gh api -X PATCH repos/o/r/pulls/5 -f body=x",
   "env -i gh pr edit 5 --body-file f",
   "time -p gh api -X PATCH repos/o/r/issues/5 --field body=x",
   "x=$(gh pr edit 5 --body x)",
@@ -166,6 +171,7 @@ test("non-body writes and reads remain allowed by the pre-check", async () => {
       "nice -n 5 gh pr edit 5 --add-label needs-review",
       "time -p gh pr view 5 --json body",
       "gh pr view 5",
+      "setsid gh pr view 5",
       "gh pr list",
       "gh issue view 5",
       "env -P /usr/bin echo hi",
@@ -191,7 +197,7 @@ test("both denies stay scoped to a managed repo, and the resolved-slug API form 
   // Neither deny is a local command boundary: outside a dev-loops-managed repo the pre-check must
   // keep allowing them, or this change would widen the gate beyond its rule scope.
   await withRepo(async (root) => {
-    for (const command of [bodyWrite, timeoutWrap]) {
+    for (const command of [bodyWrite, timeoutWrap, "gh pr edit 5 --body x"]) {
       assert.equal(bash(root, command, undefined).decision, "allow", command);
     }
   }, { managed: false });
@@ -203,4 +209,39 @@ test("both denies stay scoped to a managed repo, and the resolved-slug API form 
     },
     { remote: "git@github.com:acme/widgets.git" },
   );
+});
+
+test("the token-rule deny names both sanctioned launcher routes", async () => {
+  await withManagedRepo(async (root) => {
+    const { decision, reason } = bash(root, "stdbuf -oL gh pr create --body x", undefined);
+    assert.equal(decision, "deny");
+    assert.match(reason, /ADR-TRIPWIRE-STANDING-WAIVER/);
+    assert.match(reason, /cli\/index\.mjs pr create/);
+    assert.match(reason, /cli\/index\.mjs pr edit/);
+  });
+});
+
+test("the sanctioned writer is denied when its title holds the word gh (known false positive)", async () => {
+  await withManagedRepo(async (root) => {
+    const { decision, reason } = bash(root, "dev-loops-run cli/index.mjs pr create --title 'fix(gh): x' --body-file f.md", undefined);
+    assert.equal(decision, "deny");
+    assert.match(reason, /ADR-TRIPWIRE-STANDING-WAIVER/);
+    assert.match(reason, /rephrase the title/);
+  });
+});
+
+test("a word with many brace groups is decided fast and fails closed", async () => {
+  await withManagedRepo(async (root) => {
+    const groups = "{a,b,c}".repeat(25);
+    const json = `[${Array.from({ length: 30 }, () => '{"a":1,"b":2}').join(",")}]`;
+    for (const command of [
+      `echo '${groups}'; gh pr edit 5 --body x`,
+      `echo ${"{a,b}".repeat(30)}; git stash`,
+      `gh api repos/o/r/issues/5/comments -f body='${json}'`,
+    ]) {
+      const started = Date.now();
+      assert.equal(bash(root, command, undefined).decision, "deny", command);
+      assert.ok(Date.now() - started < 10000, `${command.slice(0, 40)} must decide quickly`);
+    }
+  });
 });
