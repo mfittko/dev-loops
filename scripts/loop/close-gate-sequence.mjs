@@ -11,19 +11,21 @@
  * and MARKER_UNREADABLE (the marker is unreadable, names no branch or has a baseline name that is not a full hex sha; --head then
  * takes any safe marker file name, never a path). It closes only once the marker is as old as the dispatch grace, and only for the
  * work order owner (--repo and --pr). A marker that does not parse names no execution, so the pull-receipt and fixer-running checks use the
- * execution and branch of the PR's emit plan when that plan was emitted for the marker's baseline; with no such plan only marker age and the
- * sealed-record check apply, and the closure record is keyed none. Residuals: a marker whose name is empty cannot be closed here, and a no-branch marker that names
+ * execution and branch of the emit plan (the given PR's first, else any plan under the tmp root) emitted for the marker's baseline; a plan of another
+ * repo or PR refuses abandonment_unproven and names that owner; with no such plan only marker age and the
+ * sealed-record check apply, and the closure record is keyed none. The uncloseable marker names are listed at the isSafeMarkerName doc comment in
+ * packages/core/src/loop/fix-push-authority.mjs. Residual: a no-branch marker that names
  * a pulled execution loses the branch reflog activity signal, so only its pull time counts and a fixer still committing more than
  * one grace after its pull reads as stopped.
  * A live sequence is never closed. Refusals: sequence_absent, baseline_unknown, sequence_live, fixer_running, abandonment_unproven.
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { clearSequenceMarker, isSafeMarkerName, readSequenceMarker, sequenceClosurePath, sequenceMarkerPath, withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
+import { clearSequenceMarker, isSafeMarkerName, isValidBranchName, readSequenceMarker, sequenceClosurePath, sequenceMarkerPath, withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightFieldsSpec, preflightJqFilter } from "../lib/jq-output.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
@@ -55,20 +57,36 @@ export const defaultActor = (env = process.env, lookup = userInfo) => {
   try { return lookup().username; } catch { return "unknown"; }
 };
 
-/**
- * The fixer execution of the PR's emit plan when it was emitted for this baseline head, else undefined (an absent, unreadable or other-baseline plan proves nothing).
- * The branch joins only when it is a plain ref name, because it reaches a reflog path.
- */
-const planExecutionFor = (tmpRoot, repo, pr, head) => {
+/** The fixer execution of one emit plan file when it was emitted for this baseline head, else undefined (an absent, unreadable or other-baseline plan proves nothing). The branch joins only when it is a valid ref name, because it reaches a reflog path. */
+const readPlanExecution = (file, head) => {
   try {
-    const plan = JSON.parse(readFileSync(path.join(tmpRoot, "gate-fixer", repoSlugFor(repo), `pr-${pr}`, "fixer-emit-plan.json"), "utf8"));
+    const plan = JSON.parse(readFileSync(file, "utf8"));
     const order = plan?.workOrder;
     const baseline = order?.authority?.reviewBaselineHead ?? order?.headSha;
     const outputRef = order?.outputRefs?.[0];
     if (baseline !== head || typeof plan.executionIdentity !== "string" || typeof plan.workOrderRef !== "string" || typeof outputRef !== "string") return undefined;
     const branch = order.mutationAuthority?.branch;
-    return { executionIdentity: plan.executionIdentity, workOrderRef: plan.workOrderRef, outputRef, ...(typeof branch === "string" && /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/u.test(branch) && !branch.includes("..") ? { branch } : {}) };
+    return { executionIdentity: plan.executionIdentity, workOrderRef: plan.workOrderRef, outputRef, ...(isValidBranchName(branch) ? { branch } : {}) };
   } catch { return undefined; }
+};
+
+/**
+ * The fixer execution of the emit plan emitted for this baseline head: the given PR's plan first, else the plan of any other repo or PR under the tmp root, marked `foreign`
+ * (the gate-delta directory is shared by the whole repository, so the marker's real fixer can belong to a stacked PR).
+ */
+const planExecutionFor = (tmpRoot, repo, pr, head) => {
+  const own = readPlanExecution(path.join(tmpRoot, "gate-fixer", repoSlugFor(repo), `pr-${pr}`, "fixer-emit-plan.json"), head);
+  if (own) return own;
+  try {
+    for (const slug of readdirSync(path.join(tmpRoot, "gate-fixer"))) {
+      for (const prDir of readdirSync(path.join(tmpRoot, "gate-fixer", slug))) {
+        if (!/^pr-[0-9]+$/u.test(prDir)) continue;
+        const other = readPlanExecution(path.join(tmpRoot, "gate-fixer", slug, prDir, "fixer-emit-plan.json"), head);
+        if (other) return { ...other, foreign: true };
+      }
+    }
+  } catch { /* no plan directory proves nothing */ }
+  return undefined;
 };
 
 /** @param {{ tmpRoot: string, head: string, repo?: string, pr?: number, fetchPr?: Function, now?: () => number, actor?: string }} input */
@@ -79,6 +97,10 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   const { executionIdentity } = marker.execution ?? {};
   // A marker with no execution (it did not parse) names no work order, so the pull-receipt and fixer-running checks read the PR's emit plan for the same baseline.
   const recovered = marker.execution || !repo || !pr ? undefined : planExecutionFor(tmpRoot, repo, pr, head);
+  if (recovered?.foreign) {
+    const named = /^fixer:([^#:]+#[0-9]+):/u.exec(recovered.workOrderRef)?.[1] ?? "another repo or PR";
+    return refuse("abandonment_unproven", `the emit plan for ${head} belongs to ${named}, not ${repo}#${pr}, so its fixer execution ${recovered.executionIdentity} owns the marker`, "Pass the --repo and --pr the emit plan names.");
+  }
   const { workOrderRef, outputRef } = marker.execution ?? recovered ?? {};
   const runningIdentity = executionIdentity ?? recovered?.executionIdentity;
   const fixerBranch = marker.branch ?? recovered?.branch;

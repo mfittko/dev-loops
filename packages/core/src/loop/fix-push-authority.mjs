@@ -94,9 +94,9 @@ export function clearSequenceMarker(tmpRoot, baselineHead) {
   rmSync(sequenceMarkerPath(tmpRoot, baselineHead), { force: true });
 }
 
-/** A full lowercase sha, or any other safe marker file name (never a path). A case or whitespace variant of a full sha opens the real marker on a case-insensitive filesystem, so it is no non-hex name; an empty name, a name over 128 characters or one with any other character is uncloseable. One predicate for close-sequence and the push refusal's close command. */
-export const isSafeMarkerName = (name) => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(name)
-  || (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(String(name).trim().toLowerCase()) && /^[A-Za-z0-9._-]{1,128}$/u.test(name) && name !== "." && name !== "..");
+/** A full lowercase sha, or any other safe marker file name (never a path). Uncloseable: a non-string, an empty name, a name over 128 characters, a name with a character outside `[A-Za-z0-9._-]`, a name that starts with `-` (the CLI parser rejects `--head -x`), `.` and `..`, and a case or whitespace variant of a full sha (it opens the real marker on a case-insensitive filesystem, so it is no non-hex name). One predicate for close-sequence and the push refusal's close command. */
+export const isSafeMarkerName = (name) => typeof name === "string" && (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(name)
+  || (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(name.trim().toLowerCase()) && /^[A-Za-z0-9._][A-Za-z0-9._-]{0,127}$/u.test(name) && name !== "." && name !== ".."));
 
 /**
  * The recovery pointer the refusal reason carries (ADR 0218): the sanctioned no-commit close of the sequence. A `commit_only` fixer that handed back with no commit closes with the authenticated
@@ -109,7 +109,7 @@ const noCommitHint = (baselineHead, markerPath, branch) => !/^(?:[0-9a-f]{40}|[0
 export const recoveryHint = (baselineHead, markerPath, branch) => noCommitHint(baselineHead, markerPath, branch) + (markerPath ? ` To close an abandoned sequence instead, run dev-loops-run cli/index.mjs gate close-sequence --head ${isSafeMarkerName(baselineHead) && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(baselineHead) ? baselineHead : "<baseline sha>"} --repo <owner/name> --pr <number>; it refuses a live sequence.` : "");
 
 /** Approximates git check-ref-format for a branch name; an invalid name reads as no branch (fail closed). */
-const isValidBranchName = (b) =>
+export const isValidBranchName = (b) =>
   typeof b === "string" && b !== "" && b !== "@" && b !== "HEAD" &&
   !/[\x00-\x20\x7f~^:?*[\\]/.test(b) &&
   !b.includes("..") && !b.includes("@{") && !b.includes("//") &&

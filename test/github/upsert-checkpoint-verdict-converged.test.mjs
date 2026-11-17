@@ -314,6 +314,13 @@ test("a converged actList that disagrees with the round's act items on which are
     const out = await post(tempDir, { findings, converged: input });
     assert.match(out.error ?? "", /disagree on which items are PR-body items/);
     assert.deepEqual(out.puts, []);
+    // Reverse direction: the round holds a PR-body item and converged.actList gives it a file, so the body-change checks would be skipped without the agreement refusal.
+    const mixed = [finding("low", 1), bodyFinding("low", 2)];
+    const reverse = convergedInput(mixed);
+    reverse.actList = reverse.actList.map((item) => (item.file ? item : { ...item, file: "x.mjs", line: 2 }));
+    const reversed = await post(tempDir, { findings: mixed, converged: reverse });
+    assert.match(reversed.error ?? "", /disagree on which items are PR-body items/);
+    assert.deepEqual(reversed.puts, []);
   }, { prefix: "dev-loops-converged-bodyset-" });
 });
 

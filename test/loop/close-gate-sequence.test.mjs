@@ -488,13 +488,17 @@ test("a pull older than the grace with the head moved closes as HEAD_MOVED", asy
   });
 });
 
-test("an unparseable pulledAt or a garbage receipt reads as a running fixer", async () => {
+test("an unparseable pulledAt or a garbage receipt reads as a running fixer inside the grace", async () => {
   await withTempDir(async (tmpRoot) => {
     const ex = execution(tmpRoot);
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
     pull(tmpRoot, ex, "not a date");
+    const receipt = pullReceiptPath(tmpRoot, ex.workOrderRef);
+    const pin = () => utimesSync(receipt, (T0 - 60_000) / 1000, (T0 - 60_000) / 1000); // the receipt mtime is the pull time, so pin it relative to the injected clock
+    pin();
     assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "fixer_running");
-    writeFileSync(pullReceiptPath(tmpRoot, ex.workOrderRef), "{garbage");
+    writeFileSync(receipt, "{garbage");
+    pin();
     assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "fixer_running");
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
   });
@@ -842,11 +846,11 @@ test("closeGateSequence rejects an unsafe --head name (case or whitespace varian
   await withTempDir(async (tmpRoot) => {
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: execution(tmpRoot) });
     const mixed = `${HEAD.slice(0, 20)}${"A".repeat(20)}`;
-    for (const head of [HEAD.toUpperCase(), mixed, "", ".", "..", "../x", ` ${HEAD}`, "a".repeat(129)]) {
+    for (const head of [HEAD.toUpperCase(), mixed, "", ".", "..", "../x", "a/b", "-x", "--head", undefined, null, ` ${HEAD}`, "a".repeat(129)]) {
       await assert.rejects(closeGateSequence(base(tmpRoot, { head, now: aged })), /not a full sha or a safe marker file name/, JSON.stringify(head));
     }
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
-    for (const head of [HEAD, "not-a-sha", "legacy.marker_1", "a".repeat(128)]) await closeGateSequence(base(tmpRoot, { head, fetchPr: pr(HEAD) })); // accepted forms do not throw
+    for (const head of [HEAD, "not-a-sha", "legacy.marker_1", "corrupt.name", "a-b_c.d", "a".repeat(128)]) await closeGateSequence(base(tmpRoot, { head, fetchPr: pr(HEAD) })); // accepted forms do not throw
   });
 });
 
@@ -957,4 +961,22 @@ test("recoveryHint renders a concrete --head only for a name the CLI accepts", (
   const upper = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
   assert.match(recoveryHint(upper, "/m", "feat"), /--head <baseline sha>/);
   assert.match(recoveryHint("not-a-sha", "/m", "feat"), /--head not-a-sha /);
+  // A dash-leading name is rejected by the CLI parser as an option value, so the hint renders the placeholder.
+  assert.match(recoveryHint("-x", "/m", "feat"), /--head <baseline sha>/);
+});
+
+test("MARKER_UNREADABLE refuses abandonment_unproven when the emit plan for the baseline belongs to another PR, and leaves the marker", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = { ...execution(tmpRoot), workOrderRef: "fixer:o/r#8:head:f1-abcd1234" };
+    const planDir = path.join(tmpRoot, "gate-fixer", "o-r", "pr-8");
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ ...ex, workOrder: { headSha: HEAD, outputRefs: [ex.outputRef], mutationAuthority: { branch: "feat" } } }));
+    mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
+    writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
+    pull(tmpRoot, ex, new Date(Date.now() + 120_000).toISOString()); // the PR 8 fixer pulled recently and has not handed back
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: aged })); // --pr 7
+    assert.equal(result.refusal, "abandonment_unproven");
+    assert.match(result.reason, /o\/r#8/);
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
 });
