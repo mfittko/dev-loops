@@ -13,15 +13,17 @@
  *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
  *   - in a managed repo the whole command is denied when its tokens (any segment, any order; brace and
- *     `${VAR:-x}` forms split) hold `gh`, `pr`, `edit|create` and a body flag (`segmentHoldsBodyWrite`); fails closed.
+ *     `${VAR:-x}` forms split) hold `gh`, `pr`, `edit|create` and a body flag, or `gh`, `api` and a body
+ *     field or `--input` (`segmentHoldsBodyWrite`); fails closed. Accepted false positive: a command
+ *     that holds those tokens as data (a title or note that says gh) is denied too.
  *   - raw `gh pr edit` body writes (`--body`/`--body-file`/`-b`/`-F`; `gh pr create` is covered by the token rule above only) and `gh api` body writes to
  *     `pulls/<n>` or `issues/<n>` (a `body` field via `-f`/`-F`/`--field`/`--raw-field`, an
  *     `--input` payload, or a `gh api graphql` `updatePullRequest`) — blocked actor-independently
  *     (`ADR-TRIPWIRE-STANDING-WAIVER`): the sanctioned launcher writers are the only route for these
  *     `gh pr` and `gh api` body writes, because they refuse a hand-written `adr-tripwire:allow` line.
- *     A process wrapper in front of the write cannot hide it from either side: the pre-check and the
- *     decision it nominates both read the wrapper-unwrapped command head (`unwrappedCommandHeads`),
- *     so a `timeout`/`sudo`/`nice`/`time`/path-prefixed wrapper's own flags are skipped too.
+ *     A process wrapper in front of the write cannot hide it: in a managed repo the whole-command token
+ *     rule above also denies `gh`, `api` and a body field (`-f`/`-F`/`--field`/`--raw-field` `body=`) or
+ *     `--input`, in any order and behind any wrapper (the same accepted false positive applies).
  *     The raw `gh issue edit <n> --body`/`--body-file` command line form is NOT covered by this deny;
  *     it stays with the subagent-scoped external-write guard, which runs only when `agent_type` is present.
  *   - `timeout N <sanctioned command>` — blocked outright: the wrapper hides the `dev-loops-run`
@@ -87,92 +89,13 @@ const mainRoot = isFixer && parseSanctionedPullLine(command) ? listCheckouts(cwd
 const fixerPull = mainRoot ? parseFixerPullCommand(command, mainRoot) : null;
 if (fixerPull) recordFixerAgentBinding(mainRoot, { agentId: input?.agent_id, ...fixerPull });
 
-// Consume option values only while reading a wrapper, never by dropping a possible executable.
-const WRAPPER_VALUE_OPTIONS = {
-  sudo: ["-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C", "--close-from", "-T", "--command-timeout", "-D", "--chdir", "-R", "--chroot"],
-  env: ["-u", "--unset", "-C", "--chdir", "-S", "--split-string"],
-  xargs: ["-a", "--arg-file", "-E", "-I", "-L", "--max-lines", "-n", "--max-args", "-P", "--max-procs", "-s", "--max-chars"],
-  time: ["-f", "--format", "-o", "--output"],
-  nice: ["-n", "--adjustment"],
-  stdbuf: ["-i", "--input", "-o", "--output", "-e", "--error"],
-  ionice: ["-c", "--class", "-n", "--classdata", "-p", "--pid", "-P", "--pgid", "-u", "--uid"],
-  setsid: [],
-  timeout: ["-s", "--signal", "-k", "--kill-after"],
-  gtimeout: ["-s", "--signal", "-k", "--kill-after"],
-  command: [],
-  exec: [],
-};
-// Options known to take no value. An option in neither table is unknown: fail closed on it.
-const WRAPPER_FLAG_OPTIONS = {
-  sudo: ["-n", "--non-interactive", "-E", "--preserve-env", "-H", "-b", "-k", "-K", "-S", "-A", "-B"],
-  env: ["-i", "--ignore-environment", "-0", "--null", "-v", "--debug"],
-  xargs: ["-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose", "-x", "-p"],
-  time: ["-p", "-v", "-l"],
-  ionice: ["-t", "--ignore"],
-  setsid: ["-c", "--ctty", "-f", "--fork", "-w", "--wait"],
-  timeout: ["--foreground", "--preserve-status", "-v", "--verbose"],
-  gtimeout: ["--foreground", "--preserve-status", "-v", "--verbose"],
-};
-
-/**
- * Read each executable segment through its process wrappers. The tokenizer keeps quoted data
- * and heredoc bodies from becoming executable segments; offsets preserve the original gh flags.
- * @param {string} command @returns {string[]}
- */
-let unknownWrapperOption = false; // set when a wrapper carries an option word neither table lists
-function unwrappedCommandHeads(command) {
-  return tokenizeShellCommand(command).segments.flatMap(({ words, end }) => {
-    let i = 0;
-    let wrapped = false;
-    while (i < words.length) {
-      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i].value)) { i++; continue; }
-      const wrapper = words[i].value.split("/").pop();
-      if (!Object.hasOwn(WRAPPER_VALUE_OPTIONS, wrapper)) break;
-      wrapped = true;
-      i++;
-      // Fail closed: an option or duration this parser cannot place makes every later token of
-      // the segment a candidate head, and `env -S` hides the command inside its quoted value.
-      let unknown = false;
-      const extra = [];
-      while (i < words.length && words[i].value.startsWith("-")) {
-        const option = words[i++].value;
-        if (option === "--") break;
-        // Joined `-S<v>` / `--split-string=<v>`: the option word itself carries the command.
-        const joinedSplit = wrapper === "env" ? /^(?:-S|--split-string=)(.+)$/s.exec(option) : null;
-        if (joinedSplit) {
-          const joined = [joinedSplit[1], i < words.length ? command.slice(words[i].start, end) : ""].join(" ").trim();
-          extra.push(joined, ...unwrappedCommandHeads(joined));
-        } else if (WRAPPER_VALUE_OPTIONS[wrapper].includes(option)) {
-          if (wrapper === "env" && (option === "-S" || option === "--split-string") && i < words.length) {
-            // The -S value splits into the command's leading words; the segment's remaining words are its tail.
-            const joined = [words[i].value, i + 1 < words.length ? command.slice(words[i + 1].start, end) : ""].join(" ").trim();
-            extra.push(joined, ...unwrappedCommandHeads(joined));
-          }
-          i++;
-        } else if (WRAPPER_VALUE_OPTIONS[wrapper].some((o) => option.length > o.length && option.startsWith(o.length === 2 ? o : `${o}=`))) {
-          // A value joined to its known option (`-oL`, `--user=root`): the value is part of this word.
-        } else if (!(WRAPPER_FLAG_OPTIONS[wrapper] ?? []).includes(option)) {
-          // Fail closed, never extract: the option word may carry the command, so the whole command is denied.
-          unknownWrapperOption = true;
-          return extra;
-        }
-      }
-      if (/^g?timeout$/.test(wrapper) && !unknown) {
-        if (!/^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?$/i.test(words[i]?.value ?? "")) unknown = true;
-        else i++;
-      }
-      if (unknown) return [...extra, ...words.slice(i).map((word) => command.slice(word.start, end))];
-      if (extra.length) return [...extra, ...(i < words.length ? [command.slice(words[i].start, end)] : [])];
-    }
-    return wrapped && i < words.length ? [command.slice(words[i].start, end)] : [];
-  });
-}
-
 // Token deny: the whole command is a body write when its tokens, across all segments and pipes and
 // in any order, hold `gh`, `pr`, `edit|create` and a body flag (`--body*`, or a short cluster with
-// `b`/`F`: `-b`, `-bx`, `-b=x`, `-Fwaiver.md`, `-db`). `$(`, `)`, backticks, braces and commas split tokens so a
+// `b`/`F`: `-b`, `-bx`, `-b=x`, `-Fwaiver.md`, `-db`), or hold `gh`, `api` and a body field (`-f body=`,
+// `-F body=`, `--field body=`, `--raw-field body=`) or `--input`. `$(`, `)`, backticks, braces and commas split tokens so a
 // command substitution or brace expansion is seen, a `${VAR:-gh}` default counts as a token, and `gh` matches by basename (`/usr/bin/gh`). No head, wrapper or echo exemption: fails closed.
-// `--{body,x}` expands to `--body`, `--x`: one innermost group per pass.
+// A process wrapper needs no parser: the rules read every token of the command.
+// `--{body,x}` expands to `--body`, `--x`: one innermost comma group per pass; a comma-less group nested in it stays literal.
 // The product of the group sizes is exponential, so a word past BRACE_EXPANSION_CAP returns null and the caller fails closed.
 const BRACE_EXPANSION_CAP = 64;
 function braceExpansions(value) {
@@ -181,14 +104,18 @@ function braceExpansions(value) {
     let expanded = false;
     words = words.flatMap((word) => {
       // Linear scan for the first innermost `{...,...}` group; a regex here backtracks quadratically on an unclosed `{`.
+      // A stack keeps the enclosing group when a comma-less group closes inside it (`--bo{dy,x{y}}`).
+      const stack = [];
       let open = -1;
-      let comma = false;
       let end = -1;
       for (let k = 0; k < word.length && end < 0; k++) {
         const c = word[k];
-        if (c === "{") { open = k; comma = false; }
-        else if (c === ",") comma ||= open >= 0;
-        else if (c === "}") { if (open >= 0 && comma) end = k; else { open = -1; comma = false; } }
+        if (c === "{") stack.push({ at: k, comma: false });
+        else if (c === ",") { if (stack.length) stack[stack.length - 1].comma = true; }
+        else if (c === "}") {
+          const group = stack.pop();
+          if (group?.comma) { open = group.at; end = k; }
+        }
       }
       if (end < 0) return [word];
       expanded = true;
@@ -206,8 +133,12 @@ function segmentHoldsBodyWrite(command) {
       // `${G:-gh}` leaves `G:-gh`: also keep the default value. Needs a leading name, so `--body`/`-b` are untouched.
       .flatMap((t) => [t, t.replace(/^[A-Za-z_]\w*:?[-+]/, "")])]));
   const has = (test) => tokens.some((token) => test(token));
-  return overCap || has((t) => /^(?:-S)?gh$/.test(t.split("/").pop())) && has((t) => t === "pr") && has((t) => t === "edit" || t === "create") &&
-    has((t) => t.startsWith("--body") || /^-[^-]*[bF]/.test(t));
+  // `-S`/`-iS` before `gh` covers `env -Sgh` / `env -iSgh`, where the split-string value joins the option cluster.
+  if (overCap || !has((t) => /^(?:-[A-Za-z]*S)?gh$/.test(t.split("/").pop()))) return overCap;
+  return (has((t) => t === "pr") && has((t) => t === "edit" || t === "create") &&
+    has((t) => t.startsWith("--body") || /^-[^-]*[bF]/.test(t))) ||
+    (has((t) => t === "api") && (has((t) => t.startsWith("--input")) ||
+      (has((t) => /^(?:-[fF]|--(?:raw-)?field)$/.test(t)) && has((t) => t === "body")) || has((t) => /^-[fF]body$/.test(t))));
 }
 
 let repoRoot = null;
@@ -262,17 +193,12 @@ const isTimeoutWrapped = typeof command === "string" && commandContainsTimeoutWr
 // decider and denied for EVERY actor, operator and main agent included. The pre-check must
 // nominate them too, or the non-match path allows what the decider would deny.
 //
-// Both sides anchor those predicates on a segment's command HEAD, and `SHELL_EXEC_PREFIX`
-// tolerates `NAME=value` assignments, the `env`/`command`/`exec` words and a binary path but NOT a
-// process wrapper, so the wrapped form of a shape this file already names (`timeout 300 gh pr edit
-// 5 --body-file f`, `sudo -n gh api … -f body=x`) reached neither and the hook emitted allow. Read
-// the unwrapped heads as well, here and in the deny below.
-const bodyWriteHeads = typeof command === "string" ? [command, ...unwrappedCommandHeads(command)] : [];
-const hasRawPrBodyWrite = (view) =>
-  commandContainsRawPrBodyEdit(view, managedRepoSlug) || commandContainsRawPrBodyApiWrite(view, managedRepoSlug);
+// Those predicates anchor on a segment's command head, so a wrapped write (`timeout 300 gh pr edit
+// 5 --body-file f`, `sudo -n gh api … -f body=x`) reaches the token rule (`segmentHoldsBodyWrite`)
+// instead, which reads every token and needs no wrapper parser.
 const isSegmentBodyWrite = inManagedContext && typeof command === "string" && segmentHoldsBodyWrite(command);
-const isUnknownWrapperOption = inManagedContext && unknownWrapperOption;
-const isBodyWrite = isSegmentBodyWrite || isUnknownWrapperOption || bodyWriteHeads.some(hasRawPrBodyWrite);
+const isBodyWrite = isSegmentBodyWrite || (typeof command === "string" &&
+  (commandContainsRawPrBodyEdit(command, managedRepoSlug) || commandContainsRawPrBodyApiWrite(command, managedRepoSlug)));
 // COORDINATOR-VERIFY-BOUNDARY (#2082) — actor-scoped inside decideBashGate (agentType is
 // "dev-loop" or "gate-coordinator"), so the quick pre-check here only detects the command shape; the hook must not
 // short-circuit to allow before the decider applies the actor + enforceCoordinator scoping.
@@ -355,28 +281,13 @@ const decision = decideBashGate(bashGateFacts);
 if (decision.decision === "deny") {
   emitDeny(decision.reason);
 }
-// A raw body write behind a wrapper prefix: the decision above reads the command it is handed, so
-// the wrapped form cannot produce its own deny. Judge the unwrapped heads too and honor the deny.
-for (const head of bodyWriteHeads.slice(1)) {
-  if (!hasRawPrBodyWrite(head)) continue;
-  const unwrappedDecision = decideBashGate({ ...bashGateFacts, command: head });
-  if (unwrappedDecision.decision === "deny") {
-    emitDeny(unwrappedDecision.reason);
-  }
-}
 if (isSegmentBodyWrite) {
   emitDeny(
-    "ADR-TRIPWIRE-STANDING-WAIVER: this command holds the gh, pr, edit or create and body-flag tokens (or a brace expansion too large to read), so it is blocked as a raw PR body write. " +
+    "ADR-TRIPWIRE-STANDING-WAIVER: this command holds the gh, pr, edit or create and body-flag tokens, or the gh, api and body-field (or --input) tokens, or a brace expansion too large to read, so it is blocked as a raw PR or issue body write. " +
     "Write a PR body through the launcher: `dev-loops-run cli/index.mjs pr create` or `dev-loops-run cli/index.mjs pr edit` (it refuses a hand-written adr-tripwire:allow line). " +
     "Edit an issue body through `dev-loops-run cli/index.mjs issue edit`. " +
     "If the launcher command itself was denied because its title or body text holds the word gh, rephrase the title or move the text into the body file. " +
-    "If a data word with many comma brace groups (a JSON or jq argument) tripped the size limit, write the data to a file and pass it with `--input <file>` or `-F field=@<file>`.",
-  );
-}
-if (isUnknownWrapperOption) {
-  emitDeny(
-    "BASH-GATE-UNKNOWN-WRAPPER-OPTION: a wrapper (env, sudo, timeout, nice and similar) carries an option word the gate cannot fully read, and that word may hide the command it runs, so the whole command is denied. " +
-    "Drop the option, or spell out a known option in its separate form (for example `env -S 'cmd'` or `env -i`).",
+    "If a data word with many comma brace groups (a JSON or jq argument) tripped the size limit, write the data to a file and let a launcher command read it.",
   );
 }
 emitAllow();

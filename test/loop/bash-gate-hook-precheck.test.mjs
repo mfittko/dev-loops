@@ -6,9 +6,9 @@
 // This suite drives the REAL hook script (the harness `test/loop/fixer-pull-line-hook.test.mjs`
 // mirrors) for the two actor-independent denies the pre-check used to leave unnamed:
 //   - `ADR-TRIPWIRE-STANDING-WAIVER`: raw `gh pr edit` body writes and `gh api` body writes to
-//     `pulls/<n>`/`issues/<n>` — including either shape behind a `timeout`/`sudo`/`nice`/`time`/
-//     path-prefix wrapper, whose own options must not hide the command head from the pre-check
-//     (the hook reads the wrapper-unwrapped head beside the raw one, `unwrappedCommandHeads`) — and
+//     `pulls/<n>`/`issues/<n>` — including either shape behind any process wrapper, which the
+//     whole-command token rule (`gh`, `pr`, `edit|create` and a body flag, or `gh`, `api` and a body
+//     field or `--input`) reads without a wrapper parser — and
 //   - the `timeout N <sanctioned command>` wrapper.
 // Both apply to EVERY Claude actor, so each is asserted for the operator/main-agent payload
 // (Claude exposes `agent_type` only inside a subagent, so its absence IS the main agent) and for
@@ -153,27 +153,25 @@ for (const command of [
   "echo $(gh pr edit 5 --body x)",
   "`echo gh` pr edit 5 --body x",
   "/usr/bin/gh pr -R o/r edit 5 --body x",
+  // The gh api token rule: any wrapper, any order, any body field spelling.
+  "sudo -i gh pr edit 5 --body x",
+  "caffeinate gh api -X PATCH repos/o/r/pulls/5 -f body=x",
+  "doas gh api -X PATCH repos/o/r/pulls/5 -f body=x",
+  "chrt 1 gh api -X PATCH repos/o/r/pulls/5 --input f.json",
+  "env -iSgh api -X PATCH repos/o/r/pulls/5 -f body=x",
+  "env -iS'gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
+  "env -P /usr/bin gh api -X PATCH repos/o/r/pulls/5 -f body=x",
+  "gh api -X PATCH repos/o/r/pulls/5 -F body=@f.md",
+  "gh api -X PATCH repos/o/r/pulls/5 --raw-field body=x",
+  "gh api -X PATCH repos/o/r/pulls/5 -fbody=x",
+  "gh api -f body=x -X PATCH repos/o/r/pulls/5",
+  // A comma-less group nested in a comma group still expands.
+  "gh pr edit 5 --bo{dy,x{y}} hello",
+  "gh pr edit 5 --{body,x{y}} hello",
 ]) {
   test(`PR/issue body write is denied for every Claude actor: ${command}`, async () => {
     await withManagedRepo(async (root) => {
       denyForEveryActor(root, command, /ADR-TRIPWIRE-STANDING-WAIVER/);
-    });
-  });
-}
-
-// The gate fails closed: a wrapper option word the parser does not fully recognize denies the whole command, never extracts from it.
-for (const command of [
-  "env -iS'gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
-  "env -iSgh api -X PATCH repos/o/r/pulls/5 -f body=x",
-  "env -i\\S'gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
-  "env --split='gh api -X PATCH repos/o/r/pulls/5 -f body=x'",
-  "env --split gh api -X PATCH repos/o/r/pulls/5 -f body=x",
-  "env -x gh pr view 5",
-  "env -P /usr/bin echo hi",
-]) {
-  test(`an unknown wrapper option is denied: ${command}`, async () => {
-    await withManagedRepo(async (root) => {
-      denyForEveryActor(root, command, /BASH-GATE-UNKNOWN-WRAPPER-OPTION.*Drop the option, or spell out/s);
     });
   });
 }
@@ -197,6 +195,22 @@ test("non-body writes and reads remain allowed by the pre-check", async () => {
       "gh pr list",
       "gh issue view 5",
       "timeout inf echo hi",
+      "command -v gh",
+      "command -v jq",
+      "command -v jq >/dev/null && echo ok",
+      "command -v bun && bun --version",
+      "command -v bun >/dev/null && bun run x",
+      "nice -5 make",
+      "env - ls",
+      "echo {a}",
+      "exec -a x true",
+      "env -P /usr/bin echo hi",
+      "env -x gh pr view 5",
+      "sudo -i ls",
+      "nice -10 ls",
+      "xargs -d x echo hi",
+      "echo {a} {x,y}",
+      "gh api repos/o/r/pulls/5",
     ]) {
       assert.equal(bash(root, command, undefined).decision, "allow", command);
     }
@@ -272,7 +286,7 @@ test("a word with many brace groups is decided fast and fails closed", async () 
       const started = Date.now();
       const { decision, reason } = bash(root, command, undefined);
       assert.equal(decision, "deny", command);
-      if (command.startsWith("gh api")) assert.match(reason, /--input <file>/, "an over-cap deny names a usable exit");
+      if (command.startsWith("gh api")) assert.match(reason, /launcher command read it/, "an over-cap deny names a usable exit");
       assert.ok(Date.now() - started < 10000, `${command.slice(0, 40)} must decide quickly`);
     }
   });
