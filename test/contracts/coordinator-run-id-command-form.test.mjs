@@ -29,6 +29,13 @@ test("coordinator docs name no env-prefixed or exported run id", () => {
   }
 });
 
+test("coordinator docs name no unrouted pr-runner-coordination.mjs handoff or takeover form", () => {
+  for (const rel of COORDINATOR_DOCS) {
+    const text = fs.readFileSync(path.join(repoRoot, rel), "utf8");
+    assert.doesNotMatch(text, /<resolved-skill-scripts>\/loop\/pr-runner-coordination\.mjs (handoff|takeover)/, `${rel} names an unrouted form`);
+  }
+});
+
 test("RUNNER-HANDOFF-TEARDOWN names the routed handoff form and the stale-claim recovery", () => {
   // The source names the routed `node <root>/cli/index.mjs` form; the Claude asset generator
   // renders it as `dev-loops-run cli/index.mjs ...`, which the allow rule matches.

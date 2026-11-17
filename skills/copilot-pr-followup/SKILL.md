@@ -550,9 +550,11 @@ free its claim. After verifying with native evidence that its required children 
 run the owner-only handoff before returning its handback and record its status there:
 
 ```sh
-node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs handoff \
-  --repo <owner/name> --pr <number> --run-id <the id used at claim>
+node <dev-loops-package-root>/cli/index.mjs loop runner-coordination handoff \
+  --repo <owner/name> --pr <number>
 ```
+
+Add `--run-id <the id used at claim>` only when no run id resolves (see `RUNNER-HANDOFF-TEARDOWN`).
 
 `handoff` appends the exit signal and clears the claim in one locked write, so the successor's
 pre-flight finds no claim to recover: it takes the `no_owner_record` path, claims fresh and returns
@@ -564,7 +566,7 @@ a claim. `ownership_lost` or
 If a stale claim still blocks the merge because the completing run could not release it (crash, killed process, or a pre-#1109 run), the sanctioned recovery for a lock held by a COMPLETED run is an explicit takeover by the merge run:
 
 ```sh
-node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover \
+node <dev-loops-package-root>/cli/index.mjs loop runner-coordination takeover \
   --repo <owner/name> --pr <number> --run-id <the merge run's id>
 ```
 

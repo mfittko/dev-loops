@@ -2250,10 +2250,15 @@ test("the coordinator prompt's terminal release resolves the claim run id and ru
 });
 
 test("a skipped automatic release names the explicit handoff command", async () => {
-  const skipped = await releaseAsyncRunnerOwnership({ repo: "owner/repo", pr: 17, env: {} });
-  assert.equal(skipped.status, "skipped_no_async_run_id");
-  assert.match(skipped.remedy, /loop runner-coordination handoff --repo owner\/repo --pr 17 --run-id/);
-  assert.match(skipped.remedy, /`handoff_noop` with no owner, `ownership_lost` with a foreign owner/);
+  // An isolated checkout without a run-context file, so the ambient checkout cannot supply a run id.
+  const cwd = realpathSync(await mkdtemp(path.join(os.tmpdir(), "runner-no-run-context-")));
+  await mkdir(path.join(cwd, ".git"));
+  try {
+    const skipped = await releaseAsyncRunnerOwnership({ repo: "owner/repo", pr: 17, env: {}, cwd });
+    assert.equal(skipped.status, "skipped_no_async_run_id");
+    assert.match(skipped.remedy, /run dev-loops-run cli\/index\.mjs loop runner-coordination handoff --repo owner\/repo --pr 17 --run-id/);
+    assert.match(skipped.remedy, /`handoff_noop` with no owner, `ownership_lost` with a foreign owner/);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
 });
 
 test("claim refusal wording follows the injected clock and max age, not the host", async () => {

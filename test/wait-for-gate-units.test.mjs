@@ -614,7 +614,7 @@ test("a long plan wait refreshes the lane's claim from the run-context file with
   });
 });
 
-test("the heartbeat resolves the run id from the process cwd, not the parent of --tmp-root", async () => {
+test("the heartbeat passes the caller cwd, not the parent of --tmp-root, to ensureOwnership", async () => {
   await withDir(async (root) => {
     const { planPath } = await seedPlan(root, [["g", ["a"]]]);
     const plan = JSON.parse(await readFile(planPath, "utf8"));
