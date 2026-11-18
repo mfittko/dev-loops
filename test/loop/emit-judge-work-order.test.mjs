@@ -145,7 +145,7 @@ test("cited rule IDs reach the judge with their text and owning doc (issue 3092)
 
 test("Codex bootstrap precedes every pinned read and binds contracts to the emitting toolchain", async () => {
   await withDir(async (root) => {
-    const plan = await emitJudgeWorkOrder(await seed(root));
+    const plan = await emitJudgeWorkOrder({ ...(await seed(root)), harness: "codex" });
     const result = pull(plan, root);
     assert.equal(result.status, 0, result.stderr);
     const setup = result.stdout.indexOf("## Codex after-pull setup");
