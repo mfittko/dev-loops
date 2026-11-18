@@ -3610,12 +3610,21 @@ test("issue 2787 C11: --ci-file emits a ci-failure order that names the failing 
   });
 });
 
-test("issue 3251: a ci file whose only failures are timed-out smoke jobs routes to the re-run script, other failures keep the fixer", async () => {
+test("issue 3251: a smoke-only red head whose failed jobs carry GitHub timeout annotations routes to the re-run script, any other failure keeps the fixer", async () => {
   await withFixture(async (fx) => {
-    const smoke = (name) => ({ name, conclusion: "timed_out" });
-    await assert.rejects(emitCi(fx, {}, ciFailureFor(fx.head, { failedChecks: [smoke("viewer-smoke")] })), /timed-out smoke job.*rerun-failed-ci\.mjs/);
-    const unit = await emitCi(fx, {}, ciFailureFor(fx.head, { failedChecks: [smoke("viewer-smoke"), { name: "build (24)", conclusion: "failure" }] }));
-    assert.equal(unit.workOrder.source, "ci-failure");
+    const smokeOnly = ciFailureFor(fx.head, { failedChecks: [{ name: "viewer-smoke" }] });
+    const gh = (jobs, annotations) => makeGhMock([
+      { assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", attempt: 1 }]) },
+      { assertArgs: ["view", "7"], stdout: JSON.stringify({ jobs }) },
+      ...annotations.map((a) => ({ assertArgs: ["api"], stdout: JSON.stringify([{ annotation_level: "failure", message: a }]) })),
+    ]).runChild;
+    const timedOut = gh([{ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }], ["The action 'Run inspect-run viewer WebKit smoke' has timed out after 10 minutes."]);
+    await assert.rejects(emitCi(fx, { runChild: timedOut }, smokeOnly), /timed-out smoke job.*rerun-failed-ci\.mjs/);
+    const realFailure = gh([{ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }], ["Process completed with exit code 1."]);
+    assert.equal((await emitCi(fx, { runChild: realFailure }, smokeOnly)).workOrder.source, "ci-failure");
+    // A non-smoke failed check never reads GitHub: the mock has no entries, so any gh call would fail.
+    const mixed = ciFailureFor(fx.head, { failedChecks: [{ name: "viewer-smoke" }, { name: "build (24)" }] });
+    assert.equal((await emitCi(fx, { runChild: makeGhMock([]).runChild }, mixed)).workOrder.source, "ci-failure");
   });
 });
 
