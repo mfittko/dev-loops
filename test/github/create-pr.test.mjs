@@ -2737,3 +2737,29 @@ test("hasSpikePrMarker accepts a bare or padded marker line and rejects fenced o
   assert.equal(hasSpikePrMarker(`\`\`\`\n${m}\n\`\`\``), false);
   assert.equal(hasSpikePrMarker(`text ${m}`), false);
 });
+
+test("hasSpikePrMarker honors fence length and info-less closers", () => {
+  const m = "<!-- dev-loops:spike-pr no-merge -->";
+  assert.equal(hasSpikePrMarker(`\`\`\`\`md\n\`\`\`js\n${m}\n\`\`\`\n\`\`\`\``), false);
+  assert.equal(hasSpikePrMarker(`\`\`\`\ncode\n\`\`\`\n${m}`), true);
+  assert.equal(hasSpikePrMarker(`\`\`\`\n\`\`\`js\n${m}`), false);
+});
+
+test("create-pr --spike-file refuses a body with an unclosed fence", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-spike-fence-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, {
+      devloopsYaml: "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        softLoc: 100\n        waiverLoc: 250\n",
+      headFiles: [{ path: "scripts/big.mjs", content: repeatedLinesContent(300) }, { path: "changes/size.md", content: "- Exercise size checks (#1)\n" }],
+    });
+    execFileSync("git", ["branch", "feature"], { cwd: tempDir });
+    const findings = path.join(tempDir, "spike.md");
+    await writeFile(findings, "## Question\nq\n\n## Approach\na\n\n## Findings\nf\n");
+    const { env } = await writeGhStub(tempDir, []);
+    const result = await runNode(["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "T", "--body", "b\n```\nopen", "--spike-file", findings], { env, cwd: tempDir });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /unclosed/u);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

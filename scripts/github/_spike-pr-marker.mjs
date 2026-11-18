@@ -7,9 +7,10 @@ export function hasSpikePrMarker(body) {
   if (typeof body !== "string") return false;
   let fence = null;
   for (const line of body.split(/\r?\n/u)) {
-    const open = /^ {0,3}(`{3,}|~{3,})/u.exec(line);
-    if (fence === null && open) fence = open[1][0];
-    else if (fence !== null && open && open[1][0] === fence) fence = null;
+    const open = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
+    if (fence === null && open) fence = open[1];
+    // CommonMark: a closer is at least as long as the opener, same character, no info string.
+    else if (fence !== null && open && open[1][0] === fence[0] && open[1].length >= fence.length && open[2].trim() === "") fence = null;
     else if (fence === null && line.trim() === SPIKE_PR_MARKER) return true;
   }
   return false;

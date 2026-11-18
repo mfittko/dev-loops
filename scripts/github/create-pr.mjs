@@ -576,7 +576,12 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     throw parseError("the body carries the spike no-merge marker line; it is stamped only by --spike-file (ADR 0293)");
   }
   // The last --body wins, so the marker survives every body source.
-  if (spikeFile !== null && !hasSpikePrMarker(body)) ghArgs = [...ghArgs, "--body", `${body ?? ""}\n\n${SPIKE_PR_MARKER}\n`];
+  if (spikeFile !== null && !hasSpikePrMarker(body)) {
+    const stamped = `${body ?? ""}\n\n${SPIKE_PR_MARKER}\n`;
+    // An unclosed fence in the body would swallow the appended marker and open the no-merge guard.
+    if (!hasSpikePrMarker(stamped)) throw parseError("the --spike-file body leaves a code fence unclosed, so the spike no-merge marker cannot be stamped; close the fence");
+    ghArgs = [...ghArgs, "--body", stamped];
+  }
   // ADR-TRIPWIRE-STANDING-WAIVER: a new PR starts with no waiver line.
   const waiverRefusal = waiverLineChangeRefusal({ currentBody: "", nextBody: body ?? "", action: "create" });
   if (waiverRefusal) {
