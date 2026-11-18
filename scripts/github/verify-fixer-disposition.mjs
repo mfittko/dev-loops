@@ -656,12 +656,14 @@ function pinnedDisposition(operatorFocus, keys, deltaResolved) {
   };
 }
 
-// A reply note authorizes a reply and a resolve, so only a note the operator focus pinned for that thread counts, on every route.
-function assertNotesPinned(handoff, operatorFocus) {
+// A reply note authorizes a reply and a resolve, so only a note the operator focus pinned for that thread counts.
+// A fingerprint pin counts only when that fingerprint is a live ACT member of the entry's thread (membersOf).
+function assertNotesPinned(handoff, operatorFocus, membersOf) {
   for (const entry of handoff.dispositions) {
     if (!entry.threadId || !entry.replyNote) continue;
     const pinned = (operatorFocus?.items ?? []).some((item) => item.replyDisposition === entry.disposition && item.replyNote === entry.replyNote
-      && (item.threadId === entry.threadId || (item.fingerprint && (!entry.fingerprint || item.fingerprint === entry.fingerprint))));
+      && (item.threadId === entry.threadId
+        || (item.fingerprint && membersOf(entry.threadId).includes(item.fingerprint) && (!entry.fingerprint || item.fingerprint === entry.fingerprint))));
     if (!pinned) throw new Error(`handoff entry for ${entry.threadId} carries a replyNote with no matching operator focus pin; only the operator focus carrier sets a reply note`);
   }
 }
@@ -856,12 +858,13 @@ async function verifyFixerDispositionCore(
   if (liveHead !== options.headSha) {
     throw new Error(`--head-sha ${options.headSha} is not the live PR head ${liveHead ?? `(unreadable: ${(live.stderr || "").trim()})`}; refresh the PR state before verifying`);
   }
-  assertNotesPinned(handoff, operatorFocus);
   // A refused handoff writes no checkpoint: capture and assert before the write.
   const initialSnapshot = await captureParsedReviewThreads({ repo: options.repo, pr: options.pr }, runtime);
   let gateLogin = null;
+  if (Array.isArray(actList)) gateLogin = await resolveAuthenticatedLogin({ env, ghCommand, runChild });
+  const actFingerprints = new Set((actList ?? []).map((item) => item?.fingerprint ?? fingerprintFinding(item)));
+  assertNotesPinned(handoff, operatorFocus, (threadId) => (Array.isArray(actList) ? selectActThreadBinding(initialSnapshot, threadId, gateLogin, actFingerprints).members : []));
   if (Array.isArray(actList)) {
-    gateLogin = await resolveAuthenticatedLogin({ env, ghCommand, runChild });
     assertActItemThreadsDisposed(actList, handoff, initialSnapshot, gateLogin, deltaStatuses, completion, operatorFocus);
   }
   if (handoff.headSha !== options.headSha) {

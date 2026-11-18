@@ -3603,6 +3603,16 @@ test("a THREAD report whose replyNote differs from the pinned note refuses as di
   });
 });
 
+test("a note pinned by fingerprint and copied onto an unrelated thread refuses before any reply or resolve", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const pin = { items: [{ fingerprint: "ffffffffffffffff", replyDisposition: "deferred", replyNote: "tracked as a follow-up" }] };
+    const fixerPlan = await deliver(repoRoot, NOTED_DEFERRED, { operatorFocus: pin });
+    const { deps, calls } = runtimeWithGit([unresolvedT1()], repoRoot, git);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps), /no matching operator focus pin/);
+    assert.equal(hasPost(calls), false);
+  });
+});
+
 test("a fixer-written replyNote with no operator focus pin refuses before any reply or resolve, delta-blocked thread included", async () => {
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, NOTED_DEFERRED);
