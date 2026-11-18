@@ -80,7 +80,7 @@ Behavior:
   - forwards every other argument to \`gh pr create\` unchanged
   - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
   - refuses with \`size_split_required_before_pr\` before creating when the local \`origin/<base>...<head>\` whole-PR logic LOC is at or above the resolved default-tier \`waiverLoc\` (PRE-PR-SIZE-CHECK); no override flag; an unknown size does not refuse
-  - \`--spike-file <findings.md>\` (a spike findings file with Question, Approach and Findings) skips that refusal, stamps a no-merge marker in the PR body and keeps the size line advisory; ready-for-review and merge-pr refuse the PR (ADR 0293)
+  - \`--spike-file <findings.md>\` (a spike findings file with Question, Approach and Findings) skips that refusal, stamps a no-merge marker in the PR body and keeps the size line advisory; ready-for-review and merge-pr refuse the PR; only this flag binds the marker, and pr create without it and pr edit refuse a body that adds it (ADR 0293)
   - fetches only \`origin <base>\` before size and changelog checks; refuses with \`base_fetch_failed_before_pr\` on fetch failure
   - validates \`--base\` as a non-empty literal branch name before that fetch: refuses empty values, options, refspecs and revision syntax; valid branch names remain supported
   - refuses with \`changelog_incomplete_before_pr\` (LIFECYCLE-CHANGELOG-COMPLETENESS) after size checks against the fetched base when the selected head equals checkout HEAD; skips for an unresolved origin base or a different head; applies only when \`changelog.required: true\` is set in the committed HEAD \`.devloops\` config file (any loader-order name), otherwise prints a skip notice

@@ -57,6 +57,9 @@ At least one edit:
 ADR tripwire waiver lines: a body that adds, changes or removes an
 \`adr-tripwire:allow\` line (compared with the PR's current body) is refused.
 Use \`dev-loops pr waive-adr-tripwire\` (ADR-TRIPWIRE-STANDING-WAIVER).
+Spike no-merge marker (ADR 0293): a body that removes the
+\`dev-loops:spike-pr no-merge\` marker from a spike PR is refused, and so is a
+body that adds it to a PR without it. Only \`pr create --spike-file\` binds it.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "pr": 17, "edited": ["title", "body", ...] }
 Error output (stderr, JSON):
