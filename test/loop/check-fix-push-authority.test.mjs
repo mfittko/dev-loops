@@ -197,3 +197,38 @@ test("recoveryHint renders the close command only for a 40 or 64 char lowercase 
     assert.match(hint, /sequence marker is \/m/);
   }
 });
+
+// #3252: a marker is scoped to the repo its execution work order ref names.
+const ABSENT = `${"0".repeat(39)}1`;
+const executionFor = (repo, baseline) => ({ executionIdentity: "f1-abcdef12", workOrderRef: `fixer:${repo}#1:${baseline}:f1-abcdef12`, outputRef: "out.json" });
+
+test("another repo's marker with a baseline absent from this checkout does not block the push", async () => {
+  await withRepo(async (root, _head, git) => {
+    git("remote", "add", "origin", "https://github.com/o/a.git");
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: ABSENT, branch: "issue-b", execution: executionFor("o/b", ABSENT) });
+    assert.deepEqual(checkFixPushAuthority(root), { ok: true });
+  });
+});
+
+test("a same-repo marker with a baseline absent from this checkout still fails closed", async () => {
+  await withRepo(async (root, _head, git) => {
+    git("remote", "add", "origin", "https://github.com/o/a.git");
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: ABSENT, branch: "issue-a", execution: executionFor("O/A", ABSENT) });
+    const refused = checkFixPushAuthority(root);
+    assert.equal(refused.ok, false);
+    assert.ok(refused.reason.includes(`${ABSENT}.sequence`));
+  });
+});
+
+test("the refusal names only the pushing repo's marker", async () => {
+  await withRepo(async (root, head, git) => {
+    git("remote", "add", "origin", "https://github.com/o/a.git");
+    const tmpRoot = path.join(root, "tmp");
+    writeSequenceMarker({ tmpRoot, baselineHead: ABSENT, branch: "issue-b", execution: executionFor("o/b", ABSENT) });
+    writeSequenceMarker({ tmpRoot, baselineHead: head, branch: "issue-a", execution: executionFor("o/a", head) });
+    const refused = checkFixPushAuthority(root);
+    assert.equal(refused.ok, false);
+    assert.ok(refused.reason.includes(`${head}.sequence`));
+    assert.ok(!refused.reason.includes(`${ABSENT}.sequence`));
+  });
+});

@@ -11,6 +11,8 @@ import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } 
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
+import { repoSlugEquals } from "../github/repo-slug.mjs";
+
 export const sequenceMarkerPath = (tmpRoot, baselineHead) => path.join(tmpRoot, "gate-delta", `${baselineHead}.sequence`);
 
 /** The closure record of a sequence closed by close-gate-sequence; keyed by execution so a second close with another execution on one head keeps the first. An execution-less close writes `.none.json` and overwrites a prior execution-less record on the same head. */
@@ -145,15 +147,19 @@ export function readSequenceMarker(tmpRoot, baselineHead) {
  * the tested commit is its baseline or descends from it, or when `remoteRef` is the marker's branch (whatever the
  * pushed sha is, so a force-push is covered); a branch marker ends once the remote ref has advanced past the baseline.
  * A marker that names no branch cannot be ended by a remote ref: it stays active until `gate close-sequence` closes it as MARKER_UNREADABLE (fail closed).
+ * When `repo` (the pushing checkout's owner/name) is given, a marker whose execution work order ref names another repo is skipped before the ancestry test,
+ * so another repo's baseline that is absent from this checkout blocks nothing; a marker that names no repo keeps the rules above (fail closed).
  * With several active markers a non-granted one wins, so a stale
  * granted marker cannot admit a commit_only fixer push.
- * @param {{ tmpRoot: string, head: string, remoteRef?: string, listBaselines: () => string[], isAncestor: (a: string, b: string) => boolean, remoteAdvanced: (baseline: string, branch: string) => boolean }} input
+ * @param {{ tmpRoot: string, head: string, remoteRef?: string, repo?: string, listBaselines: () => string[], isAncestor: (a: string, b: string) => boolean, remoteAdvanced: (baseline: string, branch: string) => boolean }} input
  */
-export function findActiveSequence({ tmpRoot, head, remoteRef, listBaselines, isAncestor, remoteAdvanced }) {
+export function findActiveSequence({ tmpRoot, head, remoteRef, repo, listBaselines, isAncestor, remoteAdvanced }) {
   const active = [];
   for (const baseline of listBaselines()) {
     const marker = readSequenceMarker(tmpRoot, baseline);
     if (!marker) continue;
+    const markerRepo = /^fixer:([^#:]+)#[0-9]+:/u.exec(marker.execution?.workOrderRef ?? "")?.[1];
+    if (repo && markerRepo && !repoSlugEquals(markerRepo, repo)) continue;
     if (marker.branch !== undefined && remoteRef !== undefined && remoteRef !== `refs/heads/${marker.branch}`) continue;
     let covered;
     try {

@@ -7,6 +7,7 @@
  * branch's remote ref has not advanced past the baseline) and the full work order has not granted the push;
  * exit 0 allows it. A marker that names a branch covers a push only when the known push target is
  * refs/heads/<branch>; a branchless marker, or an unknown push target, keeps the ancestry rule (fail closed).
+ * A marker whose execution work order ref names another repo than the checkout's origin is skipped; a marker that names no repo, or a checkout with no detectable origin, keeps these rules.
  * A parse error or git failure refuses (fail closed). With no ref lines the HEAD of
  * the checkout is tested. Agent identity is unknown to git, so this check binds every pusher.
  */
@@ -14,6 +15,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
+import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { findActiveSequence, recoveryHint, sequenceMarkerPath } from "@dev-loops/core/loop/fix-push-authority";
 
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -55,10 +57,11 @@ export function checkFixPushAuthority(cwd = process.cwd(), pushedShas = null) {
   // Exit 1 means "not an ancestor"; any other failure (missing object, invalid ref) throws and findActiveSequence refuses under that marker unless it is granted (fail closed).
   const isAncestor = (a, b) => { try { git("merge-base", "--is-ancestor", a, b); return true; } catch (error) { if (error?.status === 1) return false; throw error; } };
   const remoteAdvanced = (baseline, branch) => git("for-each-ref", "--contains", baseline, "--format=%(objectname)", `refs/remotes/*/${branch}`).split("\n").some((sha) => sha && sha !== baseline);
+  const repo = detectRepoSlug(cwd) ?? undefined;
   const heads = (pushedShas ?? [git("rev-parse", "HEAD").trim()]).map((p) => typeof p === "string" ? { sha: p } : p);
   let refusedBy = null;
   for (const { sha: head, remoteRef } of heads) {
-    const sequence = findActiveSequence({ tmpRoot, head, remoteRef, listBaselines, isAncestor, remoteAdvanced });
+    const sequence = findActiveSequence({ tmpRoot, head, remoteRef, repo, listBaselines, isAncestor, remoteAdvanced });
     if (sequence !== null && sequence.fullGranted !== true) { refusedBy = sequence; break; }
   }
   return refusedBy
