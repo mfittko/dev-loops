@@ -112,17 +112,17 @@ Preflight verdicts:
 - fetch with `node scripts/github/view-issue.mjs --repo <owner/name> --issue <number> --json number,title,body,state,labels,assignees,milestone`
 - If the issue is closed, stop for a user decision before proceeding
 - detect an existing linked PR with the deterministic linked-PR helper:
-  `node <resolved-skill-scripts>/github/detect-linked-issue-pr.mjs --repo <resolved-repo> --issue <number>`
+  `dev-loops-run scripts/github/detect-linked-issue-pr.mjs --repo <resolved-repo> --issue <number>`
 - treat the helper output as authoritative for linked-PR detection/selection
 - <!-- rule: INTAKE-LINKED-PR-HELPER-DELEGATION --> `INTAKE-LINKED-PR-HELPER-DELEGATION`: Agents MUST NOT re-implement linked-event query behavior, pagination, repo filtering, or tie-break logic, and MUST NOT rely only on PR title/body containing a literal issue number.
 - treat an open linked PR as the active implementation for this issue
 - once an open linked PR exists, attach follow-up work to it per `FACADE-LINKED-PR-SINGLE-ARTIFACT` (owned in [Public Dev Loop Contract](public-dev-loop-contract.md)) for the `issue_intake` strategy
 - follow-up-capture rule: a follow-up discovered while working a PR or loop goes as a comment on the originating issue, in the PR body, or as a comment on an existing issue or epic. A standalone issue is filed only under `MAIN-AGENT-FILING-BLOCKER-ONLY` in [Main Agent Contract](./main-agent-contract.md#filing-from-runner-findings). See [Sub-Issue Tree Contract](./sub-issue-tree-contract.md).
 - if a PR already exists, classify bootstrap-wait versus follow-up:
-  `node <resolved-skill-scripts>/loop/detect-initial-copilot-pr-state.mjs --repo <resolved-repo> --issue <number>`
+  `dev-loops-run scripts/loop/detect-initial-copilot-pr-state.mjs --repo <resolved-repo> --issue <number>`
 - `waiting_for_initial_copilot_implementation`: keep waiting; in durable-auto mode use:
   ```sh
-  node <resolved-skill-scripts>/loop/watch-initial-copilot-pr.mjs --repo <resolved-repo> --issue <number>
+  dev-loops-run scripts/loop/watch-initial-copilot-pr.mjs --repo <resolved-repo> --issue <number>
   ```
   - durable-auto ownership of this seam (the dedicated watcher + its default 1-hour watch budget) is owned by [FACADE-BOOTSTRAP-WATCH-ROUTE](public-dev-loop-contract.md); this procedure does not restate that rule
   - quiet/no-activity watch observations alone are non-terminal
@@ -175,13 +175,13 @@ When an umbrella/epic issue must be decomposed into bounded, independently closa
 Follow the "Default decomposition flow" in [Sub-Issue Tree Contract](./sub-issue-tree-contract.md), which owns the full `manage-sub-issues.mjs` contract and `SUBISSUE-NO-ADHOC-BYPASS`. Create each child with `dev-loops-run cli/index.mjs issue create --repo <resolved-repo> --title <title> --body-file <path> --assignee @me`, then:
 
 ```sh
-node <resolved-skill-scripts>/github/manage-sub-issues.mjs add \
+dev-loops-run scripts/github/manage-sub-issues.mjs add \
   --repo <resolved-repo> --issue <parent-number> --child <child-number>
-node <resolved-skill-scripts>/github/manage-sub-issues.mjs reorder \
+dev-loops-run scripts/github/manage-sub-issues.mjs reorder \
   --repo <resolved-repo> --issue <parent-number> --order <n1,n2,...>
-node <resolved-skill-scripts>/github/manage-sub-issues.mjs verify \
+dev-loops-run scripts/github/manage-sub-issues.mjs verify \
   --repo <resolved-repo> --issue <parent-number> --expected <n1,n2,...> [--ordered]
-node <resolved-skill-scripts>/github/manage-sub-issues.mjs list \
+dev-loops-run scripts/github/manage-sub-issues.mjs list \
   --repo <resolved-repo> --issue <parent-number>
 ```
 
@@ -202,10 +202,10 @@ node scripts/github/view-issue.mjs --repo <resolved-repo> --issue <number> --jso
 
 When the linked PR becomes substantive, keep the shared loop scoped to the resolved repo, for example:
 ```sh
-node <resolved-skill-scripts>/loop/copilot-pr-handoff.mjs --repo <resolved-repo> --pr <number>
-node <resolved-skill-scripts>/github/edit-pr.mjs --repo <resolved-repo> --pr <pr-number> --title "..." --body-file <body-file>
-node <resolved-skill-scripts>/github/ready-for-review.mjs --repo <resolved-repo> --pr <pr-number>
-node <resolved-skill-scripts>/github/detect-checkpoint-evidence.mjs --repo <resolved-repo> --pr <pr-number>
+dev-loops-run scripts/loop/copilot-pr-handoff.mjs --repo <resolved-repo> --pr <number>
+dev-loops-run scripts/github/edit-pr.mjs --repo <resolved-repo> --pr <pr-number> --title "..." --body-file <body-file>
+dev-loops-run scripts/github/ready-for-review.mjs --repo <resolved-repo> --pr <pr-number>
+dev-loops-run scripts/github/detect-checkpoint-evidence.mjs --repo <resolved-repo> --pr <pr-number>
 ```
 
 The ready transition uses `RAW-GH-PR-READY-BYPASS`'s mandatory wrapper in

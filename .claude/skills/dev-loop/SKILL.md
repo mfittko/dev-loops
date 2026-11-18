@@ -105,7 +105,7 @@ When the `@dev-loops/core` package is not installed in the consumer repo, the fu
 Use the fallback poster only when the full helper cannot be reached:
 
 1. Detect the missing helper: try `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --help` from the consumer repo. If the script is absent or imports fail, switch to the fallback path.
-2. Invoke the fallback from the installed dev-loop skill directory: `node <resolved-skill-scripts>/post-gate-verdict-fallback.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path>) --next-action <text> [--gate <draft_gate|pre_approval_gate>]`.
+2. Invoke the fallback from the installed dev-loop skill directory: `dev-loops-run scripts/post-gate-verdict-fallback.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path>) --next-action <text> [--gate <draft_gate|pre_approval_gate>]`.
 3. Treat every successful fallback-posted gate comment as a one-shot create with no idempotent same-head update: if the agent reruns the gate on the same head, a duplicate comment will be created. Detect duplicates manually and update manually if needed.
 4. Treat every fallback-posted gate comment as a degraded audit-trail artifact: the visible body uses the same parser-stable shape as the full helper (gate name, head SHA, verdict, findings summary, next action), but the helper skips stale-head detection, gate-coordination validation, blocking-severity count enforcement, and the internal-only PR short-circuit.
 5. If the fallback helper exits non-zero, stop the gate and report the posting failure: do not mark the PR ready for review and do not proceed to merge readiness until the comment is posted.
@@ -117,7 +117,7 @@ When `@dev-loops/core` is available again, switch back to the full helper. The f
 Before posting a `pre_approval_gate` (or `draft_gate`) verdict, resolve which layout the verdict/ledger tooling should run from via the deterministic helper (issue #1661):
 
 ```sh
-node <resolved-skill-scripts>/loop/resolve-verdict-ledger-source.mjs --jq .preferredSource
+dev-loops-run scripts/loop/resolve-verdict-ledger-source.mjs --jq .preferredSource
 ```
 
 When `preferredSource` is `worktree` (installed dev-loops CLI older than the current source/worktree), run `upsert-checkpoint-verdict.mjs`, `write-gate-findings-log.mjs`, and `detect-checkpoint-evidence.mjs` from the worktree/source `scripts/` layout — the stale installed CLI lacks the gate-evidence CI exclusion and would otherwise block verdict posting on `WAITING_FOR_CI`. When `installed`, use the resolved skill-scripts (installed) layout as usual. The copilot-pr-followup skill's [Skill asset path resolution](../copilot-pr-followup/SKILL.md#skill-asset-path-resolution) owns the full rule; this is the entrypoint pointer.

@@ -90,7 +90,9 @@ export function stripPiOnlyBlocks(body) {
  * @returns {string}
  */
 export function rewriteCliInvocation(body) {
-  return String(body).split("node <dev-loops-package-root>/cli/index.mjs").join("dev-loops-run cli/index.mjs");
+  return String(body)
+    .split("node <dev-loops-package-root>/cli/index.mjs").join("dev-loops-run cli/index.mjs")
+    .split("node <resolved-skill-scripts>/").join("dev-loops-run scripts/");
 }
 
 /**
