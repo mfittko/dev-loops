@@ -861,6 +861,15 @@ export function buildDraftStart({ repo, pr }) {
     nextAction: `PR #${pr} is an existing draft: a valid start target. Run the draft-start pre-flight \`${preflight}\` and follow its nextAction (\`run_draft_gate\` enters draft_gate while the PR stays draft; \`report_blocked\` reports the spec precondition and stops). The Copilot handoff's \`pr_draft\` stop belongs to the Copilot-only follow-up path and is not an abort here. Do not mark ready or request Copilot review until a clean current-head draft_gate verdict exists.`,
   };
 }
+/** Ready-start route marker for an open, ready PR the viewer owns: the gate-coordination pre-flight selects the next gate step. */
+export function buildReadyStart({ repo, pr }) {
+  const preflight = `dev-loops loop gate-coordination --repo ${repo} --pr ${pr}`;
+  return {
+    reviewGate: "pre_approval_gate",
+    preflight,
+    nextAction: `PR #${pr} is an open, ready PR owned by this loop: a valid start target. Run the ready-start pre-flight \`${preflight}\` and follow its nextAction.`,
+  };
+}
 export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, inputSource, uiReview = false, review = false, claim = false, expectedIssue, env = process.env }) {
   // The viewer-login memo exists to dedupe gh calls WITHIN one resolution
   // (PR + linked-issue checks); reset it per invocation so a long-lived
@@ -1109,6 +1118,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
   // that strategy is gated. Review peeks are exempt, so a reviewer can inspect
   // a PR (and its linked issue) they do not own. Bypassed (read-only
   // inspection): skip enforcement entirely, mirroring the --issue path above.
+  let ownershipGatePassed = false;
   if (!ownershipGateBypassed(env)) {
     const peekedStrategy = resolveAuthoritativeStartupResumeBundle(result).selectedStrategy ?? "none";
     if (ownershipGateAppliesToStrategy(peekedStrategy)) {
@@ -1157,6 +1167,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
         reviewRouteHint,
       });
       if (!claimNow) checkLinkedIssues();
+      ownershipGatePassed = true;
     }
   }
   // Draft-start route: an existing draft PR is a valid start target. The
@@ -1170,6 +1181,10 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
   const copilotAssigned = classifyOwnership(prAssignees, null).state === OWNERSHIP_STATE.ASSIGNED_TO_COPILOT;
   if (prDraft && !review && !uiReview && !copilotAssigned) {
     return { ...result, draftStart: buildDraftStart({ repo, pr }) };
+  }
+  // Ready-start route (issue 3105 AC49): a ready PR past the ownership gate is loop-owned by claim, whatever its author.
+  if (prRead && artifactState === "open" && !prDraft && !review && !uiReview && !copilotAssigned && ownershipGatePassed) {
+    return { ...result, readyStart: buildReadyStart({ repo, pr }) };
   }
   return result;
 }
@@ -1497,7 +1512,7 @@ export function buildResolveDevLoopStartupResult(input, {
   // `canonicalSpecSource`). Strip them before evaluation and re-attach to the
   // result; `planFileExempt` waives the worktree-isolation guard because a
   // pre-promotion plan has no issue to key a worktree on.
-  const { planFileExempt = false, planFileIntakeState = null, spikeIntakeState = null, canonicalSpecSource = null, draftStart = null, issueReadinessReason = null, ...routingInput } = input;
+  const { planFileExempt = false, planFileIntakeState = null, spikeIntakeState = null, canonicalSpecSource = null, draftStart = null, readyStart = null, issueReadinessReason = null, ...routingInput } = input;
   input = routingInput;
   // Retrospective checkpoint gate (RETRO-ENFORCEMENT-CONFIG-GATED). The
   // durable checkpoint file, when present, is always honored. Cycle scoping
@@ -1615,9 +1630,12 @@ export function buildResolveDevLoopStartupResult(input, {
       );
     }
   }
-  // Draft-start route: only the plain PR follow-up route carries it.
-  const draftStartApplies = draftStart !== null && ["copilot_pr_followup", "external_pr_followup"].includes(strategyKey);
-  const routedBundle = { ...bundle, ...(draftStartApplies ? { nextAction: draftStart.nextAction } : {}), pendingRetrospectives };
+  // Draft-start and ready-start routes: only the plain PR follow-up route carries them.
+  const prFollowup = ["copilot_pr_followup", "external_pr_followup"].includes(strategyKey);
+  const draftStartApplies = draftStart !== null && prFollowup;
+  const readyStartApplies = readyStart !== null && prFollowup;
+  const startMarker = draftStartApplies ? draftStart : readyStartApplies ? readyStart : null;
+  const routedBundle = { ...bundle, ...(startMarker ? { nextAction: startMarker.nextAction } : {}), pendingRetrospectives };
   return {
     ok: true,
     bundleKind: bundle.bundleKind,
@@ -1630,6 +1648,7 @@ export function buildResolveDevLoopStartupResult(input, {
     ...(spikeIntakeState !== null ? { spikeIntakeState } : {}),
     ...(canonicalSpecSource !== null ? { canonicalSpecSource } : {}),
     ...(draftStartApplies ? { draftStart } : {}),
+    ...(readyStartApplies ? { readyStart } : {}),
     bundle: routedBundle,
   };
 }
@@ -1695,6 +1714,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       delete parsed.spikeIntakeState;
       delete parsed.canonicalSpecSource;
       delete parsed.draftStart;
+      delete parsed.readyStart;
       delete parsed.issueReadinessReason;
     }
     input = parsed;

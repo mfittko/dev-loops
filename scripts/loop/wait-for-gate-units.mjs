@@ -32,7 +32,7 @@ export const RECHECK_INTERVAL_MS = 2000;
 export const ARTIFACT_STABLE_MS = 10000;
 const EXIT = { all_done: 0, timeout: 2, pending: 2, round_retired: 3 };
 
-const USAGE = `Usage: wait-for-gate-units.mjs (--emit-plan <path> [--unit <scope>]... | --judge-plan <path>) --tmp-root <worktree>/tmp [--timeout <seconds>]
+const USAGE = `Usage: wait-for-gate-units.mjs (--emit-plan <path> [--unit <scope>]... | --judge-plan <path>) [--tmp-root <dir>] [--timeout <seconds>]
        wait-for-gate-units.mjs --artifact <path> --after <path> [--timeout <seconds>]
 Block in one foreground process until the round's dispatched units are done.
 One call waits at most ${WAIT_CAP_MS / 1000} seconds (GATE-EXEC-BOUNDED-WAIT-CAP): a longer --timeout returns pending (exit 2) with a \`reissue\` command carrying the remaining --timeout; run it.
@@ -42,7 +42,7 @@ Outcomes (JSON on stdout): all_done (exit 0), timeout (exit 2), pending (exit 2)
   --judge-plan <path>  the round's judge-emit-plan.json; waits on the one judge unit
   --artifact <path>    single-unit join (COORDINATOR-SINGLE-CHILD-JOIN): waits until this file parses as JSON and carries its terminal field (outcome), or, with no terminal field, stays unchanged for ${ARTIFACT_STABLE_MS / 1000} seconds; excludes the plan flags and --tmp-root. For a full-phase fixer pass its joinRef (the final-on-write report).
   --after <path>       required with --artifact: an absolute path to a file written before the dispatch (the emitted fixer plan, or the delta reviewer's input.patchPath). An --artifact older than it is pending and the result reports stale: true.
-  --tmp-root <dir>     worktree-local tmp root with the sentinels and retirement records
+  --tmp-root <dir>     tmp root with the sentinels and retirement records (default: the nearest tmp directory above the plan path, else the gate tmp root resolved from the current directory; omit it)
   --timeout <seconds>  0 to ${MAX_TIMEOUT_MS / 1000} (default ${DEFAULT_TIMEOUT_MS / 1000}; 0 = single immediate check)
   --timeout-ms <n>     Deprecated alias for --timeout (milliseconds); warns on stderr. Passing both fails closed.`;
 
@@ -77,8 +77,14 @@ export function parseWaitArgs(argv) {
   }
   if ((values["emit-plan"] === undefined) === (values["judge-plan"] === undefined)) throw new Error("pass exactly one of --emit-plan, --judge-plan and --artifact");
   if (values["judge-plan"] !== undefined && values.unit !== undefined) throw new Error("--unit applies only to --emit-plan");
-  if (!values["tmp-root"]) throw new Error("--tmp-root is required");
-  return { emitPlan: values["emit-plan"], judgePlan: values["judge-plan"], units: values.unit, tmpRoot: values["tmp-root"], timeoutMs, jq: values.jq, fields: values.fields, silent: values.silent };
+  if (values["tmp-root"] !== undefined && (values["tmp-root"].trim() === "" || values["tmp-root"] !== values["tmp-root"].trim())) throw new Error("--tmp-root must be a non-empty path with no surrounding whitespace; omit the flag to use the round's own gate tmp root");
+  return { emitPlan: values["emit-plan"], judgePlan: values["judge-plan"], units: values.unit, tmpRoot: values["tmp-root"] ?? planTmpRoot(values["emit-plan"] ?? values["judge-plan"]), timeoutMs, jq: values.jq, fields: values.fields, silent: values.silent };
+}
+
+// The round's sentinels and retirement records sit under the tmp that holds its plan (a linked worktree's tmp, not the main checkout's).
+function planTmpRoot(planPath) {
+  for (let dir = path.dirname(path.resolve(planPath)); dir !== path.dirname(dir); dir = path.dirname(dir)) if (path.basename(dir) === "tmp") return dir;
+  return resolveGateArtifactTmpRoot(process.cwd());
 }
 
 async function readPlan(planPath) {

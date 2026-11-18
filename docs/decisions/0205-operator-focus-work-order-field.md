@@ -4,6 +4,8 @@
 
 Accepted — 2026-10-28 ([issue 2635](https://github.com/mfittko/dev-loops/issues/2635))
 
+Extended by ADR 0291
+
 ## Context
 
 Retros of PR 2623, PR 2688, PR 2808 and PR 2838 recorded operator context that had no sanctioned path to the judge or the fixer. A churn rule for one round, a chosen remedy for one act item and acceptance conditions were appended to the emitted prompt or lost. The pulled work order is the only input an actor reads, so free text outside it never took effect, and a fixer that saw two remedies picked the other one.

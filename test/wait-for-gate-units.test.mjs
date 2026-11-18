@@ -5,7 +5,8 @@ import { link, mkdir, open, readFile, readdir, realpath, rm, stat, symlink, utim
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
-import { resolveRepoRoot } from "../scripts/loop/_repo-root-resolver.mjs";
+import { readFileSync, readdirSync } from "node:fs";
+import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../scripts/loop/_repo-root-resolver.mjs";
 import { pullReceiptPath } from "../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../cli/index.mjs";
 import { ARTIFACT_STALE_PENDING_REMEDY, ARTIFACT_STALE_REMEDY, ARTIFACT_TIMEOUT_REMEDY, main, parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
@@ -648,4 +649,42 @@ test("an emit plan without repo and pr never heartbeats", async () => {
     assert.equal(result.outcome, "timeout");
     assert.equal(calls, 0);
   });
+});
+
+test("the join used by both the Pi blocking join and the Claude Code join resolves the plan's worktree tmp root from the plan path when --tmp-root is omitted", async () => {
+  await withDir(async (main) => {
+    const worktree = path.join(main, "tmp", "worktrees", "x");
+    const { planPath } = await seedPlan(worktree, [["g", ["a"]], ["h", ["b"]]]);
+    await setMtime(planPath, 100);
+    const wtTmp = path.join(worktree, "tmp");
+    await writeJson(path.join(wtTmp, `checkpoint-context-sentinel-g-${HEAD}.json`), {});
+    const parsed = parseWaitArgs(["--emit-plan", planPath, "--unit", "g"]);
+    assert.equal(parsed.tmpRoot, wtTmp);
+    assert.equal(parseWaitArgs(["--judge-plan", planPath]).tmpRoot, wtTmp);
+    const opts = { ...parsed, receiptTmpRoot: wtTmp, ...fakeClock() };
+    const running = await waitForUnits({ ...opts, timeoutMs: 1 });
+    assert.equal(running.outcome, "timeout");
+    assert.equal(running.missing[0].state, "running");
+    await writeJson(path.join(wtTmp, "retired-gate-rounds", HEAD, "round-1", "retirement.json"), { gate: GATE, retiredAt: new Date(200000).toISOString() });
+    assert.equal((await waitForUnits(opts)).outcome, "round_retired");
+  });
+});
+
+test("a plan with no tmp ancestor falls back to the cwd gate tmp root; an explicit --tmp-root wins", () => {
+  assert.equal(parseWaitArgs(["--emit-plan", "/no-such-root/plan.json"]).tmpRoot, resolveGateArtifactTmpRoot(process.cwd()));
+  for (const root of ["t", "/repo/tmp/worktrees/x/tmp"]) assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", root]).tmpRoot, root);
+});
+
+test("an empty, whitespace-only or padded --tmp-root is refused", () => {
+  for (const value of ["", "  ", " /repo/tmp ", "/repo/tmp "]) assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", value]), /--tmp-root must be a non-empty path/, JSON.stringify(value));
+  assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "/repo/tmp"]).tmpRoot, "/repo/tmp");
+});
+
+const REPO = fileURLToPath(new URL("../", import.meta.url));
+test("no script refuses a missing --tmp-root", () => {
+  for (const dir of ["scripts/loop", "scripts/github"]) {
+    for (const name of readdirSync(path.join(REPO, dir)).filter((n) => n.endsWith(".mjs"))) {
+      assert.doesNotMatch(readFileSync(path.join(REPO, dir, name), "utf8"), /--tmp-root is required/, `${dir}/${name}`);
+    }
+  }
 });

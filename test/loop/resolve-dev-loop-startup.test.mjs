@@ -2373,6 +2373,50 @@ test("#2456: --pr on a non-draft, merged-draft, closed-draft, or Copilot-assigne
   }
 });
 
+test("3105 AC49: a ready, viewer-assigned PR carries readyStart whatever its author; Copilot-assigned, --review and bypass carry none", async () => {
+  const viewer = [{ login: "test-viewer" }];
+  for (const [assignees, extra, bypass, expected] of [
+    [viewer, [], false, true],
+    [[{ login: "copilot-swe-agent" }], [], false, false],
+    [viewer, ["--review"], false, false],
+    [viewer, ["--ui-review"], false, false],
+    [viewer, [], true, false],
+  ]) {
+    await withTempDir(async (tempDir) => {
+      await initRepoWithOrigin(tempDir);
+      execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--quiet", "--allow-empty", "-m", "init"], { cwd: tempDir, stdio: "ignore" });
+      const checkout = path.join(tempDir, "tmp", "worktrees", "issue-3105");
+      execFileSync("git", ["worktree", "add", "--quiet", "-b", "issue-3105", checkout], { cwd: tempDir, stdio: "ignore" });
+      const prData = {
+        number: 3239, url: "https://github.com/mfittko/dev-loops/pull/3239", headRefName: "issue-3105",
+        headRefOid: execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" }).trim(),
+        headRepository: { name: "dev-loops" }, headRepositoryOwner: { login: "mfittko" },
+        author: { login: "some-human" }, state: "OPEN", isDraft: false, mergedAt: null, assignees, closingIssuesReferences: [{ number: 3105 }], body: "",
+      };
+      const ghStub = await writeGhStubHelper(tempDir, [
+        { assertArgs: ["pr", "view", "3239"], stdout: JSON.stringify(prData) },
+        { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+        { assertArgs: ["issue", "view", "3105"], stdout: JSON.stringify({ assignees: viewer }) },
+        { assertArgs: ["pr", "view", "3239"], stdout: JSON.stringify(prData) },
+      ], { matchMode: "claims" });
+      const env = { ...ghStub.env, ...resolverTestEnv(bypass ? {} : { DEVLOOPS_OWNERSHIP_BYPASS: undefined }) };
+      const result = await runNode(["--pr", "3239", ...extra], { cwd: tempDir, env });
+      assert.equal(result.code, 0, result.stderr);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.draftStart, undefined);
+      if (!expected) return assert.equal(parsed.readyStart, undefined, JSON.stringify([assignees, extra, bypass]));
+      assert.equal(parsed.readyStart.reviewGate, "pre_approval_gate");
+      assert.equal(parsed.readyStart.preflight, "dev-loops loop gate-coordination --repo mfittko/dev-loops --pr 3239");
+      assert.equal(parsed.nextAction, parsed.readyStart.nextAction);
+      const startupPath = path.join(tempDir, "startup.json");
+      await writeFile(startupPath, result.stdout);
+      const order = await runNodeHelper(path.resolve("scripts/loop/emit-coordinator-work-order.mjs"), ["--input", startupPath, "--repo", "mfittko/dev-loops"], { cwd: tempDir, env });
+      assert.equal(order.code, 0, order.stderr || order.stdout);
+      assert.match(JSON.parse(order.stdout).workOrder.handoff.nextAction, /loop gate-coordination --repo mfittko\/dev-loops --pr 3239/);
+    }, { prefix: "resolve-dev-loop-ready-start-" });
+  }
+});
+
 test("#2456: --input strips an injected draftStart", async () => {
   await withTempDir(async (tempDir) => {
     const inputPath = await writeTempJson(tempDir, "startup.json", {
@@ -2387,6 +2431,7 @@ test("#2456: --input strips an injected draftStart", async () => {
       issueLinkageResolution: "not_applicable",
       loopState: "pr_followup_start",
       draftStart: { reviewGate: "draft_gate", preflight: "injected", nextAction: "injected" },
+      readyStart: { reviewGate: "pre_approval_gate", preflight: "injected", nextAction: "injected" },
     });
     const result = await runNode(["--input", inputPath], {
       cwd: tempDir,
@@ -2395,6 +2440,7 @@ test("#2456: --input strips an injected draftStart", async () => {
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.draftStart, undefined);
+    assert.equal(parsed.readyStart, undefined);
     assert.doesNotMatch(parsed.nextAction, /injected/);
   }, { prefix: "resolve-dev-loop-input-draft-start-" });
 });

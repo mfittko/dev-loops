@@ -139,7 +139,7 @@ test("semantic mutation refuses as semantic_identity_mismatch; a materialization
   });
 });
 
-test("retirement lookup ignores only absence and propagates unreadable or malformed authority", async () => {
+test("retirement lookup ignores absence and stray non-directory entries, and propagates unreadable or malformed authority", async () => {
   await withDir(async (root) => {
     const lookup = () => findRetirementAfter(root, GATE, HEAD, 0);
     const retired = path.join(root, "retired-gate-rounds", HEAD);
@@ -155,6 +155,10 @@ test("retirement lookup ignores only absence and propagates unreadable or malfor
     assert.throws(lookup, SyntaxError);
     await writeFile(record, JSON.stringify({ gate: GATE, retiredAt: new Date(1).toISOString() }));
     assert.equal(lookup(), "round-1");
+    await writeFile(path.join(retired, "a-stray-file.json"), "{}");
+    assert.equal(lookup(), "round-1", "a stray file beside the rounds is debris");
+    await rm(path.join(retired, "round-1"), { recursive: true });
+    assert.equal(lookup(), null, "only the stray file remains");
   });
 });
 
@@ -835,5 +839,17 @@ test("self-hosting fixer pull: a successful delegated pull returns the worktree 
       git(["worktree", "remove", "--force", linked]);
       git(["branch", "-D", branch]);
     }
+  });
+});
+
+test("a pull with a custom-root execution refuses naming the searched roots and the default root", async () => {
+  await withDir(async (root) => {
+    const unit = await emitRound(root);
+    const custom = path.join(root, "custom-tmp");
+    const body = refusal(run("pull-work-order.mjs", [unit.executionIdentity, "--tmp-root", custom], root));
+    assert.equal(body.refusal, "dispatch_reference_mismatch");
+    assert.match(body.message ?? body.error ?? JSON.stringify(body), new RegExp(`searched tmp roots ${custom.replaceAll(".", "\\.")}; the default tmp root is ${resolveGateArtifactTmpRoot(root).replaceAll(".", "\\.")}`));
+    assert.match(JSON.stringify(body), /a caller that passed --tmp-root re-runs with no --tmp-root, and otherwise re-dispatches the SAME unit/);
+    assert.equal(pull(unit, root).status, 0);
   });
 });
