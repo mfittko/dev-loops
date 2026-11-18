@@ -122,13 +122,13 @@ export function resolveDeltaTrigger({ actItemCount = 0, threadItemCount = 0, fix
  */
 export function normalizeThreadsPayload(payload, { repo, pr } = {}) {
   const p = /** @type {any} */ (payload);
-  if (!p || typeof p.source !== "object" || p.source === null || p.repo !== undefined || !Array.isArray(p.threads) || !p.threads.every((thread) => Array.isArray(thread?.bodies))) return payload;
+  if (!p || typeof p.source !== "object" || p.source === null || p.repo !== undefined || !Array.isArray(p.threads) || !p.threads.every((thread) => Array.isArray(thread?.bodies) && thread.bodies.length > 0 && thread.bodies.every((b) => typeof b === "string"))) return payload;
   const bound = p.ok === true && p.source.type === "github" && p.source.repo === repo && Number(p.source.pr) === Number(pr);
   return { ...p, ok: bound, repo, pr, threads: p.threads.map((thread) => ({ ...thread, isResolved: false, trusted: true, body: thread.bodies.join("\n\n") })) };
 }
 
 /**
- * Thread route: reduce successful `list-review-threads --unresolved-only` output for `repo#pr`
+ * Thread route: reduce successful `list-review-threads --unresolved-only` output (or a github-sourced `capture-review-threads --unresolved --bodies` file) for `repo#pr`
  * to a judge-act-list-shaped array, one act item per unresolved thread, `ref` = the `threadId`.
  * @param {unknown} payload
  * @param {{ repo: string, pr: number|string }} target
@@ -140,7 +140,7 @@ export function threadsToActList(rawPayload, { repo, pr } = {}) {
   const threads = Array.isArray(allThreads) ? allThreads.filter((thread) => thread?.trustIncomplete !== true) : allThreads;
   if (/** @type {any} */ (payload)?.ok !== true || !Array.isArray(threads) || /** @type {any} */ (payload).repo !== repo || Number(/** @type {any} */ (payload).pr) !== Number(pr)
     || !threads.every((thread) => thread?.isResolved === false && nonEmpty(thread?.threadId))) {
-    throw new Error(`threads file is not successful list-review-threads --unresolved-only output for ${repo}#${pr}`);
+    throw new Error(`threads file is not successful list-review-threads --unresolved-only output (or a github-sourced capture-review-threads --unresolved --bodies file) for ${repo}#${pr}`);
   }
   // ADR 0238: a thread without the ingestion trust marker is untrusted text; never an act item.
   if (!threads.every((thread) => thread.trusted === true)) {

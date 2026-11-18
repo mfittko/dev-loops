@@ -256,6 +256,11 @@ function reviewBodyFullTask(workOrder, verifier, dispositionPath) {
 ${fullPhaseSteps(workOrder, verifier, { push: `Commit the fixes and push them to branch ${JSON.stringify(branch)}.`, handoffStep })}`;
 }
 
+// One sentence per pinned shape: a capture file carries full `bodies`, a list file carries ~200-character excerpts.
+const threadsReadSentence = (workOrder) => workOrder.threadsShape === "capture"
+  ? " Fix each thread from the full text in its `bodies` in that read."
+  : " Each thread `body` in that read is an excerpt of about 200 characters; stop and report a thread whose problem statement it does not contain.";
+
 export function renderWorkOrder(workOrder) {
   const [dispositionPath] = workOrder.outputRefs;
   if (workOrder.operation === "complete") {
@@ -296,7 +301,7 @@ ${JSON.stringify(workOrder, null, 2)}
     : `Make no further commit: the clearing delta record's candidateHead is the delta-reviewed candidate, and --construct requires the pushed head to equal it. The verifier's --construct writes the report from the threads source and the clearing delta record; never write the disposition handoff yourself. Replace \`<pushed-head-sha>\` below with the full 40-character SHA of the pushed head.\n${fullPhaseSteps(workOrder, verifier, { push: `Push exactly the delta-reviewed candidate (the clearing delta record's candidateHead) to branch ${JSON.stringify(workOrder.mutationAuthority.branch)}.` })}`;
   return `# Fixer work order (ADR 0106)
 
-Source: the \`${workOrder.source}\` read${workOrder.gate ? ` (${workOrder.gate} act list)` : ""}. Phase: \`${workOrder.phase}\`. PR ${workOrder.target.repo}#${workOrder.target.pr} at head \`${workOrder.headSha}\`.${workOrder.source === "threads" ? " Fix each thread from its full text in that read: the `bodies` of a capture-review-threads file, or the `body` of a list-review-threads file (an excerpt of about 200 characters)." : ""}
+Source: the \`${workOrder.source}\` read${workOrder.gate ? ` (${workOrder.gate} act list)` : ""}. Phase: \`${workOrder.phase}\`. PR ${workOrder.target.repo}#${workOrder.target.pr} at head \`${workOrder.headSha}\`.${workOrder.source === "threads" ? threadsReadSentence(workOrder) : ""}
 ${task}${workOrder.deltaFindings ? `\nDelta review findings to fix as act items:\n${workOrder.deltaFindings.map((f, i) => `${i + 1}. ${normalizeSeverity(f.severity)}${f.lifecycle === true ? " [lifecycle]" : ""}: ${JSON.stringify(f.summary)} (evidence: ${JSON.stringify(f.evidence)})`).join("\n")}` : ""}
 When a \`delta-result\` read is listed, follow agents/fixer.agent.md step 7 for its act-item statuses.
 Read every \`required\` entry below IN FULL before any change. If one is missing, unreadable, or its sha256 differs, stop and report which read failed.
@@ -877,6 +882,7 @@ async function emitPlan({
     headSha: candidateHead,
     phase,
     source: source.read.kind,
+    ...(source.read.kind === "threads" && source.parsed.threads?.some((thread) => Array.isArray(thread?.bodies)) ? { threadsShape: "capture" } : {}),
     gate: actListFile ? gate : undefined,
     ...(ciFile ? { failedChecks: source.parsed.failedChecks.slice(0, 50).map((check) => check.name.slice(0, 200)), ...(source.parsed.failedChecks.length > 50 ? { failedChecksOmitted: source.parsed.failedChecks.length - 50 } : {}) } : {}),
     ...(deltaFindings?.length ? { deltaFindings: deltaFindings.map(({ severity, summary, evidence, residueOf, site, lifecycle }) => ({ severity, summary, evidence, ...(lifecycle === true ? { lifecycle: true } : {}),...(residueOf === undefined ? {} : { residueOf }), ...(site === undefined ? {} : { site }) })) } : {}),

@@ -192,6 +192,11 @@ describe("delta trigger", () => {
     for (const source of [{ type: "github", repo: "o/r", pr: 8 }, { type: "input", inputPath: "x.json" }, { type: "stdin" }]) {
       assert.throws(() => threadsToActList(capture(source), { repo: "o/r", pr: 7 }), /not successful list-review-threads/);
     }
+    for (const bodies of [[], [1], ["ok", null]]) {
+      const bad = capture({ type: "github", repo: "o/r", pr: 7 });
+      bad.threads[0].bodies = bodies;
+      assert.throws(() => threadsToActList(bad, { repo: "o/r", pr: 7 }), /not successful list-review-threads/);
+    }
   });
 
   test("thread-route actSetId ignores body excerpts and order; a different thread set changes it", () => {

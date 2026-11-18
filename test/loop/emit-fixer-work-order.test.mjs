@@ -967,13 +967,22 @@ const LONG_BODY = `${"The problem statement runs long. ".repeat(20)}End.`;
 const CAPTURE = (source = { type: "github", repo: REPO, pr: PR }) => ({ ok: true, source, summary: {}, skippedUntrusted: [], threads: [{ threadId: "T1", path: "src/a.mjs", line: 3, isOutdated: false, bodies: [LONG_BODY, "second comment"] }] });
 
 test("a capture-review-threads --unresolved --bodies file is accepted and its full bodies are pinned (commit_only and full)", async () => {
-  await withFixture(async ({ files, emit }) => {
+  await withFixture(async ({ wt, head, files, emit, writeRecord }) => {
     await writeFile(files.threads, JSON.stringify(CAPTURE()));
     const unit = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     const read = unit.workOrder.requiredReads.find((r) => r.kind === "threads");
     assert.equal(JSON.parse(await readFile(read.path)).threads[0].bodies[0], LONG_BODY);
     const prompt = await readFile(unit.promptPath, "utf8");
-    assert.match(prompt, /full text in that read: the `bodies` of a capture-review-threads file/);
+    assert.match(prompt, /Fix each thread from the full text in its `bodies` in that read/);
+    assert.doesNotMatch(prompt, /excerpt of about 200/);
+    // The full phase accepts the same capture and renders the same shape sentence.
+    git(wt, "commit", "-q", "--allow-empty", "-m", "fix");
+    const candidate = git(wt, "rev-parse", "HEAD");
+    await writeFile(files.threads, JSON.stringify({ ...CAPTURE(), threads: [{ ...CAPTURE().threads[0], threadId: "PRRT_T1" }] }));
+    await writeRecord({ candidateHead: candidate, items: [{ ref: "PRRT_T1", status: "resolved" }] });
+    const full = await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    assert.equal(full.workOrder.phase, "full");
+    assert.match(await readFile(full.promptPath, "utf8"), /Fix each thread from the full text in its `bodies` in that read/);
   });
 });
 

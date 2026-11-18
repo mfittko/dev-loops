@@ -152,7 +152,7 @@ against the act items the fix claims to resolve. It resolves the same `pre-push-
 role and tier as full mode (`PRE-PR-MODEL-CONFIG-RESOLVED`) and uses the same
 harness dispatch. There are two delta sources: the gate judge's act list, and
 the thread route, which takes the captured set of unresolved review threads
-(`list-review-threads --unresolved-only` output, passed with `--threads-file` in
+(`capture-review-threads --unresolved --bodies` output, or `list-review-threads --unresolved-only` output, passed with `--threads-file` in
 place of `--act-list`, with `--repo` and `--pr`). On the thread route each
 unresolved thread is one act item and its `ref` is the `threadId`. The
 deterministic checks live in `@dev-loops/core/loop/pre-push-delta-review`; the
