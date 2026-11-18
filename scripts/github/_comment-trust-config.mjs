@@ -38,11 +38,11 @@ export function loadCommentTrustConfig(options = {}) {
 /**
  * For an entry script's direct-run block. A refused load prints one `{ ok: false, error, state }` JSON line on stderr and exits
  * 3 (`TRUST_CONFIG_REFUSED_EXIT`), before any trust read. Exit 1 and 2 stay each entry script's own documented codes; callers key on `state`.
- * A `--help` or `-h` run makes no trust read, so the load is skipped. A help token right after another option token may be that
+ * A `--help` or `-h` run makes no trust read, so the load is skipped. `--help` always skips the load, because a flag may precede it (`--unresolved-only --help`). A `-h` right after another option token may be that
  * option's value (`--output -h`), so it does not skip the load: the load is the safe side.
  */
 export function loadCommentTrustConfigOrExit(options, argv = process.argv.slice(2)) {
-  if (argv.some((arg, i) => (arg === "--help" || arg === "-h") && !(i > 0 && argv[i - 1].startsWith("-") && argv[i - 1] !== "--help" && argv[i - 1] !== "-h"))) return undefined;
+  if (argv.some((arg, i) => arg === "--help" || (arg === "-h" && !(i > 0 && argv[i - 1].startsWith("-") && argv[i - 1] !== "-h")))) return undefined;
   try {
     return loadCommentTrustConfig(options);
   } catch (error) {

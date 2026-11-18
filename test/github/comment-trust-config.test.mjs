@@ -131,6 +131,7 @@ test("an entry script with an invalid default-branch trust block prints one JSON
     assert.equal(help.status, 0);
     assert.match(help.stdout, /3 {2}Comment trust config refused/);
     assert.equal(spawnSync(process.execPath, [script, "-h"], { cwd: dir, encoding: "utf8" }).status, 0);
+    assert.equal(spawnSync(process.execPath, [script, "--unresolved-only", "--help"], { cwd: dir, encoding: "utf8" }).status, 0);
     const run = spawnSync(process.execPath, [script, "--repo", "o/r", "--pr", "1"], { cwd: dir, encoding: "utf8" });
     assert.equal(run.status, 3);
     assert.equal(run.stdout, "");
