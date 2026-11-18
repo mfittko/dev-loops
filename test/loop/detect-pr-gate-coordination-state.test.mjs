@@ -4952,3 +4952,12 @@ for (const { name, isDraft, seal, verdict, threads = 0, seed = true, satisfied, 
     }
   });
 }
+
+test("detect-pr-gate-coordination-state reports not_verified for a noted deferred thread handoff", async () => {
+  const handoffRaw = JSON.stringify({ headSha: "abc9988776", dispositions: [{ threadId: "PRRT_x", fixingCommitSha: "fed9876543fed9876543fed9876543fed9876543", disposition: "deferred", replyNote: "tracked as a follow-up" }] });
+  await runNotVerifiedFixture({ handoffRaw }, (result) => {
+    assert.equal(result.ok, true);
+    assert.match(result.fixerDispositionWarning.warning, /PRRT_x/);
+    assert.match(result.fixerDispositionWarning.warning, /not_verified/);
+  });
+});

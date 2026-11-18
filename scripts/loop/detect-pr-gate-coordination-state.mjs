@@ -27,7 +27,7 @@ import { OUT_OF_BAND_WRITE } from "../github/_gate-artifact-seal.mjs";
 import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
-  FIXER_DISPOSITION_KIND,
+  FIXER_COMMIT_CLAIM_KINDS,
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
@@ -795,7 +795,7 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
 // No checkpoint recorded for this head and no delivered tackled handoff for the live head means nothing
 // to enforce here (a PR with no fixer-disposition ledger entry behaves exactly as before this
 // boundary existed) — returns null so the evaluator input omits the field.
-// A fixer handoff delivered for the live head that lists a tackled thread, with no checkpoint, means
+// A fixer handoff delivered for the live head that lists a tackled or partially_fixed thread, or a thread entry with a replyNote, with no checkpoint, means
 // verify-fixer-disposition never completed (a failed run writes none): report it incomplete as not_verified.
 // Scans every execution's handoff, not the latest plan: a later emission overwrites the plan but not the handoff.
 // Only absence (ENOENT) means "no handoff"; any other read or parse failure is reported incomplete like unreadable_checkpoint.
@@ -834,9 +834,9 @@ async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot
     }
     if (!matchesLiveHead(handoff?.headSha)) continue;
     for (const entry of Array.isArray(handoff.dispositions) ? handoff.dispositions : []) {
-      if (entry?.disposition === FIXER_DISPOSITION_KIND.TACKLED && typeof entry.threadId === "string") {
+      if ((FIXER_COMMIT_CLAIM_KINDS.includes(entry?.disposition) || (typeof entry?.replyNote === "string" && entry.replyNote !== "")) && typeof entry.threadId === "string") {
         incomplete.push({ threadId: entry.threadId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED });
-      } else if (entry?.disposition === FIXER_DISPOSITION_KIND.TACKLED && typeof entry.reviewId === "string") {
+      } else if (entry?.disposition === "tackled" && typeof entry.reviewId === "string") {
         incomplete.push({ reviewId: entry.reviewId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED });
       }
     }
@@ -906,7 +906,7 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
               const relation = await isCommitContainedByHead({ repo, commitSha: head, headSha: currentHeadSha, requireAhead: true }, runtime);
               if (!relation.contained) throw new Error("ancestor checkpoint requires an ahead live head; run a full gate round");
               const threads = typeof parsedThreads === "function" ? await parsedThreads() : parsedThreads;
-              const containment = await buildContainmentMap(handoff.dispositions.filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).map((entry) => entry.fixingCommitSha), { repo, headSha: currentHeadSha }, runtime);
+              const containment = await buildContainmentMap(handoff.dispositions.filter((entry) => FIXER_COMMIT_CLAIM_KINDS.includes(entry.disposition)).map((entry) => entry.fixingCommitSha), { repo, headSha: currentHeadSha }, runtime);
               const liveThreads = threads.threads.map((thread) => ({ threadId: thread.id, isResolved: thread.isResolved, replyBodies: threads.comments.filter((comment) => comment.threadId === thread.id).map((comment) => comment.body) }));
               const evaluation = evaluateFixerDisposition({ handoff, liveThreads, containment, liveReviews: await readHandoffReviewMarkers(handoff, { repo, pr }, runtime) });
               if (!(await readFile(planPath)).equals(planBytes)) throw new Error("active fixer plan changed during carry verification");
@@ -974,7 +974,7 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
   }
   const tackledShas = [...new Set(
     handoff.dispositions
-      .filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED)
+      .filter((entry) => FIXER_COMMIT_CLAIM_KINDS.includes(entry.disposition))
       .map((entry) => entry.fixingCommitSha),
   )];
   const containment = await buildContainmentMap(tackledShas, { repo, headSha: currentHeadSha }, runtime);

@@ -5,14 +5,57 @@
 // (live thread state, commit containment) is injected as data, never fetched
 // here, so the same decision is shared verbatim across every harness.
 
-/** Disposition values a handoff entry may carry. Only "tackled" entries are
- * auto-disposed by evaluateFixerDisposition; every other value keeps its
+import { guardCommentBodyNoIssuePrIds } from "../github/comment-id-guard.mjs";
+import { sanitizeCopilotSummonTokens } from "../github/copilot-helpers.mjs";
+
+/** Disposition values a handoff entry may carry. "tackled" and "partially_fixed"
+ * entries are auto-disposed by evaluateFixerDisposition, as is a "deferred" or
+ * "rejected" entry that carries a replyNote; every other entry keeps its
  * existing judgment path untouched (see the boundary rule's scope note). */
 export const FIXER_DISPOSITION_KIND = Object.freeze({
   TACKLED: "tackled",
+  PARTIALLY_FIXED: "partially_fixed",
   DEFERRED: "deferred",
   REJECTED: "rejected",
 });
+
+/** The dispositions that claim a fixing commit in the PR head. */
+export const FIXER_COMMIT_CLAIM_KINDS = Object.freeze([FIXER_DISPOSITION_KIND.TACKLED, FIXER_DISPOSITION_KIND.PARTIALLY_FIXED]);
+
+/** The `Fixed in commit <sha>.` text. Throws for any entry kind other than `tackled`. */
+export function composeFixedInCommitBody(entry) {
+  if (entry.disposition !== FIXER_DISPOSITION_KIND.TACKLED) throw new Error(`A "Fixed in commit" body is composed for a tackled entry only, not "${entry.disposition}".`);
+  return `Fixed in commit ${entry.fixingCommitSha}.`;
+}
+
+/**
+ * The one reply body for a thread entry. A `Fixed in commit` body is composed for a `tackled` entry only.
+ * Returns null for a `deferred` or `rejected` entry without a replyNote: that entry posts no reply of its own.
+ */
+export function composeFixerReplyBody(entry) {
+  const { disposition, fixingCommitSha: sha, replyNote: note } = entry;
+  if (disposition === FIXER_DISPOSITION_KIND.TACKLED) return `${composeFixedInCommitBody(entry)}${note ? ` ${note}` : ""}`;
+  if (disposition === FIXER_DISPOSITION_KIND.PARTIALLY_FIXED) return `Partially fixed in commit ${sha}. Not done: ${note}`;
+  if (!note) return null;
+  return disposition === FIXER_DISPOSITION_KIND.DEFERRED ? `Deferred, no code change in this PR: ${note}` : `Not changed: ${note}`;
+}
+
+const REPLY_NOTE_MAX_CHARS = 500;
+
+/**
+ * Sanitize a reply note to the operator-focus carrier rules (control characters, angle brackets and backticks removed, at most
+ * 500 characters) and refuse one the reply writer would refuse or alter: a bare issue/PR id, an operator-owned line or a Copilot summon token.
+ * Returns the cleaned note; throws on a refusal.
+ */
+export function cleanReplyNote(value, label = "replyNote") {
+  if (typeof value !== "string") throw new Error(`${label} must be a string`);
+  if (value.length > REPLY_NOTE_MAX_CHARS) throw new Error(`${label} is over ${REPLY_NOTE_MAX_CHARS} characters`);
+  const note = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").replace(/[<>`]/g, "").replace(/~{3,}/g, "").replace(/ +/g, " ").trim();
+  if (note === "") throw new Error(`${label} is empty after sanitizing`);
+  if (sanitizeCopilotSummonTokens(note) !== note) throw new Error(`${label} carries a Copilot summon token that the reply writer rewrites; reword it`);
+  guardCommentBodyNoIssuePrIds(note, { ref: label });
+  return note;
+}
 
 export const FIXER_DISPOSITION_FAILED_STEP = Object.freeze({
   MISSING_FROM_HANDOFF: "missing_from_handoff",
@@ -21,6 +64,8 @@ export const FIXER_DISPOSITION_FAILED_STEP = Object.freeze({
   NOT_RESOLVED: "not_resolved",
   // The thread is resolved and its replies cite only a short SHA of the fixing commit.
   RESOLVED_SHORT_SHA_REPLY: "resolved_short_sha_reply",
+  // A thread with a replyNote is resolved and carries no composed reply, so the verifier cannot post one.
+  RESOLVED_NOTE_REPLY_MISSING: "resolved_note_reply_missing",
   // A delivered tackled handoff for the live head with no verification checkpoint: verify-fixer-disposition never completed.
   NOT_VERIFIED: "not_verified",
   // The delta review of the fix left the thread not_resolved or cannot_verify; the status rides in `deltaStatus`.
@@ -231,7 +276,8 @@ export function normalizeFixerDispositionHandoff(raw, { ruleIds } = {}) {
       // The marker comment cites the commit in full, so the entry must carry the full 40-character SHA.
       if (!isNonEmptyString(entry.fixingCommitSha) || !/^[0-9a-fA-F]{40}$/.test(entry.fixingCommitSha.trim())) throw new Error(`Fixer disposition handoff entry for review ${reviewId} needs fixingCommitSha as the full 40-character SHA (git rev-parse <commit>)`);
       const disposition = isNonEmptyString(entry.disposition) ? entry.disposition.trim().toLowerCase() : "";
-      if (!Object.values(FIXER_DISPOSITION_KIND).includes(disposition)) throw new Error(`Fixer disposition handoff entry for review ${reviewId} has a missing or unrecognized disposition: ${disposition}`);
+      if (disposition === FIXER_DISPOSITION_KIND.PARTIALLY_FIXED || !Object.values(FIXER_DISPOSITION_KIND).includes(disposition)) throw new Error(`Fixer disposition handoff entry for review ${reviewId} has a missing or unrecognized disposition: ${disposition}`);
+      if (entry.replyNote !== undefined) throw new Error(`Fixer disposition handoff entry for review ${reviewId} carries a replyNote; a review-body entry takes none`);
       return { reviewId, fingerprint: null, fixingCommitSha: entry.fixingCommitSha.trim().toLowerCase(), disposition, validation: isNonEmptyString(entry.validation) ? entry.validation.trim() : null };
     }
     if (!isNonEmptyString(entry.threadId)) {
@@ -248,7 +294,7 @@ export function normalizeFixerDispositionHandoff(raw, { ruleIds } = {}) {
     if (!isNonEmptyString(entry.fixingCommitSha)) {
       throw new Error(`Fixer disposition handoff entry for thread ${threadId} is missing fixingCommitSha`);
     }
-    if (String(entry.disposition).trim().toLowerCase() === FIXER_DISPOSITION_KIND.TACKLED && !/^[0-9a-fA-F]{40}$/.test(entry.fixingCommitSha.trim())) {
+    if (FIXER_COMMIT_CLAIM_KINDS.includes(String(entry.disposition).trim().toLowerCase()) && !/^[0-9a-fA-F]{40}$/.test(entry.fixingCommitSha.trim())) {
       throw new Error(`Fixer disposition handoff entry for thread ${threadId} needs fixingCommitSha as the full 40-character SHA (git rev-parse <commit>)`);
     }
     if (!isNonEmptyString(entry.disposition)) {
@@ -259,12 +305,15 @@ export function normalizeFixerDispositionHandoff(raw, { ruleIds } = {}) {
     if (!Object.values(FIXER_DISPOSITION_KIND).includes(disposition)) {
       throw new Error(`Fixer disposition handoff entry for thread ${threadId} has an unrecognized disposition: ${disposition}`);
     }
+    if (entry.replyNote !== undefined && !isNonEmptyString(entry.replyNote)) throw new Error(`Fixer disposition handoff entry for thread ${threadId} replyNote must be a non-empty string`);
+    if (disposition === FIXER_DISPOSITION_KIND.PARTIALLY_FIXED && entry.replyNote === undefined) throw new Error(`Fixer disposition handoff entry for thread ${threadId} is partially_fixed and needs a replyNote naming what is not done`);
     return {
       threadId,
       fingerprint,
       fixingCommitSha: entry.fixingCommitSha.trim(),
       disposition,
       validation: isNonEmptyString(entry.validation) ? entry.validation.trim() : null,
+      ...(entry.replyNote !== undefined ? { replyNote: cleanReplyNote(entry.replyNote, `Fixer disposition handoff entry for thread ${threadId} replyNote`) } : {}),
       ...normalizeSiteCoverage(entry, `Fixer disposition handoff entry for thread ${threadId}`, ruleIds),
     };
   });
@@ -283,8 +332,11 @@ function formatIncompleteReason(incomplete) {
   const shortSha = incomplete.some((entry) => entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.RESOLVED_SHORT_SHA_REPLY)
     ? " A resolved thread whose replies cite only a short SHA needs the full 40-character SHA: run `dev-loops-run scripts/github/unresolve-review-thread.mjs --repo <owner/name> --pr <n> --thread-id <thread id>`, then re-run the verifier, which replies with the full SHA and resolves again."
     : "";
+  const noteReply = incomplete.some((entry) => entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.RESOLVED_NOTE_REPLY_MISSING)
+    ? " A resolved thread with a replyNote and no composed reply needs that reply: unresolve it (the same unresolve-review-thread.mjs command), then re-run the verifier, which posts the reply and resolves again."
+    : "";
   return `Fixer disposition is incomplete for ${incomplete.length} entry(ies): ${parts.join("; ")}. `
-    + `The only legal next action is ${COMPLETE_FIXER_DISPOSITION_ACTION}.${shortSha}`;
+    + `The only legal next action is ${COMPLETE_FIXER_DISPOSITION_ACTION}.${shortSha}${noteReply}`;
 }
 
 // A short hex token in a reply that is a prefix of the fixing commit.
@@ -322,7 +374,7 @@ export function evaluateFixerDisposition({ handoff, liveThreads = [], containmen
   // handoff counterpart at all — that gap is exactly missing_from_handoff.
   const tackledThreadIds = new Set();
   for (const entry of threadEntries) {
-    if (entry.disposition === FIXER_DISPOSITION_KIND.TACKLED) {
+    if (FIXER_COMMIT_CLAIM_KINDS.includes(entry.disposition)) {
       tackledThreadIds.add(entry.threadId);
     }
   }
@@ -349,18 +401,33 @@ export function evaluateFixerDisposition({ handoff, liveThreads = [], containmen
     }
     const liveThread = liveByThreadId.get(threadId) ?? null;
     const replyBodies = Array.isArray(liveThread?.replyBodies) ? liveThread.replyBodies : [];
-    const hasEvidencedReply = replyBodies.some((body) => (
+    // A noted entry needs its own composed reply: an unrelated earlier reply citing the SHA does not satisfy it.
+    const composedBody = handoffEntry.replyNote ? composeFixerReplyBody(handoffEntry) : null;
+    const hasEvidencedReply = composedBody ? replyBodies.includes(composedBody) : replyBodies.some((body) => (
       typeof body === "string" && body.toLowerCase().includes(expectedCommit.toLowerCase())
     ));
     if (!hasEvidencedReply) {
       // A resolved thread cannot take the verifier's reply: name the short-SHA cause so the remedy is runnable.
       const shortOnly = liveThread?.isResolved === true && replyBodies.some((body) => citesShortSha(body, expectedCommit));
-      incomplete.push({ threadId, expectedCommit, failedStep: shortOnly ? FIXER_DISPOSITION_FAILED_STEP.RESOLVED_SHORT_SHA_REPLY : FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING });
+      // A resolved thread with a noted entry cannot take the composed reply either: name the unresolve remedy.
+      const failedStep = composedBody && liveThread?.isResolved === true ? FIXER_DISPOSITION_FAILED_STEP.RESOLVED_NOTE_REPLY_MISSING
+        : shortOnly ? FIXER_DISPOSITION_FAILED_STEP.RESOLVED_SHORT_SHA_REPLY : FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING;
+      incomplete.push({ threadId, expectedCommit, failedStep });
       continue;
     }
     if (liveThread?.isResolved !== true) {
       incomplete.push({ threadId, expectedCommit, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED });
     }
+  }
+
+  // A deferred or rejected entry with a replyNote needs its own composed reply and a resolved thread; no commit is claimed.
+  for (const entry of threadEntries.filter((e) => !FIXER_COMMIT_CLAIM_KINDS.includes(e.disposition) && e.replyNote)) {
+    const liveThread = liveByThreadId.get(entry.threadId) ?? null;
+    const body = composeFixerReplyBody(entry);
+    const failedStep = !(liveThread?.replyBodies ?? []).includes(body)
+      ? (liveThread?.isResolved === true ? FIXER_DISPOSITION_FAILED_STEP.RESOLVED_NOTE_REPLY_MISSING : FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING)
+      : liveThread?.isResolved !== true ? FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED : null;
+    if (failedStep) incomplete.push({ threadId: entry.threadId, expectedCommit: null, failedStep });
   }
 
   // A review body has no thread: its evidence is a trusted marker comment citing the fixing commit (`liveReviews[].markerCommits`).
