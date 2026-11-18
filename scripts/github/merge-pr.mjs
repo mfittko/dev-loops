@@ -727,11 +727,14 @@ export async function mergePr(options, runtime = {}) {
   if (!currentHeadSha) throw new Error("Invalid gh pr view payload: missing headRefOid");
   if (hasSpikePrMarker(prView?.body)) {
     const reason = spikePrRefusal(options.pr);
-    const error = new Error(`Merge preconditions not satisfied: spike_pr (${reason})`);
-    error.mergePrFailure = {
+    const failure = {
       ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
       failures: [{ precondition: "spike_pr", reason }],
     };
+    // --check exits 0 with the check-shaped result whenever the preconditions could be evaluated.
+    if (options.check) return { ...failure, check: true };
+    const error = new Error(`Merge preconditions not satisfied: spike_pr (${reason})`);
+    error.mergePrFailure = failure;
     throw error;
   }
 
