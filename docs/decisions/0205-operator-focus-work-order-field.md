@@ -22,7 +22,3 @@ The change adds a rule to [Gate review sub-loop contract](../../skills/docs/gate
 ## Consequences
 
 Operator context reaches the actor through the authenticated work order and is part of its digest. Free-text additions to a dispatch prompt stay unsanctioned. The carrier is bounded, so a focus file cannot inject markup or unbounded prose.
-
-## Amendment: fixer reply dispositions (issue 3206)
-
-A fixer item carries two more optional fields. `replyDisposition` is one of `tackled`, `partially_fixed`, `deferred` and `rejected`, and `partially_fixed` is a new value of `FIXER_DISPOSITION_KIND`. `replyNote` is sanitized and bounded by the reply writer's own rules, and the verifier posts it in the thread reply. A `replyDisposition` other than `tackled` without a `replyNote` refuses, and a `replyNote` without a `replyDisposition` refuses. An item binds by `fingerprint` on an `--act-list-file` source or by `threadId` on a `--threads-file` source, and exactly one of the two keys is present. A `threadId` item carries no `decision`, and an unknown thread id refuses and nothing is written. The work-order digest pins both fields, and `## Operator focus` renders them. The `replyDisposition` sets only the reply on the review thread. The judge and the act list keep ownership of the act/defer disposition.
