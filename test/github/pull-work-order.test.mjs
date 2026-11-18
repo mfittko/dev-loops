@@ -521,6 +521,7 @@ test("historical judge pull delegates to the index-owning new renderer and its p
     for (const dep of ["yaml", "zod"]) await symlink(path.join(checkout, "node_modules", dep), path.join(old, "node_modules", dep), "dir");
     const emit = async (root) => {
       const sources = await seedJudgeSources(root, { headSha: HEAD, pr: 800000 + parseInt(randomBytes(3).toString("hex"), 16) });
+      ensureTrustConfigCheckout(root, path.join(root, "scripts/loop/emit-judge-work-order.mjs"));
       const result = spawnSync("node", [path.join(root, "scripts/loop/emit-judge-work-order.mjs"), "--repo", sources.repo, "--pr", String(sources.pr), "--gate", sources.gate, "--head-sha", HEAD,
         "--findings-file", sources.findingsFile, "--spec-file", sources.specFile, "--identity-file", sources.identityFile], { cwd: root, encoding: "utf8", env: (await writeGhStub(root, [{ stdout: JSON.stringify({ body: "Declared scope: fix the finding.\n" }) }], { repeatLastOnOverflow: true })).env });
       assert.equal(result.status, 0, result.stdout + result.stderr);
