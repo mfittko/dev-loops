@@ -59,7 +59,8 @@ Diagnostic output (stderr):
     { "ok": false, "error": "..." }
 Exit codes:
   0  Success
-  1  Argument error or gh failure`.trim();
+  1  Argument error or gh failure
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const COPILOT_ACTIVITY_QUERY = [
   "query($owner: String!, $name: String!, $pr: Int!) {",
   "  repository(owner: $owner, name: $name) {",

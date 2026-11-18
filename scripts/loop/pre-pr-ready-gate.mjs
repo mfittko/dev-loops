@@ -46,6 +46,7 @@ comments.
 Exit codes:
   0  Draft gate evidence exists and the size budget does not block — ready transition is allowed
   1  Draft gate evidence missing/insufficient, or the size budget blocks — transition blocked
+  3  Comment trust config refused (stderr JSON with a state field)
 
 Output (stdout, JSON on success):
   {

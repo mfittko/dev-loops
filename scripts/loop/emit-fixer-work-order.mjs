@@ -79,7 +79,7 @@ that renders as a bounded, sanitized "Operator focus" section and is pinned by t
 An item decision picks among remedies its act item offers and never changes the disposition; items need an
 --act-list-file source and a fingerprint from that list, or the emit refuses and writes nothing.
 It accepts no other brief, payload or summary input.
-Exit codes: 0 emitted, 1 refused (missing or conflicting source or authority), 2 usage/IO error.`;
+Exit codes: 0 emitted, 1 refused (missing or conflicting source or authority), 2 usage/IO error, 3 comment trust config refused (stderr JSON with a state field).`;
 
 // ref = fixer:<owner/repo>#<pr>:<headSha>:<executionIdentity>; executionIdentity = f<emit ms>-<8 hex>.
 const FIXER_REF_RE = /^fixer:([^/\s#]+\/[^/\s#]+)#(\d+):([0-9a-f]{40}|[0-9a-f]{64}):(f(\d+)-[0-9a-f]{8})$/;

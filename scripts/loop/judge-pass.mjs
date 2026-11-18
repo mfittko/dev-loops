@@ -185,6 +185,7 @@ Exit codes:
   0   Success
   1   Fail closed (stale verdict head, malformed verdict, out-of-range disposition, etc.)
   2   Invalid --jq filter
+  3   Comment trust config refused (stderr JSON with a state field)
 `.trim();
 
 const GATES = GATE_NAMES;

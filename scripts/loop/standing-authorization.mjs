@@ -103,7 +103,7 @@ export function readDefaultBranchConfig({ repoRoot = process.cwd(), defaultBranc
   try {
     git(["rev-parse", "--verify", "--quiet", `origin/${branch}^{commit}`], { repoRoot });
   } catch {
-    return refuse("missing", `no .devloops on origin/${branch} (ref absent)`);
+    return refuse("missing", `no .devloops on origin/${branch} (ref absent)`, { refAbsent: true });
   }
   let source = null;
   let sourceName = null;

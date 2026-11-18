@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,7 @@ import { afterEach, test } from "bun:test";
 
 import { isTrustedCommentAuthor, setCommentTrustConfig } from "@dev-loops/core/github/comment-trust";
 import { CommentTrustConfigError, loadCommentTrustConfig, loadCommentTrustConfigOrExit } from "../../scripts/github/_comment-trust-config.mjs";
+import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 
 afterEach(() => setCommentTrustConfig());
 
@@ -14,8 +15,8 @@ const ghUser = (login) => ({ login, type: "User", association: "NONE" });
 
 function repoWithDefaultBranch(devloops) {
   const dir = mkdtempSync(join(tmpdir(), "trust-cfg-"));
-  const git = (...args) => execFileSync("git", args, { cwd: dir, stdio: "pipe", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).toString();
-  git("init", "-q", "-b", "main");
+  const git = (...args) => runGitFixture(dir, args);
+  initGitFixture(dir, { branch: "main", commit: null });
   if (devloops !== null) {
     writeFileSync(join(dir, ".devloops"), devloops);
     git("add", ".devloops");
@@ -64,7 +65,7 @@ test("each load outcome refuses with its own typed state", () => {
   const valid = repoWithDefaultBranch("version: 1\ntrust:\n  reviewers:\n    - fine-login\n");
   const invalid = repoWithDefaultBranch("version: 1\ntrust:\n  reviewers:\n    - 'bad login'\n");
   const noRef = mkdtempSync(join(tmpdir(), "trust-cfg-"));
-  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: noRef });
+  initGitFixture(noRef, { branch: "main", commit: null });
   const state = (dir, options) => {
     try {
       loadCommentTrustConfig({ repoRoot: dir, ...options });
@@ -77,10 +78,21 @@ test("each load outcome refuses with its own typed state", () => {
   try {
     const gitFailingOn = (needle) => (args) => {
       if (args.includes(needle)) throw new Error("boom");
-      return execFileSync("git", args, { cwd: valid.dir }).toString();
+      return runGitFixture(valid.dir, args);
+    };
+    const detail = (dir, options) => {
+      try {
+        loadCommentTrustConfig({ repoRoot: dir, ...options });
+      } catch (error) {
+        return error.message;
+      }
+      return "";
     };
     assert.equal(state(valid.dir, { git: () => { throw new Error("no origin/HEAD"); } }), "default_branch_unresolved");
+    assert.match(detail(valid.dir, { git: () => { throw new Error("no origin/HEAD"); } }), /run: git remote set-head origin --auto$/);
     assert.equal(state(noRef, { defaultBranch: "main" }), "missing");
+    assert.match(detail(noRef, { defaultBranch: "main" }), /refusing to run: the local origin\/main ref is absent.*run: git fetch origin$/);
+    assert.match(detail(invalid.dir, { defaultBranch: "main" }), /then run: git fetch origin$/);
     assert.equal(state(valid.dir, { defaultBranch: "main", git: gitFailingOn("show") }), "malformed");
     assert.equal(state(invalid.dir, { defaultBranch: "main" }), "invalid");
     assert.equal(state(valid.dir, { defaultBranch: "main" }), "loaded");
@@ -109,13 +121,16 @@ test("loadCommentTrustConfigOrExit reads the config from the repoRoot option", (
   }
 });
 
-test("an entry script with an invalid default-branch trust block prints one JSON refusal with the typed state and exits 2", () => {
+test("an entry script with an invalid default-branch trust block prints one JSON refusal with the typed state and exits 3, while --help still exits 0", () => {
   const { dir, git } = repoWithDefaultBranch("version: 1\ntrust:\n  reviewers:\n    - 'bad login'\n");
   try {
     git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
     const script = new URL("../../scripts/github/list-review-threads.mjs", import.meta.url).pathname;
-    const run = spawnSync(process.execPath, [script, "--help"], { cwd: dir, encoding: "utf8" });
-    assert.equal(run.status, 2);
+    const help = spawnSync(process.execPath, [script, "--help"], { cwd: dir, encoding: "utf8" });
+    assert.equal(help.status, 0);
+    assert.match(help.stdout, /3 {2}Comment trust config refused/);
+    const run = spawnSync(process.execPath, [script, "--repo", "o/r", "--pr", "1"], { cwd: dir, encoding: "utf8" });
+    assert.equal(run.status, 3);
     assert.equal(run.stdout, "");
     const refusal = JSON.parse(run.stderr.trim());
     assert.equal(refusal.ok, false);

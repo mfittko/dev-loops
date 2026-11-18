@@ -141,7 +141,8 @@ filtered value) and is exempt from the status-based rule above.
 Exit codes:
   0  Success (including unavailable); with --silent, only when status is "requested"
   1  Argument error, gh failure, or (--silent) any non-"requested" status
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const parseError = buildParseError(USAGE);
 export function parseRequestCliArgs(argv) {
   const { tokens } = parseArgs({

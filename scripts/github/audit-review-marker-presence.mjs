@@ -61,6 +61,7 @@ Exit codes:
   1   Usage/IO/gh error; ALSO a falsy --silent/--jq predicate (the standard
       base-CLI query result per BASE-JQ-OUTPUT-GUARANTEE, not a gate failure)
   2   Invalid --jq filter
+  3   Comment trust config refused (stderr JSON with a state field)
 
 ${JQ_OUTPUT_USAGE}
 `.trim();

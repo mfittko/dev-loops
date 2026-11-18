@@ -552,7 +552,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
   1  Argument error, gh failure, or contradictory gate evidence
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const parseError = buildParseError(USAGE);
 function rejectRemovedFlag(token) {
   throw parseError(

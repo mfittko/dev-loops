@@ -172,7 +172,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success (gate evidence is valid)
   1  Argument error, gh failure, malformed gh JSON, or missing required pre-merge gate evidence.
-  2  Invalid --jq filter.`.trim();
+  2  Invalid --jq filter.
+  3  Comment trust config refused (stderr JSON with a state field).`.trim();
 const parseError = buildParseError(USAGE);
 export function parseDetectCheckpointEvidenceCliArgs(argv) {
   const { tokens } = parseArgs({

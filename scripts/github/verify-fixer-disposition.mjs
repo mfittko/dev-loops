@@ -140,7 +140,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
   1  Argument error or gh/runtime failure
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 
 function parseError(message) {
   return Object.assign(new Error(message), { usage: USAGE });

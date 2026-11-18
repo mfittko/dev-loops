@@ -54,6 +54,7 @@ Exit codes:
   0   Success
   1   Usage/IO/gh error
   2   Invalid --jq filter
+  3   Comment trust config refused (stderr JSON with a state field)
 
 ${JQ_OUTPUT_USAGE}
 `.trim();

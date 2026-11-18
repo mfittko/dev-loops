@@ -355,7 +355,8 @@ Exit codes:
      unreadable/non-JSON/missing-key --emit-plan artifact
      (the rejected invocation writes no new output and preserves pre-existing
      caller-owned files; callers must honor exit 1)
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 
 const parseError = buildParseError(USAGE);
 

@@ -123,7 +123,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
   1  Argument error or gh failure
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const POST_CONVERGENCE_SUPPRESSED_NEXT_ACTION = "The converged Copilot review stands for this head, so no Copilot round was placed; continue to pre_approval_gate instead of re-requesting Copilot review";
 // The converged review stands for this head: route to the same stop/terminal,
 // pre_approval_gate-bound disposition as the clean round-cap fallback.

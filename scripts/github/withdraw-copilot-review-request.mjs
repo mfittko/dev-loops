@@ -132,6 +132,7 @@ Exit codes:
   0 — withdrawn, or a no-op because nothing was pending
   1 — usage/argument error, gh failure, or a refusal (the guards did not hold)
   2 — invalid --jq filter
+  3 — Comment trust config refused (stderr JSON with a state field)
 `.trim();
 
 function parseCliArgs(argv) {

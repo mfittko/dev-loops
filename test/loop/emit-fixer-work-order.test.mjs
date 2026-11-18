@@ -1240,7 +1240,7 @@ test("push authority: the idempotent --phase full re-emission refuses once local
     // HEAD past the reviewed candidate: the re-emission refuses and leaves the marker ungranted.
     await corrupt();
     git(wt, "commit", "-q", "--allow-empty", "-m", "past the reviewed candidate");
-    await assert.rejects(f.full(), /full_order_head_moved: [^]*re-run the commit_only emission [^]*at the new HEAD, then run the delta review \(dev-loops(?:-run --repo-root <checkout> cli\/index\.mjs)? loop pre-push-delta\)/);
+    await assert.rejects(f.full(), /full_order_head_moved: [^]*re-run the commit_only emission [^]*at the new HEAD, then run the delta review \(dev-loops loop pre-push-delta\)/);
     assert.equal(readSequenceMarker(markerRoot, head)?.fullGranted, false);
   });
 });

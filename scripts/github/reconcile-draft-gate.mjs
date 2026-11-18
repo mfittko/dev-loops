@@ -60,7 +60,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success — PR was reconciled and gate evidence posted
   1  Argument error, gh failure, or unrecoverable state
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const parseError = buildParseError(USAGE);
 export function parseReconcileDraftGateCliArgs(argv) {
   const { tokens } = parseArgs({
