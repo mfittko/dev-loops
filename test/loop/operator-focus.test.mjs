@@ -101,6 +101,7 @@ test("reply fields: parse on both bindings, sanitize, cap at 500 characters and 
   assert.deepEqual(focus.items, [{ fingerprint: "f1", replyDisposition: "partially_fixed", replyNote: "a b" }, { threadId: "PRRT_1", replyDisposition: "tackled" }]);
   const bound = bindOperatorFocusItems(focus, [{ fingerprint: "f1", summary: "s" }], ["PRRT_1"]);
   assert.match(renderOperatorFocusSection(bound), /Thread PRRT_1: operator reply disposition: tackled\n/);
+  assert.match(renderOperatorFocusSection(bound), /A reply disposition of deferred or rejected means make no code change for that thread/);
   assert.match(renderOperatorFocusSection(bound), /Act item f1: operator reply disposition: partially_fixed; reply note: a b\n/);
 });
 

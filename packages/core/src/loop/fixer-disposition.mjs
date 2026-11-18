@@ -64,7 +64,7 @@ export const FIXER_DISPOSITION_FAILED_STEP = Object.freeze({
   NOT_RESOLVED: "not_resolved",
   // The thread is resolved and its replies cite only a short SHA of the fixing commit.
   RESOLVED_SHORT_SHA_REPLY: "resolved_short_sha_reply",
-  // A noted deferred or rejected thread is resolved and carries no composed reply, so the verifier cannot post one.
+  // A thread with a replyNote is resolved and carries no composed reply, so the verifier cannot post one.
   RESOLVED_NOTE_REPLY_MISSING: "resolved_note_reply_missing",
   // A delivered tackled handoff for the live head with no verification checkpoint: verify-fixer-disposition never completed.
   NOT_VERIFIED: "not_verified",
@@ -333,7 +333,7 @@ function formatIncompleteReason(incomplete) {
     ? " A resolved thread whose replies cite only a short SHA needs the full 40-character SHA: run `dev-loops-run scripts/github/unresolve-review-thread.mjs --repo <owner/name> --pr <n> --thread-id <thread id>`, then re-run the verifier, which replies with the full SHA and resolves again."
     : "";
   const noteReply = incomplete.some((entry) => entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.RESOLVED_NOTE_REPLY_MISSING)
-    ? " A resolved deferred or rejected thread without its composed reply needs that reply: unresolve it (the same unresolve-review-thread.mjs command), then re-run the verifier, which posts the reply and resolves again."
+    ? " A resolved thread with a replyNote and no composed reply needs that reply: unresolve it (the same unresolve-review-thread.mjs command), then re-run the verifier, which posts the reply and resolves again."
     : "";
   return `Fixer disposition is incomplete for ${incomplete.length} entry(ies): ${parts.join("; ")}. `
     + `The only legal next action is ${COMPLETE_FIXER_DISPOSITION_ACTION}.${shortSha}${noteReply}`;

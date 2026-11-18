@@ -72,7 +72,7 @@ Required:
                         partially_fixed and replyNote apply to threadId entries
                         only (a reviewId entry refuses both); a replyNote must
                         match an operator focus pin for that thread.
-                        A resolved deferred or rejected thread with a replyNote and
+                        A resolved thread with a replyNote and
                         no composed reply fails resolved_note_reply_missing:
                         unresolve the thread, then re-run the verifier.
                         A review-body work order (emit-fixer-work-order.mjs
@@ -660,16 +660,16 @@ function pinnedDisposition(operatorFocus, keys, deltaResolved) {
 }
 
 // A reply note authorizes a reply and a resolve, so only a note the operator focus pinned for that thread counts.
-// A fingerprint pin counts only when that fingerprint is a live ACT member of the entry's thread (membersOf).
+// A fingerprint pin counts only when that fingerprint is a live ACT member of the entry's thread (membersOf).  The entry scalar fingerprint never narrows it.
 // The check runs both ways: an entry may not drop a bound pin either. A deferred or rejected pin needs the same
 // disposition and note. A tackled or partially_fixed pin needs the same entry, or a deferred entry without a note.
-function assertNotesPinned(handoff, operatorFocus, membersOf) {
+export function assertNotesPinned(handoff, operatorFocus, membersOf) {
   const pins = (operatorFocus?.items ?? []).filter((item) => item.replyDisposition);
   for (const entry of handoff.dispositions) {
     if (!entry.threadId) continue;
     const members = membersOf(entry.threadId);
     const bound = pins.filter((item) => item.threadId === entry.threadId
-      || (item.fingerprint && members.includes(item.fingerprint) && (!entry.fingerprint || item.fingerprint === entry.fingerprint)));
+      || (item.fingerprint && members.includes(item.fingerprint)));
     if (entry.replyNote && !bound.some((item) => item.replyDisposition === entry.disposition && item.replyNote === entry.replyNote)) {
       throw new Error(`handoff entry for ${entry.threadId} carries a replyNote with no matching operator focus pin; only the operator focus carrier sets a reply note`);
     }

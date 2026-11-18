@@ -107,7 +107,7 @@ export function bindOperatorFocusItems(focus, actList, threadIds) {
 /** Render the fixed "## Operator focus" section, or an empty string for an absent focus. */
 export function renderOperatorFocusSection(focus) {
   if (!focus) return "";
-  const lines = ["## Operator focus", "", "The operator supplied this context. A decision picks among remedies an act item offers and never changes its disposition."];
+  const lines = ["## Operator focus", "", "The operator supplied this context. A decision picks among remedies an act item offers and never changes its disposition. A reply disposition of deferred or rejected means make no code change for that thread, and partially_fixed means leave undone what the note names."];
   if (focus.round) lines.push("", `Round: ${focus.round}`);
   for (const item of focus.items ?? []) {
     const label = item.threadId ? `Thread ${item.threadId}` : `Act item ${item.fingerprint}`;

@@ -16,6 +16,7 @@ import {
   parseVerifyFixerDispositionCliArgs,
   verifyFixerDisposition,
   assertDescendantThreadSites,
+  assertNotesPinned,
   publishReport,
 } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
@@ -3658,5 +3659,18 @@ for (const [label, pin, entry] of [
         assert.doesNotMatch(error.message, /operator focus pin/);
       });
     });
+  });
+}
+
+// A scalar entry fingerprint never narrows the pins that bind a thread: every pinned live ACT member counts.
+for (const [label, fingerprint, expected] of [
+  ["no fingerprint", undefined, /disagrees with its operator focus pin/],
+  ["the pinned member fpB", "fpB", /disagrees with its operator focus pin/],
+  ["a different member fpA", "fpA", /disagrees with its operator focus pin/],
+]) {
+  test(`assertNotesPinned binds the fpB pin for a tackled entry with ${label}`, () => {
+    const focus = { items: [{ fingerprint: "fpB", replyDisposition: "deferred", replyNote: "n" }] };
+    const handoff = { dispositions: [{ threadId: "T", fixingCommitSha: FIX_SHA, disposition: "tackled", ...(fingerprint ? { fingerprint } : {}) }] };
+    assert.throws(() => assertNotesPinned(handoff, focus, () => ["fpA", "fpB"]), expected);
   });
 }
