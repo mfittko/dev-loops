@@ -69,6 +69,9 @@ Required:
                         needs fixingCommitSha as the full 40-character SHA, and a
                         partially_fixed entry needs a replyNote; a reviewId entry
                         needs the full 40-character SHA for every disposition.
+                        partially_fixed and replyNote apply to threadId entries
+                        only (a reviewId entry refuses both); a replyNote must
+                        match an operator focus pin for that thread.
                         A resolved deferred or rejected thread with a replyNote and
                         no composed reply fails resolved_note_reply_missing:
                         unresolve the thread, then re-run the verifier.

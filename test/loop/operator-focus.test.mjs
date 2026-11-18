@@ -88,6 +88,11 @@ test("path-leading focus text changes the work-order digest (shared canonicalize
   assert.deepEqual(operatorFocusDigestEntry(null), {});
 });
 
+test("a replyNote change changes the operator focus digest", () => {
+  const digest = (replyNote) => operatorFocusDigestEntry(normalizeOperatorFocus({ items: [{ threadId: "PRRT_1", replyDisposition: "deferred", replyNote }] }, { allowItems: true }));
+  assert.notDeepEqual(digest("a"), digest("b"));
+});
+
 test("reply fields: parse on both bindings, sanitize, cap at 500 characters and bind by threadId", () => {
   const focus = normalizeOperatorFocus({ items: [
     { fingerprint: "f1", replyDisposition: "partially_fixed", replyNote: "a\n<b>" },

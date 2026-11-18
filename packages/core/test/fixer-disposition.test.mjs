@@ -485,6 +485,13 @@ test("evaluate: partially_fixed is checked like tackled; a noted deferred or rej
   }
 });
 
+test("evaluate: a resolved noted partially_fixed thread with only a bare Fixed in commit reply reports resolved_note_reply_missing", () => {
+  const handoff = { headSha: SHA, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "partially_fixed", replyNote: "the retry" }] };
+  const result = evaluateFixerDisposition({ handoff, liveThreads: [{ threadId: "PRRT_T1", isResolved: true, replyBodies: [`Fixed in commit ${SHA}.`] }], containment: { [SHA]: true } });
+  assert.deepEqual(result.incomplete.map((e) => e.failedStep), [FIXER_DISPOSITION_FAILED_STEP.RESOLVED_NOTE_REPLY_MISSING]);
+  assert.match(result.reason, /unresolve-review-thread\.mjs/);
+});
+
 test("composeFixerReplyBody composes the four bodies; only a tackled entry gets a Fixed in commit body", () => {
   const entry = (disposition, replyNote) => ({ disposition, fixingCommitSha: SHA, ...(replyNote ? { replyNote } : {}) });
   assert.equal(composeFixerReplyBody(entry("tackled")), `Fixed in commit ${SHA}.`);

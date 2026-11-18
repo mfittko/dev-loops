@@ -409,7 +409,10 @@ export function evaluateFixerDisposition({ handoff, liveThreads = [], containmen
     if (!hasEvidencedReply) {
       // A resolved thread cannot take the verifier's reply: name the short-SHA cause so the remedy is runnable.
       const shortOnly = liveThread?.isResolved === true && replyBodies.some((body) => citesShortSha(body, expectedCommit));
-      incomplete.push({ threadId, expectedCommit, failedStep: shortOnly ? FIXER_DISPOSITION_FAILED_STEP.RESOLVED_SHORT_SHA_REPLY : FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING });
+      // A resolved thread with a noted entry cannot take the composed reply either: name the unresolve remedy.
+      const failedStep = composedBody && liveThread?.isResolved === true ? FIXER_DISPOSITION_FAILED_STEP.RESOLVED_NOTE_REPLY_MISSING
+        : shortOnly ? FIXER_DISPOSITION_FAILED_STEP.RESOLVED_SHORT_SHA_REPLY : FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING;
+      incomplete.push({ threadId, expectedCommit, failedStep });
       continue;
     }
     if (liveThread?.isResolved !== true) {
