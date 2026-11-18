@@ -44,7 +44,7 @@ import { selectActThreadBinding } from "../github/_fixer-act-thread-bindings.mjs
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { renderCliText } from "@dev-loops/core/loop/cli-command";
 import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
-import { DEFAULT_MAX_ATTEMPTS, findHeadCiRun, isSmokeOnly, isSmokeTimeoutOnlyRun } from "../github/rerun-failed-ci.mjs";
+import { findHeadCiRun, isRerunnableAttempt, isSmokeOnly, isSmokeTimeoutOnlyRun } from "../github/rerun-failed-ci.mjs";
 
 const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path> | --review-id <review node id> | --ci-file <path>) [--completion-only] [--delta-result <path>] [--allowed-path <repo-relative path>]... [--operator-focus-file <path>] [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
@@ -579,11 +579,10 @@ async function emitPlan({
     // A run at the re-run cap, or a failed live read, keeps the fixer route so the loop never dead-ends.
     if (isSmokeOnly(ci.failedChecks)) {
       const runtime = { env, ghCommand, runChild };
-      const rerunnable = async () => {
-        const run = await findHeadCiRun({ repo, headSha }, runtime);
-        return run && run.attempt < DEFAULT_MAX_ATTEMPTS && await isSmokeTimeoutOnlyRun({ repo, runId: run.databaseId }, runtime) ? run : null;
-      };
-      const run = await rerunnable().catch(() => null);
+      const headRun = await findHeadCiRun({ repo, headSha }, runtime).catch(() => null);
+      // A re-run already started (or the run is otherwise unsettled): emit nothing until CI settles, as the re-run script's run_in_progress refusal does.
+      if (headRun && headRun.status !== "completed") throw new Refusal(`CI run ${headRun.databaseId} is ${headRun.status}, not completed; wait for it with scripts/github/wait-pr-checks.mjs, then emit again`);
+      const run = headRun && isRerunnableAttempt(headRun.attempt) && await isSmokeTimeoutOnlyRun({ repo, runId: headRun.databaseId }, runtime).catch(() => false) ? headRun : null;
       if (run) throw new Refusal(`every failed job of CI run ${run.databaseId} is a timed-out smoke job: a hang, not a code defect, so emit no fixer; run scripts/github/rerun-failed-ci.mjs --repo ${repo} --head-sha ${headSha}, then wait for CI again`);
     }
   }

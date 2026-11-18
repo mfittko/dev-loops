@@ -10,11 +10,21 @@ export const DEFAULT_MAX_ATTEMPTS = 3;
 // GitHub never reports `timed_out` for an Actions job. A job past its timeout-minutes is `cancelled` with
 // "The job has exceeded the maximum execution time of 20m0s"; a step past its timeout-minutes fails the job
 // (`failure`) with "The action '<step>' has timed out after 10 minutes." Only the annotation tells a timeout apart.
-const TIMEOUT_ANNOTATION = /The job has exceeded the maximum execution time|The action '.*' has timed out after/;
+const TIMEOUT_ANNOTATION = /has exceeded the maximum execution time|The action '.*' has timed out after/;
+// The `verify` aggregator (ci.yml, if: always()) fails whenever a smoke job fails; it is a dependent, never a cause.
+const AGGREGATOR_JOB_NAME = "verify";
+const HEAD_SHA = /^[0-9a-f]{40}$/;
+
+/** True when the attempt is a positive integer below the cap; a missing or non-numeric attempt fails closed. */
+export const isRerunnableAttempt = (attempt) => Number.isInteger(attempt) && attempt >= 1 && attempt < DEFAULT_MAX_ATTEMPTS;
+
+// The failed names that decide smoke-only: the aggregator is ignored, so a lone failed `verify` is never smoke-only.
+const causeNames = (names) => names.filter((name) => name !== AGGREGATOR_JOB_NAME);
 
 /** True when every failed check name is a smoke job: the cheap pre-filter before the live timeout read. */
 export function isSmokeOnly(failedChecks) {
-  return Array.isArray(failedChecks) && failedChecks.length > 0 && failedChecks.every((c) => SMOKE_JOB_NAMES.includes(c?.name));
+  const causes = Array.isArray(failedChecks) ? causeNames(failedChecks.map((c) => c?.name)) : [];
+  return causes.length > 0 && causes.every((name) => SMOKE_JOB_NAMES.includes(name));
 }
 
 async function ghJson(args, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}, what) {
@@ -32,9 +42,10 @@ export async function findHeadCiRun({ repo, headSha }, runtime = {}) {
 export async function isSmokeTimeoutOnlyRun({ repo, runId }, runtime = {}) {
   const { jobs = [] } = await ghJson(["run", "view", String(runId), "--repo", repo, "--json", "jobs"], runtime, `jobs of CI run ${runId}`) ?? {};
   const failed = jobs.filter((job) => job?.conclusion === "failure" || job?.conclusion === "cancelled");
-  if (failed.length === 0 || !failed.every((job) => SMOKE_JOB_NAMES.includes(job.name))) return false;
-  for (const job of failed) {
-    const annotations = await ghJson(["api", `repos/${repo}/check-runs/${job.databaseId}/annotations`], runtime, `annotations of job ${job.databaseId}`) ?? [];
+  const causes = failed.filter((job) => job.name !== AGGREGATOR_JOB_NAME);
+  if (causes.length === 0 || !causes.every((job) => SMOKE_JOB_NAMES.includes(job.name))) return false;
+  for (const job of causes) {
+    const annotations = await ghJson(["api", `repos/${repo}/check-runs/${job.databaseId}/annotations?per_page=100`], runtime, `annotations of job ${job.databaseId}`) ?? [];
     if (!annotations.some((a) => a?.annotation_level === "failure" && TIMEOUT_ANNOTATION.test(a.message ?? ""))) return false;
   }
   return true;
@@ -47,7 +58,7 @@ Refuses a run that is still in progress, a run whose failed jobs are not all
 smoke jobs with a GitHub timeout annotation, and a run that has reached
 attempt ${DEFAULT_MAX_ATTEMPTS}; the attempt count is the run's own attempt number.
 Output (stdout, JSON): { "ok": true, "action": "rerun", "runId": N, "attempt": N }
-Refusals (stderr JSON, exit 1): no run, run_in_progress, attempt_cap, not_smoke_timeout.
+Refusals (stderr JSON, exit 1): no_run, run_in_progress, attempt_cap, not_smoke_timeout.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Re-run requested
@@ -74,6 +85,7 @@ export function parseRerunFailedCiCliArgs(argv) {
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (!options.repo || !options.headSha) throw parseError("rerun-failed-ci requires --repo and --head-sha");
+  if (!HEAD_SHA.test(options.headSha)) throw parseError("--head-sha must be a full 40-character lowercase hex commit SHA");
   parseRepoSlug(options.repo);
   return options;
 }
@@ -81,9 +93,9 @@ export function parseRerunFailedCiCliArgs(argv) {
 export async function rerunFailedCi(options, runtime = {}) {
   const { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = runtime;
   const run = await findHeadCiRun(options, runtime);
-  if (!run) throw new Error(`no ci.yml run found for head ${options.headSha}`);
+  if (!run) throw new Error(`no_run: no ci.yml run found for head ${options.headSha}`);
   if (run.status !== "completed") throw new Error(`run_in_progress: CI run ${run.databaseId} is ${run.status}; wait for it with scripts/github/wait-pr-checks.mjs, then retry`);
-  if (run.attempt >= DEFAULT_MAX_ATTEMPTS) throw new Error(`attempt_cap: CI run ${run.databaseId} is at attempt ${run.attempt} of ${DEFAULT_MAX_ATTEMPTS}; stop re-running and escalate`);
+  if (!isRerunnableAttempt(run.attempt)) throw new Error(`attempt_cap: CI run ${run.databaseId} is at attempt ${run.attempt} of ${DEFAULT_MAX_ATTEMPTS}; stop re-running and escalate`);
   if (!await isSmokeTimeoutOnlyRun({ repo: options.repo, runId: run.databaseId }, runtime)) throw new Error(`not_smoke_timeout: CI run ${run.databaseId} has a failed job that is not a timed-out smoke job; emit the ci-failure fixer order instead`);
   const rerun = await runChild(ghCommand, ["run", "rerun", String(run.databaseId), "--repo", options.repo, "--failed"], env);
   if (rerun.code !== 0) throw new Error(`Failed to re-run CI run ${run.databaseId}: ${rerun.stderr.trim() || `exit code ${rerun.code}`}`);
