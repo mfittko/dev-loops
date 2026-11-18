@@ -429,7 +429,7 @@ export async function ruleOwnerIndex(repoRoot = REPO_ROOT) {
   for (const file of await collectContractMarkdownFiles(repoRoot)) {
     const doc = path.relative(repoRoot, file).split(path.sep).join("/");
     const content = await readFile(file, "utf8").catch((error) => {
-      if (error?.code === "ENOENT") return null;
+      if (["ENOENT", "ENOTDIR", "ENAMETOOLONG"].includes(error?.code)) return null;
       throw error;
     });
     if (content == null) continue;

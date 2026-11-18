@@ -52,3 +52,18 @@ test("issue 3093 AC3: both schema examples pass the checker", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("issue 3093: an empty file and a directory name the expected file", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "check-judge-decision-"));
+  try {
+    const empty = path.join(dir, "empty.json");
+    await writeFile(empty, "");
+    for (const file of [empty, dir]) {
+      const { exitCode, out } = await check(["--file", file]);
+      assert.equal(exitCode, 1);
+      assert.match(out, /spec-authority-verdict\.json/);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

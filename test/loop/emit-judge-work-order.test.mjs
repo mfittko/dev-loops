@@ -101,7 +101,7 @@ test("grounded discovery preserves the neutral and Claude judge tool boundaries"
 
 test("the work order states the judge's allowed search commands and the Read offset and limit (issue 3092)", async () => {
   await withDir(async (root) => {
-    const plan = await emitJudgeWorkOrder(await seed(root));
+    const plan = await emitJudgeWorkOrder({ ...(await seed(root)), harness: "codex" });
     const text = await readFile(plan.promptPath, "utf8");
     assert.match(text, /Search with read-only `grep -n`, `rg -n`, `git show` and `git diff`/);
     assert.match(text, /`git diff` only as a range such as `origin\/main\.\.\.HEAD` or two revisions/);
@@ -807,7 +807,7 @@ test("2678: the work order carries outputSchemas and a verdict built from them v
 
 test("2678: the Judgment section leaves the digest check to the pull", async () => {
   await withDir(async (root) => {
-    const plan = await emitJudgeWorkOrder(await seed(root));
+    const plan = await emitJudgeWorkOrder({ ...(await seed(root)), harness: "codex" });
     const result = pull(plan, root);
     const judgment = result.stdout.slice(result.stdout.indexOf("## Judgment"), result.stdout.indexOf("## Required reads"));
     assert.doesNotMatch(judgment, /sha256 differs/);
@@ -895,10 +895,19 @@ test("issue 3093 AC5: the Codex setup paragraph is omitted for Claude and Pi and
       assert.doesNotMatch(text, /## Codex after-pull setup|command -v shasum|shasum -a 256/);
       assert.match(text, /## Output schemas/);
     }
-    for (const harness of ["codex", undefined]) {
+    for (const harness of ["claude", "pi"]) {
       const text = await readFile((await emitJudgeWorkOrder({ ...sources, harness })).promptPath, "utf8");
-      assert.match(text, /## Codex after-pull setup[\s\S]*command -v shasum[\s\S]*## Output schemas/);
+      assert.doesNotMatch(text, /Codex after-pull setup/);
     }
+    const codexText = await readFile((await emitJudgeWorkOrder({ ...sources, harness: "codex" })).promptPath, "utf8");
+    assert.match(codexText, /## Codex after-pull setup[\s\S]*command -v shasum[\s\S]*## Output schemas/);
+    assert.match(codexText, /the Codex after-pull setup above still governs Codex/);
+    assert.match(codexText, /replace their specDigest, headSha, contentDigest, index and checkedCriteria/);
+    // No flag: the harness resolves from the environment (finding 1).
+    const claudeEnv = await readFile((await emitJudgeWorkOrder({ ...sources, env: { CLAUDECODE: "1" } })).promptPath, "utf8");
+    assert.doesNotMatch(claudeEnv, /Codex after-pull setup/);
+    const codexEnv = await readFile((await emitJudgeWorkOrder({ ...sources, env: { CODEX_THREAD_ID: "t-1" } })).promptPath, "utf8");
+    assert.match(codexEnv, /## Codex after-pull setup/);
     await assert.rejects(emitJudgeWorkOrder({ ...sources, harness: "emacs" }), /--harness must be claude, pi or codex/);
   });
 });

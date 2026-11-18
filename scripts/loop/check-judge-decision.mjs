@@ -55,8 +55,8 @@ export async function main(argv = process.argv.slice(2), { stdout = process.stdo
     }
     result = { ok: true, checked: decisions.length };
   } catch (error) {
-    // A missing or wrong file is a usage mistake: name the file this checker validates.
-    const wrongFile = error.code === "ENOENT" || error.message === "verdict.decisions must be an array";
+    // Any failure that is not a decision-validator error is a usage mistake: name the file this checker validates.
+    const wrongFile = error.decisionIndex === undefined;
     result = { ok: false, error: wrongFile ? `${error.message}; ${USAGE_HINT}` : error.message, ...(error.decisionIndex !== undefined ? { decisionIndex: error.decisionIndex } : {}), ...(error.code === "spec_authority_decision_invalid" ? { code: error.code, field: error.field } : {}) };
   }
   process.exitCode = emitResult(result, { jq: args.jq, fields: args.fields, silent: args.silent, stdout, stderr });
