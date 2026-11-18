@@ -1085,6 +1085,15 @@ describe("splitDiffIntoParts — Read-sized diff parts", () => {
     assert.ok(parts.filter((p) => !p.oversized).every((p) => Buffer.byteLength(p.text) <= 500));
   });
 
+  test("the byte cap counts UTF-8 bytes, not string length", () => {
+    const diff = file("a.txt", ["€", "€"].map((c, i) => `@@ -${i},1 +${i},1 @@\n+${c.repeat(30)}\n`));
+    const maxBytes = diff.length + 1;
+    assert.ok(diff.length < maxBytes && Buffer.byteLength(diff) > maxBytes);
+    const parts = splitDiffIntoParts(diff, { maxBytes });
+    assert.ok(parts.length > 1);
+    assert.equal(joined(parts), diff);
+  });
+
   test("the line cap cuts a short-line diff that is under the byte cap", () => {
     const files = ["a", "b", "c"].map((n) => file(`${n}.txt`, [hunk(1, 3, 1)]));
     const diff = files.join("");

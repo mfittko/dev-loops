@@ -118,7 +118,7 @@ test("work order: the emitted prompt carries no PR/issue body, diff body, or adj
   });
 });
 
-test("work order: prompt size is independent of diff size (small vs >=100x diff)", async () => {
+test("work order: the prompt grows by one manifest line per diff part (small vs >=100x diff)", async () => {
   const sizes = [];
   for (const lines of [10, 2000]) {
     await withTmpDir(async (repoRoot) => {
@@ -134,6 +134,22 @@ test("work order: prompt size is independent of diff size (small vs >=100x diff)
     assert.ok(Math.abs(sizes[1][scope] - sizes[0][scope]) <= 256 + 400 * extraParts, `${scope}: ${sizes[0][scope]} vs ${sizes[1][scope]}`);
     assert.ok(sizes[1][scope] < REVIEWER_WORK_ORDER_MAX_BYTES);
   }
+});
+
+test("work order: a filtered diff of about 60 parts makes the emitter refuse fail-closed over the prompt cap", async () => {
+  // 1000 files of ~3 KB each, so about 16 files per 40000-byte part.
+  const fileBlock = (i) => `diff --git a/src/f${i}.mjs b/src/f${i}.mjs\n--- a/src/f${i}.mjs\n+++ b/src/f${i}.mjs\n@@ -0,0 +1,100 @@\n${Array.from({ length: 100 }, (_, n) => `+export const v${n} = ${n};`).join("\n")}\n`;
+  const diffOutput = Array.from({ length: 1000 }, (_, i) => fileBlock(i)).join("");
+  await withTmpDir(async (repoRoot) => {
+    const written = await writeRound(repoRoot, { diffOutput });
+    const parts = written.artifact.requiredReads.filter((r) => r.kind === "diff");
+    assert.ok(parts.length >= 55 && parts.length <= 70, `parts: ${parts.length}`);
+    const baseEnv = { ...process.env };
+    delete baseEnv.CLAUDECODE;
+    const result = spawnSync("node", [emitCliPath, "--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot, encoding: "utf8", env: baseEnv });
+    assert.equal(result.status, 1);
+    assert.match(`${result.stdout}${result.stderr}`, /GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing .*REVIEWER_WORK_ORDER_MAX_BYTES/);
+  });
 });
 
 test("work order: prompt size is independent of issue/spec body size (small vs 100x body)", async () => {

@@ -1399,7 +1399,7 @@ function renderRequiredReadsSection(requiredReads, worktreeRoot) {
     "",
     ...(reads.length > 0 ? reads.map((read) => renderRequiredReadLine(read, worktreeRoot)) : ["- (no required reads recorded)"]),
     // Not a `- ` line, so the manifest verifier ignores it.
-    ...reads.filter((read) => read.oversized).map((read) => `Oversized diff part: \`${path.resolve(worktreeRoot, read.path)}\` holds one hunk above the ${DIFF_PART_MAX_BYTES}-byte or ${DIFF_PART_MAX_LINES}-line part cap; page it with offset/limit.`),
+    ...reads.filter((read) => read.oversized).map((read) => `Oversized diff part: \`${path.resolve(worktreeRoot, read.path)}\` holds one unsplittable unit (a hunk or a file block with no hunks) above the ${DIFF_PART_MAX_BYTES}-byte or ${DIFF_PART_MAX_LINES}-line part cap; page it with offset/limit.`),
   ].join("\n");
 }
 
