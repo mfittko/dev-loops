@@ -1,3 +1,3 @@
 ### Fixed
 
-- The pre-push fix-push-authority check skips sequence markers whose work order names another repo, so an open sequence in another repo no longer refuses the push (#3252)
+- The pre-push push-authority check skips a marker only for another valid repo whose baseline is absent locally, so a fork checkout still fails closed (#3252)

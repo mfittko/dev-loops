@@ -6,7 +6,7 @@ import { mkdir, realpath } from "node:fs/promises";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "bun:test";
-import { clearSequenceMarker, recoveryHint, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { clearSequenceMarker, findActiveSequence, recoveryHint, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { renderGuardHook } from "@dev-loops/core/loop/default-branch-guard";
 import { checkFixPushAuthority, parsePushedShas } from "../../scripts/loop/check-fix-push-authority.mjs";
 import { closeGateSequence, fixerGraceMs } from "../../scripts/loop/close-gate-sequence.mjs";
@@ -232,3 +232,43 @@ test("the refusal names only the pushing repo's marker", async () => {
     assert.ok(!refused.reason.includes(`${ABSENT}.sequence`));
   });
 });
+
+test("the foreign marker is skipped whatever the listing order (stubbed order, strict isAncestor)", async () => {
+  await withRepo(async (root, head) => {
+    const tmpRoot = path.join(root, "tmp");
+    writeSequenceMarker({ tmpRoot, baselineHead: ABSENT, branch: "issue-b", execution: executionFor("o/b", ABSENT) });
+    writeSequenceMarker({ tmpRoot, baselineHead: head, branch: "issue-a", execution: executionFor("o/a", head) });
+    const found = findActiveSequence({
+      tmpRoot, head, repo: "o/a", baselinePresent: (b) => b !== ABSENT,
+      listBaselines: () => [ABSENT, head],
+      isAncestor: (a) => { if (a === ABSENT) throw new Error("foreign baseline must not be tested"); return true; },
+      remoteAdvanced: () => false,
+    });
+    assert.equal(found.baselineHead, head);
+  });
+});
+
+test("a fork checkout (origin slug differs) with the baseline present still refuses", async () => {
+  await withRepo(async (root, head, git) => {
+    git("remote", "add", "origin", "https://github.com/me/a.git");
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head, branch: "issue-a", execution: executionFor("o/a", head) });
+    assert.equal(checkFixPushAuthority(root).ok, false);
+  });
+});
+
+test("a foreign-repo marker with an absent baseline refuses when the checkout has no detectable origin", async () => {
+  await withRepo(async (root) => {
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: ABSENT, branch: "issue-b", execution: executionFor("o/b", ABSENT) });
+    assert.equal(checkFixPushAuthority(root).ok, false);
+  });
+});
+
+for (const bad of ["garbage1", "own er/name", "a/b/c"]) {
+  test(`a malformed repo segment ${JSON.stringify(bad)} with an absent baseline refuses`, async () => {
+    await withRepo(async (root, _head, git) => {
+      git("remote", "add", "origin", "https://github.com/o/a.git");
+      writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: ABSENT, branch: "issue-b", execution: executionFor(bad, ABSENT) });
+      assert.equal(checkFixPushAuthority(root).ok, false);
+    });
+  });
+}
