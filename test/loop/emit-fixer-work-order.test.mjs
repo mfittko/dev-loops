@@ -3654,6 +3654,12 @@ test("issue 3251: a timed-out smoke run at the re-run cap, or a failed live read
     // A gh failure in the live read never blocks the fixer.
     const ghDown = makeGhMock([{ assertArgs: ["list"], exitCode: 1, stdout: "", stderr: "HTTP 502" }]);
     assert.equal((await emitCi(fx, { runChild: ghDown.runChild }, smokeOnly)).workOrder.source, "ci-failure");
+    // A failed jobs read after a successful list also keeps the fixer route.
+    const viewDown = makeGhMock([
+      { assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", attempt: 1 }]) },
+      { assertArgs: ["view", "7"], exitCode: 1, stdout: "", stderr: "HTTP 502" },
+    ]);
+    assert.equal((await emitCi(fx, { runChild: viewDown.runChild }, smokeOnly)).workOrder.source, "ci-failure");
   });
 });
 
