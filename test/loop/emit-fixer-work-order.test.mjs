@@ -3465,7 +3465,7 @@ test("operator focus: round and a per-item decision render next to the act item 
   });
 });
 
-test("operator focus: an unknown fingerprint, a threads source with items and bad strings refuse and emit nothing", async () => {
+test("operator focus: an unknown fingerprint, a fingerprint item on a threads source and bad strings refuse and emit nothing", async () => {
   await withFixture(async ({ root, files, emit }) => {
     const focusFile = path.join(root, "tmp", "focus.json");
     const refuses = async (focus, over = {}) => {

@@ -513,3 +513,18 @@ test("normalize: a replyNote is sanitized, capped at 500 characters and refused 
   assert.throws(() => note("see #123"), /issue\/PR id/);
   assert.throws(() => note("ask @copilot to retry"), /summon token/);
 });
+
+test("normalize: a review-body entry refuses partially_fixed and a replyNote, and accepts tackled, deferred and rejected", () => {
+  const review = (over) => ({ headSha: SHA, dispositions: [{ reviewId: "PRR_x", fixingCommitSha: SHA, disposition: "tackled", ...over }] });
+  for (const disposition of ["tackled", "deferred", "rejected"]) assert.equal(normalizeFixerDispositionHandoff(review({ disposition })).dispositions[0].disposition, disposition);
+  assert.throws(() => normalizeFixerDispositionHandoff(review({ disposition: "partially_fixed" })), /unrecognized disposition/);
+  assert.throws(() => normalizeFixerDispositionHandoff(review({ replyNote: "x" })), /takes none/);
+});
+
+test("evaluate: a prior bare Fixed reply does not satisfy a noted partially_fixed entry", () => {
+  const handoff = { headSha: SHA, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "partially_fixed", replyNote: "the retry" }] };
+  const live = (replyBodies) => [{ threadId: "PRRT_T1", isResolved: false, replyBodies }];
+  const steps = (replyBodies) => evaluateFixerDisposition({ handoff, liveThreads: live(replyBodies), containment: { [SHA]: true } }).incomplete.map((e) => e.failedStep);
+  assert.deepEqual(steps([`Fixed in commit ${SHA}.`]), [FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING]);
+  assert.deepEqual(steps([composeFixerReplyBody(handoff.dispositions[0])]), [FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED]);
+});

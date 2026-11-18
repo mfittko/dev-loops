@@ -793,7 +793,7 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
 // No checkpoint recorded for this head and no delivered tackled handoff for the live head means nothing
 // to enforce here (a PR with no fixer-disposition ledger entry behaves exactly as before this
 // boundary existed) — returns null so the evaluator input omits the field.
-// A fixer handoff delivered for the live head that lists a tackled thread, with no checkpoint, means
+// A fixer handoff delivered for the live head that lists a tackled or partially_fixed thread, or a thread entry with a replyNote, with no checkpoint, means
 // verify-fixer-disposition never completed (a failed run writes none): report it incomplete as not_verified.
 // Scans every execution's handoff, not the latest plan: a later emission overwrites the plan but not the handoff.
 // Only absence (ENOENT) means "no handoff"; any other read or parse failure is reported incomplete like unreadable_checkpoint.
@@ -834,7 +834,7 @@ async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot
     for (const entry of Array.isArray(handoff.dispositions) ? handoff.dispositions : []) {
       if ((FIXER_COMMIT_CLAIM_KINDS.includes(entry?.disposition) || (typeof entry?.replyNote === "string" && entry.replyNote !== "")) && typeof entry.threadId === "string") {
         incomplete.push({ threadId: entry.threadId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED });
-      } else if (FIXER_COMMIT_CLAIM_KINDS.includes(entry?.disposition) && typeof entry.reviewId === "string") {
+      } else if (entry?.disposition === "tackled" && typeof entry.reviewId === "string") {
         incomplete.push({ reviewId: entry.reviewId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED });
       }
     }

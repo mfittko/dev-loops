@@ -276,7 +276,8 @@ export function normalizeFixerDispositionHandoff(raw, { ruleIds } = {}) {
       // The marker comment cites the commit in full, so the entry must carry the full 40-character SHA.
       if (!isNonEmptyString(entry.fixingCommitSha) || !/^[0-9a-fA-F]{40}$/.test(entry.fixingCommitSha.trim())) throw new Error(`Fixer disposition handoff entry for review ${reviewId} needs fixingCommitSha as the full 40-character SHA (git rev-parse <commit>)`);
       const disposition = isNonEmptyString(entry.disposition) ? entry.disposition.trim().toLowerCase() : "";
-      if (!Object.values(FIXER_DISPOSITION_KIND).includes(disposition)) throw new Error(`Fixer disposition handoff entry for review ${reviewId} has a missing or unrecognized disposition: ${disposition}`);
+      if (disposition === FIXER_DISPOSITION_KIND.PARTIALLY_FIXED || !Object.values(FIXER_DISPOSITION_KIND).includes(disposition)) throw new Error(`Fixer disposition handoff entry for review ${reviewId} has a missing or unrecognized disposition: ${disposition}`);
+      if (entry.replyNote !== undefined) throw new Error(`Fixer disposition handoff entry for review ${reviewId} carries a replyNote; a review-body entry takes none`);
       return { reviewId, fingerprint: null, fixingCommitSha: entry.fixingCommitSha.trim().toLowerCase(), disposition, validation: isNonEmptyString(entry.validation) ? entry.validation.trim() : null };
     }
     if (!isNonEmptyString(entry.threadId)) {
@@ -400,7 +401,9 @@ export function evaluateFixerDisposition({ handoff, liveThreads = [], containmen
     }
     const liveThread = liveByThreadId.get(threadId) ?? null;
     const replyBodies = Array.isArray(liveThread?.replyBodies) ? liveThread.replyBodies : [];
-    const hasEvidencedReply = replyBodies.some((body) => (
+    // A noted entry needs its own composed reply: an unrelated earlier reply citing the SHA does not satisfy it.
+    const composedBody = handoffEntry.replyNote ? composeFixerReplyBody(handoffEntry) : null;
+    const hasEvidencedReply = composedBody ? replyBodies.includes(composedBody) : replyBodies.some((body) => (
       typeof body === "string" && body.toLowerCase().includes(expectedCommit.toLowerCase())
     ));
     if (!hasEvidencedReply) {

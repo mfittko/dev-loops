@@ -63,11 +63,15 @@ Required:
                         handoff { headSha, dispositions } is read from the plan's
                         outputRef. Each dispositions entry is { threadId | reviewId,
                         fixingCommitSha, disposition: "tackled"|"partially_fixed"|"deferred"|"rejected",
-                        fingerprint?, validation? }; each entry carries exactly one
+                        fingerprint?, replyNote?, validation? }; each entry carries exactly one
                         of threadId or reviewId, plus fixingCommitSha and
-                        disposition. A tackled threadId entry needs fixingCommitSha
-                        as the full 40-character SHA; a reviewId entry needs the
-                        full 40-character SHA for every disposition.
+                        disposition. A tackled or partially_fixed threadId entry
+                        needs fixingCommitSha as the full 40-character SHA, and a
+                        partially_fixed entry needs a replyNote; a reviewId entry
+                        needs the full 40-character SHA for every disposition.
+                        A resolved deferred or rejected thread with a replyNote and
+                        no composed reply fails resolved_note_reply_missing:
+                        unresolve the thread, then re-run the verifier.
                         A review-body work order (emit-fixer-work-order.mjs
                         --review-id) takes a { reviewId, fixingCommitSha,
                         disposition } entry written by the fixer; the verifier
@@ -652,6 +656,16 @@ function pinnedDisposition(operatorFocus, keys, deltaResolved) {
   };
 }
 
+// A reply note authorizes a reply and a resolve, so only a note the operator focus pinned for that thread counts, on every route.
+function assertNotesPinned(handoff, operatorFocus) {
+  for (const entry of handoff.dispositions) {
+    if (!entry.threadId || !entry.replyNote) continue;
+    const pinned = (operatorFocus?.items ?? []).some((item) => item.replyDisposition === entry.disposition && item.replyNote === entry.replyNote
+      && (item.threadId === entry.threadId || (item.fingerprint && (!entry.fingerprint || item.fingerprint === entry.fingerprint))));
+    if (!pinned) throw new Error(`handoff entry for ${entry.threadId} carries a replyNote with no matching operator focus pin; only the operator focus carrier sets a reply note`);
+  }
+}
+
 // Builds the { threadId -> replyBodies[] } / isResolved liveThreads shape
 // evaluateFixerDisposition needs from one captureParsedReviewThreads() snapshot.
 function buildLiveThreads(parsed) {
@@ -709,7 +723,7 @@ function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, delta
       // A noted pinned reply resolves a residual thread, so a re-run sees it resolved.
       const pinned = pinnedDisposition(operatorFocus, members, !residual);
       if ((residual && !pinned.replyNote && thread.isResolved !== false)
-        || (entry && entry.disposition !== pinned.disposition)) {
+        || (entry && (entry.disposition !== pinned.disposition || (entry.replyNote ?? null) !== (pinned.replyNote ?? null)))) {
         throw new Error(`delta status and live thread disposition disagree for ${thread.id} (${members.join(", ")})`);
       }
     }
@@ -842,6 +856,7 @@ async function verifyFixerDispositionCore(
   if (liveHead !== options.headSha) {
     throw new Error(`--head-sha ${options.headSha} is not the live PR head ${liveHead ?? `(unreadable: ${(live.stderr || "").trim()})`}; refresh the PR state before verifying`);
   }
+  assertNotesPinned(handoff, operatorFocus);
   // A refused handoff writes no checkpoint: capture and assert before the write.
   const initialSnapshot = await captureParsedReviewThreads({ repo: options.repo, pr: options.pr }, runtime);
   let gateLogin = null;
