@@ -251,7 +251,7 @@ function treeRunsMergePr(segments) {
     const { values, i } = segmentProgram(seg.words);
     return segmentRunsMergePrWithoutCheck(seg.words)
       || seg.words.some((w, k) => w.subs.some((sub) => treeRunsMergePr(sub.segments)) || (isPayloadWord(seg.words, k) && commandRunsMergePrWithoutCheck(w.value)))
-      || (/^(?:ba|z|da)?sh$/.test(baseName(values[i] ?? "")) && seg.heredocs.some((h) => commandRunsMergePrWithoutCheck(h.body)));
+      || (/^(?:ba|z|da|k|mk|a)?sh$/.test(baseName(values[i] ?? "")) && seg.heredocs.some((h) => commandRunsMergePrWithoutCheck(h.body)));
   });
 }
 
