@@ -659,6 +659,16 @@ function pinnedDisposition(operatorFocus, keys, deltaResolved) {
   };
 }
 
+// Builds the { threadId -> replyBodies[] } / isResolved liveThreads shape
+// evaluateFixerDisposition needs from one captureParsedReviewThreads() snapshot.
+function buildLiveThreads(parsed) {
+  return parsed.threads.map((thread) => ({
+    threadId: thread.id,
+    isResolved: thread.isResolved,
+    replyBodies: parsed.comments.filter((comment) => comment.threadId === thread.id).map((comment) => comment.body),
+  }));
+}
+
 // A reply note authorizes a reply and a resolve, so only a note the operator focus pinned for that thread counts.
 // A fingerprint pin counts only when that fingerprint is a live ACT member of the entry's thread (membersOf).  The entry scalar fingerprint never narrows it.
 // The check runs both ways: an entry may not drop a bound pin either. A deferred or rejected pin needs the same
@@ -681,16 +691,6 @@ export function assertNotesPinned(handoff, operatorFocus, membersOf) {
       }
     }
   }
-}
-
-// Builds the { threadId -> replyBodies[] } / isResolved liveThreads shape
-// evaluateFixerDisposition needs from one captureParsedReviewThreads() snapshot.
-function buildLiveThreads(parsed) {
-  return parsed.threads.map((thread) => ({
-    threadId: thread.id,
-    isResolved: thread.isResolved,
-    replyBodies: parsed.comments.filter((comment) => comment.threadId === thread.id).map((comment) => comment.body),
-  }));
 }
 
 // A judge-act item whose fingerprint marks an open inline gate thread is resolved by the fix
