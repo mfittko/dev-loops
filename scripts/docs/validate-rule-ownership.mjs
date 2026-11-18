@@ -420,6 +420,24 @@ export async function collectContractMarkdownFiles(repoRoot = REPO_ROOT) {
   return files.sort();
 }
 
+/**
+ * Rule ID to `{ doc, text }` for the first `<!-- rule: ID -->` marker in the sorted contract files; `doc` is the
+ * repo-relative path. A file that disappears during the scan is skipped.
+ */
+export async function ruleOwnerIndex(repoRoot = REPO_ROOT) {
+  const owners = new Map();
+  for (const file of await collectContractMarkdownFiles(repoRoot)) {
+    const doc = path.relative(repoRoot, file).split(path.sep).join("/");
+    const content = await readFile(file, "utf8").catch((error) => {
+      if (error?.code === "ENOENT") return null;
+      throw error;
+    });
+    if (content == null) continue;
+    for (const def of extractRuleDefinitions(content, doc)) if (!owners.has(def.id)) owners.set(def.id, { doc, text: def.body });
+  }
+  return owners;
+}
+
 function lineFor(content, index) {
   return content.slice(0, index).split(/\r?\n/).length;
 }

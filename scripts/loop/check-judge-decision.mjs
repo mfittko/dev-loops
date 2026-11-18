@@ -18,6 +18,8 @@ decision; code and field appear only when a valid_compliant decision lacks defec
 
 ${JQ_OUTPUT_USAGE}`;
 
+const USAGE_HINT = "this checker validates the spec-authority-verdict.json outputRef, not judge-verdict.json; usage: check-judge-decision.mjs --file <spec-authority-verdict.json>";
+
 export async function main(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
   const args = {};
   const { tokens } = parseArgs({
@@ -53,7 +55,9 @@ export async function main(argv = process.argv.slice(2), { stdout = process.stdo
     }
     result = { ok: true, checked: decisions.length };
   } catch (error) {
-    result = { ok: false, error: error.message, ...(error.decisionIndex !== undefined ? { decisionIndex: error.decisionIndex } : {}), ...(error.code === "spec_authority_decision_invalid" ? { code: error.code, field: error.field } : {}) };
+    // A missing or wrong file is a usage mistake: name the file this checker validates.
+    const wrongFile = error.code === "ENOENT" || error.message === "verdict.decisions must be an array";
+    result = { ok: false, error: wrongFile ? `${error.message}; ${USAGE_HINT}` : error.message, ...(error.decisionIndex !== undefined ? { decisionIndex: error.decisionIndex } : {}), ...(error.code === "spec_authority_decision_invalid" ? { code: error.code, field: error.field } : {}) };
   }
   process.exitCode = emitResult(result, { jq: args.jq, fields: args.fields, silent: args.silent, stdout, stderr });
 }

@@ -19,7 +19,7 @@ import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "..
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildLogPath } from "../github/_gate-artifact-paths.mjs";
-import { PR_BODY_ABSENT_SENTINEL, isInRoundRewrite, listPriorActItems, renderPrBodyRead, renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { PR_BODY_ABSENT_SENTINEL, isInRoundRewrite, listPriorActItems, renderPrBodyRead } from "../github/write-gate-context.mjs";
 import { viewPr } from "../github/view-pr.mjs";
 import { copilotBodyJudgePath } from "../github/_copilot-body-disposition.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
@@ -29,11 +29,11 @@ import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } f
 import { SLICE_LINKAGE_SENTENCE, sliceLinkageIssues } from "./_slice-linkage.mjs";
 import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "./_operator-focus.mjs";
 import { isFindingsLogName, resolveGateRound } from "../github/_gate-finding-surface.mjs";
-import { RULE_ID_CITATION_RE, collectContractMarkdownFiles, extractRuleDefinitions } from "../docs/validate-rule-ownership.mjs";
+import { RULE_ID_CITATION_RE, ruleOwnerIndex } from "../docs/validate-rule-ownership.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 
-const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--round <n>] [--tmp-root <path>] [--operator-focus-file <path>]
+const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--harness <claude|pi|codex>] [--round <n>] [--tmp-root <path>] [--operator-focus-file <path>]
 Derives the judge's work order from the round's authoritative inputs: the consolidated
 ledger (consolidate-fanin --ledger-out), the structured spec and identity stamp
 (spec-context.mjs --spec-out/--identity-out), the gate-context evidence and pr-body reads and the
@@ -41,6 +41,8 @@ prior-round judge verdicts. It writes the immutable work order under
 <tmp-root>/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/ and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, planPath }.
 The work order's two verdict outputRefs sit under that directory's <roundId>/ segment.
+--harness claude or pi omits the Codex-only setup paragraph from the work order; codex or no flag keeps it.
+A --prior-verdict named judge-verdict.json also pins the spec-authority-verdict.json beside it when that file exists.
 --tmp-root must be a listed checkout's tmp directory (the default is <checkout root>/tmp).
 Dispatch the judge with the compact dispatchPrompt only; each run supersedes the
 previous emission for this PR and gate at any head. The only operator input is --operator-focus-file, a JSON file { round?: string } that
@@ -64,12 +66,8 @@ async function citedRulesFor(findingsValue) {
   const known = loadKnownRuleIds();
   const ids = [...new Set(JSON.stringify(findingsValue).match(RULE_ID_CITATION_RE) ?? [])].filter((id) => known.has(id)).sort();
   if (ids.length === 0) return [];
-  const rules = new Map();
-  for (const file of await collectContractMarkdownFiles(fileURLToPath(PACKAGE_ROOT))) {
-    const rel = path.relative(fileURLToPath(PACKAGE_ROOT), file).split(path.sep).join("/");
-    for (const def of extractRuleDefinitions(await readFile(file, "utf8"), rel)) if (ids.includes(def.id) && !rules.has(def.id)) rules.set(def.id, { id: def.id, doc: rel, text: def.body });
-  }
-  return ids.filter((id) => rules.has(id)).map((id) => rules.get(id));
+  const owners = await ruleOwnerIndex(fileURLToPath(PACKAGE_ROOT));
+  return ids.filter((id) => owners.has(id)).map((id) => ({ id, ...owners.get(id) }));
 }
 
 const renderCitedRules = (rules = []) => rules.length === 0 ? "" : `## Cited rules
@@ -106,7 +104,13 @@ function parseSource({ read, bytes }) {
   try { return JSON.parse(bytes.toString("utf8")); } catch { throw new Refusal(`required judge source ${read.kind} is not JSON: ${read.path}`); }
 }
 
+// The Codex setup paragraph is printed unless the emitter named a Claude or Pi run (fail safe for Codex and unknown harnesses).
 export function renderWorkOrder(workOrder) {
+  const text = renderFullWorkOrder(workOrder);
+  return ["claude", "pi"].includes(workOrder.harness) ? text.replace(/## Codex after-pull setup\n[\s\S]*?(?=## Output schemas)/, "") : text;
+}
+
+function renderFullWorkOrder(workOrder) {
   const [verdictPath, specVerdictPath] = workOrder.outputRefs;
   return `# Judge work order (ADR 0106)
 
@@ -128,11 +132,12 @@ Each disposition carries \`title\` (the one-line defect), \`detail\` (the concre
 ${workOrder.requiredReads.some((read) => read.kind === "copilot-body-feedback") ? `A \`copilot-body-feedback\` read holds a Copilot review body that raised a finding with no inline thread (GATE-EXEC-COPILOT-BODY-TO-JUDGE). It is cluster ${workOrder.copilotBodyClusterId} of this round: you MUST dispose it with a disposition whose \`index\` is ${workOrder.copilotBodyClusterId}, like any other cluster. Leave it out of the spec-authority verdict: that verdict covers the findings you read only, and a decision at that index is dropped. A verdict with no disposition for that cluster is refused and writes no ledger. An operator marker overrides it.\n` : ""}Read every \`required\` entry below IN FULL before any judgment. The pull already verified the sha256 of every required read, and a changed read arrives as a pull refusal, so Pi and Claude judges compute no digest of a required read and run no digest tool for it; the Codex after-pull setup above still governs Codex. If a read is missing or unreadable, stop and report which one; never write a verdict.
 On Claude Code, Bash search is available. Search with read-only \`grep -n\`, \`rg -n\`, \`git show\` and \`git diff\`, with the pattern in single quotes, glob characters only inside single quotes, \`git diff\` only as a range such as \`origin/main...HEAD\` or two revisions, git running in your working directory (the work order's worktree root), and no redirection, pipe, chaining or write flag. On Pi, use the native read, grep and find tools. Read accepts offset and limit. On Claude Code and Pi, Bash otherwise runs only the work-order pull and \`check-judge-decision.mjs\`. The Codex after-pull setup governs Codex.
 Write exactly two artifacts: the relevance verdict to \`${verdictPath}\` and the spec-authority verdict to \`${specVerdictPath}\`.
+Validate with: \`dev-loops-run scripts/loop/check-judge-decision.mjs --file ${specVerdictPath}\`. It validates the spec-authority verdict only, and prints \`{"ok":true,"checked":N}\` on success. Run it once, after you write that file; the \`outputSchemas\` examples show a valid verdict.
 Widening: ${workOrder.executionRules?.widening ?? JUDGE_WIDENING_RULE}.
 
-${typeof workOrder.sliceLinkage === "string" ? `## Slice linkage\n\n${workOrder.sliceLinkage}\nA remedy that changes Closes to Refs for this PR is never act.\n\n` : ""}${renderOperatorFocusSection(workOrder.operatorFocus)}${renderCitedRules(workOrder.citedRules)}## Required reads
+${typeof workOrder.sliceLinkage === "string" ? `## Slice linkage\n\nThe \`sliceLinkage\` and \`sliceLinkageIssues\` fields in the work order JSON below state the rule. A remedy that changes Closes to Refs for this PR is never act.\n\n` : ""}${renderOperatorFocusSection(workOrder.operatorFocus)}${renderCitedRules(workOrder.citedRules)}## Required reads
 
-${workOrder.requiredReads.map((read) => renderRequiredReadLine(read, "/")).join("\n")}
+The \`requiredReads\` array in the work order JSON below lists each pinned read once, with its kind, path, sha256 and byte count.
 
 ## Work order
 
@@ -146,8 +151,9 @@ ${JSON.stringify(workOrder, null, 2)}
  * Emit one judge work order. Returns the plan record written beside it. Throws
  * Refusal on a missing or inconsistent source. `roundId` is injectable for tests.
  */
-export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile, specFile, identityFile, priorVerdicts = [], round = null, operatorFocusFile, cwd = process.cwd(), tmpRoot, fetchLivePrBody = livePrBody, roundId = `j${Date.now()}-${randomBytes(4).toString("hex")}` }) {
+export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile, specFile, identityFile, priorVerdicts = [], round = null, harness, operatorFocusFile, cwd = process.cwd(), tmpRoot, fetchLivePrBody = livePrBody, roundId = `j${Date.now()}-${randomBytes(4).toString("hex")}` }) {
   if (!/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Refusal(`--head-sha must be a full 40- or 64-char lowercase SHA, got ${headSha}`);
+  if (harness !== undefined && !["claude", "pi", "codex"].includes(harness)) throw Object.assign(new Refusal(`--harness must be claude, pi or codex, got ${harness}`), { refusal: "invalid_harness" });
   if (round !== null && !(Number.isInteger(round) && round > 0)) {
     throw Object.assign(new Refusal(`--round must be a positive integer, got ${round}`), { refusal: "invalid_round" });
   }
@@ -206,7 +212,13 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     throw Object.assign(new Refusal(`GATE-EXEC-BODY-ONLY-RERUN: the pinned pr-body ${prBodyRead.path} has sha256 ${prBody.read.sha256}, but the live PR body has sha256 ${liveSha256}; rebuild the round context with write-gate-context.mjs at this head`), { refusal: "pr_body_stale" });
   }
   const priors = [];
-  for (const prior of priorVerdicts) priors.push(await readSource("prior-judge-verdict", abs(prior)));
+  const priorSpecVerdicts = [];
+  for (const prior of priorVerdicts) {
+    priors.push(await readSource("prior-judge-verdict", abs(prior)));
+    // The prior round's spec-authority verdict sits beside its judge verdict; it shows the verdict shape and the prior outcomes.
+    const sibling = path.join(path.dirname(abs(prior)), "spec-authority-verdict.json");
+    if (path.basename(prior) === "judge-verdict.json" && existsSync(sibling)) priorSpecVerdicts.push(await readSource("prior-spec-authority-verdict", sibling));
+  }
   // The detector's derived file is pinned when it exists.
   const derivedBodyFile = copilotBodyJudgePath({ tmpRoot: resolveGateArtifactTmpRoot(checkoutRoot), repo, pr, headSha });
   const bodyFile = existsSync(derivedBodyFile) ? derivedBodyFile : null;
@@ -230,6 +242,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     operation: "judge",
     roundIdentity: { gate, headSha },
     headSha,
+    ...(harness ? { harness } : {}),
     // Judge inputs, never a deferral rule: the gate round and the medium fix window. The judge decides act, defer or reject for every cluster in every round.
     round,
     mediumFixWindow: resolveGateConfig(config, GATE_CONFIG_KEY[gate] ?? "preApproval").mediumFixWindow,
@@ -253,7 +266,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     },
     contracts,
     citedRules: await citedRulesFor(findingsRead),
-    requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, prBody.read, ...priors.map((prior) => prior.read), ...(copilotBody ? [copilotBody.read] : [])],
+    requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, prBody.read, ...priors.map((prior) => prior.read), ...priorSpecVerdicts.map((prior) => prior.read), ...(copilotBody ? [copilotBody.read] : [])],
     // Per-round paths: a superseded round's late verdict never lands where this round's is read.
     outputRefs: [path.join(dir, roundId, "judge-verdict.json"), path.join(dir, roundId, "spec-authority-verdict.json")],
     outputSchemas: {
@@ -369,7 +382,7 @@ registerWorkOrderRole("judge", {
 const CLI_OPTIONS = {
   repo: { type: "string" }, pr: { type: "string" }, gate: { type: "string" }, "head-sha": { type: "string" },
   "findings-file": { type: "string" }, "spec-file": { type: "string" }, "identity-file": { type: "string" },
-  "prior-verdict": { type: "string", multiple: true }, round: { type: "string" }, "operator-focus-file": { type: "string" }, "tmp-root": { type: "string" }, help: { type: "boolean", short: "h" },
+  "prior-verdict": { type: "string", multiple: true }, round: { type: "string" }, "operator-focus-file": { type: "string" }, harness: { type: "string" }, "tmp-root": { type: "string" }, help: { type: "boolean", short: "h" },
   ...JQ_OUTPUT_PARSE_OPTIONS,
 };
 
@@ -405,7 +418,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     const plan = await emitJudgeWorkOrder({
       repo: values.repo, pr: values.pr, gate: values.gate, headSha: values["head-sha"].toLowerCase(),
       findingsFile: values["findings-file"], specFile: values["spec-file"], identityFile: values["identity-file"],
-      priorVerdicts: values["prior-verdict"] ?? [], ...(values["operator-focus-file"] ? { operatorFocusFile: values["operator-focus-file"] } : {}), ...(values.round !== undefined ? { round: /^[1-9][0-9]*$/.test(values.round) ? Number(values.round) : values.round } : {}), cwd, ...(tmpRoot ? { tmpRoot } : {}), ...(roundId ? { roundId } : {}), ...(fetchLivePrBody ? { fetchLivePrBody } : {}),
+      priorVerdicts: values["prior-verdict"] ?? [], ...(values.harness ? { harness: values.harness } : {}), ...(values["operator-focus-file"] ? { operatorFocusFile: values["operator-focus-file"] } : {}), ...(values.round !== undefined ? { round: /^[1-9][0-9]*$/.test(values.round) ? Number(values.round) : values.round } : {}), cwd, ...(tmpRoot ? { tmpRoot } : {}), ...(roundId ? { roundId } : {}), ...(fetchLivePrBody ? { fetchLivePrBody } : {}),
     });
     const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath } = plan;
     return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath });

@@ -939,8 +939,10 @@ fan-in it runs the deterministic producer over the round's sources:
 dev-loops-run scripts/loop/emit-judge-work-order.mjs --repo <owner/name> --pr <N> --gate <gate> \
   --head-sha <current_head_sha> --findings-file <ledger-path> --spec-file <spec-path> \
   --identity-file <identity-path> [--prior-verdict <prior-judge-verdict-path> ...] \
-  [--round <n>] [--operator-focus-file <path>] [--tmp-root <checkout>/tmp]
+  [--round <n>] [--operator-focus-file <path>] [--harness <claude|pi|codex>] [--tmp-root <checkout>/tmp]
 ```
+
+Pass `--harness` with the judge's harness: `claude` or `pi` omits the Codex-only setup paragraph from the work order.
 
 A slice PR's reopen line lives in the PR body Non-goals when the spec comes from the linked issue. The producer reads the PR body from the pinned gate-context `pr-body` read and, when it holds exactly one closing reference, to an issue in this repository, whose number a reopen line names, carries `sliceLinkage` and `sliceLinkageIssues` in the work order. `judge-pass` arms its coercion from those pinned fields only (`SPEC-SLICE-PR-KEEPS-CLOSING-REF`).
 Write the `--operator-focus-file` JSON only when the operator supplied round context for the judge (`GATE-EXEC-OPERATOR-FOCUS`).

@@ -344,6 +344,46 @@ export const SPEC_AUTHORITY_VERDICT_SCHEMA = Object.freeze({
       defectKind: `one of: ${DEFECT_KINDS.join(", ")} (default other); matcher also needs acceptedForms[] and rejectedForms[], each a non-empty array of strings (verbatim input forms, "" allowed); doc_lag needs statedSurfaces[], a non-empty array of non-empty strings (surface locations); the lists are refused on any other defectKind`,
     }),
   }),
+  // Two filled verdict files for the checker. Replace every identity and criterion value with the work order's own.
+  examples: Object.freeze([
+    Object.freeze({
+      specDigest: `sha256:${"a".repeat(64)}`,
+      headSha: "b".repeat(40),
+      contentDigest: `sha256:${"c".repeat(64)}`,
+      decisions: [{
+        index: 0,
+        outcome: "valid_compliant",
+        specDigest: `sha256:${"a".repeat(64)}`,
+        headSha: "b".repeat(40),
+        contentDigest: `sha256:${"c".repeat(64)}`,
+        checkedCriteria: ["ac:1"],
+        rationale: "The finding is a real defect and the remedy fits the spec.",
+        authorizedRemediation: "Guard the empty input in parseThing and add a test.",
+        defectClass: "unguarded empty input",
+        siteQuery: "parseThing readThing",
+      }],
+    }),
+    Object.freeze({
+      specDigest: `sha256:${"a".repeat(64)}`,
+      headSha: "b".repeat(40),
+      contentDigest: `sha256:${"c".repeat(64)}`,
+      decisions: [{
+        index: 1,
+        outcome: "valid_compliant",
+        specDigest: `sha256:${"a".repeat(64)}`,
+        headSha: "b".repeat(40),
+        contentDigest: `sha256:${"c".repeat(64)}`,
+        checkedCriteria: ["ac:1"],
+        rationale: "The matcher rejects a form the spec accepts.",
+        authorizedRemediation: "Accept the prefixed form in matchThing and add a test.",
+        defectClass: "matcher too narrow",
+        siteQuery: "matchThing",
+        defectKind: "matcher",
+        acceptedForms: ["sha256:abc", "abc"],
+        rejectedForms: ["", "sha256:"],
+      }],
+    }),
+  ]),
 });
 
 function nonEmptyStringList(value) {
