@@ -215,6 +215,14 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
+      # The detector's trust-config read resolves the default branch from refs/remotes/origin/HEAD,
+      # which actions/checkout does not set (ADR 0290); the default branch comes from the event, never a guess.
+      - name: Set origin/HEAD to the default branch
+        if: steps.pr.outputs.draft == 'false'
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: git remote set-head origin "$DEFAULT_BRANCH"
+
       - name: Set up Node.js
         if: steps.pr.outputs.draft == 'false'
         uses: actions/setup-node@v5
@@ -385,6 +393,14 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
+
+      # The detector's trust-config read resolves the default branch from refs/remotes/origin/HEAD,
+      # which actions/checkout does not set (ADR 0290); the default branch comes from the event, never a guess.
+      - name: Set origin/HEAD to the default branch
+        if: steps.decide.outputs.recompute == 'true' && steps.pr.outputs.draft == 'false'
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: git remote set-head origin "$DEFAULT_BRANCH"
 
       - name: Set up Node.js
         if: steps.decide.outputs.recompute == 'true' && steps.pr.outputs.draft == 'false'

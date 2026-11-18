@@ -52,6 +52,7 @@ import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 // Gate-coordination terminal stop actions where the dev-loop run is completing
 // or stopping (success OR stop). The runner-coordination lock is auto-released
 // at these boundaries so a fresh re-dispatch on the same PR acquires the lock
@@ -160,7 +161,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
   1  Argument error or gh/runtime failure
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const parseError = buildParseError(USAGE);
 export function parseDetectPrGateCoordinationCliArgs(argv) {
   const options = {
@@ -1663,5 +1665,6 @@ async function main() {
   }
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseDetectPrGateCoordinationCliArgs(process.argv.slice(2)).help);
   await main();
 }

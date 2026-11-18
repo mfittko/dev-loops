@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { initGitFixture, runGitFixture, resolverTestEnv, writeGhStub, runNode as runNodeHelper } from "../_helpers.mjs";
+import { addLocalOrigin, initGitFixture, runGitFixture, resolverTestEnv, writeGhStub, runNode as runNodeHelper } from "../_helpers.mjs";
 
 import {
   expectedWorktreeBranchRef,
@@ -499,12 +499,12 @@ test("build-handoff-envelope emits actionable error when auto-detected repo slug
   try {
     const inputPath = await writeTempJson(tempDir, "resolver.json", makeResolverOutput());
 
-    // No --repo and a git repo without an origin remote.
+    // No --repo and an origin that is not a github.com remote: the trust-config read resolves, the slug does not.
     const repoDir = path.join(tempDir, "repo");
-    const { execFileSync } = await import("node:child_process");
     const { mkdir } = await import("node:fs/promises");
     await mkdir(repoDir, { recursive: true });
-    execFileSync("git", ["init"], { cwd: repoDir, stdio: "ignore" });
+    initGitFixture(repoDir, { branch: "main" });
+    addLocalOrigin(repoDir);
 
     const result = await runNode(["--input", inputPath], { cwd: repoDir });
     assert.equal(result.code, 1, `expected exit 1, got ${result.code} stdout:${result.stdout} stderr:${result.stderr}`);
@@ -525,11 +525,9 @@ test("build-handoff-envelope auto-detects repo slug from git remote origin", asy
     await writeFile(path.join(tempDir, "resolver.json"), `${JSON.stringify(makeResolverOutput())}\n`, "utf8");
 
     // Create a temp git repo with a remote origin
-    const { execFileSync } = await import("node:child_process");
     const { mkdir } = await import("node:fs/promises");
     await mkdir(repoDir, { recursive: true });
-    execFileSync("git", ["init"], { cwd: repoDir, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", "https://github.com/owner/test-repo.git"], { cwd: repoDir, stdio: "ignore" });
+    initGitFixture(repoDir, { remote: "https://github.com/owner/test-repo.git", branch: "main" });
 
     const result = await runNode(["--input", path.join(tempDir, "resolver.json")], { cwd: repoDir });
     assert.equal(result.code, 0, `expected exit 0, got stderr: ${result.stderr}`);

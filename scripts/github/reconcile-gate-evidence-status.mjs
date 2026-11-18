@@ -151,6 +151,10 @@ async function defaultDetectEvidence({ repo, pr }, { runChild, nodeBin = process
     throw new Error(`detect-checkpoint-evidence returned unparseable output (exit ${res.code}): ${res.stderr || res.stdout}`.trim());
   }
   const evidenceState = typeof parsed?.evidenceState === "string" ? parsed.evidenceState : null;
+  // A trust-config refusal ({ ok: false, error, state }, exit 3) carries the state and its remedy in `error`.
+  if (!evidenceState && parsed?.ok === false && typeof parsed.state === "string") {
+    throw new Error(`detect-checkpoint-evidence refused (exit ${res.code}, state ${parsed.state}): ${parsed.error}`);
+  }
   if (!evidenceState) {
     throw new Error(`detect-checkpoint-evidence returned no evidenceState (exit ${res.code})`);
   }

@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { runNode as runNodeHelper } from "../_helpers.mjs";
+import { ensureTrustConfigCheckout, initGitFixture, runNode as runNodeHelper } from "../_helpers.mjs";
 
 const infoScriptPath = path.resolve("scripts/loop/info.mjs");
 
@@ -83,8 +83,10 @@ test("info.mjs --issue produces human-readable output with gh stubs", async () =
 
     // Initialize temp git repo with origin remote matching repoSlug
     // so the startup resolver can auto-detect the repo slug
-    execFileSync("git", ["init"], { cwd: tmpDir, stdio: "ignore" });
-    execFileSync("git", ["remote", "add", "origin", `https://github.com/${repoSlug}.git`], { cwd: tmpDir, stdio: "ignore" });
+    // The startup resolver (a child of info.mjs) reads the trust config from the default branch, so the fixture
+    // needs a commit and a resolvable origin/HEAD; the helper only acts on a script that itself loads the config.
+    initGitFixture(tmpDir, { branch: "main", remote: `https://github.com/${repoSlug}.git` });
+    ensureTrustConfigCheckout(tmpDir);
 
     const ghPath = path.join(tmpDir, "gh");
     const ghScript = [

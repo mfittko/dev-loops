@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { test } from "bun:test";
+
+// The trust-config load runs git, so the restricted PATH keeps the directory of the real git.
+const GIT_BIN = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
 
 import {
   SOURCE_MODE,
@@ -742,7 +746,7 @@ test("inspect-run CLI: checkpoint-only repo-qualified path stays advisory and to
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "55"], {
       cwd: tempDir,
-      env: { ...process.env, PATH: tempDir },
+      env: { ...process.env, PATH: `${tempDir}${path.delimiter}${path.dirname(GIT_BIN)}` },
     });
 
     assert.equal(result.code, 0, `stderr: ${result.stderr}`);
@@ -789,7 +793,7 @@ test("inspect-run CLI: checkpoint-only selection still picks the targeted repo w
 
     const result = await runNode(["--repo", "owner/repo-b", "--pr", "55"], {
       cwd: tempDir,
-      env: { ...process.env, PATH: tempDir },
+      env: { ...process.env, PATH: `${tempDir}${path.delimiter}${path.dirname(GIT_BIN)}` },
     });
 
     assert.equal(result.code, 0, `stderr: ${result.stderr}`);
@@ -839,7 +843,7 @@ test("inspect-run CLI: mixed live + checkpoint fallback stays advisory and top-l
       "--copilot-input", copilotPath,
     ], {
       cwd: tempDir,
-      env: { ...process.env, PATH: tempDir },
+      env: { ...process.env, PATH: `${tempDir}${path.delimiter}${path.dirname(GIT_BIN)}` },
     });
 
     assert.equal(result.code, 0, `stderr: ${result.stderr}`);
@@ -874,7 +878,7 @@ test("inspect-run CLI: matching legacy checkpoint fallback stays advisory when r
 
     const result = await runNode(["--repo", "Owner/Repo", "--pr", "55"], {
       cwd: tempDir,
-      env: { ...process.env, PATH: tempDir },
+      env: { ...process.env, PATH: `${tempDir}${path.delimiter}${path.dirname(GIT_BIN)}` },
     });
 
     assert.equal(result.code, 0, `stderr: ${result.stderr}`);
@@ -918,7 +922,7 @@ test("inspect-run CLI: prefers repo-qualified checkpoint when both new and legac
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "55"], {
       cwd: tempDir,
-      env: { ...process.env, PATH: tempDir },
+      env: { ...process.env, PATH: `${tempDir}${path.delimiter}${path.dirname(GIT_BIN)}` },
     });
 
     assert.equal(result.code, 0, `stderr: ${result.stderr}`);
@@ -949,7 +953,7 @@ test("inspect-run CLI: ignores legacy fallback checkpoint when repo does not mat
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "55"], {
       cwd: tempDir,
-      env: { ...process.env, PATH: tempDir },
+      env: { ...process.env, PATH: `${tempDir}${path.delimiter}${path.dirname(GIT_BIN)}` },
     });
 
     assert.equal(result.code, 0, `stderr: ${result.stderr}`);

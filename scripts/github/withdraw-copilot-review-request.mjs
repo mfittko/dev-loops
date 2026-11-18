@@ -66,6 +66,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { loadDevLoopConfigStrict, resolveClassifyRules } from "@dev-loops/core/config";
 import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "../loop/_copilot-convergence-carry.mjs";
 import { writeSuppressionMarker } from "../loop/_post-convergence-review-suppression.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 // The requested-reviewers read that verifies a `gh pr edit --remove-reviewer`
 // request landed is eventually consistent, mirroring the identical race that
@@ -131,6 +132,7 @@ Exit codes:
   0 — withdrawn, or a no-op because nothing was pending
   1 — usage/argument error, gh failure, or a refusal (the guards did not hold)
   2 — invalid --jq filter
+  3 — Comment trust config refused (stderr JSON with a state field)
 `.trim();
 
 function parseCliArgs(argv) {
@@ -426,6 +428,7 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseCliArgs(process.argv.slice(2)).help);
   runCli(process.argv.slice(2));
 }
 

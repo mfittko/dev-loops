@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { addLocalOrigin, initGitFixture, runGitFixture, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 
 // ADR 0238/0248: a gate-formatted comment from a stranger must not become evidence text.
 
@@ -30,7 +30,7 @@ const verdict = ({ id, login, association, type = "User" }) => ({
 // Claims mode: each entry matches by args, so the viewer lookups (one for the
 // evidence trust filter, one for the gate-thread login) cannot misalign. A null
 // `viewer` stubs no `api user` entry, so the lookup fails.
-async function runFull(comments, { viewer = "gate-bot-user", reviews = [] } = {}) {
+async function runFull(comments, { viewer = "gate-bot-user", reviews = [], trustReviewers = [] } = {}) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-untrusted-"));
   try {
     const user = { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: viewer })}\n` };
@@ -41,7 +41,14 @@ async function runFull(comments, { viewer = "gate-bot-user", reviews = [] } = {}
       ...(viewer === null ? [] : [user, user]),
       { assertArgs: ["api", "graphql"], stdout: `${JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } })}\n` },
     ], { matchMode: "claims" });
-    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const trust = trustReviewers.length > 0 ? `trust:\n  reviewers:\n${trustReviewers.map((l) => `    - ${l}\n`).join("")}` : "";
+    await writeFile(path.join(tempDir, ".devloops"), `version: 1\ngates:\n  requireFanoutEvidence: false\n${trust}`, "utf8");
+    if (trust) {
+      initGitFixture(tempDir, { branch: "main", commit: null });
+      runGitFixture(tempDir, ["add", ".devloops"]);
+      runGitFixture(tempDir, ["commit", "-q", "-m", "devloops"]);
+      addLocalOrigin(tempDir);
+    }
     const result = await runNodeHelper(scriptPath, ["--repo", "owner/repo", "--pr", "17", "--skip-fanout-ledger-check"], {
       env: runIdFreeEnv({ ...env, DEVLOOPS_RUN_ID: "" }),
       cwd: tempDir,
@@ -75,9 +82,9 @@ const preApproval = (association) => ({
   updated_at: "2026-10-20T10:01:00Z",
   html_url: "https://github.com/owner/repo/pull/17#issuecomment-20",
 });
-const sizeFailures = (extraComments, reviews = []) => runFull(
+const sizeFailures = (extraComments, reviews = [], extra = {}) => runFull(
   [verdict({ id: 2, login: "maintainer", association: "MEMBER" }), preApproval("MEMBER"), ...extraComments],
-  { reviews },
+  { reviews, ...extra },
 );
 
 test("a forged verdict comment from a NONE-association stranger is ignored", async () => {
@@ -119,4 +126,9 @@ test("a stranger's APPROVED review does not satisfy the size-budget human approv
   const approved = (association) => ({ id: 40, user: { login: "someone", type: "User" }, author_association: association, state: "APPROVED", commit_id: HEAD, submitted_at: "2026-10-20T10:02:00Z", body: "" });
   assert.equal(hasSizeFailure(await sizeFailures([], [approved("NONE")])), true);
   assert.equal(hasSizeFailure(await sizeFailures([], [approved("MEMBER")])), false);
+});
+
+test("a trust.reviewers human with association NONE never satisfies the size-budget human approval (ADR 0290)", async () => {
+  const approve = { id: 31, user: { login: "someone", type: "User" }, author_association: "NONE", body: `approve merge ${HEAD}`, updated_at: "2026-10-20T10:02:00Z" };
+  assert.equal(hasSizeFailure(await sizeFailures([approve], [], { trustReviewers: ["someone"] })), true);
 });

@@ -18,6 +18,7 @@ import {
   validateResolutionMessage,
 } from "./_review-thread-mutations.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const USAGE = `Usage: reply-resolve-review-threads.mjs --repo <owner/name> --pr <number> [--author <login>] (((--message <text> | stdin) --disposition <fixed|deferred|rejected>) | --message-map <path>) [--resolve]
 Reply to all matching unresolved review threads on one PR and optionally resolve them.
 A message source is always required, in one of two mutually exclusive modes:
@@ -55,7 +56,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
   1  Argument error or gh/runtime failure
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const parseError = buildParseError(USAGE);
 export function parseReplyResolveThreadsCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -533,6 +535,7 @@ export async function runCli(
   }), { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseReplyResolveThreadsCliArgs(process.argv.slice(2)).help);
   runCli().catch((error) => {
     process.stderr.write(`${JSON.stringify(toCliFailurePayload(error))}\n`);
     process.exitCode = 1;

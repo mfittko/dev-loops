@@ -53,6 +53,7 @@ import {
   emitResult,
   matchJqOutputToken,
 } from "../lib/jq-output.mjs";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 
 const USAGE = `Usage: judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --findings-file <path> --judge-verdict <path> --judge-plan <path> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>] [--tmp-root <path>]
 
@@ -184,6 +185,7 @@ Exit codes:
   0   Success
   1   Fail closed (stale verdict head, malformed verdict, out-of-range disposition, etc.)
   2   Invalid --jq filter
+  3   Comment trust config refused (stderr JSON with a state field)
 `.trim();
 
 const GATES = GATE_NAMES;
@@ -1202,6 +1204,7 @@ function main() {
     process.exitCode = 1;
     return;
   }
+  loadCommentTrustConfigOrExit({ repoRoot: opts.repoRoot });
   judgePassCli(opts)
     .then((payload) => {
       process.exitCode = emitResult(payload, { jq: opts.jq, silent: opts.silent });

@@ -2,6 +2,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatCliError } from "../_core-helpers.mjs";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 import { parseInspectRunViewerCliArgs, parseInspectRunViewerCliError, USAGE } from "./inspect-run-viewer/cli.mjs";
 import {
   createInspectRunViewerServer,
@@ -124,6 +125,7 @@ export async function runCli(
 }
 const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectRun) {
+  loadCommentTrustConfigOrExit(undefined, () => parseInspectRunViewerCliArgs(process.argv.slice(2)).help); // the server's adapter calls inspectRun in-process, so the direct-run loader of inspect-run.mjs never runs
   runCli()
     .then((server) => {
       if (server) {
