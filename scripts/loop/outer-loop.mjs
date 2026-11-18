@@ -431,7 +431,7 @@ export async function runCli(
 }
 const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectRun) {
-  loadCommentTrustConfigOrExit();
+  loadCommentTrustConfigOrExit(undefined, () => parseOuterLoopCliArgs(process.argv.slice(2)).help);
   runCli().catch((error) => {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;

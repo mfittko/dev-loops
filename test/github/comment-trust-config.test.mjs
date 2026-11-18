@@ -160,9 +160,16 @@ test("a help token that is an option value does not skip the trust load, while a
   try {
     git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
     const script = new URL("../../scripts/github/capture-review-threads.mjs", import.meta.url).pathname;
-    const valued = spawnSync(process.execPath, [script, "--repo", "o/r", "--pr", "1", "--output", "-h"], { cwd: dir, encoding: "utf8" });
-    assert.equal(valued.status, 3);
-    assert.equal(spawnSync(process.execPath, [script, "--repo", "o/r", "-h"], { cwd: dir, encoding: "utf8" }).status, 0);
+    const run = (...args) => spawnSync(process.execPath, [script, ...args], { cwd: dir, encoding: "utf8" });
+    assert.equal(run("--repo", "o/r", "--pr", "1", "--output", "-h").status, 3);
+    assert.equal(run("--repo", "o/r", "--pr", "1", "--output", "--help").status, 3);
+    assert.equal(run("--repo", "o/r", "-h").status, 0);
+    assert.equal(run("--repo", "o/r", "--help").status, 0);
+    assert.equal(run("--repo=o/r", "--help").status, 0);
+    const listScript = new URL("../../scripts/github/list-review-threads.mjs", import.meta.url).pathname;
+    assert.equal(spawnSync(process.execPath, [listScript, "--unresolved-only", "--help"], { cwd: dir, encoding: "utf8" }).status, 0);
+    const title = spawnSync(process.execPath, [new URL("../../scripts/github/waive-adr-tripwire.mjs", import.meta.url).pathname, "--repo", "o/r", "--pr", "1", "--output", "--help"], { cwd: dir, encoding: "utf8" });
+    assert.equal(title.status, 3);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

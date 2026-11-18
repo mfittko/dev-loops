@@ -1097,6 +1097,6 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
 }
 
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
+  loadCommentTrustConfigOrExit(undefined, () => parseMergePrCliArgs(process.argv.slice(2)).help);
   process.exitCode = await main();
 }

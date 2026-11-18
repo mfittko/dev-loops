@@ -1073,7 +1073,7 @@ export async function runCli(
   setExitCode(emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: silentOk }));
 }
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
+  loadCommentTrustConfigOrExit(undefined, () => parseRequestCliArgs(process.argv.slice(2)).help);
   runCli().catch((error) => {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;

@@ -190,7 +190,7 @@ async function main() {
 }
 
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
+  loadCommentTrustConfigOrExit(undefined, () => parseAuditGateEvidenceCliArgs(process.argv.slice(2)).help);
   const exitCode = await main();
   process.exit(exitCode ?? 0);
 }

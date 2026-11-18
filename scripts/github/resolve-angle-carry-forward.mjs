@@ -608,6 +608,6 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
 }
 
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
+  loadCommentTrustConfigOrExit(undefined, () => parseResolveAngleCarryForwardCliArgs(process.argv.slice(2)).help);
   await main();
 }

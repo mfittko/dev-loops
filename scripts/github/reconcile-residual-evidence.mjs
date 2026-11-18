@@ -283,7 +283,7 @@ export async function snapshotResidualEvidence(options, deps = {}) {
 }
 
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
+  loadCommentTrustConfigOrExit(undefined, () => parseResidualEvidenceArgs(process.argv.slice(2)).help);
   try {
     const options = parseResidualEvidenceArgs(process.argv.slice(2));
     if (options.help) console.log(USAGE);

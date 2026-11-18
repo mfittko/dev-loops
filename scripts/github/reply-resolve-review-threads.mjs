@@ -535,7 +535,7 @@ export async function runCli(
   }), { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
+  loadCommentTrustConfigOrExit(undefined, () => parseReplyResolveThreadsCliArgs(process.argv.slice(2)).help);
   runCli().catch((error) => {
     process.stderr.write(`${JSON.stringify(toCliFailurePayload(error))}\n`);
     process.exitCode = 1;

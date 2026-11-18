@@ -428,7 +428,7 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
 }
 
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
+  loadCommentTrustConfigOrExit(undefined, () => parseCliArgs(process.argv.slice(2)).help);
   runCli(process.argv.slice(2));
 }
 

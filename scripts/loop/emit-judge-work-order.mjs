@@ -366,13 +366,15 @@ registerWorkOrderRole("judge", {
   },
 });
 
+const CLI_OPTIONS = {
+  repo: { type: "string" }, pr: { type: "string" }, gate: { type: "string" }, "head-sha": { type: "string" },
+  "findings-file": { type: "string" }, "spec-file": { type: "string" }, "identity-file": { type: "string" },
+  "prior-verdict": { type: "string", multiple: true }, round: { type: "string" }, "operator-focus-file": { type: "string" }, "tmp-root": { type: "string" }, help: { type: "boolean", short: "h" },
+  ...JQ_OUTPUT_PARSE_OPTIONS,
+};
+
 export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), roundId, fetchLivePrBody } = {}) {
-  const { values } = parseArgs({ args: argv, options: {
-    repo: { type: "string" }, pr: { type: "string" }, gate: { type: "string" }, "head-sha": { type: "string" },
-    "findings-file": { type: "string" }, "spec-file": { type: "string" }, "identity-file": { type: "string" },
-    "prior-verdict": { type: "string", multiple: true }, round: { type: "string" }, "operator-focus-file": { type: "string" }, "tmp-root": { type: "string" }, help: { type: "boolean", short: "h" },
-    ...JQ_OUTPUT_PARSE_OPTIONS,
-  } });
+  const { values } = parseArgs({ args: argv, options: CLI_OPTIONS });
   if (values.help) {
     process.stdout.write(`${USAGE}\n\n${JQ_OUTPUT_USAGE}\n`);
     return 0;
@@ -414,7 +416,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
 }
 
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
+  loadCommentTrustConfigOrExit(undefined, () => parseArgs({ args: process.argv.slice(2), options: CLI_OPTIONS }).values.help);
   try {
     process.exitCode = await main();
   } catch (err) {

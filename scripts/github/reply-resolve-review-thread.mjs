@@ -131,7 +131,7 @@ async function run(argv) {
 }
 
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
+  loadCommentTrustConfigOrExit(undefined, () => parseCliArgs(process.argv.slice(2)).help);
   run(process.argv.slice(2)).then(
     (code) => { process.exitCode = typeof code === "number" ? code : 0; },
     (error) => {

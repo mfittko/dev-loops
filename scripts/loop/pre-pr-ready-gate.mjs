@@ -353,7 +353,7 @@ export async function runCli(argv = process.argv.slice(2), runtime = {}) {
 }
 
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
+  loadCommentTrustConfigOrExit(undefined, () => parsePrePrReadyGateCliArgs(process.argv.slice(2)).help);
   runCli().catch((error) => {
                 process.stderr.write(`${formatCliError(error, { usage: USAGE })}\n`);
     process.exitCode = 1;

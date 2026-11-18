@@ -453,7 +453,7 @@ export async function runCli(
   return emitResult(result, { jq: options.jq, silent: options.silent, stdout });
 }
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
+  loadCommentTrustConfigOrExit(undefined, () => parseWatchCliArgs(process.argv.slice(2)).help);
   runCli().then((code) => {
     if (typeof code === "number") {
       process.exitCode = code;

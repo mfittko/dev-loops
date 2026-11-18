@@ -1305,6 +1305,6 @@ async function main() {
   }
 }
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
+  loadCommentTrustConfigOrExit(undefined, () => parseWriteGateFindingsLogCliArgs(process.argv.slice(2)).help);
   await main();
 }

@@ -1210,6 +1210,6 @@ async function main() {
 export { loadDeliveredHandoff };
 
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
+  loadCommentTrustConfigOrExit(undefined, () => parseVerifyFixerDispositionCliArgs(process.argv.slice(2)).help);
   await main();
 }

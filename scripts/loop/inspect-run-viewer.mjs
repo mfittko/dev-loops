@@ -125,7 +125,7 @@ export async function runCli(
 }
 const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectRun) {
-  loadCommentTrustConfigOrExit(); // the server's adapter calls inspectRun in-process, so the direct-run loader of inspect-run.mjs never runs
+  loadCommentTrustConfigOrExit(undefined, () => parseInspectRunViewerCliArgs(process.argv.slice(2)).help); // the server's adapter calls inspectRun in-process, so the direct-run loader of inspect-run.mjs never runs
   runCli()
     .then((server) => {
       if (server) {

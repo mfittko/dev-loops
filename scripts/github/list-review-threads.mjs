@@ -328,7 +328,7 @@ export async function runCli(
 }
 
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
+  loadCommentTrustConfigOrExit(undefined, () => parseListReviewThreadsCliArgs(process.argv.slice(2)).help);
   runCli().then((code) => {
     if (typeof code === "number") {
       process.exitCode = code;

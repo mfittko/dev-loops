@@ -321,6 +321,6 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
 }
 
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
+  loadCommentTrustConfigOrExit(undefined, () => parseWaiveAdrTripwireCliArgs(process.argv.slice(2)).help);
   runCli().then((code) => { process.exitCode = code; });
 }
