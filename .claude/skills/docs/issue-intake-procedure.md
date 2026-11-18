@@ -127,6 +127,7 @@ Preflight verdicts:
   - durable-auto ownership of this seam (the dedicated watcher + its default 1-hour watch budget) is owned by [FACADE-BOOTSTRAP-WATCH-ROUTE](public-dev-loop-contract.md); this procedure does not restate that rule
   - quiet/no-activity watch observations alone are non-terminal
   - `ready_for_followup`: linked PR has become substantive; resume from that PR
+  - `timed_out` with `outcome: "pending"`: the per-call cap was reached and the watch budget is not exhausted; run the returned `reissue` unchanged per `GATE-EXEC-BOUNDED-WAIT-CAP`, and never re-run `watch-initial` with a fresh budget
   - `timed_out`: observational first; refresh authoritative state
   - if refreshed state is still `waiting_for_initial_copilot_implementation`, remain attached to the same durable wait seam and continue waiting
   - <!-- rule: INTAKE-TIMEOUT-ROUTE-ON-SEAM-EXIT --> `INTAKE-TIMEOUT-ROUTE-ON-SEAM-EXIT`: if the refreshed state exits this seam, route based on that refreshed state instead of surfacing timeout attention
@@ -134,7 +135,7 @@ Preflight verdicts:
   - <!-- rule: INTAKE-TIMEOUT-SURFACE-BUDGET-EXHAUSTED --> `INTAKE-TIMEOUT-SURFACE-BUDGET-EXHAUSTED`: only surface timeout attention when the seam's durable watch budget is actually exhausted
   - for explicit inspect/status requests, report the still-waiting state and exit normally
 - carry that resolved repo slug through every later GitHub issue/PR command
-- before invoking `resolve-dev-loop-startup.mjs --issue <number>` for local implementation on this directly-targeted issue, claim ownership: `dev-loops-run cli/index.mjs issue edit --repo <resolved-repo> --issue <number> --add-assignee @me` (skip if already assigned to the viewer; source-repo fallback: `node scripts/github/edit-issue.mjs ...`). The resolver's single-contributor ownership gate fails closed on a foreign or unclaimed assignee — see [Public Dev Loop Contract](public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup)
+- before invoking `resolve-dev-loop-startup.mjs --issue <number>` for local implementation on this directly-targeted issue, claim ownership by adding `--claim` to that startup call (`loop startup --issue <number> --claim`; it assigns the viewer only when the issue is unassigned, and only on the user's explicit start or continue request for this exact issue). The resolver's single-contributor ownership gate fails closed on a foreign or unclaimed assignee — see [Public Dev Loop Contract](public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup)
 
 ### From a plan-doc path
 

@@ -44,6 +44,31 @@ export function listCheckouts(dir) {
   }
 }
 
+/**
+ * The `workOrderRef` the execution index of any checkout of `dir`'s repository holds for `executionIdentity`
+ * (ADR 0267), or null for an unknown identity. Mirrors the pull's resolveExecutionIndex: null as well for an
+ * identity failing EXECUTION_IDENTITY_RE and for any unreadable, malformed or conflicting entry.
+ */
+export function resolveIndexedWorkOrderRef(executionIdentity, dir) {
+  if (!EXECUTION_IDENTITY_RE.test(String(executionIdentity))) return null;
+  let found = null;
+  for (const { root } of listCheckouts(dir)) {
+    let text;
+    try {
+      text = readFileSync(executionIndexPath(path.join(root, "tmp"), executionIdentity), "utf8");
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      return null;
+    }
+    let entry = null;
+    try { entry = JSON.parse(text); } catch { /* refused below */ }
+    if (entry?.executionIdentity !== executionIdentity || typeof entry.workOrderRef !== "string" || typeof entry.workOrderDigest !== "string") return null;
+    if (found && (found.workOrderRef !== entry.workOrderRef || found.workOrderDigest !== entry.workOrderDigest)) return null;
+    found ??= entry;
+  }
+  return found?.workOrderRef ?? null;
+}
+
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 // A fixer execution: the shared identity pattern with an `f` prefix and no `-u<n>` unit suffix.
 export const isFixerExecution = (id) => typeof id === "string" && id[0] === "f" && !id.includes("-u") && EXECUTION_IDENTITY_RE.test(id);
@@ -60,13 +85,12 @@ const bindingPath = (mainRoot, workOrderRef, workOrderDigest, executionIdentity)
 
 /**
  * `{ workOrderRef, workOrderDigest, executionIdentity }` of an exact sanctioned fixer pull line. The
- * 3-flag line carries them with a `fixer:` ref. The short line (ADR 0115) resolves them through the
- * execution index under `<mainRoot>/tmp`. Null for any other command, an `r`/`j` identity, a missing
- * or unreadable entry, an entry for another execution or a non-`fixer:` ref.
+ * short line (ADR 0115) resolves them through the execution index under `<mainRoot>/tmp`. Null for any
+ * other command, an `r`/`j` identity, a missing or unreadable entry, an entry for another execution or a
+ * non-`fixer:` ref.
  */
 export function parseFixerPullCommand(command, mainRoot) {
   const line = parseSanctionedPullLine(command);
-  if (line?.workOrderRef) return line.workOrderRef.startsWith("fixer:") ? line : null;
   const executionIdentity = line?.executionIdentity;
   if (!isFixerExecution(executionIdentity)) return null;
   try {
@@ -81,7 +105,7 @@ export function parseFixerPullCommand(command, mainRoot) {
 /**
  * Record that `agentId` pulls `workOrderRef`. Keyed by the ref, digest and execution hash, so a replacement
  * fixer re-pulling the same unit takes the binding over. The marker is written before the pull runs,
- * so it also carries the pull's `--digest`: boundTo honors it only when that digest equals the
+ * so it also carries the index entry's digest: boundTo honors it only when that digest equals the
  * receipt's, and a pull that the digest check refuses never takes over or revokes a receipt's grant.
  * A non-string or empty agentId records nothing.
  */
@@ -102,12 +126,36 @@ const boundTo = (mainRoot, receipt, agentId) => {
   }
 };
 
+const KEYED_PLAN_RE = /^fixer-emit-plan\.(f\d+-[0-9a-f]{8})\.json$/u;
+const emittedAtMs = (id) => Number(id.slice(1, id.indexOf("-")));
+const closureRecorded = (mainRoot, heads, executionIdentity) => heads.some((head) => {
+  try { readFileSync(path.join(mainRoot, "tmp", "gate-delta", `${head}.sequence-closed.${executionIdentity}.json`)); return true; } catch (error) { return error?.code !== "ENOENT"; }
+});
+
+// Mirrors the keyed-plan staleness of locateFixerUnit. A keyed plan file is never overwritten, so supersession
+// shows only here: the canonical plan no longer names the parent execution, a closure record exists for the
+// parent, or a newer same-parent keyed plan exists (an unparsable newer sibling counts, as in locate).
+function keyedPlanStale(mainRoot, planPath, plan, heads) {
+  if (!KEYED_PLAN_RE.test(path.basename(planPath))) return false;
+  const dir = path.dirname(planPath);
+  const parentId = plan.parentExecutionIdentity;
+  try {
+    if (!parentId || JSON.parse(readFileSync(path.join(dir, "fixer-emit-plan.json"), "utf8")).executionIdentity !== parentId) return true;
+  } catch { return true; }
+  for (const name of readdirSync(dir)) {
+    const id = KEYED_PLAN_RE.exec(name)?.[1];
+    if (!id || emittedAtMs(id) <= emittedAtMs(plan.executionIdentity)) continue;
+    try { if (JSON.parse(readFileSync(path.join(dir, name), "utf8")).parentExecutionIdentity === parentId) return true; } catch { return true; }
+  }
+  return closureRecorded(mainRoot, heads, parentId);
+}
+
 // The pull's staleness predicate (locateFixerUnit), re-checked on every hook call: a required read
 // changed or vanished, the gate round was retired after emission (the pull's own retirement
 // predicate over every checkout's tmp/, as the pull scans), or the authority branch no longer
 // contains the work order head. A stale unit grants nothing even though its receipt still exists.
 // A malformed retirement record throws, and the caller grants nothing.
-function isStale(mainRoot, checkoutRoots, order, executionIdentity) {
+function isStale(mainRoot, checkoutRoots, order, executionIdentity, planPath, plan) {
   const bytesByRead = new Map();
   for (const read of order.requiredReads ?? []) {
     let bytes = null;
@@ -116,6 +164,7 @@ function isStale(mainRoot, checkoutRoots, order, executionIdentity) {
     if (bytes === null || sha256(bytes) !== read.sha256) return true;
   }
   const baseline = assertFixerReviewBaseline(order, bytesByRead);
+  if (keyedPlanStale(mainRoot, planPath, plan, [order.headSha, ...(baseline ? [baseline.reviewBaselineHead] : [])])) return true;
   if (order.source === "act-list") {
     const emittedAtMs = Number(executionIdentity.slice(1, executionIdentity.indexOf("-")));
     for (const head of new Set([order.headSha, ...(baseline ? [baseline.reviewBaselineHead] : [])])) {
@@ -167,7 +216,7 @@ export function loadFixerGrants(mainRoot, agentId, checkoutRoots) {
       const text = readFileSync(path.join(path.dirname(planPath), "work-orders", `${plan.executionIdentity}.md`), "utf8");
       if (`sha256:${sha256(text)}` !== receipt.materializationHash) continue;
       const order = JSON.parse(text.slice(text.lastIndexOf("\n```json\n") + "\n```json\n".length, text.lastIndexOf("\n```")));
-      if (workOrderDigest(order) !== receipt.workOrderDigest || isStale(mainRoot, checkoutRoots, order, plan.executionIdentity)) continue;
+      if (workOrderDigest(order) !== receipt.workOrderDigest || isStale(mainRoot, checkoutRoots, order, plan.executionIdentity, planPath, plan)) continue;
       const { branch, allowedPaths } = order.mutationAuthority;
       const outputRef = realpathNearestExisting(path.join(path.dirname(planPath), plan.executionIdentity, "fixer-disposition.json"));
       grants.push({ branch, allowedPaths, outputRef });

@@ -1517,6 +1517,20 @@ describe("applyJudgeDispositions (#1525)", () => {
     assert.equal(scopeDrift.verdict, "within_scope");
   });
 
+  test("appended stamped findings share one cluster on an unstamped ledger", () => {
+    const findings = [
+      { severity: "high", angle: "correctness", summary: "unstamped" },
+      { severity: "low", angle: "copilot", summary: "body one", clusterId: 1 },
+      { severity: "low", angle: "copilot", summary: "body two", clusterId: 1 },
+    ];
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "x" },
+      { index: 1, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "y" },
+    ]);
+    const { findings: out } = applyJudgeDispositions(findings, verdict, { pastCap: false, round: 1 });
+    assert.deepEqual(out.map((f) => f.judgeRationale), ["x", "y", "y"]);
+  });
+
   // GATE-EXEC-THREAD-DISPOSITION: a high, a question and an all-nit cluster are never deferred.
   for (const [severity, others] of [["high", ["low"]], ["question", ["low"]], ["nit", ["nit", "nit"]]]) {
     test(`a defer on a cluster whose findings are ${severity} fails closed`, () => {
@@ -2088,5 +2102,83 @@ describe("fan-in never disposes; the judge disposes each cluster and authors its
     assert.throws(() => validateJudgeVerdict(verdict({ ...base, disposition: "defer", followUpDraft })), /reason must be a non-empty one-sentence string/);
     assert.doesNotThrow(() => validateJudgeVerdict(verdict({ ...base, disposition: "defer", followUpDraft, reason: "Follow-up." })));
     assert.doesNotThrow(() => validateJudgeVerdict(verdict(base)));
+  });
+});
+
+describe("pastCapBlockers evidence_only act items", () => {
+  const item = (overrides) => ({ severity: "high", summary: "needs a body edit", judgeDisposition: "act", ...overrides });
+
+  test("an evidence_only act item at the cap round composes no blocker while an ordinary high without a fix blocks", () => {
+    assert.deepEqual(fanin.pastCapBlockers([item({ remedyKind: "evidence_only" })], { round: 4, cap: 4 }), []);
+    assert.equal(fanin.pastCapBlockers([item({})], { round: 4, cap: 4 }).length, 1);
+  });
+
+  test("hasSeverityText accepts only a non-blank severity string", () => {
+    assert.equal(fanin.hasSeverityText({ severity: "low" }), true);
+    for (const severity of ["", "  ", undefined, null, 3]) assert.equal(fanin.hasSeverityText({ severity }), false);
+    assert.equal(fanin.hasSeverityText(undefined), false);
+  });
+});
+
+describe("recorded reviewer-unit bound in fan-in (missing means 5)", () => {
+  const share = (names, reviewer, group) => names.map((angle) => ({ angle, reviewer, group }));
+  const six = ["a", "b", "c", "d", "e", "f"];
+  const seven = [...six, "g"];
+
+  test("fanoutReviewerPairingError: a recorded unit above 5 passes only under a recorded bound that holds it", () => {
+    const units = [{ name: "u", angles: six }];
+    const perAngle = share(six, "r1", "u");
+    assert.equal(fanoutReviewerPairingError(perAngle, [{ name: "u", angles: six }], units, 10), null);
+    assert.match(fanoutReviewerPairingError(perAngle, [{ name: "u", angles: six }], units), /holds 6 angles, above the 5-angle unit bound; re-run the round's gate-context build and emit-fanout-dispatch/);
+    assert.match(fanoutReviewerPairingError(perAngle, [{ name: "u", angles: six }], units, 5), /holds 6 angles, above the 5-angle unit bound/);
+  });
+
+  test("fanoutReviewerPairingError: the bound caps at 10 and names the effective bound", () => {
+    const eleven = [...seven, "h", "i", "j", "k"];
+    const error = fanoutReviewerPairingError(share(eleven, "r1", "u"), [{ name: "u", angles: eleven }], [{ name: "u", angles: eleven }], 99);
+    assert.match(error, /holds 11 angles, above the 10-angle unit bound/);
+  });
+
+  test("fanoutReviewerPairingError: base units re-derive at the recorded bound, so a 7-angle group is one unit", () => {
+    const groups = [{ name: "g", angles: seven }];
+    const perAngle = share(seven, "r1", "g");
+    assert.equal(fanoutReviewerPairingError(perAngle, groups, [{ name: "g", angles: seven }], 10), null);
+    assert.match(fanoutReviewerPairingError(perAngle, groups, [{ name: "g", angles: seven }]), /above the 5-angle unit bound/);
+  });
+
+  test("fanoutReviewerPairingError: a missing bound leaves the 5-angle behavior unchanged", () => {
+    const five = six.slice(0, 5);
+    assert.equal(fanoutReviewerPairingError(share(five, "r1", "u"), [{ name: "u", angles: five }], [{ name: "u", angles: five }]), null);
+    assert.equal(fanoutReviewerPairingError(share(five, "r1", "u"), [{ name: "u", angles: five }], [{ name: "u", angles: five }], undefined), null);
+  });
+
+  test("fanoutReviewerPairingError: a packed unit above 5 still fails closed for a foreign, split, duplicated or cross-unit angle", () => {
+    const groups = [{ name: "x", angles: ["a", "b", "c"] }, { name: "y", angles: ["d", "e", "f"] }];
+    const unit = { name: "u", angles: six };
+    const honest = share(six, "r1", "u");
+    assert.equal(fanoutReviewerPairingError(honest, groups, [unit], 10), null);
+    // foreign: a recorded angle that no re-derived base unit holds
+    assert.match(fanoutReviewerPairingError(honest, groups, [{ name: "u", angles: [...six, "zzz"] }], 10), /angle "zzz" that is not a member of any re-derived base unit/);
+    // missing: a recorded unit that drops one angle of a base unit splits it
+    assert.match(fanoutReviewerPairingError(honest, groups, [{ name: "u", angles: six.slice(0, 5) }], 10), /splits base unit d\+e\+f/);
+    // duplicated: one angle recorded in two units
+    assert.match(fanoutReviewerPairingError(honest, groups, [unit, { name: "v", angles: ["a"] }], 10), /angle "a" is recorded in more than one dispatch unit/);
+    // cross-unit: one reviewer across two recorded units
+    const twoUnits = [{ name: "u1", angles: ["a", "b", "c"] }, { name: "u2", angles: ["d", "e", "f"] }];
+    assert.match(fanoutReviewerPairingError(share(six, "r1", "u1"), groups, twoUnits, 10), /does not place all of them in one group/);
+  });
+
+  test("countFreshDispatchUnits reports one unit for a shared reviewer across a packed unit above 5", () => {
+    assert.equal(countFreshDispatchUnits(share(six, "r1", "u")), 1);
+  });
+
+  test("reviewerBudgetPreflight: the one-angle tail keeps its group only after a unit at the recorded bound", () => {
+    const tenAngles = Array.from({ length: 10 }, (_, i) => `a${i}`);
+    const groups = [{ name: "big-part1", angles: tenAngles, group: "big" }, { name: "big-part2", angles: ["tail"], group: "big" }];
+    assert.equal(reviewerBudgetPreflight(groups, null, { unitBound: 10 }).pendingGroups[1].group, "big");
+    assert.equal(reviewerBudgetPreflight(groups, null).pendingGroups[1].group, null);
+    const five = [{ name: "p1", angles: tenAngles.slice(0, 5), group: "big" }, { name: "p2", angles: ["tail"], group: "big" }];
+    assert.equal(reviewerBudgetPreflight(five, null).pendingGroups[1].group, "big");
+    assert.equal(reviewerBudgetPreflight(five, null, { unitBound: 10 }).pendingGroups[1].group, null);
   });
 });

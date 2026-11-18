@@ -36,6 +36,18 @@ async function fixture(files, requiredRules = [], optOutRules = []) {
   return dir;
 }
 
+test("extractRuleDefinitions skips heading and HTML comment lines when taking the rule text (issue 3092)", () => {
+  const [def] = extractRuleDefinitions("<!-- rule: TEST-RULE-002 -->\n<!-- note -->\n## Heading\n\nThe tool MUST pass.\n", "doc.md");
+  assert.equal(def.body, "The tool MUST pass.");
+});
+
+test("extractRuleDefinitions drops a multi-line HTML comment and a table-row closing pipe (issue 3092)", () => {
+  const [a] = extractRuleDefinitions("<!-- rule: TEST-RULE-003 -->\n<!-- first line\nsecond line -->\nThe tool MUST pass.\n", "doc.md");
+  assert.equal(a.body, "The tool MUST pass.");
+  const [b] = extractRuleDefinitions("| <!-- rule: TEST-RULE-004 --> `TEST-RULE-004` | The tool MUST pass. |", "doc.md");
+  assert.equal(b.body, "The tool MUST pass.");
+});
+
 test("extractRuleDefinitions reads rule markers", () => {
   const defs = extractRuleDefinitions("| <!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The tool MUST pass. |", "doc.md");
   assert.deepEqual(defs.map((d) => d.id), ["TEST-RULE-001"]);
@@ -444,6 +456,22 @@ test("runtime citations with 3-letter prefixes (OPS-/ADR-) are detected and cred
   try {
     const result = await validateRuleOwnership(dir);
     assert.deepEqual(result.enforcement, { runtimeTotal: 1, runtimeEnforced: 1, runtimeUnenforced: 0 });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("shared executable test helper refusals count, while test cases and fixtures do not", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: TEST-RULE-001 --> The tool MUST refuse.",
+    "skills/docs/b.md": "<!-- rule: TEST-RULE-002 --> The tool MUST refuse.",
+    "test/_helpers.mjs": "throw new Error('TEST-RULE-001: setup failed')",
+    "test/helper.test.mjs": "throw new Error('TEST-RULE-002: fixture failure')",
+    "test/fixtures/_helpers.mjs": "throw new Error('TEST-RULE-002: fixture failure')",
+  }, ["TEST-RULE-001", "TEST-RULE-002"]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.deepEqual(result.enforcement, { runtimeTotal: 2, runtimeEnforced: 1, runtimeUnenforced: 1 });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

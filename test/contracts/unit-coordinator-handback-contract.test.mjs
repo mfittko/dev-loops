@@ -178,7 +178,7 @@ test("2955: every harness mirror carries the soft-cap rule, unknown-never-zero r
     assert.match(text, /COORDINATOR-CONTINUITY-SOFT-CAP.*advisory retrospective diagnostic/);
     assert.match(text, /Crossing 150K never stops, relaunches or blocks a coordinator, a gate, completion or merge/);
     assert.match(text, /Staying below 150K is not an acceptance prerequisite/);
-    assert.match(text, /Fresh dispatch stays for reviewer and judge isolation, genuine recovery/);
+    assert.match(text, /Fresh dispatch stays for reviewer and judge isolation and for the run-ending cases in Unit coordinator boundaries/);
     assert.match(text, /reported as unknown, never zero/);
   }
   for (const doc of ["skills/docs/retrospective-checkpoint-contract.md", ".claude/skills/docs/retrospective-checkpoint-contract.md"]) {
@@ -251,7 +251,7 @@ test("2955: the replacement reason is read from the predecessor hand-back status
     assert.match(retro, /read from the predecessor's hand-back packet `status`, which names the run-ending case, reported as "unknown" when the status is absent/);
     assert.ok(!/dispatch\s+note/i.test(retro), `${base} retrospective must not cite an orchestrator note`);
     const main = squeeze(await readRepo(`${base}/main-agent-contract.md`));
-    assert.match(main, /The packet `status` names the run-ending case from the canonical list in Unit coordinator boundaries, so it is the replacement reason\./);
+    assert.match(main, /The packet `status` of a run-ending hand-back names the run-ending case from the canonical list in Unit coordinator boundaries, so it is the replacement reason\./);
   }
 });
 

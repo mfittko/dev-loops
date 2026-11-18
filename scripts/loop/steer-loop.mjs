@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
 import path from "node:path";
@@ -907,6 +908,7 @@ export async function runCli(
 }
 const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectRun) {
+  loadCommentTrustConfigOrExit(undefined, () => parseSubmitCliArgs(process.argv.slice(2)).help);
   runCli().catch((error) => {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;

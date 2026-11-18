@@ -80,7 +80,7 @@ function resolvePrResponse(prId) {
   };
 }
 
-// `gh issue view --json body` response for the refinement-artifact gate
+// `gh api graphql` body read (issueOrPullRequest node) for the refinement-artifact gate
 // (issue #1251), fired only when an issue targets the pickup column.
 function issueBodyResponse(body) {
   return { body };

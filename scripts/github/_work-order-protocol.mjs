@@ -12,7 +12,7 @@
  */
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { TOOLCHAIN_ROOT } from "../loop/_repo-root-resolver.mjs";
+import { TOOLCHAIN_ROOT, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { shellQuote } from "../lib/checkout-delegation-refusal.mjs";
 import { writeJson } from "@dev-loops/core/loop/phase-files";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -26,13 +26,11 @@ export const materializationHash = sha256Hex;
 export const fixerReportPath = (outputRef) => `${outputRef}.report`;
 
 // The compact dispatch envelope, the ONLY text relayed to a worker: a self-describing pull instruction
-// (a lagging agent definition still pulls), never task prose. Values go unquoted, so each is one shell-inert word.
-// Step 1 of ADR 0115 keeps this 3-flag form; issue 2560 switches it to the execution identity alone.
-export function buildDispatchPointer({ workOrderRef, workOrderDigest: digest, executionIdentity }) {
-  const unsafe = [workOrderRef, digest, executionIdentity].find((value) => !/^[A-Za-z0-9][\w.:/#-]*$/.test(String(value)));
-  if (unsafe !== undefined) throw new Error(`dispatch envelope value ${JSON.stringify(unsafe)} is not shell-safe`);
+// (a lagging agent definition still pulls), never task prose. The execution identity is the only interpolated value and must match EXECUTION_IDENTITY_RE.
+// The pointer carries the execution identity alone (ADR 0115); the pull resolves the ref and digest through the execution index.
+export function buildDispatchPointer({ workOrderRef, executionIdentity }) {
   if (!EXECUTION_IDENTITY_RE.test(executionIdentity)) throw new Error(`execution identity ${JSON.stringify(executionIdentity)} does not match EXECUTION_IDENTITY_RE`);
-  const text = `Run \`dev-loops-run scripts/github/pull-work-order.mjs --ref ${workOrderRef} --digest ${digest} --execution ${executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`;
+  const text = `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`;
   const bytes = Buffer.byteLength(text);
   if (bytes > DISPATCH_POINTER_MAX_BYTES) throw new Error(`dispatch envelope for ${workOrderRef} is ${bytes} bytes, over DISPATCH_POINTER_MAX_BYTES ${DISPATCH_POINTER_MAX_BYTES}`);
   return text;
@@ -70,8 +68,10 @@ export async function codeTreeSkewNote({ execution, tmpRoots, script, args = "",
 
 const IDENTITY_ROLES = { r: "review", j: "judge", f: "fixer", c: "coordinator" };
 
+const defaultTmpRoot = (cwd) => { try { return resolveGateArtifactTmpRoot(cwd); } catch { return "(unresolved)"; } };
+
 /** The one `{ workOrderRef, workOrderDigest }` the execution index holds for `execution` across `tmpRoots`. */
-async function resolveExecutionIndex(execution, tmpRoots) {
+async function resolveExecutionIndex(execution, tmpRoots, cwd) {
   let found = null;
   if (EXECUTION_IDENTITY_RE.test(String(execution))) {
     for (const tmpRoot of tmpRoots) {
@@ -92,7 +92,7 @@ async function resolveExecutionIndex(execution, tmpRoots) {
       found ??= entry;
     }
   }
-  if (!found) throw new WorkOrderRefusal("dispatch_reference_mismatch", `execution ${execution} matches no emitted execution index entry; re-dispatch the SAME unit with its emitted dispatchPrompt`, true);
+  if (!found) throw new WorkOrderRefusal("dispatch_reference_mismatch", `execution ${execution} matches no emitted execution index entry under the searched tmp roots ${tmpRoots.join(", ")}; the default tmp root is ${defaultTmpRoot(cwd)}; a caller that passed --tmp-root re-runs with no --tmp-root, and otherwise re-dispatches the SAME unit with its emitted dispatchPrompt`, true);
   return found;
 }
 
@@ -121,7 +121,7 @@ export const pullReceiptPath = (receiptTmpRoot, workOrderRef) => path.join(recei
  */
 export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, receiptTmpRoot, rerunTmpRoot }) {
   const fromIndex = ref === undefined;
-  if (fromIndex) ({ workOrderRef: ref, workOrderDigest: digest } = await resolveExecutionIndex(execution, tmpRoots));
+  if (fromIndex) ({ workOrderRef: ref, workOrderDigest: digest } = await resolveExecutionIndex(execution, tmpRoots, cwd));
   const role = String(ref).split(":", 1)[0];
   if (fromIndex && IDENTITY_ROLES[execution[0]] !== role) throw new WorkOrderRefusal("dispatch_identity_mismatch", `execution ${execution} names role ${IDENTITY_ROLES[execution[0]]}, but its index entry names ref ${ref}`);
   const adapter = WORK_ORDER_ROLES.get(role);

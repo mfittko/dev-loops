@@ -9,6 +9,7 @@ import { z } from "zod";
 import { classifyFile, compileClassifyRules, isDevLoopConfigSourcePath } from "../analysis/diff-analyzer.mjs";
 import { ChangeCategory, resolveDynamicAngles } from "../analysis/change-classifier.mjs";
 import { isClaudeHarness } from "../loop/run-context.mjs";
+import { REVIEWER_UNIT_COMBINED_ANGLES_LIMIT, REVIEWER_UNIT_MAX_ANGLES } from "../loop/reviewer-unit-bound.mjs";
 import { trimmedOrNull } from "../loop/normalize.mjs";
 import { matchesDiffExcludeGlob } from "../loop/review-dispatch-plan.mjs";
 
@@ -57,6 +58,8 @@ const BUILTIN_ROLE_TIERS = Object.freeze({
   // harness via models.tiers/roleTiers.
   "pre-push-reviewer": "high",
   "dev-loop": "inherit",
+  // The gate coordinator also inherits by default; a `roleTiers` entry retargets it.
+  "gate-coordinator": "inherit",
 });
 
 // A tier alias's per-harness concrete model. Either harness may be a concrete
@@ -219,9 +222,10 @@ const GateAngleEntry = z.preprocess(
     enabled: z.boolean().optional().describe("Set false to drop this angle from the resolved list (a later config layer disabling a base angle)."),
     persona: z.string().trim().min(1).optional().describe("Reviewer persona for this angle."),
     prompt: z.string().min(1).optional().describe("Short focused instruction for the reviewer agent — what to look for and how to judge this angle."),
-    model: z.string().trim().min(1).optional().describe("Concrete model override for this angle (highest precedence)."),
-    tier: z.string().trim().min(1).optional().describe("Model tier alias for this angle (used when `model` is absent)."),
+    model: z.string().trim().min(1).optional().describe("Concrete model override for this angle. Applies on Pi only; Claude honors the angle tier and Codex inherits."),
+    tier: z.string().trim().min(1).optional().describe("Model tier alias for this angle. On Pi it applies when `model` is absent, Claude always applies it, and Codex inherits."),
     scope: z.enum(GATE_ANGLE_SCOPES).optional().describe("Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle or its changed-files/adjacent-file summary section), or docs-only (doc-file paths only; the diff stays the required diff read). Unknown/omitted resolves to full."),
+    readsPrBody: z.boolean().optional().describe("Declare that this angle reads the PR body, so a PR-body-only edit re-runs its dispatch unit (GATE-EXEC-BODY-ONLY-RERUN). An angle whose prompt names the PR body or PR description is body-reading without it."),
     categories: z.array(z.enum(CHANGE_CATEGORY_NAMES)).min(1).optional().describe("Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed."),
     kinds: z.array(z.enum(FILE_KIND_NAMES)).min(1).optional().describe("File kinds (code/config/test/ci/docs/asset/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed."),
   }),
@@ -280,6 +284,10 @@ const ClassifyConfig = z
 // repo's own config, never from PR content, and run through `sh -c`.
 const ValidationCommand = z.string().trim().min(1).max(500)
   .regex(/^[^\p{Cc}]+$/u, "command must be one line with no control characters");
+
+const ChangelogConfig = z.strictObject({
+  required: z.boolean().describe("`true` enforces the dev-loops changelog completeness rule (a `changes/<slug>.md` fragment or a `CHANGELOG.md` `## Unreleased` item) before PR creation, in pre-push-delta results and in `test:docs`. Default `false`: the rule is skipped.").optional(),
+}).describe("Changelog completeness opt-in. Only `required: true` enables the check; file presence never does. Only the `.devloops` family file is read; the key has no effect in `.pi/dev-loop/defaults.*` or the extension defaults.");
 
 export const ValidationConfig = z
   .strictObject({
@@ -403,7 +411,7 @@ const GateConfig = z.strictObject({
 // Only the draft gate reads maxReviewRounds, so only gates.draft accepts it.
 // No schema-level `.default()` (same layer-shadowing hazard); resolveGateConfig applies 4.
 const DraftGateConfig = GateConfig.extend({
-  maxReviewRounds: z.number().int().nonnegative().optional().describe("Round cap for the draft gate: a round whose count of completed judged rounds reaches this number is past the cap, and a new act item then blocks with round_cap_reached instead of running another fixer round. 0 disables the cap. Default 4."),
+  maxReviewRounds: z.number().int().nonnegative().optional().describe("Round cap for the draft gate: a round whose count of completed judged rounds reaches this number is past the cap, and at the cap round only a named human decision blocks with round_cap_reached (GATE-EXEC-SOFT-CAP); other act items go to the fixer, and a round after the cap round is refused. 0 disables the cap. Default 4."),
 });
 
 // One named group of angles dispatched together onto a single reviewer under
@@ -423,7 +431,17 @@ const FanoutGroup = z.strictObject({
 //   maxConcurrent (M, default 5, min 1) — at most M dispatch units per wave
 //     (scheduleFanoutWaves).
 // An angle in no configured group joins the auto-chunked leftover pool.
+// One size tier of gates.fanout.sizeTiers: a round whose weighted logic LOC is
+// at or below maxWholeLogicLoc packs whole base units into dispatch units of at
+// most maxAnglesPerUnit angles (resolveFanoutSizeTier, ADR 0278).
+const FanoutSizeTier = z.strictObject({
+  maxWholeLogicLoc: z.number().int().min(0).describe("Weighted whole logic LOC ceiling of this tier: the round uses the first tier whose ceiling is at or above its wholeLogicLoc."),
+  maxAnglesPerUnit: z.number().int().min(REVIEWER_UNIT_MAX_ANGLES).max(REVIEWER_UNIT_COMBINED_ANGLES_LIMIT).describe(`Max angles per packed dispatch unit for a round in this tier (${REVIEWER_UNIT_MAX_ANGLES} to ${REVIEWER_UNIT_COMBINED_ANGLES_LIMIT}).`),
+  maxFiles: z.number().int().min(0).optional().describe("Optional non-doc file-count ceiling (countLightModeFiles); a round above it keeps existing grouping. Absent means no file-count limit; localImplementation.lightMode.maxFiles is never reused."),
+});
+
 const FanoutConfig = z.strictObject({
+  sizeTiers: z.array(FanoutSizeTier).min(1).optional().describe("Opt-in ordered size tiers (strictly ascending maxWholeLogicLoc) that pack more angles per review unit for small changes on draft_gate and pre_approval_gate. Absent keeps existing grouping. Rejected together with mode: per-angle."),
   mode: z.enum(["grouped", "per-angle"]).default("grouped").describe("Angle dispatch mode: grouped batches related angles onto one reviewer each (default); per-angle bypasses the configured-groups table and emits one singleton unit per angle (the original full-scrutiny shape). per-angle is equivalent to maxAnglesPerGroup: 1 in dispatch unit size ONLY when no configured multi-angle group matches a resolved angle; otherwise per-angle bypasses configured groups while maxAnglesPerGroup: 1 honors them (matched first, never split)."),
   groups: z.array(FanoutGroup).optional().describe("Static named angle groups consulted in grouped mode. An angle absent from every group joins the auto-chunked leftover pool (chunked into units of ≤maxAnglesPerGroup)."),
   maxAnglesPerGroup: z.number().int().min(1).default(5).describe("Max angles per auto-chunked dispatch unit for leftover ungrouped angles (default 5, min 1). Configured groups are matched first and never split by this knob; mode: per-angle bypasses the table entirely (one singleton per angle)."),
@@ -498,6 +516,25 @@ function rejectInvalidFanoutGroupNames(val, ctx) {
   }
 }
 
+/**
+ * Reject `gates.fanout.sizeTiers` with `mode: per-angle` (per-angle bypasses
+ * grouping, so a tier cannot apply) and tiers whose `maxWholeLogicLoc` is not
+ * strictly ascending (first-match selection needs a deterministic order).
+ * @param {{ mode?: string, sizeTiers?: Array<{ maxWholeLogicLoc: number }> }} val
+ * @param {import("zod").RefinementCtx} ctx
+ */
+function rejectInvalidFanoutSizeTiers(val, ctx) {
+  if (!Array.isArray(val.sizeTiers)) return;
+  if (val.mode === "per-angle") {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["sizeTiers"], message: "gates.fanout.sizeTiers cannot be combined with mode: per-angle (per-angle bypasses grouping)" });
+  }
+  val.sizeTiers.forEach((tier, index) => {
+    if (index > 0 && !(tier.maxWholeLogicLoc > val.sizeTiers[index - 1].maxWholeLogicLoc)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["sizeTiers", index, "maxWholeLogicLoc"], message: "gates.fanout.sizeTiers maxWholeLogicLoc must be strictly ascending" });
+    }
+  });
+}
+
 // Fail-closed PR size budget (see check-size-budget.mjs's pure computation).
 // `patterns` classifies a changed file into t1/t3 by path glob; the default
 // tier is implicit (no `patterns`). `sliceHardLoc` (t1 only) caps the T1-slice
@@ -570,7 +607,7 @@ const GatesConfig = z.strictObject({
   rejectForeignAngles: z.boolean().default(true),
   // Grouped vs per-angle fan-out dispatch policy + static grouping table.
   // GLOBAL, not per-gate — see resolveFanoutGroups.
-  fanout: FanoutConfig.superRefine(rejectInvalidFanoutGroupNames).optional(),
+  fanout: FanoutConfig.superRefine(rejectInvalidFanoutGroupNames).superRefine(rejectInvalidFanoutSizeTiers).optional(),
   reviewDiff: ReviewDiffConfig.optional(),
   contextExpansion: ContextExpansionConfig.optional(),
 });
@@ -972,6 +1009,15 @@ const StandingAuthorizationsConfig = z.strictObject({
   adrTripwireWaiver: z.unknown().optional().describe("Standing authorization for the ADR tripwire waiver writer: { grantedBy (GitHub login), grantedAt (ISO date), expires (ISO date, at most 90 days after grantedAt), reason (non-empty) }. Read only from the default branch's .devloops."),
 });
 
+/**
+ * `trust`: extra comment authors trusted by the shared predicate. Read only from
+ * the default branch's `.devloops` by scripts/github/_comment-trust-config.mjs.
+ */
+export const TrustConfig = z.strictObject({
+  githubActionsBot: z.boolean().describe("Trust the exact github-actions[bot] comment author (default true); false turns the default bot trust off.").optional(),
+  reviewers: z.array(z.string().regex(/^[A-Za-z0-9-]{1,39}(?:\[bot\])?$/, "a GitHub login (A-Z, a-z, 0-9, -; 1 to 39 characters) with an optional [bot] suffix")).describe("Exact, case-insensitive logins trusted as comment authors; a [bot] entry also requires type Bot.").optional(),
+});
+
 /** Internal path whitelist for internal-only PR detection — flat array of regex strings */
 const InternalPatternsConfig = z.array(z.string().trim().min(1)).min(1);
 
@@ -991,7 +1037,7 @@ const FileGatesConfig = z.strictObject({
   postFindingsComments: z.boolean().describe("Also post consolidated gate findings as a second marker-tagged PR comment, duplicating the verdict review's own findings (default false).").optional(),
   anglePool: z.array(z.string().trim().min(1)).describe("Explicit global lens catalog for additive angle selection (global, not per-gate).").optional(),
   rejectForeignAngles: z.boolean().describe("Reject fan-out provenance naming angles outside the gate's configured pool (default true).").optional(),
-  fanout: FanoutConfig.partial().superRefine(rejectInvalidFanoutGroupNames).describe("Grouped vs per-angle fan-out dispatch policy + static grouping table (global, not per-gate).").optional(),
+  fanout: FanoutConfig.partial().superRefine(rejectInvalidFanoutGroupNames).superRefine(rejectInvalidFanoutSizeTiers).describe("Grouped vs per-angle fan-out dispatch policy + static grouping table (global, not per-gate).").optional(),
   reviewDiff: ReviewDiffConfig.partial().describe("Reviewer-diff shaping (global, applies on every gate): excludeGlobs drops matching file blocks from the required filtered diff read.").optional(),
   contextExpansion: ContextExpansionConfig.partial().describe("Adaptive reviewer-context expansion caps (global, applies on every gate): maxFiles and maxBytes bound the importers and sibling functions added per round.").optional(),
 });
@@ -1024,8 +1070,10 @@ export const DevLoopConfigSchema = z.strictObject({
   uiReview: UiReviewConfig.optional(),
   postMerge: PostMergeConfig.optional(),
   standingAuthorizations: StandingAuthorizationsConfig.optional(),
+  trust: TrustConfig.optional(),
   classify: ClassifyConfig.optional(),
   validation: ValidationConfig.optional(),
+  changelog: ChangelogConfig.optional(),
 }).superRefine(refineExtraToolsGuidanceKeys);
 
 // ============================================================================
@@ -1103,8 +1151,10 @@ export const FileConfigSchema = z.strictObject({
   uiReview: UiReviewConfig.partial().describe("UI-review route recipes: per-project run/boot, dev-login, driven flows, and caps.").optional(),
   postMerge: PostMergeConfig.partial().describe("Post-merge local hook actions (postMerge.actions): consumer-declared commands run sequentially, in order, after a merge succeeds — optionally scoped to changed-file substrings (onlyIfChanged) and polled for readiness (verify).").optional(),
   standingAuthorizations: StandingAuthorizationsConfig.describe("Operator-recorded standing human authorizations (adrTripwireWaiver), read only from the default branch's .devloops.").optional(),
+  trust: TrustConfig.describe("Extra trusted comment authors (githubActionsBot, reviewers), read only from the default branch's .devloops.").optional(),
   classify: ClassifyConfig.optional(),
   validation: ValidationConfig.optional(),
+  changelog: ChangelogConfig.optional(),
   // Unknown keys fail closed like any typo (strictObject).
 });
 
@@ -1182,6 +1232,7 @@ function normalizeAngleEntry(a) {
     if (typeof a.prompt === "string" && a.prompt.length > 0) entry.prompt = a.prompt;
     if (typeof a.model === "string" && a.model.trim().length > 0) entry.model = a.model.trim();
     if (typeof a.tier === "string" && a.tier.trim().length > 0) entry.tier = a.tier.trim();
+    if (a.readsPrBody === true) entry.readsPrBody = true;
     if (typeof a.scope === "string" && GATE_ANGLE_SCOPES.includes(a.scope.trim())) entry.scope = a.scope.trim();
     // Category/file-kind bindings for consumer angles. Enum membership is
     // enforced by the schema; this hand-built path only keeps non-empty string
@@ -1217,8 +1268,7 @@ function normalizeAngleEntries(raw) {
 
 /**
  * Find a named angle's configured entry, searching this config's own gates in
- * a fixed priority order (draft, preApproval, spike) and returning the first
- * match. An ENABLED entry in any gate wins: returning a bare `enabled:false`
+ * a fixed priority order (draft, preApproval, spike), with `preferGate` searched first when given, and returning the first match. An ENABLED entry in any gate wins: returning a bare `enabled:false`
  * placeholder first would shadow another gate's real override of the same
  * angle name. When no gate enables the name, the first DISABLED entry is the
  * fallback, so an angle the SECURITY_SENSITIVE_SEAM override adds past
@@ -1226,11 +1276,13 @@ function normalizeAngleEntries(raw) {
  * entry in any gate returns null.
  * @param {DevLoopConfig} config
  * @param {string} name
- * @returns {{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string}|null}
+ * @param {string} [preferGate] config gate key searched first, so a gate-scoped caller sees its own gate's entry
+ * @returns {{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string, scope?: string, categories?: string[], kinds?: string[], readsPrBody?: boolean}|null}
  */
-function findAngleEntry(config, name) {
+export function findAngleEntry(config, name, preferGate) {
   let disabled = null;
-  for (const gate of ["draft", "preApproval", "spike"]) {
+  const order = ["draft", "preApproval", "spike"];
+  for (const gate of preferGate ? [preferGate, ...order.filter((g) => g !== preferGate)] : order) {
     const entries = normalizeAngleEntries(config?.gates?.[gate]?.angles);
     for (const e of entries) {
       if (e.name !== name) continue;
@@ -1325,8 +1377,13 @@ export function resolveReviewerRole(config, angle) {
  * `null` (inherit → pass no model override).
  *
  * Precedence:
- *   1. `kind: "angle"` (gate review dispatch): the angle's own `model`, else its
- *      `tier`, else the built-in `review` tier — so a gate review runs at review
+ *   1. `kind: "angle"` (gate review dispatch): the angle's own `model` (Pi only;
+ *      the string is harness-specific, so Claude ignores it), else its
+ *      `tier`, else (Claude only) the repo's `models.roles.review` or
+ *      `models.roleTiers.review`, else the built-in `review` tier; Pi and Codex
+ *      skip the repo review fallback. `models.roles[angle]` and `models.roleTiers[angle]`
+ *      are never read on this path; per-angle overrides live on `gates.<gate>.angles[]`
+ *      (`model`, `tier`) — so a gate review runs at review
  *      quality even when the angle name collides with a routine role (e.g. the
  *      `docs` angle resolves high via `review`, not the `docs` writer's low tier).
  *   2. `kind: "role"`/absent (routine subagent): `models.roles[role]`, else
@@ -1340,17 +1397,21 @@ export function resolveReviewerRole(config, angle) {
  * @param {DevLoopConfig} config
  * Codex roles select harness-scoped settings; Codex angles still inherit.
  *
- * @param {{ role: string, harness: "claude"|"pi"|"codex", kind?: "role"|"angle" }} params
+ * @param {{ role: string, harness: "claude"|"pi"|"codex", kind?: "role"|"angle", gate?: string }} params
  * @returns {string|null}
  */
-export function resolveRoleModel(config, { role, harness, kind } = {}) {
+export function resolveRoleModel(config, { role, harness, kind, gate } = {}) {
   if (harness === "codex") return kind === "angle" || !role ? null : resolveRoleSettings(config, { role, harness }).model;
   if (!role || (harness !== "claude" && harness !== "pi")) return null;
 
   if (kind === "angle") {
-    const entry = findAngleEntry(config, role);
-    if (typeof entry?.model === "string" && entry.model.length > 0) return entry.model;
-    const tierAlias = entry?.tier ?? BUILTIN_ROLE_TIERS.review;
+    const entry = findAngleEntry(config, role, gate);
+    // A concrete angle model is a harness-specific string (e.g. a gpt-* id on Pi), so Claude honors only the angle's tier.
+    if (harness === "pi" && typeof entry?.model === "string" && entry.model.length > 0) return entry.model;
+    // Claude only: the repo-level review override (models.roles.review / models.roleTiers.review) is the angle default.
+    const reviewConcrete = harness === "claude" ? config?.models?.roles?.review : undefined;
+    if (entry?.tier === undefined && typeof reviewConcrete === "string" && reviewConcrete.trim().length > 0) return reviewConcrete.trim();
+    const tierAlias = entry?.tier ?? (harness === "claude" ? config?.models?.roleTiers?.review : undefined) ?? BUILTIN_ROLE_TIERS.review;
     return resolveTierMapping(config, tierAlias, harness);
   }
 
@@ -1611,20 +1672,11 @@ function mergeAngleArrays(targetRaw, sourceRaw) {
 }
 
 /**
- * Try to read and parse a config file (YAML preferred, JSON fallback).
- * Detects format from file extension: .yaml/.yml → YAML, .json → JSON.
- * Returns the parsed object or null if the file doesn't exist.
- * Throws on read errors other than ENOENT.
- * @param {string} filePath
- * @returns {Promise<object|null>}
- */
-/**
  * Parse already-read config text (YAML or JSON, keyed off `filePath`'s
- * extension) into a plain object. Split out of {@link readConfigFile} so a
- * caller that already has the raw text from somewhere other than this
- * checkout's disk (e.g. `loadDevLoopConfig`'s `devloopsOverride`, which reads
- * a PR head commit's `.devloops` via git) can reuse the exact same parsing
- * rules instead of re-implementing them.
+ * extension) into a plain object. Shared by the on-disk loader and callers
+ * that have the raw text from somewhere other than this checkout's disk
+ * (e.g. `loadDevLoopConfig`'s `devloopsOverride`, which reads a PR head
+ * commit's `.devloops` via git), so both use the exact same parsing rules.
  * @param {string} raw
  * @param {string} filePath - used only for its extension and in error messages
  * @returns {Record<string, unknown>}
@@ -1689,17 +1741,6 @@ export function stripConfigKeyPaths(raw, filePath, keyPaths) {
   return JSON.stringify(data);
 }
 
-async function readConfigFile(filePath) {
-  let raw;
-  try {
-    raw = await readFile(filePath, "utf8");
-  } catch (err) {
-    if (err.code === "ENOENT") return null;
-    throw configError(`Cannot read config file: ${err.message}`, err.code, filePath);
-  }
-  return parseConfigContent(raw, filePath);
-}
-
 /**
  * Find a config file by trying one or more base names in order.
  * Each base name prefers YAML (.yaml, then .yml) before JSON.
@@ -1708,32 +1749,56 @@ async function readConfigFile(filePath) {
  */
 async function findConfigFile(basePaths) {
   const candidates = Array.isArray(basePaths) ? basePaths : [basePaths];
+  const read = async (filePath) => {
+    try {
+      return await readFile(filePath, "utf8");
+    } catch (err) {
+      if (err.code === "ENOENT") return null;
+      throw configError(`Cannot read config file: ${err.message}`, err.code, filePath);
+    }
+  };
 
   for (const basePath of candidates) {
-    // Try bare path first. ENOENT: try extension variants. Other errors
-    // (EISDIR/EACCES) mean the bare file exists but is unreadable — try
-    // extension variants, but surface the original error if none exists.
-    let bareData = null;
-    let bareError = null;
-    try {
-      bareData = await readConfigFile(basePath);
-    } catch (err) {
-      bareError = err;
-    }
-    if (bareData !== null) return { path: basePath, data: bareData };
-
-    for (const ext of [".yaml", ".yml", ".json"]) {
-      const filePath = basePath + ext;
-      const data = await readConfigFile(filePath);
-      if (data !== null) return { path: filePath, data };
-    }
-
-    // No extension variant found either — if the bare path exists but is
-    // unreadable, surface that error rather than silently falling back.
-    if (bareError) throw bareError;
+    const found = await selectConfigSource(basePath, read);
+    if (found) return { path: found.path, data: parseConfigContent(found.raw, found.path) };
   }
 
   return { path: candidates[0] + ".yaml", data: null };
+}
+
+/**
+ * The single source-selection rule for a config base name: the bare file wins
+ * when it parses to a plain object; otherwise (blank, unparseable, non-object,
+ * unreadable, absent) fall through to the first existing `.yaml`, `.yml`,
+ * `.json` variant, which is final (its parse error is the caller's to report).
+ * With no variant, an unusable bare file is returned (a read error is thrown) so
+ * the caller surfaces its own error. Shared by {@link findConfigFile} and
+ * callers that read the same files from elsewhere, such as a git ref.
+ * @param {string} basePath
+ * @param {(filePath: string) => Promise<string|null>} read - resolves `null` when the file is absent
+ * @returns {Promise<{ path: string, raw: string }|null>}
+ */
+export async function selectConfigSource(basePath, read) {
+  let bareRaw = null;
+  let bareError = null;
+  try {
+    bareRaw = await read(basePath);
+    if (bareRaw !== null) parseConfigContent(bareRaw, basePath);
+  } catch (err) {
+    bareError = err;
+  }
+  if (bareRaw !== null && !bareError) return { path: basePath, raw: bareRaw };
+
+  for (const ext of [".yaml", ".yml", ".json"]) {
+    const raw = await read(basePath + ext);
+    if (raw !== null) return { path: basePath + ext, raw };
+  }
+
+  if (bareError) {
+    if (bareRaw !== null) return { path: basePath, raw: bareRaw };
+    throw bareError;
+  }
+  return null;
 }
 
 /**
@@ -1822,6 +1887,13 @@ function applyParsedLayer(merged, filePath, data, layer, warnings, errors, repoR
     );
     const { primeSharedPrefix: _removed, ...gatesRest } = data.gates;
     data = { ...data, gates: gatesRest };
+  }
+
+  // `changelog` is read only from the `.devloops` family layer (a HEAD-pinned
+  // input under requireHeadInputs); a defaults-layer value is ignored.
+  if (layer !== "devloops" && data?.changelog !== undefined) {
+    const { changelog: _ignored, ...rest } = data;
+    data = rest;
   }
 
   // Validate the file's structure before merging: a schema violation ANYWHERE
@@ -2793,6 +2865,44 @@ export function resolveMaxAnglesPerGroup(config) {
   const n = config?.gates?.fanout?.maxAnglesPerGroup;
   if (typeof n !== "number" || !Number.isInteger(n) || n < 1) return DEFAULT_MAX_ANGLES_PER_GROUP;
   return n;
+}
+
+/**
+ * Pure eligibility helper for `gates.fanout.sizeTiers` (ADR 0278): does this
+ * round use a size tier? Checks run in precedence order and the first failure
+ * names the reason, which keeps existing grouping: unconfigured key, per-angle
+ * mode, a gate other than draft/preApproval, `gate:full` label, light-mode
+ * escalation, size evidence that is missing, non-`pass` or not T1-clean,
+ * unreadable changed files, a risk-path or config-source touch, an unclassifiable file, a wLoC above the
+ * last tier, then the selected tier's optional `maxFiles`. Reuses the
+ * proportionality predicates; adds none.
+ * @param {DevLoopConfig|null} config
+ * @param {"draft"|"preApproval"|"review"|string} gate
+ * @param {{ sizeOutcome?: object|null, changedFiles?: string[], hasFullLabel?: boolean, escalated?: boolean }} [facts]
+ * @returns {{ tier: { maxWholeLogicLoc: number, maxAnglesPerUnit: number, maxFiles?: number }|null, reason: string }}
+ */
+export function resolveFanoutSizeTier(config, gate, { sizeOutcome, changedFiles, hasFullLabel = false, escalated = false } = {}) {
+  const fanout = config?.gates?.fanout;
+  const tiers = fanout?.sizeTiers;
+  const none = (reason) => ({ tier: null, reason });
+  if (!Array.isArray(tiers) || tiers.length === 0) return none("size_tiers_unconfigured");
+  if (fanout.mode === "per-angle") return none("per_angle_mode");
+  if (gate !== "draft" && gate !== "preApproval") return none("gate_not_tiered");
+  if (hasFullLabel) return none("gate_full_label");
+  if (escalated) return none("escalated");
+  const loc = sizeOutcome?.wholeLogicLoc;
+  if (sizeOutcome == null || typeof sizeOutcome !== "object" || typeof loc !== "number" || !Number.isFinite(loc) || loc < 0) return none("size_outcome_unavailable");
+  if (sizeOutcome.outcome !== "pass") return none("size_outcome_not_pass");
+  if (!isSizeOutcomeT1Clean(sizeOutcome)) return none("size_outcome_t1");
+  if (!Array.isArray(changedFiles) || changedFiles.length === 0) return none("changed_files_unavailable");
+  if (touchesRiskPath(changedFiles, config?.localImplementation?.lightMode?.riskPaths)) return none("risk_path_touch");
+  if (touchesConfigSource(changedFiles)) return none("config_source_touch");
+  const rules = resolveClassifyRules(config);
+  if (changedFiles.some((f) => classifyFile(f, rules) === "unknown")) return none("unclassifiable_diff");
+  const tier = tiers.find((t) => loc <= t.maxWholeLogicLoc);
+  if (!tier) return none("above_size_tiers");
+  if (typeof tier.maxFiles === "number" && countLightModeFiles(config, changedFiles) > tier.maxFiles) return none("over_tier_max_files");
+  return { tier, reason: "size_tier_applied" };
 }
 
 /**

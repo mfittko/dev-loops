@@ -6,7 +6,7 @@ import { test } from "bun:test";
 import { captureStderr } from "../_helpers.mjs";
 import { runNode as runNodeHelper } from "../_helpers.mjs";
 
-import { parseCiWatchCliArgs, watchCiStatus, watchCommitCiStatus } from "../../scripts/github/probe-ci-status.mjs";
+import { parseCiWatchCliArgs, runCli, watchCiStatus, watchCommitCiStatus } from "../../scripts/github/probe-ci-status.mjs";
 
 const scriptPath = path.resolve("scripts/github/probe-ci-status.mjs");
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
@@ -1088,6 +1088,22 @@ test("watch-commit-ci returns timeout while a run is still in_progress past the 
   );
 });
 
+test("watch-commit-ci stops polling once slow reads push elapsed time past the budget", async () => {
+  await withGhRunListStub(
+    [{ stdout: runList([{ name: "verify", status: "in_progress", conclusion: null }]) }],
+    async (env) => {
+      let clock = 0;
+      const result = await watchCommitCiStatus(
+        { repo: "owner/repo", commit: "sha-main-5", pollIntervalMs: 10, timeoutMs: 100 },
+        { ...fastDeps(env), now: () => { const t = clock; clock += 500; return t; } },
+      );
+      assert.equal(result.status, "timeout");
+      assert.equal(result.attempts, 11);
+    },
+    { expectedCommit: "sha-main-5" },
+  );
+});
+
 test("watch-commit-ci single check (timeout-ms 0) reports live pending without waiting", async () => {
   await withGhRunListStub(
     [{ stdout: runList([{ name: "verify", status: "queued", conclusion: null }]) }],
@@ -1206,4 +1222,78 @@ test("probe-ci-status parses --timeout in seconds; --timeout-ms is a deprecated 
 test("probe-ci-status warns on stderr for deprecated --timeout-ms", () => {
   const err = captureStderr(() => parseCiWatchCliArgs(["--repo", "o/r", "--pr", "1", "--timeout-ms", "1500"]));
   assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
+});
+
+test("probe-ci-status --baseline-sha accepts a 40-hex SHA and rejects empty, blank, short, 64-hex and uppercase values", () => {
+  const base = ["--repo", "owner/repo", "--pr", "7"];
+  assert.equal(parseCiWatchCliArgs([...base, "--baseline-sha", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]).baselineSha, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  for (const bad of ["", " ", "abc123", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".toUpperCase()]) {
+    assert.throws(() => parseCiWatchCliArgs([...base, "--baseline-sha", bad]), /--baseline-sha must be a full 40-character lowercase hex SHA|Missing value for --baseline-sha/, JSON.stringify(bad));
+  }
+});
+
+test("probe-ci-status capped call returns pending and the re-issue keeps the baseline head and the stall start (GATE-EXEC-BOUNDED-WAIT-CAP)", async () => {
+  const queued = (sha) => [
+    { match: ["pr", "view"], stdout: prView(sha, ["build"]) },
+    { match: ["check-runs"], stdout: checkRuns([{ status: "queued", conclusion: null, name: "build" }]) },
+    { match: ["/status"], stdout: statuses([]) },
+  ];
+  const sink = () => { let text = ""; return { write: (c) => { text += c; return true; }, text: () => text }; };
+  const call = async (argv, routes, startMs) => {
+    let clock = startMs;
+    const stdout = sink();
+    await withGhStub({ routes }, (env) => runCli(argv, {
+      stdout, stderr: sink(), env, ghCommand: "gh", runChild: env[RUN_CHILD], delayImpl: async (ms) => { clock += ms; }, now: () => clock,
+    }));
+    return JSON.parse(stdout.text());
+  };
+  const argv = ["--repo", "owner/repo", "--pr", "7", "--poll-interval-ms", "30000", "--timeout", "600"];
+  const first = await call(argv, queued("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), 1_000_000);
+  assert.equal(first.status, "timeout");
+  assert.equal(first.outcome, "pending");
+  // Polls at 0, 30, ... 150 s end the slice at 150 s: the re-issue deducts that elapsed time, not the 170 s cap.
+  assert.equal(first.remainingTimeoutSeconds, 450);
+  assert.match(first.reissue, /^dev-loops-run --repo-root \S+ scripts\/github\/probe-ci-status\.mjs --repo owner\/repo --pr 7 --poll-interval-ms 30000 --baseline-sha aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --stall-started-at-ms 1000000 --timeout 450$/);
+  const resumed = first.reissue.split(" ").slice(4);
+  // A push between the calls is not absorbed: the carried baseline sees the new head.
+  assert.equal((await call(resumed, queued("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), 1_175_000)).status, "changed");
+  // The carried stall start matures across calls: 300 s after the first call's stall began.
+  const stuck = await call(resumed, queued("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), 1_175_000);
+  assert.equal(stuck.status, "stuck");
+  assert.equal(parseCiWatchCliArgs(resumed).baselineSha, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+});
+
+test("probe-ci-status --timeout 30 with the default poll on pending CI performs one poll (GATE-EXEC-BOUNDED-WAIT-CAP)", async () => {
+  const sink = () => { let text = ""; return { write: (c) => { text += c; return true; }, text: () => text }; };
+  const routes = [
+    { match: ["pr", "view"], stdout: prView("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["build"]) },
+    { match: ["check-runs"], stdout: checkRuns([{ status: "queued", conclusion: null, name: "build" }]) },
+    { match: ["/status"], stdout: statuses([]) },
+  ];
+  let clock = 1_000_000;
+  const stdout = sink();
+  await withGhStub({ routes }, (env) => runCli(["--repo", "owner/repo", "--pr", "7", "--timeout", "30"], {
+    stdout, stderr: sink(), env, ghCommand: "gh", runChild: env[RUN_CHILD], delayImpl: async (ms) => { clock += ms; }, now: () => clock,
+  }));
+  const result = JSON.parse(stdout.text());
+  assert.equal(result.status, "timeout");
+  assert.equal(result.attempts, 1);
+});
+
+test("probe-ci-status capped call whose slice overruns the requested budget returns no re-issue (GATE-EXEC-BOUNDED-WAIT-CAP)", async () => {
+  const sink = () => { let text = ""; return { write: (c) => { text += c; return true; }, text: () => text }; };
+  const routes = [
+    { match: ["pr", "view"], stdout: prView("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ["build"]) },
+    { match: ["check-runs"], stdout: checkRuns([{ status: "queued", conclusion: null, name: "build" }]) },
+    { match: ["/status"], stdout: statuses([]) },
+  ];
+  let clock = 1_000_000;
+  const stdout = sink();
+  // The budget is just above the cap; slow reads (the delay overshoots) leave no budget to hand on.
+  await withGhStub({ routes }, (env) => runCli(["--repo", "owner/repo", "--pr", "7", "--timeout", "171"], {
+    stdout, stderr: sink(), env, ghCommand: "gh", runChild: env[RUN_CHILD], delayImpl: async (ms) => { clock += ms + 100_000; }, now: () => clock,
+  }));
+  const result = JSON.parse(stdout.text());
+  assert.equal(result.status, "timeout");
+  assert.equal(result.reissue, undefined);
 });

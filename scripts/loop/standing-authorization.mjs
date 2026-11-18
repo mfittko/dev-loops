@@ -103,14 +103,14 @@ export function readDefaultBranchConfig({ repoRoot = process.cwd(), defaultBranc
   try {
     git(["rev-parse", "--verify", "--quiet", `origin/${branch}^{commit}`], { repoRoot });
   } catch {
-    return refuse("missing", `no .devloops on origin/${branch} (ref absent)`);
+    return refuse("missing", `no .devloops on origin/${branch} (ref absent)`, { refAbsent: true });
   }
   let source = null;
   let sourceName = null;
   for (const name of DEVLOOPS_CONFIG_PATHS) {
     let listed;
     try {
-      listed = git(["ls-tree", "--name-only", `origin/${branch}`, "--", name], { repoRoot });
+      listed = git(["ls-tree", "--full-tree", "--name-only", `origin/${branch}`, "--", name], { repoRoot });
     } catch {
       return refuse("malformed", `cannot list ${name} on origin/${branch}`);
     }

@@ -31,6 +31,7 @@ import {
   classifyOwnership,
   ownershipNeedsViewerLogin,
 } from "@dev-loops/core/github/ownership-helpers";
+import { selectPrClosingIssue } from "@dev-loops/core/github/issue-ops";
 import { resolveLinkedIssuesFromPr } from "./detect-pr-gate-coordination-state.mjs";
 import { configLoadFailure, countLightModeFiles, lightModeCapState, loadDevLoopConfig, normalizeToBareBranch, resolveBaseBranch, resolveIssuelessEnabled, resolveLightMode, resolveWorkflowConfig, touchesConfigSource } from "@dev-loops/core/config";
 import { detectScope, detectWorkingTreeChangedFiles } from "./detect-change-scope.mjs";
@@ -47,6 +48,12 @@ import {
   PLAN_FILE_REFINEMENT_SECTIONS,
 } from "@dev-loops/core/loop/plan-file-intake-contract";
 import { evaluateSpikeIntakeState } from "@dev-loops/core/loop/spike-intake-contract";
+import {
+  SPEC_CHANGED_SINCE_GRILL_REASON,
+  buildSpecChangeFactsGhArgs,
+  detectSpecChangedSinceGrill,
+  parseSpecChangeFacts,
+} from "@dev-loops/core/loop/refinement-grill-state";
 import { loadBoardConfig } from "@dev-loops/core/loop/queue-board-sync";
 import { main as reconcileQueue } from "../projects/reconcile-queue.mjs";
 import { parseArgs } from "node:util";
@@ -57,6 +64,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 // the target repoRoot. A non-vendored consumer's repoRoot has no scripts/ tree;
 // resolving there threw "Cannot find module" and disabled linkage resolution.
 // Matches the module-relative sibling pattern (ui-review-diagnose.mjs).
+const SPEC_CHANGE_READ_FAILED_REASON = "spec_change_read_failed";
 const DETECT_LINKED_ISSUE_PR_SCRIPT = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "../github/detect-linked-issue-pr.mjs",
@@ -81,6 +89,12 @@ Required (exactly one):
   --plan-file <path>  Path to a phase-doc-format plan to start locally
   --spike <path>  Path to a spike artifact to start a spike loop locally
 Optional modifier:
+  --claim        With --issue <n> or --pr <n> only: if the target is open and unassigned,
+                 assign the current user (the only write; open targets only), then start. Pass it
+                 only when the user explicitly asked to start or continue that
+                 exact target. With --pr, an unreadable linked issue refuses
+                 the claim. Rejected with --review/--ui-review/--input/
+                 --plan-file/--spike and with no target.
   --review       With --pr only: route the PR to the read-only review strategy
                  instead of the default continue_on_pr path. Requires no
                  ownership. Rejected without --pr, or combined with --issue/
@@ -88,7 +102,7 @@ Optional modifier:
                  --ui-review.
   --ui-review    With --pr only: route the PR to the ui_review strategy
                  (running-app review from an isolated worktree) instead of
-                 the default continue_on_pr/copilot_pr_followup path.
+                 the default continue_on_pr path.
                  Rejected without --pr, or combined with --issue/--input/
                  --plan-file/--spike, and mutually exclusive with --review.
   --lightweight  With --issue: use the PR body as the spec-of-record
@@ -243,6 +257,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
     lightweight: false,
     uiReview: false,
     review: false,
+    claim: false,
     reconcile: true,
   };
   const { tokens } = parseArgs({
@@ -257,6 +272,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
       lightweight: { type: "boolean" },
       "ui-review": { type: "boolean" },
       review: { type: "boolean" },
+      claim: { type: "boolean" },
       "no-reconcile": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -307,6 +323,10 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
       options.review = true;
       continue;
     }
+    if (token.name === "claim") {
+      options.claim = true;
+      continue;
+    }
     // Read-only callers (the inspect viewer's envelope preview) must not trigger
     // the board self-heal: it is a WRITE path, and its in-flight `gh` fan-out
     // keeps the process alive long after the bundle is on stdout.
@@ -332,6 +352,11 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
   // valid only for an explicitly selected PR target.
   if (options.review && options.pr === undefined) {
     throw parseError("--review is only valid with --pr <n> (rejected with --issue, --input, --plan-file, --spike, or with no --pr).");
+  }
+  // --claim is the one assignee write; valid only for an explicit --issue/--pr
+  // target and never with the read-only review routes.
+  if (options.claim && (options.issue === undefined && options.pr === undefined || options.review || options.uiReview)) {
+    throw parseError("--claim is only valid with --issue <n> or --pr <n> (rejected with --review, --ui-review, --input, --plan-file, --spike, or with no target).");
   }
   if (options.review && options.uiReview) {
     throw parseError("--review and --ui-review are mutually exclusive selectors; provide only one.");
@@ -369,6 +394,8 @@ function ghJson(args, cwd, env = process.env) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: GH_CALL_TIMEOUT_MS,
+      // Default 1 MiB overflows on 100 long comment bodies (spec-change facts read).
+      maxBuffer: 16 * 1024 * 1024,
     });
     return JSON.parse(stdout);
   } catch (err) {
@@ -728,16 +755,31 @@ function resolveOwnershipState(assignees, cwd, env) {
 // Unassigned work is impossible by construction: the startup resolver
 // requires assigned_to_me and fails closed on anything else. assigned_to_other
 // names the foreign assignee(s); unassigned names the exact claim command so
-// the caller can self-heal (claim, then re-run) instead of guessing.
-function enforceOwnershipGate(ownership, { describeArtifact, claimCommand, reviewRouteHint = "" }) {
+// the caller can self-heal (claim, then re-run) instead of guessing, or, with
+// the in-process --claim (open targets only), claims once and proceeds.
+function enforceOwnershipGate(ownership, { describeArtifact, claimCommand, claimArgs, claim, claimRequested = false, cwd, env, reviewRouteHint = "" }) {
   if (ownership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
     throw new Error(
       `${describeArtifact} is assigned to ${ownership.foreignLogins.join(", ")}, not the current viewer; fail closed — do not start. Have the owner unassign it, or pick a different item.${reviewRouteHint}`,
     );
   }
   if (ownership.state === OWNERSHIP_STATE.UNASSIGNED) {
+    if (claim) {
+      // The only write: add the viewer as assignee, then continue as owner.
+      try {
+        execFileSync("gh", claimArgs, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: GH_CALL_TIMEOUT_MS });
+      } catch (err) {
+        throw new Error(`${describeArtifact} could not be claimed (${err instanceof Error ? err.message : String(err)}); fail closed — do not start.`);
+      }
+      return;
+    }
+    if (claimRequested) {
+      throw new Error(
+        `${describeArtifact} is not claimed by any contributor and --claim was not applied (the target is not open, or its assignees or state could not be read); fail closed — do not start.${reviewRouteHint}`,
+      );
+    }
     throw new Error(
-      `${describeArtifact} is not claimed by any contributor; fail closed — do not start. Claim it first: ${claimCommand}${reviewRouteHint}`,
+      `${describeArtifact} is not claimed by any contributor; fail closed — do not start. If the user explicitly asked to start or continue this target, re-run the same command with --claim, or claim it first: ${claimCommand}${reviewRouteHint}`,
     );
   }
 }
@@ -761,7 +803,7 @@ function resolveTargetPreference(cwd) {
   ];
   // Check .devloops first (bare or with extension).
   // Bare files try YAML first, then JSON fallback (consistent with
-  // config.mjs readConfigFile behavior).
+  // config.mjs findConfigFile behavior).
   for (const devloopsPath of devloopsCandidates) {
     try {
       const raw = readFileSync(devloopsPath, "utf8");
@@ -816,7 +858,16 @@ export function buildDraftStart({ repo, pr }) {
     nextAction: `PR #${pr} is an existing draft: a valid start target. Run the draft-start pre-flight \`${preflight}\` and follow its nextAction (\`run_draft_gate\` enters draft_gate while the PR stays draft; \`report_blocked\` reports the spec precondition and stops). The Copilot handoff's \`pr_draft\` stop belongs to the Copilot-only follow-up path and is not an abort here. Do not mark ready or request Copilot review until a clean current-head draft_gate verdict exists.`,
   };
 }
-export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, inputSource, uiReview = false, review = false, env = process.env }) {
+/** Ready-start route marker for an open, ready PR the viewer owns: the gate-coordination pre-flight selects the next gate step. */
+export function buildReadyStart({ repo, pr }) {
+  const preflight = `dev-loops loop gate-coordination --repo ${repo} --pr ${pr}`;
+  return {
+    reviewGate: "pre_approval_gate",
+    preflight,
+    nextAction: `PR #${pr} is an open, ready PR owned by this loop: a valid start target. Run the ready-start pre-flight \`${preflight}\` and follow its nextAction.`,
+  };
+}
+export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, inputSource, uiReview = false, review = false, claim = false, expectedIssue, env = process.env }) {
   // The viewer-login memo exists to dedupe gh calls WITHIN one resolution
   // (PR + linked-issue checks); reset it per invocation so a long-lived
   // process (or test) never reuses a stale login across resolutions.
@@ -856,11 +907,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
         },
       };
     }
-    let artifactState = "not_applicable";
     const warnings = [];
-    let issueLinkageResolution = "resolved_no_open_pr";
-    let linkedPr = null;
-    let ownership = "local";
     let linkagePayload = null;
     try {
       const linkageJson = execFileSync(process.execPath, [
@@ -878,25 +925,36 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       );
     }
     if (linkagePayload?.hasOpenLinkedPr) {
-      issueLinkageResolution = "resolved_linked_pr";
-      linkedPr = linkagePayload.prNumber;
-      try {
-        const prJson = ghJson(["pr", "view", String(linkedPr), "--repo", repo, "--json", "author,state"], repoRoot, env);
-        ownership = isCopilotLogin(prJson?.author?.login) ? "copilot" : "external_human";
-        artifactState = mapGhState(prJson?.state ?? "OPEN");
-      } catch {
-        warnings.push(
-          `linkedPr authorship: using default ownership "${ownership}" for PR #${linkedPr} — gh pr view failed`,
-        );
-      }
+      // The linked PR is found via timeline events; the PR route checks its
+      // own closing issue against `expectedIssue` before any claim write.
+      return buildAutoResolvedInput({ pr: linkagePayload.prNumber, cwd: repoRoot,
+        targetPreference: resolvedTargetPreference, inputSource, claim, expectedIssue: issue, env });
     }
     let issueReadiness;
+    let issueReadinessReason;
     try {
       const issueJson = ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "body"], repoRoot, env);
       issueReadiness = hasAcSection(issueJson.body) ? "ready" : "needs_clarification";
     } catch {
       issueReadiness = "needs_clarification";
       warnings.push(`issueReadiness: using default "${issueReadiness}" — gh issue view failed`);
+    }
+    // GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL: a ready spec that changed after
+    // its latest grill goes back to the grill. Runs regardless of the AC
+    // heading (linked refinement documents, edited-out headings); the existing
+    // readiness value is kept when no change is found.
+    {
+      try {
+        const facts = parseSpecChangeFacts(ghJson(buildSpecChangeFactsGhArgs({ repo, number: issue }), repoRoot, env));
+        if (detectSpecChangedSinceGrill({ comments: facts.comments, bodyLastEditedAt: facts.lastEditedAt, commentsTruncated: facts.commentsTruncated })) {
+          issueReadiness = "needs_clarification";
+          issueReadinessReason = SPEC_CHANGED_SINCE_GRILL_REASON;
+        }
+      } catch (error) {
+        issueReadiness = "needs_clarification";
+        issueReadinessReason = SPEC_CHANGE_READ_FAILED_REASON;
+        warnings.push(`issueReadiness: using default "${issueReadiness}" — spec-change read failed: ${error?.message ?? error}`);
+      }
     }
     // Single-contributor ownership gate: a failed read defaults to an empty
     // assignee list (today's warn+default posture for the READ).
@@ -910,9 +968,11 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     // the strategy the pure routing evaluator would select for this
     // canonical state.
     let assignees = [];
+    let assigneesRead = false;
     try {
       const assigneesJson = ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "assignees"], repoRoot, env);
       assignees = assigneesJson.assignees || [];
+      assigneesRead = true;
     } catch {
       warnings.push('issueAssignmentState: using default "unassigned" — gh issue view failed');
     }
@@ -932,19 +992,17 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       intent: "start_issue_locally",
       mode: "bounded_handoff",
       targetPreference: resolvedTargetPreference,
-      artifactState,
-      issueLinkageResolution,
+      artifactState: "not_applicable",
+      issueLinkageResolution: "resolved_no_open_pr",
       issueReadiness,
+      ...(issueReadinessReason ? { issueReadinessReason } : {}),
       issueAssignmentState,
       loopState,
       warnings: warnings.length > 0 ? warnings : undefined,
       currentState: {
-        target: { kind: "issue", issue, pr: null, linkedPr, branch: null, phase: null },
-        ownership: ownership,
-        nextActor: ownership === "copilot"
-          ? "copilot"
-          : ownership === "external_human"
-            ? "external_human" : "local",
+        target: { kind: "issue", issue, pr: null, linkedPr: null, branch: null, phase: null },
+        ownership: "local",
+        nextActor: "local",
         status: "active",
         authorization: "authorized",
       },
@@ -962,11 +1020,27 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     if (!ownershipGateBypassed(env)) {
       const peekedStrategy = resolveAuthoritativeStartupResumeBundle(result).selectedStrategy ?? "none";
       if (ownershipGateAppliesToStrategy(peekedStrategy)) {
+        // --claim only claims an OPEN issue; the extra state read runs only
+        // when a claim write is actually possible.
+        let claimNow = false;
+        // Claim only after a successful assignees read that showed no assignee.
+        if (claim && assigneesRead && routingOwnership.state === OWNERSHIP_STATE.UNASSIGNED) {
+          try {
+            claimNow = ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "state"], repoRoot, env).state === "OPEN";
+          } catch {
+            // Unreadable state: fall through to the existing refusal.
+          }
+        }
         // Plain review is PR-only, so issue ownership errors intentionally do
         // not suggest the review selector.
         enforceOwnershipGate(resolveOwnershipState(assignees, repoRoot, env), {
           describeArtifact: `Issue #${issue}`,
-          claimCommand: `node scripts/github/edit-issue.mjs --repo ${repo} --issue ${issue} --add-assignee @me`,
+          claimCommand: `dev-loops-run scripts/github/edit-issue.mjs --repo ${repo} --issue ${issue} --add-assignee @me`,
+          claimArgs: ["issue", "edit", String(issue), "--repo", repo, "--add-assignee", "@me"],
+          claim: claimNow,
+          claimRequested: claim,
+          cwd: repoRoot,
+          env,
         });
       }
     }
@@ -976,16 +1050,18 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
   let prAssignees = [];
   let linkedIssueNumbers = [];
   let prDraft = false;
+  let prRead = false;
+  let prJson;
   try {
-    const prJson = ghJson(
-      ["pr", "view", String(pr), "--repo", repo, "--json", "state,mergedAt,assignees,closingIssuesReferences,body,isDraft"],
+    prJson = ghJson(
+      ["pr", "view", String(pr), "--repo", repo, "--json", "author,state,mergedAt,assignees,closingIssuesReferences,body,isDraft"],
       repoRoot,
       env,
     );
     artifactState = prJson.mergedAt ? "merged" : mapGhState(prJson.state);
     prAssignees = prJson.assignees || [];
-    linkedIssueNumbers = resolveLinkedIssuesFromPr(prJson);
     prDraft = prJson.isDraft === true && artifactState === "open";
+    prRead = true;
   } catch {
     // A plain review is ownership-exempt, so unlike the gated strategies the
     // ownership gate cannot backstop an unreadable PR: fail closed rather than
@@ -997,11 +1073,25 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     }
     artifactState = "open";
   }
+  if (!review && !uiReview && !prRead) {
+    throw new Error(`PR #${pr} could not be read; fail closed — do not guess routing ownership.${claim ? " --claim was not applied." : ""}`);
+  }
+  if (!review && !uiReview && !prJson?.author?.login) {
+    throw new Error(`PR #${pr} author could not be read; fail closed — do not guess routing ownership.`);
+  }
+  const closingIssue = review || uiReview ? null : selectPrClosingIssue(prJson);
+  // The --issue route names the unit; refuse a different one before any claim write.
+  if (expectedIssue !== undefined && closingIssue !== expectedIssue) {
+    throw new Error(
+      `issue #${expectedIssue} is linked to PR #${pr}, but that PR closes ${closingIssue === null ? "no issue" : `issue #${closingIssue}`}; fail closed — refusing to bind the coordinator to a unit the operator did not name.`,
+    );
+  }
+  // Body-reference fallback remains a foreign-ownership guard, never unit authority.
+  linkedIssueNumbers = resolveLinkedIssuesFromPr(prJson);
+  const ownership = isCopilotLogin(prJson?.author?.login?.replace?.(/^app\//i, "")) ? "copilot" : "external_human";
   const resolvedTargetPreference = targetPreference ?? resolveTargetPreference(repoRoot);
   // `--review` and `--ui-review` route the PR to their read-only strategies
-  // instead of the default continue_on_pr/copilot_pr_followup path; every other
-  // field stays identical. Without either selector, the plain --pr path is
-  // byte-unchanged.
+  // instead of the author-derived PR follow-up path.
   const result = {
     intent: review ? "review_pr" : uiReview ? "review_pr_ui" : "continue_on_pr",
     mode: "bounded_handoff",
@@ -1010,9 +1100,9 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     issueLinkageResolution: "not_applicable",
     loopState: review ? "pr_review_start" : uiReview ? "pr_ui_review_start" : "pr_followup_start",
     currentState: {
-      target: { kind: "pr", issue: null, pr, linkedPr: null, branch: null, phase: null },
-      ownership: "copilot",
-      nextActor: "user",
+      target: { kind: "pr", issue: closingIssue, pr, linkedPr: null, branch: null, phase: null },
+      ownership,
+      nextActor: ownership,
       status: "active",
       authorization: "authorized",
     },
@@ -1025,40 +1115,56 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
   // that strategy is gated. Review peeks are exempt, so a reviewer can inspect
   // a PR (and its linked issue) they do not own. Bypassed (read-only
   // inspection): skip enforcement entirely, mirroring the --issue path above.
+  let ownershipGatePassed = false;
   if (!ownershipGateBypassed(env)) {
     const peekedStrategy = resolveAuthoritativeStartupResumeBundle(result).selectedStrategy ?? "none";
     if (ownershipGateAppliesToStrategy(peekedStrategy)) {
       const prOwnership = resolveOwnershipState(prAssignees, repoRoot, env);
       const reviewRouteHint = ` For a read-only review that needs no ownership, use: dev-loops loop startup --pr ${pr} --review`;
-      enforceOwnershipGate(prOwnership, {
-        describeArtifact: `PR #${pr}`,
-        claimCommand: `node scripts/github/edit-pr.mjs --repo ${repo} --pr ${pr} --add-assignee @me`,
-        reviewRouteHint,
-      });
       // A PR whose linked issue is foreign-owned is foreign too — the issue
       // owner owns the whole loop. This only checks for a FOREIGN linked
-      // issue (not unassigned): the PR's own ownership above already gates
-      // the unclaimed case, and an unassigned linked issue is not evidence
+      // issue (not unassigned): the PR's own ownership gate covers the
+      // unclaimed case, and an unassigned linked issue is not evidence
       // anyone else owns it. Copilot-assigned PRs short-circuit: the
       // Copilot-first flow governs them, and their path stays immune to
-      // viewer-login resolution entirely.
-      for (const linkedIssueNumber of prOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_COPILOT ? [] : linkedIssueNumbers) {
-        let linkedIssueAssignees;
-        try {
-          const linkedIssueJson = ghJson(["issue", "view", String(linkedIssueNumber), "--repo", repo, "--json", "assignees"], repoRoot, env);
-          linkedIssueAssignees = linkedIssueJson.assignees || [];
-        } catch {
-          // Warn-on-failure posture, same as other reads: an unreadable linked
-          // issue cannot block continuation on its own.
-          continue;
+      // viewer-login resolution entirely. Read-only; with --claim it runs
+      // BEFORE the claim write so a refusal leaves no assignment behind.
+      const claimNow = claim && prRead && artifactState === "open" && prOwnership.state === OWNERSHIP_STATE.UNASSIGNED;
+      const checkLinkedIssues = ({ strict = false } = {}) => {
+        for (const linkedIssueNumber of prOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_COPILOT ? [] : linkedIssueNumbers) {
+          let linkedIssueAssignees;
+          try {
+            const linkedIssueJson = ghJson(["issue", "view", String(linkedIssueNumber), "--repo", repo, "--json", "assignees"], repoRoot, env);
+            linkedIssueAssignees = linkedIssueJson.assignees || [];
+          } catch {
+            // Warn-on-failure posture, same as other reads: an unreadable linked
+            // issue cannot block continuation on its own, but it blocks a claim write.
+            if (strict) {
+              throw new Error(`PR #${pr}'s linked issue #${linkedIssueNumber} could not be read; fail closed — do not claim.${reviewRouteHint}`);
+            }
+            continue;
+          }
+          const linkedIssueOwnership = resolveOwnershipState(linkedIssueAssignees, repoRoot, env);
+          if (linkedIssueOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
+            throw new Error(
+              `PR #${pr}'s linked issue #${linkedIssueNumber} is assigned to ${linkedIssueOwnership.foreignLogins.join(", ")}, not the current viewer; the issue owner owns the whole loop — fail closed, do not continue. Have the owner unassign it, or pick a different item.${reviewRouteHint}`,
+            );
+          }
         }
-        const linkedIssueOwnership = resolveOwnershipState(linkedIssueAssignees, repoRoot, env);
-        if (linkedIssueOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
-          throw new Error(
-            `PR #${pr}'s linked issue #${linkedIssueNumber} is assigned to ${linkedIssueOwnership.foreignLogins.join(", ")}, not the current viewer; the issue owner owns the whole loop — fail closed, do not continue. Have the owner unassign it, or pick a different item.${reviewRouteHint}`,
-          );
-        }
-      }
+      };
+      if (claimNow) checkLinkedIssues({ strict: true });
+      enforceOwnershipGate(prOwnership, {
+        describeArtifact: `PR #${pr}`,
+        claimCommand: `dev-loops-run scripts/github/edit-pr.mjs --repo ${repo} --pr ${pr} --add-assignee @me`,
+        claimArgs: ["pr", "edit", String(pr), "--repo", repo, "--add-assignee", "@me"],
+        claim: claimNow,
+        claimRequested: claim,
+        cwd: repoRoot,
+        env,
+        reviewRouteHint,
+      });
+      if (!claimNow) checkLinkedIssues();
+      ownershipGatePassed = true;
     }
   }
   // Draft-start route: an existing draft PR is a valid start target. The
@@ -1072,6 +1178,10 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
   const copilotAssigned = classifyOwnership(prAssignees, null).state === OWNERSHIP_STATE.ASSIGNED_TO_COPILOT;
   if (prDraft && !review && !uiReview && !copilotAssigned) {
     return { ...result, draftStart: buildDraftStart({ repo, pr }) };
+  }
+  // Ready-start route (issue 3105 AC49): a ready PR past the ownership gate is loop-owned by claim, whatever its author.
+  if (prRead && artifactState === "open" && !prDraft && !review && !uiReview && !copilotAssigned && ownershipGatePassed) {
+    return { ...result, readyStart: buildReadyStart({ repo, pr }) };
   }
   return result;
 }
@@ -1399,7 +1509,7 @@ export function buildResolveDevLoopStartupResult(input, {
   // `canonicalSpecSource`). Strip them before evaluation and re-attach to the
   // result; `planFileExempt` waives the worktree-isolation guard because a
   // pre-promotion plan has no issue to key a worktree on.
-  const { planFileExempt = false, planFileIntakeState = null, spikeIntakeState = null, canonicalSpecSource = null, draftStart = null, ...routingInput } = input;
+  const { planFileExempt = false, planFileIntakeState = null, spikeIntakeState = null, canonicalSpecSource = null, draftStart = null, readyStart = null, issueReadinessReason = null, ...routingInput } = input;
   input = routingInput;
   // Retrospective checkpoint gate (RETRO-ENFORCEMENT-CONFIG-GATED). The
   // durable checkpoint file, when present, is always honored. Cycle scoping
@@ -1432,6 +1542,33 @@ export function buildResolveDevLoopStartupResult(input, {
     input = { ...input, retrospectiveCheckpointState: checkpointState };
   }
   const bundle = resolveAuthoritativeStartupResumeBundle(input);
+  // GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL: every target preference stops and
+  // routes back to the grill (prefer_local never reads issueReadiness).
+  if (issueReadinessReason === SPEC_CHANGE_READ_FAILED_REASON) {
+    const issue = input.currentState?.target?.issue;
+    return {
+      ...buildNeedsReconcileStartupResult(
+        bundle,
+        `The spec-change read for issue #${issue} failed (${SPEC_CHANGE_READ_FAILED_REASON}). Retry startup; check the warnings for the read error (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
+        pendingRetrospectives,
+      ),
+      issueReadiness: input.issueReadiness,
+      issueReadinessReason,
+      ...(input.warnings ? { warnings: input.warnings } : {}),
+    };
+  }
+  if (issueReadinessReason === SPEC_CHANGED_SINCE_GRILL_REASON) {
+    const issue = input.currentState?.target?.issue;
+    return {
+      ...buildNeedsReconcileStartupResult(
+        bundle,
+        `Issue #${issue} changed after its latest "🔬 Grill / refinement results" comment (${SPEC_CHANGED_SINCE_GRILL_REASON}). Re-grill it with \`/dev-loops:loop-grill ${issue} --auto\` (or \`/loop-grill ${issue} --auto\` in the dev-loops repo itself), then re-run startup (rule GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL).`,
+        pendingRetrospectives,
+      ),
+      issueReadiness: input.issueReadiness,
+      issueReadinessReason,
+    };
+  }
   const strategyKey = bundle.selectedStrategy ?? "none";
   if (!(strategyKey in STRATEGY_REQUIRED_READS)) {
     throw new Error(
@@ -1490,9 +1627,12 @@ export function buildResolveDevLoopStartupResult(input, {
       );
     }
   }
-  // Draft-start route: only the plain PR follow-up route carries it.
-  const draftStartApplies = draftStart !== null && strategyKey === "copilot_pr_followup";
-  const routedBundle = { ...bundle, ...(draftStartApplies ? { nextAction: draftStart.nextAction } : {}), pendingRetrospectives };
+  // Draft-start and ready-start routes: only the plain PR follow-up route carries them.
+  const prFollowup = ["copilot_pr_followup", "external_pr_followup"].includes(strategyKey);
+  const draftStartApplies = draftStart !== null && prFollowup;
+  const readyStartApplies = readyStart !== null && prFollowup;
+  const startMarker = draftStartApplies ? draftStart : readyStartApplies ? readyStart : null;
+  const routedBundle = { ...bundle, ...(startMarker ? { nextAction: startMarker.nextAction } : {}), pendingRetrospectives };
   return {
     ok: true,
     bundleKind: bundle.bundleKind,
@@ -1505,6 +1645,7 @@ export function buildResolveDevLoopStartupResult(input, {
     ...(spikeIntakeState !== null ? { spikeIntakeState } : {}),
     ...(canonicalSpecSource !== null ? { canonicalSpecSource } : {}),
     ...(draftStartApplies ? { draftStart } : {}),
+    ...(readyStartApplies ? { readyStart } : {}),
     bundle: routedBundle,
   };
 }
@@ -1553,6 +1694,8 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       delete parsed.spikeIntakeState;
       delete parsed.canonicalSpecSource;
       delete parsed.draftStart;
+      delete parsed.readyStart;
+      delete parsed.issueReadinessReason;
     }
     input = parsed;
   } else if (options.issue !== undefined) {
@@ -1561,6 +1704,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       cwd: sessionCwd,
       targetPreference,
       inputSource,
+      claim: options.claim,
       env: adapter.getEnv(),
     });
     // --lightweight modifier: the PR body becomes the spec-of-record for
@@ -1578,6 +1722,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       targetPreference,
       uiReview: options.uiReview,
       review: options.review,
+      claim: options.claim,
       env: adapter.getEnv(),
     });
   }

@@ -613,7 +613,7 @@ function buildWorktreeSlug(artifact, kind) {
 
 /**
  * Deterministic report points for one unit coordinator. A unit reports status at
- * each listed point it reaches, in order, and continues; a replacement is dispatched only at a real stop, the orchestrator only emits and dispatches
+ * the draft_pr_opened point and continues, and it hands back at gate_verdict_posted under COORDINATOR-ROUND-BOUNDARY-HANDBACK; a replacement is dispatched at every run-ending case, the orchestrator only emits and dispatches
  * its work order, and it re-resolves startup against
  * authoritative state (never a brief authored by the predecessor).
  * The vocabulary is closed so a fixture can assert the exact set.
@@ -641,8 +641,8 @@ export const STATELESS_UNIT_STRATEGIES = Object.freeze([
 /**
  * Derive the unit coordinator's report points from the route the envelope
  * already carries. Nothing here comes from a predecessor: `resume` names the
- * sanctioned re-resolution the unit runs at a report point, or a replacement runs
- * after a real stop, against authoritative state.
+ * sanctioned re-resolution the unit runs at a report point, and a replacement
+ * runs at every run-ending case, against authoritative state.
  * Returns undefined for a route that has no unit to report from (terminal
  * reconciliation, read-only review or ui-review, wait) so the field never
  * contradicts the route's own stop rules.
@@ -917,7 +917,7 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     envelope.gateConfig = gateConfig;
   }
 
-  // Unit coordinator report points (issue 2532, amended by issue 2955). Target+strategy derived,
+  // Unit coordinator report points (issue 2532, amended by issues 2955 and 3069). Target+strategy derived,
   // so it is byte-stable across builds for the same route.
   const unitBoundaries = deriveUnitBoundaries(isReconciliation ? null : strategy, target);
   if (unitBoundaries) {
@@ -1308,7 +1308,7 @@ export function validateHandoffEnvelope(envelope) {
     }
   }
 
-  // ----- unitBoundaries (optional — coordinator report points, issue 2532, amended by issue 2955) -----
+  // ----- unitBoundaries (optional — coordinator report points, issue 2532, amended by issues 2955 and 3069) -----
   if (envelope.unitBoundaries !== undefined) {
     const ub = envelope.unitBoundaries;
     const boundaryNames = Object.values(UNIT_BOUNDARY);

@@ -378,3 +378,59 @@ test("evaluateJqFilter: null sorts below numbers in order comparisons", () => {
   assert.deepEqual(evaluateJqFilter(rows, ".[] | select(.f >= 10)"), [{ f: 20 }]);
   assert.deepEqual(evaluateJqFilter(rows, ".[] | select(.f > null)"), [{ f: 20 }]);
 });
+
+test("strict: a typo in a select/comparison predicate path is a missing-path error, a present null is a value", () => {
+  const data = { a: null, b: 1 };
+  assert.throws(() => evaluateJqFilter(data, "select(.typo == 1)", { strict: true }), /matches no field/);
+  assert.throws(() => evaluateJqFilter(data, "select(.typo)", { strict: true }), /matches no field/);
+  assert.throws(() => evaluateJqFilter(data, ".typo == 1", { strict: true }), /matches no field/);
+  assert.deepEqual(evaluateJqFilter(data, ".a == null", { strict: true }), [true]);
+  assert.deepEqual(evaluateJqFilter(data, "select(.a == null)", { strict: true }), [data]);
+  assert.deepEqual(evaluateJqFilter(data, ".typo == 1"), [false]);
+  // a path through a present null is not a missing path (view-pr --jq .pr.mergeCommit.oid)
+  assert.deepEqual(evaluateJqFilter({ a: null }, ".a.b", { strict: true }), evaluateJqFilter({ a: null }, ".a.b"));
+});
+
+test("strict: the path[] iteration branch reports a missing base path", () => {
+  assert.throws(() => evaluateJqFilter({ a: [] }, ".typo[]", { strict: true }), /matches no field/);
+  assert.deepEqual(evaluateJqFilter({ a: [] }, ".a[]", { strict: true }), []);
+});
+
+test("strict: inherited properties such as .constructor are not fields", () => {
+  assert.throws(() => evaluateJqFilter({ a: 1 }, ".constructor", { strict: true }), /matches no field/);
+});
+
+test("strict: a value an earlier pipe stage did not find is not evidence that a later path exists", () => {
+  const data = { items: [{ a: { body: "text" } }, {}] };
+  assert.throws(() => evaluateJqFilter(data, ".items[] | .a | .typo", { strict: true }), /matches no field/);
+  assert.deepEqual(evaluateJqFilter({ items: [{ a: { body: "text" } }] }, ".items[] | .a | .body", { strict: true }), ["text"]);
+  // A null intermediate and an out-of-range index stay present through pipes, like the dotted form.
+  assert.deepEqual(evaluateJqFilter({ a: null }, ".a | .b | .c", { strict: true }), [undefined]);
+  assert.deepEqual(evaluateJqFilter({ items: [] }, ".items[5] | .a", { strict: true }), [undefined]);
+});
+
+test("strict: a value an earlier pipe stage did not find behaves as null in later predicates", () => {
+  const data = { items: [{ a: 1 }, {}] };
+  const opts = { strict: true };
+  assert.deepEqual(evaluateJqFilter(data, ".items[] | .a | select(. != null)", opts), [1]);
+  assert.deepEqual(evaluateJqFilter(data, ".items[] | .a | . == null", opts), [false, true]);
+  assert.deepEqual(evaluateJqFilter(data, ".items[] | .a | select(.)", opts), [1]);
+  assert.deepEqual(evaluateJqFilter(data, ".items[] | .a | . > 0", opts), [true, false]);
+});
+
+test("strict: a typo predicate path after a partial pipe miss is a missing-path error", () => {
+  const data = { items: [{ a: { body: "text" } }, {}] };
+  const opts = { strict: true };
+  assert.throws(() => evaluateJqFilter(data, ".items[] | .a | .typo == null", opts), /matches no field/);
+  assert.throws(() => evaluateJqFilter(data, ".items[] | .a | select(.typo == null)", opts), /matches no field/);
+  assert.throws(() => evaluateJqFilter(data, ".items[] | .a | select(.typo)", opts), /matches no field/);
+  assert.deepEqual(evaluateJqFilter(data, ".items[] | .a | select(.body == \"text\")", opts), [{ body: "text" }]);
+});
+
+test("strict: a missing value that passes select stays missing for later path stages", () => {
+  const data = { items: [{ a: { body: "t" } }, {}] };
+  const opts = { strict: true };
+  assert.throws(() => evaluateJqFilter(data, ".items[] | .a | select(. == null) | .typo", opts), /matches no field/);
+  assert.throws(() => evaluateJqFilter(data, ".items[] | .a | select(. == null) | .body", opts), /matches no field/);
+  assert.deepEqual(evaluateJqFilter(data, ".items[] | .a | select(. != null) | .body", opts), ["t"]);
+});

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
@@ -30,7 +31,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success — PR is marked ready again
   1  Argument error, gh failure, or a ready-for-review.mjs guard refused
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const parseError = buildParseError(USAGE);
 
 export function parseRestoreReadyCliArgs(argv) {
@@ -68,6 +70,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseRestoreReadyCliArgs(process.argv.slice(2)).help);
   main().then((code) => { process.exitCode = code; }).catch((error) => {
     process.stderr.write(`${formatCliError(error, { usage: USAGE })}\n`);
     process.exitCode = 1;

@@ -2,11 +2,11 @@
 
 How dev-loop work is structured depends on the harness.
 
-**Under the Claude Code harness, the dev-loop runs as a single agent that acts as a delegating
-COORDINATOR.** The agent invoked for dev-loop work runs git and PR lifecycle operations, runs the
+**Under the Claude Code harness, the main session dispatches the `dev-loops:dev-loop` coordinator
+(`dev-loop` inside the dev-loops repo itself), and the coordinator is one agent that acts as a delegating
+COORDINATOR.** The main session runs no gate, fixer or reviewer step. The coordinator runs git and PR lifecycle operations, runs the
 `dev-loops` CLI (including state-changing `gate` / `pr` / `loop` subcommands), and posts gate
-verdicts under the operating session's identity. There is no separate read-only "main agent" and
-no Pi-style main-agent→dev-loop async hop. As COORDINATOR, the dev-loop agent is read-only for
+verdicts under the operating session's identity. The main session is the main agent. It dispatches the coordinator. The opt-in `DEVLOOPS_MAIN_AGENT_READONLY` hook covers it (`agent_type: null`). As COORDINATOR, the dev-loop agent is read-only for
 TRACKED repo files (source, tests, docs) and MUST delegate every tracked-file implementation edit
 and targeted verification run to a fresh WORKER subagent (`developer`/`fixer`/`quality`/`docs`).
 The coordinator MAY still write EPHEMERAL gitignored/non-repo artifacts directly: `tmp/`, the
@@ -16,7 +16,7 @@ this boundary: opt-in via `DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open),
 enforced, it denies a tracked-file Write/Edit whose `agent_type` is `dev-loop` or `gate-coordinator`; a worker
 subagent's `agent_type` is unaffected. It is a targeted denylist, not an airtight sandbox:
 Bash-driven tracked mutations (`git commit`, `sed -i`, `> file`) stay convention-enforced, and
-the top-level/inline agent (`agent_type: null`) falls under the main-agent boundary below. On Pi, see
+the top-level/inline agent (`agent_type: null`) falls under the opt-in `DEVLOOPS_MAIN_AGENT_READONLY` hook described at the end of this section. On Pi, see
 "Guarded surface and deliberate ceilings" below for what it does and does not cover. **The coordinator also
 delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verify`/`bun test`/
 `vitest`/`npm test`/`npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/
@@ -64,6 +64,16 @@ runner finding goes as a comment on an existing issue or epic. The gate tools fo
 bar: `judge-pass.mjs` and `close-gate-findings.mjs` never create an issue for a deferred finding
 (see `GATE-EXEC-DEFERRAL-RECORD` in the
 [Gate review sub-loop contract](gate-review-sub-loop-contract.md)).
+
+## Questions to the operator
+
+<!-- rule: MAIN-AGENT-OPERATOR-QUESTION-SCOPE -->
+`MAIN-AGENT-OPERATOR-QUESTION-SCOPE`: Parent: `PURPOSE-HIGHEST-SAFE-AUTONOMY`. The orchestrator asks the
+operator only about operator-owned decisions: operator-owned lines, ADR acceptance the contract does not
+settle, scope departures, choices between distinct mechanisms the contracts do not settle, destructive
+actions, classifier or permission denials, an undecidable spec (`spec_cannot_decide`), and conflicting
+authoritative state. The orchestrator answers every other question from the
+contracts and its own judgement and records the source. This rule governs autonomous lane execution. An operator-invoked interactive flow (such as the loop grill) and a start-implementation confirmation keep their own questions. A coordinator or procedure stop-and-ask for human direction reaches the orchestrator first. The orchestrator applies this rule to it and asks the operator only when the question falls on the operator-owned list. ADR 0270 records this rule.
 
 ## Generic Codex dispatch
 
@@ -183,22 +193,22 @@ queues completion with `trigger_turn: false`; the corresponding
 requires `trigger_turn` or durable sleep to schedule pending work. This is source evidence, not proof
 of the installed binary. No watchdog, harness patch or durable-sleep experiment is authorized here.
 
-## Unit coordinator boundaries (issue 2532, amended by issue 2955)
+## Unit coordinator boundaries (issue 2532, amended by issues 2955 and 3069)
 
-One coordinator may run a whole cycle. The boundary list is tooling-emitted: the handoff envelope
+One coordinator runs one step: up to its first gate-round end, fix-pass end or other run-ending case. The boundary list is tooling-emitted: the handoff envelope
 carries `unitBoundaries` (`reportAfter` + `resume`, derived from the target and route; see
 [Workflow Handoff Contract](workflow-handoff-contract.md#envelope-schema)). `reportAfter` is an
-ordered list of **report points**. At each listed report point it reaches, in order, the coordinator
+ordered list of **report points**. At the `draft_pr_opened` report point, the coordinator
 records status through existing evidence (PR comment or gate ledger), re-resolves authoritative
-state with `unitBoundaries.resume` and **continues**. Re-resolving is a read of current state through
+state with `unitBoundaries.resume` and **continues**. At `gate_verdict_posted` it hands back under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`. Re-resolving is a read of current state through
 the resume identity. A pull-dispatched coordinator keeps the pulled work order as its digest-pinned
-authority and builds no new envelope. After draft PR creation or a verdict, it adopts the new PR
-identity for state reads and gate calls under the same assigned task. A report point never forces a successor.
+authority and builds no new envelope. After draft PR creation, it adopts the new PR
+identity for state reads and gate calls under the same assigned task. The `draft_pr_opened` report point never forces a successor. The end of a gate round and the end of a fix pass are run-ending cases under `COORDINATOR-ROUND-BOUNDARY-HANDBACK`, so the coordinator does not continue past them.
 
 The following is the one canonical list of run-ending cases (the "run-ending cases"). The coordinator hands
-back only at `final_approval_ready`, a stop that needs a decision, the route's own terminal
+back only at `final_approval_ready`, the end of a gate round, the end of a fix pass, a stop that needs a decision, the route's own terminal
 completion, a changed route, a lockout, genuine recovery, an unavailable actor, a runtime
-constraint, or explicit operator direction. The issue-to-PR re-target caused by the unit's own draft PR is a continuation, not a changed route. When the orchestrator dispatches a replacement for one of those
+constraint, or explicit operator direction. The one other hand-back is the interim hand-back sent with a child in flight under `GATE-EXEC-HARNESS-JOIN`, which names no run-ending case. The issue-to-PR re-target caused by the unit's own draft PR is a continuation, not a changed route. When the orchestrator dispatches a replacement for one of those
 reasons, it emits the work order with
 `scripts/loop/emit-coordinator-work-order.mjs --input <startup-output path> --harness <claude|pi|codex> --entry <queue|direct>`
 and dispatches the printed `dispatchPayload` unchanged. The input is the startup-output path a
@@ -210,7 +220,7 @@ through authoritative state, not through the relay: the replacement recovers rou
 evidence and open findings by re-running the detectors at resume.
 
 A child hand-back is a **compact relay packet** only: unit identity, status, `nextAction`, evidence
-links (including the startup-output path that unit ran), and an open question if one is needed. The packet `status` names the run-ending case from the canonical list in Unit coordinator boundaries, so it is the replacement reason. On Claude Code the packet also carries the consumed relayed message under `COORDINATOR-HANDBACK-ONE-REPORT`. On Pi a hand-back sent with a child in flight also carries the child list under `GATE-EXEC-HARNESS-JOIN` in [Gate review sub-loop contract](./gate-review-sub-loop-contract.md). No
+links (including the startup-output path that unit ran), and an open question if one is needed. The packet `status` of a run-ending hand-back names the run-ending case from the canonical list in Unit coordinator boundaries, so it is the replacement reason. A hand-back sent with a child in flight that ends no run carries an interim status and names no run-ending case. On Claude Code the packet also carries the consumed relayed message under `COORDINATOR-HANDBACK-ONE-REPORT`. On Pi a hand-back sent with a child in flight also carries the child list under `GATE-EXEC-HARNESS-JOIN` in [Gate review sub-loop contract](./gate-review-sub-loop-contract.md). No
 transcript, tool output or review text. A relay is the dispatch trigger, never the replacement's
 context.
 
@@ -220,7 +230,7 @@ context.
 - Crossing 150K never stops, relaunches or blocks a coordinator, a gate, completion or merge.
 - Staying below 150K is not an acceptance prerequisite.
 - To reduce traffic, use smaller reads, concise tool output and evidence reuse. Delegate heavy reading to narrow subagents.
-- Fresh dispatch stays for reviewer and judge isolation, genuine recovery, an unavailable actor, a runtime constraint and explicit operator direction.
+- Fresh dispatch stays for reviewer and judge isolation and for the run-ending cases in Unit coordinator boundaries.
 - On a Codex root, allow at most 10% empty wakeups, measured against root turns rather than wait duration.
 - A missing or ambiguous native measurement is reported as unknown, never zero.
 
@@ -237,12 +247,26 @@ The rule binds the coordinator on every harness, so it stays outside the section
 - After a refused `SubagentHandback`, the dev-loop coordinator makes no further call in that run and ends the turn with the full report as plain text.
 - Every hand-back names the last relayed message it consumed, by first line and arrival time, or states that it consumed none.
 
-<!-- rule: MAIN-AGENT-COORDINATOR-REPORT-READ -->
-`MAIN-AGENT-COORDINATOR-REPORT-READ`: Claude Code only. When a coordinator notification says the result is "not repeated here", or the coordinator went idle without a delivered report, the orchestrator reads the last assistant message of the coordinator's output file before it resumes or re-asks it.
+<!-- rule: COORDINATOR-ROUND-BOUNDARY-HANDBACK -->
+`COORDINATOR-ROUND-BOUNDARY-HANDBACK`: A unit coordinator hands back at the end of every gate round and at the end of every fix pass. It never continues into the next round. ADR 0274 amends ADR 0181 with these two run-ending cases.
 
-- The orchestrator sends all decisions for one block in one message.
-- The orchestrator reads the latest hand-back before it re-instructs.
-- On the next notification of a reporter that named children in flight, read its output file before acting.
+- A gate round ends when the coordinator records the round's verdict. A fix pass ends after a draft or pre_approval fixer pass with its delta review, its push and its CI wait. On a round that is eligible under `GATE-EXEC-LOW-NIT-CONVERGENCE`, the fix pass ends only after the `--converged-json` post.
+- The hand-back is the run's one `SubagentHandback` report under `COORDINATOR-HANDBACK-ONE-REPORT`. Its packet adds four typed fields to the compact relay packet, which still carries `status` and the startup-output path. The `status` names the run-ending case (`gate_round_end` or `fix_pass_end`). The four typed fields are: `pr` (the PR number), `head` (the PR head SHA), `nextAction` (the next action from `loop gate-coordination`) and `workerRunning` (true while any worker the coordinator dispatched still runs).
+- A coordinator never sends a round-boundary or fix-pass hand-back while a worker it dispatched runs; the interim hand-back under `GATE-EXEC-HARNESS-JOIN` is unchanged. `validateCoordinatorHandback` in `scripts/loop/_coordinator-handback.mjs` refuses a hand-back with `workerRunning: true` (`worker_running`) and a hand-back with a missing or invalid field (`missing_fields`). Before the hand-back, the coordinator writes the packet to a file and runs `dev-loops-run scripts/loop/validate-coordinator-handback.mjs --packet <path>`. Exit 1 means a refusal or an unreadable packet. On exit 1 it fixes the cause and runs the check again; it never hands back a refused packet.
+- The order before a hand-back is fixed: join every dispatched worker, run `validate-coordinator-handback.mjs`, release the runner claim under `RUNNER-HANDOFF-TEARDOWN` only after exit 0, then hand back. A coordinator releases its runner claim before every run-ending hand-back.
+- The orchestrator dispatches a fresh coordinator for the next step with `scripts/loop/emit-coordinator-work-order.mjs`. The fresh coordinator re-resolves state with `loop startup --pr <n>` and `loop gate-coordination`. The hand-back names the startup-output path under the compact relay packet rule. A coordinator that started from an issue target runs `loop startup --pr <n>` before the hand-back and names that output. Its brief names the PR and the bounds and carries no head SHA, ledger path or other state copy. The brief text is unchanged: the work order cites this rule under `ruleReferences.stateDerivation`, and the coordinator follows that reference to derive state. When the current head carries a `findings_present` gate verdict whose judge verdict has a non-empty act list, the fresh coordinator runs the fix pass on that act list before it takes `nextAction`, unless `loop gate-coordination` returns `resolve_merge_conflicts` (that action goes first) or the head already has an authenticated `no_commit` fixer result (the saved act list is spent, so it takes the push-to-gate route of step 2 in the [pre-push review contract](pre-pr-review-contract.md#delta-mode): a full gate round with the open threads as `--known-findings`, not `nextAction`, because `loop gate-coordination` returns `address_review_feedback` while those threads are open).
+- `COORDINATOR-CONTINUITY-SOFT-CAP` stays advisory.
+
+<!-- rule: MAIN-AGENT-COORDINATOR-REPORT-READ -->
+`MAIN-AGENT-COORDINATOR-REPORT-READ`: The orchestrator reads a coordinator's report before it acts on it.
+
+- Claude Code: When a coordinator notification says the result is "not repeated here", or the coordinator went idle without a delivered report, the orchestrator reads the last assistant message of the coordinator's output file before it resumes or re-asks it.
+- Claude Code: The orchestrator sends all decisions for one block in one message.
+- Claude Code: The orchestrator reads the latest hand-back before it re-instructs.
+- Claude Code: On the next notification of a reporter that named children in flight, read its output file before acting.
+- Every harness: A hand-back or pause that lists children in flight and names no run-ending case is interim, whether or not it says so. It is a status, not a result. The orchestrator relays it as a status, does not re-dispatch a listed child, and waits for the reporter's next report.
+- Every harness: A report that names a run-ending case (a run-ending case from the Unit coordinator boundaries section, or a gate coordinator's terminal `units_stalled` or `round_retired` hand-back under `GATE-EXEC-HARNESS-JOIN`) is final even when it lists children. The orchestrator treats each listed child as still running. A hand-back that states it is interim under `GATE-EXEC-HARNESS-JOIN` and whose packet status names no run-ending case is interim. When its packet status names a run-ending case, the forced hand-back has ended the reporter's run, so it is final and the orchestrator waits for no further report.
+- Every harness: A second hand-back that repeats the report the orchestrator already consumed, by first line and child list, from the same coordinator with the run state unchanged, is a duplicate. This holds for interim reports too and takes precedence over the interim bullet. A report whose packet status names a run-ending case is never a duplicate of a consumed report that named none. The orchestrator reads the state, acts on nothing and relays nothing.
 
 <!-- pi-only -->
 > **Absolute read-only boundary (Pi).** The main agent must never mutate files tracked by the repository.
@@ -301,8 +325,10 @@ because "the user said yes," not because it is running from a worktree.
   See [Delegation contract](../local-implementation/SKILL.md#delegation-contract).
 - On Claude Code a gate coordinator's completion notification is the join signal for its round and is never dismissed as a repeat (`GATE-EXEC-HARNESS-JOIN` in [Gate Review Sub-Loop Contract](gate-review-sub-loop-contract.md)).
 
-## Model tier at dispatch (Pi)
+<!-- /pi-only -->
+## Model tier at dispatch (Pi and Claude)
 
+<!-- pi-only -->
 When dispatching a subagent, resolve its model with
 `resolveRoleModel(config, { role, harness: "pi" })` from `@dev-loops/core/config`
 (`role` = the subagent/angle name, e.g. `developer`, `refiner`, `review`, or a
@@ -316,11 +342,29 @@ on the low tier, planning (`refiner`) and critical review (the `review` role and
 fan-out review angles) on the high tier, and lets the conductor (`dev-loop`) inherit.
 Built-in Pi tiers are `null`, so with zero config dispatch passes no model override.
 Operators opt in by setting concrete Pi ids under `models.tiers.<alias>.pi` (and may
-retune `models.roleTiers` / `models.roles`) in `.devloops`. On the Claude harness the same
-resolver bakes the tier into each agent's `model:` frontmatter at asset-generation time
-(`harness: "claude"`). A Claude-only `claudeModel` key in canonical agent frontmatter
+retune `models.roleTiers` / `models.roles`) in `.devloops`.
+<!-- /pi-only -->
+<!-- rule: MAIN-CLAUDE-DISPATCH-MODEL -->
+`MAIN-CLAUDE-DISPATCH-MODEL`: On the Claude harness a dispatching agent resolves the model at dispatch time with
+`node <dev-loops-package-root>/cli/index.mjs gate resolve-role --role <name> --harness claude`, which prints
+`{ok, role, harness: "claude", model, configErrors}`, and passes `model` as the Agent `model` parameter
+**only when non-null**. Only exit 0 permits dispatch; exit 1 or 2 stops the dispatch and reports the `configErrors`. The main session does this for the initial `dev-loops:dev-loop` dispatch (`gate resolve-role --role dev-loop --harness claude`). The fixer and coordinator (`dev-loop`) emitters add it to the printed
+`dispatchPayload`; every other Claude dispatch (`developer`, `docs`, `quality`, `refiner`,
+`gate-coordinator`, `review`, `judge`, the pre-push reviewer) passes it from the dispatching
+agent: the `dev-loop` agent for its own sub-delegates, the `gate-coordinator` for its review and
+judge dispatches. A review dispatch uses its angles' resolved model
+(`gate resolve-role --gate <operation> --angle <angle> --harness claude`, default: the repo's `models.roles.review` or `models.roleTiers.review`, else the high tier); a unit whose angles resolve to different models uses the `review` role model (`gate resolve-role --role review --harness claude`), per ADR 0278. A consumer's `.devloops` tiers therefore apply with no change to installed
+agent frontmatter. The Agent `model` parameter takes an alias (`sonnet`, `opus`, `haiku`,
+`fable`), so `.devloops` Claude tier values (`models.tiers.<alias>.claude`) should be aliases
+for dispatch; no code maps a full model id to an alias. The resolver also bakes the tier
+into each agent's `model:` frontmatter at asset-generation time; that value is the fallback when
+dispatch passes no model. A Claude-only `claudeModel` key in canonical agent frontmatter
 is the fallback when the resolver inherits (the judge uses it to pin the strong tier);
-`models.roles` and `models.roleTiers` still win.
+`models.roles` and `models.roleTiers` still win. `dev-loop` and `gate-coordinator` inherit with
+zero config and take a model when `models.roleTiers` (or `models.roles`) names them; `claude-launch`
+and a session started without it resolve the same model for both through the same command.
+Review roles stay on the high tier.
+<!-- pi-only -->
 
 ## Boundary examples
 

@@ -33,6 +33,13 @@ async function installedFixture() {
   }
   const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(consumer, { devloopsYaml: "version: 1\nautonomy:\n  humanMergeOnly: true\n" });
   runGitFixture(consumer, ["remote", "add", "origin", "https://github.com/owner/consumer.git"]);
+  // The hook's trust-config load fetches origin and reads the default branch: serve the fake remote from a local bare repo.
+  const bare = path.join(root, "origin.git");
+  runGitFixture(root, ["init", "-q", "--bare", bare]);
+  runGitFixture(consumer, ["config", `url.${bare}.insteadOf`, "https://github.com/owner/consumer.git"]);
+  runGitFixture(consumer, ["push", "-q", "origin", `HEAD:refs/heads/${baseBranch}`]);
+  runGitFixture(consumer, ["fetch", "-q", "origin"]);
+  runGitFixture(consumer, ["remote", "set-head", "origin", baseBranch]);
   const env = runIdFreeEnv({ PATH: bin, FIXTURE_ROOT: root });
   delete env.DEVLOOPS_PRE_PR_READY_GATE_SCRIPT; delete env.DEVLOOPS_PRE_MERGE_GATE_SCRIPT;
   const write = (rel, body) => { fs.mkdirSync(path.dirname(path.join(pkg, rel)), { recursive: true }); fs.writeFileSync(path.join(pkg, rel), body); };

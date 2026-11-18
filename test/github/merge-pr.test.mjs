@@ -1,8 +1,9 @@
-import { test } from "bun:test";
+import { test, mock } from "bun:test";
 import assert from "node:assert/strict";
-import { mergePr, parseMergePrCliArgs, main, defaultIsAncestor, defaultFetchPrHead, buildDetectEvidenceArgv, defaultPostMergeComment } from "../../scripts/github/merge-pr.mjs";
+import { mergePr, parseMergePrCliArgs, main, defaultReadMergeDiff, defaultIsAncestor, defaultFetchPrHead, buildDetectEvidenceArgv, defaultPostMergeComment } from "../../scripts/github/merge-pr.mjs";
 import { runChild } from "../../scripts/_cli-primitives.mjs";
 import { captureStream } from "../_helpers.mjs";
+import { scanDiffText } from "@dev-loops/core/security/secret-scan";
 
 const HEAD = "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
 const MERGE_COMMIT = "aaaa1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
@@ -126,6 +127,7 @@ function makeRuntime({
       isAncestor: () => true,
       detectOriginSlug: () => "mfittko/dev-loops",
       evaluateAdrTripwire: async () => ({ outcome: "pass" }),
+      readMergeDiff: () => "",
       detectInternalOnlyPr: async () => (prFilesCode ? { ok: false, error: "files read failed" } : { ok: true, internalOnly: detectorInternalOnly, files: prFiles }),
       loadConfig: async () => ({ config: { autonomy: { humanMergeOnly }, refinement: { maxCopilotRounds, requireCopilotConvergenceAtLatestHead: strict }, ...configExtra }, errors: [] }),
       cwd: process.cwd(),
@@ -184,6 +186,96 @@ test("adr_tripwire re-issues a stale covered waiver through the writer, re-reads
   assert.deepEqual(written, [{ repo: "mfittko/dev-loops", pr: 5 }]);
   assert.deepEqual(bodies, ["old", "new"]);
   assert.equal(mergeCalls(calls).length, 1);
+});
+
+// Assembled at runtime so this file's own diff carries no whole credential.
+const SCAN_TOKEN = ["ghp_", "E".repeat(34), "f5"].join("");
+const secretDiff = (line) => ["diff --git a/cfg.sh b/cfg.sh", "--- /dev/null", "+++ b/cfg.sh", "@@ -0,0 +1,2 @@", "+clean", `+${line}`].join("\n");
+
+test("secret_scan refuses a credential that origin/<base>...<head> adds, naming file, line, rule and both exits", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
+  const read = [];
+  runtime.readMergeDiff = (opts) => { read.push({ base: opts.base, head: opts.head }); return secretDiff(`T="${SCAN_TOKEN}"`); };
+  const error = await mergePr(baseOptions(), runtime).catch((e) => e);
+  assert.match(error.message, /secret_scan \(secret scan hit in origin\/main\.\.\..*cfg\.sh:2 @secretlint\/secretlint-rule-github/);
+  assert.match(error.message, /remove the credential and rotate it, or add a same-line "secret-scan:allow <reason>" marker/);
+  assert.equal(error.mergePrFailure.failures[0].precondition, "secret_scan");
+  assert.ok(!JSON.stringify(error.mergePrFailure).includes(SCAN_TOKEN) && !error.message.includes(SCAN_TOKEN));
+  assert.deepEqual(read, [{ base: "origin/main", head: HEAD }]);
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("secret_scan refuses a library hit with no mappable line, even beside an allow marker, and renders it as line unknown", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
+  // The only added line carries a valid allow marker; the library hit has no loc, so no marker can apply.
+  runtime.readMergeDiff = () => secretDiff("T=1 # secret-scan:allow public fixture");
+  const specifier = "../../packages/core/node_modules/@secretlint/core/module/index.js";
+  const secretlint = await import(specifier);
+  const real = secretlint.lintSource;
+  mock.module(specifier, () => ({ ...secretlint, lintSource: async () => ({ messages: [{ ruleId: "@secretlint/secretlint-rule-github", messageId: "GITHUB_TOKEN" }] }) }));
+  try {
+    const error = await mergePr(baseOptions(), runtime).catch((e) => e);
+    assert.match(error.message, /secret_scan \(secret scan hit in origin\/main\.\.\..*cfg\.sh:line unknown @secretlint\/secretlint-rule-github/);
+    assert.ok(!error.message.includes("null"));
+    assert.equal(mergeCalls(calls).length, 0);
+  } finally {
+    mock.module(specifier, () => ({ ...secretlint, lintSource: real }));
+  }
+});
+
+test("secret_scan fails closed when the diff read throws", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
+  runtime.readMergeDiff = () => { throw new Error("git diff exploded"); };
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /secret_scan \(the secret scan could not run: git diff exploded; remove the credential/);
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("secret_scan fails closed when the scan itself throws", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
+  runtime.readMergeDiff = () => 42; // a non-string makes scanDiffText throw
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /secret_scan \(the secret scan could not run: [\s\S]*remove the credential and rotate it, or add a same-line "secret-scan:allow <reason>" marker/);
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("defaultReadMergeDiff reads base...head from real git, including a NUL-bearing file, and the scan reports it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "merge-diff-"));
+  try {
+    runGitFixture(dir, ["init", "-q", "-b", "main"]);
+    runGitFixture(dir, ["config", "user.email", "test@example.com"]);
+    runGitFixture(dir, ["config", "user.name", "Test"]);
+    runGitFixture(dir, ["commit", "-q", "--allow-empty", "-m", "base"]);
+    runGitFixture(dir, ["checkout", "-q", "-b", "feature"]);
+    writeFileSync(join(dir, "s.txt"), `x\0y\nT="${SCAN_TOKEN}"\n`);
+    runGitFixture(dir, ["add", "s.txt"]);
+    runGitFixture(dir, ["commit", "-q", "-m", "head"]);
+    const head = runGitFixture(dir, ["rev-parse", "HEAD"]);
+    const result = await scanDiffText(defaultReadMergeDiff({ base: "main", head, repoRoot: dir }));
+    assert.equal(result.ok, false);
+    assert.ok(result.findings.some((f) => f.file === "s.txt"), JSON.stringify(result.findings));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("secret_scan passes a clean diff and an allow-marked public value, and the merge proceeds", async () => {
+  for (const diff of ["", secretDiff(`T="${SCAN_TOKEN}" # secret-scan:allow public fixture`)]) {
+    const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
+    runtime.readMergeDiff = () => diff;
+    assert.equal((await mergePr(baseOptions(), runtime)).merged, true);
+    assert.equal(mergeCalls(calls).length, 1);
+  }
+});
+
+test("--check reports a secret_scan hit with the other failures", async () => {
+  const { runtime } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
+  runtime.readMergeDiff = () => secretDiff(`T="${SCAN_TOKEN}"`);
+  const result = await mergePr({ ...baseOptions(), check: true }, runtime);
+  assert.equal(result.ok, false);
+  assert.match(result.failures.find((f) => f.precondition === "secret_scan").reason, /cfg\.sh:2/);
+});
+
+test("usage text lists secret_scan among the preconditions", async () => {
+  const out = [];
+  assert.equal(await main(["--help"], { stdout: { write: (s) => out.push(s) } }), 0);
+  assert.match(out.join(""), /adr_tripwire,\s+secret_scan,/);
 });
 
 test("the merge fetches the base and PR head once and the tripwire evaluates origin/<base> at the PR head", async () => {
@@ -1647,4 +1739,26 @@ test("the default merge record comment kills a hung gh child at the timeout boun
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a PR carrying the spike no-merge marker is refused before any merge (ADR 0293)", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { body: "spike\n\n<!-- dev-loops:spike-pr no-merge -->\n" } });
+  const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
+  assert.match(threw.message, /spike size exemption/u);
+  assert.equal(threw.mergePrFailure.failures[0].precondition, "spike_pr");
+  assert.equal(threw.mergePrFailure.ok, false);
+  assert.equal(calls.runChild.length, 0);
+});
+
+test("main --check on a spike-marked PR exits 0 with the check-shaped spike_pr failure and no merge call", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { body: "spike\n\n<!-- dev-loops:spike-pr no-merge -->\n" } });
+  const out = captureStream();
+  const code = await main(["--repo", "mfittko/dev-loops", "--pr", "5", "--check"], { ...runtime, stdout: out });
+  assert.equal(code, 0);
+  const result = JSON.parse(out.get());
+  assert.equal(result.ok, false);
+  assert.equal(result.check, true);
+  assert.equal(result.failures.length, 1);
+  assert.equal(result.failures[0].precondition, "spike_pr");
+  assert.equal(calls.runChild.length, 0);
 });

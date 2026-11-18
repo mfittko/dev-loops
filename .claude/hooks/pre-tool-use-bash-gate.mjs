@@ -12,6 +12,23 @@
  *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
  *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
+ *   - in a managed repo the whole command is denied when its tokens (any segment, any order; comma brace groups and
+ *     `${VAR:-x}` forms split; a sequence group `{x..y}` stays outside the token model) hold `gh`, `pr`, `edit|create` and a body flag, or `gh`, `api` and a body
+ *     field or `--input`, or `gh`, `api`, `graphql` and `updatePullRequest`, `updateIssue` or `body`
+ *     (`segmentHoldsBodyWrite`); fails closed. Accepted false positive: a command
+ *     that holds those tokens as data (a title or note that says gh) is denied too.
+ *   - raw `gh pr edit` body writes (`--body`/`--body-file`/`-b`/`-F`; `gh pr create` is covered by the token rule above only) and `gh api` body writes to
+ *     `pulls/<n>` or `issues/<n>` (a `body` field via `-f`/`-F`/`--field`/`--raw-field`, an
+ *     `--input` payload, or a `gh api graphql` `updatePullRequest`) — blocked actor-independently
+ *     (`ADR-TRIPWIRE-STANDING-WAIVER`): the sanctioned launcher writers are the only route for these
+ *     `gh pr` and `gh api` body writes, because they refuse a hand-written `adr-tripwire:allow` line.
+ *     A process wrapper in front of the write cannot hide it: in a managed repo the whole-command token
+ *     rule above also denies `gh`, `api` and a body field (`-f`/`-F`/`--field`/`--raw-field` `body=`) or
+ *     `--input`, in any order and behind any wrapper (the same accepted false positive applies).
+ *     The raw `gh issue edit <n> --body`/`--body-file` command line form is NOT covered by this deny;
+ *     it stays with the subagent-scoped external-write guard, which runs only when `agent_type` is present.
+ *   - `timeout N <sanctioned command>` — blocked outright: the wrapper hides the `dev-loops-run`
+ *     head from operator allow rules. Run the command bare; wait/probe tools bound themselves.
  *   - `git stash` — blocked outright: `refs/stash` is shared across every worktree over this
  *     repo's one `.git` directory (skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout).
  *   - `bun run verify` / `bun test` / `vitest` / `npm test` / `npm run test` / `bun run build` /
@@ -23,8 +40,8 @@
  *     fixer pull line (prefix, suffix, redirect, `cd`) is denied with the exact line to run.
  *     The fixer Bash commit/push boundary is owned by issue 2534.
  *   - every command from the read-only `judge` subagent except its sanctioned work-order pull
- *     (`dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` or the 3-flag line, ADR 0106, ADR 0115)
- *     and its decision check (`check-judge-decision.mjs`).
+ *     (`dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>`, ADR 0106, ADR 0115),
+ *     its decision check (`check-judge-decision.mjs`) and its read-only search commands (ADR 0269).
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -46,10 +63,14 @@ import {
   commandContainsCopilotRequestBypass,
   commandContainsCopilotSummonComment,
   commandContainsDetachedWaitTool,
+  commandContainsTimeoutWrappedSanctionedTool,
+  commandContainsRawPrBodyEdit,
+  commandContainsRawPrBodyApiWrite,
   commandContainsCodeVerificationEntrypoint,
   extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
   normalizeGitHubRepoSlug,
+  tokenizeShellCommand,
 } from "./_bash-command-classify.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
@@ -68,6 +89,77 @@ const isFixer = normalizeAgentType(agentType) === FIXER_AGENT_TYPE;
 const mainRoot = isFixer && parseSanctionedPullLine(command) ? listCheckouts(cwd)[0]?.root : null;
 const fixerPull = mainRoot ? parseFixerPullCommand(command, mainRoot) : null;
 if (fixerPull) recordFixerAgentBinding(mainRoot, { agentId: input?.agent_id, ...fixerPull });
+
+// Token deny: the whole command is a body write when its tokens, across all segments and pipes and
+// in any order, hold `gh`, `pr`, `edit|create` and a body flag (`--body*`, or a short cluster with
+// `b`/`F`: `-b`, `-bx`, `-b=x`, `-Fwaiver.md`, `-db`), or hold `gh`, `api` and a body field (`-f body=`,
+// `-F body=`, `--field body=`, `--raw-field body=`) or `--input`, or `gh`, `api`, `graphql` and `updatePullRequest`/`updateIssue`/`body`. `$(`, `)`, backticks, braces and commas split tokens so a
+// command substitution or comma brace group is seen (a sequence group `{x..y}` stays literal), a `${VAR:-gh}` default counts as a token, and `gh` matches by basename (`/usr/bin/gh`). No head, wrapper or echo exemption: fails closed.
+// A process wrapper needs no parser: the rules read every token of the command.
+// `--{body,x}` expands to `--body`, `--x`: one innermost comma group per pass; a comma-less group nested in it stays literal.
+// The product of the group sizes is exponential, so a word past BRACE_EXPANSION_CAP returns null and the caller fails closed.
+const BRACE_EXPANSION_CAP = 64;
+function braceExpansions(value) {
+  let words = [value];
+  for (;;) {
+    let expanded = false;
+    let total = 0;
+    let over = false;
+    words = words.flatMap((word) => {
+      if (over) return [];
+      // Linear scan for the first innermost `{...,...}` group; a regex here backtracks quadratically on an unclosed `{`.
+      // A stack keeps the enclosing group when a comma-less group closes inside it (`--bo{dy,x{y}}`).
+      const stack = [];
+      let open = -1;
+      let end = -1;
+      for (let k = 0; k < word.length && end < 0; k++) {
+        const c = word[k];
+        if (c === "{") stack.push({ at: k, comma: false });
+        else if (c === ",") { if (stack.length) stack[stack.length - 1].comma = true; }
+        else if (c === "}") {
+          const group = stack.pop();
+          if (group?.comma) { open = group.at; end = k; }
+        }
+      }
+      if (end < 0) { total++; return [word]; }
+      expanded = true;
+      // Count the alternatives before building them: the cap holds before allocation, not after the pass.
+      let alts = 1;
+      for (let k = word.indexOf(",", open); k >= 0 && k < end; k = word.indexOf(",", k + 1)) alts++;
+      total += alts;
+      if (total > BRACE_EXPANSION_CAP) { over = true; return []; }
+      return word.slice(open + 1, end).split(",").map((alt) => word.slice(0, open) + alt + word.slice(end + 1));
+    });
+    if (over) return null;
+    if (!expanded) return words;
+  }
+}
+
+function segmentHoldsBodyWrite(command) {
+  let overCap = false;
+  // Normalize the raw text once: delete quotes and backslash, turn substitution and shell punctuation into spaces
+  // (braces and commas stay for the brace rules below), so `$(gh pr "edit" ...)` and `ed"it"` need no parser.
+  // The tokenizer's decoded word values (ANSI-C `$'\x65dit'` becomes `edit`, also inside substitutions) join the set.
+  // Backtick substitutions are not in `subs`: tokenize each terminated tick's text too (the text between the backticks, unescaped as bash does: \` \$ \\ lose the backslash; nested ticks recurse).
+  const decodedWords = (segments) => segments.flatMap((s) => s.words.flatMap((w) => [w.value, ...decodedWords(w.subs.flatMap((x) => x.segments))]));
+  const decodedOf = (text) => { const t = tokenizeShellCommand(text); return [...decodedWords(t.segments), ...t.ticks.flatMap((k) => decodedOf(k.slice(1, -1).replace(/\\([`$\\])/g, "$1")))]; };
+  const words = [...command.replace(/['"\\]/g, "").replace(/[`$();|&<>\s]+/g, " ").split(" "),
+    ...decodedOf(command)].filter(Boolean);
+  const splitWord = (w) => w.split(/[\s=$(){},`]+/).filter(Boolean);
+  const tokens = words.flatMap((word) =>
+    [...(braceExpansions(word) ?? (overCap = true, [])).flatMap((e) => [e, ...splitWord(e)]), ...splitWord(word)
+      // `${G:-gh}` leaves `G:-gh`: also keep the default value. Needs a leading name, so `--body`/`-b` are untouched.
+      .flatMap((t) => [t, t.replace(/^[A-Za-z_]\w*:?[-+]/, "")])]);
+  // Tokens are lower-cased: on case-insensitive filesystems `GH` runs the real gh. Every pattern below is lower-case.
+  const has = (test) => tokens.some((token) => test(token.toLowerCase()));
+  // `-S`/`-iS` before `gh` covers `env -Sgh` / `env -iSgh`, where the split-string value joins the option cluster.
+  if (overCap || !has((t) => /^(?:-[a-z]*s)?gh$/.test(t.split("/").pop()))) return overCap;
+  return (has((t) => t === "pr") && has((t) => t === "edit" || t === "create") &&
+    has((t) => t.startsWith("--body") || /^-[^-]*[bf]/.test(t))) ||
+    (has((t) => t === "api") && (has((t) => t.startsWith("--input")) ||
+      (has((t) => /^(?:-f|--(?:raw-)?field)$/.test(t)) && has((t) => t === "body")) || has((t) => /^-fbody$/.test(t)) ||
+      (has((t) => t === "graphql") && has((t) => /update(?:pullrequest|issue)/.test(t) || t === "body"))));
+}
 
 let repoRoot = null;
 let repoSlug = null;
@@ -114,11 +206,24 @@ const isReplyResolve =
 const isRequestApi = typeof command === "string" && commandContainsCopilotRequestBypass(command, managedRepoSlug);
 const isCopilotSummon = typeof command === "string" && commandContainsCopilotSummonComment(command);
 const isWaitTool = typeof command === "string" && commandContainsDetachedWaitTool(command);
+// The `timeout N <sanctioned command>` deny is decided in the shared decider; the pre-check only
+// detects the shape, because a shape it does not name reaches `emitAllow()` before the decider runs.
+const isTimeoutWrapped = typeof command === "string" && commandContainsTimeoutWrappedSanctionedTool(command);
+// The `ADR-TRIPWIRE-STANDING-WAIVER` raw PR/issue body write shapes are decided in the shared
+// decider and denied for EVERY actor, operator and main agent included. The pre-check must
+// nominate them too, or the non-match path allows what the decider would deny.
+//
+// Those predicates anchor on a segment's command head, so a wrapped write (`timeout 300 gh pr edit
+// 5 --body-file f`, `sudo -n gh api … -f body=x`) reaches the token rule (`segmentHoldsBodyWrite`)
+// instead, which reads every token and needs no wrapper parser.
+const isSegmentBodyWrite = inManagedContext && typeof command === "string" && segmentHoldsBodyWrite(command);
+const isBodyWrite = isSegmentBodyWrite || (typeof command === "string" &&
+  (commandContainsRawPrBodyEdit(command, managedRepoSlug) || commandContainsRawPrBodyApiWrite(command, managedRepoSlug)));
 // COORDINATOR-VERIFY-BOUNDARY (#2082) — actor-scoped inside decideBashGate (agentType is
 // "dev-loop" or "gate-coordinator"), so the quick pre-check here only detects the command shape; the hook must not
 // short-circuit to allow before the decider applies the actor + enforceCoordinator scoping.
 const isVerifyEntrypoint = typeof command === "string" && commandContainsCodeVerificationEntrypoint(command);
-// The read-only judge may run only its work-order pull and check-judge-decision (ADR 0106); every judge command reaches the decider.
+// The read-only judge may run only its work-order pull, check-judge-decision (ADR 0106) and read-only search commands (ADR 0269); every judge command reaches the decider.
 const isJudge = normalizeAgentType(agentType) === JUDGE_AGENT_TYPE;
 // A fixer pull attempt reaches the decider, which denies any line other than the exact one.
 const isFixerPull = isFixer && isFixerPullAttempt(command);
@@ -127,7 +232,7 @@ const isUnresolve = isUnresolveInvocation(command);
 if (
   !isReady && !isMerge && !isCreate && !isExternalWrite && !isStash &&
   !isInline && !isSubIssue && !isReplyResolve && !isRequestApi && !isCopilotSummon && !isWaitTool &&
-  !isVerifyEntrypoint && !isJudge && !isFixerPull && !isUnresolve
+  !isTimeoutWrapped && !isBodyWrite && !isVerifyEntrypoint && !isJudge && !isFixerPull && !isUnresolve
 ) {
   emitAllow();
 }
@@ -170,7 +275,8 @@ if (inManagedContext) {
       const stderr = String(error?.stderr ?? "").trim();
       // Native loader/launcher diagnostics also exit 1; JSON evidence errors are not startup failures.
       const startupFailure = /^(?:dev-loops-run: (?:cannot resolve|cannot start)|Error(?: \[ERR_MODULE_NOT_FOUND\])?: Cannot find (?:module|package)|TypeError \[ERR_UNKNOWN_FILE_EXTENSION\]: Unknown file extension|Error \[ERR_UNSUPPORTED_DIR_IMPORT\]: Directory import|Error: (?:EACCES: permission denied|EPERM: operation not permitted), open |SyntaxError:)/m.test(stderr);
-      if (typeof error?.status !== "number" || startupFailure) {
+      // Exit 3 is TRUST_CONFIG_REFUSED_EXIT: its stderr JSON names the state and remedy, so surface it instead of a missing-verdict deny.
+      if (typeof error?.status !== "number" || startupFailure || error.status === 3) {
         gateError = `could not run ${gateScript} via ${override || launcher} in consumer ${repoRoot}: ${stderr || error.message}`;
       }
     }
@@ -181,7 +287,7 @@ if (inManagedContext) {
 // as boundary 3 of pre-tool-use-write-guard.mjs (decideCoordinatorWriteGuard).
 const enforceCoordinator = process.env.DEVLOOPS_COORDINATOR_READONLY === "1";
 
-const decision = decideBashGate({
+const bashGateFacts = {
   command,
   repoSlug,
   managedRepoSlug,
@@ -191,8 +297,19 @@ const decision = decideBashGate({
   agentType,
   humanMergeOnly,
   enforceCoordinator,
-});
+};
+const decision = decideBashGate(bashGateFacts);
 if (decision.decision === "deny") {
   emitDeny(decision.reason);
+}
+if (isSegmentBodyWrite) {
+  emitDeny(
+    "ADR-TRIPWIRE-STANDING-WAIVER: this command holds the gh, pr, edit or create and body-flag tokens, or the gh, api and body-field (or --input) tokens, or the gh, api, graphql and updatePullRequest, updateIssue or body tokens, or a brace expansion too large to read, so it is blocked as a raw PR or issue body write. " +
+    "To read a body, use `gh pr view <n> --json body`. " +
+    "Write a PR body through the launcher: `dev-loops-run cli/index.mjs pr create` or `dev-loops-run cli/index.mjs pr edit` (it refuses a hand-written adr-tripwire:allow line). " +
+    "Edit an issue body through `dev-loops-run cli/index.mjs issue edit`. " +
+    "If the launcher command itself was denied because its title or body text holds the word gh, rephrase the title or move the text into the body file. " +
+    "If a data word with many comma brace groups (a JSON or jq argument) tripped the size limit, write the data to a file and let a launcher command read it.",
+  );
 }
 emitAllow();

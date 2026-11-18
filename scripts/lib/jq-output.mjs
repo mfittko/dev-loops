@@ -180,8 +180,59 @@ function evaluatePredicate(value, predicate) {
   }
 }
 
+// Strict mode (read wrappers): a field path that no stream value carries is an
+// error, never a silent null a caller could write back. A null intermediate and
+// an out-of-range index are legitimate nulls and stay present.
+const MISSING = Symbol("missing");
+
+function hasPath(value, path) {
+  // MISSING is a path an earlier strict pipe stage did not find; only the identity path counts as present.
+  if (value === MISSING) return parsePathSteps(path).length === 0;
+  let cursor = value;
+  for (const step of parsePathSteps(path)) {
+    if (cursor === undefined || cursor === null) return true;
+    if (step.field !== undefined) {
+      if (typeof cursor !== "object" || Array.isArray(cursor) || !Object.hasOwn(cursor, step.field)) return false;
+      cursor = cursor[step.field];
+    } else {
+      if (!Array.isArray(cursor)) return false;
+      cursor = cursor[step.index];
+    }
+  }
+  return true;
+}
+
+function assertPathPresent(stream, path) {
+  if (stream.length === 0 || stream.some((v) => hasPath(v, path))) return;
+  const error = new JqFilterError(`path ${path.trim()} matches no field in the output`);
+  error.missingPath = path.trim();
+  throw error;
+}
+
+// A typo in a predicate path must not read as "false" (exit 1 under --silent).
+function assertPredicatePath(stream, predicate) {
+  const parsed = parsePredicateSyntax(predicate);
+  assertPathPresent(stream, parsed.kind === "bare" ? parsed.path : parsed.leftRaw);
+}
+
+// One-level listing of the real paths in a result, for the missing-path error.
+function describeOutputPaths(result) {
+  if (result === null || typeof result !== "object" || Array.isArray(result)) return ".";
+  const paths = [];
+  for (const [key, value] of Object.entries(result)) {
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      for (const sub of Object.keys(value)) paths.push(`.${key}.${sub}`);
+    } else {
+      paths.push(`.${key}`);
+    }
+  }
+  return paths.join(", ");
+}
+
 // Apply one pipe stage to a stream (array of values), returning a new stream.
-function applyStage(stream, rawStage) {
+function applyStage(raw, rawStage, strict = false) {
+  // MISSING only matters to the two strict presence stages below, which read raw.
+  const stream = raw.map((v) => (v === MISSING ? undefined : v));
   const stage = rawStage.trim();
   if (stage === "") {
     throw new JqFilterError("Empty filter stage");
@@ -202,10 +253,13 @@ function applyStage(stream, rawStage) {
   }
   const selectMatch = stage.match(/^select\((.*)\)$/);
   if (selectMatch) {
-    return stream.filter((v) => evaluatePredicate(v, selectMatch[1]));
+    if (strict) assertPredicatePath(raw, selectMatch[1]);
+    // Keep the raw entry so a MISSING that passes the predicate stays MISSING downstream.
+    return raw.filter((_, i) => evaluatePredicate(stream[i], selectMatch[1]));
   }
   // Top-level comparison expression yields a boolean per input (e.g. .x=="y").
   if (/(==|!=|<=|>=|<|>)/.test(stage)) {
+    if (strict) assertPredicatePath(raw, stage);
     return stream.map((v) => evaluatePredicate(v, stage));
   }
   // Iteration: a path ending in [] (incl. bare .[]).
@@ -214,10 +268,12 @@ function applyStage(stream, rawStage) {
   }
   if (stage.endsWith("[]")) {
     const base = stage.slice(0, -2);
-    return stream.flatMap((v) => iterate(resolvePath(v, base)));
+    if (strict) assertPathPresent(raw, base);
+    return raw.flatMap((v) => iterate(resolvePath(v, base)));
   }
   // Plain path access (single value per input).
-  return stream.map((v) => resolvePath(v, stage));
+  if (strict) assertPathPresent(raw, stage);
+  return raw.map((v) => (strict && !hasPath(v, stage) ? MISSING : resolvePath(v, stage)));
 }
 
 // Validate one pipe stage's syntax without touching data. Mirrors the
@@ -287,15 +343,15 @@ function splitPipes(filter) {
 
 // Evaluate a jq-subset filter against a value. Returns the jq "stream" (array of
 // result values). Throws JqFilterError on unsupported syntax.
-export function evaluateJqFilter(value, filter) {
+export function evaluateJqFilter(value, filter, { strict = false } = {}) {
   if (typeof filter !== "string" || filter.trim() === "") {
     throw new JqFilterError("Empty --jq filter");
   }
   let stream = [value];
   for (const stage of splitPipes(filter)) {
-    stream = applyStage(stream, stage);
+    stream = applyStage(stream, stage, strict);
   }
-  return stream;
+  return stream.map((v) => (v === MISSING ? null : v));
 }
 
 // Validate a --jq filter's SYNTAX only, independent of any data. Throws
@@ -504,6 +560,8 @@ export function emitResult(
     jq = undefined,
     silent = false,
     fields = undefined,
+    jqRoot = undefined,
+    strictPaths = false,
     stdout = process.stdout,
     stderr = process.stderr,
     ok = result?.ok !== false,
@@ -535,10 +593,13 @@ export function emitResult(
   if (jq !== undefined) {
     let stream;
     try {
-      stream = evaluateJqFilter(result, jq);
+      stream = evaluateJqFilter(jqRoot ?? result, jq, { strict: strictPaths });
     } catch (error) {
       if (error instanceof JqFilterError) {
         // Fail closed, distinct from a clean "predicate false". Exit 2.
+        if (error.missingPath !== undefined) {
+          error.message += `; real paths: ${describeOutputPaths(result)}`;
+        }
         stderr.write(`${formatJqFilterErrorEnvelope(error)}\n`);
         return 2;
       }
@@ -572,7 +633,7 @@ export function emitResult(
 // through when injected (tests) and otherwise left undefined so each operation's
 // own `runChild` default applies — unchanged from the per-command shells.
 export async function runReadCommandCli(
-  { parse, operate, usage },
+  { parse, operate, usage, jqRootKey },
   argv,
   { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh", run } = {},
 ) {
@@ -594,5 +655,10 @@ export async function runReadCommandCli(
     stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
     return 1;
   }
-  return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
+  // --jq resolves against the requested fields: the object under `jqRootKey` is
+  // merged under the envelope, so `.body` and `.issue.body` read the same
+  // value. Without --jq the output shape is unchanged.
+  const inner = jqRootKey === undefined ? undefined : result?.[jqRootKey];
+  const jqRoot = inner !== null && typeof inner === "object" && !Array.isArray(inner) ? { ...inner, ...result } : undefined;
+  return emitResult(result, { jq: options.jq, silent: options.silent, jqRoot, strictPaths: true, stdout, stderr });
 }

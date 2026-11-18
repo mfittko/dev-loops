@@ -62,3 +62,30 @@ test("runCli: parser + viewIssue wire through the shared shell (--jq extracts th
   assert.equal(code, 0);
   assert.equal(stdout.get().trim(), "## Summary\nApply the grounding pass to the intro deck.");
 });
+
+test("runCli: --json body --jq .body resolves against the requested field (AC1)", async () => {
+  const { run } = stubGh({ body: ISSUE.body });
+  const stdout = captureStream();
+  const code = await runCli(["--repo", "o/n", "--issue", "1354", "--json", "body", "--jq", ".body"], { run, stdout });
+  assert.equal(code, 0);
+  assert.equal(stdout.get().trim(), ISSUE.body);
+});
+
+test("runCli: a --jq path matching no field exits non-zero, names the real paths, never prints null (AC2)", async () => {
+  const { run } = stubGh({ title: ISSUE.title });
+  const stdout = captureStream();
+  const stderr = captureStream();
+  const code = await runCli(["--repo", "o/n", "--issue", "1354", "--json", "title", "--jq", ".body"], { run, stdout, stderr });
+  assert.notEqual(code, 0);
+  assert.equal(stdout.get(), "");
+  assert.match(stderr.get(), /path \.body matches no field/);
+  assert.match(stderr.get(), /\.issue\.title/);
+});
+
+test("runCli: a field that is present but null still prints null (AC2 keeps real nulls)", async () => {
+  const { run } = stubGh({ milestone: null });
+  const stdout = captureStream();
+  const code = await runCli(["--repo", "o/n", "--issue", "1354", "--json", "milestone", "--jq", ".milestone"], { run, stdout });
+  assert.equal(code, 0);
+  assert.equal(stdout.get().trim(), "null");
+});

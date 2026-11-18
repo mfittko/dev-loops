@@ -18,9 +18,9 @@ import { isQuarantinedHead, latestQuarantineMs, logWrittenMs } from "./_gate-qua
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
-import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES, computeReviewerUnitBudget } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_BUDGET_CAP, REVIEWER_UNIT_BUDGET_PER_EXTRA_ANGLE, REVIEWER_UNIT_MAX_ANGLES, computeReviewerUnitBudget, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "../loop/_operator-focus.mjs";
-import { expandDispatchUnits, isPackedUnitName, normalizeUnitAngles, sanitizeScopeSegment, unitScopeSegment } from "./_dispatch-units.mjs";
+import { dispatchUnitScope, expandDispatchUnits, normalizeUnitAngles, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 
 const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--operator-focus-file <path>] [--tmp-root <path>] [--help]
 The SANCTIONED one-shot gate fan-out dispatch step: given a gate +
@@ -35,9 +35,9 @@ print-gates.mjs.
 
 Dispatch-unit rule: EVERY multi-angle resolveFanoutGroups unit — a CONFIGURED
 gates.fanout.groups group OR an auto-chunked leftover \`group:...\` bundle —
-shares one reviewer, and never more than REVIEWER_UNIT_MAX_ANGLES (${REVIEWER_UNIT_MAX_ANGLES}) angles
+shares one reviewer, and never more than the round's recorded unit bound (fanout.unitBound; REVIEWER_UNIT_MAX_ANGLES (${REVIEWER_UNIT_MAX_ANGLES}) when absent) angles
 per reviewer. A multi-angle unit LARGER than that cap deterministically splits
-into ordered ≤${REVIEWER_UNIT_MAX_ANGLES}-angle sub-units (\`<name>-part1\`, \`<name>-part2\`, ...) — angle
+into ordered sub-units of at most that bound (\`<name>-part1\`, \`<name>-part2\`, ...) — angle
 order preserved, nothing dropped/duplicated/merged. Only a genuine SINGLE-angle
 unit gets its own distinct singleton reviewer. This matches ADR 0048's
 grouped-dispatch-default: resolveFanoutGroups draws no dispatch-relevant
@@ -59,7 +59,7 @@ Each emitted prompt is a bounded reviewer work order (reference seeding): the
 invariant prefix with its \`## Required reads\` manifest, the volatile tail, and
 a per-unit angle-suffix that carries each angle's persona and prompt, resolved
 here via resolveReviewerRole against the merged .devloops and shipped defaults.
-Bulk evidence (PR/issue bodies, diff, validation) stays in the referenced files;
+Bulk evidence (linked-issue bodies, diff, validation) stays in the referenced files, and the PR body is a separate pr-body read;
 the reviewer reads them in full itself.
 
 Run write-gate-context.mjs FIRST (it writes the briefing prefix, evidence file,
@@ -85,6 +85,11 @@ Optional:
                                older artifact); a PRESENT-but-empty pendingGroups
                                requires every resolved angle to be carried with
                                --carry-forward-plan proof, or refuses zero units.
+                               The persisted plan also keeps the completed prior
+                               units marked "resumed": true, so its count can
+                               exceed the stdout count. Only the stdout "units"
+                               are dispatched, and --expected-dispatch-units
+                               takes the stdout count.
   --carry-forward-plan <json>  Resolver output (or its carried array). Required
                                for a zero-unit pending round; persisted with the
                                keyed plan for fan-in and provenance verification.
@@ -96,13 +101,16 @@ Optional:
                                must match the write-gate-context.mjs call).
 Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "repo": "...", "pr": "...",
-    "pending": <true|false>, "roundId": "...", "count": <n>, "maxConcurrent": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>,
+    "pending": <true|false>, "roundId": "...", "count": <n>, "maxConcurrent": <n>, "unitBound": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>,
       "budget": { "maxToolCalls": <n>, "maxModelTurns": <n>, "maxAngles": <n> }, "budgetBasis": { "scope": "none|docs-only|full", "files": <n>, "changedLines": <n> }, "promptPath": "...",
       "workOrderRef", "workOrderDigest", "materializationHash", "executionIdentity", "dispatchPrompt",
       "promptBytes": <n>, "sectionBytes": { "prefix": <n>, "volatile": <n>, "suffix": <n> },
       "workOrder": { "role", "target", "operation", "roundIdentity", "headSha", "configSha256", "assignedAngles",
         "angleInstructions": [ { "angle": "...", "persona": "...", "prompt": "..." } ],
         "requiredReads", "outputRefs", "executionRules" } } ] }
+  "unitBound" is present only when the round's recorded bound (fanout.unitBound)
+  differs from 5; its absence means 5. "budget.maxAngles" carries the round's
+  resolved unit bound.
   Wave the EMITTED units at most \`maxConcurrent\` at a time (1 when
   gates.fanout.sequential is set). Do NOT use the artifact's fanout.wavePlan to
   bound this step: that plan is computed over the UNSPLIT resolveFanoutGroups
@@ -134,30 +142,6 @@ Exit codes:
      error, or invalid --jq filter)`.trim();
 
 const parseError = buildParseError(USAGE);
-
-/**
- * Derive the reviewer-sentinel/prompt-layout scope for a resolved dispatch unit.
- * An ordinary singleton unit dispatches under its angle name
- * (`<gatePrefix><angle>`). A packed bin (even a one-angle bin) and every
- * multi-angle unit dispatch under `<gatePrefix>group-<segment>`, where
- * `<segment>` is unitScopeSegment(unit.name) — the leading `group:` auto-chunk
- * marker (see resolveFanoutGroups' chunk naming) is stripped BEFORE
- * sanitizing, whatever the unit's origin: a configured group's name is not
- * guaranteed marker-free either (e.g. a split sub-unit's base name can itself
- * be an auto-chunk name carrying the marker), so this never special-cases
- * "came from config" vs "auto-chunked". The scope keys the sentinel/prompt
- * layout only; the EXACT unit name is carried separately as the provenance
- * `group`. Pure.
- * @param {string} gate normalized gate id
- * @param {{ name: string, angles: string[] }} unit
- * @returns {string}
- */
-export function dispatchUnitScope(gate, unit) {
-  const prefix = gateScopePrefix(gate);
-  const angles = Array.isArray(unit?.angles) ? unit.angles : [];
-  if (angles.length === 1 && !isPackedUnitName(unit?.name)) return `${prefix}${sanitizeScopeSegment(angles[0])}`;
-  return `${prefix}group-${unitScopeSegment(unit?.name)}`;
-}
 
 // Human phrasing for each PROHIBITED_REVIEWER_OPERATIONS kind. The RENDERED
 // SET is still driven off the array (buildAngleNamingSuffix below maps over
@@ -234,7 +218,7 @@ export const REVIEWER_VERIFIED_ITEMS_INSTRUCTION = "Verified items: in the findi
  *   computed budget (computeReviewerUnitBudget); the floor when absent
  * @returns {string}
  */
-export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = [], budget = REVIEWER_UNIT_BUDGET, operatorFocus = null) {
+export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = [], budget = REVIEWER_UNIT_BUDGET, operatorFocus = null, unitBound = REVIEWER_UNIT_MAX_ANGLES) {
   if (typeof scope !== "string" || scope.length === 0) {
     throw new TypeError(`buildAngleNamingSuffix requires a non-empty scope string, got ${JSON.stringify(scope)}`);
   }
@@ -262,11 +246,11 @@ export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unit
     ? `${REVIEWER_VERIFIED_ITEMS_INSTRUCTION}.\n`
     : "";
   const contract = `## Bounded reviewer contract
-Budget: at most ${budget.maxModelTurns} model turns and ${budget.maxToolCalls} tool calls for this unit, computed from the size of the diff blocks in this unit's scope (doc and unparsed-path blocks for a docs-only unit, every block otherwise).
-Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is prohibited.
+Budget: at most ${budget.maxModelTurns} model turns and ${budget.maxToolCalls} tool calls for this unit, computed from the size of the diff blocks in this unit's scope (doc and unparsed-path blocks for a docs-only unit, every block otherwise), plus ${REVIEWER_UNIT_BUDGET_PER_EXTRA_ANGLE.maxModelTurns} model turns and ${REVIEWER_UNIT_BUDGET_PER_EXTRA_ANGLE.maxToolCalls} tool calls for each angle above ${REVIEWER_UNIT_MAX_ANGLES}, clamped at ${REVIEWER_UNIT_BUDGET_CAP.maxModelTurns} and ${REVIEWER_UNIT_BUDGET_CAP.maxToolCalls}.
+Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is prohibited. The one exception: also apply the Secret leaks check of the review agent's Review Focus (a prefixless secret in the diff, or a secret value written to a log, a file or a workflow output); it is never an unassigned angle.
 Prohibited: ${prohibited}.
 Widening: ${REVIEWER_WIDENING_RULE}.
-${verifiedItemsLine}If you exceed this budget (more than ${budget.maxModelTurns} model turns or ${budget.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --max-model-turns ${budget.maxModelTurns} --max-tool-calls ${budget.maxToolCalls} --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
+${verifiedItemsLine}If you exceed this budget (more than ${budget.maxModelTurns} model turns or ${budget.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --max-model-turns ${budget.maxModelTurns} --max-tool-calls ${budget.maxToolCalls}${unitBound !== REVIEWER_UNIT_MAX_ANGLES ? ` --unit-bound ${unitBound}` : ""} --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
   return `${header}\n\n${scopeLine}\n\n${renderOperatorFocusSection(operatorFocus)}${reads}${body}\n\n${instructions}\n\n${contract}\n`;
 }
 
@@ -461,6 +445,31 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // path's freshness for. ENOENT on the rm is fine (no prior plan exists).
   // The success-only WRITE at the end of main is unchanged — this removes,
   // it does not pre-persist anything.
+  // A --pending emission replaces the keyed plan with the pending units only. The prior plan is read first so
+  // units that completed in an earlier wave of this round can stay in the persisted plan (see mergedUnits below).
+  // The rm below destroys the plan, so the latest persisted plan bytes live in a sidecar the rm leaves alone, refreshed after
+  // every successful emission: a refused run followed by a --pending run finds the latest prior units. fan-in never reads the sidecar.
+  const priorPlanSidecar = `${buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot })}.prior`;
+  let priorPlan = null;
+  if (pendingOnly) {
+    const priorText = await readFile(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), "utf8").catch(() => null)
+      ?? await readFile(priorPlanSidecar, "utf8").catch(() => null);
+    try {
+      priorPlan = priorText === null ? null : JSON.parse(priorText);
+    } catch {
+      priorPlan = null; // a truncated or malformed prior plan contributes no resumed unit
+    }
+    if (priorPlan !== null) {
+      try {
+        await writeFile(priorPlanSidecar, priorText, "utf8");
+      } catch (err) {
+        // The rm below destroys the only readable copy, so refuse while no backup exists. This refusal precedes the rm,
+        // so the previous keyed plan survives this failed run: the one exception to the start-of-flow removal above.
+        process.stderr.write(`${formatCliError(err)}\n`);
+        return 2;
+      }
+    }
+  }
   try {
     await rm(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), { force: true });
   } catch (err) {
@@ -653,7 +662,8 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // shared unit is a configured group (a valid string name), a singleton uses
   // its angle as the name — so both the scope and the provenance group are
   // well-formed by construction.
-  const dispatchUnits = expandDispatchUnits(units, configuredGroupNames);
+  const unitBound = resolveReviewerUnitBound(fanout.unitBound);
+  const dispatchUnits = expandDispatchUnits(units, configuredGroupNames, unitBound);
 
   // GATE-EXEC-FANOUT-CAPACITY (emitter half): the emitted unit count is the wave
   // width the coordinator uses, so a PRESENT plan record whose EMITTED units
@@ -754,11 +764,11 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     }
     const unitReads = resolveUnitScopedReads(artifact, angles);
     const budgetBasis = unitBudgetBasis(artifact, angles, diffBlocks, resolveClassifyRules(config));
-    const budget = computeReviewerUnitBudget(budgetBasis);
+    const budget = computeReviewerUnitBudget({ ...budgetBasis, angles: angles.length, unitBound });
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {
       await mkdir(path.dirname(suffixPath), { recursive: true });
-      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus), "utf8");
+      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus, unitBound), "utf8");
     } catch (err) {
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;
@@ -854,12 +864,28 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // success emit runs after the persist, so guarding here (rather than around
   // each earlier finish call, all of which run before the persist) is the one
   // complete seam.
-  const payload = { ok: true, gate, headSha, repo, pr, pending: pendingOnly, roundId, count: emitted.length, maxConcurrent, units: emitted };
+  const payload = { ok: true, gate, headSha, repo, pr, pending: pendingOnly, roundId, count: emitted.length, maxConcurrent, ...(unitBound !== REVIEWER_UNIT_MAX_ANGLES ? { unitBound } : {}), units: emitted };
   if (carryProof !== undefined) payload.carried = carryProof;
   const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
+  // Units of the prior plan whose angles all completed in this round and are not re-emitted keep their fan-in
+  // provenance: they stay in the persisted plan, marked resumed, but never in the dispatch list printed above.
+  const completedAngles = new Set(artifact.fanout?.preflight?.completedAngles ?? []);
+  const emittedAngles = new Set(emitted.flatMap((unit) => unit.angles));
+  const priorUnits = priorPlan?.gate === gate && priorPlan.headSha === headSha && Array.isArray(priorPlan.units) ? priorPlan.units.filter((unit) => unit !== null && typeof unit === "object") : [];
+  const isResumed = (unit) => Array.isArray(unit.angles) && unit.angles.length > 0
+    && unit.angles.every((angle) => completedAngles.has(angle) && !emittedAngles.has(angle));
+  // The prior unit order stays: the findings-log sibling check needs split-group parts adjacent and in order.
+  const emittedByScope = new Map(emitted.map((unit) => [unit.scope, unit]));
+  const mergedUnits = priorUnits.flatMap((unit) => (isResumed(unit) ? [{ ...unit, resumed: true }] : emittedByScope.has(unit.scope) ? [emittedByScope.get(unit.scope)] : []));
+  const placed = new Set(mergedUnits.map((unit) => unit.scope));
+  const persistedUnits = [...mergedUnits, ...emitted.filter((unit) => !placed.has(unit.scope))];
+  const persistedPayload = persistedUnits.length > emitted.length ? { ...payload, units: persistedUnits, count: persistedUnits.length } : payload;
   try {
     await mkdir(path.dirname(planPath), { recursive: true });
-    await persistPlan(planPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    const persistedText = `${JSON.stringify(persistedPayload, null, 2)}\n`;
+    await persistPlan(planPath, persistedText, "utf8");
+    // Every successful emission, pending or not, refreshes the sidecar so a later --pending run never falls back to an older plan.
+    await writeFile(priorPlanSidecar, persistedText, "utf8").catch(() => {});
   } catch (err) {
     try {
       await rm(planPath, { force: true });

@@ -19,7 +19,7 @@ required helper is unavailable.
 
 | Current boundary | Command / action |
 | --- | --- |
-| Initial Copilot implementation, no follow-up-ready PR | `node <dev-loops-package-root>/cli/index.mjs loop watch-initial --repo <owner/name> --issue <N>`; preserve the bootstrap budget (its `--timeout <seconds>` accepts `0` or at least `3600`) and exceptions in `FACADE-BOOTSTRAP-WATCH-ROUTE` and its adjacent rules in the public contract. |
+| Initial Copilot implementation, no follow-up-ready PR | `node <dev-loops-package-root>/cli/index.mjs loop watch-initial --repo <owner/name> --issue <N>`; preserve the bootstrap budget (its `--timeout <seconds>` accepts `0` or at least `3600`) and exceptions in `FACADE-BOOTSTRAP-WATCH-ROUTE` and its adjacent rules in the public contract. `timed_out` with `outcome: "pending"` means the budget is not exhausted: run `reissue` unchanged per `GATE-EXEC-BOUNDED-WAIT-CAP`. |
 | Current PR | Refresh with `node <dev-loops-package-root>/cli/index.mjs loop loop-state --repo <owner/name> --pr <N>` (add `--lightweight` for a light-dispatched PR so the round cap composes correctly). If the refreshed state remains waiting and preflight below is satisfied, use `node <dev-loops-package-root>/cli/index.mjs loop watch-cycle --repo <owner/name> --pr <N> --concise`. |
 | Pending/absent CI | The cycle routes to the provider-agnostic CI watcher. The direct equivalent is `node <dev-loops-package-root>/cli/index.mjs loop watch-ci --repo <owner/name> --pr <N> --timeout <remaining-budget-seconds>`. Failed CI needs follow-up, not more waiting. |
 
@@ -95,7 +95,7 @@ when feasible. Carry the checkpoint and watch outcome, and report the pending
 boundary accurately rather than declaring completion.
 <!-- /pi-only -->
 
-Under Claude Code, continue pending non-terminal waits inline in the same agent,
+Under Claude Code, the dev-loop coordinator continues pending non-terminal waits in the same agent,
 using the fresh envelope on each re-entry, until the requested stop boundary or
 budget is reached. Do not exit just to have a parent re-dispatch the watch loop.
 

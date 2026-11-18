@@ -106,11 +106,11 @@ test("behavioral pin: review proceeds on a foreign-owned PR while the write/merg
     // calls against an ambient GIT_DIR/GIT_WORK_TREE redirect (the hazard its
     // own JSDoc documents) and persists a repo-local identity — the
     // determinism angle's finding (draft_gate round 2).
-    initGitFixture(resolverHalfRoot, { remote: `git@github.com:${REPO}.git`, commit: null });
+    initGitFixture(resolverHalfRoot, { remote: `git@github.com:${REPO}.git`, branch: "main" });
     const ghStub = await writeGhStub(resolverHalfRoot, [
       {
         assertArgs: ["pr", "view", String(PR)],
-        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: FOREIGN_ASSIGNEE }], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify({ author: { login: FOREIGN_ASSIGNEE }, state: "OPEN", mergedAt: null, assignees: [{ login: FOREIGN_ASSIGNEE }], closingIssuesReferences: [], body: "" }),
       },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
     ], { matchMode: "claims" });
@@ -438,7 +438,7 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
   ].map(([, shard]) => shard);
   assert.deepEqual(allTestShards, ["1/4", "2/4", "3/4", "4/4"]);
   assert.match(verifySuiteSection, /BUN_TEST_PARALLELISM:\s*2/);
-  assert.match(verifySuiteSection, /bun run \$\{\{\s*matrix\.suite\s*\}\} --timings=\.bun-test-timings\.json --shard=\$\{\{\s*matrix\.shard\s*\}\}/);
+  assert.match(verifySuiteSection, /bun run \$\{\{\s*matrix\.suite\s*\}\} --timings=\.ci-timing-output\.json --timings=\.ci-timing-input\.json --update-timings --shard=\$\{\{\s*matrix\.shard\s*\}\}/);
 
   // Fail-closed aggregation: the gate must run on `if: always()` (else a failed
   // leg SKIPS the gate under the default `if: success()`), depend on the whole

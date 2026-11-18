@@ -1027,10 +1027,10 @@ test("both gate finding renderers neutralize a backtick-unbalance payload that w
   assert.ok(fileRefIndex > -1, "expected the file ref's own code span in the rendered body");
   const precedingBackticks = (backtickBody.slice(0, fileRefIndex).match(/`/g) ?? []).length;
   assert.equal(precedingBackticks % 2, 0, "an even number of backticks must precede the file ref's own opening delimiter (odd means an earlier stray backtick shifted the pairing)");
-  assert.ok(!backtickBody.includes("for ` value"), "the stray backtick in summary must be stripped, not survive to shift pairing");
+  assert.ok(!backtickBody.includes("for ` value"), "the stray backtick in summary must be entity-encoded, not survive to shift pairing");
   // Negative-only would also pass if the summary were DROPPED rather than
   // stripped — pin that it still renders, backtick removed, bracket encoded.
-  assert.ok(backtickBody.includes("guard &#91;missing for value"), "the summary must still render with only its backtick removed, not be dropped");
+  assert.ok(backtickBody.includes("guard &#91;missing for &#96; value"), "the summary must still render with its stray backtick entity-encoded, not be dropped");
 
   // Same shape against upsert-checkpoint-verdict.mjs's structured renderer:
   // `summary` is bare prose, `file` is rendered inside its own code span.
@@ -1055,8 +1055,8 @@ test("both gate finding renderers neutralize a backtick-unbalance payload that w
   assert.ok(verdictFileRefIndex > -1, "expected the file ref's own code span in the rendered body");
   const verdictPrecedingBackticks = (verdictBacktickBody.slice(0, verdictFileRefIndex).match(/`/g) ?? []).length;
   assert.equal(verdictPrecedingBackticks % 2, 0, "an even number of backticks must precede the file ref's own opening delimiter (odd means an earlier stray backtick shifted the pairing)");
-  assert.ok(!verdictBacktickBody.includes("for ` value"), "the stray backtick in summary must be stripped, not survive to shift pairing");
-  assert.ok(verdictBacktickBody.includes("guard &#91;missing for value"), "the structured renderer's summary must also strip the backtick rather than drop the finding");
+  assert.ok(!verdictBacktickBody.includes("for ` value"), "the stray backtick in summary must be entity-encoded, not survive to shift pairing");
+  assert.ok(verdictBacktickBody.includes("guard &#91;missing for &#96; value"), "the structured renderer summary must also entity-encode the backtick rather than drop the finding");
 
   // Both assertions above turn on the PROSE sanitiser stripping summary's
   // backtick, so they hold even if the code-span sanitiser stops working.
@@ -1807,4 +1807,14 @@ test("postGateFindings refuses a findings body containing a raw issue/PR id (gua
     await rm(tmpDir, { recursive: true, force: true });
     await rm(repoRoot, { recursive: true, force: true });
   }
+});
+
+test("renderFindingsCommentBody labels an evidence_only act finding only (#3197)", () => {
+  const findings = parseFindings(JSON.stringify([
+    { severity: "low", angle: "docs", summary: "needs evidence", judgeDisposition: "act", remedyKind: "evidence_only" },
+    { severity: "low", angle: "docs", summary: "rejected one", judgeDisposition: "reject", remedyKind: "evidence_only" },
+  ]));
+  const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
+  assert.equal(body.split("(evidence only, no file change").length - 1, 1);
+  assert.match(body, /needs evidence.*judge: _act_ \(evidence only/);
 });

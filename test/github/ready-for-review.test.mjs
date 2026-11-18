@@ -874,6 +874,13 @@ test("absolute and unapproved T1 size limits remain unwaivable", async () => {
   }
 });
 
+test("size waiver --reason carrying an operator-owned release approval is neutralized in the record", async () => {
+  const { result, commentBody } = await runWaiverCase({ config: DEFAULT_WAIVER, args: ["--reason", "approve release v1.2.3"], allow: true });
+  assert.equal(result.code, 0, result.stderr);
+  assert.ok(!commentBody.split("\n").some((line) => /^approve release/i.test(line)));
+  assert.match(commentBody, /\*\*justification:\*\* `approve release`/);
+});
+
 test("approved T1 size waiver names its approver", async () => {
   const { result, commentBody } = await runWaiverCase({ config: T1_WAIVER, file: "src/money/pay.mjs", args: ["--reason", "money-slice rename", "--approved-by", "jane-reviewer"], allow: true });
   assert.equal(result.code, 0, result.stderr);
@@ -1029,4 +1036,25 @@ test("ready-for-review accepts a base-only merge M of the chain's last clearing 
     const refusedStub = await capRoundGhStub(tempDir, { bucket: "pass", head: M });
     await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, runtime(refusedStub, false)), /draft_gate marker does not match|No visible clean draft_gate/);
   } finally { await rm(tempDir, { recursive: true, force: true }); }
+});
+
+test("refuses a PR carrying the spike no-merge marker (ADR 0293)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-spike-"));
+  try {
+    const { env } = await writeGhStub(tempDir, [
+      {
+        stdout: JSON.stringify({
+          data: { repository: { pullRequest: {
+            id: "PR_abc123", isDraft: true, headRefOid: "abc123def456", state: "OPEN", mergeStateStatus: "CLEAN",
+            body: "spike\n\n<!-- dev-loops:spike-pr no-merge -->\n",
+          } } },
+        }),
+      },
+    ]);
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /spike size exemption/u);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "./_gate-artifact-seal.mjs";
 import path from "node:path";
 import { verifyZeroUnitCarryProvenance } from "./_carried-angles.mjs";
@@ -10,21 +11,23 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, assertNoProjectedForbiddenDefer, neverDeferredSeverity, UNJUDGED_DISPOSITION, checkFanoutAngleCoverage, fanoutReviewerPairingError, ledgerAngleNames, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveFindingFile, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
+import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, assertNoProjectedForbiddenDefer, neverDeferredSeverity, UNJUDGED_DISPOSITION, checkFanoutAngleCoverage, fanoutReviewerPairingError, listOpenActItems, ledgerAngleNames, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveFindingFile, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 // JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
 // the validator's membership check so validateFindingsArray stays self-contained.
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
-import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { REVIEWER_UNIT_MAX_ANGLES, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
-import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateConfig, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { capClosedFor } from "@dev-loops/core/loop/gate-fanin";
-import { listPriorActItems, resolveDraftRoundCap } from "./write-gate-context.mjs";
+import { isInRoundRewrite, listPriorActItems, resolveDraftRoundCap } from "./write-gate-context.mjs";
+import { raiseVerdictForActedCopilotBlock, withPinnedCopilotBodyCluster, withoutCopilotBodyDecision } from "./_copilot-body-disposition.mjs";
 import { clusterFindings, clustersFromStampedIds, projectClusterDisposition } from "@dev-loops/core/loop/finding-cluster";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
-import { buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "./_gate-artifact-paths.mjs";
+import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "./_gate-artifact-paths.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--verdict <clean|findings_present|blocked>] (--findings <json> | --findings-file <path>) [--tmp-root <path>] [--context-tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
 Required:
@@ -74,11 +77,20 @@ Optional:
                                  (one disposition per cluster, keyed by clusterId; the 0-based ledger position only
                                  when the ledger carries no clusterId). Each disposition requires title, detail and
                                  fix, and defer and reject also require reason; a missing field FAILS CLOSED and
-                                 writes no ledger. Optional; when absent the ledger writes byte-identically to before.
+                                 writes no ledger. The ledger always records roundIdentity.
+                                 The judge plan beside the verdict pins the Copilot body cluster, which the writer appends and
+                                 re-checks by sha256; a verdict in a j<id> directory whose judge-emit-plan.json is missing,
+                                 unreadable or names another round, repo, PR, gate or head, and a verdict outside a judge
+                                 execution directory while the plan pins a copilot-body-feedback read, FAIL CLOSED. An acted
+                                 blocking Copilot finding raises a clean verdict to findings_present (GATE-EXEC-COPILOT-BODY-TO-JUDGE).
                                  With --spec-authority, a sibling spec-authority-verdict.json next to the judge
                                  verdict is validated against that identity, and each finding_conflicts finding is
                                  written as judgeDisposition reject (ADR 0089). An invalid or mismatched sibling
                                  FAILS CLOSED; an absent one changes nothing.
+                                 After a judge pass the log's verdict is findings_present whenever an act item is open (blocked
+                                 stays blocked). A non-review write without this flag refuses judge_verdict_required when a
+                                 j<id>/judge-verdict.json exists for the round. An explicit --verdict
+                                 may equal the wrapper's overallVerdict or that composed findings_present.
   --tmp-root <path>              Root tmp directory. Default: the MAIN worktree's tmp/
                                  — the ledger is anchored at the primary git
                                  worktree so the merge (running from the main checkout)
@@ -329,10 +341,10 @@ function resolveFindings(options) {
  * perAngle). Rejects malformed or self-inconsistent provenance; this raises
  * the bar but does not make provenance unforgeable (see the Pi-harness
  * subagent-tool bridge for that). `dispatchUnits` is the round's recorded
- * dispatch membership (readContextDispatchUnits); a caller-supplied
+ * dispatch membership (readContextFanout + dispatchUnitsFromFanout); a caller-supplied
  * `dispatchUnits` key in `raw` is dropped, never trusted.
  */
-export function parseProvenanceJson(raw, resolvedGroups = null, dispatchUnits = null) {
+export function parseProvenanceJson(raw, resolvedGroups = null, dispatchUnits = null, unitBound = undefined) {
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -404,11 +416,13 @@ export function parseProvenanceJson(raw, resolvedGroups = null, dispatchUnits = 
   // see fanoutReviewerPairingError). `resolvedGroups` additionally rejects a
   // claimed group the configured table does not actually place together, and
   // `dispatchUnits` (when recorded) is the membership the reviewers shared.
-  const pairingError = fanoutReviewerPairingError(normalized.perAngle, resolvedGroups, dispatchUnits);
+  const pairingError = fanoutReviewerPairingError(normalized.perAngle, resolvedGroups, dispatchUnits, unitBound);
   if (pairingError) {
     throw parseError(`--provenance.perAngle ${pairingError}`);
   }
   if (dispatchUnits !== null) normalized.dispatchUnits = dispatchUnits;
+  const bound = resolveReviewerUnitBound(unitBound);
+  if (dispatchUnits !== null && bound !== REVIEWER_UNIT_MAX_ANGLES) normalized.unitBound = bound;
   return normalized;
 }
 /**
@@ -499,7 +513,9 @@ export async function verifyEmitPlanProvenance(planPath, provenance, round, { re
     }
     if (unit.angles.length === 1 && group !== undefined) {
       const previous = plan.units[unitIndex - 1];
-      if (previous?.angles.length !== REVIEWER_UNIT_MAX_ANGLES || previous.group?.trim() !== group.trim()) {
+      // At a unit bound of 1 every split sub-unit is itself a full-cap singleton, so the first has no predecessor.
+      const bound = resolveReviewerUnitBound(plan.unitBound);
+      if (bound !== 1 && (previous?.angles.length !== bound || previous.group?.trim() !== group.trim())) {
         throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}] is a grouped singleton without a preceding same-group full-cap split sibling`);
       }
     }
@@ -709,7 +725,7 @@ export { buildLogPath };
  * `spec-authority-verdict.json` of the judge verdict. An absent sibling is a
  * no-op. An unreadable, invalid, or identity-mismatched one fails closed.
  */
-async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
+async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity, order) {
   const verdictPath = path.join(path.dirname(judgePath), "spec-authority-verdict.json");
   let raw;
   try {
@@ -720,7 +736,7 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
   }
   let validated;
   try {
-    validated = validateSpecAuthorityVerdict(JSON.parse(raw), {
+    validated = validateSpecAuthorityVerdict(withoutCopilotBodyDecision(JSON.parse(raw), order), {
       findingsCount: findings.length,
       clusterIds: findings.map((f) => f?.clusterId),
       criterionIds: identity?.checkedCriteria,
@@ -759,9 +775,9 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
  * or a fanout plan without a `fanout.groups` array, fails closed. A plan whose
  * groups yield no dispatch unit (empty, or only malformed or angle-less
  * entries) returns `[]`, which the pairing guard rejects as a shape error.
- * @returns {Promise<{ name: string, angles: string[] }[]|null>}
+ * @returns {Promise<object|null>} the raw fanout plan (dispatchUnitsFromFanout expands it into units)
  */
-export async function readContextDispatchUnits({ repo, pr, gate, headSha, contextTmpRoot }, config, repoRoot) {
+async function readContextFanout({ repo, pr, gate, headSha, contextTmpRoot }, repoRoot) {
   const contextPath = path.resolve(repoRoot, buildGateContextPath({
     repo,
     pr,
@@ -784,8 +800,16 @@ export async function readContextDispatchUnits({ repo, pr, gate, headSha, contex
   }
   if (context?.fanout === undefined || context?.fanout === null) return null;
   if (!Array.isArray(context.fanout.groups)) throw parseError(`gate-context artifact ${contextPath} has a fanout plan without a fanout.groups array, so its dispatch membership cannot be recorded`);
+  return context.fanout;
+}
+
+// The dispatch units of one already-read context fanout plan (null when absent).
+// The writer derives the units and the recorded unit bound (`fanout.unitBound`,
+// 5 when absent) from the one read so they always come from the same artifact.
+function dispatchUnitsFromFanout(fanout, config) {
+  if (fanout === null) return null;
   const configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
-  return expandDispatchUnits(context.fanout.groups, configuredGroupNames).map(({ name, angles }) => ({ name, angles }));
+  return expandDispatchUnits(fanout.groups, configuredGroupNames, fanout.unitBound).map(({ name, angles }) => ({ name, angles }));
 }
 
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
@@ -861,6 +885,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // applyJudgeDispositions fails closed on a malformed verdict, an
   // out-of-range index, or dispositions that do not cover every finding.
   let findings = rawFindings;
+  let copilotActedSeverities = [];
   let scopeDrift;
   const specAuthorityIdentity = await readSpecAuthorityIdentity(
     options.specAuthority !== undefined ? path.resolve(repoRoot, options.specAuthority) : undefined,
@@ -868,8 +893,64 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   );
   // `priorOptions` and the round-cap state are shared by the judge coercion and the cap-closed record below.
   const priorOptions = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot };
+  // The round and execution identity stamped on this ledger: the emit-plan round id and the judge execution directory (`.../<j-id>/judge-verdict.json`), `null` when absent.
+  let planRoundId = null;
+  if (hasEmitPlan) {
+    let plan = {};
+    try {
+      plan = JSON.parse(await readFile(emitPlanPath, "utf8"));
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw parseError(`the emit plan ${emitPlanPath} could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    planRoundId = typeof plan?.roundId === "string" && plan.roundId.length > 0 ? plan.roundId : null;
+  }
+  const roundIdentity = {
+    roundId: planRoundId,
+    judgeExecution: /^j\d+-[0-9a-f]+$/.exec(path.basename(path.dirname(options.judgeVerdict ?? "")))?.[0] ?? null,
+    completed: options.gate === "review" || Boolean(options.judgeVerdict),
+  };
   let roundCap;
-  const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot }));
+  const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, roundIdentity, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot, includeLiveCurrentHead: true }));
+  // A judged round must be written with its verdict: a write without --judge-verdict while a judge execution's verdict sits on disk would persist the unjudged severity verdict.
+  if (!options.judgeVerdict && options.gate !== "review") {
+    const judgeRoots = [...new Set([options.contextTmpRoot, options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot), path.join(repoRoot, "tmp")].filter(Boolean))];
+    // Both ids embed their emission time (r<ms>-, j<ms>-): a judge emitted before this fan-out round belongs to an earlier same-head round.
+    const roundEmittedMs = Number(/^r(\d+)-/.exec(planRoundId ?? "")?.[1]) || 0;
+    // Without an emit plan roundEmittedMs is 0: a judge execution that the live or a retained same-head ledger already stamps as completed was consumed by an earlier round, so it is skipped.
+    const consumedJudges = new Set();
+    const ledgerDir = path.dirname(fullPath);
+    const ledgerStem = path.basename(fullPath, ".json");
+    for (const name of await readdir(ledgerDir).catch(() => [])) {
+      if (name !== `${ledgerStem}.json` && !(name.startsWith(`${ledgerStem}.round-`) && name.endsWith(".json"))) continue;
+      try {
+        const identity = JSON.parse(await readSealed(path.join(ledgerDir, name))).roundIdentity;
+        // A ledger of the current emit-plan round does not consume its own judge: a rewrite of this round must still pass --judge-verdict.
+        const sameRound = planRoundId !== null && identity?.roundId === planRoundId;
+        if (!sameRound && identity?.completed === true && typeof identity.judgeExecution === "string") consumedJudges.add(identity.judgeExecution);
+      } catch { /* an unreadable ledger binds no judge; retention refuses a tampered live ledger later */ }
+    }
+    // A judge execution emitted at or before the newest consumed one is superseded by it (each run supersedes the previous), so its late verdict is skipped too.
+    const consumedWatermarkMs = Math.max(0, ...[...consumedJudges].map((id) => Number(/^j(\d+)-/.exec(id)?.[1]) || 0));
+    // Both ids embed their emission time: order the candidates by it, then id, so the refusal names the latest judge verdict (never a superseded one in readdir order).
+    const candidates = [];
+    for (const root of judgeRoots) {
+      const judgeDir = path.resolve(repoRoot, buildGateArtifactPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: root, dir: "gate-judge" }));
+      let entries = [];
+      try {
+        entries = await readdir(judgeDir);
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+      for (const entry of entries.filter((name) => Number(/^j(\d+)-[0-9a-f]+$/.exec(name)?.[1]) > Math.max(roundEmittedMs, consumedWatermarkMs))) {
+        const found = path.join(judgeDir, entry, "judge-verdict.json");
+        if (await exists(found)) candidates.push({ ms: Number(/^j(\d+)-/.exec(entry)[1]), entry, found });
+      }
+    }
+    candidates.sort((a, b) => a.ms - b.ms || (a.entry < b.entry ? -1 : a.entry > b.entry ? 1 : 0));
+    const latest = candidates.at(-1);
+    if (latest) throw parseError(`judge_verdict_required: a judge verdict exists at ${latest.found}; pass --judge-verdict ${latest.found} so the log carries the judged verdict`);
+  }
+  // The writer resolves the round before it retains the live same-head ledger, so it counts that ledger itself, but only when retention will keep it (the shared isInRoundRewrite predicate): every later reader counts it as the retained round.
   if (options.judgeVerdict) {
     const judgePath = path.resolve(repoRoot, options.judgeVerdict);
     let judgeVerdict;
@@ -879,7 +960,47 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       throw parseError(`--judge-verdict could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
     }
     const { lowFixCapped, round } = await roundCapState();
-    const enriched = applyJudgeDispositions(rawFindings, judgeVerdict, { pastCap: lowFixCapped, round });
+    // The judge disposed the pinned Copilot body finding as one more cluster (GATE-EXEC-COPILOT-BODY-TO-JUDGE); the plan beside the verdict names it.
+    // A judge-execution verdict (`.../<j-id>/judge-verdict.json`) must find its own plan: a missing or foreign plan would silently drop the Copilot cluster.
+    const judgeRoundDir = path.basename(path.dirname(judgePath));
+    const inJudgeDir = /^j\d+-[0-9a-f]+$/.test(judgeRoundDir);
+    // A verdict outside a judge execution directory binds no plan of its own: read the gate and head judge directory's plan instead.
+    // emit-judge-work-order writes it under the checkout tmp; the main-anchored ledger tmp is the other candidate, and every readable plan counts, and any one that pins a Copilot read refuses.
+    const judgePlanPaths = inJudgeDir
+      ? [path.join(path.dirname(path.dirname(judgePath)), "judge-emit-plan.json")]
+      : [...new Set([options.contextTmpRoot, options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot), path.join(repoRoot, "tmp")].filter(Boolean))]
+        .map((root) => path.join(path.resolve(repoRoot, buildGateArtifactPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: root, dir: "gate-judge" })), "judge-emit-plan.json"));
+    // Read every candidate: only ENOENT is absent, and a candidate that exists but fails to parse is refused, never skipped.
+    const readablePlans = [];
+    for (const candidate of judgePlanPaths) {
+      let text;
+      try {
+        text = await readFile(candidate, "utf8");
+      } catch (error) {
+        if (error?.code === "ENOENT") continue;
+        throw parseError(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${candidate} could not be read: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      try {
+        readablePlans.push({ path: candidate, plan: JSON.parse(text) });
+      } catch (error) {
+        throw parseError(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${candidate} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    const pinningPlan = readablePlans.find(({ plan }) => plan?.workOrder?.requiredReads?.some((read) => read?.kind === "copilot-body-feedback"));
+    const { path: judgePlanPath = judgePlanPaths[0], plan: judgePlan = null } = pinningPlan ?? readablePlans[0] ?? {};
+    if (inJudgeDir && judgePlan?.roundId !== judgeRoundDir) {
+      throw parseError(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${judgePlanPath} is missing, unreadable or names another round than ${judgeRoundDir}; re-emit the judge work order`);
+    }
+    // The plan must belong to this repo, PR, gate and head, as judge-pass verifyJudgeDelivery requires.
+    const planOrder = judgePlan?.workOrder;
+    if (judgePlan && (planOrder?.target?.repo !== options.repo || planOrder.target.pr !== Number(options.pr) || planOrder.roundIdentity?.gate !== options.gate || String(planOrder.headSha).toLowerCase() !== String(options.headSha).trim().toLowerCase())) {
+      throw parseError(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${judgePlanPath} is not the judge plan for ${options.repo}#${options.pr} ${options.gate} at ${options.headSha}; re-emit the judge work order`);
+    }
+    if (!inJudgeDir && pinningPlan) {
+      throw parseError(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${judgePlanPath} pins a copilot-body-feedback read, so the judge verdict must sit in its judge execution directory (<gate>-<head>/j<id>/judge-verdict.json), not ${options.judgeVerdict}`);
+    }
+    const pinnedFindings = await withPinnedCopilotBodyCluster(rawFindings, judgePlan?.workOrder);
+    const enriched = applyJudgeDispositions(pinnedFindings, judgeVerdict, { pastCap: lowFixCapped, round });
     // Same cluster projection judge-pass applies: one judge decision per root cause, so the durable ledger
     // matches judge-pass's --ledger-out instead of dropping the cluster-normalized dispositions.
     const stamped = enriched.findings.every((f) => Number.isInteger(f?.clusterId));
@@ -887,10 +1008,13 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       ? clustersFromStampedIds(enriched.findings)
       : clusterFindings(enriched.findings, { headSha: options.headSha }).clusters;
     findings = projectClusterDisposition(enriched.findings, clusters);
+    // The verdict raise reads the INPUT severity, as judge-pass does: a failOpen act promotes a low to medium after the consolidator weighed it.
+    copilotActedSeverities = findings.slice(rawFindings.length).flatMap((f, i) => (f?.judgeDisposition === "act" ? [pinnedFindings[rawFindings.length + i]?.severity ?? f.severity] : []));
     assertNoProjectedForbiddenDefer(findings, clusters);
     scopeDrift = enriched.scopeDrift;
     if (specAuthorityIdentity !== undefined) {
-      findings = await applySiblingSpecAuthorityVerdict(findings, judgePath, specAuthorityIdentity);
+      // judge-pass validates the spec-authority verdict over the findings read only, so validate the same prefix and re-attach the appended Copilot cluster.
+      findings = [...(await applySiblingSpecAuthorityVerdict(findings.slice(0, rawFindings.length), judgePath, specAuthorityIdentity, judgePlan?.workOrder)), ...findings.slice(rawFindings.length)];
     }
   }
   // `resurfaces` stays only when it names a closed prior round's act item in the same file; every other act item is new.
@@ -900,6 +1024,9 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       if (f.resurfaces !== undefined && !(priorFiles.has(f.resurfaces) && priorFiles.get(f.resurfaces) === (resolveFindingFile(f) ?? null))) delete f.resurfaces;
     }
   }
+  // One completed rule for the cap count and the ledger stamp, so a repeated judged write is not counted as an extra round.
+  const roundCompleted = () => options.gate === "review" || findings.length === 0 || findings.some((f) => f?.judgeDisposition !== undefined);
+  roundIdentity.completed = roundCompleted();
   // Past the round cap, a judge defer or reject is recorded as cap-closed (GATE-EXEC-ROUND-CAP).
   if (options.gate === "draft_gate" && findings.some((f) => f.judgeDisposition === "defer" || f.judgeDisposition === "reject")) {
     const { pastCap, round, cap } = await roundCapState();
@@ -944,21 +1071,32 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     normalizedOverallVerdict = verdict;
     // Fail closed on a caller-passed --verdict that contradicts the
     // consolidator's computed verdict (GATE-COMMENT-VERDICT-VALUES).
-    // The judge only enriches findings with act/defer/reject dispositions —
-    // it never revises the ledger's severity verdict, which may be clean with
-    // non-blocking act items; the posted review verdict is composed with the
-    // act list (ADR 0089) — so this comparison runs the same
-    // with or without --judge-verdict. A --judge-verdict run can still fail
+    // The comparison accepts the consolidator's severity verdict and, on a judged round with an open
+    // act item, the composed findings_present the log persists (below). A --judge-verdict run can still fail
     // earlier: an unreadable, malformed, or incomplete-coverage judge
     // artifact throws its own error before this contradiction check runs.
-    if (callerVerdict !== null && callerVerdict !== normalizedOverallVerdict) {
+    const composedVerdict = options.judgeVerdict && normalizedOverallVerdict !== "blocked" && listOpenActItems(findings).length > 0 ? "findings_present" : normalizedOverallVerdict;
+    if (callerVerdict !== null && callerVerdict !== normalizedOverallVerdict && callerVerdict !== composedVerdict) {
       throw parseError(
-        `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict (the severity verdict), which judge dispositions from --judge-verdict never alter; the posted review verdict is composed with the judge act list (ADR 0089)`,
+        `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict (the severity verdict), or on a --judge-verdict run with an open act item the composed ${JSON.stringify(composedVerdict)} the log persists (ADR 0275)`,
       );
     }
   }
   persistedVerdict = callerVerdict ?? normalizedOverallVerdict;
   if (!persistedVerdict) throw parseError("the fan-in ledger carries no overallVerdict; pass --verdict");
+  // An acted blocking Copilot body cluster raises a clean verdict, as judge-pass does for its --ledger-out (GATE-EXEC-COPILOT-BODY-TO-JUDGE).
+  if (copilotActedSeverities.length > 0) {
+    const { config } = await loadDevLoopConfigStrict({ repoRoot });
+    const blocking = resolveGateConfig(config, GATE_CONFIG_KEY[options.gate] ?? "preApproval").blockCleanOnFindingSeverities;
+    const severities = copilotActedSeverities;
+    persistedVerdict = raiseVerdictForActedCopilotBlock(persistedVerdict, severities, blocking);
+    if (normalizedOverallVerdict !== undefined) normalizedOverallVerdict = raiseVerdictForActedCopilotBlock(normalizedOverallVerdict, severities, blocking);
+  }
+  // After a judge pass an open act item makes the persisted verdict findings_present (ADR 0275); blocked stays blocked.
+  if (options.judgeVerdict && persistedVerdict !== "blocked" && listOpenActItems(findings).length > 0) {
+    persistedVerdict = "findings_present";
+    if (normalizedOverallVerdict !== undefined && normalizedOverallVerdict !== "blocked") normalizedOverallVerdict = "findings_present";
+  }
   // Resolve + validate a candidate provenance JSON STRING through the exact
   // same path an explicit --provenance takes: resolve this round's dispatch
   // groups first (so a claimed `group` is cross-checked against the gate's
@@ -983,8 +1121,10 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       if (err?.code === "config_load_failed") throw err;
       resolvedGroups = null;
     }
-    const dispatchUnits = await readContextDispatchUnits(options, config, repoRoot);
-    return parseProvenanceJson(rawProvenanceJson, resolvedGroups, dispatchUnits);
+    const fanout = await readContextFanout(options, repoRoot);
+    const dispatchUnits = dispatchUnitsFromFanout(fanout, config);
+    const unitBound = resolveReviewerUnitBound(fanout?.unitBound);
+    return parseProvenanceJson(rawProvenanceJson, resolvedGroups, dispatchUnits, unitBound);
   };
   let provenance;
   if (faninLedger === undefined && options.provenance !== undefined) {
@@ -1056,6 +1196,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     // Defaults to inline_single_agent (DEFAULT_EXECUTION_MODE) exactly like the
     // write-time provenance guard above, so the two can never disagree.
     executionMode,
+    // `completed`: a judged round, a clean round and the standalone review (one write per round) are finished; any other unjudged write is intermediate or aborted.
+    roundIdentity: { ...roundIdentity, completed: roundCompleted() },
     findings,
   };
   // `overallVerdict` is optional and additive (absent on a bare-array input);
@@ -1088,10 +1230,52 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // helper. Pure no-op (byte-identical log) when the flag is absent.
   const stampedLog = stampOptionalSpecAuthority(log, specAuthorityIdentity);
   await mkdir(path.dirname(fullPath), { recursive: true });
+  const retainedRound = await retainSameHeadLedger(fullPath, logPath, stampedLog.roundIdentity);
   await writeSealed(fullPath, JSON.stringify(stampedLog, null, 2) + "\n");
-  return angleCoverage.warning
-    ? { ok: true, path: logPath, log: stampedLog, warning: angleCoverage.warning }
-    : { ok: true, path: logPath, log: stampedLog };
+  return {
+    ok: true, path: logPath, log: stampedLog,
+    ...(retainedRound ? { retainedRound } : {}),
+    ...(angleCoverage.warning ? { warning: angleCoverage.warning } : {}),
+  };
+}
+// A second write at the same head must not destroy a finished round: every existing live ledger (and its seal) except an in-round rewrite (at least one finding, none judged) is copied
+// to the next free `<gate>-<sha>.round-<n>.json` sibling before the rewrite. Returns the retained path, or null when there was no live ledger or it is an in-round rewrite.
+// A tampered live ledger refuses with OUT_OF_BAND_WRITE before anything is retained.
+// ponytail: retention runs outside the write lock; the exclusive copy makes a round-number collision fail instead of overwriting, but concurrent same-head writers are otherwise unsupported (move retention under the ledger lock if they ever are).
+async function retainSameHeadLedger(fullPath, logPath, roundIdentity) {
+  if (!(await access(fullPath).then(() => true, () => false))) return null;
+  let live;
+  try {
+    live = JSON.parse(await readSealed(fullPath));
+  } catch (err) { if (err?.code === OUT_OF_BAND_WRITE) throw err; }
+  // An in-round rewrite (at least one finding, none judged) is replaced, not retained; a finished round, including a clean one with no findings, is retained.
+  if (live && isInRoundRewrite(live, roundIdentity)) return null;
+  // An unjudged write of a round whose live ledger is already completed would retain the finished round and count it twice: refuse.
+  const same = (a, b) => typeof a === "string" && a === b;
+  if (live?.roundIdentity?.completed === true && roundIdentity.completed !== true && (same(live.roundIdentity.roundId, roundIdentity.roundId) || same(live.roundIdentity.judgeExecution, roundIdentity.judgeExecution))) {
+    throw parseError(`the live ledger ${logPath} is already a completed write of this round; an unjudged write of the same round is refused (completed-round-unjudged-rewrite)`);
+  }
+  const dir = path.dirname(fullPath);
+  const stem = path.basename(fullPath, ".json");
+  const roundOf = (n) => (n.startsWith(`${stem}.round-`) ? /\.round-(\d+)\.json$/.exec(n)?.[1] : undefined);
+  const taken = (await readdir(dir)).map((n) => Number(roundOf(n) ?? 0));
+  const next = Math.max(0, ...taken.filter(Number.isSafeInteger)) + 1;
+  await claimRetainedRound(fullPath, path.join(dir, `${stem}.round-${next}.json`));
+  return logPath.replace(/\.json$/, `.round-${next}.json`);
+}
+// Moves the live ledger and its seal to `retained` without ever replacing an existing file: COPYFILE_EXCL fails with EEXIST on a taken name.
+// The copies are separate inodes, so a later rewrite of the live path never writes through to the retained round.
+// The seal is copied first (a crash leaves a waiting seal that matches the bytes a retry copies there; EEXIST on the seal is that waiting seal).
+export async function claimRetainedRound(fullPath, retained) {
+  let copiedSeal = true;
+  await copyFile(`${fullPath}.seal`, `${retained}.seal`, fsConstants.COPYFILE_EXCL).catch((err) => { copiedSeal = false; if (err?.code !== "ENOENT" && err?.code !== "EEXIST") throw err; });
+  // A refused claim drops only the seal this call copied; a pre-existing seal of the taken round stays.
+  try { await copyFile(fullPath, retained, fsConstants.COPYFILE_EXCL); } catch (err) {
+    if (copiedSeal) await unlink(`${retained}.seal`).catch(() => {});
+    throw err;
+  }
+  await unlink(fullPath);
+  await unlink(`${fullPath}.seal`).catch((err) => { if (err?.code !== "ENOENT") throw err; });
 }
 async function main() {
   let options;
@@ -1121,5 +1305,6 @@ async function main() {
   }
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseWriteGateFindingsLogCliArgs(process.argv.slice(2)).help);
   await main();
 }

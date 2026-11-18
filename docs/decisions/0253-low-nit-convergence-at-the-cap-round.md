@@ -1,0 +1,22 @@
+# 0253. Low and nit convergence applies at the cap round; the draft gate fixes a low there
+
+## Status
+
+Accepted, 2026-11-05 ([issue 3105](https://github.com/mfittko/dev-loops/issues/3105)).
+
+Amends [ADR 0168](./0168-draft-gate-low-nit-convergence.md) and the draft-gate low deferral of [ADR 0188](./0188-low-nit-never-block.md) (as amended by [ADR 0196](./0196-pre-approval-gate-low-nit-never-block.md)). Every other decision of those records stays in force, and the records stay unedited.
+
+Corrects the amendment scope that [ADR 0251](./0251-soft-round-cap.md) states for this slice. ADR 0191 owns the medium cap-round clauses. [ADR 0208](./0208-draft-cap-round-fixed-goes-ready.md) and [ADR 0224](./0224-cap-round-proof-for-adr-waiver-and-docs-tests-chain-extension.md) stay in force until a later slice of issue 3105 supersedes their round N+1 refusal. This record ships the draft low change of ADR 0251 item 6.
+
+## Context
+
+`GATE-EXEC-LOW-NIT-CONVERGENCE` reads no round count. An all-low/nit act list converges after one fixer pass and a `locally_clear` delta review, so it also fires below the cap and skips the remaining full rounds. At or past the cap, `GATE-EXEC-LOW-FIX-UNTIL-CAP` defers a draft-gate low, so the cap round leaves a low unfixed ([ADR 0251](./0251-soft-round-cap.md) item 6).
+
+## Decision
+
+1. `composeConvergedDraftGate` refuses a round below the cap. Convergence applies at the cap round (completed-round count at or above a positive `gates.draft.maxReviewRounds`) or later. Below the cap a low or nit act list goes to the fixer and the next full round runs. With `gates.draft.maxReviewRounds` 0 (no cap) the round condition does not apply.
+2. The draft gate fixes a low act item in every round, the cap round included. `resolveDraftRoundCap` returns `lowFixCapped: false` for `draft_gate`. `pre_approval_gate` keeps its low deferral. An all-nit act in round 1 stays `act` even when round 1 is the cap round (cap 1).
+
+## Consequences
+
+A hard cut that only narrows: converged markers already posted stay accepted. A PR that used to converge early on low findings now runs its remaining full rounds, which is the intended use of the cap rounds.

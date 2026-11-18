@@ -19,7 +19,7 @@ test("authenticated no_commit and foreign-head exits close only their own sequen
     initGitFixture(cwd, { branch: "issue-1" });
     const A = git(cwd, "rev-parse", "HEAD");
     git(cwd, "commit", "--allow-empty", "-m", "developer change");
-    const act = { severity: "low", angle: "correctness", summary: outcome, judgeDisposition: "act" };
+    const act = { severity: "low", angle: "correctness", summary: outcome, file: "src/a.mjs", judgeDisposition: "act" };
     act.fingerprint = fingerprintFinding(act);
     const actPath = path.join(cwd, `${outcome}.json`), coverage = path.join(cwd, `${outcome}-coverage.json`), log = path.join(cwd, `${outcome}-log.json`);
     fs.writeFileSync(actPath, JSON.stringify([act]));
@@ -67,7 +67,7 @@ test("authenticated no_commit and foreign-head exits close only their own sequen
 });
 
 test("pulled coverage binding preserves raw identity through the input, result and decision", async () => {
-  const act = { severity: "low", angle: "correctness", summary: "binding", judgeDisposition: "act", siteQuery: "git grep x" };
+  const act = { severity: "low", angle: "correctness", summary: "binding", file: "src/a.mjs", judgeDisposition: "act", siteQuery: "git grep x" };
   act.fingerprint = fingerprintFinding(act);
   const actPath = path.join(coverageRepo, "act.json"), coverage = path.join(coverageRepo, "coverage.json"), log = path.join(coverageRepo, "log.json");
   const siteCoverage = [{ fingerprint: act.fingerprint, returnedSites: ["a.mjs"], sites: [{ site: "a.mjs", kind: "site", status: "fixed", reason: "" }] }];
@@ -191,7 +191,7 @@ test("an unpushed fix commit at HEAD keeps the sequence marker and the push refu
   const A = git(cwd, "rev-parse", "HEAD");
   git(cwd, "commit", "--allow-empty", "-m", "fix commit");
   const F = git(cwd, "rev-parse", "HEAD");
-  const act = { severity: "low", angle: "correctness", summary: "unpushed", judgeDisposition: "act" };
+  const act = { severity: "low", angle: "correctness", summary: "unpushed", file: "src/a.mjs", judgeDisposition: "act" };
   act.fingerprint = fingerprintFinding(act);
   const actPath = path.join(cwd, "act.json"), emptyPath = path.join(cwd, "empty.json"), coverage = path.join(cwd, "coverage.json"), log = path.join(cwd, "log.json");
   fs.writeFileSync(actPath, JSON.stringify([act]));

@@ -347,12 +347,12 @@
                         "minLength": 1
                       },
                       "model": {
-                        "description": "Concrete model override for this angle (highest precedence).",
+                        "description": "Concrete model override for this angle. Applies on Pi only; Claude honors the angle tier and Codex inherits.",
                         "type": "string",
                         "minLength": 1
                       },
                       "tier": {
-                        "description": "Model tier alias for this angle (used when `model` is absent).",
+                        "description": "Model tier alias for this angle. On Pi it applies when `model` is absent, Claude always applies it, and Codex inherits.",
                         "type": "string",
                         "minLength": 1
                       },
@@ -364,6 +364,10 @@
                           "changed-files",
                           "docs-only"
                         ]
+                      },
+                      "readsPrBody": {
+                        "description": "Declare that this angle reads the PR body, so a PR-body-only edit re-runs its dispatch unit (GATE-EXEC-BODY-ONLY-RERUN). An angle whose prompt names the PR body or PR description is body-reading without it.",
+                        "type": "boolean"
                       },
                       "categories": {
                         "description": "Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed.",
@@ -541,7 +545,7 @@
               "description": "Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class."
             },
             "maxReviewRounds": {
-              "description": "Round cap for the draft gate: a round whose count of completed judged rounds reaches this number is past the cap, and a new act item then blocks with round_cap_reached instead of running another fixer round. 0 disables the cap. Default 4.",
+              "description": "Round cap for the draft gate: a round whose count of completed judged rounds reaches this number is past the cap, and at the cap round only a named human decision blocks with round_cap_reached (GATE-EXEC-SOFT-CAP); other act items go to the fixer, and a round after the cap round is refused. 0 disables the cap. Default 4.",
               "type": "integer",
               "minimum": 0
             }
@@ -587,12 +591,12 @@
                         "minLength": 1
                       },
                       "model": {
-                        "description": "Concrete model override for this angle (highest precedence).",
+                        "description": "Concrete model override for this angle. Applies on Pi only; Claude honors the angle tier and Codex inherits.",
                         "type": "string",
                         "minLength": 1
                       },
                       "tier": {
-                        "description": "Model tier alias for this angle (used when `model` is absent).",
+                        "description": "Model tier alias for this angle. On Pi it applies when `model` is absent, Claude always applies it, and Codex inherits.",
                         "type": "string",
                         "minLength": 1
                       },
@@ -604,6 +608,10 @@
                           "changed-files",
                           "docs-only"
                         ]
+                      },
+                      "readsPrBody": {
+                        "description": "Declare that this angle reads the PR body, so a PR-body-only edit re-runs its dispatch unit (GATE-EXEC-BODY-ONLY-RERUN). An angle whose prompt names the PR body or PR description is body-reading without it.",
+                        "type": "boolean"
                       },
                       "categories": {
                         "description": "Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed.",
@@ -822,12 +830,12 @@
                         "minLength": 1
                       },
                       "model": {
-                        "description": "Concrete model override for this angle (highest precedence).",
+                        "description": "Concrete model override for this angle. Applies on Pi only; Claude honors the angle tier and Codex inherits.",
                         "type": "string",
                         "minLength": 1
                       },
                       "tier": {
-                        "description": "Model tier alias for this angle (used when `model` is absent).",
+                        "description": "Model tier alias for this angle. On Pi it applies when `model` is absent, Claude always applies it, and Codex inherits.",
                         "type": "string",
                         "minLength": 1
                       },
@@ -839,6 +847,10 @@
                           "changed-files",
                           "docs-only"
                         ]
+                      },
+                      "readsPrBody": {
+                        "description": "Declare that this angle reads the PR body, so a PR-body-only edit re-runs its dispatch unit (GATE-EXEC-BODY-ONLY-RERUN). An angle whose prompt names the PR body or PR description is body-reading without it.",
+                        "type": "boolean"
                       },
                       "categories": {
                         "description": "Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed.",
@@ -1164,6 +1176,37 @@
         "fanout": {
           "type": "object",
           "properties": {
+            "sizeTiers": {
+              "description": "Opt-in ordered size tiers (strictly ascending maxWholeLogicLoc) that pack more angles per review unit for small changes on draft_gate and pre_approval_gate. Absent keeps existing grouping. Rejected together with mode: per-angle.",
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "maxWholeLogicLoc": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Weighted whole logic LOC ceiling of this tier: the round uses the first tier whose ceiling is at or above its wholeLogicLoc."
+                  },
+                  "maxAnglesPerUnit": {
+                    "type": "integer",
+                    "minimum": 5,
+                    "maximum": 10,
+                    "description": "Max angles per packed dispatch unit for a round in this tier (5 to 10)."
+                  },
+                  "maxFiles": {
+                    "description": "Optional non-doc file-count ceiling (countLightModeFiles); a round above it keeps existing grouping. Absent means no file-count limit; localImplementation.lightMode.maxFiles is never reused.",
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "maxWholeLogicLoc",
+                  "maxAnglesPerUnit"
+                ],
+                "additionalProperties": false
+              }
+            },
             "mode": {
               "default": "grouped",
               "description": "Angle dispatch mode: grouped batches related angles onto one reviewer each (default); per-angle bypasses the configured-groups table and emits one singleton unit per angle (the original full-scrutiny shape). per-angle is equivalent to maxAnglesPerGroup: 1 in dispatch unit size ONLY when no configured multi-angle group matches a resolved angle; otherwise per-angle bypasses configured groups while maxAnglesPerGroup: 1 honors them (matched first, never split).",
@@ -1892,6 +1935,25 @@
       "additionalProperties": false,
       "description": "Operator-recorded standing human authorizations (adrTripwireWaiver), read only from the default branch's .devloops."
     },
+    "trust": {
+      "type": "object",
+      "properties": {
+        "githubActionsBot": {
+          "type": "boolean",
+          "description": "Trust the exact github-actions[bot] comment author (default true); false turns the default bot trust off."
+        },
+        "reviewers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9-]{1,39}(?:\\[bot\\])?$"
+          },
+          "description": "Exact, case-insensitive logins trusted as comment authors; a [bot] entry also requires type Bot."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Extra trusted comment authors (githubActionsBot, reviewers), read only from the default branch's .devloops."
+    },
     "classify": {
       "type": "object",
       "properties": {
@@ -2063,6 +2125,17 @@
       },
       "additionalProperties": false,
       "description": "Validation resolution: gate mode, optional full command, and a path-to-command map. Only the `.devloops` family file is read; the key has no effect in `.pi/dev-loop/defaults.*`. Requires a dev-loops CLI that knows the `validation` key."
+    },
+    "changelog": {
+      "type": "object",
+      "properties": {
+        "required": {
+          "type": "boolean",
+          "description": "`true` enforces the dev-loops changelog completeness rule (a `changes/<slug>.md` fragment or a `CHANGELOG.md` `## Unreleased` item) before PR creation, in pre-push-delta results and in `test:docs`. Default `false`: the rule is skipped."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Changelog completeness opt-in. Only `required: true` enables the check; file presence never does. Only the `.devloops` family file is read; the key has no effect in `.pi/dev-loop/defaults.*` or the extension defaults."
     }
   },
   "required": [

@@ -13,22 +13,26 @@ import {
 import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { isSanctionedCopilotReviewerLogin } from "@dev-loops/core/github/comment-trust";
-import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
+import { buildSnapshotFromPrFacts, DISPOSITION, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateEarlySurface } from "./early-surface-checks.mjs";
-import { buildAdrTripwireField, buildSizeBudgetField, evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
+import { checkBaseFreshness } from "./pre-write-remote-freshness-guard.mjs";
+import { CONFLICT_FORBIDDEN_ACTIONS, buildAdrTripwireField, buildSizeBudgetField, evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
 import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
+import { OUT_OF_BAND_WRITE } from "../github/_gate-artifact-seal.mjs";
 import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
-  FIXER_DISPOSITION_KIND,
+  FIXER_COMMIT_CLAIM_KINDS,
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
-import { countCompletedRounds, resolveCapRoundFixed } from "../github/write-gate-context.mjs";
+import { countCompletedRounds, readClosedPriorRoundLogs, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
+import { isPastRoundCap, listOpenActItems, normalizeSeverity, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
 import { workOrderDigest } from "../github/_work-order-protocol.mjs";
@@ -41,13 +45,14 @@ import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.m
 import { evaluateCopilotConvergence } from "@dev-loops/core/loop/merge-approval";
 import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "./_copilot-convergence-carry.mjs";
 import { copilotBodyJudgePath, readReviewMarkerCommits, resolveCurrentHeadBodyFeedback } from "../github/_copilot-body-disposition.mjs";
-import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { evaluateToolchainAuthority, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
 import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 // Gate-coordination terminal stop actions where the dev-loop run is completing
 // or stopping (success OR stop). The runner-coordination lock is auto-released
 // at these boundaries so a fresh re-dispatch on the same PR acquires the lock
@@ -137,8 +142,14 @@ Output (stdout, JSON):
     "forbiddenActions": ["run_pre_approval_gate", "declare_merge_ready"],
     "nextAction": "resolve_merge_conflicts",
     "reason": "...",
-    "fixerDispositionWarning"?: { "warning": "...", "incomplete": [{ "threadId": "...", "failedStep": "..." }] }
+    "fixerDispositionWarning"?: { "warning": "...", "incomplete": [{ "threadId": "...", "failedStep": "..." }] },
+    "blockedOn"?: "operator_decision",
+    "agentRemedy"?: { "command": "...", "summary": "..." }
   }
+  (blockedOn and agentRemedy are present only on report_blocked results; a
+  result carries at most one of them. Results listed in KNOWN_GAPS in
+  packages/core/src/loop/gate-no-dead-end.mjs carry neither until the
+  issue 3105 slices that remove them land)
   (fixerDispositionWarning is present only when the fixer disposition is
   incomplete; it is advisory and blocks nothing, ADR 0155)
   (refinementArtifact.planDocPath is present only when specSource is
@@ -150,7 +161,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
   1  Argument error or gh/runtime failure
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const parseError = buildParseError(USAGE);
 export function parseDetectPrGateCoordinationCliArgs(argv) {
   const options = {
@@ -441,7 +453,7 @@ async function fetchIssueBody({ repo, issue }, { env = process.env, ghCommand = 
 // literal marker is how the refinement check tells a promoted plan-file PR
 // apart from an ordinary issue-less body.
 
-// Resolve the refinement artifact for a draft PR with zero linked issues,
+// Resolve the refinement artifact for a PR with zero linked issues,
 // directly from its own body. The sanctioned three-origin model
 // (artifact-authority-contract.md) backs a draft PR with a linked issue, a
 // promoted plan file, or the PR body itself as the spec-of-record; only the
@@ -525,7 +537,7 @@ async function resolveNoIssueRefinementArtifact(body, expectedIssue) {
   }
   const reason = Number.isInteger(expectedIssue)
     ? `PR body fails the tracker-backed spec-of-record validation for expected issue #${expectedIssue} (validate-pr-body-spec: ${specResult.errors.map((e) => e.code).join(", ")}).`
-    : `No usable spec: the draft PR closes no resolvable same-repo issue (no Closes/Fixes/Resolves #n reference) and names no promoted plan doc, and the PR body fails the issue-less lightweight spec-of-record validation (validate-pr-body-spec --no-issue: ${specResult.errors.map((e) => e.code).join(", ")}).`;
+    : `No usable spec: the PR closes no resolvable same-repo issue (no Closes/Fixes/Resolves #n reference) and names no promoted plan doc, and the PR body fails the issue-less lightweight spec-of-record validation (validate-pr-body-spec --no-issue: ${specResult.errors.map((e) => e.code).join(", ")}).`;
   return {
     status: "missing",
     linkedIssue: null,
@@ -581,9 +593,14 @@ async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand
 export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, prMerged, expectedIssue = null }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const linkedIssues = resolveLinkedIssuesFromPr(prData);
   if (linkedIssues.length === 0) {
-    if (prDraft) {
+    if (prDraft || (!prClosed && !prMerged)) {
       const body = typeof prData?.body === "string" ? prData.body : "";
-      return resolveNoIssueRefinementArtifact(body, Number.isInteger(expectedIssue) ? expectedIssue : null);
+      const artifact = await resolveNoIssueRefinementArtifact(body, Number.isInteger(expectedIssue) ? expectedIssue : null);
+      if (prDraft) return artifact;
+      // Ready PRs expose validated authority without re-enforcing the draft boundary.
+      const prBodySpecValid = artifact.status === "present" && artifact.specSource === REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY;
+      return { ...artifact, status: "unknown", finding: null, _onlyEnforcedWhenDraft: false, prBodySpecValid,
+        reason: `Refinement enforcement applies only to draft PRs; the ready PR's spec-of-record validity is reported separately (${artifact.specSource ?? "no spec source"}, ${artifact.status === "present" ? "valid" : "not valid"}).` };
     }
     return {
       status: "unknown",
@@ -778,7 +795,7 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
 // No checkpoint recorded for this head and no delivered tackled handoff for the live head means nothing
 // to enforce here (a PR with no fixer-disposition ledger entry behaves exactly as before this
 // boundary existed) — returns null so the evaluator input omits the field.
-// A fixer handoff delivered for the live head that lists a tackled thread, with no checkpoint, means
+// A fixer handoff delivered for the live head that lists a tackled or partially_fixed thread, or a thread entry with a replyNote, with no checkpoint, means
 // verify-fixer-disposition never completed (a failed run writes none): report it incomplete as not_verified.
 // Scans every execution's handoff, not the latest plan: a later emission overwrites the plan but not the handoff.
 // Only absence (ENOENT) means "no handoff"; any other read or parse failure is reported incomplete like unreadable_checkpoint.
@@ -817,9 +834,9 @@ async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot
     }
     if (!matchesLiveHead(handoff?.headSha)) continue;
     for (const entry of Array.isArray(handoff.dispositions) ? handoff.dispositions : []) {
-      if (entry?.disposition === FIXER_DISPOSITION_KIND.TACKLED && typeof entry.threadId === "string") {
+      if ((FIXER_COMMIT_CLAIM_KINDS.includes(entry?.disposition) || (typeof entry?.replyNote === "string" && entry.replyNote !== "")) && typeof entry.threadId === "string") {
         incomplete.push({ threadId: entry.threadId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED });
-      } else if (entry?.disposition === FIXER_DISPOSITION_KIND.TACKLED && typeof entry.reviewId === "string") {
+      } else if (entry?.disposition === "tackled" && typeof entry.reviewId === "string") {
         incomplete.push({ reviewId: entry.reviewId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED });
       }
     }
@@ -889,7 +906,7 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
               const relation = await isCommitContainedByHead({ repo, commitSha: head, headSha: currentHeadSha, requireAhead: true }, runtime);
               if (!relation.contained) throw new Error("ancestor checkpoint requires an ahead live head; run a full gate round");
               const threads = typeof parsedThreads === "function" ? await parsedThreads() : parsedThreads;
-              const containment = await buildContainmentMap(handoff.dispositions.filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).map((entry) => entry.fixingCommitSha), { repo, headSha: currentHeadSha }, runtime);
+              const containment = await buildContainmentMap(handoff.dispositions.filter((entry) => FIXER_COMMIT_CLAIM_KINDS.includes(entry.disposition)).map((entry) => entry.fixingCommitSha), { repo, headSha: currentHeadSha }, runtime);
               const liveThreads = threads.threads.map((thread) => ({ threadId: thread.id, isResolved: thread.isResolved, replyBodies: threads.comments.filter((comment) => comment.threadId === thread.id).map((comment) => comment.body) }));
               const evaluation = evaluateFixerDisposition({ handoff, liveThreads, containment, liveReviews: await readHandoffReviewMarkers(handoff, { repo, pr }, runtime) });
               if (!(await readFile(planPath)).equals(planBytes)) throw new Error("active fixer plan changed during carry verification");
@@ -957,7 +974,7 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
   }
   const tackledShas = [...new Set(
     handoff.dispositions
-      .filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED)
+      .filter((entry) => FIXER_COMMIT_CLAIM_KINDS.includes(entry.disposition))
       .map((entry) => entry.fixingCommitSha),
   )];
   const containment = await buildContainmentMap(tackledShas, { repo, headSha: currentHeadSha }, runtime);
@@ -1001,6 +1018,9 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   if (!currentHeadSha) {
     throw new Error("Invalid gh pr view payload: missing headRefOid");
   }
+  // ADR 0117 (issue 3139): a run the toolchain guard refuses must not write or remove the shared Copilot body judge file, so the guard runs before any such write.
+  const toolchain = runtime.guardToolchain ? evaluateToolchainAuthority({ repo: options.repo, pr: options.pr, prState: prData?.state, prHeadSha: currentHeadSha, changedFiles: extractChangedFiles(prData) }, runtime.toolchain) : null;
+  if (toolchain?.refusal) throw new Error(toolchain.refusal);
   // Fetch Copilot requested-reviewers at the original position (before threads/graphql)
   // to preserve the gh call order existing tests expect; the reconciliation (timeline
   // fetch) is deferred to after reviewSummary is computed.
@@ -1244,6 +1264,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     copilotBodyJudgeFile,
     copilotBodyJudgeFileError,
     fixerDisposition,
+    toolchain,
   };
 }
 
@@ -1273,6 +1294,33 @@ export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = pr
   return false;
 }
 
+/**
+ * Issue 3105 AC15 (ADR 0288): the open act list of the current head's live draft_gate ledger, or null.
+ * Null when the head has no live ledger with an open act item, when every open item is a PR-body item, past the cap (cap > 0 and round > cap), and when every open item is a nit outside draft round 1.
+ * `blockers` are the GATE-EXEC-SOFT-CAP blockers of the cap round; below the cap every act item goes to the fixer.
+ * A hand-edited sealed ledger throws OUT_OF_BAND_WRITE.
+ */
+export async function resolveDraftOpenActList(context, { repoRoot, cap }) {
+  const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
+  if (!/^[0-9a-f]{40,64}$/.test(head)) return null;
+  const options = { repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: head };
+  // The live ledger at the current head is that head's latest round; retained same-head rounds are earlier rounds.
+  const logs = await readClosedPriorRoundLogs(options, { repoRoot, includeLiveCurrentHead: true });
+  const log = logs.find((entry) => String(entry.headSha).trim().toLowerCase() === head);
+  // The posted verdict is findings_present (the evaluator checks it); a legacy ledger may persist `clean` beside open act items.
+  const open = log ? listOpenActItems(log.findings) : [];
+  // The emitter refuses an all-PR-body act list (delta_body_only_act_set), so that list keeps the earlier routing.
+  if (open.length === 0 || open.every(isDeltaBodyItem)) return null;
+  // countCompletedRounds counts the round being posted, so the live ledger's round is one less.
+  const round = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead: true }) - 1;
+  // Past the cap the emitter refuses every act list (round_cap_reached), so that round keeps the earlier routing.
+  if (cap > 0 && round > cap) return null;
+  // The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so that list keeps the earlier routing.
+  const severities = open.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity]));
+  if (round !== 1 && severities.every((s) => normalizeSeverity(s) === "nit")) return null;
+  return { headSha: head, openActCount: open.length, blockers: isPastRoundCap(round, cap) ? pastCapBlockers(log.findings, { round, cap }) : [] };
+}
+
 // Builds the exact input object passed to evaluatePrGateCoordination.
 // Exported (and used by detectPrGateCoordinationState below, not duplicated)
 // so a test can assert the real production wiring — e.g. that
@@ -1290,6 +1338,7 @@ export function buildGateCoordinationEvaluatorInput({
   draftCapRoundFixed = false,
   draftRoundRefused = false,
   draftCapRoundFailure = null,
+  draftOpenActList = null,
 }) {
   return {
     repo: context.repo,
@@ -1354,6 +1403,7 @@ export function buildGateCoordinationEvaluatorInput({
     draftCapRoundFixed,
     draftRoundRefused,
     draftCapRoundFailure,
+    draftOpenActList,
     ...(earlySurface ?? {}),
   };
 }
@@ -1362,7 +1412,9 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
   // The config loads first: a config load error refuses before any gh read.
   const config = (await loadDevLoopConfigStrict({ repoRoot })).config ?? {};
-  const context = await loadPrGateCoordinationContext(options, runtime);
+  // ADR 0117 (issue 3139): an open self-hosting PR is answered by its own head's toolchain; another checkout refuses inside the loader, before any shared gate state is written.
+  const context = await loadPrGateCoordinationContext(options, { ...runtime, guardToolchain: true });
+  const { toolchain } = context;
   const draftGateConfig = resolveGateConfig(config, "draft");
   const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
   // Shared with interpreterRefinementConfig.maxCopilotRounds in
@@ -1430,10 +1482,12 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
       });
   // ADR 0208: a PR whose cap round is fixed never runs draft_gate again; fail closed when the evidence is unreadable.
   // A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
-  let draftCapRoundFailure = null;
-  const draftCapRoundFixed = await (runtime.resolveCapRoundFixed ?? resolveCapRoundFixed)({ repo: context.repo, pr: context.pr, headSha: context.currentHeadSha, baseRefName: prBaseRefName, anyHead: context.prData?.isDraft !== true }, { repoRoot, onFailure: (condition) => { draftCapRoundFailure = condition; } }).then(Boolean, () => { draftCapRoundFailure = "cap_round_unresolved"; return false; });
+  const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure } = await resolveDraftCapRoundFact(context, { repoRoot, resolve: runtime.resolveCapRoundFixed ?? resolveCapRoundFixed });
   const draftRoundRefused = context.prData?.isDraft === true && !draftCapRoundFixed
-    && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), () => false);
+    && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot, includeLiveCurrentHead: true }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), () => false);
+  const draftOpenActList = context.prData?.isDraft === true && !draftCapRoundFixed
+    ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0 }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
+    : null;
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
     context: evaluatorContext,
     maxCopilotRounds,
@@ -1452,6 +1506,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     draftCapRoundFixed,
     draftRoundRefused,
     draftCapRoundFailure,
+    draftOpenActList,
   }));
   // Copilot review request guard: when Copilot has reviewed the PR but no
   // formal review request was made, block pre-approval gate entry. Only
@@ -1530,6 +1585,24 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     result.reason = "No contract-complete pre_approval_gate marker exists for the current head SHA; run pre_approval_gate before proceeding.";
     result.allowedNextActions = [PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE];
   }
+  // GATE-EXEC-BASE-REFRESH: a stale head must integrate the base before a gate-run action. A fetch failure or unresolved head keeps the action (write-gate-context still refuses at dispatch).
+  if (result.nextAction === PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE || result.nextAction === PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE) {
+    const checkFreshness = runtime.checkBaseFreshness ?? (runtime.runChild ? null : checkBaseFreshness);
+    if (checkFreshness && prBaseRefName.length > 0 && typeof context.currentHeadSha === "string" && context.currentHeadSha.length > 0) {
+      const freshness = await checkFreshness({ base: prBaseRefName, head: context.currentHeadSha, cwd: repoRoot, env: runtime.env ?? process.env, trusted: true })
+        .catch(() => ({ ok: false, error: "base_fetch_failed" }));
+      result.baseFreshness = { status: freshness.ok ? freshness.status : freshness.error, base: prBaseRefName };
+      if (freshness.error === "base_stale_integrate_first") {
+        result.baseFreshness.newerCommits = freshness.newerCommits;
+        result.gateBoundary = PR_CHECKPOINT.CONFLICT_RESOLUTION;
+        result.loopDisposition = DISPOSITION.ACTION_REQUIRED;
+        result.nextAction = PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS;
+        result.reason = `base_stale_integrate_first: head ${context.currentHeadSha} does not contain origin/${prBaseRefName} (GATE-EXEC-BASE-REFRESH). ${freshness.remedy}`;
+        result.allowedNextActions = [PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS];
+        result.forbiddenActions = [...new Set([...(result.forbiddenActions ?? []), ...CONFLICT_FORBIDDEN_ACTIONS])];
+      }
+    }
+  }
   // Expose effective round count in output for testability
   result.copilotReviewRoundCount = context.snapshot?.copilotReviewRoundCount ?? 0;
   // ADR 0238: all-untrusted open threads are non-blocking but visible, with authors and the remedy.
@@ -1548,6 +1621,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   result.copilotBodyJudgeFinding = context.copilotBodyJudgeFinding ?? null;
   result.copilotBodyJudgeFile = context.copilotBodyJudgeFile ?? null;
   result.copilotBodyJudgeFileError = context.copilotBodyJudgeFileError ?? null;
+  result.toolchain = { root: toolchain.root, headSha: toolchain.headSha, selfHosting: toolchain.selfHosting };
   // Auto-release the runner-coordination lock at gate-coordination terminal stop
   // boundaries — see TERMINAL_RUNNER_RELEASE_ACTIONS above for the rationale
   // (success-or-stop release vs 30-min TTL; env-aware, best-effort,
@@ -1591,5 +1665,6 @@ async function main() {
   }
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseDetectPrGateCoordinationCliArgs(process.argv.slice(2)).help);
   await main();
 }

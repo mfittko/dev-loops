@@ -128,6 +128,8 @@ Required authoritative inputs:
 - refreshed `linked_pr_ready_for_followup` for an issue target with a resolved linked PR: promote stale bootstrap waiting to the linked PR follow-up path, or fail closed if the linked-PR facts are incomplete/contradictory, instead of preserving the old bootstrap wait route
 - refreshed `prior_linked_pr_closed_unmerged` for a Copilot-owned issue target with `issueLinkageResolution=resolved_no_open_pr`: fail closed to reconcile instead of treating the issue as a healthy bootstrap wait or fresh issue-intake path
 
+A spec-change stop of `loop startup` emits top-level `issueReadiness` (`needs_clarification`) and `issueReadinessReason` (`spec_changed_since_grill` or `spec_change_read_failed`) beside a `needs_reconcile` bundle; the bundle itself carries neither `issueReadinessReason` nor a changed `issueReadiness`.
+
 Resolved bundle output shape:
 
 ```json
@@ -267,7 +269,7 @@ Do not create, read, or update `docs/phases/phase-<n>.md` for the same tracker-b
 
 For Copilot-first issue flows (`currentState.target.kind=issue`, `ownership=copilot`, and no linked PR), orchestration must resolve this seam from authoritative issue facts before follow-up routing:
 
-1. `issueReadiness=needs_clarification` → ask clarification questions and stop before assignment (`issueAssignmentSeam=needs_refinement`)
+1. `issueReadiness=needs_clarification` → ask clarification questions and stop before assignment (`issueAssignmentSeam=needs_refinement`); when `issueReadinessReason` is set, follow the startup `nextAction` instead: `spec_changed_since_grill` routes to a re-grill and `spec_change_read_failed` routes to a startup retry (`GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL`)
 2. `issueReadiness=ready` + `issueAssignmentState=unassigned` + `authorization=needs_confirmation` → ask for explicit assignment confirmation (`issueAssignmentSeam=ready_needs_assignment_confirmation`)
 3. `issueReadiness=ready` + `issueAssignmentState=unassigned` + `authorization=authorized` → assign `copilot-swe-agent` now before PR/bootstrap/watch follow-up (`issueAssignmentSeam=ready_assign_now`)
 4. `issueReadiness=ready` + `issueAssignmentState=assigned_to_copilot` → assignment seam satisfied; proceed to follow-up (`issueAssignmentSeam=assigned_to_copilot`)
@@ -281,7 +283,7 @@ This script-layer gate is a distinct seam from the Copilot-first assignment seam
 The `review` route stays read-only: no assignee claim, no branch push, no fix commit, no board move, and no lifecycle gate evidence. It never satisfies `draft_gate` or `pre_approval_gate`. Every write-capable route stays gated.
 
 - assigned to another human, or co-assigned to the viewer AND another human (contested, not sole): foreign-ownership error naming the OTHER assignee(s), never the viewer; no readiness bundle
-- unassigned: not-claimed error naming the exact claim command (`edit-issue.mjs`/`edit-pr.mjs --add-assignee @me`); no readiness bundle
+- unassigned: not-claimed error naming the `--claim` re-run and the claim command (`dev-loops-run scripts/github/edit-issue.mjs`/`edit-pr.mjs --add-assignee @me`); no readiness bundle. With `--claim` (valid only with `--issue`/`--pr`; rejected with `--review`, `--ui-review`, `--input`, `--plan-file`, `--spike`), startup runs that one assignee write (open targets only, and only after a successful read that showed no assignee; on the PR path an unreadable linked issue refuses the claim) and continues. `--claim` is a no-op when the viewer or Copilot already owns the target, never changes a foreign assignee, and is never implied
 - assigned to the viewer alone: proceed
 - assigned to `copilot-swe-agent`: unaffected; the Copilot-first seam above still governs; the viewer login is never resolved for this case
 - the PR path also fails closed when the PR's linked issue is assigned to another human; the issue owner owns the whole loop
@@ -290,7 +292,7 @@ The `review` route stays read-only: no assignee claim, no branch push, no fix co
 Claiming is NOT compare-and-swap: `gh issue/pr edit --add-assignee @me` can land two racing contributors as co-assignees. Three layers keep ownership safe:
 
 1. `resolve-active-board-item.mjs` (Next Up pickup) claims an unassigned candidate, then immediately RE-READS its assignees. Sole: proceed. A re-read that shows another human is a GENUINE contest only when the viewer's own claim is verified present in that same re-read (case-insensitive membership check). When the re-read shows only another human and the viewer's `@me` is not yet visible, the pickup best-effort self-unclaims and skips without touching the other assignee (`claim_not_visible_post_read`). A genuine contest resolves through a deterministic tiebreak: the case-insensitive lexicographically-smallest login wins. The **loser** self-unassigns (`--remove-assignee @me`) and skips to the next candidate. The **winner** removes the OTHER contender's login (`--remove-assignee <their login>`) before proceeding, so a loser that raced past its own re-read fails closed as foreign on its next ownership read.
-2. The issue-intake procedure claims a directly-targeted issue before invoking startup, with the same claim semantics.
+2. The issue-intake procedure claims a directly-targeted issue before invoking startup, or via `loop startup --claim` (open targets only), with the same claim semantics. A `--claim` run does not re-read assignees after the write, so two concurrent `--claim` runs share the existing non-atomic claim window (accepted residual; claim race handling is unchanged).
 3. Every contributor's own `resolve-dev-loop-startup.mjs` invocation re-derives sole ownership from scratch and fails closed on any contested (non-sole) state. This is the backstop when a pickup-side re-read, tiebreak or removal is interrupted; those failure paths also best-effort self-unassign so an aborted pick does not strand a phantom claim.
 
 Every ownership read that observes contention (contested or foreign) fails closed. Two residual windows remain and are accepted:
@@ -328,6 +330,7 @@ For issue targets, authoritative issue↔PR linkage resolution remains part of s
 - when canonical issue state includes `linkedPr`, route selection first uses that linked PR as the authoritative routable artifact
 - when canonical issue state does **not** include `linkedPr`, status/reporting consumers must still require explicit authoritative linkage resolution before asserting there is no open linked PR
 - <!-- rule: FACADE-LINKED-PR-SINGLE-ARTIFACT --> `FACADE-LINKED-PR-SINGLE-ARTIFACT`: when authoritative linkage resolves an already-open linked PR, that PR is the only canonical active artifact for the issue during follow-up; startup/status/follow-up MUST reuse it and MUST fail closed against opening another PR until the prior state is explicitly reconciled
+  Issue and PR startup reuse the same PR route and derive ownership from its author. For coordinator startup and emission, a single GitHub `closingIssuesReferences` issue populates the existing target issue field; several closing issues refuse with the candidate list. Zero keeps the existing issue-less authority (a promoted plan file or the validated lightweight PR-body spec) and binds no target issue. `--issue` startup refuses when the linked PR's single closing issue is not the requested issue, including when the PR closes no issue. Authorized human linked drafts carry the same draft-gate continuation through either entrypoint. Lifecycle umbrella refinement keeps its existing multi-issue resolver. See ADR 0264 (`docs/decisions/0264-single-closing-issue-coordinator-startup.md`).
 
 ## Deterministic routing order
 
@@ -402,7 +405,7 @@ Bootstrap-only exception to the general blocked-escalation rule for `waiting_for
 
 | Rule ID | Condition | Outcome |
 |---|---|---|
-| <!-- rule: FACADE-BOOTSTRAP-WATCH-ROUTE --> `FACADE-BOOTSTRAP-WATCH-ROUTE` | durable-auto ownership of this seam | ownership MUST route to the dedicated `watch-initial-copilot-pr.mjs` watcher with its default 1-hour watch budget |
+| <!-- rule: FACADE-BOOTSTRAP-WATCH-ROUTE --> `FACADE-BOOTSTRAP-WATCH-ROUTE` | durable-auto ownership of this seam | ownership MUST route to the dedicated `watch-initial-copilot-pr.mjs` watcher with its default 1-hour watch budget; a `timed_out` result with `outcome: "pending"` means the budget is not exhausted, so the agent runs `reissue` unchanged per `GATE-EXEC-BOUNDED-WAIT-CAP` |
 | <!-- rule: FACADE-BOOTSTRAP-QUIET-NO-EJECT --> `FACADE-BOOTSTRAP-QUIET-NO-EJECT` | quiet/no-activity observation while refreshed state still resolves this seam | durable ownership MUST NOT be ejected; inspect/status intents MAY still summarize that state and exit normally |
 | <!-- rule: FACADE-BOOTSTRAP-ACTION-REQUIRED-NONBLOCKING --> `FACADE-BOOTSTRAP-ACTION-REQUIRED-NONBLOCKING` | bootstrap-only linked PR; approval-gated Actions/Copilot run reports `action_required` (a run conclusion, not a lifecycle state) | treated as a non-blocking observational signal (concluded session activity); MUST NOT by itself force stop/escalation |
 | <!-- rule: FACADE-BOOTSTRAP-CLOSED-UNMERGED-RECONCILE --> `FACADE-BOOTSTRAP-CLOSED-UNMERGED-RECONCILE` | refreshed bootstrap state resolves `prior_linked_pr_closed_unmerged` | MUST fail closed to reconcile so status/startup surfaces the prior closed-unmerged decision instead of normal watch continuity |
@@ -441,7 +444,7 @@ Any conflict that would materially change artifact identity, ownership truth, or
 
 The bounded allow-list is exported from `packages/core/src/loop/public-dev-loop-routing.mjs` as `DEV_LOOP_VARIATION_PARAMETER_CONTRACT`.
 
-`issueReadiness` and `issueAssignmentState` are **not** part of that bounded variation-parameter allow-list. They are authoritative issue-state facts used only for the Copilot-first unassigned-issue seam during startup/status/routing resolution.
+`issueReadiness` and `issueAssignmentState` are **not** part of that bounded variation-parameter allow-list. They are authoritative issue-state facts used for the Copilot-first unassigned-issue seam during startup/status/routing resolution. `issueReadinessReason` additionally stops `loop startup` on every target preference (`GRILL-SUBLOOP-SPEC-CHANGED-SINCE-GRILL`).
 
 ### Explicit non-parameters for this slice
 

@@ -3,6 +3,8 @@ import { test } from "bun:test";
 
 import {
   COMPLETE_FIXER_DISPOSITION_ACTION,
+  composeFixedInCommitBody,
+  composeFixerReplyBody,
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
   FIXER_DISPOSITION_FORBIDDEN_ACTIONS,
@@ -457,4 +459,80 @@ test("a resolved thread completes with a full-SHA reply and fails resolved_short
   assert.match(short.reason, /unresolve-review-thread\.mjs/);
   // An unresolved thread keeps reply_missing: the verifier posts the full-SHA reply itself.
   assert.deepEqual(run("Fixed in commit ccccccc.", false).incomplete.map((e) => e.failedStep), [FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING]);
+});
+
+test("partially_fixed needs the full SHA and a replyNote; replyNote is carried; a blank note throws", () => {
+  const entry = (over) => ({ headSha: SHA, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "partially_fixed", replyNote: " the retry ", ...over }] });
+  assert.equal(normalizeFixerDispositionHandoff(entry()).dispositions[0].replyNote, "the retry");
+  assert.throws(() => normalizeFixerDispositionHandoff(entry({ replyNote: undefined })), /needs a replyNote/);
+  assert.throws(() => normalizeFixerDispositionHandoff(entry({ fixingCommitSha: "abc1234" })), /40-character/);
+  assert.throws(() => normalizeFixerDispositionHandoff(entry({ disposition: "deferred", replyNote: "  " })), /replyNote must be a non-empty string/);
+});
+
+test("evaluate: partially_fixed is checked like tackled; a noted deferred or rejected entry needs its composed reply and a resolved thread", () => {
+  const handoff = (disposition, replyNote) => ({ headSha: SHA, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: SHA, disposition, ...(replyNote ? { replyNote } : {}) }] });
+  const steps = (result) => result.incomplete.map((e) => [e.failedStep, e.expectedCommit]);
+  const partial = handoff("partially_fixed", "the retry");
+  assert.deepEqual(steps(evaluateFixerDisposition({ handoff: partial, liveThreads: [], containment: {} })), [[FIXER_DISPOSITION_FAILED_STEP.COMMIT_NOT_CONTAINED, SHA]]);
+  assert.deepEqual(steps(evaluateFixerDisposition({ handoff: partial, liveThreads: [{ threadId: "PRRT_T1", isResolved: false, replyBodies: [] }], containment: { [SHA]: true } })), [[FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING, SHA]]);
+  assert.equal(evaluateFixerDisposition({ handoff: partial, liveThreads: [{ threadId: "PRRT_T1", isResolved: true, replyBodies: [composeFixerReplyBody(partial.dispositions[0])] }], containment: { [SHA]: true } }).ok, true);
+  for (const [kind, body] of [["deferred", "Deferred, no code change in this PR: why"], ["rejected", "Not changed: why"]]) {
+    const noted = handoff(kind, "why");
+    assert.deepEqual(steps(evaluateFixerDisposition({ handoff: noted, liveThreads: [{ threadId: "PRRT_T1", isResolved: true, replyBodies: ["Fixed in commit x"] }] })), [[FIXER_DISPOSITION_FAILED_STEP.RESOLVED_NOTE_REPLY_MISSING, null]]);
+    assert.deepEqual(steps(evaluateFixerDisposition({ handoff: noted, liveThreads: [{ threadId: "PRRT_T1", isResolved: false, replyBodies: [body] }] })), [[FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED, null]]);
+    assert.equal(evaluateFixerDisposition({ handoff: noted, liveThreads: [{ threadId: "PRRT_T1", isResolved: true, replyBodies: [body] }] }).ok, true);
+    assert.equal(evaluateFixerDisposition({ handoff: handoff(kind), liveThreads: [] }).ok, true, "no note keeps today's behavior");
+  }
+});
+
+test("evaluate: a resolved noted partially_fixed thread with only a bare Fixed in commit reply reports resolved_note_reply_missing", () => {
+  const handoff = { headSha: SHA, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "partially_fixed", replyNote: "the retry" }] };
+  const result = evaluateFixerDisposition({ handoff, liveThreads: [{ threadId: "PRRT_T1", isResolved: true, replyBodies: [`Fixed in commit ${SHA}.`] }], containment: { [SHA]: true } });
+  assert.deepEqual(result.incomplete.map((e) => e.failedStep), [FIXER_DISPOSITION_FAILED_STEP.RESOLVED_NOTE_REPLY_MISSING]);
+  assert.match(result.reason, /unresolve-review-thread\.mjs/);
+});
+
+test("composeFixerReplyBody composes the four bodies; only a tackled entry gets a Fixed in commit body", () => {
+  const entry = (disposition, replyNote) => ({ disposition, fixingCommitSha: SHA, ...(replyNote ? { replyNote } : {}) });
+  assert.equal(composeFixerReplyBody(entry("tackled")), `Fixed in commit ${SHA}.`);
+  assert.equal(composeFixerReplyBody(entry("tackled", "n")), `Fixed in commit ${SHA}. n`);
+  assert.equal(composeFixerReplyBody(entry("partially_fixed", "n")), `Partially fixed in commit ${SHA}. Not done: n`);
+  assert.equal(composeFixerReplyBody(entry("deferred", "n")), "Deferred, no code change in this PR: n");
+  assert.equal(composeFixerReplyBody(entry("rejected", "n")), "Not changed: n");
+  assert.equal(composeFixerReplyBody(entry("deferred")), null);
+  for (const kind of ["partially_fixed", "deferred", "rejected"]) assert.doesNotMatch(composeFixerReplyBody(entry(kind, "n")), /Fixed in commit/);
+  for (const kind of ["partially_fixed", "deferred", "rejected"]) assert.throws(() => composeFixedInCommitBody(entry(kind, "n")), /tackled entry only/);
+});
+
+test("evaluate: a noted deferred thread resolved without its composed reply fails with the named step and its unresolve remedy", () => {
+  const handoff = { headSha: SHA, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "deferred", replyNote: "why" }] };
+  const result = evaluateFixerDisposition({ handoff, liveThreads: [{ threadId: "PRRT_T1", isResolved: true, replyBodies: [] }] });
+  assert.deepEqual(result.incomplete.map((e) => e.failedStep), [FIXER_DISPOSITION_FAILED_STEP.RESOLVED_NOTE_REPLY_MISSING]);
+  assert.match(result.reason, /unresolve-review-thread\.mjs/);
+  const open = evaluateFixerDisposition({ handoff, liveThreads: [{ threadId: "PRRT_T1", isResolved: false, replyBodies: [] }] });
+  assert.deepEqual(open.incomplete.map((e) => e.failedStep), [FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING]);
+});
+
+test("normalize: a replyNote is sanitized, capped at 500 characters and refused when the reply writer would refuse or alter it", () => {
+  const note = (replyNote) => normalizeFixerDispositionHandoff({ headSha: SHA, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "deferred", replyNote }] });
+  assert.equal(note("a\n<b>").dispositions[0].replyNote, "a b");
+  assert.throws(() => note("x".repeat(501)), /over 500 characters/);
+  assert.throws(() => note("see #123"), /issue\/PR id/);
+  assert.throws(() => note("ask @copilot to retry"), /summon token/);
+  assert.throws(() => note("~~~ ask @copilot to retry"), /summon token/);
+});
+
+test("normalize: a review-body entry refuses partially_fixed and a replyNote, and accepts tackled, deferred and rejected", () => {
+  const review = (over) => ({ headSha: SHA, dispositions: [{ reviewId: "PRR_x", fixingCommitSha: SHA, disposition: "tackled", ...over }] });
+  for (const disposition of ["tackled", "deferred", "rejected"]) assert.equal(normalizeFixerDispositionHandoff(review({ disposition })).dispositions[0].disposition, disposition);
+  assert.throws(() => normalizeFixerDispositionHandoff(review({ disposition: "partially_fixed" })), /unrecognized disposition/);
+  assert.throws(() => normalizeFixerDispositionHandoff(review({ replyNote: "x" })), /takes none/);
+});
+
+test("evaluate: a prior bare Fixed reply does not satisfy a noted partially_fixed entry", () => {
+  const handoff = { headSha: SHA, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "partially_fixed", replyNote: "the retry" }] };
+  const live = (replyBodies) => [{ threadId: "PRRT_T1", isResolved: false, replyBodies }];
+  const steps = (replyBodies) => evaluateFixerDisposition({ handoff, liveThreads: live(replyBodies), containment: { [SHA]: true } }).incomplete.map((e) => e.failedStep);
+  assert.deepEqual(steps([`Fixed in commit ${SHA}.`]), [FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING]);
+  assert.deepEqual(steps([composeFixerReplyBody(handoff.dispositions[0])]), [FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED]);
 });

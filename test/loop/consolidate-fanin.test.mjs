@@ -28,7 +28,7 @@ import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, renderBrie
 import { dispatchPromptLayoutRecordPath } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
 import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
 import { writeJson } from "@dev-loops/core/loop/phase-files";
-import { runNode, withTempDir } from "../_helpers.mjs";
+import { addLocalOrigin, initGitFixture, runNode, withTempDir } from "../_helpers.mjs";
 
 // #1592: several fixtures below deliberately keep pre-rename severity
 // spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
@@ -1675,7 +1675,7 @@ test("emit CLI then consolidate-fanin CLI with --emit-plan: one round end to end
     const [unit] = emitPayload.units;
     const pulled = await runNode(
       path.join(import.meta.dirname, "..", "..", "scripts", "github", "pull-work-order.mjs"),
-      ["--ref", unit.workOrderRef, "--digest", unit.workOrderDigest, "--execution", unit.executionIdentity],
+      [unit.executionIdentity],
       { cwd: workDir },
     );
     assert.equal(pulled.code, 0, pulled.stdout + pulled.stderr);
@@ -3855,6 +3855,8 @@ test("through dev-loops-run --repo-root, the fan-in counts the sentinels under <
   const root = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-reporoot-"));
   const shellCwd = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-shell-"));
   try {
+    initGitFixture(root, { branch: "main" });
+    addLocalOrigin(root);
     await mkdir(path.join(root, "findings"), { recursive: true });
     for (const angle of ["coverage", "correctness"]) {
       await writeFile(path.join(root, "findings", `${angle}.json`), JSON.stringify({ angle, verdict: "clean", findings: [], headSha: HEAD_A }));

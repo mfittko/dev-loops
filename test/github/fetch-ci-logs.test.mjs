@@ -15,6 +15,8 @@ const stubGh = (matchers) => makeGhStub(matchers);
 const isPrView = (a) => a[0] === "pr" && a[1] === "view";
 const isRunList = (a) => a[0] === "run" && a[1] === "list";
 const isRunView = (a) => a[0] === "run" && a[1] === "view";
+const isJobs = (a) => a[0] === "api" && a[1].includes("/actions/runs/") && a[1].includes("/jobs");
+const isLog = (a) => a[0] === "api" && a[1].includes("/actions/jobs/") && a[1].endsWith("/logs");
 
 test("parseFetchCiLogsCliArgs: requires repo + pr; defaults tail=200", () => {
   const out = parseFetchCiLogsCliArgs(["--repo", "o/n", "--pr", "5"]);
@@ -48,7 +50,8 @@ test("fetchCiLogs: returns failing job log tail for a red PR", async () => {
         ]),
       },
     },
-    { match: (a) => isRunView(a) && a.includes("--log-failed"), resp: { stdout: logBody } },
+    { match: isJobs, resp: { stdout: JSON.stringify([{ jobs: [{ id: 420, conclusion: "success" }, { id: 421, conclusion: "failure" }] }]) } },
+    { match: (a) => isLog(a) && a[1] === "repos/o/n/actions/jobs/421/logs", resp: { stdout: logBody } },
   ]);
   const result = await fetchCiLogs(
     { repo: "o/n", pr: 5, failedOnly: true, tail: 3 },
@@ -63,6 +66,9 @@ test("fetchCiLogs: returns failing job log tail for a red PR", async () => {
   assert.equal(result.runs[0].logTail, "line 8\nline 9\nline 10");
   // run list was scoped to the head SHA.
   assert.ok(calls.some((a) => isRunList(a) && a.includes("abc123")));
+  assert.ok(calls.some((a) => isJobs(a) && a[1] === "repos/o/n/actions/runs/42/jobs?per_page=100" && a.includes("--paginate") && a.includes("--slurp")));
+  assert.ok(calls.every((a) => !isRunView(a) && !a.includes("--cache")));
+  assert.ok(calls.filter(isLog).every((a) => a.includes("--allow-escape-sequences")));
 });
 
 test("fetchCiLogs: CRLF log tail normalizes without a stray trailing \\r", async () => {
@@ -70,34 +76,50 @@ test("fetchCiLogs: CRLF log tail normalizes without a stray trailing \\r", async
   const { run } = stubGh([
     { match: isPrView, resp: { stdout: JSON.stringify({ headRefOid: "crlf01" }) } },
     { match: isRunList, resp: { stdout: JSON.stringify([{ databaseId: 1, name: "ci", conclusion: "failure", status: "completed" }]) } },
-    { match: (a) => isRunView(a) && a.includes("--log-failed"), resp: { stdout: logBody } },
+    { match: isJobs, resp: { stdout: JSON.stringify([{ jobs: [{ id: 1, conclusion: "failure" }] }]) } },
+    { match: isLog, resp: { stdout: logBody } },
   ]);
   const result = await fetchCiLogs({ repo: "o/n", pr: 5, failedOnly: true, tail: 2 }, { run });
   assert.equal(result.runs[0].logTail, "line 4\nline 5");
 });
 
-test("fetchCiLogs: without --failed-only includes all runs and uses --log for non-failures", async () => {
+test("fetchCiLogs: non-failed runs concatenate all jobs across pages", async () => {
   const { run } = stubGh([
     { match: isPrView, resp: { stdout: JSON.stringify({ headRefOid: "def456" }) } },
     {
       match: isRunList,
       resp: { stdout: JSON.stringify([{ databaseId: 7, name: "ci", conclusion: "success", status: "completed" }]) },
     },
-    { match: (a) => isRunView(a) && a.includes("--log"), resp: { stdout: "all good" } },
+    { match: isJobs, resp: { stdout: JSON.stringify([{ jobs: [{ id: 1, conclusion: "success" }] }, { jobs: [{ id: 2, conclusion: "skipped" }] }]) } },
+    { match: (a) => isLog(a) && a[1].includes("/1/"), resp: { stdout: "all good\n" } },
+    { match: (a) => isLog(a) && a[1].includes("/2/"), resp: { stdout: "second job" } },
   ]);
   const result = await fetchCiLogs({ repo: "o/n", pr: 5, failedOnly: false, tail: 200 }, { run });
   assert.equal(result.runs.length, 1);
-  assert.equal(result.runs[0].logTail, "all good");
+  assert.equal(result.runs[0].logTail, "all good\nsecond job");
 });
 
 test("fetchCiLogs: log fetch failure records an unavailable note, not a throw", async () => {
   const { run } = stubGh([
     { match: isPrView, resp: { stdout: JSON.stringify({ headRefOid: "abc" }) } },
     { match: isRunList, resp: { stdout: JSON.stringify([{ databaseId: 9, name: "ci", conclusion: "failure" }]) } },
-    { match: isRunView, resp: { code: 1, stderr: "log expired" } },
+    { match: isJobs, resp: { stdout: JSON.stringify([{ jobs: [{ id: 1, conclusion: "failure" }] }]) } },
+    { match: isLog, resp: { code: 1, stderr: "log expired" } },
   ]);
   const result = await fetchCiLogs({ repo: "o/n", pr: 5, failedOnly: true, tail: 10 }, { run });
   assert.match(result.runs[0].logTail, /log unavailable: log expired/);
+});
+
+test("fetchCiLogs: successful log tail cannot truncate another job's failure note", async () => {
+  const { run } = stubGh([
+    { match: isPrView, resp: { stdout: JSON.stringify({ headRefOid: "abc" }) } },
+    { match: isRunList, resp: { stdout: JSON.stringify([{ databaseId: 9, name: "ci", conclusion: "failure" }]) } },
+    { match: isJobs, resp: { stdout: JSON.stringify([{ jobs: [{ id: 1, conclusion: "failure" }, { id: 2, conclusion: "failure" }] }]) } },
+    { match: (a) => isLog(a) && a[1].includes("/1/"), resp: { code: 1, stderr: "log expired" } },
+    { match: (a) => isLog(a) && a[1].includes("/2/"), resp: { stdout: "line 1\nline 2\nline 3\n" } },
+  ]);
+  const result = await fetchCiLogs({ repo: "o/n", pr: 5, failedOnly: true, tail: 2 }, { run });
+  assert.equal(result.runs[0].logTail, "line 2\nline 3\n<log unavailable: log expired>");
 });
 
 test("fetchCiLogs: throws when pr view yields no head SHA", async () => {
@@ -109,7 +131,8 @@ test("runCli: --jq extracts a failing run's name", async () => {
   const { run } = stubGh([
     { match: isPrView, resp: { stdout: JSON.stringify({ headRefOid: "abc" }) } },
     { match: isRunList, resp: { stdout: JSON.stringify([{ databaseId: 1, name: "ci", conclusion: "failure" }]) } },
-    { match: isRunView, resp: { stdout: "boom" } },
+    { match: isJobs, resp: { stdout: JSON.stringify([{ jobs: [{ id: 1, conclusion: "failure" }] }]) } },
+    { match: isLog, resp: { stdout: "boom" } },
   ]);
   const stdout = captureStream();
   const code = await runCli(["--repo", "o/n", "--pr", "5", "--failed-only", "--jq", ".runs[0].name"], { run, stdout });

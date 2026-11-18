@@ -3,7 +3,7 @@ import { parseArgs } from "node:util";
 import { parseAllowedRefsCsv, requireTokenValue } from "../_cli-primitives.mjs";
 import { containsBareCopilotSummon, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeInline } from "./post-gate-findings.mjs";
+import { listIssueComments, resolveAuthenticatedLogin, runGhJson, escapeProse } from "./post-gate-findings.mjs";
 import {
   FINDING_MARKER_RE,
   countUnresolvedGateAuthoredThreads,
@@ -27,6 +27,7 @@ import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateConfig, resolveTrackerProvider } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY, isOpenActItem } from "@dev-loops/core/loop/gate-fanin";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 const USAGE = `Usage: close-gate-findings.mjs --ledger <findings-log path> [--tmp-root <dir>]
 Run a closed gate round's THREAD DISPOSITION pass. This helper posts NO review of
@@ -125,7 +126,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
   1  Argument error or gh failure
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 
 function parseError(message) {
   return Object.assign(new Error(message), { usage: USAGE });
@@ -228,13 +230,13 @@ function extractFindingSummary(body) {
 
 export function buildMeritRationale({ body, judgeReason, judgeRationale }) {
   // Collapse any embedded double quote to a single quote: the summary is
-  // wrapped in literal double quotes below and sanitizeInline does not escape
+  // wrapped in literal double quotes below and escapeProse does not escape
   // `"` (no injection risk — cosmetic only, avoids confusing nested quotes).
-  const summary = sanitizeInline(extractFindingSummary(body)).replace(/"/g, "'");
+  const summary = escapeProse(extractFindingSummary(body)).replace(/"/g, "'");
   // The visible reason is the judge's own words, never a text derived from severity or round.
   const judgeText = [judgeReason, judgeRationale].find((t) => typeof t === "string" && t.trim().length > 0);
   const reason = judgeText
-    ? sanitizeInline(neutralizeBareIssuePrIds(judgeText.trim())).replace(/[.\s]+$/u, "")
+    ? escapeProse(neutralizeBareIssuePrIds(judgeText.trim())).replace(/[.\s]+$/u, "")
     : "the judge recorded no reason text for this disposition";
   return `Examined on merits: \"${summary}\" was reviewed against current scope and acceptance criteria; ${reason}.`;
 }
@@ -671,8 +673,8 @@ async function runEvidenceOnlyClosePass({ repo, pr, gate, headSha, round, thread
         failure(`evidence-only act thread ${thread.threadId} has no valid root commentId (${String(thread.commentId)}); left open`);
         continue;
       }
-      const summary = sanitizeInline(extractFindingSummary(thread.body)).replace(/"/g, "'");
-      const rationale = sanitizeInline(neutralizeBareIssuePrIds(judgement.rationale ?? NO_EVIDENCE_ONLY_RATIONALE_TEXT)).replace(/[.\s]+$/u, "");
+      const summary = escapeProse(extractFindingSummary(thread.body)).replace(/"/g, "'");
+      const rationale = escapeProse(neutralizeBareIssuePrIds(judgement.rationale ?? NO_EVIDENCE_ONLY_RATIONALE_TEXT)).replace(/[.\s]+$/u, "");
       const message = `${GATE_REJECT_CLOSE_REPLY_PREFIX}round ${round}, fingerprint ${marker.fp}, severity ${marker.severity}, angle ${marker.angle}): Examined on merits: "${summary}" was accepted by the judge with an evidence-only remedy, so no file change applies — ${rationale}.`;
       await replyAndMaybeResolve(
         { repo, pr, commentId: thread.commentId, threadId: thread.threadId, body: message, resolve: true, validatedSnapshot: snapshot, allowedRefs },
@@ -693,13 +695,13 @@ const NO_JUDGE_RATIONALE_TEXT = "the judge rejected this finding on its merits; 
 // citing a bare issue/PR reference would otherwise throw inside
 // replyAndMaybeResolve's own guardCommentBodyNoIssuePrIds call, leaving the
 // thread unresolved and re-deadlocking on every rerun (ADR 0088) —
-// neutralizeBareIssuePrIds runs on the raw text, before sanitizeInline, for
+// neutralizeBareIssuePrIds runs on the raw text, before escapeProse, for
 // the same reason formatDeferredFindingEntry orders them that way.
 function rejectCloseMessage({ fp, severity, angle, round, rationale, body }) {
-  const rationaleText = sanitizeInline(neutralizeBareIssuePrIds(rationale ?? NO_JUDGE_RATIONALE_TEXT));
+  const rationaleText = escapeProse(neutralizeBareIssuePrIds(rationale ?? NO_JUDGE_RATIONALE_TEXT));
   const head = `${GATE_REJECT_CLOSE_REPLY_PREFIX}round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): `;
   if (severity === "question") return `${head}this question was answered, and the judge rejected the finding — ${rationaleText}.`;
-  const summary = sanitizeInline(extractFindingSummary(body)).replace(/"/g, "'");
+  const summary = escapeProse(extractFindingSummary(body)).replace(/"/g, "'");
   return `${head}Examined on merits: "${summary}" was reviewed against current scope and acceptance criteria; the judge rejected the finding — ${rationaleText}.`;
 }
 
@@ -957,5 +959,6 @@ async function main() {
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseCloseGateFindingsCliArgs(process.argv.slice(2)).help);
   await main();
 }

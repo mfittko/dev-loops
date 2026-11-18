@@ -29,10 +29,11 @@ Output (stdout, JSON):
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage"?: "..." }
 ${JQ_OUTPUT_USAGE}
+--jq resolves against the requested fields (.body and .issue.body both work; the requested fields are also addressable at the top level); a path matching no field exits 2 listing the real paths.
 Exit codes:
   0  Success
   1  Argument error or gh failure
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter, or a --jq path that matches no field`.trim();
 const parseError = buildParseError(USAGE);
 
 export function parseViewIssueCliArgs(argv) {
@@ -109,7 +110,7 @@ export async function viewIssue(options, { env = process.env, ghCommand = "gh", 
 }
 
 export async function runCli(argv = process.argv.slice(2), io = {}) {
-  return runReadCommandCli({ parse: parseViewIssueCliArgs, operate: viewIssue, usage: USAGE }, argv, io);
+  return runReadCommandCli({ parse: parseViewIssueCliArgs, operate: viewIssue, usage: USAGE, jqRootKey: "issue" }, argv, io);
 }
 
 if (isDirectCliRun(import.meta.url)) {

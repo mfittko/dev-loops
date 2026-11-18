@@ -139,3 +139,22 @@ describe("gate coordination for a converged draft_gate", () => {
     assert.equal(state.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
   });
 });
+
+describe("body-only converged marker (ADR 0271)", () => {
+  test("after a body-only converged post at the same head the detector returns mark_ready_for_review", () => {
+    const comments = [comment(commentBody({ converged: `fixer \`${A}\` delta \`${DIGEST}\`` }))];
+    const state = evaluatePrGateCoordination({
+      pr: 10, currentHeadSha: A, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success",
+      draftGate: summarizeGateReviewComments(comments).draft_gate,
+      draftGateMarker: summarizeGateReviewCommentMarkers(comments, { headSha: A }).draft_gate,
+    });
+    assert.equal(state.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+  });
+
+  test("the detector reads the converged comment at the same head and at a head moved by a base-only merge", () => {
+    assert.equal(markerAt(A, [commentBody({ converged: `fixer \`${A}\` delta \`${DIGEST}\`` })]).draft_gate.verdict, "clean");
+    const moved = markerAt(FIX, [commentBody()]).draft_gate;
+    assert.equal(moved.headSha, FIX);
+    assert.equal(moved.convergedFromHeadSha, A);
+  });
+});

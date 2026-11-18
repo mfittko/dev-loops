@@ -22,7 +22,7 @@ import {
   enforceReviewerUnitBound,
 } from "@dev-loops/core/loop/reviewer-unit-bound";
 
-const USAGE = `Usage: emit-reviewer-blocked.mjs --head-sha <sha> --angles <csv> --model-turns <n> --tool-calls <n> --findings-dir <dir> [--run <id>] [--completed-angles <csv>] [--max-model-turns <n> --max-tool-calls <n>] [--harness <pi|claude|codex>] [--help]
+const USAGE = `Usage: emit-reviewer-blocked.mjs --head-sha <sha> --angles <csv> --model-turns <n> --tool-calls <n> --findings-dir <dir> [--run <id>] [--completed-angles <csv>] [--max-model-turns <n> --max-tool-calls <n>] [--harness <pi|claude|codex>] [--unit-bound <n>] [--help]
 Live reviewer-unit-bound enforcement: calls enforceReviewerUnitBound with the
 given consumption/coverage and, only when it reports blocked, writes one
 "blocked" per-angle findings artifact per unreviewed angle to --findings-dir —
@@ -43,6 +43,8 @@ Optional:
                                  (${REVIEWER_UNIT_BUDGET_FLOOR.maxToolCalls}..${REVIEWER_UNIT_BUDGET_CAP.maxToolCalls}).
                                  Pass both or neither; neither enforces the floor budget.
   --harness <pi|claude|codex>     Dispatch harness label (unit.gateContext.harness).
+  --unit-bound <n>              The round's recorded reviewer-unit angle bound (fanout.unitBound).
+                                 Absent means 5.
 Output (stdout, JSON):
   { "ok": true, "verdict": "blocked", "reason": "...", "unreviewedAngles": [...], "headSha": "...", "written": ["..."] }
 ${JQ_OUTPUT_USAGE}
@@ -119,6 +121,11 @@ export async function main(argv = process.argv.slice(2), { mkdirFn = mkdir, writ
     process.stderr.write(`${formatCliError(parseError("--findings-dir is required and must be non-empty."))}\n`);
     return 2;
   }
+  const unitBoundArg = resolveFlagValue(argv, "--unit-bound");
+  if (unitBoundArg === "" || (unitBoundArg !== null && !/^[1-9]\d*$/.test(unitBoundArg))) {
+    process.stderr.write(`${formatCliError(parseError("--unit-bound must be a positive integer; omit the flag for the default of 5."))}\n`);
+    return 2;
+  }
   const harness = resolveFlagValue(argv, "--harness");
   if (harness === "" || (harness !== null && !HARNESS_VALUES.includes(harness))) {
     process.stderr.write(`${formatCliError(parseError(`--harness must be one of: ${HARNESS_VALUES.join(", ")}${harness ? ` (got ${JSON.stringify(harness)})` : ""}.`))}\n`);
@@ -147,7 +154,7 @@ export async function main(argv = process.argv.slice(2), { mkdirFn = mkdir, writ
       maxToolCalls: parseNonNegativeInt(maxToolCallsArg, "--max-tool-calls"),
     };
     result = enforceReviewerUnitBound({
-      unit: { run, gateContext: { headSha, ...(harness ? { harness } : {}) }, angles },
+      unit: { run, gateContext: { headSha, ...(harness ? { harness } : {}), ...(unitBoundArg === null ? {} : { unitBound: Number(unitBoundArg) }) }, angles },
       consumed: { modelTurns, toolCalls },
       completedAngles,
       budget,

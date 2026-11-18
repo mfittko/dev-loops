@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { isCleanDraftVerdict } from "@dev-loops/core/loop/pr-gate-coordination";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
 import { isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
@@ -26,7 +27,7 @@ import {
   summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
-import { escapeProse, flattenPaginatedSlurp, listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
+import { escapeProse, flattenPaginatedSlurp, listIssueComments, renderEvidenceOnlyLabel, resolveAuthenticatedLogin, runGhJson, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { PROBLEM_CAP, RECOMMENDATION_CAP, cutAtSentence, normalizeFindingSummary } from "./_gate-finding-text.mjs";
 import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { carryFromPostedVerdict } from "./_carried-verdict.mjs";
@@ -35,6 +36,7 @@ import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
+import { wrapOperatorOwnedPhrases } from "@dev-loops/core/github/operator-owned-lines";
 import { GATE_NAMES, GATE_VERDICTS } from "./_gate-names.mjs";
 
 // The one predicate for "counts as a submitted review with content": every
@@ -251,7 +253,7 @@ export function collectFingerprints(text, set) {
 
 function formatDeferredFindingEntry({ fingerprint, severity, angle, summary, refUrl }) {
   const detail = typeof summary === "string" && summary.trim().length > 0
-    ? sanitizeInline(neutralizeBareIssuePrIds(summary.trim()))
+    ? escapeProse(neutralizeBareIssuePrIds(summary.trim()))
     : (typeof refUrl === "string" && refUrl.trim().length > 0
       ? neutralizeBareIssuePrIds(refUrl.trim())
       : "(no summary recorded)");
@@ -387,21 +389,21 @@ export async function commentDeferredFindings(
 export function renderJudgeDetail({ judgeReason, followUpIssueNumber }) {
   const target = Number.isInteger(followUpIssueNumber) && followUpIssueNumber > 0 ? ` (follow-up ${followUpIssueNumber})` : "";
   const reason = typeof judgeReason === "string" && judgeReason.trim().length > 0
-    ? ` - ${sanitizeInline(neutralizeBareIssuePrIds(judgeReason)).replace(/judge:/gi, "judge -")}`
+    ? ` - ${escapeProse(neutralizeBareIssuePrIds(judgeReason)).replace(/judge:/gi, "judge -")}`
     : "";
   return `${target}${reason}`;
 }
 
-export function renderFindingLine({ severity, angle, summary, judgeDisposition, judgeReason, followUpIssueNumber }) {
+export function renderFindingLine({ severity, angle, summary, judgeDisposition, judgeReason, followUpIssueNumber, remedyKind }) {
   const safeSeverity = sanitizeInline(normalizeSeverity(severity));
   const judgeSuffix = typeof judgeDisposition === "string" && judgeDisposition.trim().length > 0
-    ? ` — judge: ${sanitizeInline(judgeDisposition)}${renderJudgeDetail({ judgeReason, followUpIssueNumber })}`
+    ? ` — judge: ${sanitizeInline(judgeDisposition)}${renderJudgeDetail({ judgeReason, followUpIssueNumber })}${renderEvidenceOnlyLabel({ judgeDisposition, remedyKind })}`
     : "";
-  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary).replace(/judge:/gi, "judge -")}${judgeSuffix}`;
+  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${escapeProse(summary).replace(/judge:/gi, "judge -")}${judgeSuffix}`;
 }
 
 function renderRecommendationLine(recommendation) {
-  return `Recommendation: ${sanitizeInline(recommendation)}`;
+  return `Recommendation: ${escapeProse(recommendation)}`;
 }
 
 function hasRecommendation(finding) {
@@ -515,7 +517,7 @@ export function renderInlineCommentBody(finding, { round }) {
   }
   const angles = [...new Set(members.map((member) => neutralizeHeaderSeparator(escapeProse(member.angle))))].join(", ");
   const judge = typeof finding.judgeDisposition === "string" && finding.judgeDisposition.trim().length > 0
-    ? ` · judge: ${sanitizeInline(finding.judgeDisposition)}${renderJudgeDetail(finding)}`
+    ? ` · judge: ${sanitizeInline(finding.judgeDisposition)}${renderJudgeDetail(finding)}${renderEvidenceOnlyLabel(finding)}`
     : "";
   const lines = [...markers, `**${sanitizeInline(severity)}** · ${angles}${judge}`];
   // File and line references render as inline code right under the header.
@@ -565,7 +567,7 @@ export function renderInlineCommentBody(finding, { round }) {
   if (hiddenFields.length > 0) {
     lines.push("<details><summary>Details</summary>", "");
     for (const field of hiddenFields) {
-      const rendered = field.code ? encodeCommentDelimiters(field.text) : escapeProse(field.text);
+      const rendered = field.code ? wrapOperatorOwnedPhrases(encodeCommentDelimiters(field.text)) : escapeProse(field.text);
       const text = boundDetailsText(rendered, hiddenFields.length, { prose: !field.code });
       // Prose stays on the label line so untrusted text never starts at column 0
       // (it could otherwise forge the header parseRenderedJudgeDisposition reads).
@@ -1196,7 +1198,7 @@ export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
     && draftGateMarker.verdict === "clean" && draftGateMarker.contractComplete,
   );
   // Legacy (non-marker) draft_gate verdict.
-  const cleanEvidenceExists = Boolean(draftGate.visible && draftGate.verdict === "clean" && draftGate.headSha);
+  const cleanEvidenceExists = isCleanDraftVerdict(draftGate);
   const legacyHeadMatch = Boolean(!currentHeadClean && cleanEvidenceExists && headSha && headSha.startsWith(draftGate.headSha));
   return {
     draftGate,
@@ -1484,10 +1486,10 @@ async function listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, rep
   return { dir, filenames: entries.filter((name) => name.startsWith(prefix) && name.endsWith(".json")).sort() };
 }
 
-// A findings log is exactly `<gate>-<full sha>.json`. Sidecars (`.act-list.json`, `.judged-ledger.json`, ...)
+// A findings log is `<gate>-<full sha>.json` or a retained same-head round `<gate>-<full sha>.round-<n>.json`. Sidecars (`.act-list.json`, `.judged-ledger.json`, ...)
 // share the prefix and suffix and never count as a round.
 export function isFindingsLogName(gate, name) {
-  return name.startsWith(`${gate}-`) && /^(?:[0-9a-f]{40}|[0-9a-f]{64})\.json$/i.test(name.slice(gate.length + 1));
+  return name.startsWith(`${gate}-`) && /^(?:[0-9a-f]{40}|[0-9a-f]{64})(?:\.round-\d+)?\.json$/i.test(name.slice(gate.length + 1));
 }
 
 async function countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot }) {
@@ -1650,9 +1652,10 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
 // renderFindingLine itself, out of scope here.
 const RENDERED_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\*\s+\(`[^`\n]+`\):.* — judge: ([a-z][a-z0-9_-]*)$/mu;
 // A detail-bearing legacy line (` (follow-up N)` or ` - <reason>`) is never disposition evidence: an already-posted, unjudged summary can end in the same bytes. The inline header is unambiguous (its angles neutralize the separator), so it keeps the detail tail.
-// Header of the fixed inline layout (legacy bodies keep the suffix form above): `**<severity>** · <angles> · judge: <disposition>`.
+// Header of the fixed inline layout (legacy bodies keep the suffix form above): `**<severity>** · <angles> · judge: <disposition>[ (follow-up N)][ - <reason>][ <evidence-only label>]`.
+// The optional label is the exact text of renderEvidenceOnlyLabel and always ends the line.
 // The severity token is lowercase, so a `**Problem:**` line never matches.
-const RENDERED_HEADER_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\* · [^\n]* · judge: ([a-z][a-z0-9_-]*)(?: \(follow-up \d+\))?(?: - [^\n]*)?$/mu;
+const RENDERED_HEADER_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\* · [^\n]* · judge: ([a-z][a-z0-9_-]*)(?: \(follow-up \d+\))?(?: - [^\n]*)?(?: \(evidence only, no file change; its criterion stays unproven until the evidence lands\))?$/mu;
 
 export function parseRenderedJudgeDisposition(body) {
   const match = typeof body === "string"

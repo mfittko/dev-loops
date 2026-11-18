@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { test } from "bun:test";
 import { captureStderr } from "../_helpers.mjs";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
-import { buildAttemptBudget, buildPollDelayMs, findFreshCopilotActivity, formatProbeConcise, parseWatchCliArgs, watchCopilotReview } from "../../scripts/github/probe-copilot-review.mjs";
+import { DEFAULT_POLL_INTERVAL_MS } from "@dev-loops/core/loop/policy-constants";
+import { buildAttemptBudget, buildPollDelayMs, findFreshCopilotActivity, formatProbeConcise, parseWatchCliArgs, runCli, watchCopilotReview } from "../../scripts/github/probe-copilot-review.mjs";
 
 const scriptPath = path.resolve("scripts/github/probe-copilot-review.mjs");
 
@@ -288,6 +289,46 @@ test("probe-copilot-review excludes untrusted Copilot-named review and conversat
   }
 });
 
+test("probe-copilot-review capped call returns pending, the re-issue keeps the baseline ids, and --concise prints the pending outcome", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-pending-"));
+  const bot = "copilot-pull-request-reviewer";
+  const quiet = createActivityPayload({ reviews: [createReview("r-1", bot, "first", "Bot")] });
+  const later = createActivityPayload({ reviews: [createReview("r-1", bot, "first", "Bot"), createReview("r-2", bot, "second", "Bot")] });
+  const sink = () => { let text = ""; return { write: (c) => { text += c; return true; }, text: () => text }; };
+  const deps = (env) => { let clock = 0; return { env, ghCommand: "gh", delayImpl: async (ms) => { clock += ms; }, now: () => clock }; };
+  try {
+    const env = await writeGhStub(tempDir, [{ stdout: JSON.stringify(quiet) + "\n" }]);
+    const stdout = sink();
+    const firstDeps = deps(env);
+    await runCli(["--repo", "owner/repo", "--pr", "17", "--timeout", "600"], { stdout, ...firstDeps });
+    // The first call stops at the per-call cap, not at the requested 600 s.
+    assert.ok(firstDeps.now() <= 170_000 + DEFAULT_POLL_INTERVAL_MS, `elapsed ${firstDeps.now()} ms`);
+    const first = JSON.parse(stdout.text());
+    assert.equal(first.status, "timeout");
+    assert.equal(first.outcome, "pending");
+    assert.equal(first.remainingTimeoutSeconds, 430);
+    assert.match(first.reissue, /^dev-loops-run --repo-root \S+ scripts\/github\/probe-copilot-review\.mjs --repo owner\/repo --pr 17 --baseline-ids '\{.*"r-1".*\}' --timeout 430$/);
+    const concise = sink();
+    await runCli(["--repo", "owner/repo", "--pr", "17", "--timeout", "600", "--concise"], { stdout: concise, ...deps(env) });
+    assert.match(concise.text(), /outcome:\s+pending \(430 s left\)/);
+    assert.match(concise.text(), /reissue:\s+dev-loops-run --repo-root \S+ scripts\/github\/probe-copilot-review\.mjs/);
+    // Activity between the calls is reported, not absorbed into a fresh baseline.
+    // A real POSIX word split of the reissue tail: the quoted --baseline-ids JSON must survive as one argument.
+    const tail = first.reissue.split(" ").slice(4).join(" ");
+    const split = spawnSync("sh", ["-c", 'eval "set -- $1"; printf "%s\\0" "$@"', "_", tail], { encoding: "utf8" });
+    const resumed = split.stdout.split("\0").slice(0, -1);
+    assert.equal(resumed.length, 8);
+    const env2 = await writeGhStub(await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-resume-")), [{ stdout: JSON.stringify(later) + "\n" }]);
+    const second = sink();
+    await runCli(resumed, { stdout: second, ...deps(env2) });
+    const changed = JSON.parse(second.text());
+    assert.equal(changed.status, "changed");
+    assert.deepEqual(changed.newReviews.map((r) => r.id), ["r-2"]);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("probe-copilot-review ignores an untrusted copilot-x review-thread comment as fresh Copilot activity", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-thread-trust-"));
   const baseline = createActivityPayload();
@@ -377,6 +418,18 @@ test("probe-copilot-review --help prints usage and exits 0", async () => {
   assert.equal(helpShort.code, 0);
   assert.equal(helpShort.stderr, "");
   assert.equal(helpShort.stdout, helpLong.stdout);
+});
+
+test("probe-copilot-review --baseline-ids fails closed on {} and on non-JSON input", () => {
+  const base = ["--repo", "owner/repo", "--pr", "17"];
+  const bads = ["{}", "not json",
+    '{"reviewThreadComments":[],"reviews":[{"id":"r-1"}],"issueComments":[]}',
+    '{"reviewThreadComments":[null],"reviews":[],"issueComments":[]}',
+    '{"reviewThreadComments":[""],"reviews":[],"issueComments":[]}'];
+  assert.deepEqual(parseWatchCliArgs([...base, "--baseline-ids", '{"reviewThreadComments":[],"reviews":["r-1"],"issueComments":[]}']).baseline.reviews, [{ id: "r-1" }]);
+  for (const bad of bads) {
+    assert.throws(() => parseWatchCliArgs([...base, "--baseline-ids", bad]), /--baseline-ids must be a JSON object of id arrays/, bad);
+  }
 });
 
 test("probe-copilot-review uses production-safe defaults (1-minute poll, 30-minute timeout)", () => {

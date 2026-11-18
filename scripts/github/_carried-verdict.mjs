@@ -9,6 +9,7 @@
  */
 import { createHash } from "node:crypto";
 
+import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { validateBaseMergeCarryEvidence } from "@dev-loops/core/loop/base-merge-verdict-carry";
 
 import { isGhBinaryMissing, restFetchPrView } from "./_gh-rest-fallback.mjs";
@@ -45,7 +46,9 @@ async function upsertCarriedHead({ repo, pr, comments, entry }, runJson) {
   // untouched), capped at MAX_ENTRIES, so the comment stays far below the GitHub body limit. A pruned head
   // is simply re-recorded on its next carry.
   const kept = entries.filter((e) => (e.gate !== entry.gate || e.originHead === entry.originHead) && !(e.gate === entry.gate && e.headSha === entry.headSha));
-  const body = renderCarriedHeadsBody([...kept, entry].slice(-MAX_ENTRIES));
+  // Only the known string fields survive: an existing record cannot smuggle arbitrary text into the new body.
+  const pick = (e) => Object.fromEntries(["gate", "originHead", "headSha", "decision", "evidenceDigest"].map((k) => [k, typeof e[k] === "string" ? e[k] : ""]));
+  const body = guardCommentBodyNoIssuePrIds(renderCarriedHeadsBody([...kept, entry].slice(-MAX_ENTRIES).map(pick)), { ref: "carried-heads record comment body" });
   const saved = comment?.id
     ? await runJson(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${comment.id}`, "-f", `body=${body}`])
     : await runJson(["api", "-X", "POST", `repos/${repo}/issues/${pr}/comments`, "-f", `body=${body}`]);
@@ -82,6 +85,19 @@ export async function carryGateMarker(marker, { gate, currentHeadSha, baseRef, r
     return marker; // fail closed: an unwritable record costs one gate round, never a crashed detector
   }
   return carried;
+}
+
+/**
+ * The fixer-emit carry seam (issue 2752 slice 4, GATE-EXEC-POST-BEFORE-FIX): true only when a verdict posted at
+ * `originHead` may stand for `headSha` because every PR blob is identical at both heads (no conflict hunks).
+ * It skips the gate-tooling rule, records nothing and returns no marker, so it never satisfies gate
+ * coordination or merge-pr (their validator recomputes with the tooling rule). Any failure is false.
+ */
+export async function fixerEmitCarryAccepts({ originHead, headSha, baseRef, repoRoot }) {
+  if (!originHead || !headSha || !baseRef) return false;
+  const evidence = await computeBaseMergeCarry({ prevHead: originHead, headSha, baseRef, repoRoot, ignoreGateTooling: true });
+  return evidence.decision === "carry_verdict"
+    && validateBaseMergeCarryEvidence(evidence, { expectedSourceHead: originHead, expectedNewHead: headSha, ignoreGateTooling: true }).ok;
 }
 
 /**

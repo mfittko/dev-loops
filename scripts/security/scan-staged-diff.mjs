@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// Fail-closed secret scan CLI over the currently staged git diff — the
-// deterministic signal both the git pre-commit hook and the fixer invoke.
+// Secret scan CLI over the currently staged git diff: the deterministic
+// signal the git pre-commit hook and the fixer invoke.
 //
 // Exit 0: clean (no hit). Exit non-zero: a hit was found, OR the scan itself
-// failed (bad cwd, git error, ...) — both block; a caller distinguishes them
-// from the JSON payload's `error` field, never from the exit code alone. Any
-// exception thrown here escapes to the isDirectCliRun catch-all below, which
-// also exits non-zero — an internal scanner error fails closed by
-// construction, not by an explicit try/catch this file has to get right.
+// failed (bad cwd, git error, ...). A caller distinguishes them from the JSON
+// payload's `error` field, never from the exit code alone. The pre-commit
+// hook only warns on a non-zero exit; the merge gate's `secret_scan`
+// precondition is the fail-closed block. Any exception thrown here escapes to
+// the isDirectCliRun catch-all below, which also exits non-zero.
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue, runCommand } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
@@ -15,9 +15,10 @@ import { scanDiffText } from "@dev-loops/core/security/secret-scan";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: scan-staged-diff.mjs
-Fail-closed secret scan over the ADDED lines of the currently staged git
-diff (\`git diff --cached\` in the current working directory). On a hit,
-reports only file/line/detector-class per finding — NEVER the matched value.
+Secret scan over the ADDED lines of the currently staged git diff
+(\`git diff --cached\` in the current working directory). Exits non-zero on
+a hit or a scan error. On a hit, reports only file/line/rule id per
+finding — NEVER the matched value.
 
 ${JQ_OUTPUT_USAGE}`;
 
@@ -46,8 +47,8 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   const options = parseScanStagedDiffCliArgs(argv);
   if (options.help) { stdout.write(`${USAGE}\n`); return { ok: true, help: true }; }
 
-  const { stdout: diffText } = await runCommand(gitCommand, ["diff", "--cached", "--no-color"], { cwd, env });
-  const result = scanDiffText(diffText);
+  const { stdout: diffText } = await runCommand(gitCommand, ["diff", "--cached", "--no-color", "-U1000000"], { cwd, env });
+  const result = await scanDiffText(diffText);
   const payload = result.ok
     ? { ok: true, hits: [] }
     : { ok: false, error: "secret_scan_hit", hits: result.findings };
@@ -62,7 +63,7 @@ if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {
     // A THROWN error here (a bad cwd, a git failure, a scanner bug) is the
     // "scanner internal error" case — reported distinctly from a hit, but
-    // exiting non-zero all the same: fail closed either way.
+    // exiting non-zero all the same.
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;
   });

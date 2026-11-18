@@ -591,6 +591,17 @@ export function formatBrokenLinkReport(brokenLinks) {
   return lines.join("\n");
 }
 
+/** Run the validator, write the CLI report (`err` for a broken-link report) and return the exit code. */
+export async function run({ root = resolveDefaultRepoRoot(), out = process.stdout, err = process.stderr } = {}) {
+  const result = await validateMarkdownLinks({ repoRoot: root });
+  if (result.ok) {
+    out.write(`Markdown links OK (${result.scannedFiles.length} files, ${result.checkedLinkCount} links checked).\n`);
+    return 0;
+  }
+  err.write(`${formatBrokenLinkReport(result.brokenLinks)}\n`);
+  return 1;
+}
+
 async function main() {
   try {
     const options = parseValidateLinksCliArgs(process.argv.slice(2));
@@ -601,15 +612,7 @@ async function main() {
       return;
     }
 
-    const result = await validateMarkdownLinks({ repoRoot: options.repoRoot });
-    if (result.ok) {
-      process.stdout.write(`Markdown links OK (${result.scannedFiles.length} files, ${result.checkedLinkCount} links checked).\n`);
-      process.exitCode = 0;
-      return;
-    }
-
-    process.stderr.write(`${formatBrokenLinkReport(result.brokenLinks)}\n`);
-    process.exitCode = 1;
+    process.exitCode = await run({ root: options.repoRoot });
   } catch (error) {
     // Deliberately out of formatCliError's scope: this tool's error output is
     // human-readable TEXT (a message + the full usage body), not the JSON

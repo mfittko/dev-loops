@@ -73,6 +73,27 @@ export async function checkBaseFreshness({ base: rawBase, head: rawHead = "HEAD"
   };
 }
 
+/**
+ * Validation and verdict seams (issue 2885 slice 2b): the refusal reason when `head` lacks commits on
+ * origin/<base>, else null. Without `base` it checks the default branch origin/HEAD names. Only
+ * base_stale_integrate_first refuses; a fetch failure, an unresolved head or no origin/HEAD proceeds.
+ */
+export async function staleBaseReason({ base, head, cwd, env = process.env, check = checkBaseFreshness }) {
+  if (!base) {
+    const gitEnv = { ...env };
+    for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"]) delete gitEnv[key];
+    // No --short: it returns remotes/origin/<b> when a local branch named origin/<b> exists.
+    const prefix = "refs/remotes/origin/";
+    base = await runCommand("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], { cwd, env: gitEnv })
+      .then(({ stdout }) => (stdout.trim().startsWith(prefix) ? stdout.trim().slice(prefix.length) : ""), () => "");
+    if (!base) return null;
+  }
+  const freshness = await check({ base, head, cwd, env, trusted: true });
+  if (freshness?.error !== "base_stale_integrate_first") return null;
+  const more = freshness.newerCommits.length > 5 ? ` (+${freshness.newerCommits.length - 5} more)` : "";
+  return `base_stale_integrate_first: head ${head} does not contain origin/${base}; newer commits: ${freshness.newerCommits.slice(0, 5).join("; ")}${more}. ${freshness.remedy}`;
+}
+
 export function parseRemoteFreshnessGuardCliArgs(argv) {
   const options = { help: false, branch: undefined, base: undefined };
   const { tokens } = parseArgs({

@@ -87,3 +87,40 @@ test("path-leading focus text changes the work-order digest (shared canonicalize
   assert.notEqual(workOrderDigest(order("/src/a: check resolution")), workOrderDigest(order("/src/b: check resolution")));
   assert.deepEqual(operatorFocusDigestEntry(null), {});
 });
+
+test("a replyNote change changes the operator focus digest", () => {
+  const digest = (replyNote) => operatorFocusDigestEntry(normalizeOperatorFocus({ items: [{ threadId: "PRRT_1", replyDisposition: "deferred", replyNote }] }, { allowItems: true }));
+  assert.notDeepEqual(digest("a"), digest("b"));
+});
+
+test("reply fields: parse on both bindings, sanitize, cap at 500 characters and bind by threadId", () => {
+  const focus = normalizeOperatorFocus({ items: [
+    { fingerprint: "f1", replyDisposition: "partially_fixed", replyNote: "a\n<b>" },
+    { threadId: "PRRT_1", replyDisposition: "tackled" },
+  ] }, { allowItems: true });
+  assert.deepEqual(focus.items, [{ fingerprint: "f1", replyDisposition: "partially_fixed", replyNote: "a b" }, { threadId: "PRRT_1", replyDisposition: "tackled" }]);
+  const bound = bindOperatorFocusItems(focus, [{ fingerprint: "f1", summary: "s" }], ["PRRT_1"]);
+  assert.match(renderOperatorFocusSection(bound), /Thread PRRT_1: operator reply disposition: tackled\n/);
+  assert.match(renderOperatorFocusSection(bound), /A reply disposition of deferred or rejected means make no code change for that thread/);
+  assert.match(renderOperatorFocusSection(bound), /Act item f1: operator reply disposition: partially_fixed; reply note: a b\n/);
+});
+
+test("reply fields refuse: missing note, bad value, long note, decision on a threadId item, unknown thread, mixed binding", () => {
+  const bad = (items) => assert.throws(() => normalizeOperatorFocus({ items }, { allowItems: true }), OperatorFocusRefusal);
+  for (const replyDisposition of ["partially_fixed", "deferred", "rejected"]) bad([{ threadId: "PRRT_1", replyDisposition }]);
+  bad([{ threadId: "PRRT_1", replyDisposition: "fixed", replyNote: "x" }]);
+  bad([{ threadId: "PRRT_1", replyDisposition: "deferred", replyNote: "x".repeat(501) }]);
+  bad([{ threadId: "PRRT_1", decision: "d", replyDisposition: "tackled" }]);
+  bad([{ threadId: "PRRT_1", fingerprint: "f", replyDisposition: "tackled" }]);
+  bad([{ fingerprint: "f", replyNote: "x" }]);
+  assert.throws(() => normalizeOperatorFocus({ items: [{ fingerprint: "f", decision: "d", replyNote: "x" }] }, { allowItems: true }), /has a replyNote and no replyDisposition/);
+  const focus = normalizeOperatorFocus({ items: [{ threadId: "PRRT_1", replyDisposition: "tackled" }] }, { allowItems: true });
+  assert.throws(() => bindOperatorFocusItems(focus, [], ["PRRT_2"]), OperatorFocusRefusal);
+  assert.throws(() => bindOperatorFocusItems(focus, [{ fingerprint: "f" }]), OperatorFocusRefusal);
+});
+
+test("a reply note the reply writer would refuse or alter refuses at normalization", () => {
+  for (const replyNote of ["tracked in #123", "ask @copilot to retry", "ask /copilot to retry"]) {
+    assert.throws(() => normalizeOperatorFocus({ items: [{ threadId: "PRRT_1", replyDisposition: "deferred", replyNote }] }, { allowItems: true }), OperatorFocusRefusal);
+  }
+});

@@ -20,6 +20,9 @@ export function sealDeltaFixture(tmpRoot, file) {
         sealEvidence(tmpRoot, file, current, bytes);
         return;
       }
+      if (error.reason === "evidence_unsealed") { // the input run's own record: seal it in place, as the reviewer's seal command does, so the run id keeps naming the input run's patch
+        try { sealEvidence(tmpRoot, file, current, bytes); return; } catch (sealError) { if (!(sealError instanceof EvidenceSealError)) throw sealError; } // a result written to another path than the briefed one gets a fresh run below
+      }
     }
   }
   const parsed = { ...current, runId: mintEvidenceRunId() };

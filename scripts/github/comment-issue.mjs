@@ -3,7 +3,6 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { parseIssueNumber, parseAllowedRefsCsv, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { commentIssue as coreCommentIssue, resolveCommentBody } from "@dev-loops/core/github/issue-ops";
-import { operatorOwnedCommentLineRefusal } from "../loop/adr-waiver-markers.mjs";
 import { parseArgs } from "node:util";
 import {
   JQ_OUTPUT_PARSE_OPTIONS,
@@ -27,9 +26,12 @@ Optional:
   --allowed-refs <csv>          Comma-separated numeric issue/PR ids to allow as
                                 deliberate cross-references in the body (the
                                 no-ids-in-comments guard refuses any other #<digits>)
-Refusal: a body with a line that opens with \`approve merge\` (operator-owned merge
-approval) or an \`adr-tripwire:allow\` line (ADR tripwire waiver) is refused with
-OPERATOR-OWNED-LINE, exit 1, no gh call. There is no override flag.
+  --standing-authorization      Assert a recorded standing operator authorization. Clears
+                                only the Copilot body-disposition \`operator\` marker.
+                                Accepted forms: bare, =true, =1. Any other value keeps the refusal.
+Refusal: a body with an operator-owned line (\`approve merge\`, \`approve release v<version>\`,
+\`adr-tripwire:allow\`, or a Copilot \`operator\` marker without the flag) is refused with
+OPERATOR-OWNED-LINE, exit 1, no GitHub write. \`--allowed-refs\` never clears it. The human posts the line.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "issue": 17, "commentUrl": "https://github.com/owner/repo/issues/17#issuecomment-123" }
 Error output (stderr, JSON):
@@ -51,6 +53,7 @@ export function parseCommentIssueCliArgs(argv) {
       body: { type: "string" },
       "body-file": { type: "string" },
       "allowed-refs": { type: "string" },
+      "standing-authorization": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -64,6 +67,7 @@ export function parseCommentIssueCliArgs(argv) {
     body: undefined,
     bodyFile: undefined,
     allowedRefs: [],
+    standingAuthorization: false,
     jq: undefined,
     silent: false,
   };
@@ -98,6 +102,10 @@ export function parseCommentIssueCliArgs(argv) {
       options.bodyFile = rawPath;
       continue;
     }
+    if (token.name === "standing-authorization") {
+      options.standingAuthorization = token.value === undefined || /^(?:true|1)$/iu.test(String(token.value).trim());
+      continue;
+    }
     if (token.name === "allowed-refs") {
       options.allowedRefs = parseAllowedRefsCsv(requireTokenValue(token, parseError), "--allowed-refs", parseError);
       continue;
@@ -128,8 +136,6 @@ export function parseCommentIssueCliArgs(argv) {
 export async function commentIssue(options, { env = process.env, ghCommand = "gh", run = runChild } = {}) {
   // Resolve once here so the check sees the same text that is posted (stdin reads once).
   const body = await resolveCommentBody(options);
-  const refusal = operatorOwnedCommentLineRefusal(body);
-  if (refusal !== null) throw new Error(refusal);
   return coreCommentIssue({ ...options, body, bodyFile: undefined }, { env, ghCommand, run });
 }
 

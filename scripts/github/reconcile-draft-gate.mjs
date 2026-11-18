@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -7,6 +8,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { zeroSeverityCounts } from "@dev-loops/core/loop/gate-fanin";
 import { detectCheckpointEvidence } from "./detect-checkpoint-evidence.mjs";
 import { upsertCheckpointVerdict } from "./upsert-checkpoint-verdict.mjs";
+import { checkBaseFreshness as defaultCheckBaseFreshness, staleBaseReason } from "../loop/pre-write-remote-freshness-guard.mjs";
 // convertPrToDraft/markPrReady live in their own module (no dependency on this
 // file or upsert-checkpoint-verdict.mjs) so both callers can import them
 // statically without a circular reference back to upsert-checkpoint-verdict.mjs
@@ -14,6 +16,7 @@ import { upsertCheckpointVerdict } from "./upsert-checkpoint-verdict.mjs";
 // caused (#1455).
 import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { cliError } from "@dev-loops/core/loop/cli-command";
 const USAGE = `Usage: reconcile-draft-gate.mjs --repo <owner/name> --pr <number>
 Optional/manual recovery tool for an already non-draft PR when you want to
 retroactively record clean \`draft_gate\` evidence.
@@ -57,7 +60,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success — PR was reconciled and gate evidence posted
   1  Argument error, gh failure, or unrecoverable state
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const parseError = buildParseError(USAGE);
 export function parseReconcileDraftGateCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -190,21 +194,22 @@ const FANOUT_REFUSAL_MARKER = "inline gate verdicts are not accepted";
 function isFanoutRefusalError(error) {
   return error instanceof Error && error.message.includes(FANOUT_REFUSAL_MARKER);
 }
-function withFanoutRefusalGuidance(error, { repo, pr, headSha } = {}) {
+function withFanoutRefusalGuidance(error, { repo, pr, headSha, env } = {}) {
   if (!isFanoutRefusalError(error)) return error;
   const repoArg = repo ? `--repo ${repo} --pr ${pr}` : "--repo <repo> --pr <pr>";
   const headShaArg = headSha || "<current head>";
-  return new Error(
+  return cliError(
     `${error.message} reconcile-draft-gate only completes for a PR under the light-mode threshold ` +
     `(it can only synthesize an inline verdict); this PR needs an actual fan-out gate run — run ` +
     `\`dev-loops pr convert-to-draft ${repoArg}\`, post \`dev-loops gate upsert-verdict ${repoArg} ` +
     `--gate draft_gate --head-sha ${headShaArg} --execution-mode fanout_fanin --findings-ledger ` +
     `<path from write-findings-log>\` backed by a findings-log ledger from \`dev-loops gate ` +
     `write-findings-log\` for the current head, then \`dev-loops pr ready-for-review ${repoArg}\` (or ` +
-    `\`dev-loops pr restore-ready ${repoArg}\` if CI is blocking), instead of reconciling.`
+    `\`dev-loops pr restore-ready ${repoArg}\` if CI is blocking), instead of reconciling.`,
+    { env },
   );
 }
-export async function reconcileDraftGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild } = {}) {
+export async function reconcileDraftGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, checkBaseFreshness } = {}) {
   const { config } = await loadDevLoopConfigStrict({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
   const initialEvidence = await detectCheckpointEvidence(
@@ -240,6 +245,21 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
       );
     }
   }
+  // GATE-EXEC-BASE-REFRESH (issue 2885): refuse a stale base before any draft conversion, so a refusal never flips a ready PR to draft.
+  // An injected runChild test double skips the fetch unless the test injects the checker too.
+  const checkFreshness = checkBaseFreshness ?? (runChild === defaultRunChild ? defaultCheckBaseFreshness : null);
+  if (checkFreshness) {
+    const view = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "baseRefName"], env);
+    let baseRefName = "";
+    if (view.code === 0) {
+      // A malformed payload skips the check like a nonzero exit (a lookup failure proceeds).
+      try { baseRefName = (JSON.parse(view.stdout.trim() || "{}")?.baseRefName ?? "").trim(); } catch { baseRefName = ""; }
+    }
+    if (baseRefName) {
+      const stale = await staleBaseReason({ base: baseRefName, head: headSha, cwd: repoRoot, env, check: checkFreshness });
+      if (stale) throw new Error(`${stale} A clean draft_gate verdict is not recorded at a stale base.`);
+    }
+  }
   const draftConversion = await convertPrToDraft({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
   let gateResult;
   try {
@@ -265,8 +285,8 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
       findingsSummary: draftGateConfig.requireCi
         ? "Reconciled non-draft PR — draft gate auto-reconciled (CI green)."
         : "Reconciled non-draft PR — draft gate auto-reconciled (CI optional by config).",
-      nextAction: "Mark ready for review (auto-reconciled).",
-    }, { env, ghCommand, repoRoot, runChild });
+      nextAction: "mark ready for review",
+    }, { env, ghCommand, repoRoot, runChild, checkBaseFreshness });
   } catch (error) {
     if (draftConversion.alreadyDraft !== true) {
       try {
@@ -274,7 +294,7 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
       } catch {
       }
     }
-    throw withFanoutRefusalGuidance(error, { repo: options.repo, pr: options.pr, headSha });
+    throw withFanoutRefusalGuidance(error, { repo: options.repo, pr: options.pr, headSha, env });
   }
   await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
   return {
@@ -310,5 +330,6 @@ async function main() {
   }
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseReconcileDraftGateCliArgs(process.argv.slice(2)).help);
   await main();
 }

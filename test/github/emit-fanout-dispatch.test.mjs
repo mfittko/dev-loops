@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { spawnSync } from "node:child_process";
+import { spawnSyncTrusted as spawnSync } from "../_helpers.mjs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { REVIEWER_VERIFIED_ITEMS_INSTRUCTION, REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, dispatchUnitScope, listPriorFindingsLogHeads, main, unitBudgetBasis } from "../../scripts/github/emit-fanout-dispatch.mjs";
-import { expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
-import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { REVIEWER_VERIFIED_ITEMS_INSTRUCTION, REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, listPriorFindingsLogHeads, main, unitBudgetBasis } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
+import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, readCompletedAnglesForHead, renderPrBodyRead, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
-import { toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { countFreshDispatchUnits, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { consolidateGateFanin, parseConsolidateFaninCliArgs } from "../../scripts/loop/consolidate-fanin.mjs";
 import { verifyEmitPlanProvenance, writeGateFindingsLog as writeGateFindingsLogRaw } from "../../scripts/github/write-gate-findings-log.mjs";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
@@ -42,7 +43,7 @@ function runEmitCli(args = [], opts = {}) {
 
 // The reviewer's first step (#2416): pull its work order with the compact reference.
 function runPullCli(unit, opts = {}) {
-  return spawnSync("node", [path.resolve("scripts/github/pull-work-order.mjs"), "--ref", unit.workOrderRef, "--digest", unit.workOrderDigest, "--execution", unit.executionIdentity], { encoding: "utf8", ...opts });
+  return spawnSync("node", [path.resolve("scripts/github/pull-work-order.mjs"), unit.executionIdentity], { encoding: "utf8", ...opts });
 }
 
 async function withTmpDir(fn) {
@@ -505,6 +506,7 @@ test("fan-in join: consolidateGateFanin consumes per-angle findings artifacts fo
 
     // Reviewers pull first; a result only counts when written after its pull.
     for (const unit of payload.units) {
+      assert.equal(unit.dispatchPrompt, `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${unit.executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`);
       const pulled = runPullCli(unit, { cwd: tmpDir });
       assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
     }
@@ -1854,6 +1856,12 @@ test("buildAngleNamingSuffix names angles and carries their supplied instruction
   assert.match(group, /one findings artifact PER ANGLE/);
 });
 
+test("buildAngleNamingSuffix names the Secret leaks check as an exception to the unassigned-angle prohibition for a unit without a security angle", () => {
+  const suffix = buildAngleNamingSuffix({ name: "coverage", angles: ["coverage"] }, "draft-gate-coverage");
+  assert.match(suffix, /reviewing an unassigned angle is prohibited\. The one exception: also apply the Secret leaks check/);
+  assert.match(suffix, /it is never an unassigned angle/);
+});
+
 test("buildAngleNamingSuffix requires the file-write tool for single-angle and grouped units and keeps the blocked invocation (#2510)", () => {
   const single = buildAngleNamingSuffix({ name: "acceptance-criteria", angles: ["acceptance-criteria"] }, "pre-approval-gate-acceptance-criteria");
   const group = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] }, "pre-approval-gate-group-design-simplicity");
@@ -2222,3 +2230,412 @@ test("operator focus: an empty --operator-focus-file is a usage error (exit 2)",
     assert.match(result.stderr, /--operator-focus-file must not be an empty value/);
   });
 });
+
+test("a PR-body-only edit re-runs only the body-reading unit and the round-1 ledger is kept as a retained round", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const gate = "draft_gate";
+    const angles = ["scope", "determinism", "holistic", "pr-description"];
+    await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: { fanout: { groups: [
+      { name: "process", angles: ["scope", "pr-description"] },
+      { name: "design-input", angles: ["determinism", "holistic"] },
+    ] } } }), "utf8");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    assert.deepEqual(errors, []);
+    const tmpRoot = path.join(repoRoot, "tmp");
+    const id = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA };
+    const build = async (prBody) => {
+      const completedAngles = await readCompletedAnglesForHead({ ...id, tmpRoot: "tmp", prBodySha256: createHash("sha256").update(renderPrBodyRead(prBody)).digest("hex") }, { repoRoot, config });
+      const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles), "--pr-body", prBody]);
+      return writeGateContext({ ...options, config, fanoutDispatch: resolveFanoutDispatch(config, "draft", angles, { completedAngles }) }, { repoRoot });
+    };
+    const emit = (pending) => {
+      const out = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, ...(pending ? ["--pending"] : [])], { cwd: repoRoot });
+      assert.equal(out.status, 0, out.stderr || out.stdout);
+      return JSON.parse(out.stdout);
+    };
+    const findingsDir = buildGateReviewsDir({ ...id, tmpRoot });
+    const emitPlan = buildGateEmitPlanPath({ ...id, tmpRoot });
+    const review = async (units, prefixHash) => {
+      await mkdir(findingsDir, { recursive: true });
+      for (const unit of units) {
+        await writeFile(path.join(tmpRoot, `${CHECKPOINT_SENTINEL_PREFIX}${unit.scope}-${HEAD_SHA}.json`), JSON.stringify({ scope: unit.scope, prefixHash }), "utf8");
+        const pulled = runPullCli(unit, { cwd: repoRoot });
+        assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
+        for (const angle of unit.angles) await writeFile(path.join(findingsDir, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: HEAD_SHA, findings: [] }), "utf8");
+      }
+    };
+    const closeRound = async () => {
+      const fanin = await consolidateGateFanin({ findingsDir, repoRoot, tmpRoot, gate, headSha: HEAD_SHA, emitPlan, expectedDispatchUnits: JSON.parse(await readFile(emitPlan, "utf8")).units.length, resolvedAngles: angles });
+      assert.equal(fanin.overallVerdict, "clean", JSON.stringify(fanin));
+      return writeGateFindingsLog({ ...id, verdict: "clean", findings: "[]", executionMode: "fanout_fanin", emitPlan, tmpRoot }, { repoRoot });
+    };
+
+    const first = await build("Original");
+    await review(emit(false).units, first.prefixHash);
+    await closeRound();
+
+    const second = await build("Edited");
+    assert.equal(second.prefixHash, first.prefixHash);
+    const pending = emit(true);
+    assert.deepEqual(pending.units.map((unit) => unit.angles), [["scope", "pr-description"]]);
+    await review(pending.units, first.prefixHash);
+    const written = await closeRound();
+    assert.deepEqual(written.log.provenance.perAngle.map((entry) => entry.angle).sort(), [...angles].sort());
+    assert.ok((await readdir(path.dirname(written.path ?? buildGateFaninLedgerPath({ ...id, tmpRoot })))).some((name) => name === `${gate}-${HEAD_SHA}.round-1.json`));
+  });
+});
+
+test("a pending emit marks no unit resumed for another head or gate, a malformed prior plan or a partly completed unit, and survives a refused run", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const gate = "draft_gate";
+    const angles = ["srp", "soc", "ocp", "lsp", "isp", "pr-description"];
+    await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: { fanout: { groups: [{ name: "design-solid", angles }], maxAnglesPerGroup: 6 } } }), "utf8");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    assert.deepEqual(errors, []);
+    const tmpRoot = path.join(repoRoot, "tmp");
+    const id = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA };
+    const planPath = buildGateEmitPlanPath({ ...id, tmpRoot });
+    const findingsDir = buildGateReviewsDir({ ...id, tmpRoot });
+    const build = async (prBody) => {
+      const completedAngles = await readCompletedAnglesForHead({ ...id, tmpRoot: "tmp", prBodySha256: createHash("sha256").update(renderPrBodyRead(prBody)).digest("hex") }, { repoRoot, config });
+      const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles), "--pr-body", prBody]);
+      return writeGateContext({ ...options, config, fanoutDispatch: resolveFanoutDispatch(config, "draft", angles, { completedAngles, maxAnglesPerGroup: 6 }) }, { repoRoot });
+    };
+    const emitArgs = (extra = []) => ["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, ...extra];
+    const emitPending = (extra = []) => runEmitCli(emitArgs(["--pending", ...extra]), { cwd: repoRoot });
+    const readPlan = async () => JSON.parse(await readFile(planPath, "utf8"));
+    const seedRound = async () => {
+      await build("Original");
+      assert.equal(runEmitCli(emitArgs(), { cwd: repoRoot }).status, 0);
+      await mkdir(findingsDir, { recursive: true });
+      for (const angle of angles) await writeFile(path.join(findingsDir, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: HEAD_SHA, findings: [] }), "utf8");
+      await build("Edited");
+    };
+    await seedRound();
+    const full = await readPlan();
+    const prior = JSON.stringify(full);
+    const resumedOf = (plan) => plan.units.filter((unit) => unit.resumed === true);
+
+    // A prior plan for another head or gate contributes no resumed unit.
+    for (const foreign of [{ ...full, headSha: "f".repeat(40) }, { ...full, gate: "pre_approval_gate" }]) {
+      await writeFile(planPath, JSON.stringify(foreign), "utf8");
+      await rm(`${planPath}.prior`, { force: true });
+      const out = emitPending();
+      assert.equal(out.status, 0, out.stderr || out.stdout);
+      assert.deepEqual(resumedOf(await readPlan()), []);
+    }
+    // A malformed prior plan falls back to no resumed unit instead of aborting the emission.
+    await writeFile(planPath, '{"gate":', "utf8");
+    await rm(`${planPath}.prior`, { force: true });
+    const malformed = emitPending();
+    assert.equal(malformed.status, 0, malformed.stderr || malformed.stdout);
+    assert.deepEqual(resumedOf(await readPlan()), []);
+
+    // A unit with one pending angle is re-emitted, never marked resumed.
+    await writeFile(planPath, prior, "utf8");
+    await rm(`${planPath}.prior`, { force: true });
+    await rm(path.join(findingsDir, "srp.json"));
+    await build("Edited");
+    const partly = emitPending();
+    assert.equal(partly.status, 0, partly.stderr || partly.stdout);
+    assert.ok(JSON.parse(partly.stdout).units.some((unit) => unit.angles.includes("srp")));
+    assert.ok(!(await readPlan()).units.some((unit) => unit.resumed === true && unit.angles.includes("srp")));
+
+    // A refused --pending run followed by a successful one keeps the resumed units.
+    await rm(`${planPath}.prior`, { force: true });
+    await writeFile(planPath, prior, "utf8");
+    await writeFile(path.join(findingsDir, "srp.json"), JSON.stringify({ angle: "srp", verdict: "clean", headSha: HEAD_SHA, findings: [] }), "utf8");
+    await rm(findingsDir, { recursive: true, force: true });
+    await mkdir(findingsDir, { recursive: true });
+    for (const angle of angles.filter((angle) => angle !== "pr-description")) await writeFile(path.join(findingsDir, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: HEAD_SHA, findings: [] }), "utf8");
+    await build("Edited again");
+    const refused = emitPending(["--operator-focus-file", path.join(repoRoot, "missing-focus.json")]);
+    assert.notEqual(refused.status, 0);
+    assert.equal(existsSync(planPath), false, "a refused run leaves no keyed plan");
+    const retried = emitPending();
+    assert.equal(retried.status, 0, retried.stderr || retried.stdout);
+    assert.ok(resumedOf(await readPlan()).length > 0, "the prior units survive the refused run");
+  });
+});
+
+test("a pending emit keeps the prior plan's unit order when only the tail of a split group re-runs", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const gate = "draft_gate";
+    const angles = ["srp", "soc", "ocp", "lsp", "isp", "pr-description"];
+    await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: { fanout: { groups: [{ name: "design-solid", angles }], maxAnglesPerGroup: 6 } } }), "utf8");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    assert.deepEqual(errors, []);
+    const id = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA };
+    const build = async (prBody) => {
+      const completedAngles = await readCompletedAnglesForHead({ ...id, tmpRoot: "tmp", prBodySha256: createHash("sha256").update(renderPrBodyRead(prBody)).digest("hex") }, { repoRoot, config });
+      const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles), "--pr-body", prBody]);
+      return writeGateContext({ ...options, config, fanoutDispatch: resolveFanoutDispatch(config, "draft", angles, { completedAngles, maxAnglesPerGroup: 6 }) }, { repoRoot });
+    };
+    const emit = (pending) => {
+      const out = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, ...(pending ? ["--pending"] : [])], { cwd: repoRoot });
+      assert.equal(out.status, 0, out.stderr || out.stdout);
+      return JSON.parse(out.stdout);
+    };
+    await build("Original");
+    const full = emit(false);
+    assert.equal(full.units.length, 2, "5 + 1 split");
+    const findingsDir = buildGateReviewsDir({ ...id, tmpRoot: path.join(repoRoot, "tmp") });
+    await mkdir(findingsDir, { recursive: true });
+    for (const angle of angles) await writeFile(path.join(findingsDir, `${angle}.json`), JSON.stringify({ angle, verdict: "clean", headSha: HEAD_SHA, findings: [] }), "utf8");
+    await build("Edited");
+    const pending = emit(true);
+    assert.deepEqual(pending.units.map((unit) => unit.angles), [["pr-description"]]);
+    const plan = JSON.parse(await readFile(buildGateEmitPlanPath({ ...id, tmpRoot: path.join(repoRoot, "tmp") }), "utf8"));
+    assert.deepEqual(plan.units.map((unit) => unit.scope), full.units.map((unit) => unit.scope), "the split siblings keep their order");
+    assert.deepEqual(plan.units.map((unit) => unit.resumed === true), [true, false]);
+  });
+});
+
+test("every successful emission, pending or not, refreshes the .prior sidecar with the persisted plan bytes", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const gate = "draft_gate";
+    const angles = ["srp", "soc", "pr-description"];
+    await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: { fanout: { groups: [{ name: "design-solid", angles }], maxAnglesPerGroup: 6 } } }), "utf8");
+    const { config } = await loadDevLoopConfig({ repoRoot });
+    const id = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA };
+    const planPath = buildGateEmitPlanPath({ ...id, tmpRoot: path.join(repoRoot, "tmp") });
+    const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles), "--pr-body", "Body"]);
+    await writeGateContext({ ...options, config, fanoutDispatch: resolveFanoutDispatch(config, "draft", angles, { maxAnglesPerGroup: 6 }) }, { repoRoot });
+    const emitArgs = ["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA];
+    const full = runEmitCli(emitArgs, { cwd: repoRoot });
+    assert.equal(full.status, 0, full.stderr || full.stdout);
+    assert.equal(await readFile(`${planPath}.prior`, "utf8"), await readFile(planPath, "utf8"), "a non-pending emission refreshes the sidecar");
+    // A refused run removes the plan but leaves the latest sidecar for the next --pending run.
+    const latest = await readFile(`${planPath}.prior`, "utf8");
+    const refused = runEmitCli([...emitArgs, "--operator-focus-file", path.join(repoRoot, "missing-focus.json")], { cwd: repoRoot });
+    assert.notEqual(refused.status, 0);
+    assert.equal(existsSync(planPath), false);
+    assert.equal(await readFile(`${planPath}.prior`, "utf8"), latest);
+  });
+});
+
+async function seedPendingEmitRound(repoRoot) {
+  const gate = "draft_gate";
+  const angles = ["srp", "soc", "pr-description"];
+  await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: { fanout: { groups: [{ name: "design-solid", angles }], maxAnglesPerGroup: 6 } } }), "utf8");
+  const { config } = await loadDevLoopConfig({ repoRoot });
+  const id = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA };
+  const planPath = buildGateEmitPlanPath({ ...id, tmpRoot: path.join(repoRoot, "tmp") });
+  const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles), "--pr-body", "Body"]);
+  await writeGateContext({ ...options, config, fanoutDispatch: resolveFanoutDispatch(config, "draft", angles, { maxAnglesPerGroup: 6 }) }, { repoRoot });
+  const emitArgs = ["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA];
+  const full = runEmitCli(emitArgs, { cwd: repoRoot });
+  assert.equal(full.status, 0, full.stderr || full.stdout);
+  return { planPath, emitArgs, gate };
+}
+
+test("a --pending emit refuses with exit 2 and keeps the prior keyed plan when the .prior sidecar cannot be written", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const { planPath, emitArgs } = await seedPendingEmitRound(repoRoot);
+    const before = await readFile(planPath, "utf8");
+    // A directory at the sidecar path makes the backup write fail; the refusal precedes the removal of the keyed plan.
+    await rm(`${planPath}.prior`, { force: true });
+    await mkdir(`${planPath}.prior`);
+    const refused = runEmitCli([...emitArgs, "--pending"], { cwd: repoRoot });
+    assert.equal(refused.status, 2, refused.stderr || refused.stdout);
+    assert.equal(await readFile(planPath, "utf8"), before, "the keyed plan survives the refused run");
+  });
+});
+
+test("a --pending emit tolerates a prior plan whose units hold non-objects and marks no unit resumed", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const { planPath, emitArgs, gate } = await seedPendingEmitRound(repoRoot);
+    await writeFile(planPath, JSON.stringify({ gate, headSha: HEAD_SHA, units: [null, 7, "x"] }), "utf8");
+    await rm(`${planPath}.prior`, { force: true });
+    const out = runEmitCli([...emitArgs, "--pending"], { cwd: repoRoot });
+    assert.equal(out.status, 0, out.stderr || out.stdout);
+    const plan = JSON.parse(await readFile(planPath, "utf8"));
+    assert.ok(plan.units.length > 0 && plan.units.every((unit) => unit !== null && typeof unit === "object" && unit.resumed !== true));
+  });
+});
+
+// The recorded reviewer-unit bound (fanout.unitBound; missing means 5) governs
+// every split and pack decision, so a packed unit above 5 angles survives the
+// emitter and the emit-plan tail check.
+test("expandDispatchUnits: a recorded bound of 10 keeps a 7-angle group whole and splits 11 angles into 10 + 1", () => {
+  const configured = new Set(["backend"]);
+  const seven = ["a", "b", "c", "d", "e", "f", "g"];
+  assert.deepEqual(expandDispatchUnits([{ name: "backend", angles: seven }], configured, 10), [{ name: "backend", angles: seven, group: "backend" }]);
+  const eleven = [...seven, "h", "i", "j", "k"];
+  assert.deepEqual(expandDispatchUnits([{ name: "backend", angles: eleven }], configured, 10).map((u) => u.angles.length), [10, 1]);
+  assert.deepEqual(expandDispatchUnits([{ name: "backend", angles: seven }], configured, undefined).map((u) => u.angles.length), [5, 2]);
+  assert.deepEqual(expandDispatchUnits([{ name: "backend", angles: seven }], configured, 0).map((u) => u.angles.length), [5, 2]);
+  assert.deepEqual(expandDispatchUnits([{ name: "backend", angles: eleven }], configured, 99).map((u) => u.angles.length), [10, 1]);
+});
+
+test("packDispatchUnits: the recorded bound sets bin capacity, a missing bound means 5, and base units are never split", () => {
+  const unit = (name, count) => ({ name, angles: Array.from({ length: count }, (_, i) => `${name}${i}`) });
+  const six = [unit("x", 6), unit("y", 6), unit("z", 6)];
+  assert.equal(packDispatchUnits(six, 3, 10).length, 3);
+  assert.equal(packDispatchUnits(six, 2, 10), null);
+  assert.equal(packDispatchUnits(six, 3), null, "a 6-angle base unit does not fit the default bound of 5");
+  const elevenAngles = [unit("p", 6), unit("q", 5)];
+  const packed = packDispatchUnits([...elevenAngles], 2, 10);
+  assert.equal(packed.length, 2);
+  assert.deepEqual(packed.flatMap((u) => u.angles).sort(), elevenAngles.flatMap((u) => u.angles).sort());
+  const fits = packDispatchUnits([unit("p", 4), unit("q", 6)], 1, 10);
+  assert.equal(fits.length, 1);
+  assert.equal(fits[0].angles.length, 10);
+  assert.equal(packDispatchUnits([unit("p", 4), unit("q", 6)], 1), null);
+});
+
+const BOUND_ANGLES = ["srp", "soc", "ocp", "lsp", "isp", "dip", "dry", "kiss", "yagni", "deep", "determinism"];
+
+// Writes a real context whose one configured group holds `groupAngles`, then
+// stamps the recorded bound on the artifact's fanout plan like the producer.
+async function seedBoundBundle(repoRoot, groupAngles, unitBound, extraAngles = []) {
+  const angles = [...groupAngles, ...extraAngles];
+  await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: {
+    preApproval: { angles: [{ name: "holistic", enabled: false }] },
+    fanout: { groups: [{ name: "design-solid", angles: groupAngles }], maxAnglesPerGroup: 6 },
+  } }));
+  const { config, errors } = await loadDevLoopConfig({ repoRoot });
+  assert.deepEqual(errors, []);
+  const fanout = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), angles, {});
+  const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles)]);
+  await writeGateContext({ ...options, config, fanoutDispatch: unitBound === undefined ? fanout : { ...fanout, unitBound } }, { repoRoot });
+  return fanout;
+}
+
+test("the producer records the default unit bound of 5 on the context fanout plan", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const fanout = await seedBoundBundle(repoRoot, BOUND_ANGLES.slice(0, 6), undefined, ["pr-checklist"]);
+    assert.equal(fanout.unitBound, 5);
+    const artifactPath = path.join(repoRoot, "tmp", "gate-context", "o-r", "pr-7", `${GATE}-${HEAD_SHA}.json`);
+    assert.equal(JSON.parse(await readFile(artifactPath, "utf8")).fanout.unitBound, 5);
+  });
+});
+
+test("main(): a recorded bound of 10 emits the same packed unit membership and provenance under pi, claude and codex with the unchanged maxConcurrent", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const groupAngles = BOUND_ANGLES.slice(0, 6);
+    await seedBoundBundle(repoRoot, groupAngles, 10, ["pr-checklist"]);
+    const harnessEnvs = {
+      pi: {},
+      claude: { CLAUDECODE: "1" },
+      codex: { CODEX_THREAD_ID: "thread-1" },
+    };
+    for (const [harness, extra] of Object.entries(harnessEnvs)) {
+      const env = { ...process.env };
+      delete env.CLAUDECODE;
+      delete env.CODEX_THREAD_ID;
+      const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot, env: { ...env, ...extra } });
+      assert.equal(emitted.status, 0, `${harness}: ${emitted.stderr || emitted.stdout}`);
+      const payload = JSON.parse(emitted.stdout);
+      assert.equal(payload.unitBound, 10, harness);
+      assert.deepEqual(payload.units.map((unit) => unit.angles), [groupAngles, ["pr-checklist"]], harness);
+      assert.deepEqual(payload.units.map((unit) => unit.group), ["design-solid", null], harness);
+      assert.equal(payload.maxConcurrent, 5, harness);
+    }
+  });
+});
+
+test("main(): a recorded bound of 10 emits a 6-angle packed unit whole with the per-angle budget step, and fan-in accepts one shared reviewer", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const groupAngles = BOUND_ANGLES.slice(0, 6);
+    await seedBoundBundle(repoRoot, groupAngles, 10, ["pr-checklist"]);
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+    const payload = JSON.parse(emitted.stdout);
+    assert.equal(payload.unitBound, 10);
+    assert.equal(payload.count, 2);
+    assert.deepEqual(payload.units.map((unit) => unit.angles), [groupAngles, ["pr-checklist"]]);
+    assert.deepEqual(payload.units.map((unit) => unit.group), ["design-solid", null]);
+    // Floor 45/50 plus 9 turns and 10 calls for the one angle above 5; the one-angle unit keeps the floor.
+    assert.deepEqual([payload.units[0].budget.maxModelTurns, payload.units[0].budget.maxToolCalls], [54, 60]);
+    // maxAngles is the round's resolved bound on every unit.
+    assert.deepEqual(payload.units[1].budget, { ...REVIEWER_UNIT_BUDGET, maxAngles: 10 });
+    assert.equal(payload.units[0].workOrder.executionRules.budget.maxToolCalls, 60);
+    const tmpRoot = path.join(repoRoot, "tmp");
+    const emitPlan = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    assert.deepEqual(JSON.parse(await readFile(emitPlan, "utf8")), payload);
+    const perAngle = payload.units.flatMap((unit, index) => unit.angles.map((angle) => ({ angle, reviewer: `review-${index}`, ...(unit.group === null ? {} : { group: unit.group }) })));
+    const provenance = { distinctReviewers: 2, perAngle };
+    assert.equal(countFreshDispatchUnits(perAngle), 2, "six angles under one shared reviewer count as one unit");
+    const writeOptions = { repo: REPO, pr: Number(PR), gate: GATE, headSha: HEAD_SHA, verdict: "clean", findings: "[]", provenance: JSON.stringify(provenance), emitPlan, tmpRoot };
+    const written = await writeGateFindingsLog(writeOptions, { repoRoot });
+    assert.equal(written.log.provenance.unitBound, 10);
+    assert.deepEqual(written.log.provenance.dispatchUnits.map((unit) => unit.angles.length), [6, 1]);
+
+    // AC3: a missing, duplicated, foreign or unreported angle fails the write and names the angle.
+    const without = (angle) => ({ ...provenance, perAngle: perAngle.filter((entry) => entry.angle !== angle) });
+    await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(without("dip")) }, { repoRoot }), /angle "dip"/);
+    const foreign = { ...provenance, perAngle: [...perAngle, { angle: "zzz-foreign", reviewer: "review-0", group: "design-solid" }] };
+    await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(foreign) }, { repoRoot }), /zzz-foreign/);
+    const duplicated = { ...provenance, perAngle: [...perAngle, perAngle[0]] };
+    await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(duplicated) }, { repoRoot }), /srp/);
+  });
+});
+
+test("main(): a recorded bound of 10 emits an 11-angle group as 10 + 1 and the emit-plan tail rule reads the recorded bound", async () => {
+  await withTmpDir(async (repoRoot) => {
+    await seedBoundBundle(repoRoot, BOUND_ANGLES, 10);
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+    const payload = JSON.parse(emitted.stdout);
+    assert.deepEqual(payload.units.map((unit) => unit.angles.length), [10, 1]);
+    assert.deepEqual(payload.units.map((unit) => unit.group), ["design-solid", "design-solid"]);
+    assert.deepEqual([payload.units[0].budget.maxModelTurns, payload.units[0].budget.maxToolCalls], [90, 100]);
+    const emitPlan = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+    const provenance = { distinctReviewers: 2, perAngle: payload.units.flatMap((unit, index) => unit.angles.map((angle) => ({ angle, reviewer: `review-${index}`, group: unit.group }))) };
+    const round = { repo: REPO, pr: Number(PR), gate: GATE, headSha: HEAD_SHA };
+    await verifyEmitPlanProvenance(emitPlan, provenance, round, { repoRoot });
+    const { unitBound, ...unrecorded } = payload;
+    assert.equal(unitBound, 10);
+    await writeFile(emitPlan, JSON.stringify(unrecorded));
+    await assert.rejects(() => verifyEmitPlanProvenance(emitPlan, provenance, round, { repoRoot }), /preceding same-group full-cap split sibling/);
+  });
+});
+
+test("main(): a missing recorded bound splits the same 6-angle group at 5 and records no unitBound in the plan", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const groupAngles = BOUND_ANGLES.slice(0, 6);
+    await seedBoundBundle(repoRoot, groupAngles, undefined);
+    const artifactPath = path.join(repoRoot, "tmp", "gate-context", "o-r", "pr-7", `${GATE}-${HEAD_SHA}.json`);
+    const artifact = JSON.parse(await readFile(artifactPath, "utf8"));
+    delete artifact.fanout.unitBound;
+    await writeFile(artifactPath, JSON.stringify(artifact));
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+    const payload = JSON.parse(emitted.stdout);
+    assert.equal("unitBound" in payload, false);
+    assert.deepEqual(payload.units.map((unit) => unit.angles.length), [5, 1]);
+  });
+});
+
+test("buildAngleNamingSuffix passes --unit-bound to the blocked command only above the default bound", () => {
+  const unit = { name: "design-simplicity", angles: ["dry", "kiss"] };
+  const at10 = buildAngleNamingSuffix(unit, "pre-approval-gate-group-design-simplicity", [], [], REVIEWER_UNIT_BUDGET, null, 10);
+  assert.match(at10, /--max-tool-calls \d+ --unit-bound 10 --findings-dir/);
+  assert.doesNotMatch(buildAngleNamingSuffix(unit, "pre-approval-gate-group-design-simplicity"), /--unit-bound/);
+});
+
+// #3166 AC1: a size-tier plan recorded in the gate-context artifact survives emit-fanout-dispatch on both gates as one unit and one scope.
+const TIER_ANGLES = BOUND_ANGLES.slice(0, 7);
+for (const gate of ["draft_gate", "pre_approval_gate"]) {
+  test(`main(): a size-tier plan for ${gate} emits one packed unit with one dispatch scope and the resolved angle set`, async () => {
+    await withTmpDir(async (repoRoot) => {
+      await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1,
+        localImplementation: { lightMode: { enabled: false, maxFiles: 3, maxLines: 200 } },
+        gates: { fanout: { sizeTiers: [{ maxWholeLogicLoc: 100, maxAnglesPerUnit: 10 }] } } }));
+      const { config, errors } = await loadDevLoopConfig({ repoRoot });
+      assert.deepEqual(errors, []);
+      const fanout = resolveFanoutDispatch(config, mapGateToConfigKey(gate), TIER_ANGLES, { env: {}, sizeOutcome: { outcome: "pass", wholeLogicLoc: 30, tierLogicLoc: { t1: 0 } }, changedFiles: ["docs/guide.md", "test/a.test.mjs"] });
+      assert.notEqual(fanout.sizeTier?.tier, null, "the tier applies");
+      const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(TIER_ANGLES)]);
+      await writeGateContext({ ...options, config, fanoutDispatch: fanout }, { repoRoot });
+      const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+      assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+      const payload = JSON.parse(emitted.stdout);
+      assert.equal(payload.count, 1);
+      assert.equal(payload.units.length, 1);
+      assert.deepEqual([...payload.units[0].angles].sort(), [...TIER_ANGLES].sort());
+      assert.equal(new Set(payload.units.map((unit) => unit.scope)).size, 1);
+    });
+  });
+}

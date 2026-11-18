@@ -13,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "bun:test";
 import { expandDispatchUnits, isPackedUnitName, packDispatchUnits } from "../../scripts/github/_dispatch-units.mjs";
-import { dispatchUnitScope } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { dispatchUnitScope } from "../../scripts/github/_dispatch-units.mjs";
 import { DISPATCH_POINTER_MAX_BYTES } from "../../scripts/github/_work-order-protocol.mjs";
 import { buildGateContextPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import {
@@ -466,7 +466,7 @@ describe("no primer or lead-reviewer serialization precedes the first wave", () 
         for (const u of payload.units) {
           assert.ok(Buffer.byteLength(u.dispatchPrompt) <= DISPATCH_POINTER_MAX_BYTES);
           // Self-describing: the pull command with concrete values, so a skewed reviewer definition still pulls.
-          assert.ok(u.dispatchPrompt.includes(`\`dev-loops-run scripts/github/pull-work-order.mjs --ref ${u.workOrderRef} --digest ${u.workOrderDigest} --execution ${u.executionIdentity}\``), u.dispatchPrompt);
+          assert.ok(u.dispatchPrompt.includes(`\`dev-loops-run scripts/github/pull-work-order.mjs ${u.executionIdentity}\``), u.dispatchPrompt);
           assert.match(u.dispatchPrompt, /follow its printed work order exactly/);
           assert.ok(u.promptBytes > 4 * Buffer.byteLength(u.dispatchPrompt), `${u.scope}: ${u.promptBytes} work-order bytes vs ${Buffer.byteLength(u.dispatchPrompt)} dispatch bytes`);
         }

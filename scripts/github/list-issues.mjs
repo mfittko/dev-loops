@@ -24,10 +24,11 @@ Output (stdout, JSON):
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage"?: "..." }
 ${JQ_OUTPUT_USAGE}
+--jq path matching no field in the output exits 2 listing the real paths.
 Exit codes:
   0  Success
   1  Argument error or gh failure
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter, or a --jq path that matches no field`.trim();
 const parseError = buildParseError(USAGE);
 
 export function parseListIssuesCliArgs(argv) {

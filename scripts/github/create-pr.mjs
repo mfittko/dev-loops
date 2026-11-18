@@ -24,6 +24,9 @@ import { PRE_PR_REVIEW_MISSING, validatePrePrReview } from "../loop/_pre-pr-revi
 import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { createGitClient, main as validateChangelog } from "../docs/validate-changelog-completeness.mjs";
+import { readFileSync } from "node:fs";
+import { validateSpikeExplorationSections } from "../refine/validate-spike-file.mjs";
+import { SPIKE_PR_MARKER, hasSpikePrMarker } from "./_spike-pr-marker.mjs";
 const USAGE = `Usage: create-pr.mjs [gh pr create args...]
 Canonical PR-creation wrapper around \`gh pr create\`. Every PR opened through this
 tool is ALWAYS a draft and is self-assigned by default. Never call raw \`gh pr create\`.
@@ -77,9 +80,10 @@ Behavior:
   - forwards every other argument to \`gh pr create\` unchanged
   - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
   - refuses with \`size_split_required_before_pr\` before creating when the local \`origin/<base>...<head>\` whole-PR logic LOC is at or above the resolved default-tier \`waiverLoc\` (PRE-PR-SIZE-CHECK); no override flag; an unknown size does not refuse
+  - \`--spike-file <findings.md>\` (a spike findings file with Question, Approach and Findings) skips that refusal, stamps a no-merge marker in the PR body and keeps the size line advisory; ready-for-review and merge-pr refuse the PR; only this flag binds the marker, and pr create without it and pr edit refuse a body that adds it (ADR 0293)
   - fetches only \`origin <base>\` before size and changelog checks; refuses with \`base_fetch_failed_before_pr\` on fetch failure
   - validates \`--base\` as a non-empty literal branch name before that fetch: refuses empty values, options, refspecs and revision syntax; valid branch names remain supported
-  - refuses with \`changelog_incomplete_before_pr\` (LIFECYCLE-CHANGELOG-COMPLETENESS) after size checks against the fetched base when the selected head equals checkout HEAD; skips for an unresolved origin base or a different head; no override
+  - refuses with \`changelog_incomplete_before_pr\` (LIFECYCLE-CHANGELOG-COMPLETENESS) after size checks against the fetched base when the selected head equals checkout HEAD; skips for an unresolved origin base or a different head; applies only when \`changelog.required: true\` is set in the committed HEAD \`.devloops\` config file (any loader-order name), otherwise prints a skip notice
   - after a successful create, prints one JSON line \`{"adrTripwire":...,"sizeBudget":...}\` (ADR-TRIPWIRE-EARLY-SURFACE);
     a block or unknown outcome is advisory and never refuses the already-created PR
 Examples:
@@ -108,6 +112,8 @@ const LIGHTWEIGHT_FLAG_PATTERN = /^--lightweight(?:=(.*))?$/iu;
 // `--issue <n>` declares the tracker link this PR closes. Consumed by the
 // wrapper (never forwarded to gh), same shape as --repo.
 const ISSUE_FLAG_PATTERN = /^--issue(?:=(.*))?$/u;
+// `--spike-file <findings.md>` opens a spike PR: skips the size refusal and stamps the no-merge marker (ADR 0293). Consumed by the wrapper.
+const SPIKE_FILE_FLAG_PATTERN = /^--spike-file(?:=(.*))?$/u;
 // `--allow-replacement-pr <prior>` records a deliberate replacement of
 // an existing open linked PR, overriding the duplicate-refusal guard. Consumed
 // by the wrapper (never forwarded to gh).
@@ -499,6 +505,14 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
       throw parseError("--allow-cross-issue is a boolean flag: pass it bare (--allow-cross-issue) or as --allow-cross-issue=false, never a space-separated value");
     }
   }
+  const spikeFile = getFlagValue(argv, SPIKE_FILE_FLAG_PATTERN);
+  if (argv.some((token) => SPIKE_FILE_FLAG_PATTERN.test(token))) {
+    let findings = "";
+    try { findings = readFileSync(spikeFile ?? "", "utf8"); } catch { /* an unreadable file fails validation below */ }
+    if (!validateSpikeExplorationSections(findings).ok) {
+      throw parseError("--spike-file requires a readable spike findings file with non-empty Question, Approach and Findings sections");
+    }
+  }
   const lastCrossIssueToken = argv.filter((token) => ALLOW_CROSS_ISSUE_FLAG_PATTERN.test(token)).at(-1) ?? null;
   const allowCrossIssue = lastCrossIssueToken === "--allow-cross-issue" ||
     (typeof lastCrossIssueToken === "string" && TRUE_FLAG_VALUE_PATTERN.test(lastCrossIssueToken.slice("--allow-cross-issue=".length)));
@@ -513,6 +527,10 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     if (LIGHTWEIGHT_FLAG_PATTERN.test(token)) continue;
     if (ISSUE_FLAG_PATTERN.test(token)) {
       // = form carries the value; space form consumes the next token too.
+      if (!token.includes("=")) skipNext = true;
+      continue;
+    }
+    if (SPIKE_FILE_FLAG_PATTERN.test(token)) {
       if (!token.includes("=")) skipNext = true;
       continue;
     }
@@ -553,6 +571,15 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   }
   // No body source: pass an explicit empty body so gh never prompts for one.
   if (body === null) ghArgs = [...ghArgs, "--body", ""];
+  // The marker belongs to --spike-file PRs only: a body that carries it otherwise could never be readied or merged.
+  if (spikeFile === null && hasSpikePrMarker(body)) {
+    throw parseError("the body carries the spike no-merge marker line; it is stamped only by --spike-file (ADR 0293)");
+  }
+  // The last --body wins, so the marker survives every body source.
+  if (spikeFile !== null && !hasSpikePrMarker(body)) {
+    const stamped = `${body ?? ""}\n\n${SPIKE_PR_MARKER}\n`;
+    ghArgs = [...ghArgs, "--body", stamped];
+  }
   // ADR-TRIPWIRE-STANDING-WAIVER: a new PR starts with no waiver line.
   const waiverRefusal = waiverLineChangeRefusal({ currentBody: "", nextBody: body ?? "", action: "create" });
   if (waiverRefusal) {
@@ -627,6 +654,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   // error, a malformed-ref rejection, or an evaluator bug propagates and
   // refuses PR creation, matching how the ready boundary lets it throw.
   let resolvedHead = "HEAD";
+  const skipNotices = [];
   const baseForDiff = hasBase ? sources.base : baseDefault;
   if (typeof baseForDiff === "string" && baseForDiff.trim().length > 0) {
     const bareBase = baseForDiff.trim().replace(/^origin\//u, "");
@@ -679,7 +707,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
         size = null;
       }
       const sizeWaiverLoc = size?.thresholds?.default?.waiverLoc;
-      if (typeof size?.wholeLogicLoc === "number" && typeof sizeWaiverLoc === "number" && size.wholeLogicLoc >= sizeWaiverLoc) {
+      if (spikeFile === null && typeof size?.wholeLogicLoc === "number" && typeof sizeWaiverLoc === "number" && size.wholeLogicLoc >= sizeWaiverLoc) {
         throw Object.assign(
           parseError(`${SIZE_SPLIT_REQUIRED_BEFORE_PR}: whole-PR logic LOC (${size.wholeLogicLoc}) is at or above default.waiverLoc (${sizeWaiverLoc}); split the local branch before any PR exists (PRE-PR-SIZE-CHECK)`),
           { code: SIZE_SPLIT_REQUIRED_BEFORE_PR },
@@ -707,6 +735,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
         if (code !== 0) {
           throw Object.assign(parseError(`LIFECYCLE-CHANGELOG-COMPLETENESS: ${diagnostics.join("; ")}`), { code: CHANGELOG_INCOMPLETE_BEFORE_PR });
         }
+        for (const line of diagnostics) if (line.startsWith("changelog completeness check skipped")) skipNotices.push(line);
       }
     }
   }
@@ -753,6 +782,8 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
       process.stderr.write(`[create-pr] FACADE-LINKED-PR-SINGLE-ARTIFACT: opening replacement PR, replacing linked PR #${guard.replaced} for issue #${closingIssue}.\n`);
     }
   }
+  // Emit the skip notice only after every later wrapper check passed, so a refusal keeps stderr JSON-only.
+  for (const line of skipNotices) process.stderr.write(`[create-pr] ${line}\n`);
   const { code, stdout } = await spawnCreatePr(ghArgs, runtime, { captureStdout: issueLess });
   // ADR-TRIPWIRE-EARLY-SURFACE: report the tripwire and size budget once the PR
   // exists. Advisory only: a block never refuses creation.

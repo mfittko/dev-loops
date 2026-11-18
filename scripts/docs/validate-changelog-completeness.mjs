@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { createGitClient as createDocGitClient, resolveBaseRef } from "./_doc-git-client.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
-import { loadDevLoopConfigStrict, resolveClassifyRules } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveClassifyRules, selectConfigSource } from "@dev-loops/core/config";
 import {
   FRAGMENTS_DIR,
   fragmentBodyClosesSection,
@@ -229,6 +229,26 @@ export function createGitClient(root, exec = promisify(execFile)) {
  * validate-decision-records.mjs run({ root, git }) shape.
  */
 export async function main({ root, base: explicitBase, env = process.env, log = console, git = createGitClient(root), requireHeadInputs = false } = {}) {
+  // Opt-in: the rule applies only when the repo sets `changelog.required: true`.
+  // A malformed value fails config load here and never enables the check.
+  // With requireHeadInputs the switch comes from the committed HEAD `.devloops*` config file,
+  // the same snapshot assertHeadInputs validates, so an uncommitted edit cannot
+  // turn enforcement off for a head that opts in.
+  // The HEAD probe follows the loader's file order (selectConfigSource), so
+  // an opt-in committed as .devloops.yaml/.yml/.json is honored as on disk.
+  let devloopsOverride;
+  if (requireHeadInputs) {
+    // Same source-selection rule as the loader's findConfigFile, read from HEAD via git.
+    const found = await selectConfigSource(".devloops", async (name) =>
+      (await git.pathExistsIn("HEAD", name)) ? git.show(`HEAD:${name}`) : null);
+    devloopsOverride = found ? { raw: found.raw, path: found.path } : { raw: null };
+  }
+  const { config } = await loadDevLoopConfigStrict({ repoRoot: root, ...(devloopsOverride && { devloopsOverride }) });
+  if (config?.changelog?.required !== true) {
+    log.log("changelog completeness check skipped: changelog.required is not set (LIFECYCLE-CHANGELOG-COMPLETENESS)");
+    return 0;
+  }
+
   const base = explicitBase !== undefined
     ? await git.mergeBase(explicitBase, "HEAD")
     : await resolveBaseRef(git, env).catch(() => null);
@@ -287,7 +307,6 @@ export async function main({ root, base: explicitBase, env = process.env, log = 
     addedFilesWithNotes.push(f);
   }
 
-  const { config } = await loadDevLoopConfigStrict({ repoRoot: root });
   const { errors } = validateChangelogCompleteness({
     baseChangelog,
     addedFiles: addedFilesWithNotes,

@@ -62,15 +62,45 @@ function setup() {
   git("add", "-A"); git("commit", "-qm", "pr");
   return { dir, git, put, head: () => git("rev-parse", "HEAD") };
 }
-function advance(s, file) {
+function advance(s, file, extra = {}) {
   const prev = s.head();
   s.git("checkout", "-q", "main");
   s.put(file, "changed\n");
   s.git("add", "-A"); s.git("commit", "-qm", "main move");
   s.git("checkout", "-q", "pr");
   s.git("merge", "-q", "--no-edit", "main");
-  return computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
+  return computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir, ...extra });
 }
+
+// Issue 2752 slice 4: the fixer-emit seam option skips only the gate-tooling decision and its evidence never validates under the default rule.
+test("ignoreGateTooling: skips only the tooling decision; conflicts, changed blobs and overlaps still refuse", () => {
+  const opt = { ignoreGateTooling: true };
+  const tooling = { ...ok, baseDeltaPaths: ["scripts/x.mjs"] };
+  assert.equal(classifyBaseMergeCarry(tooling).decision, "full_regate");
+  assert.equal(classifyBaseMergeCarry(tooling, opt).decision, "carry_verdict");
+  assert.equal(classifyBaseMergeCarry({ ...tooling, conflictResolutionHunks: true }, opt).decision, "full_regate");
+  assert.equal(classifyBaseMergeCarry({ ...tooling, prBlobsAfter: [`src/x.mjs\t100644\t${"2".repeat(40)}`] }, opt).decision, "full_regate");
+  assert.equal(classifyBaseMergeCarry({ ...tooling, baseDeltaPaths: ["scripts/x.mjs", "src/x.mjs"] }, opt).decision, "full_regate");
+});
+
+test("ignoreGateTooling: seam evidence validates only with the option, even when no tooling path is in the delta", () => {
+  const opt = { ignoreGateTooling: true };
+  for (const input of [{ ...ok, baseDeltaPaths: ["scripts/x.mjs"] }, ok]) {
+    const seam = classifyBaseMergeCarry(input, opt);
+    assert.equal(seam.decision, "carry_verdict");
+    assert.equal(validateBaseMergeCarryEvidence(seam, opt).ok, true);
+    assert.equal(validateBaseMergeCarryEvidence(seam).ok, false);
+  }
+  const genuine = classifyBaseMergeCarry(ok);
+  assert.equal(validateBaseMergeCarryEvidence(genuine).ok, true);
+});
+
+test("git: ignoreGateTooling carries a .devloops base move that the default rule re-gates", async () => {
+  const ev = await advance(setup(), ".devloops", { ignoreGateTooling: true });
+  assert.equal(ev.decision, "carry_verdict", ev.reason);
+  assert.deepEqual(ev.gateToolingPaths, [".devloops"]);
+  assert.equal((await advance(setup(), ".devloops")).decision, "full_regate");
+});
 
 test("git: unrelated base move carries", async () => {
   const ev = await advance(setup(), "docs/other.md");

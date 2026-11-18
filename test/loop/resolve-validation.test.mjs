@@ -473,6 +473,30 @@ test("a suite that moves HEAD leaves no artifact", async () => {
     await assert.rejects(readFile(artifactPath), /ENOENT/);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
+// Advance origin/main past the fixture head: the head stays checked out and clean.
+function advanceOrigin(repoRoot) {
+  const git = (...a) => execFileSync("git", a, { cwd: repoRoot, encoding: "utf8" }).trim();
+  git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "--allow-empty", "-m", "newer base commit");
+  git("push", "-q", "origin", "HEAD:refs/heads/main");
+  git("reset", "-q", "--hard", "HEAD~1");
+}
+
+test("issue 2885: a stale-base head is incomplete and names the remedy; a current head runs", async () => {
+  const { repoRoot, headSha } = await fixture();
+  try {
+    const options = parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]);
+    assert.equal((await resolveValidation(options, { repoRoot })).status, "complete");
+    advanceOrigin(repoRoot);
+    const stale = await resolveValidation(options, { repoRoot });
+    assert.equal(stale.status, "incomplete");
+    assert.match(stale.reason, /^base_stale_integrate_first: head [0-9a-f]{40} does not contain origin\/main; newer commits: [0-9a-f]+ newer base commit\./);
+    assert.match(stale.reason, /Merge origin\/main into the branch via scripts\/loop\/resolve-pr-conflicts\.mjs\. Never rebase a pushed branch\. Never force-push\./);
+    assert.equal(JSON.parse(await readFile(path.join(repoRoot, stale.artifactPath), "utf8")).allPassed, false);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+    await rm(`${repoRoot}-origin.git`, { recursive: true, force: true });
+  }
+});
 
 // A repo with no package.json (Rust, Rails, config-only) and a given .devloops.
 async function bareFixture(devloops, { origin = true } = {}) {

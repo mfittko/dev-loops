@@ -22,19 +22,19 @@ test("release runbook owns the recurring post-release rules by ID", () => {
   }
 });
 
-test("post-release steps run audit, then memory cleanup, then prose cleanup", () => {
+test("post-release steps run the five steps in order, prose cleanup first", () => {
   const body = doc.slice(doc.indexOf("`RELEASE-POST-RELEASE-RECURRING-STEPS`:"));
-  const order = ["Contract and codebase audit", "Memory cleanup", "Prose cleanup"].map((s) => body.indexOf(s));
-  assert.ok(order.every((i) => i > 0), "all three steps present");
+  const order = ["1. Prose cleanup.", "2. Contract and codebase audit.", "3. Outdated and redundant files audit and cleanup.", "4. Tests audit and cleanup.", "5. Memory cleanup."].map((s) => body.indexOf(s));
+  assert.ok(order.every((i) => i > 0), "all five steps present");
   assert.deepEqual([...order].sort((a, b) => a - b), order, "steps in order");
-  const lastStep = body.indexOf("3. Prose cleanup.");
-  const sentence = body.indexOf("Each of the three steps files its own issue in the next milestone.");
-  assert.ok(lastStep > 0 && sentence > lastStep, "the issue-filing sentence follows all three steps and covers each");
+  const lastStep = body.indexOf("5. Memory cleanup.");
+  const sentence = body.indexOf("Each of the five steps files its own issue in the next milestone.");
+  assert.ok(lastStep > 0 && sentence > lastStep, "the issue-filing sentence follows all five steps and covers each");
   assert.ok(doc.indexOf("`RELEASE-COMBINED-RETRO`: A combined release retro runs once after a stable release, before the steps above.") > 0, "combined retro runs before the steps");
 });
 
 test("post-release rule is the standing explicit operator instruction", () => {
-  assert.ok(doc.includes("This rule is the standing explicit operator instruction for these three issues"));
+  assert.ok(doc.includes("This rule is the standing explicit operator instruction for these five issues"));
 });
 
 test("AGENTS.md cites the post-release rule as a standing instruction", () => {

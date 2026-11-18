@@ -18,10 +18,11 @@ import { readFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { detectRepoSlug, normalizeRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { selectPrClosingIssue } from "@dev-loops/core/github/issue-ops";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
-import { buildDevLoopHandoffEnvelope, CANONICAL_SPEC_SOURCE } from "@dev-loops/core/loop/handoff-envelope";
+import { buildDevLoopHandoffEnvelope, CANONICAL_SPEC_SOURCE, STATELESS_UNIT_STRATEGIES } from "@dev-loops/core/loop/handoff-envelope";
 import { INTERNAL_DEV_LOOP_STRATEGY } from "@dev-loops/core/loop/public-dev-loop-routing-contract";
 import { trimmedOrNull } from "@dev-loops/core/loop/normalize";
 import { REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -349,15 +350,27 @@ export async function buildHandoffEnvelopeCli(
     ?? resolveLocalWorktree(bundle, repoRoot, cwd);
   envelopeOptions.worktreeCwd = binding?.worktreeCwd;
   let verifiedResolverOutput = resolverOutput;
+  if (binding?.pr && !STATELESS_UNIT_STRATEGIES.includes(trimmedOrNull(bundle?.selectedStrategy))) {
+    const issue = selectPrClosingIssue(binding.pr);
+    const artifact = bundle.activeArtifact ?? bundle.canonicalState?.target;
+    // Any difference from the startup record fails closed; no ownership check ran on a newly linked issue.
+    const recorded = artifact?.issue ?? null;
+    if (recorded !== issue) {
+      throw parseError(`PR closing issue changed since startup: startup recorded ${recorded === null ? "no issue" : `issue #${recorded}`}, live linkage is ${issue === null ? "no issue" : `issue #${issue}`}; fail closed.`);
+    }
+    const boundBundle = { ...bundle, activeArtifact: { ...artifact, issue } };
+    verifiedResolverOutput = resolverOutput.bundle ? { ...resolverOutput, bundle: boundBundle } : boundBundle;
+  }
   // Only a PR binding carries the live PR facts the refinement check reads.
   if (binding?.pr && resolverOutput?.canonicalSpecSource == null && bundle?.canonicalSpecSource == null) {
     const { pr, repo } = binding;
     const refinement = await loadRefinementArtifact({ repo, prData: pr,
       prDraft: pr.isDraft === true, prClosed: pr.state === "CLOSED", prMerged: Boolean(pr.mergedAt) });
     // These enums have different domains; only the owning validator's PR-body result maps across.
-    if (refinement.status === "present" && refinement.specSource === REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY
+    if ((refinement.status === "present" || refinement.prBodySpecValid === true)
+      && refinement.specSource === REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY
       && refinement.finding === null) {
-      verifiedResolverOutput = { ...resolverOutput, canonicalSpecSource: CANONICAL_SPEC_SOURCE.PR_BODY };
+      verifiedResolverOutput = { ...verifiedResolverOutput, canonicalSpecSource: CANONICAL_SPEC_SOURCE.PR_BODY };
     }
   }
   const envelope = buildDevLoopHandoffEnvelope(verifiedResolverOutput, settings, gateState, envelopeOptions);

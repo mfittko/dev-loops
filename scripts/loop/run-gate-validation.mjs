@@ -28,6 +28,7 @@ import { viewPr } from "../github/view-pr.mjs";
 import { isInstallableOnHost, parseBunLock, rootWorkspaceDependencyNames } from "../release/assert-core-dependency-version.mjs";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
 import { verificationCommandSegments } from "@dev-loops/core/loop/bash-command-classify";
+import { cliError } from "@dev-loops/core/loop/cli-command";
 
 const OUTPUT_TAIL_CHARS = 4000;
 const MAX_BUFFER_BYTES = 64 * 1024 * 1024;
@@ -575,7 +576,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     assertWorktreeAtHead(options.headSha, { repoRoot });
     const scripts = await readPackageScripts(repoRoot);
     if (classifyPackageSuites(options.suites, scripts) === "full-repository") {
-      throw new Error("Full-repository validation must run through dev-loops gate resolve-validation");
+      throw cliError("Full-repository validation must run through dev-loops gate resolve-validation");
     }
 
     const artifact = await buildValidationArtifact(

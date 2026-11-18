@@ -216,9 +216,11 @@ inline `node` (`-e`/`--eval`/`-p`, stdin `-`, heredoc)/`python3 -c`/heredoc call
 
 ### Deterministic verifier (findings-producer)
 
-`node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]` reads a
+`node scripts/loop/check-retro-tooling.mjs [--transcript <path>]... [--json]` reads a
 newline-delimited transcript of the shell commands the agent ran (one top-level
-command per line, via `--transcript` or stdin) and reports agent-level raw
+command per line, via `--transcript` or stdin), or one or more Claude Code session
+transcripts (JSONL): pass each session file as `--transcript <path>` and the verifier
+extracts the Bash tool commands itself, with no helper script. It reports agent-level raw
 `gh`/`python`/`python3`/inline `node` (`-e`/`--eval`/`-p`, stdin `-`, heredoc) calls. It is a **findings-producer**:
 its JSON output (`{ ok, internalToolingOnly, rawCallViolations, allowedWriteOps }`)
 is returned to the conductor via the envelope's `retrospectiveFindings` field (normalized

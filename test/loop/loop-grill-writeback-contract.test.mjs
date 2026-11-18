@@ -227,7 +227,7 @@ test("Step 1 states the zero-iteration grill_clean exit requires recorded proven
   const step1 = skill.split("## Step 1 — Load the target")[1]?.split("## Step 1b")[0] ?? "";
   assert.match(
     step1,
-    /zero-iteration `grill_clean` exit requires a shape-clean artifact, recorded provenance[\s\S]*?AND no `size_forecast_\*` spec-lint finding/i,
+    /zero-iteration `grill_clean` exit requires a shape-clean artifact, recorded provenance[\s\S]*?AND no `size_forecast_\*` or `contract_doc_not_in_matrix` spec-lint finding/i,
     "Step 1 must state recorded provenance is required, not shape-clean alone",
   );
 });

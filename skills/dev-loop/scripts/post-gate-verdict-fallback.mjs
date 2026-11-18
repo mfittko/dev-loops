@@ -15,6 +15,7 @@
 //   - no gate-coordination state validation
 //   - no blocking-severity count enforcement (caller is responsible)
 //   - no internal-only PR short-circuit
+//   - derives no next action except a clean draft_gate, which posts `mark ready for review` and ignores the caller's --next-action; any other value renders verbatim
 //
 // The script always emits a stderr warning explaining that fallback mode is
 // active and the audit trail is degraded. On posting failure it fails closed
@@ -61,7 +62,8 @@ Required:
   --findings-file <path>                    Read summary from file (preserves
                                             newlines; takes precedence when
                                             both are provided)
-  --next-action <text>
+  --next-action <text>                      (Required. A clean draft_gate still requires the flag, ignores
+                                            its value and posts "mark ready for review".)
 Optional:
   --gate <draft_gate|pre_approval_gate>     Defaults to draft_gate
   --gh-command <path>                       Defaults to "gh"
@@ -214,6 +216,48 @@ function guardFallbackBodyNoIssuePrIds(body, ctx) {
         `the no-ids-in-comments rule (public leakage). Reword the findings summary / next action ` +
         `to avoid a raw #<digits>.`,
     );
+  }
+  return body;
+}
+
+// Local twin of the OPERATOR_OWNED_LINES registry in
+// packages/core/src/github/operator-owned-lines.mjs (OPERATOR-OWNED-LINE, ADR 0258).
+// This fallback is zero-dep and cannot import it, and it has no wrap (ADR 0258
+// wraps only on the full gate writers): a body with an operator-owned line is
+// refused. Regexes and the strip are copied from the core registry and from
+// scripts/release/verify-release-approval.mjs. The Copilot marker is matched on
+// the raw body, stricter than core, which ignores a quoted or code-span marker.
+// test/github/post-gate-verdict-fallback-operator-owned.test.mjs checks parity with
+// the core registry over shared fixtures, so drift fails CI.
+const OWNED_APPROVE_MERGE_RE = /^[ \t>*-]*approve\s+merge(?:\s|$)/imu;
+const OWNED_APPROVE_RELEASE_RE = /\bapprove\s+release\s+v?\d/i;
+const OWNED_WAIVER_RE = /^\s*adr-tripwire:allow(?:\s|$)/mu;
+const OWNED_OPERATOR_MARKER_RE = /<!--\s*dev-loops:copilot-body-disposition\s+review=\S+\s+head=[0-9a-fA-F]{40}\s+operator\s*-->/;
+
+function stripNonAssertionMarkdown(body) {
+  let s = String(body ?? "");
+  s = s.replace(/^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*$/gm, " ");
+  s = s.replace(/^[ \t]*(?:`{3,}|~{3,})[\s\S]*$/m, " ");
+  s = s.replace(/`[^\n]*`/g, " ");
+  s = s.replace(/`/g, " ");
+  s = s.replace(/^(?: {4,}|\t+).*$/gm, " ");
+  s = s.replace(/^[ \t]*>.*$/gm, " ");
+  return s;
+}
+
+export function findFallbackOperatorOwnedLine(body) {
+  const text = String(body ?? "");
+  if (OWNED_APPROVE_MERGE_RE.test(text)) return "a line that opens with `approve merge`";
+  if (OWNED_APPROVE_RELEASE_RE.test(stripNonAssertionMarkdown(text))) return "`approve release v<version>`";
+  if (OWNED_WAIVER_RE.test(text)) return "an `adr-tripwire:allow` line";
+  if (OWNED_OPERATOR_MARKER_RE.test(text)) return "a Copilot body-disposition `operator` marker";
+  return null;
+}
+
+function guardFallbackBodyNoOperatorOwnedLine(body, ctx) {
+  const label = findFallbackOperatorOwnedLine(body);
+  if (label !== null) {
+    throw new Error(`OPERATOR-OWNED-LINE: post-gate-verdict-fallback refused to post ${ctx}: the body has ${label}. The human posts that line, and this fallback does not wrap it.`);
   }
   return body;
 }
@@ -391,6 +435,8 @@ export function renderFallbackGateReviewCommentBody({
   nextAction,
   blockCleanOnFindingSeverities,
 }) {
+  // A clean draft_gate has one legal next step (GATE-COMMENT-REQUIRED-FIELDS); mirrors deriveEffectiveNextAction.
+  if (gate === "draft_gate" && verdict === "clean") nextAction = "mark ready for review";
   const summary = blockquoteContinuationLines(
     encodeMachineArtifactMarkerDelimiters(
       smartTruncate(String(findingsSummary ?? ""), MAX_FINDINGS_SUMMARY_LENGTH),
@@ -458,6 +504,7 @@ export async function postGateVerdictViaGh({
     // Fail-closed id guard applied immediately before the POST: refuse to emit
     // a rendered body that carries any raw #<digits> (see guardFallbackBodyNoIssuePrIds).
     guardFallbackBodyNoIssuePrIds(body, "gate verdict comment");
+    guardFallbackBodyNoOperatorOwnedLine(body, "gate verdict comment");
     const payload = JSON.stringify({ body });
     const child = spawnImpl(
       ghCommand,

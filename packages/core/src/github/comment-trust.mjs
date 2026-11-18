@@ -6,6 +6,23 @@ const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 // the [bot] suffix, and the bare `Copilot` login the REST API emits for the same Bot).
 const SANCTIONED_COPILOT_REVIEWER = /^(?:copilot-pull-request-reviewer(?:\[bot\])?|copilot)$/i;
 
+const GITHUB_ACTIONS_BOT = /^github-actions(?:\[bot\])?$/i;
+
+const BUILTIN_TRUST_CONFIG = Object.freeze({ githubActionsBot: true, reviewers: Object.freeze([]) });
+let trustConfig = BUILTIN_TRUST_CONFIG;
+
+/** Sets the process-scoped trust config once per entry script; a missing key takes the built-in default. */
+export function setCommentTrustConfig({ githubActionsBot = true, reviewers = [] } = {}) {
+  trustConfig = Object.freeze({ githubActionsBot, reviewers: Object.freeze(reviewers.map((entry) => entry.toLowerCase())) });
+}
+
+// GraphQL returns a Bot login without `[bot]` and REST returns it with: strip the suffix on both sides. A `[bot]` entry also needs type Bot; a plain entry matches the login, or a Bot's login in either form.
+const stripBotSuffix = (value) => value.replace(/\[bot\]$/i, "");
+function isConfiguredReviewer(name, isBot) {
+  const lower = name.toLowerCase();
+  return trustConfig.reviewers.some((entry) => (entry.endsWith("[bot]") ? isBot && stripBotSuffix(lower) === stripBotSuffix(entry) : lower === entry || (isBot && stripBotSuffix(lower) === entry)));
+}
+
 /** Exact match on the sanctioned Copilot reviewer login; `copilot-helper[bot]` and other lookalikes are false. */
 export function isSanctionedCopilotReviewerLogin(login) {
   return typeof login === "string" && SANCTIONED_COPILOT_REVIEWER.test(login);
@@ -20,8 +37,11 @@ export function isTrustedCommentAuthor({ login, type, association } = {}, { allo
   if (name.length === 0) return false;
   const isBot = (typeof type === "string" && type.toLowerCase() === "bot") || /\[bot\]$/i.test(name);
   if (allowCopilot && SANCTIONED_COPILOT_REVIEWER.test(name) && isBot) return true;
-  // Exact sanctioned login only: a human login such as `copilot-fan` is judged by association like any other.
-  if (SANCTIONED_COPILOT_REVIEWER.test(name) || isBot) return false;
+  // Trusted by default; `trust.githubActionsBot: false` turns it off (ADR 0290).
+  if (trustConfig.githubActionsBot && GITHUB_ACTIONS_BOT.test(name) && isBot) return true;
+  if (isConfiguredReviewer(name, typeof type === "string" && type.toLowerCase() === "bot")) return true;
+  // Exact sanctioned logins with a non-Bot type stay untrusted; a lookalike such as `copilot-fan` or `github-actions-fan` is judged by association.
+  if (SANCTIONED_COPILOT_REVIEWER.test(name) || GITHUB_ACTIONS_BOT.test(name) || isBot) return false;
   return TRUSTED_ASSOCIATIONS.has(typeof association === "string" ? association.toUpperCase() : "");
 }
 
@@ -35,7 +55,12 @@ export function isTrustedRestComment(comment, options) {
   return isTrustedCommentAuthor({ login: comment?.user?.login, type: comment?.user?.type, association: comment?.author_association }, options);
 }
 
-export const UNTRUSTED_COMMENT_REMEDY = "a maintainer (OWNER, MEMBER or COLLABORATOR) replies to or resolves the thread, or restates the finding";
+export const UNTRUSTED_COMMENT_REMEDY = "a maintainer (OWNER, MEMBER or COLLABORATOR) replies to or resolves the thread, or restates the finding, or the repo lists the login under `trust.reviewers` in `.devloops` on the default branch";
 
 /** Remedy for a skipped PR conversation comment, which has no thread to reply to or resolve. */
 export const UNTRUSTED_CONVERSATION_COMMENT_REMEDY = "a maintainer (OWNER, MEMBER or COLLABORATOR) restates the request in their own comment";
+
+/** Association-only trust: a configured `trust.reviewers` login never passes here, so it cannot approve a merge or source a review-body fix (ADR 0290). */
+export function isTrustedAssociation(association) {
+  return TRUSTED_ASSOCIATIONS.has(typeof association === "string" ? association.toUpperCase() : "");
+}

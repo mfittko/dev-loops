@@ -59,6 +59,10 @@ table. The third, folded, track is disposition-gated (`GATE-COMMENT-INLINE-SEVER
    marker (🔴 high · 🟠 medium · 🟡 low · ⚪ nit · 🔵 question, alongside the severity word), the
    finding's summary, its `file:line` linked to the blob at the reviewed head SHA when known, and
    its contributing angle(s) in trailing brackets.
+   A finding the judge disposed `act` with `remedyKind: evidence_only` renders the label
+   `(evidence only, no file change; its criterion stays unproven until the evidence lands)` right after
+   its judge disposition, on every findings surface (verdict body, inline thread header and the opt-in
+   findings comment).
 
 <!-- rule: GATE-COMMENT-INLINE-SEVERITY-FLOOR -->
 `GATE-COMMENT-INLINE-SEVERITY-FLOOR` (#2263, #2722): the judge's verdict decides what the verdict
@@ -123,7 +127,7 @@ The ledger keeps the full text. Reviewer inline code spans survive into the thre
 backtick outside that fenced block is escaped as an entity. Findings from different angles that describe the
 same defect post as one comment. Two findings describe the same defect only when they resolve the
 same file, their lines are equal or both absent, both or neither are questions, they carry the same
-judge disposition, and their keys match. Keys match when both findings carry an equal `defectKey`,
+judge disposition and the same `remedyKind`, and their keys match. Keys match when both findings carry an equal `defectKey`,
 or when neither carries one and their normalized summaries are identical. A `defectKey` on only one
 of the two findings blocks the merge. A finding with no file never merges. The normalized summary is
 the one `fingerprintFinding` uses: lowercase, every non-alphanumeric run collapsed to one space,
@@ -308,7 +312,7 @@ A clean `pre_approval_gate` comment does **not** retroactively replace the requi
 | **Verdict** | `clean`, `findings_present`, or `blocked` |
 | **Blocking severities** | (non-clean verdicts only) Which severity levels must be clean per gate config. Renders inside an HTML comment (`GATE-COMMENT-INLINE-SEVERITY-FLOOR`). |
 | **Findings summary** | Short truthful audit summary. Use `no issues found` only when the reviewed head needed no corrective change for that gate pass. |
-| **Next action** | One of: `stay draft and fix`, `rerun gate`, `mark ready for review`, `await final human approval`. The standalone `review` gate ignores the caller's `--next-action` and derives it from the judge act list: `fix the N item(s) this review lists`, `no change requested`, `the review could not complete; rerun it` (a `blocked` verdict) or `read the findings, none was judged`, each followed by `; this review does not approve or block the PR`. N counts distinct act items (one per cluster). |
+| **Next action** | One of: `stay draft and fix`, `rerun gate`, `mark ready for review`, `await final human approval`. A clean `draft_gate` derives `mark ready for review` and ignores the caller value. The standalone `review` gate ignores the caller's `--next-action` and derives it from the judge act list: `fix the N item(s) this review lists`, `no change requested`, `the review could not complete; rerun it` (a `blocked` verdict) or `read the findings, none was judged`, each followed by `; this review does not approve or block the PR`. N counts distinct act items (one per cluster). |
 
 ## Optional size-budget fields
 
@@ -343,12 +347,16 @@ machine, reads absent size evidence as "human approval required", never as a sil
 A `draft_gate` comment updated by `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) renders one more line
 beyond `GATE-COMMENT-REQUIRED-FIELDS`: `**Converged:** fixer <sha> delta sha256:<digest>`. The
 `<sha>` is the full fixer commit and the digest is the sha256 of the clean pre-push delta result.
-The line appears only on a `clean` `draft_gate` comment, and it is the only case where `clean`
-stands over open judge act items (all low or nit). A body without the line reads back as absent
+The line appears only on a `clean` `draft_gate` comment, and it marks the two cases where `clean`
+stands over open judge act items (the first case is all low or nit, at the cap round or later; below the cap the poster refuses a converged post and the next full round runs; the second case is the `GATE-EXEC-NO-DEAD-END` body-only post below, ADR 0271). A body without the line reads back as absent
 (unchanged). A present line that does not match the format reads back as malformed, and
 `buildPreMergeGateCheck` fails closed on it. Gate coordination treats a valid line as the
 `draft_gate` marker of the fixer commit's head. The line is not merge evidence: merge still needs a
 clean current-head `pre_approval_gate`.
+
+A body-only cap round (`GATE-EXEC-NO-DEAD-END`, ADR 0271) renders the same line at the reviewed head with
+the fixer commit equal to the PR head; its digest is the sha256 of the body-only evidence (the reviewed and
+live PR-body digests and the act list), not a delta result.
 
 ## Verdict definitions
 
@@ -358,7 +366,7 @@ with the fixed meaning below:
 
 | Verdict | Meaning |
 |---|---|
-| `clean` | A fully judged round (every finding carries a judge disposition) has an empty judge act list, whatever the severities; a round with an unjudged finding keeps the fan-in verdict, so no finding at a `blockCleanOnFindingSeverities` severity may remain. `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) is the one exception |
+| `clean` | A fully judged round (every finding carries a judge disposition) has an empty judge act list, whatever the severities; a round with an unjudged finding keeps the fan-in verdict, so no finding at a `blockCleanOnFindingSeverities` severity may remain. `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) and the `GATE-EXEC-NO-DEAD-END` body-only post (ADR 0271, medium, low or nit PR-body act items that are not fail-open and not from a security angle) are the two exceptions |
 | `findings_present` | A fully judged round has a non-empty judge act list; a round with an unjudged finding has an issue at a blocking severity or a non-empty act list; fixes are required before the gate boundary can be crossed |
 | `blocked` | The gate could not complete or a hard blocker prevented a verdict |
 
@@ -371,13 +379,19 @@ Enforcement at write time and post time:
   resolves before any ledger is written. With the keyed fan-in ledger present, that is the ledger's
   `overallVerdict` (the wrapper's value is ignored and `--verdict` is optional); otherwise it is the
   `--findings`/`--findings-file` wrapper's `overallVerdict`. The
-  check is the same whether or not `--judge-verdict` was supplied: the judge only adds
+  check accepts the `overallVerdict` and, on a `--judge-verdict` run with a non-empty judge act
+  list, the composed `findings_present` the log persists: the judge only adds
   `act`/`defer`/`reject` dispositions
-  ([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525))
-  and never revises `overallVerdict`.
+  ([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525)).
+  After a judge pass the log's `overallVerdict` and `verdict` are `findings_present` whenever the
+  judge act list is non-empty (`blocked` stays `blocked`), so a verdict derived from the log is
+  `findings_present`. `GATE-EXEC-LOW-NIT-CONVERGENCE` still posts `clean` for a fully judged round; a round with an unjudged finding keeps the ledger `overallVerdict`, which is `findings_present` after a judge pass with open act items. A non-review write without `--judge-verdict` refuses `judge_verdict_required`
+  while a `j<id>/judge-verdict.json` exists for the round (a judge emitted before the round's
+  fan-out emit plan, or one emitted at or before a judge execution that a live or retained same-head ledger
+  already stamps as a completed `roundIdentity.judgeExecution`, belongs to an earlier same-head round and is ignored, ADR 0275).
 - `upsert-checkpoint-verdict.mjs` composes the ledger's `overallVerdict` with its open judge act
   items (ADR 0089) for the same head and gate (#1616), so a non-empty act list yields
-  `findings_present` (except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168), for both ledger cases). A fully judged round takes its verdict from the act list alone, and a round with an unjudged finding keeps the fan-in severity verdict. It derives the verdict by default (passing no `--verdict` is valid),
+  `findings_present` (except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168), for a fully judged round only). A fully judged round takes its verdict from the act list alone, and a round with an unjudged finding keeps the ledger `overallVerdict`. It derives the verdict by default (passing no `--verdict` is valid),
   accepts a matching explicit value, and refuses a contradiction citing this rule. A ledger
   without `overallVerdict` still refuses an explicit `clean` while its act list is not empty, except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168).
 - The act list for a verdict post comes from judge-enriched data: the ledger written with

@@ -148,7 +148,8 @@ test("GATE-EXEC-GATE-COORDINATOR dispatch guidance points to the issue body and 
   const guidance = dispatchGuidance(await readRepo(GATE_DOC));
   assertClaims(guidance, [
     ["reviewer or judge dispatch", "exactly", "`dispatchPrompt`"],
-    ["worker or fixer dispatch", "linked issue", "The issue body is the spec; read it."],
+    ["worker dispatch (developer, docs, quality)", "linked issue", "The issue body is the spec; read it."],
+    ["fixer dispatch is exactly the `dispatchPayload`", "emit-fixer-work-order.mjs", "never a prose brief"],
     ["`pr_body`", "PR body", "spec"],
     ["never restates", "issue-specific spec"],
     ["cites rules by rule ID", "never by copied text"],
@@ -162,6 +163,8 @@ test("GATE-EXEC-GATE-COORDINATOR dispatch guidance points to the issue body and 
   assert.doesNotMatch(bulletWith("GATE-EXEC-HARNESS-JOIN"), /WORKTREE-/);
   const editing = bulletWith("WORKTREE-NONINTERACTIVE-FILE-OPS");
   assert.match(editing, /`OPS-NO-INLINE-INTERPRETER`/);
+  assert.doesNotMatch(guidance.replace(/\s+/g, " "), /editing workers \(developer, fixer, docs\)/);
+  assert.match(guidance.replace(/\s+/g, " "), /a reviewer, judge or fixer gets it through its agent definition/);
   assert.doesNotMatch(editing, /HARNESS-JOIN/);
   assert.doesNotMatch(bulletWith("WORKTREE-SCRIPT-LAUNCHER-CWD"), /HARNESS-JOIN/);
 });
@@ -205,19 +208,20 @@ test("the slice-3 runner rules are registered and have one canonical home", asyn
   }
 });
 
-test("DEV-LOOP-PROBE-TIMEOUT-CEILING pins the 600000 ms ceiling in the bounded watch rule", async () => {
+test("DEV-LOOP-PROBE-TIMEOUT-CEILING pins the explicit timeout and the 170 s cap in the bounded watch rule", async () => {
   const skill = await readRepo(DEV_LOOP_SKILL);
   const watch = skill.indexOf("**Bounded Copilot/CI watch");
   const marker = skill.indexOf("<!-- rule: DEV-LOOP-PROBE-TIMEOUT-CEILING -->");
   assert.ok(watch !== -1 && marker > watch && skill.indexOf("\n**", watch + 1) > marker, "expected the rule inside the bounded watch rule");
   const rule = collapse(passageWith(skill, "<!-- rule: DEV-LOOP-PROBE-TIMEOUT-CEILING -->"));
-  assert.match(rule, /`--timeout` on a Copilot or CI probe MUST stay below 600 seconds, the harness tool-call limit/);
-  assert.match(rule, /`probe-copilot-review\.mjs`, `wait-pr-checks\.mjs`, and `node <dev-loops-package-root>\/cli\/index\.mjs loop watch-ci` \/ `probe-ci-status\.mjs` all default to 1800 s, so every call MUST pass an explicit `--timeout` below 600 seconds/);
+  assert.match(rule, /every Copilot or CI probe call MUST pass an explicit `--timeout`/);
+  assert.match(rule, /`probe-copilot-review\.mjs`, `wait-pr-checks\.mjs`, and `node <dev-loops-package-root>\/cli\/index\.mjs loop watch-ci` \/ `probe-ci-status\.mjs` default to 1800 s/);
+  assert.match(rule, /`GATE-EXEC-BOUNDED-WAIT-CAP`.*one call waits at most about 170 seconds/);
   // The owner rule's watch-ci example carries an explicit timeout below the limit.
   const followup = await readRepo("skills/copilot-pr-followup/SKILL.md");
   const waitTools = collapse(passageWith(followup, "<!-- rule: COPILOT-FOLLOWUP-WAIT-TOOLS -->"));
   assert.match(waitTools, /`node <dev-loops-package-root>\/cli\/index\.mjs loop watch-ci --repo <owner\/name> --pr <number> --timeout 540`/);
-  assert.match(rule, /a longer wait loops in separate foreground calls/);
+  assert.match(rule, /Run `reissue` unchanged in the foreground until the wait settles/);
   // Every explicit `--timeout <seconds>` in the watch rule stays below the 600 s limit.
   const watchLine = skill.slice(watch, skill.indexOf("\n", watch));
   const seconds = [...watchLine.matchAll(/--timeout (\d+)/g)].map((m) => Number(m[1]));
@@ -280,9 +284,10 @@ test("WORKTREE-COMMIT-MSG-GUARD states the default merge subject and the agent n
   assert.match(rule, /The waiver is operator-only: an agent-authored commit never carries the waiver line\./);
 });
 
-test("WORKTREE-SCRIPT-LAUNCHER-CWD pins the compound launcher form", async () => {
+test("WORKTREE-SCRIPT-LAUNCHER-CWD pins the --repo-root launcher form", async () => {
   const rule = sectionFrom(await readRepo(WORKTREE_DOC), "<!-- rule: WORKTREE-SCRIPT-LAUNCHER-CWD -->", "\n## ");
-  assert.ok(rule.includes("`cd <checkout> && dev-loops-run scripts/<path>`"));
+  assert.ok(rule.includes("`dev-loops-run --repo-root <checkout> scripts/<path>`"));
+  assert.ok(!rule.includes("`cd <checkout> && dev-loops-run"));
   assert.match(collapse(rule), /Each Bash call may start in another checkout/);
   assert.match(rule, /`GATE-EXEC-NO-CWD-DEPENDENCE`/);
 });
@@ -320,6 +325,13 @@ test("reviewer and judge agent definitions deliver WORKTREE-SCRIPT-LAUNCHER-CWD"
   }
 });
 
+test("the fixer agent definition and its Claude mirror cite the editing and launcher rules", async () => {
+  for (const agent of ["agents/fixer.agent.md", ".claude/agents/fixer.md"]) {
+    const content = await readRepo(agent);
+    for (const rule of ["WORKTREE-NONINTERACTIVE-FILE-OPS", "OPS-NO-INLINE-INTERPRETER", "WORKTREE-SCRIPT-LAUNCHER-CWD"]) assert.match(content, new RegExp(`\`${rule}\``), `${agent} ${rule}`);
+  }
+});
+
 function subagentDelegation(content) {
   return sectionFrom(content, "## Subagent delegation", "\n## ");
 }
@@ -328,7 +340,9 @@ for (const surface of DEV_LOOP_AGENT_SURFACES) {
   test(`${surface} Subagent delegation points to the issue body and cites rules by role`, async () => {
     const section = subagentDelegation(await readRepo(surface));
     assert.match(section, /a reviewer or judge dispatch is exactly the emitted `dispatchPrompt`\. Its pulled work order carries the spec pointer, and its agent definition cites the rules it needs\./);
-    assert.match(section, /A worker or fixer dispatch names the linked issue and states "The issue body is the spec; read it\."/);
+    assert.match(section, /A worker dispatch \(developer, docs, quality\) names the linked issue and states "The issue body is the spec; read it\."/);
+    assert.match(section, /A fixer dispatch is exactly the `dispatchPayload` that `scripts\/loop\/emit-fixer-work-order\.mjs` prints \(its pull line\), never a prose brief\./);
+    assert.doesNotMatch(section, /worker or fixer dispatch names the linked issue/);
     assert.match(section, /`pr_body` path the PR body is the spec/);
     assert.match(section, /never restates issue-specific spec/);
     assert.match(section, /cites rules by rule ID, never by copied text/);
@@ -336,10 +350,11 @@ for (const surface of DEV_LOOP_AGENT_SURFACES) {
     assert.match(bullet("agents that dispatch children"), /`GATE-EXEC-HARNESS-JOIN`/);
     const editing = bullet("editing workers");
     assert.match(editing, /`WORKTREE-NONINTERACTIVE-FILE-OPS` and `OPS-NO-INLINE-INTERPRETER`/);
+    assert.doesNotMatch(section, /editing workers \(developer, fixer, docs\)/);
     assert.doesNotMatch(editing, /HARNESS-JOIN/);
     const runners = bullet("script runners");
     assert.match(runners, /`WORKTREE-SCRIPT-LAUNCHER-CWD`/);
-    assert.match(runners, /a reviewer or judge gets it through its agent definition/);
+    assert.match(runners, /a reviewer, judge or fixer gets it through its agent definition/);
     assert.doesNotMatch(runners, /HARNESS-JOIN/);
     assert.match(section, /A worker, reviewer, judge or fixer dispatches no children and receives no join rule\./);
     assert.match(bullet("Awaiting any wait the run depends on"), /Join rule: `GATE-EXEC-HARNESS-JOIN`\./);

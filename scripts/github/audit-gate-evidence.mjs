@@ -26,6 +26,7 @@ import { fetchPrHeadRefOid, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { fetchGateEvidenceComments } from "./_gate-finding-surface.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 const USAGE = `Usage: audit-gate-evidence.mjs --repo <owner/name> --pr <number> [--head-sha <sha>]
 Deterministic post-drive gate-evidence audit. Scans BOTH verdict surfaces — the
@@ -53,6 +54,7 @@ Exit codes:
   0   Success
   1   Usage/IO/gh error
   2   Invalid --jq filter
+  3   Comment trust config refused (stderr JSON with a state field)
 
 ${JQ_OUTPUT_USAGE}
 `.trim();
@@ -188,6 +190,7 @@ async function main() {
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseAuditGateEvidenceCliArgs(process.argv.slice(2)).help);
   const exitCode = await main();
   process.exit(exitCode ?? 0);
 }

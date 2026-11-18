@@ -48,12 +48,14 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
+import { COPILOT_BODY_ANGLE } from "./_copilot-body-disposition.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { isQuarantinedHead, latestQuarantineMs, logWrittenMs } from "./_gate-quarantine-cutoff.mjs";
 import {
   buildCarryForwardPlanPath,
   mapGateToConfigKey,
 } from "./write-gate-context.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 const USAGE = `Usage: resolve-angle-carry-forward.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --prev-head <sha> --head-sha <sha> [--tmp-root <path>] [--rerun-angle <angle>]...
 Decide, per angle, whether a prior gate verdict (clean OR findings_present, recorded
@@ -297,7 +299,8 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
   // a KNOWN prevAngles entry via {@link baseAngleName} (a `<angle>-delta-at-...`
   // re-review entry counts toward its base angle, per gate-fanin's own coverage
   // check) case-insensitively. An unattributable finding means no angle is
-  // provably clean, so it refuses the whole plan.
+  // provably clean, so it refuses the whole plan (the one exception is the synthetic
+  // `copilot-body` finding, skipped before attribution when no perAngle row carries that name).
   if (log.findings !== undefined && !Array.isArray(log.findings)) {
     throw new Error("prior gate findings-log's findings field is not an array — cannot verify which angles are clean (fail-closed)");
   }
@@ -328,6 +331,8 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
     if (rawAngle.length === 0) {
       throw new Error("prior gate findings-log has a finding with no angle — cannot attribute it to a carried angle (fail-closed)");
     }
+    // The synthetic Copilot body finding has no perAngle row by design; every other unattributable angle still fails closed.
+    if (rawAngle === COPILOT_BODY_ANGLE && !prevAnglesByLowerBase.has(COPILOT_BODY_ANGLE)) continue;
     const matches = prevAnglesByLowerBase.get(baseAngleName(rawAngle).toLowerCase());
     if (!matches || matches.length === 0) {
       throw new Error(`prior gate findings-log has a finding for angle ${JSON.stringify(rawAngle)}, which matches no provenance.perAngle entry — cannot prove that angle is clean (fail-closed)`);
@@ -603,5 +608,6 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseResolveAngleCarryForwardCliArgs(process.argv.slice(2)).help);
   await main();
 }

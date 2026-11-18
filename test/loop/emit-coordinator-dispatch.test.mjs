@@ -6,7 +6,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { test } from "bun:test";
-import { runNode } from "../_helpers.mjs";
+import { initGitFixture, runNode } from "../_helpers.mjs";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, pullReceiptPath, pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
 import { RULE_REFERENCES } from "../../packages/core/src/loop/coordinator-work-order.mjs";
 import { buildCoordinatorDispatchPayload, renderCoordinatorWorkOrder } from "../../scripts/loop/emit-coordinator-work-order.mjs";
@@ -26,7 +26,7 @@ async function withDirs(fn) {
   try {
     const input = path.join(dir, "resolver.json");
     await writeFile(input, JSON.stringify(resolverOutput));
-    execFileSync("git", ["init", "-q", dir]); // the dir is a checkout, so its tmp/ is a listed ledger root
+    initGitFixture(dir, { branch: "main" }); // the dir is a checkout, so its tmp/ is a listed ledger root
     return await fn({ dir, input, tmp: path.join(dir, "tmp") });
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -309,14 +309,14 @@ test("C6a a coordinator pull prints the exact materialized order, writes a recei
 test("C6a the pull-work-order CLI registers the coordinator role and prints the materialized order", async () => {
   await withDirs(async (ctx) => {
     const out = (await emit(ctx, "claude", "queue")).out;
-    const pull = await runNode(path.resolve("scripts/github/pull-work-order.mjs"), ["--ref", out.workOrderRef, "--digest", out.workOrderDigest, "--execution", out.executionIdentity, "--tmp-root", ctx.tmp], { cwd: ctx.dir });
+    const pull = await runNode(path.resolve("scripts/github/pull-work-order.mjs"), [out.executionIdentity, "--tmp-root", ctx.tmp], { cwd: ctx.dir });
     assert.equal(pull.code, 0, pull.stderr);
     assert.equal(pull.stdout, await readFile(path.join(path.dirname(out.planPath), "order.md"), "utf8"));
   });
 });
 
 test("C9 every cited rule owner exists as a rule marker in its document", () => {
-  const cited = [...RULE_REFERENCES.operationalRules, ...RULE_REFERENCES.adrCandidateRevalidation, ...RULE_REFERENCES.guardFailure.rules];
+  const cited = [...RULE_REFERENCES.operationalRules, ...RULE_REFERENCES.adrCandidateRevalidation, ...RULE_REFERENCES.stateDerivation, ...RULE_REFERENCES.guardFailure.rules];
   for (const ref of cited) {
     const [doc, rule] = ref.split("#");
     assert.ok(readFileSync(doc, "utf8").includes(`<!-- rule: ${rule} -->`), ref);
@@ -373,4 +373,17 @@ test("C6a the subagent dev-loop contract row pins resumed entries, the startup-o
 test("C6b the dev-loop agent reports the startup-output path in its hand-back", () => {
   const agent = readFileSync(path.resolve("agents/dev-loop.agent.md"), "utf8");
   assert.match(agent, /report that startup-output path in your hand-back/);
+});
+
+test("Claude coordinator dispatch carries the dev-loop model resolved from the consumer .devloops; zero config adds none", async () => {
+  await withDirs(async (ctx) => {
+    const zero = (await emit(ctx, "claude", "direct")).out;
+    assert.equal("model" in zero.dispatchPayload, false);
+    await writeFile(path.join(ctx.dir, ".devloops"), JSON.stringify({ version: 1, models: { tiers: { low: { claude: "sonnet" } }, roleTiers: { "dev-loop": "low" } } }));
+    const { result, out } = await emit(ctx, "claude", "direct");
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(out.dispatchPayload.model, "sonnet");
+    assert.equal(out.workOrderDigest, zero.workOrderDigest);
+    for (const harness of ["pi", "codex"]) assert.equal("model" in (await emit(ctx, harness, "direct")).out.dispatchPayload, false);
+  });
 });

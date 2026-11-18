@@ -20,12 +20,17 @@ import {
   classifyCopilotReviewBodyDisposition,
   COPILOT_DISPOSITION,
   isCopilotErrorReview,
-  stripMarkdownCodeForScan,
 } from "@dev-loops/core/github/copilot-helpers";
+import { bareMarkdown, parseCopilotBodyDispositionMarker } from "@dev-loops/core/github/copilot-body-disposition-marker";
 import { isSanctionedCopilotReviewerLogin, isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { isCommitContainedByHead } from "./_commit-containment.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
+
+// Synthetic angle name of the judge finding built from a Copilot review body (not a gate angle).
+export const COPILOT_BODY_ANGLE = "copilot-body";
 
 // File the gate detector writes the body finding to and the judge emit pins.
 export const copilotBodyJudgePath = ({ tmpRoot, repo, pr, headSha }) => {
@@ -33,18 +38,6 @@ export const copilotBodyJudgePath = ({ tmpRoot, repo, pr, headSha }) => {
   if (typeof headSha !== "string" || !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Error(`copilotBodyJudgePath: headSha must be 40 or 64 lowercase hex chars, got ${headSha}`);
   return path.join(tmpRoot, "gate-judge", repoSlugFor(repo), `pr-${Number(pr)}`, `copilot-body-${headSha}.json`);
 };
-
-const MARKER_RE = /<!--\s*dev-loops:copilot-body-disposition\s+review=(\S+)\s+head=([0-9a-fA-F]{40})\s+(?:fix=([0-9a-fA-F]{40})|operator)\s*-->/;
-
-
-// Only bare markdown counts: fenced blocks, inline code spans, and `>` quote
-// lines are dropped before matching, so a quoted or code-formatted marker is
-// never a record. The review-body marker also drops 4-space and tab indented
-// lines (`dropIndented`); the Copilot record keeps them, as before.
-const bareMarkdown = (body, { dropIndented = false } = {}) => stripMarkdownCodeForScan(body)
-  .split("\n")
-  .filter((bodyLine) => !/^\s*>/.test(bodyLine) && !(dropIndented && /^(?: {4}|\t)/.test(bodyLine)))
-  .join("\n");
 
 // The fixer-verifier reply on a review body: separate from the Copilot record above and never a record for it.
 const REVIEW_BODY_MARKER_RE = /<!--\s*dev-loops:review-body-disposition\s+review=(\S+)\s+fix=([0-9a-fA-F]{40})\s*-->/g;
@@ -71,18 +64,7 @@ export async function readReviewMarkerCommits(reviewIds, ctx, runtime) {
   return reviewIds.map((reviewId) => ({ reviewId, markerCommits: markers.filter((m) => m.trusted && m.reviewId === reviewId).map((m) => m.fixSha) }));
 }
 
-export function parseCopilotBodyDispositionMarker(body) {
-  if (typeof body !== "string") return null;
-  const bare = bareMarkdown(body);
-  const match = MARKER_RE.exec(bare);
-  if (!match) return null;
-  return {
-    reviewId: match[1],
-    headSha: match[2].toLowerCase(),
-    fixSha: match[3] ? match[3].toLowerCase() : null,
-    operator: !match[3],
-  };
-}
+export { parseCopilotBodyDispositionMarker };
 
 // ADR 0238: the shared trust predicate lives in comment-trust.mjs; this stays as the REST alias.
 export function isTrustedDispositionAuthor(comment) {
@@ -178,7 +160,7 @@ export function buildJudgeFinding(review) {
   const firstLine = text.split("\n").map((line) => line.trim()).find((line) => line && !line.startsWith("#"));
   const severity = classifyCopilotReviewBodyDisposition(review?.state, review?.body) === COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK ? "low" : "medium";
   // The full body is preserved; only the summary is bounded.
-  return { angle: "copilot-body", findings: [{ severity, summary: (firstLine ?? "Copilot review body feedback").slice(0, 300), recommendation: text }] };
+  return { angle: COPILOT_BODY_ANGLE, findings: [{ severity, summary: (firstLine ?? "Copilot review body feedback").slice(0, 300), recommendation: text }] };
 }
 
 const BODY_ONLY_BLOCKING_DISPOSITIONS = new Set([
@@ -302,7 +284,7 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
           ...(record.reasonCode ? { reasonCode: record.reasonCode, reason: record.reason } : {}),
           markerLine: currentReviewId ? markerLineFor(currentReviewId, headSha) : null,
         },
-        judgeFinding: { angle: "copilot-body", findings: currentReviews.flatMap((r) => buildJudgeFinding(r).findings) },
+        judgeFinding: { angle: COPILOT_BODY_ANGLE, findings: currentReviews.flatMap((r) => buildJudgeFinding(r).findings) },
       };
   }
   const { review, ambiguousBlockingTie, blockingReviews } = resolveLatestCopilotReview({ reviews: reviewSummary?.effectiveCopilotReviews });
@@ -321,7 +303,7 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
         markerLine: null,
       },
       // Every tied blocking body reaches the judge: no marker can clear a tie.
-      judgeFinding: { angle: "copilot-body", findings: blockingReviews.flatMap((r) => buildJudgeFinding(r).findings) },
+      judgeFinding: { angle: COPILOT_BODY_ANGLE, findings: blockingReviews.flatMap((r) => buildJudgeFinding(r).findings) },
     };
   }
   const reviewId = review.id !== null && review.id !== undefined ? String(review.id) : null;
@@ -343,4 +325,41 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
       },
       judgeFinding: buildJudgeFinding(review),
     };
+}
+
+/**
+ * GATE-EXEC-COPILOT-BODY-TO-JUDGE: the findings the judge disposes, plus the pinned Copilot body finding as one cluster.
+ * A work order that pins no `copilot-body-feedback` read leaves `findings` unchanged. Otherwise the order must carry `copilotBodyClusterId`
+ * (a plan written before the cluster refuses with a re-emit message), and the pinned file must still hash to its pinned sha256.
+ */
+export async function withPinnedCopilotBodyCluster(findings, order) {
+  const pinned = order?.requiredReads?.find((read) => read?.kind === "copilot-body-feedback");
+  if (!pinned) return findings;
+  if (!Number.isInteger(order.copilotBodyClusterId)) throw new Error("GATE-EXEC-COPILOT-BODY-TO-JUDGE: the judge work order pins a copilot-body-feedback read but no copilotBodyClusterId; re-emit the judge work order with emit-judge-work-order.mjs");
+  if (findings.length !== order.copilotBodyClusterId) throw new Error(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: the findings input has ${findings.length} findings but the judge work order pinned the Copilot cluster at ${order.copilotBodyClusterId}; the findings changed since the judge work order was emitted, re-emit the judge work order`);
+  const bytes = await readFile(pinned.path).catch((error) => {
+    if (error?.code === "ENOENT") throw new Error(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${pinned.path} is gone; re-emit the judge work order`);
+    throw error;
+  });
+  if (createHash("sha256").update(bytes).digest("hex") !== pinned.sha256) throw new Error(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${pinned.path} changed since the judge work order pinned it; re-emit the judge work order`);
+  const body = JSON.parse(bytes.toString("utf8"));
+  return [...findings, ...body.findings.map((finding) => ({ angle: body.angle, ...finding, clusterId: order.copilotBodyClusterId }))];
+}
+
+/**
+ * GATE-EXEC-COPILOT-BODY-TO-JUDGE: the verdict the ledger persists once the judge acted on the Copilot body cluster.
+ * A `clean` fan-in verdict rises to `findings_present` when an acted Copilot finding has a blocking severity.
+ * Shared by judge-pass and the findings-log writer so the two ledgers of one round carry one verdict.
+ */
+export function raiseVerdictForActedCopilotBlock(verdict, actedCopilotSeverities, blockingSeverities) {
+  return verdict === "clean" && actedCopilotSeverities.some((severity) => blockingSeverities.includes(severity)) ? "findings_present" : verdict;
+}
+
+/**
+ * Spec-authority covers the findings read only: drop a decision the judge keyed at the pinned Copilot body cluster
+ * (the Copilot cluster keeps its relevance disposition). A work order with no pinned read leaves the verdict unchanged.
+ */
+export function withoutCopilotBodyDecision(verdict, order) {
+  if (!order?.requiredReads?.some((read) => read?.kind === "copilot-body-feedback") || !Array.isArray(verdict?.decisions)) return verdict;
+  return { ...verdict, decisions: verdict.decisions.filter((d) => d?.index !== order.copilotBodyClusterId) };
 }

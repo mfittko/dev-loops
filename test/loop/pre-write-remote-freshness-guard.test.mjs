@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { test } from "bun:test";
 import { runGitFixture, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
-import { checkBaseFreshness, parseRemoteFreshnessGuardCliArgs, runCli } from "../../scripts/loop/pre-write-remote-freshness-guard.mjs";
+import { checkBaseFreshness, parseRemoteFreshnessGuardCliArgs, runCli, staleBaseReason } from "../../scripts/loop/pre-write-remote-freshness-guard.mjs";
 
 const scriptPath = path.resolve("scripts/loop/pre-write-remote-freshness-guard.mjs");
 
@@ -429,6 +429,37 @@ test("checkBaseFreshness judges refs/remotes/origin/<base>, not a same-named tag
   }
 });
 
+test("staleBaseReason derives the default branch from the full origin/HEAD ref, even with a local branch named origin/main", async () => {
+  const { root, clone } = await makeStaleBaseFixture({ advance: true });
+  try {
+    const bases = [];
+    const check = async ({ base }) => { bases.push(base); return { ok: true }; };
+    const head = runGitFixture(clone, ["rev-parse", "HEAD"]);
+    runGitFixture(clone, ["branch", "origin/main"]);
+    assert.match(await staleBaseReason({ head, cwd: clone }), /^base_stale_integrate_first: .* does not contain origin\/main;/u);
+    await staleBaseReason({ head, cwd: clone, check });
+    runGitFixture(clone, ["push", "-q", "origin", "HEAD:refs/heads/release/1.x"]);
+    runGitFixture(clone, ["fetch", "-q", "origin"]);
+    runGitFixture(clone, ["remote", "set-head", "origin", "release/1.x"]);
+    await staleBaseReason({ head, cwd: clone, check });
+    assert.deepEqual(bases, ["main", "release/1.x"]);
+    // A symbolic ref outside refs/remotes/origin/ yields no base.
+    runGitFixture(clone, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/upstream/main"]);
+    assert.equal(await staleBaseReason({ head, cwd: clone, check }), null);
+    assert.equal(bases.length, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("staleBaseReason shows the first 5 newer commits and counts the rest", async () => {
+  const newerCommits = Array.from({ length: 7 }, (_, i) => `c${i} commit ${i}`);
+  const check = async ({ base }) => ({ ok: false, error: "base_stale_integrate_first", base, newerCommits, foreignFiles: [], remedy: "R" });
+  const reason = await staleBaseReason({ base: "main", head: "h", cwd: ".", check });
+  assert.ok(reason.includes("c4 commit 4 (+2 more). R"));
+  assert.ok(!reason.includes("c5 commit 5"));
+});
+
 test("checkBaseFreshness fetches a trusted origin/-prefixed or 40-hex baseRefName", async () => {
   const { root, clone } = await makeStaleBaseFixture({ advance: false });
   try {
@@ -440,4 +471,9 @@ test("checkBaseFreshness fetches a trusted origin/-prefixed or 40-hex baseRefNam
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("staleBaseReason propagates an unexpected checker failure instead of proceeding", async () => {
+  const check = async () => { throw new Error("checker blew up"); };
+  await assert.rejects(staleBaseReason({ base: "main", head: "abc", cwd: process.cwd(), check }), /checker blew up/u);
 });

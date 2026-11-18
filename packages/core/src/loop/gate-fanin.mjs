@@ -30,7 +30,7 @@
 import { scheduleParallelWaves } from "./queue-parallel.mjs";
 import { trimmedOrNull } from "./normalize.mjs";
 import { clusterFindings } from "./finding-cluster.mjs";
-import { REVIEWER_UNIT_MAX_ANGLES } from "./reviewer-unit-bound.mjs";
+import { resolveReviewerUnitBound } from "./reviewer-unit-bound.mjs";
 
 /**
  * Schedule fan-out dispatch units into bounded-concurrency waves: each wave
@@ -141,7 +141,7 @@ export function planDispatchRetry(attempt, errorClass) {
  *   carried-key normalization) so a case difference still excludes the right group.
  * @returns {{ ok: boolean, dispatch: boolean, requiredReviewers: number, availableReviewers: number|null, shortfall: number|null, reason: string, verdict: null, executionMode: null, pendingGroups: { name: string, angles: string[] }[], skippedGroups: { name: string, angles: string[] }[], completedAngles: string[], carriedAngles: string[] }}
  */
-export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { completedAngles, carriedAngles } = {}) {
+export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { completedAngles, carriedAngles, unitBound } = {}) {
   const groups = Array.isArray(dispatchGroups) ? dispatchGroups : [];
   const toSet = (iterable) =>
     new Set(Array.isArray(iterable) ? iterable : iterable == null ? [] : [...iterable]);
@@ -178,7 +178,7 @@ export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { co
       : g));
   const pendingGroups = stripped.map((g, i) => {
     const prev = stripped[i - 1];
-    const validTail = prev?.angles.length === REVIEWER_UNIT_MAX_ANGLES && prev.group === g.group;
+    const validTail = prev?.angles.length === resolveReviewerUnitBound(unitBound) && prev.group === g.group;
     return g.angles.length === 1 && typeof g.group === "string" && !validTail ? { ...g, group: null } : g;
   });
   const skippedGroups = groups.filter((g) => groupIsComplete(g));
@@ -621,14 +621,14 @@ export function countFreshDispatchUnits(perAngle) {
  * non-null `group` accepted) for callers that don't load config.
  *
  * Membership is checked against BASE units: `resolvedGroups` cap-split in
- * order into chunks of at most `REVIEWER_UNIT_MAX_ANGLES` (the emitter's own
+ * order into chunks of at most the round's recorded unit bound (the emitter's own
  * cap-split). Base units do not depend on the harness concurrency clamp. An
  * optional `dispatchUnits` (the findings ledger's recorded dispatch membership,
  * copied from the context artifact's packed `fanout.groups`) replaces the base
  * units as the membership source. A malformed or empty recording, or an angle
  * recorded twice, is an error. A shared reviewer is honored only inside ONE recorded
  * unit, and that unit must be a union of whole base units with at most
- * `REVIEWER_UNIT_MAX_ANGLES` angles. A ledger without recorded membership falls
+ * the recorded unit bound of angles. A ledger without recorded membership falls
  * back to the base units re-derived at the CURRENT 5-angle bound: a round whose
  * units were emitted under that bound still passes, and a reviewer shared
  * across two base units fails closed. That fallback does NOT reproduce the
@@ -640,14 +640,16 @@ export function countFreshDispatchUnits(perAngle) {
  * @param {unknown} perAngle
  * @param {{name: string, angles: string[]}[]|null} [resolvedGroups]
  * @param {unknown} [dispatchUnits] recorded `{ name, angles }[]` membership
+ * @param {number} [unitBound] the round's recorded unit bound (the context artifact's `fanout.unitBound`); absent means 5
  * @returns {string|null}
  */
-export function fanoutReviewerPairingError(perAngle, resolvedGroups = null, dispatchUnits = null) {
+export function fanoutReviewerPairingError(perAngle, resolvedGroups = null, dispatchUnits = null, unitBound = undefined) {
+  const bound = resolveReviewerUnitBound(unitBound);
   if (!Array.isArray(perAngle)) return null;
   const baseUnits = [];
   for (const g of Array.isArray(resolvedGroups) ? resolvedGroups : []) {
     const angles = Array.isArray(g?.angles) ? g.angles : [];
-    for (let i = 0; i < angles.length; i += REVIEWER_UNIT_MAX_ANGLES) baseUnits.push(angles.slice(i, i + REVIEWER_UNIT_MAX_ANGLES));
+    for (let i = 0; i < angles.length; i += bound) baseUnits.push(angles.slice(i, i + bound));
   }
   const baseOf = new Map();
   // Keyed on the BASE angle name: the ledger's perAngle vocabulary may spell an
@@ -673,7 +675,7 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null, disp
     // one-angle reviewer identities must not let a split, oversized, or
     // foreign-member unit bypass this fail-closed check.
     for (const unit of dispatchUnits) {
-      const unitError = recordedUnitError(unit, baseUnits, baseOf);
+      const unitError = recordedUnitError(unit, baseUnits, baseOf, bound);
       if (unitError !== null) return `fan-out provenance records invalid dispatch unit membership: ${unitError}`;
     }
     configuredGroupOf = new Map();
@@ -763,7 +765,7 @@ function dispatchUnitsShapeError(dispatchUnits) {
 
 /**
  * A recorded unit is legitimate only when it holds at most
- * `REVIEWER_UNIT_MAX_ANGLES` angles and is exactly a union of whole re-derived
+ * the recorded unit bound of angles and is exactly a union of whole re-derived
  * base units. Every recorded angle must belong to a re-derived base unit.
  * Returns an error string or null. Pure.
  * @param {{ name: string, angles: string[] }} unit shape-checked recorded unit
@@ -771,9 +773,9 @@ function dispatchUnitsShapeError(dispatchUnits) {
  * @param {Map<string, number>} baseOf angle -> base unit index
  * @returns {string|null}
  */
-function recordedUnitError(unit, baseUnits, baseOf) {
+function recordedUnitError(unit, baseUnits, baseOf, bound) {
   const angles = unit.angles.map((a) => a.trim());
-  if (angles.length > REVIEWER_UNIT_MAX_ANGLES) return `unit "${unit.name}" holds ${angles.length} angles, above the ${REVIEWER_UNIT_MAX_ANGLES}-angle unit bound`;
+  if (angles.length > bound) return `unit "${unit.name}" holds ${angles.length} angles, above the ${bound}-angle unit bound; re-run the round's gate-context build and emit-fanout-dispatch for this head to regroup and record its bound`;
   // Base-name comparison on both sides: a recorded unit keyed on base angle
   // names is still a union of whole base units when the base units themselves
   // were derived from a delta-suffixed ledger spelling (and vice versa).
@@ -903,7 +905,7 @@ const MAX_ANGLE_NAME_LENGTH = 200;
  * @param {unknown} result
  * @returns {string|null}
  */
-function validateAngleResult(result) {
+export function validateAngleResult(result) {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return "angle result must be an object";
   }
@@ -1248,7 +1250,7 @@ export function assertNoProjectedForbiddenDefer(enriched, clusters) {
  *
  * @param {Array<object>} findings — the flat consolidated findings array
  * @param {object} judgeVerdict — the validated judge verdict artifact
- * @param {{ pastCap?: boolean, round?: number }} [options] — `pastCap`: the `lowFixCapped` state from `resolveDraftRoundCap`, true at or past `gates.draft.maxReviewRounds` and at pre_approval_gate in every round (default false); `round`: the draft_gate round number from the same resolver (0 without a round count, e.g. pre_approval_gate)
+ * @param {{ pastCap?: boolean, round?: number }} [options] — `pastCap`: the `lowFixCapped` state from `resolveDraftRoundCap`, true at pre_approval_gate in every round and never at the draft gate (default false); `round`: the draft_gate round number from the same resolver (0 without a round count, e.g. pre_approval_gate)
  * @returns {{ findings: Array<object>, scopeDrift: object }}
  */
 export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false, round = 0 } = {}) {
@@ -1259,7 +1261,8 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
   // finding's own index when the ledger carries no stamped clusters), and the
   // one disposition and its prose apply to every member.
   const stamped = enriched.every((f) => Number.isInteger(f?.clusterId));
-  const clusterOf = (i) => (stamped ? enriched[i].clusterId : i);
+  // An unstamped ledger with appended stamped findings (the pinned Copilot body cluster) keeps each stamped finding in its own cluster.
+  const clusterOf = (i) => (Number.isInteger(enriched[i]?.clusterId) ? enriched[i].clusterId : i);
   const clusterIds = new Set(enriched.map((_f, i) => clusterOf(i)));
   // Unstamped (legacy) ledgers cluster later (judge-pass and the ledger writer), so the coercion reads the same clusters up front.
   const projectedClusters = stamped ? [] : clusterFindings(enriched, { headSha: validated.headSha }).clusters;
@@ -1270,7 +1273,7 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
     }
     const memberIndices = stamped
       ? enriched.flatMap((_f, i) => (clusterOf(i) === d.index ? [i] : []))
-      : projectedClusters.find((c) => c.memberIndices.includes(d.index)).memberIndices;
+      : [...new Set([...(projectedClusters.find((c) => c.memberIndices.includes(d.index))?.memberIndices ?? []), ...enriched.flatMap((_f, i) => (clusterOf(i) === d.index ? [i] : []))])];
     if (d.disposition === "defer") {
       // GATE-EXEC-THREAD-DISPOSITION: a high, a question and an all-nit cluster are never deferred.
       const blocked = neverDeferredSeverity(memberIndices.map((i) => enriched[i]));
@@ -1281,8 +1284,8 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
     // ADR 0188: an `act` on a cluster is coerced from the cluster each finding is projected into and the ORIGINAL severities
     // (read before any promotion, so the result never depends on disposition order). failOpen promotes a cluster holding a low
     // to medium and keeps act in every round; else (failOpen is ignored on an all-nit cluster) an all-nit cluster stays act only in
-    // draft round 1 below the cap (the fixer fixes it) and rejects after; a low/nit cluster with a low (its nit members ride along,
-    // one disposition per cluster) stays act below the round cap and defers at or past it.
+    // draft round 1 (the fixer fixes it) and rejects after; a low/nit cluster with a low (its nit members ride along,
+    // one disposition per cluster) stays act at the draft gate and defers at pre_approval_gate.
     let disposition = d.disposition;
     let reason = d.reason;
     let followUpDraft = d.followUpDraft;
@@ -1360,6 +1363,9 @@ export function listOpenActItems(findings) {
 /** A round is past the cap when its completed-round count (the posted round included) reaches a positive cap. */
 export const isPastRoundCap = (round, cap) => cap > 0 && round >= cap;
 
+/** Whether a finding carries a non-blank severity string (the fixer act-list matcher refuses anything else). */
+export const hasSeverityText = (f) => typeof f?.severity === "string" && f.severity.trim() !== "";
+
 /**
  * The `capClosed` record of a past-cap judge defer or reject, or null for any other finding. A locatable question
  * keeps its thread and is never cap-closed.
@@ -1373,44 +1379,32 @@ export function capClosedFor(finding, { round, cap }) {
 }
 
 /**
- * Blockers a past-cap draft_gate round composes into `blocked`. A new act item and, after the cap round, a re-surfaced act item of any severity
- * block (at the cap round a re-surfaced high or medium blocks only without a `judgeFix`), unless every act item is low or nit in the cap round (GATE-EXEC-LOW-FIX-UNTIL-CAP applies instead); a mixed cap-round list follows the remedy rule below. A high, a `failOpen: true` finding that is not an act item with a `judgeFix` at the cap round, a missing
- * disposition, an unknown severity, a medium `defer` without `followUpIssueNumber` and a medium `reject` without `judgeReason` block as
- * `severity_disagreement`. A defer to the PR itself (`pr`) is not a target, and a medium defer is never final when `pr` is not an integer (fail closed). A medium rejected with a reason or deferred with a target issue is final (ADR 0191).
- * At the cap round (`round === cap`) an act item of a known severity with a string `judgeFix` does not block: the round composes
- * `findings_present` and the fixer fixes it. In every round after the cap round any act item blocks, a low or nit and a re-surfaced one included, and no fixer runs (GATE-EXEC-ROUND-CAP).
- * A `judgeFix` or `judgeReason` counts only as a non-blank string.
+ * Blockers a past-cap draft_gate round composes into `blocked` (GATE-EXEC-SOFT-CAP, ADR 0251). A blocker exists only for a named human decision:
+ * a `high` act item without a non-blank `judgeFix` (at the cap round a high with a `judgeFix` goes to the fixer; after it a high always blocks),
+ * a `question`-severity act item, a `failOpen: true` or `high` finding the judge defers or rejects, and a finding with no valid disposition or severity
+ * and an act item with a missing or blank severity (evidence integrity, `severity_disagreement`). Medium, low, nit and unknown-severity act items and a medium defer or reject without `failOpen` never block: they reach the fixer and the pre-push delta.
  * @returns {Array<{ kind: "round_cap_reached", reason: "new_act"|"resurfaced"|"severity_disagreement", item: string }>}
  */
-export function pastCapBlockers(findings, { pr, round, cap } = {}) {
+export function pastCapBlockers(findings, { round, cap } = {}) {
   const atCap = cap > 0 && round === cap;
-  const nonBlank = (value) => typeof value === "string" && value.trim().length > 0;
-  // Only an act item of a known severity (high, medium, low, nit) with a string remedy is exempt at the cap round; an unknown, missing or question severity blocks.
-  const hasRemedy = (f) => nonBlank(f.judgeFix) && ["high", "medium", "low", "nit"].includes(normalizeSeverity(f.severity));
   const list = Array.isArray(findings) ? findings : [];
   const label = (f, reason) => `[${normalizeSeverity(f?.severity)}] ${String(f?.summary ?? "").trim()} (${reason})`;
-  const acts = list.filter(isOpenActItem);
-  const afterCap = cap > 0 && round > cap;
-  // An all-low/nit list follows GATE-EXEC-LOW-FIX-UNTIL-CAP in the cap round; in a round after the cap round any act item blocks.
-  const lowNitOnly = !afterCap && acts.every((f) => ["low", "nit"].includes(normalizeSeverity(f.severity)));
   const blockers = [];
-  if (!lowNitOnly) {
-    for (const f of acts) {
-      if (atCap && hasRemedy(f)) continue;
-      // A resurfaced act item that is not exempt above blocks whatever its severity (question, unknown or missing included).
-      const reason = f.resurfaces ? "resurfaced" : "new_act";
-      blockers.push({ kind: "round_cap_reached", reason, item: label(f, reason) });
-    }
-  }
   for (const f of list) {
-    if (isOpenActItem(f)) continue;
     const severity = normalizeSeverity(f?.severity);
+    if (isOpenActItem(f)) {
+      const hasFix = typeof f.judgeFix === "string" && f.judgeFix.trim().length > 0;
+      if (!hasSeverityText(f)) {
+        // The fixer act-list matcher refuses a missing or blank severity, so the item is an evidence-integrity blocker.
+        blockers.push({ kind: "round_cap_reached", reason: "severity_disagreement", item: label(f, "severity_disagreement") });
+      } else if (severity === "question" || (severity === "high" && !(atCap && hasFix))) {
+        const reason = f.resurfaces ? "resurfaced" : "new_act";
+        blockers.push({ kind: "round_cap_reached", reason, item: label(f, reason) });
+      }
+      continue;
+    }
     const closed = f?.judgeDisposition === "defer" || f?.judgeDisposition === "reject";
-    const isFinal = f?.judgeDisposition === "reject"
-      ? nonBlank(f.judgeReason)
-      : Number.isInteger(pr) && Number.isInteger(f?.followUpIssueNumber) && f.followUpIssueNumber > 0 && f.followUpIssueNumber !== pr;
-    const closedBlocks = closed && (severity === "high" || (severity === "medium" && !isFinal));
-    if (!JUDGE_DISPOSITIONS.includes(f?.judgeDisposition) || !VALID_SEVERITIES.has(severity) || (closed && f?.failOpen === true) || closedBlocks) {
+    if (!JUDGE_DISPOSITIONS.includes(f?.judgeDisposition) || !VALID_SEVERITIES.has(severity) || (closed && (f.failOpen === true || severity === "high"))) {
       blockers.push({ kind: "round_cap_reached", reason: "severity_disagreement", item: label(f, "severity_disagreement") });
     }
   }

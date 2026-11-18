@@ -40,6 +40,9 @@ import { evaluateAdrTripwire as defaultEvaluateAdrTripwire } from "../loop/check
 import { defaultFetchOrigin } from "../loop/standing-authorization.mjs";
 import { waiveAdrTripwire as defaultWaiveAdrTripwire } from "./waive-adr-tripwire.mjs";
 import { findAdrNumberCollisions } from "../docs/validate-decision-records.mjs";
+import { hasSpikePrMarker, spikePrRefusal } from "./_spike-pr-marker.mjs";
+import { scanDiffText } from "@dev-loops/core/security/secret-scan";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 const VALID_METHODS = new Set(["squash", "merge", "rebase"]);
 
@@ -106,6 +109,7 @@ Optional:
 Preconditions (each refuses with a machine-readable reason naming the failing one):
   human_approver, mergeable, ci_green, title_markers, gate_evidence,
   copilot_convergence, size_budget_human_approval, merge_approval, adr_tripwire,
+  secret_scan, spike_pr (the PR body carries the ADR 0293 spike no-merge marker),
   retrospective_checkpoint (only when workflow.requireRetrospective is true),
   base_not_integrated (one base + PR-head fetch with an explicit refspec runs at
   the top; after the ADR step, origin/<base> must be an ancestor of the PR head,
@@ -119,6 +123,10 @@ Preconditions (each refuses with a machine-readable reason naming the failing on
   current trigger missing from paths=), it re-issues
   the line through waive-adr-tripwire and re-evaluates; a writer refusal is
   quoted in the reason.
+  secret_scan reuses that fetch and scans the lines origin/<base>...<head> adds
+  with secretlint. It refuses on any hit (file, line, rule) or when the scan
+  fails. Exits: remove and rotate the credential, or add a same-line
+  "secret-scan:allow <reason>" marker for a public value.
   copilot_convergence refuses a current-head Copilot "Changes recommended" (🟡)
   or unrecognized non-approval disposition (🔵 "Needs a closer look" is
   conductor-overridable; unresolved threads still gate it). A trusted
@@ -173,7 +181,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Merge succeeded
   1  Argument error, gh failure, or a failed precondition
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -492,6 +501,25 @@ async function resolveAdrTripwireRefusal({ options, baseRefName, body, headSha, 
   }
 }
 
+export function defaultReadMergeDiff({ base, head, repoRoot }) {
+  return execFileSync("git", ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--text", "-U1000000", `${base}...${head}`], { cwd: repoRoot, env: scrubGitEnv(process.env), encoding: "utf8", maxBuffer: 512 * 1024 * 1024 });
+}
+
+const SECRET_SCAN_EXITS = 'remove the credential and rotate it, or add a same-line "secret-scan:allow <reason>" marker for a public value';
+
+// Returns a secret_scan refusal reason, or null when origin/<base>...<head> adds no hit.
+// Reuses the fetch at the top of the merge; a read or scan error is a refusal (fail closed).
+async function resolveSecretScanRefusal({ baseRefName, headSha, repoRoot, readMergeDiff }) {
+  try {
+    const result = await scanDiffText(await readMergeDiff({ base: `origin/${baseRefName}`, head: headSha, repoRoot }));
+    if (result.ok) return null;
+    const hits = result.findings.map((f) => `${f.file}:${f.line ?? "line unknown"} ${f.ruleId}`).join(", ");
+    return `secret scan hit in origin/${baseRefName}...${headSha}: ${hits}; ${SECRET_SCAN_EXITS}`;
+  } catch (error) {
+    return `the secret scan could not run: ${error instanceof Error ? error.message : String(error)}; ${SECRET_SCAN_EXITS}`;
+  }
+}
+
 export function defaultIsAncestor({ base, head, repoRoot }) {
   try {
     execFileSync("git", ["merge-base", "--is-ancestor", base, head], { cwd: repoRoot, env: scrubGitEnv(process.env), stdio: "ignore" });
@@ -686,6 +714,7 @@ export async function mergePr(options, runtime = {}) {
     detectOriginSlug = detectRepoSlug,
     evaluateAdrTripwire = defaultEvaluateAdrTripwire,
     waiveAdrTripwire = defaultWaiveAdrTripwire,
+    readMergeDiff = defaultReadMergeDiff,
     isAncestor = defaultIsAncestor,
     postMergeComment = defaultPostMergeComment,
   } = runtime;
@@ -698,6 +727,18 @@ export async function mergePr(options, runtime = {}) {
   );
   const currentHeadSha = typeof prView?.headRefOid === "string" && prView.headRefOid.trim().length > 0 ? prView.headRefOid.trim() : null;
   if (!currentHeadSha) throw new Error("Invalid gh pr view payload: missing headRefOid");
+  if (hasSpikePrMarker(prView?.body)) {
+    const reason = spikePrRefusal(options.pr);
+    const failure = {
+      ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
+      failures: [{ precondition: "spike_pr", reason }],
+    };
+    // --check exits 0 with the check-shaped result whenever the preconditions could be evaluated.
+    if (options.check) return { ...failure, check: true };
+    const error = new Error(`Merge preconditions not satisfied: spike_pr (${reason})`);
+    error.mergePrFailure = failure;
+    throw error;
+  }
 
   const baseRefName = typeof prView?.baseRefName === "string" ? prView.baseRefName.trim() : "";
   const repoRoot = resolveRepoRoot(cwd);
@@ -745,7 +786,7 @@ export async function mergePr(options, runtime = {}) {
     throw error;
   }
 
-  // The only base + PR-head fetch of the merge; the ADR tripwire and the ancestry check reuse it.
+  // The only base + PR-head fetch of the merge; the ADR tripwire, the secret scan and the ancestry check reuse it.
   const fetchReason = resolveBaseFetchRefusal({ options, baseRefName, headSha: currentHeadSha, repoRoot, fetchPrHead, detectOriginSlug });
   // --check collects this failure with the rest; a real run raises it after the verdict so an escalated refusal names the approval.
 
@@ -874,6 +915,8 @@ export async function mergePr(options, runtime = {}) {
         waiveAdrTripwire: async () => ({ ok: false, reason: "check_read_only", detail: "--check does not write the PR body" }),
       });
       if (adrCheckReason !== null) checkFailures.push({ precondition: "adr_tripwire", reason: adrCheckReason });
+      const secretCheckReason = await resolveSecretScanRefusal({ baseRefName, headSha: currentHeadSha, repoRoot, readMergeDiff });
+      if (secretCheckReason !== null) checkFailures.push({ precondition: "secret_scan", reason: secretCheckReason });
       const ancestryCheckReason = resolveBaseNotIntegratedRefusal({ baseRefName, headSha: currentHeadSha, repoRoot, isAncestor });
       if (ancestryCheckReason !== null) checkFailures.push({ precondition: "base_not_integrated", reason: ancestryCheckReason });
     }
@@ -928,6 +971,16 @@ export async function mergePr(options, runtime = {}) {
     error.mergePrFailure = {
       ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
       mergeClass: verdict.mergeClass, failures: [{ precondition: "adr_tripwire", reason: adrReason }],
+    };
+    throw error;
+  }
+
+  const secretReason = await resolveSecretScanRefusal({ baseRefName, headSha: currentHeadSha, repoRoot, readMergeDiff });
+  if (secretReason !== null) {
+    const error = new Error(`Merge preconditions not satisfied: secret_scan (${secretReason})`);
+    error.mergePrFailure = {
+      ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
+      mergeClass: verdict.mergeClass, failures: [{ precondition: "secret_scan", reason: secretReason }],
     };
     throw error;
   }
@@ -1058,5 +1111,6 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseMergePrCliArgs(process.argv.slice(2)).help);
   process.exitCode = await main();
 }
