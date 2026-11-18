@@ -225,10 +225,10 @@ test("non-body writes and reads remain allowed by the pre-check", async () => {
 
 test("timeout-wrapped sanctioned commands are denied for every Claude actor", async () => {
   await withManagedRepo(async (root) => {
-    const command = "timeout 300 dev-loops-run scripts/github/merge-pr.mjs --repo acme/widgets --pr 5";
+    const command = "timeout 300 dev-loops-run scripts/github/wait-pr-checks.mjs --repo acme/widgets --pr 5";
     denyForEveryActor(root, command, /Do not wrap sanctioned dev-loops commands in `timeout N`/);
     // The bare form still reaches the decider: the wrapper is the deny, not the sanctioned script.
-    assert.equal(bash(root, "dev-loops-run scripts/github/merge-pr.mjs --repo acme/widgets --pr 5", undefined).decision, "allow");
+    assert.equal(bash(root, "dev-loops-run scripts/github/wait-pr-checks.mjs --repo acme/widgets --pr 5", undefined).decision, "allow");
   });
 });
 
