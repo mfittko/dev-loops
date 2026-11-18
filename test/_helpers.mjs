@@ -455,10 +455,17 @@ export function repeatedLinesContent(count, { prefix = "const x" } = {}) {
 export function ensureOriginHead(cwd) {
   if (process.env.GITHUB_ACTIONS !== "true") return;
   const git = (...args) => spawnSync("git", args, { cwd, encoding: "utf8", env: GIT_FIXTURE_ENV });
-  if (git("symbolic-ref", "-q", "refs/remotes/origin/HEAD").status === 0) return;
-  // A pull_request checkout fetches no remote-tracking refs at all: publish HEAD as the trusted origin/main.
-  if (git("rev-parse", "--verify", "-q", "refs/remotes/origin/main").status !== 0) git("update-ref", "refs/remotes/origin/main", "HEAD");
-  git("remote", "set-head", "origin", "main");
+  const resolved = () => git("symbolic-ref", "-q", "refs/remotes/origin/HEAD").status === 0 && git("rev-parse", "--verify", "-q", "refs/remotes/origin/HEAD^{commit}").status === 0;
+  // Parallel test workers share this checkout: a loser of the ref-lock race retries until the winner's refs resolve.
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (resolved()) return;
+    // A pull_request checkout fetches no remote-tracking refs at all: publish HEAD as the trusted origin/main.
+    if (git("rev-parse", "--verify", "-q", "refs/remotes/origin/main").status !== 0) git("update-ref", "refs/remotes/origin/main", "HEAD");
+    git("remote", "set-head", "origin", "main");
+    if (resolved()) return;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+  throw new Error(`ensureOriginHead: refs/remotes/origin/HEAD and origin/main did not resolve in ${cwd}`);
 }
 
 /**

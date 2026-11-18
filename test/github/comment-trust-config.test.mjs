@@ -94,6 +94,7 @@ test("each load outcome refuses with its own typed state", () => {
     assert.match(detail(noRef, { defaultBranch: "main" }), /refusing to run: the local origin\/main ref is absent.*run: git fetch origin$/);
     assert.match(detail(invalid.dir, { defaultBranch: "main" }), /then run: git fetch origin$/);
     assert.equal(state(valid.dir, { defaultBranch: "main", git: gitFailingOn("show") }), "malformed");
+    assert.match(detail(valid.dir, { defaultBranch: "main", git: gitFailingOn("show") }), /fix \.devloops on origin\/main, then run: git fetch origin$/);
     assert.equal(state(invalid.dir, { defaultBranch: "main" }), "invalid");
     assert.equal(state(valid.dir, { defaultBranch: "main" }), "loaded");
   } finally {
