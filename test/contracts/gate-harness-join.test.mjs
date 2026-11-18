@@ -50,6 +50,7 @@ test("the gate coordinator names the command on Claude Code and does not require
   for (const file of ["agents/gate-coordinator.agent.md", ".claude/agents/gate-coordinator.md"]) {
     const text = await readRepo(file);
     assert.match(text, /gate wait-for-units/);
+    assert.match(text, /from the lane's linked worktree as `dev-loops-run --repo-root <worktree> cli\/index\.mjs gate wait-for-units`/);
     assert.doesNotMatch(text, /async: false|bg_wait/);
   }
 });

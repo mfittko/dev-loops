@@ -10,7 +10,7 @@ import { PassThrough } from "node:stream";
 import {
   formatWatchCycleConcise,
   parseWatchCycleCliArgs,
-  runWatchCycle,
+  runWatchCycle as runWatchCycleAtCwd,
   watchWorkflowRun,
 } from "../../scripts/loop/run-watch-cycle.mjs";
 import { runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
@@ -26,13 +26,20 @@ import { EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY } from "@dev-loops/core/loop/timeo
 // (refinement.requireCopilotConvergenceAtLatestHead: true): the re-request
 // scenarios below were written against it.
 let capFixtureRepoRoot = null;
+// Issue 3224: the lease cwd defaults to an isolated checkout with no run-context file, so a lane
+// worktree that holds `.pi/dev-loop-run-context.json` cannot change which run id these cycles resolve.
+let isolatedCheckout = null;
+const runWatchCycle = (options, deps = {}) => runWatchCycleAtCwd(options, { cwd: isolatedCheckout, ...deps });
 beforeAll(async () => {
+  isolatedCheckout = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-cycle-checkout-"));
+  await mkdir(path.join(isolatedCheckout, ".git"));
   capFixtureRepoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-cycle-cap-fixture-"));
   const realDevloops = await readFile(path.resolve(".devloops"), "utf8");
   await writeFile(path.join(capFixtureRepoRoot, ".devloops"), realDevloops.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2\n  requireCopilotConvergenceAtLatestHead: true"), "utf8");
 });
 afterAll(async () => {
   if (capFixtureRepoRoot) await rm(capFixtureRepoRoot, { recursive: true, force: true });
+  if (isolatedCheckout) await rm(isolatedCheckout, { recursive: true, force: true });
 });
 const capPinnedHandoff = (opts, ctx) => runHandoff(opts, { ...ctx, repoRoot: capFixtureRepoRoot });
 
@@ -1037,6 +1044,7 @@ test("watcher-exclusivity claims under the run id from the run-context file with
       { repo: "owner/repo", pr: 17 },
       {
         env: {},
+        cwd: process.cwd(),
         runHandoffImpl: copilotWatchHandoffWithHead("abc123"),
         ensureOwnershipImpl: async () => ({ ok: true }),
         recordWatchClaimImpl: async ({ runId: id, head, waitKind }) => {

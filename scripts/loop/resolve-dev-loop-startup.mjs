@@ -90,14 +90,16 @@ Required (exactly one):
   --spike <path>  Path to a spike artifact to start a spike loop locally
 Optional modifier:
   --claim        With --issue <n> or --pr <n> only: if the target is open and unassigned,
-                 assign the current user (the only GitHub write; open targets only), then start. Pass it
+                 assign the current user (the only GitHub write; open targets only; it also writes the local run-context file), then start. Pass it
                  only when the user explicitly asked to start or continue that
                  exact target. With --pr, an unreadable linked issue refuses
                  the claim. Rejected with --review/--ui-review/--input/
                  --plan-file/--spike and with no target. Outside native Codex, a
                  started --claim also reports runContext: it reuses the lane's
                  run id, or mints one into <linked worktree>/.pi/dev-loop-run-context.json
-                 that later commands resolve without DEVLOOPS_RUN_ID.
+                 that later commands resolve without DEVLOOPS_RUN_ID. Outside a
+                 linked worktree with no resolvable run id, --claim returns
+                 needs_reconcile with the loop ensure-worktree command.
   --review       With --pr only: route the PR to the read-only review strategy
                  instead of the default continue_on_pr path. Requires no
                  ownership. Rejected without --pr, or combined with --issue/

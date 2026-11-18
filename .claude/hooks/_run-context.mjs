@@ -347,8 +347,12 @@ export function resolveRunId(env = process.env, { cwd = null, fs = fsDefault } =
     return synthesizePiRunId(childSessionId ?? env[NATIVE_PI_PARENT_SESSION_MARKER]);
   }
   const root = typeof cwd === "string" && cwd.length > 0 ? resolveRunContextRoot(cwd, { fs }) : null;
-  return root === null ? null : readRunContext({ root, fs })?.runId ?? null;
+  const fileRunId = root === null ? null : readRunContext({ root, fs })?.runId ?? null;
+  // The file can arrive with PR content, so only a well-formed id becomes the lane identity.
+  return fileRunId !== null && FILE_RUN_ID_PATTERN.test(fileRunId) ? fileRunId : null;
 }
+
+const FILE_RUN_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
 // A linked worktree's `.git` file points at `<git dir>/worktrees/<name>`; a submodule's points at `<git dir>/modules/<name>`.
 function linkedWorktreeGitDir(dir, fs) {

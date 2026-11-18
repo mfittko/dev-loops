@@ -516,9 +516,10 @@ export async function runWatchCycle(
     recordWatchClaimImpl = defaultRecordWatchClaim,
     detectSessionActivity = false,
     spawnImpl = spawn,
+    cwd = process.cwd(),
   } = {},
 ) {
-  const leaseCwd = resolveRepoRoot(process.cwd());
+  const leaseCwd = resolveRepoRoot(cwd);
   const nowMs = Date.now();
   const exclusivityStaleAfterMs = resolveStaleRunnerMaxAgeMs({}, env);
   const gateExclusivity = (waitKind, head) => gateWatcherExclusivity(

