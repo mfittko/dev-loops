@@ -483,7 +483,9 @@ export function ensureTrustConfigCheckout(cwd, scriptPath) {
   const url = git("config", "--get", "remote.origin.url").stdout.trim();
   // A fixture's fake github.com origin is rewritten only inside the OS temp dir, never in a real checkout.
   const fakeOrigin = /^(git@github\.com:|https:\/\/github\.com\/)/.test(url) && cacheFs.realpathSync(cwd).startsWith(cacheFs.realpathSync(os.tmpdir()) + path.sep);
-  if (url && !fakeOrigin) ensureOriginHead(cwd);
+  // Heal only the real test checkout, so temp fixtures behave the same in CI and locally.
+  const isRepoRoot = cacheFs.realpathSync(git("rev-parse", "--show-toplevel").stdout.trim()) === cacheFs.realpathSync(path.resolve(import.meta.dirname, ".."));
+  if (url && !fakeOrigin && isRepoRoot) ensureOriginHead(cwd);
   if ((url && !fakeOrigin) || git("rev-parse", "--verify", "HEAD").status !== 0 || git("symbolic-ref", "-q", "refs/remotes/origin/HEAD").status === 0) return;
   if (git("branch", "--show-current").stdout.trim()) addLocalOrigin(cwd);
 }
