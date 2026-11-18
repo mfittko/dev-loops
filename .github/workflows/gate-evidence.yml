@@ -270,8 +270,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
-          git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"
           base_ref="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.base.ref')"
+          # checkout drops persisted credentials, so a private repo needs the token for these fetches; it travels in the environment only.
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraheader
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          export GIT_CONFIG_VALUE_0
+          # An explicit destination refspec refreshes origin/<base> to the current tip, so the patch-id is not computed against a stale base.
+          git fetch --no-tags origin "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}" "refs/pull/${PR_NUMBER}/head"
           echo "base_ref=${base_ref}" >> "$GITHUB_OUTPUT"
 
       # --skip-fanout-ledger-check: the fan-out findings-log ledger is a
@@ -462,8 +467,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
-          git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"
           base_ref="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.base.ref')"
+          # checkout drops persisted credentials, so a private repo needs the token for these fetches; it travels in the environment only.
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraheader
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          export GIT_CONFIG_VALUE_0
+          # An explicit destination refspec refreshes origin/<base> to the current tip, so the patch-id is not computed against a stale base.
+          git fetch --no-tags origin "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}" "refs/pull/${PR_NUMBER}/head"
           echo "base_ref=${base_ref}" >> "$GITHUB_OUTPUT"
 
       - name: Recompute draft_gate / pre_approval_gate evidence

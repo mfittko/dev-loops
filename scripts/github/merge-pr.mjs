@@ -166,7 +166,7 @@ Merge classes:
              options, piped to git patch-id --verbatim; a base-only head change
              keeps it valid).
 
-Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approvalVia, approvalMatch, method, repo, pr, headSha, copilotConvergenceState, copilotDisposition, copilotCarriedConvergence, copilotBodyDisposition, postMerge }
+Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approvalVia, approvalMatch, approveMergeLine, method, repo, pr, headSha, copilotConvergenceState, copilotDisposition, copilotCarriedConvergence, copilotBodyDisposition, postMerge }
   copilotConvergenceState: current_head_clean | current_head_findings | no_current_head_review,
   or null when the current head SHA is unknown
   copilotDisposition: the current-head review disposition, or for
@@ -1012,6 +1012,14 @@ export async function mergePr(options, runtime = {}) {
   // The one ancestry check runs after the ADR step (the waiver writer refreshes the base too), with no refetch.
   const ancestryReason = resolveBaseNotIntegratedRefusal({ baseRefName, headSha: currentHeadSha, repoRoot, isAncestor });
   if (ancestryReason !== null) refuseBaseNotIntegrated(ancestryReason, { mergeClass: verdict.mergeClass });
+  // The ADR waiver may have refreshed origin/<base> after the patch-id authorized the merge; the id must still match the refreshed base.
+  if (verdict.approvalMatch === "patch_id") {
+    let refreshedPatchId = null;
+    try { refreshedPatchId = computePatchId({ base: `origin/${baseRefName}`, head: currentHeadSha, repoRoot }); } catch { /* fail closed below */ }
+    if (refreshedPatchId !== currentPatchId) {
+      refuseBaseNotIntegrated(`the patch-id of origin/${baseRefName}...${currentHeadSha} changed after the approval was matched (the base moved); post a new approve merge line from merge-pr --check and re-run`, { mergeClass: verdict.mergeClass });
+    }
+  }
 
   // All preconditions satisfied — perform the merge. NEVER a tag or publish.
   // runChild resolves for ANY exit code (it only rejects on a spawn error), so a
@@ -1095,6 +1103,7 @@ export async function mergePr(options, runtime = {}) {
     mergeClass: verdict.mergeClass,
     approvalVia: verdict.approvalVia,
     approvalMatch: verdict.approvalMatch,
+    approveMergeLine: describeApproval({ verdict, headSha: currentHeadSha, patchId: currentPatchId, sizeClass: evidence.sizeOutcome }).approveMergeLine,
     method: options.method,
     repo: options.repo,
     pr: options.pr,

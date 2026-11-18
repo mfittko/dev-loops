@@ -133,11 +133,15 @@ export function parseReconcileCliArgs(argv) {
  * the real error).
  */
 async function defaultDetectEvidence({ repo, pr }, { runChild, nodeBin = process.execPath }) {
+  // The detector derives a patch-id approval match only when it knows the base branch; an unreadable base leaves head-only matching.
+  const baseRun = await runChild("gh", ["api", `repos/${repo}/pulls/${pr}`, "--jq", ".base.ref"]);
+  const baseRefName = baseRun.code === 0 ? String(baseRun.stdout ?? "").trim() : "";
   const res = await runChild(nodeBin, [
     DETECT_EVIDENCE_SCRIPT,
     "--repo", repo,
     "--pr", String(pr),
     "--skip-fanout-ledger-check",
+    ...(baseRefName ? ["--base-ref-name", baseRefName] : []),
   ]);
   // The detector exits non-zero when evidence is not satisfied; that is a
   // normal signal here, not an error. On the SATISFIED path it emits the JSON
