@@ -9,9 +9,9 @@ import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
-const RAW_GH_WRITE = /\bgh (?:issue|pr) (?:create|edit)\b/u;
-// A line saying "never"/"raw"/"MUST NOT" names the raw command to forbid it, not to prescribe it.
-const PROHIBITION = /\b(?:never|raw|MUST NOT)\b/iu;
+const RAW_GH_WRITE = /\bgh (?:issue|pr) (?:create|edit|comment)\b/u;
+// A prohibition phrase right before a prose span ("never raw `gh ...`") forbids the raw command.
+const PROHIBITION = /\b(?:never|MUST NOT)(?:\s+(?:use|call|run|pass))?(?:\s+raw)?[\s*_]*$/iu;
 
 // Mirrors sourceFiles() in claude-no-bare-invocation.test.mjs.
 function listMarkdown(dir, suffix) {
@@ -31,56 +31,98 @@ function sourceFiles() {
   ];
 }
 
-// Returns [startLine, commandText, fullLine] for every inline code span and fenced-block line.
-// Backslash-continued fenced lines are joined into the line they start on.
+// Returns { start, text, before } for every inline code span and fenced-block line. `before` is the
+// prose preceding an inline span (null for a fenced line). Backslash-continued fenced lines are
+// joined into the line they start on, and consecutive prose lines are joined into one paragraph so a
+// hard-wrapped span is seen whole; a paragraph reports its first line.
 function commandContexts(markdown) {
   const out = [];
   let fenced = false;
   let pending = null;
-  markdown.split("\n").forEach((raw, i) => {
-    const line = pending ? `${pending.text} ${raw.trim()}` : raw;
-    const start = pending ? pending.start : i + 1;
-    if (fenced && line.endsWith("\\")) {
-      pending = { text: line.slice(0, -1).trimEnd(), start };
-      return;
-    }
+  let para = null;
+  const flushPending = () => {
+    if (pending) out.push({ start: pending.start, text: pending.text, before: null });
     pending = null;
-    if (/^\s*(```|~~~)/u.test(line)) {
+  };
+  const flushPara = () => {
+    if (para) {
+      for (const m of para.text.matchAll(/`([^`]+)`/gu)) {
+        out.push({ start: para.start, text: m[1], before: para.text.slice(0, m.index) });
+      }
+    }
+    para = null;
+  };
+  markdown.split("\n").forEach((raw, i) => {
+    if (/^\s*(```|~~~)/u.test(raw)) {
+      flushPending();
+      flushPara();
       fenced = !fenced;
       return;
     }
-    if (fenced) out.push([start, line, line]);
-    else for (const m of line.matchAll(/`([^`]+)`/gu)) out.push([start, m[1], line]);
+    if (fenced) {
+      const line = pending ? `${pending.text} ${raw.trim()}` : raw;
+      const start = pending ? pending.start : i + 1;
+      if (line.endsWith("\\")) pending = { text: line.slice(0, -1).trimEnd(), start };
+      else {
+        pending = null;
+        out.push({ start, text: line, before: null });
+      }
+      return;
+    }
+    if (raw.trim() === "") {
+      flushPara();
+      return;
+    }
+    para = para ? { start: para.start, text: `${para.text} ${raw.trim()}` } : { start: i + 1, text: raw.trim() };
   });
+  flushPending();
+  flushPara();
   return out;
 }
 
-export function rawWriteHits(markdown) {
-  return commandContexts(markdown)
-    .filter(([, text, line]) => RAW_GH_WRITE.test(text) && !PROHIBITION.test(line))
-    .map(([n]) => n);
+export function rawWriteContexts(markdown) {
+  return commandContexts(markdown).filter(
+    ({ text, before }) => RAW_GH_WRITE.test(text) && !(before !== null && PROHIBITION.test(before)),
+  );
 }
 
-// Documented exceptions, "<file>:<line>": each names the raw command only to describe what a
-// launcher wraps, and prescribes nothing.
-const ALLOWLIST = new Set([
-  "skills/docs/merge-preconditions.md:417",
-  "skills/docs/retrospective-checkpoint-contract.md:207",
-  "skills/docs/retrospective-checkpoint-contract.md:208",
-  "skills/docs/copilot-loop-operations.md:150",
-]);
+export function rawWriteHits(markdown) {
+  return rawWriteContexts(markdown).map(({ start }) => start);
+}
 
-test("no procedure doc prescribes a raw `gh issue|pr create|edit` in a command context", () => {
+// Documented exceptions: each names the raw command only to describe what a launcher wraps, and
+// prescribes nothing. Keyed on the file plus a stable substring of the span, not a line number.
+const ALLOWLIST = [
+  { file: "skills/docs/merge-preconditions.md", span: "gh pr edit --add-assignee" },
+  { file: "skills/docs/retrospective-checkpoint-contract.md", span: "gh issue create" },
+  { file: "skills/docs/retrospective-checkpoint-contract.md", span: "gh issue edit" },
+  { file: "skills/docs/copilot-loop-operations.md", span: "gh pr create" },
+  // Prohibitions phrased outside the narrow "never/MUST NOT [use|call] [raw]" form.
+  { file: "skills/local-implementation/SKILL.md", span: "gh pr create" },
+  { file: "skills/docs/merge-preconditions.md", span: "gh pr edit --remove-reviewer" },
+  { file: "skills/docs/main-agent-contract.md", span: "gh issue create" },
+  { file: "skills/docs/decision-record-contract.md", span: "gh pr create" },
+  { file: "commands/loop-enqueue.command.md", span: "gh issue create" },
+];
+
+test("no procedure doc prescribes a raw `gh issue|pr create|edit|comment` in a command context", () => {
   const files = sourceFiles();
   assert.ok(files.length > 0, "expected source markdown files to scan");
   const hits = [];
+  const used = new Set();
   for (const file of files) {
-    for (const n of rawWriteHits(fs.readFileSync(path.join(repoRoot, file), "utf8"))) {
-      const site = `${file}:${n}`;
-      if (!ALLOWLIST.has(site)) hits.push(site);
+    for (const { start, text } of rawWriteContexts(fs.readFileSync(path.join(repoRoot, file), "utf8"))) {
+      const entry = ALLOWLIST.find((e) => e.file === file && text.includes(e.span));
+      if (entry) used.add(entry);
+      else hits.push(`${file}:${start}`);
     }
   }
   assert.deepEqual(hits, []);
+  assert.deepEqual(
+    ALLOWLIST.filter((e) => !used.has(e)),
+    [],
+    "stale ALLOWLIST entries match no raw hit",
+  );
 });
 
 test("matcher flags the raw create form and accepts the launcher form", () => {
@@ -90,4 +132,32 @@ test("matcher flags the raw create form and accepts the launcher form", () => {
   assert.deepEqual(rawWriteHits(launcher), []);
   assert.deepEqual(rawWriteHits("```sh\ngh pr edit 5 \\\n  --body-file x\n```"), [2]);
   assert.deepEqual(rawWriteHits("Prose naming gh issue create is fine."), []);
+});
+
+test("matcher keeps fence state when a fenced line ends in a backslash", () => {
+  const doc = "```sh\ngh pr edit 5 \\\n```\n\n```sh\ngh issue create --body-file b.md\n```";
+  assert.deepEqual(rawWriteHits(doc), [2, 6]);
+});
+
+test("matcher covers the comment verbs", () => {
+  assert.deepEqual(rawWriteHits("Reply with `gh pr comment 5 --body-file reply.md`."), [1]);
+  assert.deepEqual(rawWriteHits("Post `gh issue comment 5 --body-file c.md`."), [1]);
+  const launcher = "Post it with `node <dev-loops-package-root>/scripts/github/comment-issue.mjs --repo <r> --issue 5 --body-file f`.";
+  assert.deepEqual(rawWriteHits(launcher), []);
+});
+
+test("matcher exempts only a prohibition phrase right before a prose span", () => {
+  assert.deepEqual(rawWriteHits("Never `gh issue comment` directly."), []);
+  assert.deepEqual(rawWriteHits("**never raw `gh issue create`**"), []);
+  assert.deepEqual(rawWriteHits("MUST NOT use raw `gh pr edit`."), []);
+  assert.deepEqual(rawWriteHits("```sh\ngh pr edit 5 --body-file raw-body.md\n```"), [2]);
+  assert.deepEqual(rawWriteHits("Write the raw body to a file, then run `gh issue edit 5 --body-file f`."), [1]);
+});
+
+test("matcher scans a code span split by a hard wrap", () => {
+  assert.deepEqual(rawWriteHits("Create the child with `gh issue create --repo <r>\n--body-file <p>`."), [1]);
+  assert.deepEqual(
+    rawWriteHits("Create the child with `node <dev-loops-package-root>/cli/index.mjs issue create --repo <r>\n--body-file <p>`."),
+    [],
+  );
 });
