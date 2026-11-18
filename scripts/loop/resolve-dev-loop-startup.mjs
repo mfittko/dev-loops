@@ -1666,7 +1666,13 @@ export function buildResolveDevLoopStartupResult(input, {
 export function withClaimRunContext(result, { claim, env, cwd, repoRoot = cwd, issue, pr }) {
   // A needs_reconcile stop or a no-strategy route is not a started lane: keep its own nextAction and write no file.
   if (!claim || result?.ok !== true || result.bundleKind === "needs_reconcile" || result.selectedStrategy === "none") return result;
-  const runContext = ensureLaneRunContext({ env, cwd });
+  let runContext;
+  try {
+    runContext = ensureLaneRunContext({ env, cwd });
+  } catch (error) {
+    if (error?.code !== "RUN_CONTEXT_SYMLINK") throw error;
+    return buildNeedsReconcileStartupResult(result.bundle ?? {}, `\`loop startup --claim\` refused: ${error.message}. Remove the symlink at ${error.path} (\`rm ${shellWord(error.path)}\`), then re-run \`loop startup --claim\`.`, result.bundle?.pendingRetrospectives);
+  }
   if (runContext !== null) return { ...result, runContext };
   if (resolveRuntimeHarness(env) === "codex") return result;
   const [flag, kind, n] = issue !== undefined ? ["--issue", "issue", issue] : ["--pr", "pr", pr];

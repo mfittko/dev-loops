@@ -4616,3 +4616,17 @@ test("withClaimRunContext refuses outside a linked worktree except on native Cod
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("--claim refuses with a remedy when the run-context file is a symlink (PR 3235)", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "startup-claim-symlink-"));
+  try {
+    writeFileSync(path.join(root, ".git"), "gitdir: ./.git-common/worktrees/lane\n");
+    mkdirSync(path.join(root, ".pi"));
+    symlinkSync(path.join(root, "elsewhere"), path.join(root, ".pi", "dev-loop-run-context.json"));
+    const refused = withClaimRunContext({ ok: true, selectedStrategy: "copilot_pr_followup", bundle: {} }, { claim: true, env: {}, cwd: root, issue: 1 });
+    assert.equal(refused.bundleKind, "needs_reconcile");
+    assert.match(JSON.stringify(refused), /symlink.*rm /s);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

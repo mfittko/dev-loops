@@ -688,3 +688,15 @@ test("no script refuses a missing --tmp-root", () => {
     }
   }
 });
+
+test("a standalone review-gate wait never heartbeats the runner claim (PR 3235)", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    const plan = JSON.parse(await readFile(planPath, "utf8"));
+    await writeJson(planPath, { ...plan, gate: "review", repo: "o/r", pr: 7 });
+    let calls = 0;
+    const result = await run(root, planPath, { timeoutMs: 120000, env: { DEVLOOPS_RUN_ID: "run-lane" }, ensureOwnership: async () => { calls += 1; return { ok: true }; } });
+    assert.equal(result.outcome, "timeout");
+    assert.equal(calls, 0);
+  });
+});

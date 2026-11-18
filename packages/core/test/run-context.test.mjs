@@ -583,3 +583,21 @@ test("concurrent lane startups in a fresh worktree converge on one persisted id"
   assert.equal(new Set(ids).size, 1);
   assert.equal(readRunContext({ root }).runId, ids[0]);
 });
+
+test("a symlinked .pi dir or run-context file is rejected, never written through (PR 3235)", () => {
+  const outside = makeTempRoot();
+  const victim = path.join(outside, "victim.txt");
+  fs.writeFileSync(victim, "keep");
+  const fileLink = laneWorktree(null);
+  fs.mkdirSync(path.join(fileLink.root, ".pi"));
+  fs.symlinkSync(victim, runContextPath(fileLink.root));
+  assert.throws(() => writeRunContext({ runId: "x", root: fileLink.root }), { code: "RUN_CONTEXT_SYMLINK" });
+  assert.throws(() => ensureLaneRunContext({ env: {}, cwd: fileLink.root }), { code: "RUN_CONTEXT_SYMLINK" });
+  assert.throws(() => ensureLaneRunContext({ env: { DEVLOOPS_RUN_ID: "env-run" }, cwd: fileLink.root }), { code: "RUN_CONTEXT_SYMLINK" });
+  const dirLink = laneWorktree(null);
+  fs.symlinkSync(outside, path.join(dirLink.root, ".pi"));
+  assert.throws(() => writeRunContext({ runId: "x", root: dirLink.root }), { code: "RUN_CONTEXT_SYMLINK" });
+  assert.throws(() => ensureLaneRunContext({ env: {}, cwd: dirLink.root }), { code: "RUN_CONTEXT_SYMLINK" });
+  assert.equal(fs.readFileSync(victim, "utf8"), "keep");
+  assert.deepEqual(fs.readdirSync(outside), ["victim.txt"]);
+});

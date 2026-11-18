@@ -206,7 +206,8 @@ export async function waitForUnits({ artifact, after, emitPlan, judgePlan, units
   // No-op without a resolvable run id or a plan target; a failure never affects the wait.
   let lastHeartbeat = started;
   const heartbeat = async () => {
-    if (!target?.repo || !target?.pr || now() - lastHeartbeat < WATCH_HEARTBEAT_MS) return;
+    // The standalone review route is ownership-exempt and has no teardown, so it never refreshes a claim.
+    if (gate === "review" || !target?.repo || !target?.pr || now() - lastHeartbeat < WATCH_HEARTBEAT_MS) return;
     lastHeartbeat = now();
     try { await ensureOwnership({ repo: target.repo, pr: target.pr, env, cwd, claimIfMissing: true, requireExisting: false }); } catch { /* best-effort */ }
   };

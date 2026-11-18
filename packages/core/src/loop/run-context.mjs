@@ -417,6 +417,17 @@ export function runContextPath(root) {
   return path.join(root, ".pi", RUN_CONTEXT_FILENAME);
 }
 
+// A symlinked `.pi` dir or run-context file would redirect the write outside the worktree.
+function assertNoRedirectedRunContext(file, fs) {
+  for (const target of [path.dirname(file), file]) {
+    let stat = null;
+    try { stat = fs.lstatSync(target); } catch (error) { if (error?.code !== "ENOENT") throw error; }
+    if (stat?.isSymbolicLink()) {
+      throw Object.assign(new Error(`run-context path ${target} is a symlink; remove it so the run id is not written through it`), { code: "RUN_CONTEXT_SYMLINK", path: target });
+    }
+  }
+}
+
 /**
  * Persist the run-context state file (for inspection/recovery).
  *
@@ -433,6 +444,7 @@ export function writeRunContext({ runId, root, mintedAt, fs = fsDefault }) {
     throw new TypeError("writeRunContext: runId must be a non-empty string");
   }
   const file = runContextPath(root);
+  assertNoRedirectedRunContext(file, fs);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const payload = {
     runId: runId.trim(),
@@ -525,6 +537,7 @@ export function ensureLaneRunContext({ env = process.env, cwd, mintedAt, fs = fs
   if (root === null) return null;
   const runId = mintRunId();
   const file = runContextPath(root);
+  assertNoRedirectedRunContext(file, fs);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   // Publish atomically: a hard link fails when a concurrent startup already won, and that winner's id is reused.
   const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
