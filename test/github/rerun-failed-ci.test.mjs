@@ -8,6 +8,7 @@ import { DEFAULT_MAX_ATTEMPTS, isRerunnableAttempt, isSmokeOnly, isSmokeTimeoutO
 const JOB_TIMEOUT = "The job has exceeded the maximum execution time of 20m0s";
 const RUNNER_JOB_TIMEOUT = "The job running on runner GitHub Actions 2 has exceeded the maximum execution time of 45 minutes.";
 const STEP_TIMEOUT = "The action 'Set up Playwright WebKit' has timed out after 10 minutes.";
+const BARE_STEP_TIMEOUT = "The action has timed out.";
 
 const opts = { repo: "owner/repo", headSha: "a".repeat(40) };
 const list = (over = {}) => ({ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 99, status: "completed", attempt: 1, ...over }]) });
@@ -104,6 +105,6 @@ test("isSmokeTimeoutOnlyRun reads the job and step timeout signals and rejects a
 
 test("the timeout matcher accepts the runner-named job timeout and rejects non-timeout annotations", async () => {
   const check = (message) => isSmokeTimeoutOnlyRun({ repo: "owner/repo", runId: 99 }, { env: {}, runChild: makeGhMock([jobs({ databaseId: 11, name: "viewer-smoke", conclusion: "cancelled" }), annotations(11, message)]).runChild });
-  for (const message of [JOB_TIMEOUT, RUNNER_JOB_TIMEOUT, STEP_TIMEOUT]) assert.equal(await check(message), true, message);
+  for (const message of [JOB_TIMEOUT, RUNNER_JOB_TIMEOUT, STEP_TIMEOUT, BARE_STEP_TIMEOUT]) assert.equal(await check(message), true, message);
   for (const message of ["Process completed with exit code 1.", "The operation was canceled.", ""]) assert.equal(await check(message), false, message);
 });

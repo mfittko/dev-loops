@@ -10,7 +10,7 @@ export const DEFAULT_MAX_ATTEMPTS = 3;
 // GitHub never reports `timed_out` for an Actions job. A job past its timeout-minutes is `cancelled` with
 // "The job has exceeded the maximum execution time of 20m0s"; a step past its timeout-minutes fails the job
 // (`failure`) with "The action '<step>' has timed out after 10 minutes." Only the annotation tells a timeout apart.
-const TIMEOUT_ANNOTATION = /has exceeded the maximum execution time|The action '.*' has timed out after/;
+const TIMEOUT_ANNOTATION = /has exceeded the maximum execution time|The action '.*' has timed out after|^The action has timed out\.$/;
 // The `verify` aggregator (ci.yml, if: always()) fails whenever a smoke job fails; it is a dependent, never a cause.
 const AGGREGATOR_JOB_NAME = "verify";
 const HEAD_SHA = /^[0-9a-f]{40}$/;
