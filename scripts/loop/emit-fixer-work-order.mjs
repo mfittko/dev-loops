@@ -73,10 +73,10 @@ It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N
 joinRef is the path for gate wait-for-units --artifact (with --after <planPath>): a full-phase fixer's final-on-write report (<outputRef>.report), else the outputRef.
 Each run supersedes the previous emission for this PR, except a same-head no-commit commit_only re-emission with a locally_clear --delta-result sealed for the canonical plan's execution: it writes fixer-emit-plan.<executionIdentity>.json beside the canonical plan, writes no sequence marker and prints that keyed path as planPath (a join target, never a delta --fixer-plan). Dispatch the printed
 dispatchPayload (the --harness adapter call carrying dispatchPrompt, plus the config-resolved model on the Claude payload when non-null) unchanged; an
-unsupported harness refuses. The only operator input is --operator-focus-file, a JSON file { round?: string, items?: [{ fingerprint, decision }] }
+unsupported harness refuses. The only operator input is --operator-focus-file, a JSON file { round?: string, items?: [{ fingerprint or threadId, decision?, replyDisposition?, replyNote? }] }
 that renders as a bounded, sanitized "Operator focus" section and is pinned by the digest (GATE-EXEC-OPERATOR-FOCUS).
 An item decision picks among remedies its act item offers and never changes the disposition; items need an
---act-list-file source and a fingerprint from that list, or the emit refuses and writes nothing.
+--act-list-file source (bound by fingerprint) or --threads-file source (bound by threadId, no decision); an unknown fingerprint or thread id refuses and writes nothing. replyDisposition (tackled, partially_fixed, deferred or rejected) with a replyNote sets the verifier reply for that thread.
 It accepts no other brief, payload or summary input.
 Exit codes: 0 emitted, 1 refused (missing or conflicting source or authority), 2 usage/IO error.`;
 
@@ -691,8 +691,8 @@ async function emitPlan({
     try { startDeltaSequence({ reviewBaselineHead: headSha, actList: source.parsed }); } catch (error) { throw error.message.startsWith("delta_body_only_act_set:") ? new WorkOrderRefusal("delta_body_only_act_set", error.message) : new Refusal(error.message); }
   }
   const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined, { allowItems: true });
-  if (operatorFocusRaw?.items && !actListFile) throw new OperatorFocusRefusal("GATE-EXEC-OPERATOR-FOCUS: operator focus items need an --act-list-file source; a threads source accepts a round only");
-  const operatorFocus = actListFile ? bindOperatorFocusItems(operatorFocusRaw, source.parsed) : operatorFocusRaw;
+  if (operatorFocusRaw?.items && !actListFile && !threadsFile) throw new OperatorFocusRefusal("GATE-EXEC-OPERATOR-FOCUS: operator focus items need an --act-list-file or --threads-file source");
+  if (operatorFocusRaw?.items?.some((item) => (item.threadId !== undefined) !== Boolean(threadsFile))) throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus items bind by ${threadsFile ? "threadId" : "fingerprint"} on this source`);
   // A trust-incomplete thread (first comment page all untrusted, more pages exist) stays a blocker but is never a fixer source.
   // The filtered payload becomes the pinned threads read, so the read bytes and authority.sourceDigest describe the same payload.
   if (threadsFile && Array.isArray(source.parsed?.threads) && source.parsed.threads.some((thread) => thread?.trustIncomplete === true)) {
@@ -701,6 +701,8 @@ async function emitPlan({
     await capture.write(filteredPath, bytes);
     source = { read: { kind: "threads", path: filteredPath, sha256: sha256(bytes), bytes: bytes.length, required: true }, parsed: filtered };
   }
+  // Bind after the filter: a pin on a trust-incomplete thread refuses as a thread outside the source.
+  const operatorFocus = bindOperatorFocusItems(operatorFocusRaw, actListFile ? source.parsed : undefined, threadsFile ? (source.parsed?.threads ?? []).map((thread) => thread?.threadId) : undefined);
   if (threadsFile && (source.parsed?.ok !== true || !Array.isArray(source.parsed.threads) || source.parsed.repo !== repo || Number(source.parsed.pr) !== Number(pr)
     || !source.parsed.threads.every((thread) => thread?.isResolved === false))) {
     const resolved = Array.isArray(source.parsed?.threads) ? source.parsed.threads.filter((thread) => thread?.isResolved === true) : [];
