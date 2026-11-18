@@ -11,7 +11,7 @@ import { test } from "bun:test";
 import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, codeTreeSkewNote, executionIndexPath, materializationHash, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { seedJudgeSources } from "../loop/_judge-delivery-fixture.mjs";
-import { ensureOriginHead, ensureTrustConfigCheckout, withTempDir, writeGhStub } from "../_helpers.mjs";
+import { ensureTrustConfigCheckout, withTempDir, writeGhStub } from "../_helpers.mjs";
 import { findRetirementAfter, main as pullMain, pullDelegationTarget, shouldRetryFixerPullLocally } from "../../scripts/github/pull-work-order.mjs";
 import { keyedFixerPlanPathForRef } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { shellQuote } from "../../scripts/lib/checkout-delegation-refusal.mjs";
@@ -495,7 +495,6 @@ async function seedDelegateCheckout(dir, { name = "dev-loops", stub = true } = {
 
 // A checkout-less linked worktree of THIS repo, so the real toolchain's same-repo check accepts it as a delegate.
 async function withRealLinkedWorktree(base, name, fn) {
-  ensureOriginHead(process.cwd());
   const linked = path.join(base, name);
   const git = (args) => execFileSync("git", args, { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
   git(["worktree", "add", "-q", "--detach", "--no-checkout", linked]);
@@ -816,7 +815,6 @@ test("self-hosting fixer pull: a delegated skew refusal falls through to the loc
 // assertion; only a skew refusal (covered above) falls back to the local pull.
 test("self-hosting fixer pull: a successful delegated pull returns the worktree renderer's text", async () => {
   const mainRoot = resolveMainWorktreeRoot(process.cwd());
-  ensureOriginHead(mainRoot);
   // Per-run unique names so concurrent or crashed runs cannot collide on the shared repo.
   const uniq = randomBytes(4).toString("hex");
   const prNumber = 100000 + (parseInt(uniq, 16) % 900000);
