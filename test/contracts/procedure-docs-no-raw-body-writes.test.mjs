@@ -91,37 +91,39 @@ export function rawWriteHits(markdown) {
 }
 
 // Documented exceptions: each names the raw command only to describe what a launcher wraps, and
-// prescribes nothing. Keyed on the file plus a stable substring of the span, not a line number.
+// prescribes nothing. Keyed on the file plus the prose tail right before the span and the span
+// itself (`ctx` is a suffix of `${before}${span}`), so an entry pins one site, not a line number.
 const ALLOWLIST = [
-  { file: "skills/docs/merge-preconditions.md", span: "gh pr edit --add-assignee" },
-  { file: "skills/docs/retrospective-checkpoint-contract.md", span: "gh issue create" },
-  { file: "skills/docs/retrospective-checkpoint-contract.md", span: "gh issue edit" },
-  { file: "skills/docs/copilot-loop-operations.md", span: "gh pr create" },
+  { file: "skills/docs/merge-preconditions.md", ctx: "which runs gh pr edit --add-assignee" },
+  { file: "skills/docs/retrospective-checkpoint-contract.md", ctx: "issue #1939), gh issue create" },
+  { file: "skills/docs/retrospective-checkpoint-contract.md", ctx: "create-issue.mjs`), gh issue edit" },
+  { file: "skills/docs/copilot-loop-operations.md", ctx: "The wrapper preserves gh pr create" },
   // Prohibitions phrased outside the narrow "never/MUST NOT [use|call] [raw]" form.
-  { file: "skills/local-implementation/SKILL.md", span: "gh pr create" },
-  { file: "skills/docs/merge-preconditions.md", span: "gh pr edit --remove-reviewer" },
-  { file: "skills/docs/main-agent-contract.md", span: "gh issue create" },
-  { file: "skills/docs/decision-record-contract.md", span: "gh pr create" },
-  { file: "commands/loop-enqueue.command.md", span: "gh issue create" },
+  { file: "skills/local-implementation/SKILL.md", ctx: "MUST NOT open them via raw gh pr create" },
+  { file: "skills/docs/merge-preconditions.md", ctx: "prefer it over a raw gh pr edit --remove-reviewer" },
+  { file: "skills/docs/main-agent-contract.md", ctx: "which names raw gh issue create" },
+  { file: "skills/docs/decision-record-contract.md", ctx: "JSON line after the gh pr create" },
+  { file: "commands/loop-enqueue.command.md", ctx: "do not call raw gh issue create" },
 ];
 
 test("no procedure doc prescribes a raw `gh issue|pr create|edit|comment` in a command context", () => {
   const files = sourceFiles();
   assert.ok(files.length > 0, "expected source markdown files to scan");
   const hits = [];
-  const used = new Set();
+  const used = new Map();
   for (const file of files) {
-    for (const { start, text } of rawWriteContexts(fs.readFileSync(path.join(repoRoot, file), "utf8"))) {
-      const entry = ALLOWLIST.find((e) => e.file === file && text.includes(e.span));
-      if (entry) used.add(entry);
+    for (const { start, text, before } of rawWriteContexts(fs.readFileSync(path.join(repoRoot, file), "utf8"))) {
+      const site = `${before ?? ""}${text}`;
+      const entry = ALLOWLIST.find((e) => e.file === file && site.endsWith(e.ctx));
+      if (entry) used.set(entry, (used.get(entry) ?? 0) + 1);
       else hits.push(`${file}:${start}`);
     }
   }
   assert.deepEqual(hits, []);
   assert.deepEqual(
-    ALLOWLIST.filter((e) => !used.has(e)),
+    ALLOWLIST.filter((e) => used.get(e) !== 1),
     [],
-    "stale ALLOWLIST entries match no raw hit",
+    "each ALLOWLIST entry must match exactly one raw hit",
   );
 });
 
