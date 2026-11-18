@@ -37,7 +37,7 @@ export async function writeGitStub(tempDir, { porcelainOutput = "", headRef = "m
       `  process.exit(0);`,
       `}`,
       "// Only the default-branch trust-config read runs the real git, found past this stub dir; any other command fails.",
-      "const trustRead = [/^symbolic-ref --short refs\\/remotes\\/origin\\/HEAD$/, /^rev-parse --verify --quiet origin\\/[^ ]+\\^\\{commit\\}$/, /^ls-tree --name-only origin\\/[^ ]+ -- [^ ]+$/, /^show origin\\/[^ :]+:[^ ]+$/];",
+      "const trustRead = [/^symbolic-ref --short refs\\/remotes\\/origin\\/HEAD$/, /^rev-parse --verify --quiet origin\\/[^ ]+\\^\\{commit\\}$/, /^ls-tree --full-tree --name-only origin\\/[^ ]+ -- [^ ]+$/, /^show origin\\/[^ :]+:[^ ]+$/];",
       "if (!trustRead.some((re) => re.test(args))) {",
       "  process.stderr.write(`unexpected git args: ${args}\\n`);",
       "  process.exit(97);",

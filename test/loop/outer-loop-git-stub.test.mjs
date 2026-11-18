@@ -23,7 +23,7 @@ test("writeGitStub forwards only the four trust-read shapes and exits 97 for eve
     for (const args of [
       ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
       ["rev-parse", "--verify", "--quiet", "origin/main^{commit}"],
-      ["ls-tree", "--name-only", "origin/main", "--", ".devloops"],
+      ["ls-tree", "--full-tree", "--name-only", "origin/main", "--", ".devloops"],
       ["show", "origin/main:.devloops"],
     ]) assert.notEqual(run(args), 97, args.join(" "));
   } finally {

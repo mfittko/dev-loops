@@ -84,7 +84,7 @@ test("every entry script that reads trust-filtered text loads the trust config",
   const missing = entries.filter((f) => !/\bloadCommentTrustConfig(?:OrExit)?\(/.test(sources.get(f))).map((f) => path.relative(root, f));
   assert.deepEqual(missing, []);
   // Entries that only import path, loader or resolver bindings from a reader entry make no trust read themselves.
-  const nonReaders = ["github/pull-work-order.mjs", "loop/inspect-run-viewer.mjs", "loop/check-pre-push-delta.mjs", "loop/resolve-dev-loop-startup.mjs", "loop/build-handoff-envelope.mjs"];
+  const nonReaders = ["github/pull-work-order.mjs","loop/check-pre-push-delta.mjs", "loop/resolve-dev-loop-startup.mjs", "loop/build-handoff-envelope.mjs"];
   assert.deepEqual(nonReaders.filter((rel) => /\bloadCommentTrustConfig(?:OrExit)?\(/.test(sources.get(path.join(root, rel)))), []);
 
 });

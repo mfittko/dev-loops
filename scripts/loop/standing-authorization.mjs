@@ -110,7 +110,7 @@ export function readDefaultBranchConfig({ repoRoot = process.cwd(), defaultBranc
   for (const name of DEVLOOPS_CONFIG_PATHS) {
     let listed;
     try {
-      listed = git(["ls-tree", "--name-only", `origin/${branch}`, "--", name], { repoRoot });
+      listed = git(["ls-tree", "--full-tree", "--name-only", `origin/${branch}`, "--", name], { repoRoot });
     } catch {
       return refuse("malformed", `cannot list ${name} on origin/${branch}`);
     }

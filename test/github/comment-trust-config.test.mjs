@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "bun:test";
@@ -138,6 +138,30 @@ test("an entry script with an invalid default-branch trust block prints one JSON
     assert.equal(refusal.ok, false);
     assert.equal(refusal.state, "invalid");
     assert.match(refusal.error, /^comment trust config: invalid: /);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a load run from a checkout subdirectory still reads the root .devloops", () => {
+  const { dir } = repoWithDefaultBranch("version: 1\ntrust:\n  githubActionsBot: false\n");
+  try {
+    mkdirSync(join(dir, "sub"));
+    loadCommentTrustConfig({ repoRoot: join(dir, "sub"), defaultBranch: "main" });
+    assert.equal(isTrustedCommentAuthor({ login: "github-actions[bot]", type: "Bot", association: "NONE" }), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a help token that is an option value does not skip the trust load, while a real help flag does", () => {
+  const { dir, git } = repoWithDefaultBranch("version: 1\ntrust:\n  reviewers:\n    - 'bad login'\n");
+  try {
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    const script = new URL("../../scripts/github/capture-review-threads.mjs", import.meta.url).pathname;
+    const valued = spawnSync(process.execPath, [script, "--repo", "o/r", "--pr", "1", "--output", "-h"], { cwd: dir, encoding: "utf8" });
+    assert.equal(valued.status, 3);
+    assert.equal(spawnSync(process.execPath, [script, "--repo", "o/r", "-h"], { cwd: dir, encoding: "utf8" }).status, 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
