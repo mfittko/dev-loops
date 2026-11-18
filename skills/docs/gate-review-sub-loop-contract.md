@@ -951,7 +951,7 @@ A prior head's verdict path is not derivable from the head alone, because each e
 `<roundId>` is random. The conductor reads it from the `workOrder.outputRefs` of
 `<tmp>/gate-judge/<repo-slug>/pr-<N>/<gate>-<priorHead>/judge-emit-plan.json`, searched across
 every listed checkout's `tmp` directory. It passes the relevance verdict (`outputRefs[0]`) as
-`--prior-verdict`.
+`--prior-verdict`. A `--prior-verdict` named `judge-verdict.json` also pins the `spec-authority-verdict.json` beside it, as a `prior-spec-authority-verdict` required read, when that file exists.
 
 The work order derives the gate round itself, from this gate's local findings-log ledgers plus the current head (the `resolveGateRound` computation that `close-gate-findings.mjs` uses, without the PR verdict surfaces), because the round must exist before the judge runs. Pass `--round <n>` only to override that derived value. The work order carries it as the judge input for the medium fix window. A value that is not a positive integer without a sign or prefix refuses as `invalid_round`.
 
@@ -1138,7 +1138,7 @@ judge is a separate agent dispatched after fan-in, not a reviewer. The judge is 
 designated memory: it sees the round history so it can notice accretion, self-renewing churn, or findings-about-a-fix. Its memory is durable and auditable rather
 than implicit: the conductor passes the prior-round judge verdict artifacts to
 `emit-judge-work-order.mjs` as `--prior-verdict`, which pins them as hash-bound required
-reads of the work order. Prior-round ledgers are reachable only through the work order's
+reads of the work order. A prior `judge-verdict.json` also pins the `spec-authority-verdict.json` beside it when that file exists. Prior-round ledgers are reachable only through the work order's
 widening rule.
 
 <!-- rule: GATE-EXEC-REMEDIATION-SITE-QUERY -->
