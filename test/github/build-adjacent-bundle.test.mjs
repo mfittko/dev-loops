@@ -11,7 +11,6 @@ import {
   listRepoFiles,
   resolveRelativeImport,
   resolveSafeRepoPath,
-  DEFAULT_MAX_FILE_BYTES,
 } from "../../scripts/github/build-adjacent-bundle.mjs";
 
 async function writeFiles(root, files) {
@@ -114,7 +113,10 @@ test("buildAdjacentBundle includes imports (out-edges) and importers (in-edges) 
     assert.ok(dep, "imported dep present (out-edge)");
     assert.equal(dep.role, "imports");
     assert.deepEqual(dep.relatedTo, ["src/changed.mjs"]);
-    assert.ok(dep.content.includes("function helper"));
+    assert.deepEqual(Object.keys(dep), ["path", "role", "relatedTo", "bytes"]);
+    assert.equal(dep.bytes, Buffer.byteLength("export function helper() { return 1; }\n"));
+    assert.ok(!JSON.stringify(bundle).includes("function helper"), "no file contents in the bundle");
+    assert.ok(!("truncated" in bundle) && !("maxFileBytes" in bundle));
 
     assert.ok(caller, "importer present (in-edge)");
     assert.equal(caller.role, "importedBy");
@@ -164,29 +166,6 @@ test("buildAdjacentBundle strips lockfile/generated/binary adjacents WITH a reco
   }
 });
 
-test("buildAdjacentBundle truncates a huge file and records it in the truncated manifest", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "adj-bundle-"));
-  try {
-    const huge = "// x\n" + "a".repeat(DEFAULT_MAX_FILE_BYTES * 2);
-    await writeFiles(root, {
-      "src/changed.mjs": 'import "./huge.mjs";\n',
-      "src/huge.mjs": huge,
-    });
-    const bundle = await buildAdjacentBundle({ changedFiles: ["src/changed.mjs"], repoRoot: root, maxFileBytes: 1024 });
-    const hugeEntry = fileByPath(bundle, "src/huge.mjs");
-    assert.ok(hugeEntry, "huge file still included (truncated, not dropped)");
-    assert.equal(hugeEntry.truncated, true);
-    assert.equal(hugeEntry.includedBytes, 1024);
-    assert.ok(hugeEntry.bytes > 1024);
-    assert.equal(hugeEntry.content.length, 1024);
-    const manifest = bundle.truncated.find((t) => t.path === "src/huge.mjs");
-    assert.ok(manifest, "recorded in truncated manifest");
-    assert.equal(manifest.includedBytes, 1024);
-    assert.ok(manifest.bytes > 1024);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
 
 test("buildAdjacentBundle strips a binary adjacent (NUL-byte content sniff)", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "adj-bundle-"));
@@ -207,15 +186,14 @@ test("buildAdjacentBundle strips a binary adjacent (NUL-byte content sniff)", as
   }
 });
 
-test("buildAdjacentBundle detects a binary whose first NUL is past a small maxFileBytes cap", async () => {
-  // Regression: the bounded read must still cover the binary-sniff window even
-  // when maxFileBytes < the sniff window, so a binary with text-looking bytes
-  // before the cap and a NUL after it is not misclassified as text.
+test("buildAdjacentBundle detects a binary whose first NUL is past the first bytes of the file", async () => {
+  // Regression: the sniff window covers more than the first bytes, so a binary
+  // with text-looking bytes before a NUL is not misclassified as text.
   const root = await mkdtemp(path.join(os.tmpdir(), "adj-bundle-"));
   try {
     const blob = Buffer.concat([Buffer.alloc(5000, 0x61 /* 'a' */), Buffer.from([0x00])]);
     await writeFiles(root, { "late-nul.payload": blob });
-    const bundle = await buildAdjacentBundle({ changedFiles: ["late-nul.payload"], repoRoot: root, maxFileBytes: 1024 });
+    const bundle = await buildAdjacentBundle({ changedFiles: ["late-nul.payload"], repoRoot: root });
     assert.equal(fileByPath(bundle, "late-nul.payload"), undefined);
     const entry = bundle.stripped.find((s) => s.path === "late-nul.payload");
     assert.ok(entry, "binary with a late NUL must be stripped, not included as text");
@@ -249,7 +227,7 @@ test("buildAdjacentBundle skips an unsafe changed path and records it in strippe
     // Not read as content, not leaked.
     assert.equal(fileByPath(bundle, unsafe), undefined);
     assert.ok(
-      !bundle.files.some((f) => String(f.content ?? "").includes("SECRET")),
+      !JSON.stringify(bundle).includes("SECRET"),
       "unsafe out-of-root file content must not leak into the bundle",
     );
     const entry = bundle.stripped.find((s) => s.path === unsafe);
@@ -301,7 +279,6 @@ test("buildAdjacentBundle returns empty structures for no changed files", async 
     const bundle = await buildAdjacentBundle({ changedFiles: [], repoRoot: root });
     assert.deepEqual(bundle.files, []);
     assert.deepEqual(bundle.stripped, []);
-    assert.deepEqual(bundle.truncated, []);
     assert.deepEqual(bundle.missing, []);
   } finally {
     await rm(root, { recursive: true, force: true });

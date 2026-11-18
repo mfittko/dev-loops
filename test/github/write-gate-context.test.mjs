@@ -1528,6 +1528,11 @@ test("CLI --base <ref> produces a full build-once bundle: non-null diffPath, pop
     assert.equal(byPath["src/changed.mjs"].role, "changed");
     assert.equal(byPath["src/dep.mjs"].role, "imports");
     assert.equal(byPath["src/caller.mjs"].role, "importedBy");
+    // The bundle is an index: path, role, relatedTo and bytes, never file contents.
+    for (const entry of artifact.adjacentCode.files) {
+      assert.deepEqual(Object.keys(entry), ["path", "role", "relatedTo", "bytes"]);
+    }
+    assert.ok(!JSON.stringify(artifact).includes("return helper()"), "the context JSON embeds no source text");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -4246,6 +4251,13 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "## Reviewer sibling sweep",
       "",
       `${SIBLING_SWEEP_CLAUSE} Rule \`GATE-REVIEW-SIBLING-SWEEP\` in skills/docs/gate-review-sub-loop-contract.md.`,
+      "",
+      "## Optional read fields",
+      "",
+      "Query an optional read by field with `jq`; never run `jq keys` to discover its shape.",
+      "- `context` (JSON): `resolvedAngles`, `angleScopes`, `scope.diffPath`, `scope.diffSource`, `scope.changedFiles`, `adjacentCode.files[]` (`path`, `role`, `relatedTo`, `bytes`; an index, no file contents: read a file by its path), `adjacentCode.stripped`, `adjacentCode.missing`, `adjacentCode.expansion.files`, `adjacentCode.expansion.dropped`, `requiredReads`, `fanout`.",
+      "- `validation` (JSON): `allPassed`, `status`, `authority`, `headSha`, `suites[]` (`name`, `command`, `exitCode`, `outputTail`, `outputPath`).",
+      "- `raw-diff`: the unfiltered unified diff; grep it, never read it whole.",
       "",
       "## Required reads",
       "",

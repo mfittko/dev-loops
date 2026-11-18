@@ -51,7 +51,7 @@ import { parseNonNegativeInteger, parsePrNumber, requireTokenValue, runChild } f
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { viewPr } from "./view-pr.mjs";
 import { viewIssue } from "./view-issue.mjs";
-import { buildAdjacentBundle, decodeGitDiffPathToken, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
+import { buildAdjacentBundle, decodeGitDiffPathToken } from "./build-adjacent-bundle.mjs";
 import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
 import { capRoundExit, foldDraftGateSatisfied, isCleanDraftVerdict } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -1323,6 +1323,18 @@ function pushExpansionLines(lines, expansion) {
   }
 }
 
+/** Render the "## Optional read fields" section: the static field names of each optional read, so a reviewer never discovers them with `jq keys`. */
+function renderOptionalReadFieldsSection() {
+  return [
+    "## Optional read fields",
+    "",
+    "Query an optional read by field with `jq`; never run `jq keys` to discover its shape.",
+    "- `context` (JSON): `resolvedAngles`, `angleScopes`, `scope.diffPath`, `scope.diffSource`, `scope.changedFiles`, `adjacentCode.files[]` (`path`, `role`, `relatedTo`, `bytes`; an index, no file contents: read a file by its path), `adjacentCode.stripped`, `adjacentCode.missing`, `adjacentCode.expansion.files`, `adjacentCode.expansion.dropped`, `requiredReads`, `fanout`.",
+    "- `validation` (JSON): `allPassed`, `status`, `authority`, `headSha`, `suites[]` (`name`, `command`, `exitCode`, `outputTail`, `outputPath`).",
+    "- `raw-diff`: the unfiltered unified diff; grep it, never read it whole.",
+  ].join("\n");
+}
+
 /**
  * Render the "## Reviewer sibling sweep" section: the one sibling-defect
  * clause owned by GATE-REVIEW-SIBLING-SWEEP in the gate-review sub-loop
@@ -1444,6 +1456,8 @@ export function renderBriefingPrefix({
   lines.push(renderTokenDisciplineSection(contextPath));
   lines.push("");
   lines.push(renderSiblingSweepSection());
+  lines.push("");
+  lines.push(renderOptionalReadFieldsSection());
   lines.push("");
   lines.push(renderRequiredReadsSection(requiredReads, worktreeRoot));
   return { text: lines.join("\n") + "\n" };
@@ -1622,7 +1636,7 @@ export function renderBriefingEvidence({
     lines.push(`Adjacent files (${adjacentFiles.length}):`);
     pushPathListLines(lines, adjacentFiles.map((f) => ({ path: f.path, label: `${f.path} (${f.role})` })));
     lines.push(
-      `Stripped: ${adjacentCode.stripped?.length ?? 0}, Truncated: ${adjacentCode.truncated?.length ?? 0}, Missing: ${adjacentCode.missing?.length ?? 0}`,
+      `Stripped: ${adjacentCode.stripped?.length ?? 0}, Missing: ${adjacentCode.missing?.length ?? 0}`,
     );
     pushExpansionLines(lines, adjacentCode.expansion);
   } else {
@@ -2845,11 +2859,10 @@ export function buildGateContextArtifact(options) {
  * @param {string} input.gate
  * @param {string} input.headSha
  * @param {string} input.tmpRoot
- * @param {number} [input.maxFileBytes]
  * @param {{ repoRoot: string }} opts
  * @returns {Promise<{ diffPath: string|null, diffToWrite: object|null, changedFiles: string[], adjacentCode: object|null, diffOutput: string|null }>}
  */
-async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFileBytes, expansion }, { repoRoot }) {
+async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, expansion }, { repoRoot }) {
   const diffOutput = diff?.diffOutput;
   let diffPath = null;
   const changedFiles = parseChangedFiles(diff?.nameStatusOutput);
@@ -2860,9 +2873,9 @@ async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFil
   // Build the deterministic, neutral adjacent-code bundle ONCE: for each
   // changed source file, include its 1-hop import out-edges (files it imports)
   // and in-edges (files that import it), with size guards (skip
-  // lockfiles/generated/binary/minified; cap per-file bytes; truncate the long
-  // tail) recorded in a stripped/truncated manifest. Every independent reviewer
-  // is seeded with this identical bundle instead of re-deriving it — work-dedup.
+  // lockfiles/generated/binary/minified) recorded in a stripped manifest. The
+  // bundle is an index (path, role, relatedTo, bytes), never file contents.
+  // Every independent reviewer is seeded with this identical bundle instead of re-deriving it — work-dedup.
   // Best-effort: bundle computation must never block the context artifact.
   let adjacentCode = null;
   if (changedFiles.length > 0) {
@@ -2870,7 +2883,6 @@ async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFil
       adjacentCode = await buildAdjacentBundle({
         changedFiles,
         repoRoot,
-        maxFileBytes: typeof maxFileBytes === "number" && maxFileBytes > 0 ? maxFileBytes : DEFAULT_MAX_FILE_BYTES,
         diffText: typeof diffOutput === "string" ? diffOutput : "",
         expansion,
       });
@@ -3777,7 +3789,6 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {string|null} [input.validationPosture]
  * @param {string|null} [input.prBody] — PR description text, written to the round-bound `pr-body` read (`<gate>-<headSha>.pr-body-<digest12>.md`), never into the evidence file
  * @param {string|null} [input.issueBody] — linked-issue body text, inlined under `acceptanceCriteria`'s label; omitted when absent
- * @param {number} [input.maxFileBytes] — per-file cap for the adjacent-code bundle (default DEFAULT_MAX_FILE_BYTES)
  * @param {number|null} [input.availableReviewers] — harness remaining reviewer budget for the preflight; null/omitted = unexposed (proceed, no shortfall proven)
  * @param {string[]|null} [input.carriedAngles] — angle names the fail-closed Phase 1.2 carry-forward seam (resolve-angle-carry-forward.mjs) has proven carried from a prior clean head; excluded from the preflight's `requiredReviewers`/`pendingGroups` alongside `completedAngles`; null/omitted = no carried angles known
  * @param {string} [input.tmpRoot]
@@ -3789,7 +3800,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  *
  * The artifact additionally carries a deterministic, neutral `adjacentCode`
  * bundle when changed files are present: 1-hop import in/out-edges of the
- * changed files with size guards + a stripped/truncated manifest. Reviewers read
+ * changed files as an index with a stripped manifest. Reviewers read
  * it by reference through the `context` entry of `requiredReads`, as an
  * optional navigation aid, instead of re-deriving the adjacent code.
  */
@@ -3886,7 +3897,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // scope.changedFiles, and the neutral adjacentCode bundle, all built ONCE by
   // the shared resolveDiffScope helper (also used by the CLI --base path).
   const { diffPath, diffToWrite, changedFiles, adjacentCode, diffOutput } = await resolveDiffScope(
-    { diff: input.diff, repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, maxFileBytes: input.maxFileBytes, expansion: input.config?.gates?.contextExpansion },
+    { diff: input.diff, repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, expansion: input.config?.gates?.contextExpansion },
     { repoRoot },
   );
 

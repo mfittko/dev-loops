@@ -2664,3 +2664,20 @@ test("a multi-part filtered diff: the unit prompt lists every diff part with its
     assert.deepEqual(unit.workOrder.requiredReads.filter((read) => read.kind === "diff").map((read) => read.path), parts.map((part) => part.path));
   });
 });
+
+test("the unit prompt describes the optional bundle files and their fields, under the work-order ceiling", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedRealConfiguredGroupBundle(tmpDir);
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const [unit] = JSON.parse(result.stdout).units;
+    const prompt = await readFile(path.resolve(tmpDir, unit.promptPath), "utf8");
+    const start = prompt.indexOf("## Optional read fields");
+    const section = prompt.slice(start, prompt.indexOf("\n\n## ", start));
+    assert.ok(section.length > 0 && Buffer.byteLength(section) < 900);
+    for (const field of ["adjacentCode.files[]", "`path`", "`role`", "`bytes`", "`allPassed`", "suites[]", "raw-diff"]) {
+      assert.ok(section.includes(field), field);
+    }
+    assert.ok(unit.promptBytes < REVIEWER_WORK_ORDER_MAX_BYTES);
+  });
+});
