@@ -147,9 +147,9 @@ export function readSequenceMarker(tmpRoot, baselineHead) {
  * the tested commit is its baseline or descends from it, or when `remoteRef` is the marker's branch (whatever the
  * pushed sha is, so a force-push is covered); a branch marker ends once the remote ref has advanced past the baseline.
  * A marker that names no branch cannot be ended by a remote ref: it stays active until `gate close-sequence` closes it as MARKER_UNREADABLE (fail closed).
- * When `repo` (the owner/name the push targets: the GitHub push URL's slug, else the checkout's origin slug) is given, a marker is skipped before the ancestry test only when its execution work order ref names a valid other owner/name
- * and `baselinePresent(baseline)` reports the baseline absent from this checkout, whatever the push target ref is (a same-named branch of another repo is skipped too). A marker whose repo equals the push target repo, a marker that names no valid repo, a marker whose baseline is present
- * (a fork or renamed repo), and a push with no `repo` keep the rules above (fail closed). `baselinePresent` throws on a git failure, which refuses the push.
+ * When `repo` (the owner/name the push targets: the GitHub push URL's slug, else the checkout's origin slug) is given, a marker that passes the branch rule is skipped before the ancestry test only when its execution work order ref names a valid other owner/name
+ * and `baselinePresent(baseline)` reports the baseline absent from this checkout. A marker whose repo equals the push target repo, a marker that names no valid repo, a marker whose baseline is present
+ * (a fork or renamed repo), and a push with no `repo` keep the rules above (fail closed). When `baselinePresent` throws on a git failure, a `fullGranted` marker is skipped and any other marker is active (the refusal names it).
  * With several active markers a non-granted one wins, so a stale
  * granted marker cannot admit a commit_only fixer push.
  * @param {{ tmpRoot: string, head: string, remoteRef?: string, repo?: string, baselinePresent?: (baseline: string) => boolean, listBaselines: () => string[], isAncestor: (a: string, b: string) => boolean, remoteAdvanced: (baseline: string, branch: string) => boolean }} input
@@ -161,8 +161,18 @@ export function findActiveSequence({ tmpRoot, head, remoteRef, repo, baselinePre
     if (!marker) continue;
     let markerRepo = /^fixer:([^#:]+)#[0-9]+:/u.exec(marker.execution?.workOrderRef ?? "")?.[1];
     try { if (markerRepo !== undefined) parseRepoSlugParts(markerRepo); } catch { markerRepo = undefined; } // A malformed segment names no repo (fail closed).
-    if (repo && markerRepo && !repoSlugEquals(markerRepo, repo) && !baselinePresent(baseline)) continue;
     if (marker.branch !== undefined && remoteRef !== undefined && remoteRef !== `refs/heads/${marker.branch}`) continue;
+    if (repo && markerRepo && !repoSlugEquals(markerRepo, repo)) {
+      let absent;
+      try {
+        absent = !baselinePresent(baseline);
+      } catch {
+        // The probe failed (any git failure other than a missing object). A granted marker never refuses, so skip it; any other marker refuses and the refusal reason names it (fail closed).
+        if (!marker.fullGranted) active.push(marker);
+        continue;
+      }
+      if (absent) continue;
+    }
     let covered;
     try {
       covered = baseline === head || isAncestor(baseline, head) || (marker.branch !== undefined && remoteRef === `refs/heads/${marker.branch}`);

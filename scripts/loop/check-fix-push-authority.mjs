@@ -8,7 +8,7 @@
  * exit 0 allows it. A marker that names a branch covers a push only when the known push target is
  * refs/heads/<branch>; a branchless marker, or an unknown push target, keeps the ancestry rule (fail closed).
  * A marker is skipped only when its execution work order ref names a valid other owner/name than the repo the push targets (the GitHub push URL git passes as the hook's second argument, else the checkout's origin) and its baseline commit is absent from this checkout, whatever the pushed branch is; a same-repo marker, a marker that names no valid repo, a marker whose baseline is present (a fork or renamed repo), or a push with no detectable repo keeps these rules.
- * A parse error or git failure (including a failed baseline probe) refuses (fail closed). With no ref lines the HEAD of
+ * A parse error or git failure refuses (fail closed). A failed baseline probe refuses under that marker unless it is fullGranted (then it is skipped), and the refusal names the marker file. With no ref lines the HEAD of
  * the checkout is tested. Agent identity is unknown to git, so this check binds every pusher.
  */
 import { execFileSync } from "node:child_process";

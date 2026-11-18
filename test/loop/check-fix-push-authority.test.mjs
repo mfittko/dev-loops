@@ -324,11 +324,34 @@ test("a failed baseline probe refuses instead of reading the baseline as absent 
     git("remote", "add", "origin", "https://github.com/o/a.git");
     const tmpRoot = path.join(root, "tmp");
     writeSequenceMarker({ tmpRoot, baselineHead: ABSENT, branch: "issue-b", execution: executionFor("o/b", ABSENT) });
-    assert.throws(() => findActiveSequence({
-      tmpRoot, head, repo: "o/a", baselinePresent: () => { throw new Error("git failure"); },
-      listBaselines: () => [ABSENT], isAncestor: () => false, remoteAdvanced: () => false,
-    }), /git failure/);
+    const probeFails = { tmpRoot, head, repo: "o/a", baselinePresent: () => { throw new Error("git failure"); }, listBaselines: () => [ABSENT], isAncestor: () => false, remoteAdvanced: () => false };
+    assert.equal(findActiveSequence(probeFails)?.baselineHead, ABSENT, "the ungranted marker is returned so the refusal names it");
     // The real probe returns false only for exit status 1 (missing object): the absent baseline is skipped.
+    assert.deepEqual(checkFixPushAuthority(root), { ok: true });
+  });
+});
+
+test("a failed baseline probe skips a fullGranted marker and a marker of another branch", async () => {
+  await withRepo(async (root, head) => {
+    const tmpRoot = path.join(root, "tmp");
+    writeSequenceMarker({ tmpRoot, baselineHead: ABSENT, branch: "issue-b", fullGranted: true, execution: executionFor("o/b", ABSENT) });
+    const input = { tmpRoot, head, repo: "o/a", baselinePresent: () => { throw new Error("git failure"); }, listBaselines: () => [ABSENT], isAncestor: () => false, remoteAdvanced: () => false };
+    assert.equal(findActiveSequence(input), null, "granted marker");
+    writeSequenceMarker({ tmpRoot, baselineHead: ABSENT, branch: "issue-b", execution: executionFor("o/b", ABSENT) });
+    assert.equal(findActiveSequence({ ...input, remoteRef: "refs/heads/issue-a" }), null, "the branch rule skips the marker before the probe runs");
+  });
+});
+
+test("the real probe failing (64-hex baseline in a SHA-1 checkout) refuses under an ungranted marker with its path and allows a granted one", async () => {
+  await withRepo(async (root, _head, git) => {
+    git("remote", "add", "origin", "https://github.com/o/a.git");
+    const tmpRoot = path.join(root, "tmp");
+    const sha256Baseline = "a".repeat(64);
+    writeSequenceMarker({ tmpRoot, baselineHead: sha256Baseline, branch: "issue-b", execution: executionFor("o/b", sha256Baseline) });
+    const refused = checkFixPushAuthority(root);
+    assert.equal(refused.ok, false);
+    assert.ok(refused.reason.includes(`${sha256Baseline}.sequence`));
+    writeSequenceMarker({ tmpRoot, baselineHead: sha256Baseline, branch: "issue-b", fullGranted: true, execution: executionFor("o/b", sha256Baseline) });
     assert.deepEqual(checkFixPushAuthority(root), { ok: true });
   });
 });
