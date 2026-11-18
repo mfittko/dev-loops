@@ -8,7 +8,7 @@ import { isSmokeOnly, isSmokeTimeoutOnlyRun, parseRerunFailedCiCliArgs, rerunFai
 const JOB_TIMEOUT = "The job has exceeded the maximum execution time of 20m0s";
 const STEP_TIMEOUT = "The action 'Set up Playwright WebKit' has timed out after 10 minutes.";
 
-const opts = { repo: "owner/repo", headSha: "a".repeat(40), maxAttempts: 3 };
+const opts = { repo: "owner/repo", headSha: "a".repeat(40) };
 const list = (over = {}) => ({ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 99, status: "completed", attempt: 1, ...over }]) });
 const jobs = (...entries) => ({ assertArgs: ["view", "99"], stdout: JSON.stringify({ jobs: [{ databaseId: 5, name: "build (24)", conclusion: "success" }, ...entries] }) });
 const annotations = (id, message) => ({ assertArgs: ["api", `repos/owner/repo/check-runs/${id}/annotations`], stdout: JSON.stringify([{ annotation_level: "failure", message }, { annotation_level: "failure", message: "The operation was canceled." }]) });
@@ -48,7 +48,7 @@ test("refuses when the head has no run", async () => {
 
 test("parses args and requires --repo and --head-sha", () => {
   assert.throws(() => parseRerunFailedCiCliArgs(["--repo", "o/r"]), /requires --repo and --head-sha/);
-  assert.equal(parseRerunFailedCiCliArgs(["--repo", "o/r", "--head-sha", "abc", "--max-attempts", "2"]).maxAttempts, 2);
+  assert.throws(() => parseRerunFailedCiCliArgs(["--repo", "o/r", "--head-sha", "abc", "--max-attempts", "2"]), /Unknown argument: --max-attempts/);
 });
 
 test("isSmokeOnly pre-filters on smoke job names", () => {

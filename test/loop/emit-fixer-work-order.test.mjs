@@ -26,6 +26,7 @@ import { readSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
+import { DEFAULT_MAX_ATTEMPTS } from "../../scripts/github/rerun-failed-ci.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { addLocalOrigin, ensureOriginHead, makeGhMock, runIdFreeEnv, withTempDir, withoutClaudeCode } from "../_helpers.mjs";
 import { TOOLCHAIN_ROOT, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
@@ -3625,6 +3626,19 @@ test("issue 3251: a smoke-only red head whose failed jobs carry GitHub timeout a
     // A non-smoke failed check never reads GitHub: the mock has no entries, so any gh call would fail.
     const mixed = ciFailureFor(fx.head, { failedChecks: [{ name: "viewer-smoke" }, { name: "build (24)" }] });
     assert.equal((await emitCi(fx, { runChild: makeGhMock([]).runChild }, mixed)).workOrder.source, "ci-failure");
+  });
+});
+
+test("issue 3251: a timed-out smoke run at the re-run cap, or a failed live read, falls through to the fixer route", async () => {
+  await withFixture(async (fx) => {
+    const smokeOnly = ciFailureFor(fx.head, { failedChecks: [{ name: "viewer-smoke" }] });
+    // At the cap the re-run script would refuse, so the emitter keeps the fixer route and never reads the jobs.
+    const atCap = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", attempt: DEFAULT_MAX_ATTEMPTS }]) }]);
+    assert.equal((await emitCi(fx, { runChild: atCap.runChild }, smokeOnly)).workOrder.source, "ci-failure");
+    assert.equal(atCap.calls.filter((c) => c.command === "gh").length, 1);
+    // A gh failure in the live read never blocks the fixer.
+    const ghDown = makeGhMock([{ assertArgs: ["list"], exitCode: 1, stdout: "", stderr: "HTTP 502" }]);
+    assert.equal((await emitCi(fx, { runChild: ghDown.runChild }, smokeOnly)).workOrder.source, "ci-failure");
   });
 });
 

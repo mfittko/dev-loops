@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parsePositiveInteger, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
+import { requireTokenValue,runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -40,12 +40,12 @@ export async function isSmokeTimeoutOnlyRun({ repo, runId }, runtime = {}) {
   return true;
 }
 
-const USAGE = `Usage: rerun-failed-ci.mjs --repo <owner/name> --head-sha <sha> [--max-attempts <n>]
+const USAGE = `Usage: rerun-failed-ci.mjs --repo <owner/name> --head-sha <sha>
 Sanctioned re-run of the failed jobs of a PR head's completed CI run
 (gh run rerun --failed). Recovery for a timed-out smoke job (issue 3251).
 Refuses a run that is still in progress, a run whose failed jobs are not all
 smoke jobs with a GitHub timeout annotation, and a run that has reached
---max-attempts attempts (default ${DEFAULT_MAX_ATTEMPTS}); the attempt count is the run's own attempt number.
+attempt ${DEFAULT_MAX_ATTEMPTS}; the attempt count is the run's own attempt number.
 Output (stdout, JSON): { "ok": true, "action": "rerun", "runId": N, "attempt": N }
 Refusals (stderr JSON, exit 1): no run, run_in_progress, attempt_cap, not_smoke_timeout.
 ${JQ_OUTPUT_USAGE}
@@ -58,19 +58,18 @@ const parseError = buildParseError(USAGE);
 export function parseRerunFailedCiCliArgs(argv) {
   const { tokens } = parseArgs({
     args: [...argv],
-    options: { help: { type: "boolean", short: "h" }, repo: { type: "string" }, "head-sha": { type: "string" }, "max-attempts": { type: "string" }, ...JQ_OUTPUT_PARSE_OPTIONS },
+    options: { help: { type: "boolean", short: "h" }, repo: { type: "string" }, "head-sha": { type: "string" },...JQ_OUTPUT_PARSE_OPTIONS },
     allowPositionals: true,
     strict: false,
     tokens: true,
   });
-  const options = { help: false, repo: undefined, headSha: undefined, maxAttempts: DEFAULT_MAX_ATTEMPTS };
+  const options = { help: false, repo: undefined, headSha: undefined };
   for (const token of tokens) {
     if (token.kind === "positional") throw parseError(`Unknown argument: ${token.value}`);
     if (token.kind !== "option") continue;
     if (token.name === "help") { options.help = true; return options; }
     if (token.name === "repo") { options.repo = requireTokenValue(token, parseError).trim(); continue; }
     if (token.name === "head-sha") { options.headSha = requireTokenValue(token, parseError).trim(); continue; }
-    if (token.name === "max-attempts") { options.maxAttempts = parsePositiveInteger(requireTokenValue(token, parseError), parseError); continue; }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -84,7 +83,7 @@ export async function rerunFailedCi(options, runtime = {}) {
   const run = await findHeadCiRun(options, runtime);
   if (!run) throw new Error(`no ci.yml run found for head ${options.headSha}`);
   if (run.status !== "completed") throw new Error(`run_in_progress: CI run ${run.databaseId} is ${run.status}; wait for it with scripts/github/wait-pr-checks.mjs, then retry`);
-  if (run.attempt >= options.maxAttempts) throw new Error(`attempt_cap: CI run ${run.databaseId} is at attempt ${run.attempt} of ${options.maxAttempts}; stop re-running and escalate`);
+  if (run.attempt >= DEFAULT_MAX_ATTEMPTS) throw new Error(`attempt_cap: CI run ${run.databaseId} is at attempt ${run.attempt} of ${DEFAULT_MAX_ATTEMPTS}; stop re-running and escalate`);
   if (!await isSmokeTimeoutOnlyRun({ repo: options.repo, runId: run.databaseId }, runtime)) throw new Error(`not_smoke_timeout: CI run ${run.databaseId} has a failed job that is not a timed-out smoke job; emit the ci-failure fixer order instead`);
   const rerun = await runChild(ghCommand, ["run", "rerun", String(run.databaseId), "--repo", options.repo, "--failed"], env);
   if (rerun.code !== 0) throw new Error(`Failed to re-run CI run ${run.databaseId}: ${rerun.stderr.trim() || `exit code ${rerun.code}`}`);
