@@ -21,6 +21,8 @@ import { buildContainmentMap, isCommitContainedByHead } from "./_commit-containm
 import { EXECUTION_IDENTITY_RE, fixerReportPath, verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
 import {
   evaluateFixerDisposition,
+  composeFixerReplyBody,
+  FIXER_COMMIT_CLAIM_KINDS,
   FIXER_DISPOSITION_FAILED_STEP,
   FIXER_DISPOSITION_KIND,
   normalizeFixerDispositionHandoff,
@@ -35,8 +37,10 @@ import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { revalidateLegacyCompletion } from "./_legacy-fixer-revalidation.mjs";
 import { authenticateOriginalPlan } from "./_fixer-emission-evidence.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
+import { operatorFocusDigestEntry } from "../loop/_operator-focus.mjs";
 import { observeHeadCiSignals } from "./observe-head-ci.mjs";
 import { normalizeHeadScopedCiContract } from "@dev-loops/core/loop/copilot-ci-status";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 // Provenance mark: the sha256 of the report bytes --construct wrote, kept beside the report.
 const RESIDUAL_REPLY_MARKER = "Residual delta status:";
@@ -60,12 +64,19 @@ Required:
                         from (emit-fixer-work-order.mjs, ADR 0106). The disposition
                         handoff { headSha, dispositions } is read from the plan's
                         outputRef. Each dispositions entry is { threadId | reviewId,
-                        fixingCommitSha, disposition: "tackled"|"deferred"|"rejected",
-                        fingerprint?, validation? }; each entry carries exactly one
+                        fixingCommitSha, disposition: "tackled"|"partially_fixed"|"deferred"|"rejected",
+                        fingerprint?, replyNote?, validation? }; each entry carries exactly one
                         of threadId or reviewId, plus fixingCommitSha and
-                        disposition. A tackled threadId entry needs fixingCommitSha
-                        as the full 40-character SHA; a reviewId entry needs the
-                        full 40-character SHA for every disposition.
+                        disposition. A tackled or partially_fixed threadId entry
+                        needs fixingCommitSha as the full 40-character SHA, and a
+                        partially_fixed entry needs a replyNote; a reviewId entry
+                        needs the full 40-character SHA for every disposition.
+                        partially_fixed and replyNote apply to threadId entries
+                        only (a reviewId entry refuses both); a replyNote must
+                        match an operator focus pin for that thread.
+                        A resolved thread with a replyNote and
+                        no composed reply fails resolved_note_reply_missing:
+                        unresolve the thread, then re-run the verifier.
                         A review-body work order (emit-fixer-work-order.mjs
                         --review-id) takes a { reviewId, fixingCommitSha,
                         disposition } entry written by the fixer; the verifier
@@ -139,7 +150,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
   1  Argument error or gh/runtime failure
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 
 function parseError(message) {
   return Object.assign(new Error(message), { usage: USAGE });
@@ -454,10 +466,10 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       throw new Error(`--construct needs a clearing delta record ${complete ? "" : `for baseline ${order.headSha} `}whose candidateHead is the pushed head ${options.headSha} and whose items cover the pinned threads; push the reviewed candidate first`);
     }
     const resolved = new Set((record.items ?? []).filter((item) => item?.status === "resolved").map((item) => item.ref));
-    const dispositions = source.threads.map(({ threadId }) => ({ threadId, fixingCommitSha: options.headSha, disposition: resolved.has(threadId) ? "tackled" : "deferred" }));
+    const dispositions = source.threads.map(({ threadId }) => ({ threadId, fixingCommitSha: options.headSha, ...pinnedDisposition(order.operatorFocus, [threadId], resolved.has(threadId)) }));
     if (options.construct) raw.dispositions = dispositions;
     else if (raw.dispositions.length !== dispositions.length || dispositions.some((expected) => !raw.dispositions.some((entry) => entry.threadId === expected.threadId
-      && entry.fixingCommitSha === expected.fixingCommitSha && entry.disposition === expected.disposition))) throw new Error("THREAD report differs from the clearing candidate dispositions");
+      && entry.fixingCommitSha === expected.fixingCommitSha && entry.disposition === expected.disposition && entry.replyNote === expected.replyNote))) throw new Error("THREAD report differs from the clearing candidate dispositions");
   }
   let handoff = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
   if (threadsRead) {
@@ -601,7 +613,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
         if (options.construct) {
           raw.dispositions = completion.threadBindings.map(({ threadId, fingerprints }) => ({
             threadId, fixingCommitSha: completion.fixingCommitSha,
-            disposition: Array.isArray(fingerprints) && fingerprints.every((fp) => deltaStatuses.get(fp) === "resolved") ? "tackled" : "deferred",
+            ...pinnedDisposition(order.operatorFocus, Array.isArray(fingerprints) ? fingerprints : [], Array.isArray(fingerprints) && fingerprints.every((fp) => deltaStatuses.get(fp) === "resolved")),
           }));
           handoff = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
         } else if (sha256Hex(raw.siteCoverage).slice(7) !== digest
@@ -624,6 +636,8 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     deltaStatuses,
     completion,
     constructedReport: raw,
+    operatorFocus: order.operatorFocus,
+    operatorFocusDigest: order.operatorFocusDigest,
     reviewId,
     reviewBodySha256,
     reviewCommitId,
@@ -631,6 +645,21 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     handoffPath,
     bindActiveFixer,
     delivery: { workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity },
+  };
+}
+
+// The disposition and note of one thread. The delta status decides it, except where the operator pinned a reply:
+// a pinned deferred or rejected overrides it, and a pinned tackled or partially_fixed applies only to a resolved thread.
+function pinnedDisposition(operatorFocus, keys, deltaResolved) {
+  const pins = (operatorFocus?.items ?? []).filter((item) => item.replyDisposition && keys.includes(item.threadId ?? item.fingerprint));
+  const [pin] = pins;
+  if (pins.some((other) => other.replyDisposition !== pin.replyDisposition || other.replyNote !== pin.replyNote)) {
+    throw new Error(`operator focus pins conflicting reply dispositions on one thread (${pins.map((item) => item.threadId ?? item.fingerprint).join(", ")})`);
+  }
+  const applies = pin && (deltaResolved || pin.replyDisposition === FIXER_DISPOSITION_KIND.DEFERRED || pin.replyDisposition === FIXER_DISPOSITION_KIND.REJECTED);
+  return {
+    disposition: applies ? pin.replyDisposition : deltaResolved ? FIXER_DISPOSITION_KIND.TACKLED : FIXER_DISPOSITION_KIND.DEFERRED,
+    ...(applies && pin.replyNote ? { replyNote: pin.replyNote } : {}),
   };
 }
 
@@ -644,11 +673,35 @@ function buildLiveThreads(parsed) {
   }));
 }
 
+// A reply note authorizes a reply and a resolve, so only a note the operator focus pinned for that thread counts.
+// A fingerprint pin counts only when that fingerprint is a live ACT member of the entry's thread (membersOf).  The entry scalar fingerprint never narrows it.
+// The check runs both ways: an entry may not drop a bound pin either. A deferred or rejected pin needs the same
+// disposition and note. A tackled or partially_fixed pin needs the same entry, or a deferred entry without a note.
+export function assertNotesPinned(handoff, operatorFocus, membersOf) {
+  const pins = (operatorFocus?.items ?? []).filter((item) => item.replyDisposition);
+  for (const entry of handoff.dispositions) {
+    if (!entry.threadId) continue;
+    const members = membersOf(entry.threadId);
+    const bound = pins.filter((item) => item.threadId === entry.threadId
+      || (item.fingerprint && members.includes(item.fingerprint)));
+    if (entry.replyNote && !bound.some((item) => item.replyDisposition === entry.disposition && item.replyNote === entry.replyNote)) {
+      throw new Error(`handoff entry for ${entry.threadId} carries a replyNote with no matching operator focus pin; only the operator focus carrier sets a reply note`);
+    }
+    for (const pin of bound) {
+      const same = entry.disposition === pin.replyDisposition && (entry.replyNote ?? null) === (pin.replyNote ?? null);
+      const soft = pin.replyDisposition === FIXER_DISPOSITION_KIND.TACKLED || pin.replyDisposition === FIXER_DISPOSITION_KIND.PARTIALLY_FIXED;
+      if (!same && !(soft && entry.disposition === FIXER_DISPOSITION_KIND.DEFERRED && !entry.replyNote)) {
+        throw new Error(`handoff entry for ${entry.threadId} (${entry.disposition}) disagrees with its operator focus pin (${pin.replyDisposition}); the handoff may not drop a pinned reply`);
+      }
+    }
+  }
+}
+
 // A judge-act item whose fingerprint marks an open inline gate thread is resolved by the fix
 // cycle: the handoff needs a disposition entry for that thread, never a threadless claim.
 // Gate-authored is the authenticated login on the thread ROOT comment, never marker text alone;
 // every matching thread needs its own entry.
-function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, deltaStatuses, completion) {
+function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, deltaStatuses, completion, operatorFocus) {
   const entries = new Map(handoff.dispositions.map((entry) => [entry.threadId, entry]));
   const actFingerprints = new Set(actList.map((item) => item?.fingerprint ?? fingerprintFinding(item)));
   const bindings = new Map();
@@ -688,8 +741,10 @@ function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, delta
     if (deltaStatuses) {
       // One root may merge several fingerprints, each already aggregating repeated ACT refs.
       const residual = members.some((fp) => deltaStatuses.get(fp) !== "resolved");
-      if ((residual && thread.isResolved !== false)
-        || (entry && entry.disposition !== (residual ? FIXER_DISPOSITION_KIND.DEFERRED : FIXER_DISPOSITION_KIND.TACKLED))) {
+      // A noted pinned reply resolves a residual thread, so a re-run sees it resolved.
+      const pinned = pinnedDisposition(operatorFocus, members, !residual);
+      if ((residual && !pinned.replyNote && thread.isResolved !== false)
+        || (entry && (entry.disposition !== pinned.disposition || (entry.replyNote ?? null) !== (pinned.replyNote ?? null)))) {
         throw new Error(`delta status and live thread disposition disagree for ${thread.id} (${members.join(", ")})`);
       }
     }
@@ -705,7 +760,7 @@ function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, delta
 export async function assertDescendantThreadSites({ repo, pr, candidateHead, headSha, handoff, parsed, repoRoot }, { env, ghCommand, runChild }) {
   const gitEnv = { ...env };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_DIFF_OPTS"]) delete gitEnv[key];
-  for (const entry of handoff.dispositions.filter((entry) => entry.threadId && entry.disposition === "tackled")) {
+  for (const entry of handoff.dispositions.filter((entry) => entry.threadId && FIXER_COMMIT_CLAIM_KINDS.includes(entry.disposition))) {
     const refuse = (reason, changed = false) => { throw new Error(`thread_site_${changed ? "changed" : "unverifiable"}: ${entry.threadId} (${candidateHead} -> ${headSha}): ${reason}; run pre_approval_gate with this open thread in --known-findings`); };
     const git = async (...args) => {
       const result = await runChild("git", ["-C", repoRoot, "--literal-pathspecs", ...args], gitEnv).catch(() => refuse("history unavailable"));
@@ -811,7 +866,7 @@ async function verifyFixerDispositionCore(
   const logPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: "fixer-disposition", headSha: options.headSha, tmpRoot });
   const fullPath = path.resolve(repoRoot, logPath);
   const runtime = { env, ghCommand, runChild };
-  const { handoff, actList, deltaStatuses, completion, constructedReport, reviewId, reviewBodySha256, reviewCommitId, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
+  const { handoff, actList, deltaStatuses, completion, constructedReport, operatorFocus, operatorFocusDigest, reviewId, reviewBodySha256, reviewCommitId, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
   // The observed head must be the live PR head, never a caller claim.
   const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,statusCheckRollup"], env);
   const livePayload = live.code === 0 ? (() => { try { return JSON.parse(live.stdout); } catch { return null; } })() : null;
@@ -825,9 +880,15 @@ async function verifyFixerDispositionCore(
   // A refused handoff writes no checkpoint: capture and assert before the write.
   const initialSnapshot = await captureParsedReviewThreads({ repo: options.repo, pr: options.pr }, runtime);
   let gateLogin = null;
+  if (Array.isArray(actList)) gateLogin = await resolveAuthenticatedLogin({ env, ghCommand, runChild });
+  const actFingerprints = new Set((actList ?? []).map((item) => item?.fingerprint ?? fingerprintFinding(item)));
+  // workOrderDigest drops absolute-path strings, so a pinned note such as "/src/a: ..." is not covered by it; check the focus against its own digest.
+  if ((operatorFocusDigest ?? null) !== (operatorFocusDigestEntry(operatorFocus).operatorFocusDigest ?? null)) {
+    throw new Error(`--fixer-plan "${options.fixerPlan}" operatorFocus does not match its operatorFocusDigest; the plan was edited after emission, re-emit it`);
+  }
+  assertNotesPinned(handoff, operatorFocus, (threadId) => (Array.isArray(actList) ? selectActThreadBinding(initialSnapshot, threadId, gateLogin, actFingerprints).members : []));
   if (Array.isArray(actList)) {
-    gateLogin = await resolveAuthenticatedLogin({ env, ghCommand, runChild });
-    assertActItemThreadsDisposed(actList, handoff, initialSnapshot, gateLogin, deltaStatuses, completion);
+    assertActItemThreadsDisposed(actList, handoff, initialSnapshot, gateLogin, deltaStatuses, completion, operatorFocus);
   }
   if (handoff.headSha !== options.headSha) {
     if (source === "act-list" && !completion) throw new Error("thread_site_unverifiable: descendant ACT delivery needs authenticated completion input; run pre_approval_gate with the open threads in --known-findings");
@@ -901,7 +962,7 @@ async function verifyFixerDispositionCore(
 
   const tackledShas = [...new Set(
     handoff.dispositions
-      .filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED)
+      .filter((entry) => FIXER_COMMIT_CLAIM_KINDS.includes(entry.disposition))
       .map((entry) => entry.fixingCommitSha),
   )];
   const containment = await buildContainmentMap(tackledShas, { repo: options.repo, headSha: options.headSha }, runtime);
@@ -927,7 +988,7 @@ async function verifyFixerDispositionCore(
   // A deferred thread the delta review left not_resolved or cannot_verify gets one residual-status reply and stays open.
   // Shared by the ACT and THREAD routes; --check only observes the reply and reports it missing; a live reply carrying the marker makes re-entry post nothing.
   {
-    const deferred = handoff.dispositions.filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.DEFERRED);
+    const deferred = handoff.dispositions.filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.DEFERRED && !entry.replyNote);
     const openTargets = deferred.length > 0 ? planBatchReplyTargets(initialSnapshot, "all").matchedTargets : [];
     for (const entry of deferred) {
       const target = openTargets.find((candidate) => candidate.threadId === entry.threadId);
@@ -975,10 +1036,11 @@ async function verifyFixerDispositionCore(
   // missing_from_handoff never trigger a mutation (Non-goals: a SHA alone, or
   // a claim with no ledger entry, is never evidence).
   // A thread the delta review of the fix left not_resolved or cannot_verify gets no "Fixed" reply.
+  const entryFor = (threadId) => handoff.dispositions.find((candidate) => candidate.threadId === threadId);
   const deltaBlocked = new Map();
-  for (const entry of evaluation.incomplete.filter((e) => e.threadId && (e.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING || e.failedStep === FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED))) {
+  for (const entry of evaluation.incomplete.filter((e) => e.threadId && e.expectedCommit && (e.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING || e.failedStep === FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED))) {
     const blocked = await findDeltaBlockedFixedReply(
-      [{ threadId: entry.threadId, body: `Fixed in commit ${entry.expectedCommit}.`, commit: entry.expectedCommit }],
+      [{ threadId: entry.threadId, body: composeFixerReplyBody(entryFor(entry.threadId)), commit: entry.expectedCommit }],
       { repo: options.repo, pr: options.pr, parsed: initialSnapshot, tmpRoot: path.resolve(repoRoot, tmpRoot) },
       runtime,
     );
@@ -1011,7 +1073,7 @@ async function verifyFixerDispositionCore(
               pr: options.pr,
               commentId,
               threadId: entry.threadId,
-              body: `Fixed in commit ${entry.expectedCommit}.`,
+              body: composeFixerReplyBody(entryFor(entry.threadId)),
               resolve: true,
               validatedSnapshot: initialSnapshot,
             },
@@ -1148,5 +1210,6 @@ async function main() {
 export { loadDeliveredHandoff };
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseVerifyFixerDispositionCliArgs(process.argv.slice(2)).help);
   await main();
 }

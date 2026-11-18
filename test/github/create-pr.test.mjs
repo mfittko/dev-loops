@@ -7,6 +7,7 @@ import { test } from "bun:test";
 import { runNodeWithPrePrRecord, writeGhStub as writeGhStubHelper, initSizeBudgetFixtureRepo as initBareFixtureRepo, repeatedLinesContent, runGitFixture } from "../_helpers.mjs";
 
 import { buildCreatePrArgs, main as createPrMain, detectClosingKeyword, extractClosingIssueNumber, resolveBaseDefault } from "../../scripts/github/create-pr.mjs";
+import { hasSpikePrMarker } from "../../scripts/github/_spike-pr-marker.mjs";
 import { resolveBaseBranch } from "@dev-loops/core/config";
 import { writePrePrReviewRecord } from "../../scripts/loop/_pre-pr-review-record.mjs";
 
@@ -2607,4 +2608,136 @@ test("create-pr --lightweight refuses when the only record is for a different he
   assert.equal(result.code, 1);
   assert.equal(JSON.parse(result.stderr).code, "pre_pr_review_missing");
   assert.deepEqual(calls, []);
+});
+
+// ADR 0293: --spike-file opens an oversize spike draft, stamps the no-merge marker, keeps the size line advisory.
+test("create-pr --spike-file opens above waiverLoc, stamps the marker and prints the advisory size line", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-spike-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, {
+      devloopsYaml: "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        softLoc: 100\n        waiverLoc: 250\n",
+      headFiles: [{ path: "scripts/big.mjs", content: repeatedLinesContent(300) }, { path: "changes/size.md", content: "- Exercise size checks (#1)\n" }],
+    });
+    execFileSync("git", ["branch", "feature"], { cwd: tempDir });
+    const findings = path.join(tempDir, "spike.md");
+    await writeFile(findings, "## Question\nq\n\n## Approach\na\n\n## Findings\nf\n");
+    const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
+      "--title", "T", "--body", "no closing keyword", "--spike-file", findings,
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const calls = await readGhCalls(ghLogPath);
+    assert.equal(calls.length, 1);
+    assert.match(JSON.stringify(calls[0]), /dev-loops:spike-pr no-merge/u);
+    assert.equal(JSON.stringify(calls[0]).split("dev-loops:spike-pr no-merge").length - 1, 1);
+    assert.ok(!JSON.stringify(calls[0]).includes("--spike-file"));
+    const line = JSON.parse(result.stdout.split("\n").find((l) => l.startsWith("{\"adrTripwire\"")));
+    assert.equal(line.sizeBudget.wholeLogicLoc, 300);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr --spike-file with --body-file keeps the file content and ends with the marker", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-spike-bf-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, {
+      devloopsYaml: "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        softLoc: 100\n        waiverLoc: 250\n",
+      headFiles: [{ path: "scripts/big.mjs", content: repeatedLinesContent(300) }, { path: "changes/size.md", content: "- Exercise size checks (#1)\n" }],
+    });
+    execFileSync("git", ["branch", "feature"], { cwd: tempDir });
+    const findings = path.join(tempDir, "spike.md");
+    await writeFile(findings, "## Question\nq\n\n## Approach\na\n\n## Findings\nf\n");
+    const bodyPath = path.join(tempDir, "body.md");
+    await writeFile(bodyPath, "file body text");
+    const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
+      "--title", "T", "--body-file", bodyPath, "--spike-file", findings,
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const calls = await readGhCalls(ghLogPath);
+    const args = calls[0].args ?? calls[0];
+    const body = args[args.lastIndexOf("--body") + 1];
+    assert.ok(body.startsWith("file body text"));
+    assert.ok(body.trimEnd().endsWith("<!-- dev-loops:spike-pr no-merge -->"));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr --spike-file refuses an unreadable findings file", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-spike-bad-"));
+  try {
+    const { env } = await writeGhStub(tempDir, []);
+    const result = await runNode(["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "T", "--body", "b", "--spike-file", path.join(tempDir, "missing.md")], { env, cwd: tempDir });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /--spike-file requires/u);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr --spike-file refuses an existing findings file without the exploration sections", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-spike-nosec-"));
+  try {
+    const { env } = await writeGhStub(tempDir, []);
+    const findings = path.join(tempDir, "spike.md");
+    await writeFile(findings, "## Question\nq\n");
+    const result = await runNode(["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "T", "--body", "b", "--spike-file", findings], { env, cwd: tempDir });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /--spike-file requires/u);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr --spike-file keeps exactly one marker when the input body already carries it", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-spike-dup-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, {
+      devloopsYaml: "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        softLoc: 100\n        waiverLoc: 250\n",
+      headFiles: [{ path: "scripts/big.mjs", content: repeatedLinesContent(300) }, { path: "changes/size.md", content: "- Exercise size checks (#1)\n" }],
+    });
+    execFileSync("git", ["branch", "feature"], { cwd: tempDir });
+    const findings = path.join(tempDir, "spike.md");
+    await writeFile(findings, "## Question\nq\n\n## Approach\na\n\n## Findings\nf\n");
+    const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
+      "--title", "T", "--body", "spike body\n\n<!-- dev-loops:spike-pr no-merge -->\n", "--spike-file", findings,
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const calls = await readGhCalls(ghLogPath);
+    const args = calls[0].args ?? calls[0];
+    const body = args[args.lastIndexOf("--body") + 1];
+    assert.equal(body.split("<!-- dev-loops:spike-pr no-merge -->").length - 1, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr without --spike-file refuses a body carrying the bare marker line", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-marker-nospike-"));
+  try {
+    const { env } = await writeGhStub(tempDir, []);
+    const result = await runNode(["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "T", "--body", "b\n<!-- dev-loops:spike-pr no-merge -->\n"], { env, cwd: tempDir });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /spike no-merge marker/u);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("hasSpikePrMarker is live only as the last non-empty line, exactly equal", () => {
+  const m = "<!-- dev-loops:spike-pr no-merge -->";
+  assert.equal(hasSpikePrMarker(m), true);
+  assert.equal(hasSpikePrMarker(`body\n\n${m}\n\n`), true);
+  assert.equal(hasSpikePrMarker(`body\r\n${m}\r\n`), true);
+  assert.equal(hasSpikePrMarker(`body\n${m}\ntrailing`), false);
+  assert.equal(hasSpikePrMarker(`\`\`\`\n${m}\n\`\`\``), false);
+  assert.equal(hasSpikePrMarker(`- ~~~\n${m}\n~~~\nmore`), false);
+  assert.equal(hasSpikePrMarker(`  ${m}`), false);
+  assert.equal(hasSpikePrMarker(`text ${m}`), false);
 });

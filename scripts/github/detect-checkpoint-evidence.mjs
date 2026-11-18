@@ -26,7 +26,7 @@ import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "./_gate-finding-
 import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
-import { isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
+import { isTrustedAssociation } from "@dev-loops/core/github/comment-trust";
 import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, assertConfigLoaded, isSizeOutcomeT1Clean, loadDevLoopConfig, loadDevLoopConfigStrict, stripConfigKeyPaths, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveGateDispatchMode, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
 import { FANOUT_UNAVAILABLE_MESSAGE, JUDGE_DISPOSITIONS, VALID_SEVERITIES, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, ledgerAngleNames, listOpenActItems, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseChangedFiles } from "../loop/detect-change-scope.mjs";
@@ -47,6 +47,7 @@ import { verifyFreshHumanApproval, projectSubmittedReviewFacts } from "@dev-loop
 import { countUnresolvedHumanChangesRequested, resolveSizeBudgetHumanApprovalRequired } from "@dev-loops/core/loop/size-budget-merge-gate";
 import { computePatchIdWhenIntegrated } from "./_patch-id.mjs";
 import { parseHeadDeclaredKeys } from "./head-declared-keys-schema.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const USAGE = `Usage: detect-checkpoint-evidence.mjs --repo <owner/name> --pr <number>
 Fetch the live PR head SHA and visible PR issue comments, then summarize the
 latest valid draft-gate and pre-approval checkpoint verdict comments. Always fail
@@ -173,7 +174,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success (gate evidence is valid)
   1  Argument error, gh failure, malformed gh JSON, or missing required pre-merge gate evidence.
-  2  Invalid --jq filter.`.trim();
+  2  Invalid --jq filter.
+  3  Comment trust config refused (stderr JSON with a state field).`.trim();
 const parseError = buildParseError(USAGE);
 export function parseDetectCheckpointEvidenceCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -1260,7 +1262,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
   // Size-budget facts: every review/comment still counts toward blocking
   // (CHANGES_REQUESTED fails closed), but only association-trusted entries can
   // supply the human approval (`trusted`, read by anyFreshHumanApproval).
-  const trustedByAssociation = (c) => isTrustedRestComment(c, { allowCopilot: true });
+  const trustedByAssociation = (c) => isTrustedAssociation(c?.author_association);
   const reviewFacts = rawReviews.flatMap((r) => projectSubmittedReviewFacts([r]).map((f) => ({ ...f, trusted: trustedByAssociation(r) })));
   const commentFacts = commentsPayload.map((c) => ({
     login: c?.user?.login ?? null, body: c?.body ?? "", type: c?.user?.type ?? null, trusted: trustedByAssociation(c),
@@ -1564,5 +1566,6 @@ async function main() {
   }
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseDetectCheckpointEvidenceCliArgs(process.argv.slice(2)).help);
   await main();
 }

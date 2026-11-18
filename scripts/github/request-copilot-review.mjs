@@ -22,6 +22,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { resolveCopilotReviewRequestStatus } from "../loop/_copilot-review-request-status.mjs";
 import { getLastCopilotReviewHeadSha, resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "../loop/_copilot-convergence-carry.mjs";
 import { resolveCurrentHeadBodyFeedback } from "./_copilot-body-disposition.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const BLOCKED_BY_COPILOT_COMMENT_STATUS = "blocked_by_copilot_comment";
 const SUPPRESSED_SAME_HEAD_CLEAN_STATUS = "suppressed_same_head_clean";
 const ROUND_CAP_REACHED_STATUS = "round_cap_reached";
@@ -140,7 +141,8 @@ filtered value) and is exempt from the status-based rule above.
 Exit codes:
   0  Success (including unavailable); with --silent, only when status is "requested"
   1  Argument error, gh failure, or (--silent) any non-"requested" status
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const parseError = buildParseError(USAGE);
 export function parseRequestCliArgs(argv) {
   const { tokens } = parseArgs({
@@ -1071,6 +1073,7 @@ export async function runCli(
   setExitCode(emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: silentOk }));
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseRequestCliArgs(process.argv.slice(2)).help);
   runCli().catch((error) => {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;

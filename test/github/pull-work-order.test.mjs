@@ -11,7 +11,7 @@ import { test } from "bun:test";
 import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, codeTreeSkewNote, executionIndexPath, materializationHash, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { seedJudgeSources } from "../loop/_judge-delivery-fixture.mjs";
-import { withTempDir, writeGhStub } from "../_helpers.mjs";
+import { ensureOriginHead, ensureTrustConfigCheckout, withTempDir, writeGhStub } from "../_helpers.mjs";
 import { findRetirementAfter, main as pullMain, pullDelegationTarget, shouldRetryFixerPullLocally } from "../../scripts/github/pull-work-order.mjs";
 import { keyedFixerPlanPathForRef } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { shellQuote } from "../../scripts/lib/checkout-delegation-refusal.mjs";
@@ -23,7 +23,10 @@ const SCRIPTS = path.resolve("scripts/github");
 const HEAD = "c".repeat(40);
 const GATE = "pre_approval_gate";
 
-const run = (script, args, cwd) => spawnSync("node", [path.join(SCRIPTS, script), ...args], { cwd, encoding: "utf8" });
+const run = (script, args, cwd) => {
+  ensureTrustConfigCheckout(cwd, path.join(SCRIPTS, script));
+  return spawnSync("node", [path.join(SCRIPTS, script), ...args], { cwd, encoding: "utf8" });
+};
 // The pull (ADR 0115): the execution identity alone, resolved through the execution index.
 const pullShort = (execution, cwd) => run("pull-work-order.mjs", [execution], cwd);
 const pull = (unit, cwd, over = {}) => pullShort(over.execution ?? unit.executionIdentity, cwd);
@@ -71,6 +74,7 @@ test("the dispatchPrompt carries a shell-runnable pull command; shell metacharac
   await withDir(async (root) => {
     const unit = await emitRound(root);
     const args = unit.dispatchPrompt.match(/`dev-loops-run scripts\/github\/pull-work-order\.mjs ([^`]+)`/)[1];
+    ensureTrustConfigCheckout(root, path.join(SCRIPTS, "pull-work-order.mjs"));
     const result = spawnSync("sh", ["-c", `node ${path.join(SCRIPTS, "pull-work-order.mjs")} ${args}`], { cwd: root, encoding: "utf8" });
     assert.equal(result.stdout, await readFile(unit.promptPath, "utf8"), result.stderr);
     assert.equal(unit.dispatchPrompt, `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${unit.executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`);
@@ -139,7 +143,7 @@ test("semantic mutation refuses as semantic_identity_mismatch; a materialization
   });
 });
 
-test("retirement lookup ignores only absence and propagates unreadable or malformed authority", async () => {
+test("retirement lookup ignores absence and stray non-directory entries, and propagates unreadable or malformed authority", async () => {
   await withDir(async (root) => {
     const lookup = () => findRetirementAfter(root, GATE, HEAD, 0);
     const retired = path.join(root, "retired-gate-rounds", HEAD);
@@ -155,6 +159,10 @@ test("retirement lookup ignores only absence and propagates unreadable or malfor
     assert.throws(lookup, SyntaxError);
     await writeFile(record, JSON.stringify({ gate: GATE, retiredAt: new Date(1).toISOString() }));
     assert.equal(lookup(), "round-1");
+    await writeFile(path.join(retired, "a-stray-file.json"), "{}");
+    assert.equal(lookup(), "round-1", "a stray file beside the rounds is debris");
+    await rm(path.join(retired, "round-1"), { recursive: true });
+    assert.equal(lookup(), null, "only the stray file remains");
   });
 });
 
@@ -513,6 +521,7 @@ test("historical judge pull delegates to the index-owning new renderer and its p
     for (const dep of ["yaml", "zod"]) await symlink(path.join(checkout, "node_modules", dep), path.join(old, "node_modules", dep), "dir");
     const emit = async (root) => {
       const sources = await seedJudgeSources(root, { headSha: HEAD, pr: 800000 + parseInt(randomBytes(3).toString("hex"), 16) });
+      ensureOriginHead(checkout); // linked worktrees share the checkout's refs; a tmp-dir worktree is not healed on its own
       const result = spawnSync("node", [path.join(root, "scripts/loop/emit-judge-work-order.mjs"), "--repo", sources.repo, "--pr", String(sources.pr), "--gate", sources.gate, "--head-sha", HEAD,
         "--findings-file", sources.findingsFile, "--spec-file", sources.specFile, "--identity-file", sources.identityFile], { cwd: root, encoding: "utf8", env: (await writeGhStub(root, [{ stdout: JSON.stringify({ body: "Declared scope: fix the finding.\n" }) }], { repeatLastOnOverflow: true })).env });
       assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -835,5 +844,17 @@ test("self-hosting fixer pull: a successful delegated pull returns the worktree 
       git(["worktree", "remove", "--force", linked]);
       git(["branch", "-D", branch]);
     }
+  });
+});
+
+test("a pull with a custom-root execution refuses naming the searched roots and the default root", async () => {
+  await withDir(async (root) => {
+    const unit = await emitRound(root);
+    const custom = path.join(root, "custom-tmp");
+    const body = refusal(run("pull-work-order.mjs", [unit.executionIdentity, "--tmp-root", custom], root));
+    assert.equal(body.refusal, "dispatch_reference_mismatch");
+    assert.match(body.message ?? body.error ?? JSON.stringify(body), new RegExp(`searched tmp roots ${custom.replaceAll(".", "\\.")}; the default tmp root is ${resolveGateArtifactTmpRoot(root).replaceAll(".", "\\.")}`));
+    assert.match(JSON.stringify(body), /a caller that passed --tmp-root re-runs with no --tmp-root, and otherwise re-dispatches the SAME unit/);
+    assert.equal(pull(unit, root).status, 0);
   });
 });

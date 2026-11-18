@@ -84,3 +84,13 @@ test("a trusted-author untrusted-skip note after the baseline does not pause; pr
   assert.equal((await detect([bot, comment(2, "owner", "OWNER", "please take another look at the retry logic")])).paused, true);
   assert.equal((await detect([bot, comment(2, "owner", "OWNER", "a reply that quotes <!-- dev-loops:untrusted-comments-skipped head=abc --> mid-line")])).paused, true);
 });
+
+test("an OWNER-authored fixer disposition marker does not pause; a plain comment by the same login does", async () => {
+  const sha = "14cdbcba487e25d38b0dc6a4423c170ee945607b";
+  const reviewMarker = comment(2, "owner", "OWNER", `<!-- dev-loops:review-body-disposition review=42 fix=${sha} -->\nAddressed review 42.`);
+  const copilotMarker = comment(3, "owner", "OWNER", `<!-- dev-loops:copilot-body-disposition review=42 head=${sha} fix=${sha} -->\nDone.`);
+  assert.equal((await detect([bot, reviewMarker, copilotMarker])).paused, false);
+  assert.equal((await detect([bot, reviewMarker, comment(4, "owner", "OWNER", "please wait")])).paused, true);
+  const operatorMarker = comment(5, "owner", "OWNER", `<!-- dev-loops:copilot-body-disposition review=42 head=${sha} operator -->`);
+  assert.equal((await detect([bot, operatorMarker])).paused, true);
+});

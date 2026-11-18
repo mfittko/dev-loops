@@ -10,6 +10,7 @@ import {
 } from "@dev-loops/core/github/closing-ref-guard";
 import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-mode-write-guard";
 import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
+import { hasSpikePrMarker } from "./_spike-pr-marker.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -56,6 +57,9 @@ At least one edit:
 ADR tripwire waiver lines: a body that adds, changes or removes an
 \`adr-tripwire:allow\` line (compared with the PR's current body) is refused.
 Use \`dev-loops pr waive-adr-tripwire\` (ADR-TRIPWIRE-STANDING-WAIVER).
+Spike no-merge marker (ADR 0293): a body that removes the
+\`dev-loops:spike-pr no-merge\` marker from a spike PR, or moves it off the last non-empty body line, is refused, and so is a
+body that adds it to a PR without it. Only \`pr create --spike-file\` binds it.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "pr": 17, "edited": ["title", "body", ...] }
 Error output (stderr, JSON):
@@ -357,13 +361,16 @@ export async function editPr(
   // inline so the grill check and buildEditArgs never re-read the exhausted fd 0.
   if (options.body !== undefined || options.bodyFile !== undefined) {
     const guardBody = await resolveBody(options);
+    const baseline = typeof currentBody === "string" ? currentBody : (await readPrContext())?.body;
+    if (typeof baseline !== "string") {
+      throw new Error(
+        `ADR-TRIPWIRE-STANDING-WAIVER: cannot read the current body of PR #${options.pr} (gh pr view failed), so its \`adr-tripwire:allow\` lines cannot be compared — refusing on ambiguity (fail closed).`,
+      );
+    }
+    // ADR 0293: the spike marker guard applies to every body write, the waiver writer included.
+    if (hasSpikePrMarker(baseline) && !hasSpikePrMarker(guardBody)) throw new Error(`refusing to remove the spike no-merge marker from PR #${options.pr} or move it off the last non-empty body line.`);
+    if (!hasSpikePrMarker(baseline) && hasSpikePrMarker(guardBody)) throw new Error(`refusing to add the spike no-merge marker to PR #${options.pr}: only spike PR creation binds it.`);
     if (!waiverWriter) {
-      const baseline = typeof currentBody === "string" ? currentBody : (await readPrContext())?.body;
-      if (typeof baseline !== "string") {
-        throw new Error(
-          `ADR-TRIPWIRE-STANDING-WAIVER: cannot read the current body of PR #${options.pr} (gh pr view failed), so its \`adr-tripwire:allow\` lines cannot be compared — refusing on ambiguity (fail closed).`,
-        );
-      }
       const waiverRefusal = waiverLineChangeRefusal({ currentBody: baseline, nextBody: guardBody, action: "write" });
       if (waiverRefusal) throw new Error(waiverRefusal);
       const unticked = untickedRows(baseline, guardBody);

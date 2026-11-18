@@ -21,6 +21,7 @@ import { computeSpecDigest, requireSpecFromBody } from "@dev-loops/core/loop/spe
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { evaluateAdrTripwire as realEvaluateAdrTripwire } from "../loop/check-adr-tripwire.mjs";
 import { buildStandingWaiverLine, replaceStandingWaiverLine } from "../loop/adr-waiver-markers.mjs";
+import { SPIKE_PR_MARKER, hasSpikePrMarker } from "./_spike-pr-marker.mjs";
 import { defaultFetchOrigin, readStandingAuthorization as realReadStandingAuthorization } from "../loop/standing-authorization.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { fetchIssueBody as realFetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
@@ -29,6 +30,7 @@ import { buildLogPath } from "./_gate-artifact-paths.mjs";
 import { readSealed } from "./_gate-artifact-seal.mjs";
 import { editPr as realEditPr } from "./edit-pr.mjs";
 import { resolveCapRoundFixed as realResolveCapRoundFixed } from "./write-gate-context.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 function noProofRefusal({ repo, pr, headSha }) {
   return refuse("no_clean_draft_gate", `GATE-EXEC-ROUND-CAP-WAIVER-PROOF: no clean draft_gate or pre_approval_gate checkpoint verdict and no cap-round-fixed proof on the current head ${headSha.slice(0, 7)}. For a cap-round PR whose later commits are docs and tests only, or code that a locally_clear pre-push delta covers (ADR 0254), run: node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo ${repo} --pr ${pr}. Otherwise run: node <dev-loops-package-root>/cli/index.mjs loop gate-coordination --repo ${repo} --pr ${pr} and follow its next action`);
@@ -283,7 +285,10 @@ export async function waiveAdrTripwire(options, {
 
   const { record } = authorization;
   const line = buildStandingWaiverLine({ head: headSha, issue, grantedBy: record.grantedBy, expires: record.expires, paths });
-  const nextBody = replaceStandingWaiverLine(body, line);
+  // ADR 0293: the spike marker must stay the last non-empty body line, so the waiver line goes before it.
+  const nextBody = hasSpikePrMarker(body)
+    ? `${replaceStandingWaiverLine(body.trimEnd().slice(0, -SPIKE_PR_MARKER.length), line).trimEnd()}\n\n${SPIKE_PR_MARKER}\n`
+    : replaceStandingWaiverLine(body, line);
   // The tripwire is first-marker-wins: an earlier bare marker can mask the new line.
   const effective = await evaluateAdrTripwire({ base: `origin/${prState.baseRefName}`, head: headSha, prBody: nextBody, repoRoot, env, now });
   if (effective.outcome === "block") {
@@ -320,5 +325,6 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseWaiveAdrTripwireCliArgs(process.argv.slice(2)).help);
   runCli().then((code) => { process.exitCode = code; });
 }

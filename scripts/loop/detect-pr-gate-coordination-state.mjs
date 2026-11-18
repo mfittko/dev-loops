@@ -13,6 +13,7 @@ import {
 import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { isSanctionedCopilotReviewerLogin } from "@dev-loops/core/github/comment-trust";
 import { buildSnapshotFromPrFacts, DISPOSITION, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateEarlySurface } from "./early-surface-checks.mjs";
@@ -22,14 +23,16 @@ import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-co
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
+import { OUT_OF_BAND_WRITE } from "../github/_gate-artifact-seal.mjs";
 import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
-  FIXER_DISPOSITION_KIND,
+  FIXER_COMMIT_CLAIM_KINDS,
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
-import { countCompletedRounds, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
+import { countCompletedRounds, readClosedPriorRoundLogs, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
+import { isPastRoundCap, listOpenActItems, normalizeSeverity, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
 import { workOrderDigest } from "../github/_work-order-protocol.mjs";
@@ -49,6 +52,7 @@ import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 // Gate-coordination terminal stop actions where the dev-loop run is completing
 // or stopping (success OR stop). The runner-coordination lock is auto-released
 // at these boundaries so a fresh re-dispatch on the same PR acquires the lock
@@ -157,7 +161,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
   1  Argument error or gh/runtime failure
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const parseError = buildParseError(USAGE);
 export function parseDetectPrGateCoordinationCliArgs(argv) {
   const options = {
@@ -790,7 +795,7 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
 // No checkpoint recorded for this head and no delivered tackled handoff for the live head means nothing
 // to enforce here (a PR with no fixer-disposition ledger entry behaves exactly as before this
 // boundary existed) — returns null so the evaluator input omits the field.
-// A fixer handoff delivered for the live head that lists a tackled thread, with no checkpoint, means
+// A fixer handoff delivered for the live head that lists a tackled or partially_fixed thread, or a thread entry with a replyNote, with no checkpoint, means
 // verify-fixer-disposition never completed (a failed run writes none): report it incomplete as not_verified.
 // Scans every execution's handoff, not the latest plan: a later emission overwrites the plan but not the handoff.
 // Only absence (ENOENT) means "no handoff"; any other read or parse failure is reported incomplete like unreadable_checkpoint.
@@ -829,9 +834,9 @@ async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot
     }
     if (!matchesLiveHead(handoff?.headSha)) continue;
     for (const entry of Array.isArray(handoff.dispositions) ? handoff.dispositions : []) {
-      if (entry?.disposition === FIXER_DISPOSITION_KIND.TACKLED && typeof entry.threadId === "string") {
+      if ((FIXER_COMMIT_CLAIM_KINDS.includes(entry?.disposition) || (typeof entry?.replyNote === "string" && entry.replyNote !== "")) && typeof entry.threadId === "string") {
         incomplete.push({ threadId: entry.threadId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED });
-      } else if (entry?.disposition === FIXER_DISPOSITION_KIND.TACKLED && typeof entry.reviewId === "string") {
+      } else if (entry?.disposition === "tackled" && typeof entry.reviewId === "string") {
         incomplete.push({ reviewId: entry.reviewId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED });
       }
     }
@@ -901,7 +906,7 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
               const relation = await isCommitContainedByHead({ repo, commitSha: head, headSha: currentHeadSha, requireAhead: true }, runtime);
               if (!relation.contained) throw new Error("ancestor checkpoint requires an ahead live head; run a full gate round");
               const threads = typeof parsedThreads === "function" ? await parsedThreads() : parsedThreads;
-              const containment = await buildContainmentMap(handoff.dispositions.filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).map((entry) => entry.fixingCommitSha), { repo, headSha: currentHeadSha }, runtime);
+              const containment = await buildContainmentMap(handoff.dispositions.filter((entry) => FIXER_COMMIT_CLAIM_KINDS.includes(entry.disposition)).map((entry) => entry.fixingCommitSha), { repo, headSha: currentHeadSha }, runtime);
               const liveThreads = threads.threads.map((thread) => ({ threadId: thread.id, isResolved: thread.isResolved, replyBodies: threads.comments.filter((comment) => comment.threadId === thread.id).map((comment) => comment.body) }));
               const evaluation = evaluateFixerDisposition({ handoff, liveThreads, containment, liveReviews: await readHandoffReviewMarkers(handoff, { repo, pr }, runtime) });
               if (!(await readFile(planPath)).equals(planBytes)) throw new Error("active fixer plan changed during carry verification");
@@ -969,7 +974,7 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
   }
   const tackledShas = [...new Set(
     handoff.dispositions
-      .filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED)
+      .filter((entry) => FIXER_COMMIT_CLAIM_KINDS.includes(entry.disposition))
       .map((entry) => entry.fixingCommitSha),
   )];
   const containment = await buildContainmentMap(tackledShas, { repo, headSha: currentHeadSha }, runtime);
@@ -1289,6 +1294,33 @@ export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = pr
   return false;
 }
 
+/**
+ * Issue 3105 AC15 (ADR 0288): the open act list of the current head's live draft_gate ledger, or null.
+ * Null when the head has no live ledger with an open act item, when every open item is a PR-body item, past the cap (cap > 0 and round > cap), and when every open item is a nit outside draft round 1.
+ * `blockers` are the GATE-EXEC-SOFT-CAP blockers of the cap round; below the cap every act item goes to the fixer.
+ * A hand-edited sealed ledger throws OUT_OF_BAND_WRITE.
+ */
+export async function resolveDraftOpenActList(context, { repoRoot, cap }) {
+  const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
+  if (!/^[0-9a-f]{40,64}$/.test(head)) return null;
+  const options = { repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: head };
+  // The live ledger at the current head is that head's latest round; retained same-head rounds are earlier rounds.
+  const logs = await readClosedPriorRoundLogs(options, { repoRoot, includeLiveCurrentHead: true });
+  const log = logs.find((entry) => String(entry.headSha).trim().toLowerCase() === head);
+  // The posted verdict is findings_present (the evaluator checks it); a legacy ledger may persist `clean` beside open act items.
+  const open = log ? listOpenActItems(log.findings) : [];
+  // The emitter refuses an all-PR-body act list (delta_body_only_act_set), so that list keeps the earlier routing.
+  if (open.length === 0 || open.every(isDeltaBodyItem)) return null;
+  // countCompletedRounds counts the round being posted, so the live ledger's round is one less.
+  const round = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead: true }) - 1;
+  // Past the cap the emitter refuses every act list (round_cap_reached), so that round keeps the earlier routing.
+  if (cap > 0 && round > cap) return null;
+  // The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so that list keeps the earlier routing.
+  const severities = open.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity]));
+  if (round !== 1 && severities.every((s) => normalizeSeverity(s) === "nit")) return null;
+  return { headSha: head, openActCount: open.length, blockers: isPastRoundCap(round, cap) ? pastCapBlockers(log.findings, { round, cap }) : [] };
+}
+
 // Builds the exact input object passed to evaluatePrGateCoordination.
 // Exported (and used by detectPrGateCoordinationState below, not duplicated)
 // so a test can assert the real production wiring — e.g. that
@@ -1306,6 +1338,7 @@ export function buildGateCoordinationEvaluatorInput({
   draftCapRoundFixed = false,
   draftRoundRefused = false,
   draftCapRoundFailure = null,
+  draftOpenActList = null,
 }) {
   return {
     repo: context.repo,
@@ -1370,6 +1403,7 @@ export function buildGateCoordinationEvaluatorInput({
     draftCapRoundFixed,
     draftRoundRefused,
     draftCapRoundFailure,
+    draftOpenActList,
     ...(earlySurface ?? {}),
   };
 }
@@ -1451,6 +1485,9 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const { capRoundFixed: draftCapRoundFixed, failure: draftCapRoundFailure } = await resolveDraftCapRoundFact(context, { repoRoot, resolve: runtime.resolveCapRoundFixed ?? resolveCapRoundFixed });
   const draftRoundRefused = context.prData?.isDraft === true && !draftCapRoundFixed
     && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot, includeLiveCurrentHead: true }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), () => false);
+  const draftOpenActList = context.prData?.isDraft === true && !draftCapRoundFixed
+    ? await resolveDraftOpenActList(context, { repoRoot, cap: draftGateConfig.maxReviewRounds ?? 0 }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; })
+    : null;
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
     context: evaluatorContext,
     maxCopilotRounds,
@@ -1469,6 +1506,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     draftCapRoundFixed,
     draftRoundRefused,
     draftCapRoundFailure,
+    draftOpenActList,
   }));
   // Copilot review request guard: when Copilot has reviewed the PR but no
   // formal review request was made, block pre-approval gate entry. Only
@@ -1627,5 +1665,6 @@ async function main() {
   }
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseDetectPrGateCoordinationCliArgs(process.argv.slice(2)).help);
   await main();
 }

@@ -10,7 +10,7 @@ import { initGitFixture, runGitFixture, makeGhMock, runIdFreeEnv, runNode as run
 const writeGhStubHelper = (tempDir, entries, options) => writeGhStubRaw(tempDir, trustGhEntries(entries), options);
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
-import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
@@ -29,6 +29,7 @@ import { evaluateUiDesignerReviewScoping, DESIGNER_REVIEW_SATISFIED_OUTCOME } fr
 import { buildPlanFilePromotionMarker, buildPromotionPrBody } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { pullReceiptPath, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
+import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 
 const scriptPath = path.resolve("scripts/loop/detect-pr-gate-coordination-state.mjs");
 
@@ -4563,6 +4564,142 @@ async function runBaseFreshnessFixture({ checkBaseFreshness, isDraft = true, wit
 
 const STALE = { ok: false, error: "base_stale_integrate_first", base: "main", newerCommits: ["abc1 newer"], remedy: "REMEDY-TEXT" };
 
+// Issue 3105 AC15: a fixture with a posted findings_present verdict at a stale draft head; `ledgers` maps a ledger file suffix to its findings and loggedAt.
+async function actListFixture(ledgers, { nextAction = "fix" } = {}) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-act-list-"));
+  initGitFixture(tempDir, { branch: "main" });
+  const headSha = "abc1234567".repeat(4);
+  const findingsDir = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+  await mkdir(findingsDir, { recursive: true });
+  for (const [suffix, { findings, verdict = "findings_present", loggedAt = "2026-11-16T00:00:00.000Z" }] of Object.entries(ledgers)) {
+    await writeSealed(path.join(findingsDir, `draft_gate-${headSha}${suffix}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha, verdict, loggedAt, findings }));
+  }
+  const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 medium", nextAction });
+  const detect = async () => detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body }), { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, checkBaseFreshness: async () => STALE }));
+  return { tempDir, headSha, findingsDir, detect };
+}
+const ACT = { severity: "medium", summary: "fix x", file: "src/x.mjs", line: 3, judgeDisposition: "act" };
+const BODY_ACT = { severity: "medium", summary: "PR body lacks non-goals", judgeDisposition: "act" };
+
+// The PR 3234 shape: the open act list at a stale head goes to the fixer before base integration.
+test("3105 AC15: the detector derives the open act list from the current-head ledger and routes the fixer before base integration", async () => {
+  const fixture = await actListFixture({ "": { findings: [ACT] } });
+  try {
+    const result = await fixture.detect();
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
+    assert.equal(result.agentRemedy.command, `dev-loops-run scripts/loop/emit-fixer-work-order.mjs --repo owner/repo --pr 10 --head-sha ${fixture.headSha} --phase commit_only --act-list-file <judge-pass --out> --gate draft_gate --harness <claude|pi|codex>`);
+  } finally {
+    await rm(fixture.tempDir, { recursive: true, force: true });
+  }
+});
+
+test("3105 AC15: a head-matching marker without a next action keeps the base integration", async () => {
+  const fixture = await actListFixture({ "": { findings: [ACT] } }, { nextAction: "" });
+  try {
+    assert.equal((await fixture.detect()).nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS);
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+});
+
+test("3105 AC15: a legacy ledger with verdict clean and an open act item goes to the fixer", async () => {
+  const fixture = await actListFixture({ "": { findings: [ACT], verdict: "clean" } });
+  try {
+    assert.equal((await fixture.detect()).nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+});
+
+test("3105 AC15: an all-PR-body act list keeps the base integration; a mixed list goes to the fixer", async () => {
+  const body = await actListFixture({ "": { findings: [BODY_ACT] } });
+  try {
+    const result = await body.detect();
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS, result.reason);
+    assert.equal(await resolveDraftOpenActList({ repo: "owner/repo", pr: 10, currentHeadSha: body.headSha }, { repoRoot: body.tempDir, cap: 0 }), null);
+  } finally { await rm(body.tempDir, { recursive: true, force: true }); }
+  const mixed = await actListFixture({ "": { findings: [BODY_ACT, ACT] } });
+  try {
+    assert.equal((await mixed.detect()).nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+  } finally { await rm(mixed.tempDir, { recursive: true, force: true }); }
+});
+
+// The live ledger is the current head's latest round, even when a retained same-head round sorts after it by loggedAt.
+test("3105 AC15: the act list comes from the current head's live ledger, never a retained earlier round", async () => {
+  const later = "2026-11-17T00:00:00.000Z";
+  const closed = await actListFixture({ "": { findings: [], verdict: "clean" }, ".round-1": { findings: [ACT], loggedAt: later } });
+  try {
+    assert.equal(await resolveDraftOpenActList({ repo: "owner/repo", pr: 10, currentHeadSha: closed.headSha }, { repoRoot: closed.tempDir, cap: 0 }), null);
+  } finally { await rm(closed.tempDir, { recursive: true, force: true }); }
+  const open = await actListFixture({ "": { findings: [ACT, { ...ACT, line: 9 }] }, ".round-1": { findings: [], verdict: "clean", loggedAt: later } });
+  try {
+    assert.deepEqual(await resolveDraftOpenActList({ repo: "owner/repo", pr: 10, currentHeadSha: open.headSha }, { repoRoot: open.tempDir, cap: 0 }), { headSha: open.headSha, openActCount: 2, blockers: [] });
+  } finally { await rm(open.tempDir, { recursive: true, force: true }); }
+});
+
+test("3105 AC15: a hand-edited sealed ledger at the current head throws OUT_OF_BAND_WRITE", async () => {
+  const fixture = await actListFixture({ "": { findings: [ACT] } });
+  try {
+    const file = path.join(fixture.findingsDir, `draft_gate-${fixture.headSha}.json`);
+    await writeFile(file, (await readFile(file, "utf8")).replace("fix x", "fix y"));
+    await assert.rejects(resolveDraftOpenActList({ repo: "owner/repo", pr: 10, currentHeadSha: fixture.headSha }, { repoRoot: fixture.tempDir, cap: 0 }), (error) => error.code === OUT_OF_BAND_WRITE && error.file.endsWith(path.relative(fixture.tempDir, file)));
+    await assert.rejects(fixture.detect(), (error) => error.code === OUT_OF_BAND_WRITE);
+  } finally {
+    await rm(fixture.tempDir, { recursive: true, force: true });
+  }
+});
+
+// Issue 3105 AC15: at the cap round, a high act item without a judgeFix is a named human decision, so the act list keeps report_blocked.
+// `priorRounds` closed ledgers precede the current head's ledger, so the current head's round is priorRounds + 1.
+async function detectCapFixture({ cap, priorRounds, finding }) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-act-list-cap-"));
+  try {
+    initGitFixture(tempDir, { branch: "main" });
+    await writeFile(path.join(tempDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: cap } } }));
+    const headSha = "abc1234567".repeat(4);
+    const findings = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10");
+    await mkdir(findings, { recursive: true });
+    const ledger = (head, loggedAt, list) => writeFile(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt, findings: list }), "utf8");
+    for (let i = 1; i <= priorRounds; i += 1) await ledger(String(i).repeat(40), `2026-11-15T00:0${i}:00.000Z`, [{ severity: "medium", summary: `round ${i}`, file: "src/a.mjs", line: 1, judgeDisposition: "act", judgeFix: "fix a" }]);
+    await ledger(headSha, "2026-11-16T00:00:00.000Z", [{ file: "src/x.mjs", line: 3, judgeDisposition: "act", ...finding }]);
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "findings_present", findingsSummary: "1 finding", nextAction: "fix" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
+    return await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("3105 AC15: a cap-round high act item without judgeFix reports blocked on an operator decision", async () => {
+  const result = await detectCapFixture({ cap: 2, priorRounds: 1, finding: { severity: "high", summary: "decide the auth model" } });
+  assert.equal(result.ok, true);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+  assert.equal(result.blockedOn, "operator_decision");
+  assert.match(result.reason, /decide the auth model/);
+});
+
+// Pins the round offset: the cap round is the one at which a high without judgeFix blocks.
+test("3105 AC15: a cap-round high act item with judgeFix goes to the fixer", async () => {
+  const result = await detectCapFixture({ cap: 2, priorRounds: 1, finding: { severity: "high", summary: "fix the auth check", judgeFix: "add the check" } });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
+});
+
+test("3105 AC15: a high act item without judgeFix one round below the cap goes to the fixer", async () => {
+  const result = await detectCapFixture({ cap: 3, priorRounds: 1, finding: { severity: "high", summary: "decide the auth model" } });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
+});
+
+// The emitter refuses every act list past the cap (round_cap_reached), so no fixer route follows it.
+test("3105 AC15: a past-cap current-head round keeps the cap-round refusal", async () => {
+  const result = await detectCapFixture({ cap: 2, priorRounds: 2, finding: { severity: "medium", summary: "fix x", judgeFix: "fix x" } });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+  assert.match(result.reason, /round_cap_reached/);
+  assert.doesNotMatch(result.agentRemedy?.command ?? "", /emit-fixer-work-order/);
+});
+
+// The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so no fixer route follows it.
+test("3105 AC15: a nit-only act list in draft round 2 keeps the earlier routing", async () => {
+  const result = await detectCapFixture({ cap: 4, priorRounds: 1, finding: { severity: "nit", summary: "rename x" } });
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, result.reason);
+});
+
 describe("GATE-EXEC-BASE-REFRESH coordination", () => {
   it("stale head at run_draft_gate routes to resolve_merge_conflicts", async () => {
     let args;
@@ -4815,3 +4952,12 @@ for (const { name, isDraft, seal, verdict, threads = 0, seed = true, satisfied, 
     }
   });
 }
+
+test("detect-pr-gate-coordination-state reports not_verified for a noted deferred thread handoff", async () => {
+  const handoffRaw = JSON.stringify({ headSha: "abc9988776", dispositions: [{ threadId: "PRRT_x", fixingCommitSha: "fed9876543fed9876543fed9876543fed9876543", disposition: "deferred", replyNote: "tracked as a follow-up" }] });
+  await runNotVerifiedFixture({ handoffRaw }, (result) => {
+    assert.equal(result.ok, true);
+    assert.match(result.fixerDispositionWarning.warning, /PRRT_x/);
+    assert.match(result.fixerDispositionWarning.warning, /not_verified/);
+  });
+});

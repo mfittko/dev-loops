@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "bun:test";
 
-import { resolverTestEnv } from "../_helpers.mjs";
+import { ensureTrustConfigCheckout, resolverTestEnv } from "../_helpers.mjs";
 import { OPERATOR_BRIEFING } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
 import { SANCTIONED_COMMANDS } from "../../scripts/loop/sanctioned-commands.mjs";
 
@@ -130,6 +130,7 @@ test("operatorBriefing is rendered in startup stdout and via --jq; requiredReads
       issueAssignmentState: "unassigned",
       loopState: "active",
     }));
+    ensureTrustConfigCheckout(tmpDir, cliPath);
     const run = (extra) => spawnSync((Bun.which("node") ?? "node"), [cliPath, "--input", inputPath, ...extra], {
       cwd: tmpDir,
       encoding: "utf8",

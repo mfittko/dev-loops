@@ -478,3 +478,21 @@ test("gate-evidence detector steps pass --base-ref-name from a fetched PR head s
     assert.ok(fetchStep.run.includes('refs/pull/${PR_NUMBER}/head'));
   }
 });
+
+// ADR 0290: the detector's fail-closed trust-config load resolves the default branch from refs/remotes/origin/HEAD, which actions/checkout leaves unset.
+test("gate-evidence sets origin/HEAD from the event's default branch before each detect-checkpoint-evidence step", async () => {
+  const workflow = parseYaml(await readRepo(".github/workflows/gate-evidence.yml"));
+  let detectSteps = 0;
+  for (const job of Object.values(workflow.jobs)) {
+    const steps = job.steps ?? [];
+    steps.forEach((step, index) => {
+      if (!String(step.run ?? "").includes("detect-checkpoint-evidence.mjs")) return;
+      detectSteps += 1;
+      const setHead = steps.findIndex((s) => /git remote set-head origin "\$DEFAULT_BRANCH"/.test(String(s.run ?? "")));
+      assert.ok(setHead >= 0 && setHead < index, "a set-head step precedes the detector step");
+      assert.equal(steps[setHead].env.DEFAULT_BRANCH, "${{ github.event.repository.default_branch }}", "the default branch comes from the event, never a guessed name");
+      assert.equal(steps[setHead].if, step.if, "the set-head step runs under the same condition as the detector step");
+    });
+  }
+  assert.equal(detectSteps, 2);
+});

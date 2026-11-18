@@ -31,6 +31,7 @@ import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, 
 import { isFindingsLogName, resolveGateRound } from "../github/_gate-finding-surface.mjs";
 import { RULE_ID_CITATION_RE, collectContractMarkdownFiles, extractRuleDefinitions } from "../docs/validate-rule-ownership.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 
 const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--round <n>] [--tmp-root <path>] [--operator-focus-file <path>]
 Derives the judge's work order from the round's authoritative inputs: the consolidated
@@ -46,7 +47,7 @@ previous emission for this PR and gate at any head. The only operator input is -
 renders as a bounded, sanitized "Operator focus" section and is pinned by the digest (GATE-EXEC-OPERATOR-FOCUS).
 It accepts no other brief or summary input. When the body holds exactly one closing reference and its number is named by a reopen line in the body or spec Non-goals, the work order carries "sliceLinkage" and "sliceLinkageIssues" (SPEC-SLICE-PR-KEEPS-CLOSING-REF) and renders it.
 The pinned pr-body read must match the live PR body (GATE-EXEC-BODY-ONLY-RERUN); a body edited after the round refuses with pr_body_stale and names both digests, so rebuild the round context. A live PR body that cannot be read refuses with pr_body_unreadable, because the pin cannot be compared.
-Exit codes: 0 emitted, 1 refused (missing or inconsistent source), 2 usage/IO error.`;
+Exit codes: 0 emitted, 1 refused (missing or inconsistent source), 2 usage/IO error, 3 comment trust config refused (stderr JSON with a state field).`;
 
 // ref = judge:<owner/repo>#<pr>:<gate>:<headSha>:<roundId>; executionIdentity = roundId.
 const JUDGE_REF_RE = /^judge:([^/\s#]+\/[^/\s#]+)#(\d+):([a-z_]+):([0-9a-f]{40}|[0-9a-f]{64}):(j(\d+)-[0-9a-f]+)$/;
@@ -365,13 +366,15 @@ registerWorkOrderRole("judge", {
   },
 });
 
+const CLI_OPTIONS = {
+  repo: { type: "string" }, pr: { type: "string" }, gate: { type: "string" }, "head-sha": { type: "string" },
+  "findings-file": { type: "string" }, "spec-file": { type: "string" }, "identity-file": { type: "string" },
+  "prior-verdict": { type: "string", multiple: true }, round: { type: "string" }, "operator-focus-file": { type: "string" }, "tmp-root": { type: "string" }, help: { type: "boolean", short: "h" },
+  ...JQ_OUTPUT_PARSE_OPTIONS,
+};
+
 export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), roundId, fetchLivePrBody } = {}) {
-  const { values } = parseArgs({ args: argv, options: {
-    repo: { type: "string" }, pr: { type: "string" }, gate: { type: "string" }, "head-sha": { type: "string" },
-    "findings-file": { type: "string" }, "spec-file": { type: "string" }, "identity-file": { type: "string" },
-    "prior-verdict": { type: "string", multiple: true }, round: { type: "string" }, "operator-focus-file": { type: "string" }, "tmp-root": { type: "string" }, help: { type: "boolean", short: "h" },
-    ...JQ_OUTPUT_PARSE_OPTIONS,
-  } });
+  const { values } = parseArgs({ args: argv, options: CLI_OPTIONS });
   if (values.help) {
     process.stdout.write(`${USAGE}\n\n${JQ_OUTPUT_USAGE}\n`);
     return 0;
@@ -413,6 +416,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseArgs({ args: process.argv.slice(2), options: CLI_OPTIONS }).values.help);
   try {
     process.exitCode = await main();
   } catch (err) {

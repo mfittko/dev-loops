@@ -6,7 +6,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { test } from "bun:test";
-import { runNode } from "../_helpers.mjs";
+import { initGitFixture, runNode } from "../_helpers.mjs";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, pullReceiptPath, pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
 import { RULE_REFERENCES } from "../../packages/core/src/loop/coordinator-work-order.mjs";
 import { buildCoordinatorDispatchPayload, renderCoordinatorWorkOrder } from "../../scripts/loop/emit-coordinator-work-order.mjs";
@@ -26,7 +26,7 @@ async function withDirs(fn) {
   try {
     const input = path.join(dir, "resolver.json");
     await writeFile(input, JSON.stringify(resolverOutput));
-    execFileSync("git", ["init", "-q", dir]); // the dir is a checkout, so its tmp/ is a listed ledger root
+    initGitFixture(dir, { branch: "main" }); // the dir is a checkout, so its tmp/ is a listed ledger root
     return await fn({ dir, input, tmp: path.join(dir, "tmp") });
   } finally {
     await rm(dir, { recursive: true, force: true });
