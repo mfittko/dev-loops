@@ -38,7 +38,7 @@ import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-wri
 import { REVIEWER_UNIT_MAX_ANGLES, resolveReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment } from "./_dispatch-units.mjs";
 import { retireGateRound } from "./retire-gate-round.mjs";
-import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
+import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities, splitDiffIntoParts, DIFF_PART_MAX_BYTES, DIFF_PART_MAX_LINES } from "@dev-loops/core/loop/review-dispatch-plan";
 import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -1383,9 +1383,11 @@ function renderRequiredReadsSection(requiredReads, worktreeRoot) {
   return [
     "## Required reads",
     "",
-    "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. The `diff` entry is the filtered diff, with lockfiles, generated trees, and configured `gates.reviewDiff.excludeGlobs` paths excluded; the optional `raw-diff` entry is the unfiltered `.diff`. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
+    "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. The `diff` entries are the filtered diff, split at file and hunk boundaries so each fits one Read; read them in order. The filtered diff excludes lockfiles, generated trees, and configured `gates.reviewDiff.excludeGlobs` paths; the optional `raw-diff` entry is the unfiltered `.diff`. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
     "",
     ...(reads.length > 0 ? reads.map((read) => renderRequiredReadLine(read, worktreeRoot)) : ["- (no required reads recorded)"]),
+    // Not a `- ` line, so the manifest verifier ignores it.
+    ...reads.filter((read) => read.oversized).map((read) => `Oversized diff part: \`${path.resolve(worktreeRoot, read.path)}\` holds one hunk above the ${DIFF_PART_MAX_BYTES}-byte or ${DIFF_PART_MAX_LINES}-line part cap; page it with offset/limit.`),
   ].join("\n");
 }
 
@@ -1464,7 +1466,7 @@ function renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBy
     ? `Filtered diff: ${filteredBytes} bytes. Its collapsed size (${collapsedBytes} bytes) exceeds the ${capBytes}-byte inline cap — pointer mode.`
     : `Filtered diff: ${filteredBytes} bytes.`;
   return [
-    `${sizeNote} It is the required \`diff\` read; this file does not repeat it. Read the filtered diff from:`,
+    `${sizeNote} It is the required \`diff\` read; this file does not repeat it. When the prefix's \`## Required reads\` lists more than one \`diff\` part, read every part in order. Read the filtered diff from:`,
     `  ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`,
   ];
 }
@@ -3112,7 +3114,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // ADR 0208: pre_approval_gate receives the cap round's residue as round input, in the artifact and in the evidence file its reviewers and judge read.
   const capRoundResidue = options.gate === "pre_approval_gate" ? (await resolveCapRound(options, { repoRoot }))?.residue : undefined;
   let pendingEvidence = null;
-  let pendingFilteredDiff = null;
+  let pendingFilteredDiffParts = [];
   let requiredReads = null;
   // AC3: scope.<name> -> emitted companion-file path. Only built in
   // self-rendered mode — under --prefix-file the CLI never resolves
@@ -3158,12 +3160,19 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       ? filterDiffForInline(options.diffOutput, { excludeGlobs: options.config?.gates?.reviewDiff?.excludeGlobs ?? [] })
       : null;
     const inlineDiffOutput = diffFilter ? diffFilter.filteredDiff : (options.diffOutput ?? null);
-    pendingFilteredDiff = typeof inlineDiffOutput === "string" && inlineDiffOutput.length > 0
-      ? {
-        path: buildGateArtifactPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", suffix: ".filtered.diff" }),
-        text: inlineDiffOutput.endsWith("\n") ? inlineDiffOutput : `${inlineDiffOutput}\n`,
-      }
-      : null;
+    // The filtered diff is persisted as parts that each fit one Read. A diff
+    // that fits one part keeps the plain `.filtered.diff` name.
+    const diffParts = typeof inlineDiffOutput === "string" && inlineDiffOutput.length > 0
+      ? splitDiffIntoParts(inlineDiffOutput.endsWith("\n") ? inlineDiffOutput : `${inlineDiffOutput}\n`)
+      : [];
+    pendingFilteredDiffParts = diffParts.map((part, index) => ({
+      path: buildGateArtifactPath({
+        repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp",
+        suffix: diffParts.length === 1 ? ".filtered.diff" : `.filtered.part-${index + 1}-of-${diffParts.length}.diff`,
+      }),
+      text: part.text,
+      oversized: part.oversized,
+    }));
     const evidence = renderBriefingEvidence({
       repo: options.repo,
       pr: options.pr,
@@ -3174,7 +3183,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       issueBody: options.issueBody ?? null,
       issueSections: options.issueSections ?? null,
       diffOutput: inlineDiffOutput,
-      diffPath: pendingFilteredDiff?.path ?? null,
+      diffPath: pendingFilteredDiffParts[0]?.path ?? null,
       changedFiles: options.changedFiles ?? [],
       excludedFiles: diffFilter?.excludedFiles ?? [],
       adjacentCode: options.adjacentCode ?? null,
@@ -3196,7 +3205,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       kind, path: readPath, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes), required,
     });
     requiredReads = [hashed("evidence", evidencePath, evidence.text, true)];
-    if (pendingFilteredDiff) requiredReads.push(hashed("diff", pendingFilteredDiff.path, pendingFilteredDiff.text, true));
+    for (const part of pendingFilteredDiffParts) requiredReads.push({ ...hashed("diff", part.path, part.text, true), ...(part.oversized ? { oversized: true } : {}) });
     if (options.diffPath) {
       // Optional widening read. A diff this call does not write binds the
       // on-disk bytes; an unreadable one is omitted, never required.
@@ -3251,7 +3260,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           issueSections: options.issueSections ?? null,
           diffOutput: inlineDiffOutput,
           diffPath: options.diffPath ?? null,
-          filteredDiffPath: pendingFilteredDiff?.path ?? null,
+          filteredDiffPath: pendingFilteredDiffParts[0]?.path ?? null,
           excludedFiles: diffFilter?.excludedFiles ?? [],
           validationResultsPath: options.validationResultsPath ?? null,
           adjacentCode: options.adjacentCode ?? null,
@@ -3674,7 +3683,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // Keep the marker available only when prefix AND referenced stable files
   // are unchanged on disk (the prefix hash-binds the evidence and full diff).
   let markerUnchanged = existingBytes !== null && existingBytes.equals(prefixBytes);
-  const referencedWrites = [...(pendingEvidence ? [pendingEvidence] : []), ...(pendingFilteredDiff ? [pendingFilteredDiff] : []), ...pendingVariants.values(), ...(options.diffToWrite ? [options.diffToWrite] : []), ...pendingRoundReads];
+  const referencedWrites = [...(pendingEvidence ? [pendingEvidence] : []), ...pendingFilteredDiffParts, ...pendingVariants.values(), ...(options.diffToWrite ? [options.diffToWrite] : []), ...pendingRoundReads];
   for (const pending of referencedWrites) {
     if (!markerUnchanged) break;
     try {
@@ -3698,7 +3707,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         return await writeGateContext({ ...options, diffPath: null, diffToWrite: null, carriedPrBodyBaselineSha256: prBodyBaselineSha256, ...(priorBodyState ? { carriedPriorBodySha256: priorBodyState.priorBodySha256, carriedPriorCarriedAngles: priorBodyState.priorCarriedAngles, carriedPriorGroups: priorBodyState.priorGroups, carriedPriorUnitBound: priorBodyState.priorUnitBound } : {}) }, { repoRoot });
       }
     }
-    if (pendingFilteredDiff) await writeFile(path.resolve(repoRoot, pendingFilteredDiff.path), pendingFilteredDiff.text, "utf8");
+    for (const part of pendingFilteredDiffParts) await writeFile(path.resolve(repoRoot, part.path), part.text, "utf8");
     if (pendingEvidence) await writeFile(path.resolve(repoRoot, pendingEvidence.path), pendingEvidence.text, "utf8");
     for (const [scope, variant] of pendingVariants) {
       try {

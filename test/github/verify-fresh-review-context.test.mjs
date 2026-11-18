@@ -967,6 +967,7 @@ test("verify-fresh-review-context --prefix-file refuses a hashless or malformed 
     const hashless = evidenceLine.replace(/ \(sha256 [^)]*\)$/, "");
     const cases = [
       ["writer lines incl. hashless context", lines, 0],
+      ["writer lines plus an oversized diff part line", [...lines, "Oversized diff part: `/x/part-2.diff` holds one hunk above the 40000-byte or 2000-line part cap; page it with offset/limit."], 0],
       ["no-reads marker", ["- (no required reads recorded)"], 0],
       ["hashless replacement", lines.map((line) => (line === evidenceLine ? hashless : line)), 1],
       ["malformed line", [...lines, evidenceLine.replace("(sha256 ", "(sha256:")], 1],

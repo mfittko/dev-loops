@@ -8,7 +8,7 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import { GATE_ANGLE_SCOPES, loadDevLoopConfig, loadDevLoopConfigStrict, resolveGateAngles, resolveGateAnglesDynamic, resolveReviewerRole } from "@dev-loops/core/config";
-import { buildAngleRequestGroups, composeReviewerPromptText, INHERIT_MODEL_KEY } from "@dev-loops/core/loop/review-dispatch-plan";
+import { buildAngleRequestGroups, composeReviewerPromptText, DIFF_PART_MAX_BYTES, DIFF_PART_MAX_LINES, INHERIT_MODEL_KEY } from "@dev-loops/core/loop/review-dispatch-plan";
 import { initGitFixture, makeGhMock, runGitFixture, trustGhEntries } from "../_helpers.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
@@ -38,6 +38,7 @@ import {
   parseWriteGateContextCliArgs,
   PR_BODY_ABSENT_SENTINEL,
   rationaleFromResolver,
+  renderRequiredReadLine,
   readClosedPriorRoundLogs,
   dropBodyReadingCarriedAngles,
   readCompletedAnglesForHead,
@@ -4004,6 +4005,66 @@ test("buildGateContext invalidates the marker for a changed full diff even when 
   }
 });
 
+function splitFixtureDiff({ files, hunksPerFile, linesPerHunk, width }) {
+  const hunk = (n) => `@@ -${n},${linesPerHunk} +${n},${linesPerHunk} @@\n${Array.from({ length: linesPerHunk }, (_, i) => `+${n}-${i}-${"x".repeat(width)}`).join("\n")}\n`;
+  return Array.from({ length: files }, (_, f) => `diff --git a/src/f${f}.mjs b/src/f${f}.mjs\n--- a/src/f${f}.mjs\n+++ b/src/f${f}.mjs\n${Array.from({ length: hunksPerFile }, (_, h) => hunk(h * 1000 + 1)).join("")}`).join("");
+}
+
+test("buildGateContext persists a large filtered diff as Read-sized parts cut at file and hunk boundaries", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-diff-parts-"));
+  try {
+    // 5 files, ~30 KB each: several parts, no hunk above the cap.
+    const diffOutput = splitFixtureDiff({ files: 5, hunksPerFile: 6, linesPerHunk: 40, width: 120 });
+    const result = await buildGateContext({
+      repo: "owner/repo", pr: 79, gate: "draft_gate", headSha: "abc1234567890",
+      config: draftConfig({ dynamicAngles: false }),
+      diff: { nameStatusOutput: "M\tsrc/f0.mjs\n", diffOutput },
+    }, { repoRoot });
+    const parts = result.artifact.requiredReads.filter((read) => read.kind === "diff");
+    assert.ok(parts.length >= 2, `expected several parts, got ${parts.length}`);
+    let joined = "";
+    for (const part of parts) {
+      const text = await readFile(path.resolve(repoRoot, part.path), "utf8");
+      joined += text;
+      assert.ok(Buffer.byteLength(text) <= DIFF_PART_MAX_BYTES);
+      assert.ok(text.split("\n").length - 1 <= DIFF_PART_MAX_LINES);
+      assert.ok(/^(diff --git |@@)/.test(text), "a part starts at a file or hunk boundary");
+      assert.equal(part.bytes, Buffer.byteLength(text));
+      assert.equal(part.sha256, createHash("sha256").update(text).digest("hex"));
+      assert.equal(part.oversized, undefined);
+      assert.match(part.path, /\.filtered\.part-\d+-of-\d+\.diff$/);
+    }
+    assert.equal(joined, diffOutput);
+    assert.equal(existsSync(path.resolve(repoRoot, parts[0].path.replace(/\.part-\d+-of-\d+\.diff$/, ".diff"))), false, "no whole filtered diff is written");
+    const prefix = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
+    for (const part of parts) assert.ok(prefix.includes(renderRequiredReadLine(part, repoRoot)), "one manifest line per part");
+    assert.ok(!prefix.includes("Oversized diff part:"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext marks a single hunk above the part cap as an oversized part", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-diff-oversized-"));
+  try {
+    const small = splitFixtureDiff({ files: 1, hunksPerFile: 1, linesPerHunk: 3, width: 10 });
+    const big = splitFixtureDiff({ files: 1, hunksPerFile: 1, linesPerHunk: 500, width: 120 }).replace(/f0\.mjs/g, "big.mjs");
+    const result = await buildGateContext({
+      repo: "owner/repo", pr: 80, gate: "draft_gate", headSha: "abc1234567890",
+      config: draftConfig({ dynamicAngles: false }),
+      diff: { nameStatusOutput: "M\tsrc/big.mjs\n", diffOutput: small + big },
+    }, { repoRoot });
+    const parts = result.artifact.requiredReads.filter((read) => read.kind === "diff");
+    assert.equal(parts.length, 2);
+    assert.equal(parts[0].oversized, undefined);
+    assert.equal(parts[1].oversized, true);
+    const prefix = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
+    assert.ok(prefix.includes(`Oversized diff part: \`${path.resolve(repoRoot, parts[1].path)}\``));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("CLI --base preserves the prior referenced diff when later volatile validation refuses", async () => {
   const { repoRoot, baseSha, headSha: priorHead } = await makeBaseDiffRepo();
   const savedExitCode = process.exitCode;
@@ -4188,7 +4249,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "",
       "## Required reads",
       "",
-      "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. The `diff` entry is the filtered diff, with lockfiles, generated trees, and configured `gates.reviewDiff.excludeGlobs` paths excluded; the optional `raw-diff` entry is the unfiltered `.diff`. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
+      "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. The `diff` entries are the filtered diff, split at file and hunk boundaries so each fits one Read; read them in order. The filtered diff excludes lockfiles, generated trees, and configured `gates.reviewDiff.excludeGlobs` paths; the optional `raw-diff` entry is the unfiltered `.diff`. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
       "",
       `- required evidence: \`${path.resolve(repoRoot)}/tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-evidence.txt\` (sha256 ${evidenceSha}, ${Buffer.byteLength(expectedEvidence)} bytes)`, // secret-scan:allow fixture head SHA in briefing snapshot (not a secret)
       `- optional context: \`${path.resolve(repoRoot)}/tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json\``, // secret-scan:allow fixture head SHA in briefing snapshot (not a secret)
