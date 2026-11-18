@@ -27,7 +27,7 @@ import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs"
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
-import { addLocalOrigin, makeGhMock, runIdFreeEnv, withTempDir, withoutClaudeCode } from "../_helpers.mjs";
+import { addLocalOrigin, ensureOriginHead, makeGhMock, runIdFreeEnv, withTempDir, withoutClaudeCode } from "../_helpers.mjs";
 import { TOOLCHAIN_ROOT, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { sealDeltaFixture } from "./_seal-fixture.mjs";
 
@@ -1517,6 +1517,7 @@ test("ADR 0188: the round count comes from the --tmp-root the ledger writer uses
 });
 
 test("F1: free-form brief, payload override and summary-file substitution exit 2", () => {
+  ensureOriginHead(process.cwd()); // the raw spawn below skips runNode, and the trust-config load runs before option parsing
   for (const flag of ["--brief", "--payload", "--summary-file"]) {
     const result = spawnSync("node", [EMITTER, "--repo", REPO, "--pr", "7", "--head-sha", "a".repeat(40), "--phase", "full", "--threads-file", "t.json", flag, "x"], { encoding: "utf8", env: runIdFreeEnv() });
     assert.equal(result.status, 2, `${flag}: ${result.stdout}${result.stderr}`);
