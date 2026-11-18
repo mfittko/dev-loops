@@ -67,3 +67,21 @@ test("issue 3093: an empty file and a directory name the expected file", async (
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("issue 3093 AC2: a decision error on a correct verdict file carries decisionIndex and no usage hint", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "check-judge-decision-"));
+  try {
+    const [example] = SPEC_AUTHORITY_VERDICT_SCHEMA.examples;
+    const { defectClass: _omitted, ...decision } = { ...example.decisions[0], outcome: "valid_compliant" };
+    const file = path.join(dir, "spec-authority-verdict.json");
+    await writeFile(file, JSON.stringify({ ...example, decisions: [decision] }));
+    const { exitCode, out } = await check(["--file", file]);
+    assert.equal(exitCode, 1);
+    const result = JSON.parse(out);
+    assert.equal(result.ok, false);
+    assert.equal(typeof result.decisionIndex, "number");
+    assert.doesNotMatch(result.error, /usage: check-judge-decision/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

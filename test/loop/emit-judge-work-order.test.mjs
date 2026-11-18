@@ -9,7 +9,7 @@ import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, p
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { buildGateContextPath, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { renderPrBodyRead } from "../../scripts/github/write-gate-context.mjs";
-import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
+import { emitJudgeWorkOrder, main, renderWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { ensureTrustConfigCheckout, initGitFixture, withTempDir, writeGhStub } from "../_helpers.mjs";
 import { TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
@@ -857,14 +857,18 @@ test("issue 3093 AC3: the rendered outputSchemas examples are valid verdicts for
     assert.deepEqual(examples.map((example) => example.decisions[0].defectKind), [undefined, "matcher"]);
     assert.ok(examples[1].decisions[0].acceptedForms.length > 0 && examples[1].decisions[0].rejectedForms.length > 0);
     assert.match(examples[1].specDigest, /^sha256:[0-9a-f]{64}$/);
-    for (const [i, example] of examples.entries()) {
-      const file = path.join(root, `example-${i}.json`);
-      await writeFile(file, JSON.stringify(example));
-      let out = "";
-      await check(["--file", file], { stdout: { write: (t) => { out += t; } }, stderr: { write: (t) => { out += t; } } });
-      assert.deepEqual(JSON.parse(out), { ok: true, checked: 1 });
+    const previousExitCode = process.exitCode;
+    try {
+      for (const [i, example] of examples.entries()) {
+        const file = path.join(root, `example-${i}.json`);
+        await writeFile(file, JSON.stringify(example));
+        let out = "";
+        await check(["--file", file], { stdout: { write: (t) => { out += t; } }, stderr: { write: (t) => { out += t; } } });
+        assert.deepEqual(JSON.parse(out), { ok: true, checked: 1 });
+      }
+    } finally {
+      process.exitCode = previousExitCode;
     }
-    process.exitCode = 0;
   });
 });
 
@@ -895,10 +899,10 @@ test("issue 3093 AC5: the Codex setup paragraph is omitted for Claude and Pi and
       assert.doesNotMatch(text, /## Codex after-pull setup|command -v shasum|shasum -a 256/);
       assert.match(text, /## Output schemas/);
     }
-    for (const harness of ["claude", "pi"]) {
-      const text = await readFile((await emitJudgeWorkOrder({ ...sources, harness })).promptPath, "utf8");
-      assert.doesNotMatch(text, /Codex after-pull setup/);
-    }
+    // A legacy work order without a harness field keeps the paragraph (fail safe).
+    const { workOrder } = await emitJudgeWorkOrder({ ...sources, harness: "pi" });
+    const { harness: _dropped, ...legacy } = workOrder;
+    assert.match(renderWorkOrder(legacy), /## Codex after-pull setup/);
     const codexText = await readFile((await emitJudgeWorkOrder({ ...sources, harness: "codex" })).promptPath, "utf8");
     assert.match(codexText, /## Codex after-pull setup[\s\S]*command -v shasum[\s\S]*## Output schemas/);
     assert.match(codexText, /the Codex after-pull setup above still governs Codex/);
@@ -920,5 +924,23 @@ test("issue 3093 AC6: each required read and the slice linkage appear once in th
     const text = await readFile(plan.promptPath, "utf8");
     for (const read of plan.workOrder.requiredReads) assert.equal(text.split(read.path).length - 1, 1, read.kind);
     assert.equal(text.split(plan.workOrder.sliceLinkage).length - 1, 1);
+  });
+});
+
+test("issue 3093: the CLI refuses an explicit empty --harness value as invalid_harness", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const out = [];
+    const write = process.stdout.write;
+    const previousExitCode = process.exitCode;
+    process.stdout.write = (chunk) => (out.push(String(chunk)), true);
+    try {
+      await main(["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-file", sources.findingsFile,
+        "--spec-file", sources.specFile, "--identity-file", sources.identityFile, "--harness", ""], { cwd: root, fetchLivePrBody: sources.fetchLivePrBody });
+    } finally {
+      process.stdout.write = write;
+      process.exitCode = previousExitCode;
+    }
+    assert.equal(JSON.parse(out.join("")).refusal, "invalid_harness");
   });
 });

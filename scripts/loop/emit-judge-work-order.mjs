@@ -42,7 +42,7 @@ prior-round judge verdicts. It writes the immutable work order under
 <tmp-root>/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/ and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, planPath }.
 The work order's two verdict outputRefs sit under that directory's <roundId>/ segment.
---harness overrides the harness resolved from the environment (CLAUDECODE, CODEX_THREAD_ID, else pi); claude or pi omits the Codex-only setup paragraph from the work order, codex keeps it.
+--harness overrides the harness resolved from the environment (CLAUDECODE, CODEX_THREAD_ID, else pi); claude or pi omits the Codex-only setup paragraph from the work order, codex keeps it. A coordinator that dispatches a judge to a harness other than its own must pass --harness.
 A --prior-verdict named judge-verdict.json also pins the spec-authority-verdict.json beside it when that file exists.
 --tmp-root must be a listed checkout's tmp directory (the default is <checkout root>/tmp).
 Dispatch the judge with the compact dispatchPrompt only; each run supersedes the
@@ -105,7 +105,7 @@ function parseSource({ read, bytes }) {
   try { return JSON.parse(bytes.toString("utf8")); } catch { throw new Refusal(`required judge source ${read.kind} is not JSON: ${read.path}`); }
 }
 
-// The Codex setup paragraph is printed unless the emitter named a Claude or Pi run (fail safe for Codex and unknown harnesses).
+// The Codex setup paragraph is printed unless the emitter named a Claude or Pi run (fail safe only for a historical work order without a harness field; a fresh emission always stores a harness).
 export function renderWorkOrder(workOrder) {
   const [verdictPath, specVerdictPath] = workOrder.outputRefs;
   const codex = !["claude", "pi"].includes(workOrder.harness);
@@ -416,7 +416,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     const plan = await emitJudgeWorkOrder({
       repo: values.repo, pr: values.pr, gate: values.gate, headSha: values["head-sha"].toLowerCase(),
       findingsFile: values["findings-file"], specFile: values["spec-file"], identityFile: values["identity-file"],
-      priorVerdicts: values["prior-verdict"] ?? [], ...(values.harness ? { harness: values.harness } : {}), ...(values["operator-focus-file"] ? { operatorFocusFile: values["operator-focus-file"] } : {}), ...(values.round !== undefined ? { round: /^[1-9][0-9]*$/.test(values.round) ? Number(values.round) : values.round } : {}), cwd, ...(tmpRoot ? { tmpRoot } : {}), ...(roundId ? { roundId } : {}), ...(fetchLivePrBody ? { fetchLivePrBody } : {}),
+      priorVerdicts: values["prior-verdict"] ?? [], ...(values.harness !== undefined ? { harness: values.harness } : {}), ...(values["operator-focus-file"] ? { operatorFocusFile: values["operator-focus-file"] } : {}), ...(values.round !== undefined ? { round: /^[1-9][0-9]*$/.test(values.round) ? Number(values.round) : values.round } : {}), cwd, ...(tmpRoot ? { tmpRoot } : {}), ...(roundId ? { roundId } : {}), ...(fetchLivePrBody ? { fetchLivePrBody } : {}),
     });
     const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath } = plan;
     return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath });
