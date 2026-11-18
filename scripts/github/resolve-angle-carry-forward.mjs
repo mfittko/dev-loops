@@ -55,6 +55,7 @@ import {
   buildCarryForwardPlanPath,
   mapGateToConfigKey,
 } from "./write-gate-context.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 const USAGE = `Usage: resolve-angle-carry-forward.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --prev-head <sha> --head-sha <sha> [--tmp-root <path>] [--rerun-angle <angle>]...
 Decide, per angle, whether a prior gate verdict (clean OR findings_present, recorded
@@ -607,5 +608,6 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseResolveAngleCarryForwardCliArgs(process.argv.slice(2)).help);
   await main();
 }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { postUntrustedSkipNote, untrustedSkipNoteMarker } from "../../scripts/github/_untrusted-skip-note.mjs";
+import { renderUntrustedSkipNote, postUntrustedSkipNote, untrustedSkipNoteMarker } from "../../scripts/github/_untrusted-skip-note.mjs";
 
 const HEAD = "a".repeat(40);
 const skipped = [{ threadId: "T1", authors: ["stranger", "other`x"], isResolved: false, remedy: "r" }];
@@ -53,4 +53,10 @@ test("nothing skipped posts nothing", async () => {
   const { posts, gh } = harness();
   assert.equal(await postUntrustedSkipNote(base({ skipped: [] }), gh), false);
   assert.equal(posts.length, 0);
+});
+
+test("the remedy line names the trust.reviewers option on the default branch and the note carries no comment text", () => {
+  const note = renderUntrustedSkipNote("abcdef1234567", [{ authors: ["stranger"], body: "SECRET TEXT" }]);
+  assert.match(note, /Remedy: .*`trust\.reviewers` in `\.devloops` on the default branch\./);
+  assert.equal(note.includes("SECRET TEXT"), false);
 });

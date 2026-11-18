@@ -145,3 +145,12 @@ test("reconcile: the REAL default detectEvidence reads evidenceState from stderr
   assert.equal(result.refired, false);
   assert.deepEqual(rerunCalls, [], "a genuinely-missing verdict must NEVER re-fire");
 });
+
+test("reconcileGateEvidenceStatus: a detector trust-config refusal (exit 3) surfaces its state and remedy", async () => {
+  const refusal = JSON.stringify({ ok: false, error: "comment trust config: default_branch_unresolved: origin/HEAD is unset; run: git remote set-head origin --auto", state: "default_branch_unresolved" });
+  const runChild = async () => ({ code: 3, stdout: "", stderr: `${refusal}\n` });
+  await assert.rejects(
+    reconcileGateEvidenceStatus({ repo: "mfittko/dev-loops", pr: 1934 }, { runChild }),
+    (err) => /default_branch_unresolved/.test(err.message) && /git remote set-head origin --auto/.test(err.message),
+  );
+});

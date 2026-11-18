@@ -2,11 +2,10 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
-import { resolverTestEnv, writeGhStub } from "../_helpers.mjs";
+import { resolverTestEnv, spawnSyncTrusted as spawnSync, writeGhStub } from "../_helpers.mjs";
 import { ASYNC_CONTEXT_ENV_MARKERS } from "@dev-loops/core/loop/run-context";
 import { OPERATOR_BRIEFING } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
 

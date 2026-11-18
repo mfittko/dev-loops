@@ -275,7 +275,8 @@ if (inManagedContext) {
       const stderr = String(error?.stderr ?? "").trim();
       // Native loader/launcher diagnostics also exit 1; JSON evidence errors are not startup failures.
       const startupFailure = /^(?:dev-loops-run: (?:cannot resolve|cannot start)|Error(?: \[ERR_MODULE_NOT_FOUND\])?: Cannot find (?:module|package)|TypeError \[ERR_UNKNOWN_FILE_EXTENSION\]: Unknown file extension|Error \[ERR_UNSUPPORTED_DIR_IMPORT\]: Directory import|Error: (?:EACCES: permission denied|EPERM: operation not permitted), open |SyntaxError:)/m.test(stderr);
-      if (typeof error?.status !== "number" || startupFailure) {
+      // Exit 3 is TRUST_CONFIG_REFUSED_EXIT: its stderr JSON names the state and remedy, so surface it instead of a missing-verdict deny.
+      if (typeof error?.status !== "number" || startupFailure || error.status === 3) {
         gateError = `could not run ${gateScript} via ${override || launcher} in consumer ${repoRoot}: ${stderr || error.message}`;
       }
     }

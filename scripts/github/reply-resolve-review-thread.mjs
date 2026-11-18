@@ -14,6 +14,7 @@ import {
 } from "./_review-thread-mutations.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { formatCliError } from "../_core-helpers.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 export { hasCommitShaReference } from "./_review-thread-mutations.mjs";
 
@@ -130,6 +131,7 @@ async function run(argv) {
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseCliArgs(process.argv.slice(2)).help);
   run(process.argv.slice(2)).then(
     (code) => { process.exitCode = typeof code === "number" ? code : 0; },
     (error) => {

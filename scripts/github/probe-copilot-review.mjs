@@ -14,6 +14,7 @@ import {
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { waitWithHeartbeat } from "./_watch-heartbeat.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 const REMOVED_FLAGS = new Set([
   "--poll-interval-ms",
@@ -58,7 +59,8 @@ Diagnostic output (stderr):
     { "ok": false, "error": "..." }
 Exit codes:
   0  Success
-  1  Argument error or gh failure`.trim();
+  1  Argument error or gh failure
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 const COPILOT_ACTIVITY_QUERY = [
   "query($owner: String!, $name: String!, $pr: Int!) {",
   "  repository(owner: $owner, name: $name) {",
@@ -451,6 +453,7 @@ export async function runCli(
   return emitResult(result, { jq: options.jq, silent: options.silent, stdout });
 }
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseWatchCliArgs(process.argv.slice(2)).help);
   runCli().then((code) => {
     if (typeof code === "number") {
       process.exitCode = code;

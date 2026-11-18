@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -13,7 +12,7 @@ import { DELTA_EVIDENCE_RULE, countPrOwnCommits, deltaPatchPath, gitStaleSurface
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { A, B, C, M, boundArgs, coverageRepo } from "./_delta-coverage-fixture.mjs";
-import { initGitFixture, runGitFixture } from "../_helpers.mjs";
+import { initGitFixture, runGitFixture, spawnSyncTrusted as spawnSync } from "../_helpers.mjs";
 import { sealDeltaFixture } from "./_seal-fixture.mjs";
 import { runDocsValidators } from "../../scripts/docs/docs-validators.mjs";
 import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";

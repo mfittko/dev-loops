@@ -37,12 +37,13 @@ import { captureParsedReviewThreads } from "../github/_review-thread-mutations.m
 import { resolveAuthenticatedLogin, runGhJson } from "../github/post-gate-findings.mjs";
 import { listRestPrReviews, normalizePrReviewsPayload, prReviewsApiArgs } from "../github/_gate-finding-surface.mjs";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
-import { isSanctionedCopilotReviewerLogin, isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
-import { isTrustedDispositionAuthor, resolveLatestCopilotReview } from "../github/_copilot-body-disposition.mjs";
+import { isSanctionedCopilotReviewerLogin, isTrustedAssociation, isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
+import { resolveLatestCopilotReview } from "../github/_copilot-body-disposition.mjs";
 import { isCommitContainedByHead } from "../github/_commit-containment.mjs";
 import { selectActThreadBinding } from "../github/_fixer-act-thread-bindings.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { renderCliText } from "@dev-loops/core/loop/cli-command";
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 
 const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path> | --review-id <review node id> | --ci-file <path>) [--completion-only] [--delta-result <path>] [--allowed-path <repo-relative path>]... [--operator-focus-file <path>] [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
@@ -78,7 +79,7 @@ that renders as a bounded, sanitized "Operator focus" section and is pinned by t
 An item decision picks among remedies its act item offers and never changes the disposition; items need an
 --act-list-file source (bound by fingerprint) or --threads-file source (bound by threadId, no decision); an unknown fingerprint or thread id refuses and writes nothing. replyDisposition (tackled, partially_fixed, deferred or rejected) with a replyNote sets the verifier reply for that thread.
 It accepts no other brief, payload or summary input.
-Exit codes: 0 emitted, 1 refused (missing or conflicting source or authority), 2 usage/IO error.`;
+Exit codes: 0 emitted, 1 refused (missing or conflicting source or authority), 2 usage/IO error, 3 comment trust config refused (stderr JSON with a state field).`;
 
 // ref = fixer:<owner/repo>#<pr>:<headSha>:<executionIdentity>; executionIdentity = f<emit ms>-<8 hex>.
 const FIXER_REF_RE = /^fixer:([^/\s#]+\/[^/\s#]+)#(\d+):([0-9a-f]{40}|[0-9a-f]{64}):(f(\d+)-[0-9a-f]{8})$/;
@@ -164,7 +165,7 @@ async function loadReviewBodySnapshot({ repo, pr, reviewId, headSha, fetchReview
     if (review.commit_id !== headSha) throw new Refusal(`Copilot review ${reviewId} is on ${review.commit_id}, not the PR head ${headSha}; a Copilot body on an older head is stale, re-review the head and pass the new node id, or use --threads-file`);
   } else {
     if (isBotType(review.user) || /\[bot\]$/i.test(login)) throw new Refusal(`review ${reviewId} is by the bot ${login}; only a trusted human or the Copilot reviewer is a fixer source; pass a review by one of them, or use --threads-file`);
-    if (!isTrustedDispositionAuthor(review)) throw new Refusal(`review ${reviewId} is by ${login || "an unknown author"} with association ${review.author_association}; only an OWNER, MEMBER or COLLABORATOR review is a fixer source; pass such a review's node id, or use --threads-file`);
+    if (login === "" || !isTrustedAssociation(review.author_association)) throw new Refusal(`review ${reviewId} is by ${login || "an unknown author"} with association ${review.author_association}; only an OWNER, MEMBER or COLLABORATOR review is a fixer source; pass such a review's node id, or use --threads-file`);
     if (typeof review.commit_id !== "string") throw new Refusal(`review ${reviewId} has no commit_id; re-review the head and pass the new node id, or use --threads-file`);
     const contained = await isCommitContainedByHead({ repo, commitSha: review.commit_id, headSha }, runtime);
     if (!contained.contained) throw new Refusal(`review ${reviewId} is on commit ${review.commit_id}, which the PR head ${headSha} does not contain: ${contained.reason}; re-review the head and pass the new node id, or use --threads-file`);
@@ -1190,14 +1191,16 @@ registerWorkOrderRole("fixer", {
   },
 });
 
+const CLI_OPTIONS = {
+  repo: { type: "string" }, pr: { type: "string" }, "head-sha": { type: "string" }, phase: { type: "string" },
+  "act-list-file": { type: "string" }, gate: { type: "string" }, "threads-file": { type: "string" }, "review-id": { type: "string" }, "ci-file": { type: "string" }, "completion-only": { type: "boolean" },
+  "delta-result": { type: "string" }, "operator-focus-file": { type: "string" }, "allowed-path": { type: "string", multiple: true },
+  "tmp-root": { type: "string" }, harness: { type: "string" }, help: { type: "boolean", short: "h" },
+  ...JQ_OUTPUT_PARSE_OPTIONS,
+};
+
 export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), fetchPr, fetchReview } = {}) {
-  const { values } = parseArgs({ args: argv, options: {
-    repo: { type: "string" }, pr: { type: "string" }, "head-sha": { type: "string" }, phase: { type: "string" },
-    "act-list-file": { type: "string" }, gate: { type: "string" }, "threads-file": { type: "string" }, "review-id": { type: "string" }, "ci-file": { type: "string" }, "completion-only": { type: "boolean" },
-    "delta-result": { type: "string" }, "operator-focus-file": { type: "string" }, "allowed-path": { type: "string", multiple: true },
-    "tmp-root": { type: "string" }, harness: { type: "string" }, help: { type: "boolean", short: "h" },
-    ...JQ_OUTPUT_PARSE_OPTIONS,
-  } });
+  const { values } = parseArgs({ args: argv, options: CLI_OPTIONS });
   if (values.help) {
     process.stdout.write(`${USAGE}\n\n${JQ_OUTPUT_USAGE}\n`);
     return 0;
@@ -1237,6 +1240,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseArgs({ args: process.argv.slice(2), options: CLI_OPTIONS }).values.help);
   try {
     process.exitCode = await main();
   } catch (err) {

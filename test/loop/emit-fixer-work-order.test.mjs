@@ -9,6 +9,7 @@ import { cp, link, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, test } from "bun:test";
+import { setCommentTrustConfig } from "@dev-loops/core/github/comment-trust";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
 import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
 import { startDeltaSequence, toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
@@ -26,7 +27,7 @@ import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs"
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
-import { makeGhMock, runIdFreeEnv, withTempDir, withoutClaudeCode } from "../_helpers.mjs";
+import { addLocalOrigin, ensureOriginHead, makeGhMock, runIdFreeEnv, withTempDir, withoutClaudeCode } from "../_helpers.mjs";
 import { TOOLCHAIN_ROOT, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { sealDeltaFixture } from "./_seal-fixture.mjs";
 
@@ -213,6 +214,7 @@ async function withFixture(fn) {
       git(seed, "commit", "-q", "--allow-empty", "-m", "c1");
       initialHistory.head = git(seed, "rev-parse", "HEAD");
       git(seed, "checkout", "-q", "main");
+      addLocalOrigin(seed);
     })();
     await initialHistory.ready;
     await cp(path.join(initialHistory.root, ".git"), path.join(root, ".git"), { recursive: true });
@@ -1525,6 +1527,7 @@ test("ADR 0188: the round count comes from the --tmp-root the ledger writer uses
 });
 
 test("F1: free-form brief, payload override and summary-file substitution exit 2", () => {
+  ensureOriginHead(process.cwd()); // the raw spawn below skips runNode, and the trust-config load runs before option parsing
   for (const flag of ["--brief", "--payload", "--summary-file"]) {
     const result = spawnSync("node", [EMITTER, "--repo", REPO, "--pr", "7", "--head-sha", "a".repeat(40), "--phase", "full", "--threads-file", "t.json", flag, "x"], { encoding: "utf8", env: runIdFreeEnv() });
     assert.equal(result.status, 2, `${flag}: ${result.stdout}${result.stderr}`);
@@ -1609,6 +1612,8 @@ test("AC4: the review source refuses an unknown review, a wrong state, an empty 
     for (const type of ["bot", "BOT"]) await refuses([reviewFor(head, { user: { login: "github-actions", type } })], /by the bot github-actions/);
     await refuses([reviewFor(head, { author_association: "CONTRIBUTOR" })], /association CONTRIBUTOR/);
     await refuses([reviewFor(head, { user: { login: "copilot-lookalike", type: "User" }, author_association: "NONE" })], /association NONE|only an OWNER/);
+    setCommentTrustConfig({ reviewers: ["alice"] });
+    try { await refuses([reviewFor(head, { author_association: "NONE" })], /association NONE/); } finally { setCommentTrustConfig(); }
     await refuses([reviewFor(head, { commit_id: "d".repeat(40) })], /does not contain/, { runChild: compareAs("diverged") });
     // A human review on an earlier commit of the PR stays valid.
     const earlier = await emitReview(emit, [reviewFor(head, { commit_id: "d".repeat(40) })], { runChild: compareAs("ahead") });
@@ -1712,9 +1717,9 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
       await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads }), /not successful list-review-threads --unresolved-only output/);
     }
     // Resolved threads name the runnable unresolve remedy (GATE-EXEC-ROUND-CAP-NO-DECLINE-RESOLVE).
-    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "T9", isResolved: true }] }));
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "THREAD_RESOLVED_9", isResolved: true }] }));
     await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads }), (e) => e.message.includes(`dev-loops-run scripts/github/unresolve-review-thread.mjs --repo ${REPO} --pr ${PR} --thread-id <thread-id>`)
-      && e.message.includes("re-list with --unresolved-only") && e.message.includes("only for a thread resolved by mistake") && !e.message.includes("for each") && !e.message.includes("T9"));
+      && e.message.includes("re-list with --unresolved-only") && e.message.includes("only for a thread resolved by mistake") && !e.message.includes("for each") && !e.message.includes("THREAD_RESOLVED_9"));
     await writeFile(files.threads, JSON.stringify(THREADS));
     await assert.rejects(emit({ fetchPr: async () => ({ headRefName: "issue-1", headRefOid: "b".repeat(40) }) }), /conflicting authority/);
     await assert.rejects(emit({ fetchPr: async () => ({ headRefOid: head }) }), /mutation authority is missing/);

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -61,6 +61,9 @@ async function commit(repoRoot, files) {
 
 const run = (repoRoot, headSha, extra = []) =>
   runNode(CLI, ["loop", "validation-record", "--repo", "owner/repo", "--head-sha", headSha, "--title", TITLE, ...extra], { cwd: repoRoot });
+// Not the runNode helper: it re-publishes a missing origin/HEAD, which this fixture must keep unresolvable.
+const runUnhealed = (repoRoot, headSha) =>
+  new Promise((resolve) => execFile(process.execPath, [CLI, "loop", "validation-record", "--repo", "owner/repo", "--head-sha", headSha, "--title", TITLE], { cwd: repoRoot }, (error, stdout, stderr) => resolve({ code: error ? error.code : 0, stdout, stderr })));
 const recordFile = (repoRoot, headSha) => path.join(repoRoot, "tmp", "validation-records", "owner", "repo", `${headSha}.json`);
 
 async function withFixture(options, fn) {
@@ -105,11 +108,11 @@ test("a failing suite writes a failed record and exits non-zero", () => withFixt
   assert.equal(parseValidationRecord(record, { repo: "owner/repo", headSha }).ok, true);
 }));
 
-async function assertIncomplete(repoRoot, headSha, reason, extra) {
+async function assertIncomplete(repoRoot, headSha, reason, extra, runner = run) {
   // A record left by an earlier run must be gone after every incomplete outcome.
   await mkdir(path.dirname(recordFile(repoRoot, headSha)), { recursive: true });
   await writeFile(recordFile(repoRoot, headSha), "{}\n");
-  const out = await run(repoRoot, headSha, extra);
+  const out = await runner(repoRoot, headSha, extra);
   assert.notEqual(out.code, 0);
   const result = JSON.parse(out.stdout);
   assert.equal(result.ok, false);
@@ -201,7 +204,7 @@ test("a base validation block in ci-only mode, absent or with no config file is 
 test("an unresolvable origin/HEAD is incomplete", () => withFixture({}, async (repoRoot) => {
   const headSha = await commit(repoRoot, { "docs/a.md": "# a\n" });
   git(repoRoot, "remote", "set-head", "origin", "-d");
-  await assertIncomplete(repoRoot, headSha, /origin\/HEAD does not resolve; run git fetch origin and git remote set-head origin -a/);
+  await assertIncomplete(repoRoot, headSha, /origin\/HEAD does not resolve; run git fetch origin and git remote set-head origin -a/, undefined, runUnhealed);
 }));
 
 test("a toolchain mismatch is incomplete", () => withFixture({ pinned: "0.0.1" }, async (repoRoot) => {
