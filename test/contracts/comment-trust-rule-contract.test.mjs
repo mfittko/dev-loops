@@ -48,7 +48,7 @@ test("ADR 0290 cites ADR 0238, 0240 and 0273, and the owner paragraph names the 
 });
 
 // Entry scripts (non-underscore under scripts/) that read comment, review or thread text through the trust
-// predicate or the review-thread fetchers, directly, through a `_`-prefixed helper chain, or through a non-entry module that reads them directly, load the trust config.
+// predicate or the review-thread fetchers, directly, through a `_`-prefixed helper chain, or through an imported module (entry or not) that reads them directly, load the trust config.
 test("every entry script that reads trust-filtered text loads the trust config", async () => {
   const { readdir, readFile } = await import("node:fs/promises");
   const path = await import("node:path");
@@ -64,7 +64,7 @@ test("every entry script that reads trust-filtered text loads the trust config",
   const sources = new Map(await Promise.all(files.map(async (f) => [f, await readFile(f, "utf8")])));
   const readsDirect = (src) => /\b(isTrustedCommentAuthor|isTrustedGraphqlComment|isTrustedRestComment|parseReviewThreads|fetchAllReviewThreads(?:WithSkips)?|parseUnresolvedThreadBodies)\b/.test(src.replace(/^export \{[\s\S]*?\} from .*$/gm, ""));
   const isHelper = (f) => path.basename(f).startsWith("_");
-  const isEntry = (f) => /\b(isDirectCliRun|isDirectRun)\b/.test(sources.get(f));  // shortcut: an entry imported by another entry is not followed (that is cross-entry import), revisit if one starts reading trust text.
+  const isEntry = (f) => /\b(isDirectCliRun|isDirectRun)\b/.test(sources.get(f));  // shortcut: an imported entry is checked for its own direct reads only, not its imports, because following entry-to-entry chains flags constant-only imports.
   const reads = (f, seen = new Set()) => {
     if (seen.has(f)) return false;
     seen.add(f);
@@ -72,7 +72,7 @@ test("every entry script that reads trust-filtered text loads the trust config",
     if (readsDirect(src)) return true;
     for (const [, spec] of src.matchAll(/from "(\.{1,2}\/[^"]*\.mjs)"/g)) {
       const target = path.resolve(path.dirname(f), spec);
-      if (path.basename(target) !== "_core-helpers.mjs" && sources.has(target) && (isHelper(target) ? reads(target, seen) : !isEntry(target) && readsDirect(sources.get(target)))) return true;
+      if (path.basename(target) !== "_core-helpers.mjs" && sources.has(target) && (isHelper(target) ? reads(target, seen) : readsDirect(sources.get(target)))) return true;
     }
     return false;
   };

@@ -11,7 +11,7 @@ import { test } from "bun:test";
 import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, codeTreeSkewNote, executionIndexPath, materializationHash, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { seedJudgeSources } from "../loop/_judge-delivery-fixture.mjs";
-import { withTempDir, writeGhStub } from "../_helpers.mjs";
+import { ensureTrustConfigCheckout, withTempDir, writeGhStub } from "../_helpers.mjs";
 import { findRetirementAfter, main as pullMain, pullDelegationTarget, shouldRetryFixerPullLocally } from "../../scripts/github/pull-work-order.mjs";
 import { keyedFixerPlanPathForRef } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { shellQuote } from "../../scripts/lib/checkout-delegation-refusal.mjs";
@@ -23,7 +23,10 @@ const SCRIPTS = path.resolve("scripts/github");
 const HEAD = "c".repeat(40);
 const GATE = "pre_approval_gate";
 
-const run = (script, args, cwd) => spawnSync("node", [path.join(SCRIPTS, script), ...args], { cwd, encoding: "utf8" });
+const run = (script, args, cwd) => {
+  ensureTrustConfigCheckout(cwd, path.join(SCRIPTS, script));
+  return spawnSync("node", [path.join(SCRIPTS, script), ...args], { cwd, encoding: "utf8" });
+};
 // The pull (ADR 0115): the execution identity alone, resolved through the execution index.
 const pullShort = (execution, cwd) => run("pull-work-order.mjs", [execution], cwd);
 const pull = (unit, cwd, over = {}) => pullShort(over.execution ?? unit.executionIdentity, cwd);
@@ -71,6 +74,7 @@ test("the dispatchPrompt carries a shell-runnable pull command; shell metacharac
   await withDir(async (root) => {
     const unit = await emitRound(root);
     const args = unit.dispatchPrompt.match(/`dev-loops-run scripts\/github\/pull-work-order\.mjs ([^`]+)`/)[1];
+    ensureTrustConfigCheckout(root, path.join(SCRIPTS, "pull-work-order.mjs"));
     const result = spawnSync("sh", ["-c", `node ${path.join(SCRIPTS, "pull-work-order.mjs")} ${args}`], { cwd: root, encoding: "utf8" });
     assert.equal(result.stdout, await readFile(unit.promptPath, "utf8"), result.stderr);
     assert.equal(unit.dispatchPrompt, `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${unit.executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`);

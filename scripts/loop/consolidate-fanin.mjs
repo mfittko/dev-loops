@@ -38,6 +38,7 @@
  * "Consolidation: fan-in synthesis and disposition ledger"
  * (skills/docs/gate-review-sub-loop-contract.md).
  */
+import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 import { mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
@@ -1739,6 +1740,7 @@ async function main() {
     process.exitCode = 1;
     return;
   }
+  loadCommentTrustConfigOrExit({ repoRoot: options.repoRoot });
   try {
     const result = await consolidateGateFanin(options);
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });

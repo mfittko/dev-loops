@@ -382,13 +382,24 @@ export function initGitFixture(dir, { remote, branch, commit = "init" } = {}) {
 /**
  * Give a repo with a commit a local bare `origin` (kept inside `.git`) whose default branch is the
  * current branch, so the entry scripts' default-branch trust-config read resolves offline.
+ * A repo that already has a github.com `origin` keeps its slug (https is rewritten to the ssh form) and fetches
+ * through a `core.sshCommand` stub that serves the local bare repo.
  */
 export function addLocalOrigin(dir) {
-  const branch = runGitFixture(dir, ["branch", "--show-current"]);
-  const bare = path.join(runGitFixture(dir, ["rev-parse", "--absolute-git-dir"]), "fake-origin.git");
+  // The first worktree is the main checkout: its branch is the default branch, also when dir is a linked worktree.
+  const mainDir = runGitFixture(dir, ["worktree", "list", "--porcelain"]).split("\n")[0].slice("worktree ".length);
+  const branch = runGitFixture(mainDir, ["branch", "--show-current"]);
+  const gitDir = runGitFixture(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  const bare = path.join(gitDir, "fake-origin.git");
   runGitFixture(dir, ["init", "-q", "--bare", bare]);
-  runGitFixture(dir, ["remote", "add", "origin", bare]);
-  runGitFixture(dir, ["push", "-q", "origin", `HEAD:refs/heads/${branch}`]);
+  const url = spawnSync("git", ["config", "--get", "remote.origin.url"], { cwd: dir, encoding: "utf8", env: GIT_FIXTURE_ENV }).stdout.trim();
+  if (url) {
+    const stub = path.join(gitDir, "fake-ssh.sh");
+    cacheFs.writeFileSync(stub, `#!/bin/sh\nexec git upload-pack '${bare}'\n`, { mode: 0o755 });
+    runGitFixture(dir, ["config", "core.sshCommand", stub]);
+    if (url.startsWith("https://github.com/")) runGitFixture(dir, ["config", "url.git@github.com:.insteadOf", "https://github.com/"]);
+  } else runGitFixture(dir, ["remote", "add", "origin", bare]);
+  runGitFixture(dir, ["push", "-q", bare, `refs/heads/${branch}:refs/heads/${branch}`]);
   runGitFixture(dir, ["fetch", "-q", "origin"]);
   runGitFixture(dir, ["remote", "set-head", "origin", branch]);
 }
@@ -441,14 +452,17 @@ export function repeatedLinesContent(count, { prefix = "const x" } = {}) {
  * resolvable offline: a non-git dir becomes a repo, and a repo with a commit but no `origin` gets a local one.
  */
 export function ensureTrustConfigCheckout(cwd, scriptPath) {
-  if (typeof cwd !== "string" || !existsSync(cwd) || (scriptPath && !(existsSync(scriptPath) && cacheFs.readFileSync(scriptPath, "utf8").includes("loadCommentTrustConfigOrExit();")))) return;
+  if (typeof cwd !== "string" || !existsSync(cwd) || (scriptPath && path.basename(scriptPath) !== "index.mjs" && !(existsSync(scriptPath) && cacheFs.readFileSync(scriptPath, "utf8").includes("loadCommentTrustConfigOrExit(")))) return;
   const git = (...args) => spawnSync("git", args, { cwd, encoding: "utf8", env: GIT_FIXTURE_ENV });
   if (git("rev-parse", "--git-dir").status !== 0) {
     initGitFixture(cwd, { branch: "main" });
     addLocalOrigin(cwd);
     return;
   }
-  if (git("remote", "get-url", "origin").status === 0 || git("rev-parse", "--verify", "HEAD").status !== 0) return;
+  const url = git("config", "--get", "remote.origin.url").stdout.trim();
+  // A fixture's fake github.com origin is rewritten only inside the OS temp dir, never in a real checkout.
+  const fakeOrigin = /^(git@github\.com:|https:\/\/github\.com\/)/.test(url) && cacheFs.realpathSync(cwd).startsWith(cacheFs.realpathSync(os.tmpdir()) + path.sep);
+  if ((url && !fakeOrigin) || git("rev-parse", "--verify", "HEAD").status !== 0 || git("symbolic-ref", "-q", "refs/remotes/origin/HEAD").status === 0) return;
   if (git("branch", "--show-current").stdout.trim()) addLocalOrigin(cwd);
 }
 
@@ -714,4 +728,10 @@ export function captureStderr(fn) {
   process.stderr.write = (chunk) => { out += String(chunk); return true; };
   try { fn(); } finally { process.stderr.write = original; }
   return out;
+}
+
+/** `spawnSync` for a fixture cwd: makes the cwd's default-branch trust-config read resolvable first. */
+export function spawnSyncTrusted(command, args = [], options = {}) {
+  ensureTrustConfigCheckout(options.cwd ?? process.cwd(), args[0]);
+  return spawnSync(command, args, options);
 }

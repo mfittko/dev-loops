@@ -252,6 +252,7 @@ test("J2: every dispatch is the fixed compact pointer under the shared cap, reus
     // Initial, resumed and replacement dispatches pull the same unit through the same path.
     const args = plan.dispatchPrompt.match(/`dev-loops-run scripts\/github\/pull-work-order\.mjs ([^`]+)`/)[1];
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      ensureTrustConfigCheckout(root, path.resolve("scripts/github/pull-work-order.mjs"));
       const result = spawnSync("sh", ["-c", `node ${path.resolve("scripts/github/pull-work-order.mjs")} ${args}`], { cwd: root, encoding: "utf8" });
       assert.equal(result.stdout, await readFile(plan.promptPath, "utf8"), result.stderr);
     }
