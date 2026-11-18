@@ -175,13 +175,13 @@ When an umbrella/epic issue must be decomposed into bounded, independently closa
 Follow the "Default decomposition flow" in [Sub-Issue Tree Contract](./sub-issue-tree-contract.md), which owns the full `manage-sub-issues.mjs` contract and `SUBISSUE-NO-ADHOC-BYPASS`. Create each child with `node <dev-loops-package-root>/cli/index.mjs issue create --repo <resolved-repo> --title <title> --body-file <path> --assignee @me`, then:
 
 ```sh
-dev-loops-run --repo-root <checkout> scripts/github/manage-sub-issues.mjs add \
+node <resolved-skill-scripts>/github/manage-sub-issues.mjs add \
   --repo <resolved-repo> --issue <parent-number> --child <child-number>
-dev-loops-run --repo-root <checkout> scripts/github/manage-sub-issues.mjs reorder \
+node <resolved-skill-scripts>/github/manage-sub-issues.mjs reorder \
   --repo <resolved-repo> --issue <parent-number> --order <n1,n2,...>
-dev-loops-run --repo-root <checkout> scripts/github/manage-sub-issues.mjs verify \
+node <resolved-skill-scripts>/github/manage-sub-issues.mjs verify \
   --repo <resolved-repo> --issue <parent-number> --expected <n1,n2,...> [--ordered]
-dev-loops-run --repo-root <checkout> scripts/github/manage-sub-issues.mjs list \
+node <resolved-skill-scripts>/github/manage-sub-issues.mjs list \
   --repo <resolved-repo> --issue <parent-number>
 ```
 
