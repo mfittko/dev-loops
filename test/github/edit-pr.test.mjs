@@ -413,7 +413,7 @@ test("editPr: accepts an edit that preserves the existing waiver lines", async (
 
 test("editPr: the waiverWriter runtime seam may change the waiver line (no CLI flag exists)", async () => {
   const { run, calls } = stubGh();
-  const result = await editPrRaw(editOpts({ body: `Body\n\n${WAIVER}\n` }), { run, waiverWriter: true });
+  const result = await editPrRaw(editOpts({ body: `Body\n\n${WAIVER}\n` }), { run, waiverWriter: true, currentBody: "Body\n" });
   assert.deepEqual(result.edited, ["body"]);
   assert.equal(calls.length, 1);
   assert.throws(() => parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--body", "x", "--waiver-writer"]), /Unknown argument/);
@@ -597,4 +597,13 @@ test("editPr (#2898): tick-verified-checkboxes and the untick guard agree on one
   assert.equal(ticked.body, live.replaceAll("[ ]", "[x]"));
   // the guard sees the same three rows: unticking them again is refused for each
   await assert.rejects(() => attemptEdit(ticked.body, live), /untick or remove 3 checked row/);
+});
+
+test("editPr: the waiverWriter seam still refuses to move the spike marker off the last line", async () => {
+  const marker = "<!-- dev-loops:spike-pr no-merge -->";
+  const { run } = stubGh();
+  await assert.rejects(
+    () => editPrRaw(editOpts({ body: `Body\n\n${marker}\n\n${WAIVER}\n` }), { run, waiverWriter: true, currentBody: `Body\n\n${marker}\n` }),
+    /spike no-merge marker/,
+  );
 });

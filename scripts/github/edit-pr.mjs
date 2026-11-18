@@ -361,17 +361,18 @@ export async function editPr(
   // inline so the grill check and buildEditArgs never re-read the exhausted fd 0.
   if (options.body !== undefined || options.bodyFile !== undefined) {
     const guardBody = await resolveBody(options);
+    const baseline = typeof currentBody === "string" ? currentBody : (await readPrContext())?.body;
+    if (typeof baseline !== "string") {
+      throw new Error(
+        `ADR-TRIPWIRE-STANDING-WAIVER: cannot read the current body of PR #${options.pr} (gh pr view failed), so its \`adr-tripwire:allow\` lines cannot be compared — refusing on ambiguity (fail closed).`,
+      );
+    }
+    // ADR 0293: the spike marker guard applies to every body write, the waiver writer included.
+    if (hasSpikePrMarker(baseline) && !hasSpikePrMarker(guardBody)) throw new Error(`refusing to remove the spike no-merge marker from PR #${options.pr} or move it off the last non-empty body line.`);
+    if (!hasSpikePrMarker(baseline) && hasSpikePrMarker(guardBody)) throw new Error(`refusing to add the spike no-merge marker to PR #${options.pr}: only spike PR creation binds it.`);
     if (!waiverWriter) {
-      const baseline = typeof currentBody === "string" ? currentBody : (await readPrContext())?.body;
-      if (typeof baseline !== "string") {
-        throw new Error(
-          `ADR-TRIPWIRE-STANDING-WAIVER: cannot read the current body of PR #${options.pr} (gh pr view failed), so its \`adr-tripwire:allow\` lines cannot be compared — refusing on ambiguity (fail closed).`,
-        );
-      }
       const waiverRefusal = waiverLineChangeRefusal({ currentBody: baseline, nextBody: guardBody, action: "write" });
       if (waiverRefusal) throw new Error(waiverRefusal);
-      if (hasSpikePrMarker(baseline) && !hasSpikePrMarker(guardBody)) throw new Error(`refusing to remove the spike no-merge marker from PR #${options.pr} or move it off the last non-empty body line.`);
-      if (!hasSpikePrMarker(baseline) && hasSpikePrMarker(guardBody)) throw new Error(`refusing to add the spike no-merge marker to PR #${options.pr}: only spike PR creation binds it.`);
       const unticked = untickedRows(baseline, guardBody);
       if (unticked.length > 0 && !options.allowUntick) {
         throw new Error(`CHECKLIST-SCOPE-ONE-MODEL: refusing to untick or remove ${unticked.length} checked row(s) on PR #${options.pr} (unticked, deleted, reworded, or moved into or out of its AC/DoD scope): ${unticked.map((l) => JSON.stringify(l)).join("; ")}. Edit from the current body, or pass --allow-untick for a deliberate change.`);

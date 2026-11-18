@@ -7,6 +7,7 @@ import { test } from "bun:test";
 
 import { computeSpecDigest, requireSpecFromBody } from "@dev-loops/core/loop/spec-authority";
 import { parseWaiveAdrTripwireCliArgs, runCli, waiveAdrTripwire } from "../../scripts/github/waive-adr-tripwire.mjs";
+import { hasSpikePrMarker } from "../../scripts/github/_spike-pr-marker.mjs";
 import { captureStream } from "../_helpers.mjs";
 import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
@@ -515,4 +516,16 @@ test("a cross-repo entry inside a Refs list does not count as this repo's issue"
   const result = await run();
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.deepEqual(fetched, [7]);
+});
+
+test("keeps the spike marker as the last non-empty body line when writing the waiver", async () => {
+  const marker = "<!-- dev-loops:spike-pr no-merge -->";
+  const body = `Summary.\n\nCloses #7\n\n${marker}\n`;
+  const { edits, run } = harness({
+    fetchPr: async () => ({ body, headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [{ number: 7 }] } }),
+  });
+  const result = await run();
+  assert.equal(result.ok, true);
+  assert.equal(edits[0].opts.body, `Summary.\n\nCloses #7\n\n${result.line}\n\n${marker}\n`);
+  assert.equal(hasSpikePrMarker(edits[0].opts.body), true);
 });
