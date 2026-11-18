@@ -53,7 +53,7 @@ async function ghJson(args, { env = process.env, ghCommand = "gh", runChild = de
 
 /** The head's latest ci.yml run ({ databaseId, status, attempt }), or undefined when the head has none. */
 export async function findHeadCiRun({ repo, headSha }, runtime = {}) {
-  return (await ghJson(["run", "list", "--repo", repo, "--commit", headSha, "--workflow", "ci.yml", "--limit", "1", "--json", "databaseId,status,attempt"], runtime, `CI runs for ${headSha}`) ?? [])[0];
+  return (await ghJson(["run", "list", "--repo", repo, "--commit", headSha, "--workflow", "ci.yml", "--limit", "1", "--json", "databaseId,status,conclusion,attempt"], runtime, `CI runs for ${headSha}`) ?? [])[0];
 }
 
 /** True when the run has failed jobs and every one is a smoke job carrying a GitHub timeout annotation. */
@@ -77,7 +77,7 @@ Refuses a run still in progress after the wait, a run whose failed jobs are not 
 smoke jobs with a GitHub timeout annotation, and a run that has reached
 attempt ${DEFAULT_MAX_ATTEMPTS}; the attempt count is the run's own attempt number.
 Output (stdout, JSON): { "ok": true, "action": "rerun", "runId": N, "attempt": N }
-Refusals (stderr JSON, exit 1): no_run, run_in_progress, attempt_cap, not_smoke_timeout.
+Refusals (stderr JSON, exit 1): no_run, run_in_progress, run_succeeded, attempt_cap, not_smoke_timeout.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Re-run requested
@@ -114,6 +114,7 @@ export async function rerunFailedCi(options, runtime = {}) {
   const run = await waitForHeadCiRun(options, runtime);
   if (!run) throw new Error(`no_run: no ci.yml run found for head ${options.headSha}`);
   if (run.status !== "completed") throw new Error(`run_in_progress: CI run ${run.databaseId} is still ${run.status} after waiting up to ${(runtime.waitBudgetMs ?? WAIT_BUDGET_MS) / 1000}s; run this script again to keep waiting`);
+  if (run.conclusion === "success") throw new Error(`run_succeeded: CI run ${run.databaseId} completed green with no failed job; run wait-pr-checks.mjs for a fresh read and do not emit a ci-failure fixer order`);
   if (!isRerunnableAttempt(run.attempt)) throw new Error(`attempt_cap: CI run ${run.databaseId} is at attempt ${run.attempt} of ${DEFAULT_MAX_ATTEMPTS}; stop re-running and escalate`);
   if (!await isSmokeTimeoutOnlyRun({ repo: options.repo, runId: run.databaseId }, runtime)) throw new Error(`not_smoke_timeout: CI run ${run.databaseId} has a failed job that is not a timed-out smoke job; emit the ci-failure fixer order instead`);
   const rerun = await runChild(ghCommand, ["run", "rerun", String(run.databaseId), "--repo", options.repo, "--failed"], env);

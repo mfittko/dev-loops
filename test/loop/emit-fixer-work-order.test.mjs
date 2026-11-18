@@ -3648,6 +3648,10 @@ test("issue 3251: a smoke-only red head whose failed jobs carry GitHub timeout a
     const inProgress = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "in_progress", attempt: 2 }]) }]);
     await assert.rejects(emitCi(fx, { runChild: inProgress.runChild }, smokeOnly), /in_progress, not completed.*rerun-failed-ci\.mjs/);
     assert.equal(ghCalls(inProgress), 1);
+    // The re-run completed green: the red ci file is stale, so no fixer order.
+    const green = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", conclusion: "success", attempt: 2 }]) }]);
+    await assert.rejects(emitCi(fx, { runChild: green.runChild }, smokeOnly), /completed green.*stale/);
+    assert.equal(ghCalls(green), 1);
     // A run with no numeric attempt fails closed to the fixer route and never reads the jobs.
     const noAttempt = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed" }]) }]);
     assert.equal((await emitCi(fx, { runChild: noAttempt.runChild }, smokeOnly)).workOrder.source, "ci-failure");

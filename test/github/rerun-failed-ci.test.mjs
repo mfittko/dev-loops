@@ -43,6 +43,12 @@ test("waits for an in-progress run to complete, then re-runs its timed-out smoke
   assert.equal(calls.length, 5);
 });
 
+test("an in-progress run that completes green refuses run_succeeded, not the fixer route, without a re-run call", async () => {
+  const { call, calls } = await run([list({ status: "in_progress" }), list({ attempt: 2, conclusion: "success" })]);
+  await assert.rejects(call(), /run_succeeded.*wait-pr-checks/);
+  assert.equal(calls.length, 2);
+});
+
 test("refuses at the per-head attempt cap, without a re-run call", async () => {
   const { call, calls } = await run([list({ attempt: 3 })]);
   await assert.rejects(call(), /attempt_cap/);
