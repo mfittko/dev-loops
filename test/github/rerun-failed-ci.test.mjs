@@ -16,7 +16,7 @@ const annotations = (id, message) => ({ assertArgs: ["api", `repos/owner/repo/ch
 const verifyFailed = { databaseId: 20, name: "verify", conclusion: "failure" };
 const run = async (entries) => {
   const { runChild, calls } = makeGhMock(entries);
-  return { calls, call: () => rerunFailedCi(opts, { env: {}, runChild }) };
+  return { calls, call: () => rerunFailedCi(opts, { env: {}, runChild, sleep: async () => {}, waitBudgetMs: 10_000, waitIntervalMs: 10_000 }) };
 };
 
 test("re-runs the failed jobs of a completed run whose only failure is a timed-out smoke job", async () => {
@@ -31,10 +31,16 @@ test("the verify aggregator failing beside a timed-out smoke job still re-runs, 
   assert.equal(calls.length, 4);
 });
 
-test("refuses a run that is still in progress, without a re-run call", async () => {
-  const { call, calls } = await run([list({ status: "in_progress" })]);
-  await assert.rejects(call(), /run_in_progress/);
-  assert.equal(calls.length, 1);
+test("refuses a run still in progress after the bounded wait, without a re-run call", async () => {
+  const { call, calls } = await run([list({ status: "in_progress" }), list({ status: "in_progress" })]);
+  await assert.rejects(call(), /run_in_progress.*run this script again/);
+  assert.equal(calls.length, 2);
+});
+
+test("waits for an in-progress run to complete, then re-runs its timed-out smoke job", async () => {
+  const { call, calls } = await run([list({ status: "in_progress" }), list(), jobs({ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }), annotations(11, STEP_TIMEOUT), { assertArgs: ["rerun", "99", "--failed"], stdout: "" }]);
+  assert.deepEqual(await call(), { ok: true, action: "rerun", runId: 99, attempt: 2 });
+  assert.equal(calls.length, 5);
 });
 
 test("refuses at the per-head attempt cap, without a re-run call", async () => {
@@ -75,8 +81,8 @@ test("parses args, requires --repo and --head-sha, and rejects a head that is no
 
 test("isSmokeOnly pre-filters on smoke job names and ignores a failed verify aggregator beside a smoke failure", () => {
   const names = (...n) => n.map((name) => ({ name }));
-  for (const accepted of [["viewer-smoke"], ["viewer-smoke", "deck-smoke"], ["viewer-smoke", "verify"], ["deck-smoke", "article-smoke", "verify"]]) assert.equal(isSmokeOnly(names(...accepted)), true, accepted.join());
-  for (const rejected of [["viewer-smoke", "build (24)"], ["verify"], ["verify-suite", "verify"], ["viewer-smoke", "verify-suite", "verify"], []]) assert.equal(isSmokeOnly(names(...rejected)), false, rejected.join());
+  for (const accepted of [["viewer-smoke"], ["viewer-smoke", "deck-smoke"], ["viewer-smoke", "verify"], ["deck-smoke", "article-smoke", "verify"], ["verify"]]) assert.equal(isSmokeOnly(names(...accepted)), true, accepted.join());
+  for (const rejected of [["viewer-smoke", "build (24)"], ["verify-suite", "verify"], ["viewer-smoke", "verify-suite", "verify"], []]) assert.equal(isSmokeOnly(names(...rejected)), false, rejected.join());
 });
 
 test("isSmokeTimeoutOnlyRun reads the job and step timeout signals and rejects any other failed job", async () => {

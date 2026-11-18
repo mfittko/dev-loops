@@ -18,13 +18,31 @@ const HEAD_SHA = /^[0-9a-f]{40}$/;
 /** True when the attempt is a positive integer below the cap; a missing or non-numeric attempt fails closed. */
 export const isRerunnableAttempt = (attempt) => Number.isInteger(attempt) && attempt >= 1 && attempt < DEFAULT_MAX_ATTEMPTS;
 
-// The failed names that decide smoke-only: the aggregator is ignored, so a lone failed `verify` is never smoke-only.
+// The failed names that decide smoke-only: the aggregator is ignored.
 const causeNames = (names) => names.filter((name) => name !== AGGREGATOR_JOB_NAME);
 
-/** True when every failed check name is a smoke job: the cheap pre-filter before the live timeout read. */
+/**
+ * True when no failed check name is a non-smoke job: the cheap pre-filter before the live timeout read.
+ * A lone failed `verify` passes: wait-pr-checks drops a `cancelled` job-timeout smoke job from failedChecks,
+ * so only the live read (isSmokeTimeoutOnlyRun) can tell that shape apart from another verify failure.
+ */
 export function isSmokeOnly(failedChecks) {
-  const causes = Array.isArray(failedChecks) ? causeNames(failedChecks.map((c) => c?.name)) : [];
-  return causes.length > 0 && causes.every((name) => SMOKE_JOB_NAMES.includes(name));
+  const names = Array.isArray(failedChecks) ? failedChecks.map((c) => c?.name) : [];
+  return names.length > 0 && causeNames(names).every((name) => SMOKE_JOB_NAMES.includes(name));
+}
+
+const WAIT_BUDGET_MS = 150_000; // under WAIT_CAP_MS (GATE-EXEC-BOUNDED-WAIT-CAP)
+const WAIT_INTERVAL_MS = 10_000;
+
+/** Polls the head's ci.yml run until it is completed or the budget ends; returns the last read. */
+export async function waitForHeadCiRun(options, runtime = {}) {
+  const { sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), waitBudgetMs = WAIT_BUDGET_MS, waitIntervalMs = WAIT_INTERVAL_MS } = runtime;
+  let run = await findHeadCiRun(options, runtime);
+  for (let waited = 0; run && run.status !== "completed" && waited < waitBudgetMs; waited += waitIntervalMs) {
+    await sleep(waitIntervalMs);
+    run = await findHeadCiRun(options, runtime);
+  }
+  return run;
 }
 
 async function ghJson(args, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}, what) {
@@ -54,7 +72,8 @@ export async function isSmokeTimeoutOnlyRun({ repo, runId }, runtime = {}) {
 const USAGE = `Usage: rerun-failed-ci.mjs --repo <owner/name> --head-sha <sha>
 Sanctioned re-run of the failed jobs of a PR head's completed CI run
 (gh run rerun --failed). Recovery for a timed-out smoke job (issue 3251).
-Refuses a run that is still in progress, a run whose failed jobs are not all
+Waits up to ${WAIT_BUDGET_MS / 1000}s for an in-progress run to complete (a red head does not end that run).
+Refuses a run still in progress after the wait, a run whose failed jobs are not all
 smoke jobs with a GitHub timeout annotation, and a run that has reached
 attempt ${DEFAULT_MAX_ATTEMPTS}; the attempt count is the run's own attempt number.
 Output (stdout, JSON): { "ok": true, "action": "rerun", "runId": N, "attempt": N }
@@ -92,9 +111,9 @@ export function parseRerunFailedCiCliArgs(argv) {
 
 export async function rerunFailedCi(options, runtime = {}) {
   const { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = runtime;
-  const run = await findHeadCiRun(options, runtime);
+  const run = await waitForHeadCiRun(options, runtime);
   if (!run) throw new Error(`no_run: no ci.yml run found for head ${options.headSha}`);
-  if (run.status !== "completed") throw new Error(`run_in_progress: CI run ${run.databaseId} is ${run.status}; wait for it with scripts/github/wait-pr-checks.mjs, then retry`);
+  if (run.status !== "completed") throw new Error(`run_in_progress: CI run ${run.databaseId} is still ${run.status} after waiting up to ${(runtime.waitBudgetMs ?? WAIT_BUDGET_MS) / 1000}s; run this script again to keep waiting`);
   if (!isRerunnableAttempt(run.attempt)) throw new Error(`attempt_cap: CI run ${run.databaseId} is at attempt ${run.attempt} of ${DEFAULT_MAX_ATTEMPTS}; stop re-running and escalate`);
   if (!await isSmokeTimeoutOnlyRun({ repo: options.repo, runId: run.databaseId }, runtime)) throw new Error(`not_smoke_timeout: CI run ${run.databaseId} has a failed job that is not a timed-out smoke job; emit the ci-failure fixer order instead`);
   const rerun = await runChild(ghCommand, ["run", "rerun", String(run.databaseId), "--repo", options.repo, "--failed"], env);
