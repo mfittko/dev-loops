@@ -563,6 +563,16 @@ test("ensureLaneRunContext excludes the run-context file once in the common git 
   assert.match(fs.readFileSync(path.join(common, "info", "exclude"), "utf8"), /^# existing\n/);
 });
 
+test("ensureLaneRunContext excludes the run-context file when an env id is persisted first", () => {
+  const common = makeTempRoot();
+  fs.mkdirSync(path.join(common, "info"));
+  const root = makeTempRoot();
+  fs.writeFileSync(path.join(root, ".git"), `gitdir: ${path.join(common, "worktrees", "lane")}\n`);
+  ensureLaneRunContext({ env: { DEVLOOPS_RUN_ID: "env-run" }, cwd: root });
+  assert.equal(readRunContext({ root }).runId, "env-run");
+  assert.match(fs.readFileSync(path.join(common, "info", "exclude"), "utf8"), /^\.pi\/dev-loop-run-context\.json$/m);
+});
+
 test("concurrent lane startups in a fresh worktree converge on one persisted id", async () => {
   const { root } = laneWorktree(null);
   const here = new URL("../src/loop/run-context.mjs", import.meta.url).href;

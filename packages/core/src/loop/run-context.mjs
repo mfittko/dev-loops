@@ -518,7 +518,9 @@ export function ensureLaneRunContext({ env = process.env, cwd, mintedAt, fs = fs
     if (root === null || envId !== existing || !FILE_RUN_ID_PATTERN.test(existing) || readRunContext({ root, fs })?.runId === existing) {
       return { runId: existing, minted: false, statePath: null };
     }
-    return { runId: existing, minted: false, statePath: writeRunContext({ runId: existing, root, mintedAt, fs }) };
+    const statePath = writeRunContext({ runId: existing, root, mintedAt, fs });
+    excludeRunContextFile(root, fs);
+    return { runId: existing, minted: false, statePath };
   }
   if (root === null) return null;
   const runId = mintRunId();
