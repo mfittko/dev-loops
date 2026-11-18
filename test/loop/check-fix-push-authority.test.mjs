@@ -14,9 +14,18 @@ import { withTempDir } from "../_helpers.mjs";
 
 const FIXER_GRACE_MS = fixerGraceMs();
 
-const env = { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
+// GIT_CONFIG_* isolate the tests from the developer's global and system git config (a url.insteadOf rewrite changes `git remote get-url origin`).
+const isolatedGitConfig = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+const env = { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, ...isolatedGitConfig };
 
 async function withRepo(fn) {
+  // The in-process checkFixPushAuthority git calls read process.env, so isolate it for the test and restore it.
+  const saved = Object.fromEntries(Object.keys(isolatedGitConfig).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, isolatedGitConfig);
+  try { await withRepoIsolated(fn); } finally { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+}
+
+async function withRepoIsolated(fn) {
   await withTempDir(async (dir) => {
     const root = path.join(await realpath(dir), "repo");
     await mkdir(root);
@@ -68,7 +77,7 @@ test("the generated pre-push hook bakes the path its owner supplies, even from o
 
 test("the generated pre-push hook falls back to the checkout script and, with neither file, refuses only under an ungranted sequence marker whose branch ref has not advanced", () => {
   const prePush = renderGuardHook("pre-push", ["main"]);
-  assert.match(prePush, /authority_cli=""\nif \[ -z "\$authority_cli" \] \|\| \[ ! -f "\$authority_cli" \]; then\n[^\n]*show-toplevel[^\n]*\nfi\nif \[ -f "\$authority_cli" \]; then\n[^\n]*node "\$authority_cli" \|\| exit 1\nelse\n[\s\S]*gate-delta\/\*\.sequence[\s\S]*PRE-PUSH-DELTA-PUSH-AUTHORITY[^\n]*\n    exit 1\n  fi\nfi/);
+  assert.match(prePush, /authority_cli=""\nif \[ -z "\$authority_cli" \] \|\| \[ ! -f "\$authority_cli" \]; then\n[^\n]*show-toplevel[^\n]*\nfi\nif \[ -f "\$authority_cli" \]; then\n[^\n]*node "\$authority_cli" "\$@" \|\| exit 1\nelse\n[\s\S]*gate-delta\/\*\.sequence[\s\S]*PRE-PUSH-DELTA-PUSH-AUTHORITY[^\n]*\n    exit 1\n  fi\nfi/);
   assert.ok(!prePush.includes("/../"), "no package-layout-relative path");
   assert.throws(() => renderGuardHook("pre-push", ["main"], null, "relative/check.mjs"), /absolute path/);
   assert.throws(() => renderGuardHook("pre-push", ["main"], null, "/x/$(evil)/check.mjs"), /absolute path/);
@@ -273,13 +282,53 @@ for (const bad of ["garbage1", "own er/name", "a/b/c"]) {
   });
 }
 
-test("a foreign-repo marker with an absent baseline still refuses a push that targets the marker's branch", async () => {
+// Hook-style pushes: remoteRef is set and the push URL is the pre-push hook's second argument.
+test("hook-style push to the marker's branch name: another repo's marker with an absent baseline does not block it; the marker's own repo does", async () => {
   await withRepo(async (root, head, git) => {
     git("remote", "add", "origin", "https://github.com/o/a.git");
-    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: ABSENT, branch: "issue-b", execution: executionFor("o/b", ABSENT) });
-    const refused = checkFixPushAuthority(root, [{ sha: head, remoteRef: "refs/heads/issue-b" }]);
-    assert.equal(refused.ok, false);
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: ABSENT, branch: "issue-x", execution: executionFor("o/b", ABSENT) });
+    const push = [{ sha: head, remoteRef: "refs/heads/issue-x" }];
+    assert.deepEqual(checkFixPushAuthority(root, push), { ok: true }, "origin repo o/a differs from marker repo o/b");
+    assert.deepEqual(checkFixPushAuthority(root, push, "https://github.com/o/a.git"), { ok: true }, "push URL repo o/a differs from marker repo o/b");
+    const refused = checkFixPushAuthority(root, push, "git@github.com:o/b.git");
+    assert.equal(refused.ok, false, "the push URL names the marker's repo, so the existing rules keep refusing");
     assert.ok(refused.reason.includes(`${ABSENT}.sequence`));
-    assert.deepEqual(checkFixPushAuthority(root, [{ sha: head, remoteRef: "refs/heads/issue-c" }]), { ok: true });
+    assert.deepEqual(checkFixPushAuthority(root, [{ sha: head, remoteRef: "refs/heads/issue-c" }], "git@github.com:o/b.git"), { ok: true }, "another branch of the marker's repo is skipped by the branch rule");
+  });
+});
+
+test("the push URL repo wins over origin; a non-GitHub push URL falls back to origin", async () => {
+  await withRepo(async (root, head, git) => {
+    git("remote", "add", "origin", "https://github.com/o/b.git"); // origin is the marker's repo
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: ABSENT, branch: "issue-x", execution: executionFor("o/b", ABSENT) });
+    const push = [{ sha: head, remoteRef: "refs/heads/issue-x" }];
+    assert.deepEqual(checkFixPushAuthority(root, push, "https://github.com/o/a.git"), { ok: true });
+    assert.equal(checkFixPushAuthority(root, push, "https://gitlab.example/o/a.git").ok, false, "origin o/b equals the marker repo");
+    assert.equal(checkFixPushAuthority(root, push).ok, false);
+  });
+});
+
+test("the CLI reads the push URL from the hook's second argument", async () => {
+  await withRepo(async (root, head, git) => {
+    git("remote", "add", "origin", "https://github.com/o/b.git");
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: ABSENT, branch: "issue-x", execution: executionFor("o/b", ABSENT) });
+    const input = `refs/heads/issue-x ${head} refs/heads/issue-x ${"0".repeat(40)}\n`;
+    const cli = path.resolve("scripts/loop/check-fix-push-authority.mjs");
+    assert.equal(spawnSync("node", [cli, "origin", "https://github.com/o/a.git"], { cwd: root, env, encoding: "utf8", input }).status, 0);
+    assert.equal(spawnSync("node", [cli, "origin", "https://github.com/o/b.git"], { cwd: root, env, encoding: "utf8", input }).status, 1);
+  });
+});
+
+test("a failed baseline probe refuses instead of reading the baseline as absent (fail closed)", async () => {
+  await withRepo(async (root, head, git) => {
+    git("remote", "add", "origin", "https://github.com/o/a.git");
+    const tmpRoot = path.join(root, "tmp");
+    writeSequenceMarker({ tmpRoot, baselineHead: ABSENT, branch: "issue-b", execution: executionFor("o/b", ABSENT) });
+    assert.throws(() => findActiveSequence({
+      tmpRoot, head, repo: "o/a", baselinePresent: () => { throw new Error("git failure"); },
+      listBaselines: () => [ABSENT], isAncestor: () => false, remoteAdvanced: () => false,
+    }), /git failure/);
+    // The real probe returns false only for exit status 1 (missing object): the absent baseline is skipped.
+    assert.deepEqual(checkFixPushAuthority(root), { ok: true });
   });
 });
