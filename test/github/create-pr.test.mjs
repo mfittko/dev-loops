@@ -2745,6 +2745,14 @@ test("hasSpikePrMarker honors fence length and info-less closers", () => {
   assert.equal(hasSpikePrMarker(`\`\`\`\n\`\`\`js\n${m}`), false);
 });
 
+test("hasSpikePrMarker does not open a fence on a backtick opener whose info string has a backtick", () => {
+  const m = "<!-- dev-loops:spike-pr no-merge -->";
+  assert.equal(hasSpikePrMarker(`\`\`\`npm test\`\`\`\n${m}`), true);
+  assert.equal(hasSpikePrMarker(`\`\`\`x\`\`\`\n\`\`\`\n${m}\n\`\`\``), false);
+  assert.equal(hasSpikePrMarker(`\`\`\` a\`b\n${m}`), true);
+  assert.equal(hasSpikePrMarker(`~~~ a\`b\n${m}`), false);
+});
+
 test("create-pr --spike-file refuses a body with an unclosed fence", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-spike-fence-"));
   try {

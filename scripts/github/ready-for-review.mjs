@@ -54,6 +54,9 @@ citing issue-number chronology or over the design-essay threshold blocks unless
 it carries the inline \`comment-discipline:allow\` marker; diff-scoped and
 added-lines-only, so it never flags pre-existing comments.
 
+Also refuses a PR whose body carries the \`dev-loops:spike-pr no-merge\` marker
+line (ADR 0293); no waiver surface exists.
+
 ${JQ_OUTPUT_USAGE}`;
 const parseError = buildParseError(USAGE);
 const PR_VIEW_QUERY = `query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { id, isDraft, headRefOid, baseRefName, state, mergeStateStatus, title, body, closingIssuesReferences(first:10){ nodes{ number } } } } }`;
