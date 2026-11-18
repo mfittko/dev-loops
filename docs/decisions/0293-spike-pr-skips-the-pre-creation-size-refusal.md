@@ -1,4 +1,4 @@
-# 0292. A spike PR skips the pre-creation size refusal
+# 0293. A spike PR skips the pre-creation size refusal
 
 ## Status
 
@@ -16,4 +16,4 @@ Record 0154 makes `pr create` refuse at or above the default-tier `waiverLoc` wi
 
 ## Consequences
 
-An oversize spike opens as a draft without a split. The marker lives in the PR body, so the refusal holds across sessions. Removing the marker from the body by hand lifts the refusal; `PRE-PR-SIZE-CHECK` stays the rule that names the exemption.
+An oversize spike opens as a draft without a split. The marker lives in the PR body, so the refusal holds across sessions. `pr edit` refuses a body edit that removes the marker, so the refusal holds; `PRE-PR-SIZE-CHECK` stays the rule that names the exemption.

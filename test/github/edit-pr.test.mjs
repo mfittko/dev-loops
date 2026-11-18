@@ -367,6 +367,15 @@ test("editPr: refuses the same standing-authorization waiver line when written b
   );
 });
 
+test("editPr: refuses a body edit that removes the spike no-merge marker", async () => {
+  const { run, calls } = stubGh();
+  await assert.rejects(
+    () => editPr(editOpts({ body: "Body\n" }), { run, fetchPrContext: withCurrentBody("Body\n\n<!-- dev-loops:spike-pr no-merge -->\n") }),
+    /SPIKE-PR-MARKER/,
+  );
+  assert.equal(calls.length, 0);
+});
+
 test("editPr: accepts an edit that preserves the existing waiver lines", async () => {
   const { run, calls } = stubGh();
   const result = await editPr(editOpts({ body: `New prose\n\n${WAIVER}\n` }), { run, fetchPrContext: withCurrentBody(`Old prose\n\n${WAIVER}\n`) });

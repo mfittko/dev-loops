@@ -1038,7 +1038,7 @@ test("ready-for-review accepts a base-only merge M of the chain's last clearing 
   } finally { await rm(tempDir, { recursive: true, force: true }); }
 });
 
-test("refuses a PR carrying the spike no-merge marker (ADR 0292)", async () => {
+test("refuses a PR carrying the spike no-merge marker (ADR 0293)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-spike-"));
   try {
     const { env } = await writeGhStub(tempDir, [

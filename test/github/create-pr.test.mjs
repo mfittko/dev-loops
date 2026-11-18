@@ -2609,7 +2609,7 @@ test("create-pr --lightweight refuses when the only record is for a different he
   assert.deepEqual(calls, []);
 });
 
-// ADR 0292: --spike-file opens an oversize spike draft, stamps the no-merge marker, keeps the size line advisory.
+// ADR 0293: --spike-file opens an oversize spike draft, stamps the no-merge marker, keeps the size line advisory.
 test("create-pr --spike-file opens above waiverLoc, stamps the marker and prints the advisory size line", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-spike-"));
   try {
@@ -2632,6 +2632,34 @@ test("create-pr --spike-file opens above waiverLoc, stamps the marker and prints
     assert.ok(!JSON.stringify(calls[0]).includes("--spike-file"));
     const line = JSON.parse(result.stdout.split("\n").find((l) => l.startsWith("{\"adrTripwire\"")));
     assert.equal(line.sizeBudget.wholeLogicLoc, 300);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr --spike-file with --body-file keeps the file content and ends with the marker", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-spike-bf-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, {
+      devloopsYaml: "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        softLoc: 100\n        waiverLoc: 250\n",
+      headFiles: [{ path: "scripts/big.mjs", content: repeatedLinesContent(300) }, { path: "changes/size.md", content: "- Exercise size checks (#1)\n" }],
+    });
+    execFileSync("git", ["branch", "feature"], { cwd: tempDir });
+    const findings = path.join(tempDir, "spike.md");
+    await writeFile(findings, "## Question\nq\n\n## Approach\na\n\n## Findings\nf\n");
+    const bodyPath = path.join(tempDir, "body.md");
+    await writeFile(bodyPath, "file body text");
+    const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
+      "--title", "T", "--body-file", bodyPath, "--spike-file", findings,
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const calls = await readGhCalls(ghLogPath);
+    const args = calls[0].args ?? calls[0];
+    const body = args[args.lastIndexOf("--body") + 1];
+    assert.ok(body.startsWith("file body text"));
+    assert.ok(body.trimEnd().endsWith("<!-- dev-loops:spike-pr no-merge -->"));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

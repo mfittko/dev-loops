@@ -10,6 +10,7 @@ import {
 } from "@dev-loops/core/github/closing-ref-guard";
 import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-mode-write-guard";
 import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
+import { hasSpikePrMarker } from "./_spike-pr-marker.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -366,6 +367,7 @@ export async function editPr(
       }
       const waiverRefusal = waiverLineChangeRefusal({ currentBody: baseline, nextBody: guardBody, action: "write" });
       if (waiverRefusal) throw new Error(waiverRefusal);
+      if (hasSpikePrMarker(baseline) && !hasSpikePrMarker(guardBody)) throw new Error(`SPIKE-PR-MARKER: refusing to remove the spike no-merge marker from PR #${options.pr}.`);
       const unticked = untickedRows(baseline, guardBody);
       if (unticked.length > 0 && !options.allowUntick) {
         throw new Error(`CHECKLIST-SCOPE-ONE-MODEL: refusing to untick or remove ${unticked.length} checked row(s) on PR #${options.pr} (unticked, deleted, reworded, or moved into or out of its AC/DoD scope): ${unticked.map((l) => JSON.stringify(l)).join("; ")}. Edit from the current body, or pass --allow-untick for a deliberate change.`);
