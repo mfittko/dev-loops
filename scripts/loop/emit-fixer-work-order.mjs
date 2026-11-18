@@ -44,6 +44,7 @@ import { selectActThreadBinding } from "../github/_fixer-act-thread-bindings.mjs
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { renderCliText } from "@dev-loops/core/loop/cli-command";
 import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
+import { isSmokeTimeoutOnly } from "../github/rerun-failed-ci.mjs";
 
 const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path> | --review-id <review node id> | --ci-file <path>) [--completion-only] [--delta-result <path>] [--allowed-path <repo-relative path>]... [--operator-focus-file <path>] [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
@@ -574,6 +575,7 @@ async function emitPlan({
     if (ci?.ok !== true || ci.status !== "failure" || ci.ciStatus !== "failure") throw new Refusal(`ci file ${ciFile} is not a red wait-pr-checks result (status ${JSON.stringify(ci?.status)}, ciStatus ${JSON.stringify(ci?.ciStatus)}); a green, pending or failed read has nothing to fix; ${next}`);
     if (ci.headSha !== headSha) throw new Refusal(`ci file ${ciFile} is for headSha ${JSON.stringify(ci.headSha)}, not --head-sha ${headSha}; ${next}`);
     if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name.trim() !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`);
+    if (isSmokeTimeoutOnly(ci.failedChecks)) throw new Refusal(`every failed check in ci file ${ciFile} is a timed-out smoke job: a hang, not a code defect, so emit no fixer; run scripts/github/rerun-failed-ci.mjs --repo ${repo} --head-sha ${headSha}, then wait for CI again`);
   }
   const isActItem = (f) => f?.judgeDisposition === "act" && (gate === "draft_gate" ? hasSeverityText(f) : typeof f.severity === "string" && VALID_SEVERITIES.has(f.severity)) && typeof f.summary === "string" && f.summary.trim() !== "";
   if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {

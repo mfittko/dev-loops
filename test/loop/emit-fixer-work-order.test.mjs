@@ -3610,6 +3610,15 @@ test("issue 2787 C11: --ci-file emits a ci-failure order that names the failing 
   });
 });
 
+test("issue 3251: a ci file whose only failures are timed-out smoke jobs routes to the re-run script, other failures keep the fixer", async () => {
+  await withFixture(async (fx) => {
+    const smoke = (name) => ({ name, conclusion: "timed_out" });
+    await assert.rejects(emitCi(fx, {}, ciFailureFor(fx.head, { failedChecks: [smoke("viewer-smoke")] })), /timed-out smoke job.*rerun-failed-ci\.mjs/);
+    const unit = await emitCi(fx, {}, ciFailureFor(fx.head, { failedChecks: [smoke("viewer-smoke"), { name: "build (24)", conclusion: "failure" }] }));
+    assert.equal(unit.workOrder.source, "ci-failure");
+  });
+});
+
 test("issue 2787 C17: a ci-failure plan emits the claude, pi and codex adapter payloads", async () => {
   await withFixture(async (fx) => {
     const unit = await emitCi(fx);
