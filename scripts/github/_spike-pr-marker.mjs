@@ -7,7 +7,8 @@ export function hasSpikePrMarker(body) {
   if (typeof body !== "string") return false;
   let fence = null;
   for (const line of body.split(/\r?\n/u)) {
-    let open = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
+    // A fence may follow list markers or container indentation (`- ~~~html`, four spaces).
+    let open = /^\s*(?:(?:[-+*]|\d{1,9}[.)])\s+)*(`{3,}|~{3,})(.*)$/u.exec(line);
     // CommonMark: a backtick opener's info string holds no backtick (a one-line code span is no fence).
     if (open && open[1][0] === "`" && open[2].includes("`")) open = null;
     if (fence === null && open) fence = open[1];
