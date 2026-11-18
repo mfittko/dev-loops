@@ -376,6 +376,25 @@ test("editPr: refuses a body edit that removes the spike no-merge marker", async
   assert.equal(calls.length, 0);
 });
 
+test("editPr: refuses a body edit that adds the spike no-merge marker to a non-spike PR", async () => {
+  const { run, calls } = stubGh();
+  for (const marker of ["<!-- dev-loops:spike-pr no-merge -->", "  <!-- dev-loops:spike-pr no-merge -->  "]) {
+    await assert.rejects(
+      () => editPr(editOpts({ body: `Body\n\n${marker}\n` }), { run, fetchPrContext: withCurrentBody("Body\n") }),
+      /refusing to add the spike no-merge marker/,
+    );
+  }
+  assert.equal(calls.length, 0);
+});
+
+test("editPr: accepts a fenced or inline mention of the spike marker on a non-spike PR", async () => {
+  for (const body of ["Body\n\n```\n<!-- dev-loops:spike-pr no-merge -->\n```\n", "Body text <!-- dev-loops:spike-pr no-merge -->\n"]) {
+    const { run } = stubGh();
+    const result = await editPr(editOpts({ body }), { run, fetchPrContext: withCurrentBody("Body\n") });
+    assert.deepEqual(result.edited, ["body"]);
+  }
+});
+
 test("editPr: accepts an edit that preserves the existing waiver lines", async () => {
   const { run, calls } = stubGh();
   const result = await editPr(editOpts({ body: `New prose\n\n${WAIVER}\n` }), { run, fetchPrContext: withCurrentBody(`Old prose\n\n${WAIVER}\n`) });
