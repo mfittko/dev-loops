@@ -3,6 +3,7 @@ import { test } from "bun:test";
 
 import {
   COMPLETE_FIXER_DISPOSITION_ACTION,
+  composeFixedInCommitBody,
   composeFixerReplyBody,
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
@@ -493,6 +494,7 @@ test("composeFixerReplyBody composes the four bodies; only a tackled entry gets 
   assert.equal(composeFixerReplyBody(entry("rejected", "n")), "Not changed: n");
   assert.equal(composeFixerReplyBody(entry("deferred")), null);
   for (const kind of ["partially_fixed", "deferred", "rejected"]) assert.doesNotMatch(composeFixerReplyBody(entry(kind, "n")), /Fixed in commit/);
+  for (const kind of ["partially_fixed", "deferred", "rejected"]) assert.throws(() => composeFixedInCommitBody(entry(kind, "n")), /tackled entry only/);
 });
 
 test("evaluate: a noted deferred thread resolved without its composed reply fails with the named step and its unresolve remedy", () => {

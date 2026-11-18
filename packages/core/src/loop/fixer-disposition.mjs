@@ -22,13 +22,19 @@ export const FIXER_DISPOSITION_KIND = Object.freeze({
 /** The dispositions that claim a fixing commit in the PR head. */
 export const FIXER_COMMIT_CLAIM_KINDS = Object.freeze([FIXER_DISPOSITION_KIND.TACKLED, FIXER_DISPOSITION_KIND.PARTIALLY_FIXED]);
 
+/** The `Fixed in commit <sha>.` text. Throws for any entry kind other than `tackled`. */
+export function composeFixedInCommitBody(entry) {
+  if (entry.disposition !== FIXER_DISPOSITION_KIND.TACKLED) throw new Error(`A "Fixed in commit" body is composed for a tackled entry only, not "${entry.disposition}".`);
+  return `Fixed in commit ${entry.fixingCommitSha}.`;
+}
+
 /**
  * The one reply body for a thread entry. A `Fixed in commit` body is composed for a `tackled` entry only.
  * Returns null for a `deferred` or `rejected` entry without a replyNote: that entry posts no reply of its own.
  */
 export function composeFixerReplyBody(entry) {
   const { disposition, fixingCommitSha: sha, replyNote: note } = entry;
-  if (disposition === FIXER_DISPOSITION_KIND.TACKLED) return `Fixed in commit ${sha}.${note ? ` ${note}` : ""}`;
+  if (disposition === FIXER_DISPOSITION_KIND.TACKLED) return `${composeFixedInCommitBody(entry)}${note ? ` ${note}` : ""}`;
   if (disposition === FIXER_DISPOSITION_KIND.PARTIALLY_FIXED) return `Partially fixed in commit ${sha}. Not done: ${note}`;
   if (!note) return null;
   return disposition === FIXER_DISPOSITION_KIND.DEFERRED ? `Deferred, no code change in this PR: ${note}` : `Not changed: ${note}`;
