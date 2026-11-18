@@ -1,4 +1,4 @@
-// ADR 0290: load the comment-trust config from `.devloops` on origin/<default branch> only, then set it
+// ADR 0290: load the comment-trust config from `.devloops` on the local origin/<default branch> ref only (no fetch), then set it
 // process-wide for the shared trust predicate. Never read from the worktree or a PR head.
 import { TrustConfig } from "@dev-loops/core/config";
 import { setCommentTrustConfig } from "@dev-loops/core/github/comment-trust";
@@ -18,7 +18,7 @@ export class CommentTrustConfigError extends Error {
  * @returns {{ githubActionsBot?: boolean, reviewers?: string[] }} the applied config
  */
 export function loadCommentTrustConfig(options = {}) {
-  const base = readDefaultBranchConfig(options);
+  const base = readDefaultBranchConfig({ ...options, fetchOrigin: () => {} }); // no network and no ref-lock race: a stale local ref is the operator's to refresh
   if (!base.ok && !base.noConfigFile) throw new CommentTrustConfigError(base.state, base.detail);
   const raw = base.ok ? base.parsed?.trust : undefined;
   const parsed = raw === undefined ? { success: true, data: {} } : TrustConfig.safeParse(raw);
@@ -27,12 +27,12 @@ export function loadCommentTrustConfig(options = {}) {
   return parsed.data;
 }
 
-/** For an entry script's direct-run block: a refused load prints the typed error and ends the run before any trust read. */
+/** For an entry script's direct-run block: a refused load prints one `{ ok: false, error, state }` JSON line on stderr and exits 2 (the entry scripts' own exit 1 stays theirs), before any trust read. */
 export function loadCommentTrustConfigOrExit(options) {
   try {
     return loadCommentTrustConfig(options);
   } catch (error) {
-    process.stderr.write(`${error.message}\n`);
-    process.exit(1);
+    process.stderr.write(`${JSON.stringify({ ok: false, error: error.message, state: error.state })}\n`);
+    process.exit(2);
   }
 }

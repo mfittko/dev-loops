@@ -14,7 +14,6 @@
  * Or via npx:
  *   npx dev-loops@<version> loop build-envelope --input resolver-output.json
  */
-import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 import { readFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -409,6 +408,5 @@ export async function runCli(
 }
 
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
   await runCli();
 }

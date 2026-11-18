@@ -16,10 +16,11 @@ export function setCommentTrustConfig({ githubActionsBot = true, reviewers = [] 
   trustConfig = Object.freeze({ githubActionsBot, reviewers: Object.freeze(reviewers.map((entry) => entry.toLowerCase())) });
 }
 
-// A plain entry matches the login and, for a Bot, the `<login>[bot]` form; a `[bot]` entry also needs type Bot.
+// GraphQL returns a Bot login without `[bot]` and REST returns it with: strip the suffix on both sides. A `[bot]` entry also needs type Bot; a plain entry matches the login, or a Bot's login in either form.
+const stripBotSuffix = (value) => value.replace(/\[bot\]$/i, "");
 function isConfiguredReviewer(name, isBot) {
   const lower = name.toLowerCase();
-  return trustConfig.reviewers.some((entry) => (entry.endsWith("[bot]") ? isBot && lower === entry : lower === entry || (isBot && lower === `${entry}[bot]`)));
+  return trustConfig.reviewers.some((entry) => (entry.endsWith("[bot]") ? isBot && stripBotSuffix(lower) === stripBotSuffix(entry) : lower === entry || (isBot && stripBotSuffix(lower) === entry)));
 }
 
 /** Exact match on the sanctioned Copilot reviewer login; `copilot-helper[bot]` and other lookalikes are false. */
@@ -54,7 +55,7 @@ export function isTrustedRestComment(comment, options) {
   return isTrustedCommentAuthor({ login: comment?.user?.login, type: comment?.user?.type, association: comment?.author_association }, options);
 }
 
-export const UNTRUSTED_COMMENT_REMEDY = "a maintainer (OWNER, MEMBER or COLLABORATOR) replies to or resolves the thread, or restates the finding";
+export const UNTRUSTED_COMMENT_REMEDY = "a maintainer (OWNER, MEMBER or COLLABORATOR) replies to or resolves the thread, or restates the finding, or the repo lists the login under `trust.reviewers` in `.devloops` on the default branch";
 
 /** Remedy for a skipped PR conversation comment, which has no thread to reply to or resolve. */
 export const UNTRUSTED_CONVERSATION_COMMENT_REMEDY = "a maintainer (OWNER, MEMBER or COLLABORATOR) restates the request in their own comment";

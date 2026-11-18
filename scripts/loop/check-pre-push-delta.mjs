@@ -28,7 +28,6 @@
  * With --reviewer-only (ADR 0255) both runs apply to baseline..PR head with the act list derived from the cap-round ledger (--findings-log), no fixer plan or coverage record.
  * Pure result checks live in @dev-loops/core/loop/pre-push-delta-review.
  */
-import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 import { execFile, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
@@ -803,7 +802,6 @@ export async function runCli(
 }
 
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
   try {
     await runCli();
   } catch (error) {

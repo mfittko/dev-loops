@@ -448,10 +448,6 @@ export function repeatedLinesContent(count, { prefix = "const x" } = {}) {
 }
 
 /**
- * The entry scripts read the trust config from the default branch of the cwd checkout. Make a fixture cwd
- * resolvable offline: a non-git dir becomes a repo, and a repo with a commit but no `origin` gets a local one.
- */
-/**
  * An actions/checkout pull_request clone has no `refs/remotes/origin/*` and no `origin/HEAD`, which the fail-closed trust-config load needs.
  * Create `origin/main` from HEAD when absent, then set the symbolic ref (refs, not config); a dev checkout already has it.
  */
@@ -463,6 +459,10 @@ export function ensureOriginHead(cwd) {
   git("remote", "set-head", "origin", "main");
 }
 
+/**
+ * The entry scripts read the trust config from the default branch of the cwd checkout. Make a fixture cwd
+ * resolvable offline: a non-git dir becomes a repo, and a repo with a commit but no `origin` gets a local one.
+ */
 export function ensureTrustConfigCheckout(cwd, scriptPath) {
   if (typeof cwd !== "string" || !existsSync(cwd) || (scriptPath && path.basename(scriptPath) !== "index.mjs" && !(existsSync(scriptPath) && cacheFs.readFileSync(scriptPath, "utf8").includes("loadCommentTrustConfigOrExit(")))) return;
   const git = (...args) => spawnSync("git", args, { cwd, encoding: "utf8", env: GIT_FIXTURE_ENV });

@@ -14,15 +14,17 @@ ADR 0238, as amended by ADR 0240, fixes the trusted comment authors in the predi
 
 ## Decision
 
-`.devloops` accepts a strict `trust` block: `githubActionsBot` (boolean, default true) and `reviewers` (a list of GitHub logins with an optional `[bot]` suffix). The match is exact and case-insensitive. A `[bot]` entry also requires type Bot. A plain entry matches that login, and with a Bot type also the `<login>[bot]` form. The list only adds trust. Maintainer associations, the viewer's own comments and the sanctioned Copilot reviewer stay trusted. `githubActionsBot: false` removes only the ADR 0273 trust.
+`.devloops` accepts a strict `trust` block: `githubActionsBot` (boolean, default true) and `reviewers` (a list of GitHub logins with an optional `[bot]` suffix). The match is exact and case-insensitive. The `[bot]` suffix is stripped from the entry and from the author login, because GraphQL returns a Bot login without it and REST returns it with it. A `[bot]` entry also requires type Bot. A plain entry matches that login, and with a Bot type either login form. The list only adds trust. Maintainer associations, the viewer's own comments and the sanctioned Copilot reviewer stay trusted. `githubActionsBot: false` removes only the ADR 0273 trust.
 
-The config is read only from `.devloops` on `origin/<default branch>` through `readDefaultBranchConfig`, never from the worktree, the PR head or `.pi/dev-loop/defaults.*`. A PR cannot grant itself trust.
+The config is read only from `.devloops` on the local `origin/<default branch>` ref through `readDefaultBranchConfig`, never from the worktree, the PR head or `.pi/dev-loop/defaults.*`. A PR cannot grant itself trust.
 
-`comment-trust.mjs` holds a process-scoped config, set once through `setCommentTrustConfig`. `scripts/github/_comment-trust-config.mjs` loads and validates it, and each entry script that reads trust-filtered text calls it once in its direct-run block before the first trust read.
+`comment-trust.mjs` holds a process-scoped config, set once through `setCommentTrustConfig`. `scripts/github/_comment-trust-config.mjs` loads and validates it, and each entry script that reads trust-filtered text, directly or through a `_`-prefixed helper, calls it once in its direct-run block before the first trust read. An entry script that makes no trust read, such as `pull-work-order.mjs`, does not load it, so it needs no `origin/HEAD` and no ref.
 
-Load outcomes fail closed. No `.devloops` or no `trust` key applies the built-in defaults. An unresolved default branch, a failed fetch, an unreadable file or an invalid `trust` block refuses the run with a typed error, because defaults would silently undo a `githubActionsBot: false` opt-out.
+Load outcomes fail closed. No `.devloops` or no `trust` key applies the built-in defaults. An unresolved default branch, an absent local `origin/<default branch>` ref, an unreadable file or an invalid `trust` block refuses the run with a typed error, because defaults would silently undo a `githubActionsBot: false` opt-out.
 
-The read fetches `origin/<default branch>` first, because a stale local ref would undo a `githubActionsBot: false` opt-out. The cost is one network round trip per entry-script start, and an offline run refuses.
+The read never runs `git fetch`. It reads the local `origin/<default branch>` ref only, so it needs no network and cannot race another entry script on the ref lock. A stale local ref is the operator's to refresh; the gate-evidence workflow publishes `origin/HEAD` with `git remote set-head origin` from the event's default branch before each detector step, with no guessed default name.
+
+A refused load prints one JSON line `{ "ok": false, "error": "<message>", "state": "<typed state>" }` on stderr, the shared CLI error envelope plus the typed `state`, and exits 2. Exit 1 stays each entry script's own documented refusal code.
 
 ## Alternatives rejected
 
@@ -38,3 +40,4 @@ The read fetches `origin/<default branch>` first, because a stale local ref woul
 - A `trust.reviewers` login is not a review-body fixer source. Only a trusted human by maintainer association or the sanctioned Copilot reviewer is.
 - The trust read binds to the origin of the cwd checkout, or to `--repo-root` where a script has that option. It does not bind to the `--repo` argument, so run a script from a checkout of the repo it inspects.
 - `packages/core/bin/parse-review-threads.mjs` runs with the built-in defaults and does not load the config.
+- A `trust.reviewers` login is a trusted author on every gate-evidence surface that calls the shared predicate: verdict comments, round inputs (`filterTrustedRoundInputs`), deferral markers, the carried-heads record and Copilot body-disposition records. This is the same ceiling ADR 0273 records for the GitHub Actions bot, so list only an app or person you accept as an author of gate evidence.

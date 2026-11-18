@@ -180,18 +180,34 @@ test("ADR 0273: exact github-actions login with a non-Bot type is untrusted; loo
 
 afterEach(() => setCommentTrustConfig());
 
-test("configured reviewers: plain and [bot] entries on both adapters; threads reach the fixer", async () => {
+// A GraphQL Bot author has no `[bot]` suffix and a REST Bot author has it; the suffix is stripped on both sides.
+test("configured reviewers: accepted and rejected [bot] and plain entry forms", () => {
+  const actor = (entry, login, type) => {
+    setCommentTrustConfig({ reviewers: [entry] });
+    return isTrustedCommentAuthor({ login, type, association: "NONE" });
+  };
+  const accepted = [
+    ["reviewdog[bot]", "reviewdog", "Bot"],
+    ["reviewdog[bot]", "reviewdog[bot]", "Bot"],
+    ["reviewdog[bot]", "ReviewDog[bot]", "Bot"],
+    ["reviewdog", "reviewdog[bot]", "Bot"],
+    ["External-Reviewer", "external-reviewer", "User"],
+  ];
+  const rejected = [
+    ["reviewdog[bot]", "reviewdog[bot]", "User"],
+    ["reviewdog[bot]", "reviewdog", "User"],
+    ["reviewdog[bot]", "reviewdog-fan[bot]", "Bot"],
+    ["reviewdog[bot]", "reviewdog-fan", "Bot"],
+  ];
+  for (const form of accepted) assert.equal(actor(...form), true, `accepted: ${form.join(" | ")}`);
+  for (const form of rejected) assert.equal(actor(...form), false, `rejected: ${form.join(" | ")}`);
+});
+
+test("configured reviewers: both adapters and threads reach the fixer with the GraphQL Bot login form", async () => {
   setCommentTrustConfig({ reviewers: ["reviewdog[bot]", "External-Reviewer"] });
-  const actor = (login, type, association = "NONE") => isTrustedCommentAuthor({ login, type, association });
-  assert.equal(actor("external-reviewer", "User"), true);
-  assert.equal(actor("ReviewDog[bot]", "Bot"), true);
-  assert.equal(actor("reviewdog[bot]", "User"), false);
-  assert.equal(actor("reviewdog-fan[bot]", "Bot"), false);
-  assert.equal(actor("external-reviewer", "Bot"), true);
-  assert.equal(actor("external-reviewer[bot]", "Bot"), true);
-  assert.equal(isTrustedGraphqlComment({ author: { login: "reviewdog[bot]", __typename: "Bot" }, authorAssociation: "NONE" }), true);
+  assert.equal(isTrustedGraphqlComment({ author: { login: "reviewdog", __typename: "Bot" }, authorAssociation: "NONE" }), true);
   assert.equal(isTrustedRestComment({ user: { login: "external-reviewer", type: "User" }, author_association: "NONE" }), true);
-  const bot = { login: "reviewdog[bot]", __typename: "Bot" };
+  const bot = { login: "reviewdog", __typename: "Bot" };
   const node1 = node("TR", { ...comment("c1", "reviewdog", "NONE", "Lint finding"), author: bot });
   const parsed = parseReviewThreads({ threads: [node1] });
   assert.equal(parsed.summary.unresolvedThreads, 1);
@@ -200,6 +216,15 @@ test("configured reviewers: plain and [bot] entries on both adapters; threads re
   const { threads, skipped } = await fetchAllReviewThreadsWithSkips({ repo: "o/r", pr: 1 }, { runChild: async () => ({ code: 0, stdout: payload, stderr: "" }) });
   assert.equal(threads.length, 1);
   assert.deepEqual(skipped, []);
+});
+
+test("a skippedUntrusted entry carries the remedy that names trust.reviewers", async () => {
+  setCommentTrustConfig();
+  const untrusted = node("TU", comment("c1", "stranger", "NONE", "x"));
+  const payload = JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [untrusted] } } } } });
+  const { skipped } = await fetchAllReviewThreadsWithSkips({ repo: "o/r", pr: 1 }, { runChild: async () => ({ code: 0, stdout: payload, stderr: "" }) });
+  assert.equal(skipped.length, 1);
+  assert.match(skipped[0].remedy, /`trust\.reviewers` in `\.devloops` on the default branch/);
 });
 
 test("the allowlist only adds trust; githubActionsBot false removes only the default bot trust", () => {

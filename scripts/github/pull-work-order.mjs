@@ -10,7 +10,6 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
-import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { EXECUTION_IDENTITY_RE, WorkOrderRefusal, executionIndexPath, pullWorkOrder, registerWorkOrderRole, workOrderDigest } from "./_work-order-protocol.mjs";
 import { buildGateEmitPlanPath } from "./write-gate-context.mjs";
@@ -182,7 +181,6 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
 }
 
 if (isDirectCliRun(import.meta.url)) {
-  loadCommentTrustConfigOrExit();
   try {
     process.exitCode = await main();
   } catch (err) {
