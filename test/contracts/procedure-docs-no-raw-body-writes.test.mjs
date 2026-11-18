@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
-const RAW_GH_WRITE = /\bgh (?:issue|pr) (?:create|edit|comment)\b/u;
+const RAW_GH_WRITE = /\bgh(?:\s+(?:-R|--repo)(?:\s+|=)\S+)?\s+(?:issue|pr)\s+(?:create|edit|comment)\b/u;
 // A prohibition phrase right before a prose span ("never raw `gh ...`") forbids the raw command.
 const PROHIBITION = /\b(?:never|MUST NOT)(?:\s+(?:use|call|run|pass))?(?:\s+raw)?[\s*_]*$/iu;
 
@@ -146,6 +146,16 @@ test("matcher covers the comment verbs", () => {
   assert.deepEqual(rawWriteHits("Post `gh issue comment 5 --body-file c.md`."), [1]);
   const launcher = "Post it with `node <dev-loops-package-root>/scripts/github/comment-issue.mjs --repo <r> --issue 5 --body-file f`.";
   assert.deepEqual(rawWriteHits(launcher), []);
+});
+
+test("matcher flags a gh global repo flag before the subcommand", () => {
+  assert.deepEqual(rawWriteHits("Run `gh issue create --repo <r> --body-file f`."), [1]);
+  assert.deepEqual(rawWriteHits("Run `gh -R <r> issue create --body-file f`."), [1]);
+  assert.deepEqual(rawWriteHits("Run `gh --repo <r> pr edit --body-file f`."), [1]);
+  assert.deepEqual(rawWriteHits("Run `gh --repo=<r> issue comment --body-file f`."), [1]);
+  assert.deepEqual(rawWriteHits("Run `dev-loops-run --repo-root <checkout> cli/index.mjs issue create --repo <r> --title <t> --body-file <p>`."), []);
+  assert.deepEqual(rawWriteHits("Run `node <dev-loops-package-root>/scripts/github/comment-issue.mjs --repo <r> --issue 5 --body-file f`."), []);
+  assert.deepEqual(rawWriteHits("Run `gh issue view 5 --repo <r>`."), []);
 });
 
 test("matcher exempts only a prohibition phrase right before a prose span", () => {
