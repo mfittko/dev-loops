@@ -17,7 +17,7 @@ import { VALID_SEVERITIES, normalizeSeverity, hasSeverityText, pastCapBlockers }
 import { EvidenceSealError, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
-import { deltaCoverageBinding, isDeltaBodyItem, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
+import { deltaCoverageBinding, isDeltaBodyItem, normalizeThreadsPayload, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { normalizeFixerDispositionHandoff, REVIEW_NODE_ID_PATTERN } from "@dev-loops/core/loop/fixer-disposition";
 import { readSequenceMarker, sequenceClosurePath, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
@@ -47,7 +47,7 @@ import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mj
 
 const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path> | --review-id <review node id> | --ci-file <path>) [--completion-only] [--delta-result <path>] [--allowed-path <repo-relative path>]... [--operator-focus-file <path>] [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
-or the unresolved review threads (list-review-threads.mjs --unresolved-only), plus the
+or the unresolved review threads (list-review-threads.mjs --unresolved-only, or capture-review-threads.mjs --repo --pr --unresolved --bodies for full thread text), plus the
 optional pre-push delta result (dev-loops loop pre-push-delta). --review-id <node id> takes the body of one PR
 review (CHANGES_REQUESTED or COMMENTED) by an OWNER/MEMBER/COLLABORATOR human or by the latest Copilot review on the PR head,
 read live from the PR and pinned as review-body.json; it refuses a bot other than Copilot, an empty body and an unknown ID,
@@ -296,7 +296,7 @@ ${JSON.stringify(workOrder, null, 2)}
     : `Make no further commit: the clearing delta record's candidateHead is the delta-reviewed candidate, and --construct requires the pushed head to equal it. The verifier's --construct writes the report from the threads source and the clearing delta record; never write the disposition handoff yourself. Replace \`<pushed-head-sha>\` below with the full 40-character SHA of the pushed head.\n${fullPhaseSteps(workOrder, verifier, { push: `Push exactly the delta-reviewed candidate (the clearing delta record's candidateHead) to branch ${JSON.stringify(workOrder.mutationAuthority.branch)}.` })}`;
   return `# Fixer work order (ADR 0106)
 
-Source: the \`${workOrder.source}\` read${workOrder.gate ? ` (${workOrder.gate} act list)` : ""}. Phase: \`${workOrder.phase}\`. PR ${workOrder.target.repo}#${workOrder.target.pr} at head \`${workOrder.headSha}\`.
+Source: the \`${workOrder.source}\` read${workOrder.gate ? ` (${workOrder.gate} act list)` : ""}. Phase: \`${workOrder.phase}\`. PR ${workOrder.target.repo}#${workOrder.target.pr} at head \`${workOrder.headSha}\`.${workOrder.source === "threads" ? " Fix each thread from its full text in that read: the `bodies` of a capture-review-threads file, or the `body` of a list-review-threads file (an excerpt of about 200 characters)." : ""}
 ${task}${workOrder.deltaFindings ? `\nDelta review findings to fix as act items:\n${workOrder.deltaFindings.map((f, i) => `${i + 1}. ${normalizeSeverity(f.severity)}${f.lifecycle === true ? " [lifecycle]" : ""}: ${JSON.stringify(f.summary)} (evidence: ${JSON.stringify(f.evidence)})`).join("\n")}` : ""}
 When a \`delta-result\` read is listed, follow agents/fixer.agent.md step 7 for its act-item statuses.
 Read every \`required\` entry below IN FULL before any change. If one is missing, unreadable, or its sha256 differs, stop and report which read failed.
@@ -704,13 +704,15 @@ async function emitPlan({
   }
   // Bind after the filter: a pin on a trust-incomplete thread refuses as a thread outside the source.
   const operatorFocus = bindOperatorFocusItems(operatorFocusRaw, actListFile ? source.parsed : undefined, threadsFile ? (source.parsed?.threads ?? []).map((thread) => thread?.threadId) : undefined);
-  if (threadsFile && (source.parsed?.ok !== true || !Array.isArray(source.parsed.threads) || source.parsed.repo !== repo || Number(source.parsed.pr) !== Number(pr)
-    || !source.parsed.threads.every((thread) => thread?.isResolved === false))) {
-    const resolved = Array.isArray(source.parsed?.threads) ? source.parsed.threads.filter((thread) => thread?.isResolved === true) : [];
+  // A capture-review-threads --unresolved --bodies file validates through its list-shaped view; the pinned bytes stay the capture.
+  const listed = threadsFile ? normalizeThreadsPayload(source.parsed, { repo, pr }) : null;
+  if (threadsFile && (listed?.ok !== true || !Array.isArray(listed.threads) || listed.repo !== repo || Number(listed.pr) !== Number(pr)
+    || !listed.threads.every((thread) => thread?.isResolved === false))) {
+    const resolved = Array.isArray(listed?.threads) ? listed.threads.filter((thread) => thread?.isResolved === true) : [];
     const unresolve = `dev-loops-run scripts/github/unresolve-review-thread.mjs --repo ${repo} --pr ${pr} --thread-id <thread-id>`;
-    throw new Refusal(`threads file ${threadsFile} is not successful list-review-threads --unresolved-only output for ${repo}#${pr}${resolved.length > 0 ? ` (GATE-EXEC-ROUND-CAP-NO-DECLINE-RESOLVE: the file holds resolved threads; re-list with --unresolved-only; run ${unresolve} only for a thread resolved by mistake)` : ""}`);
+    throw new Refusal(`threads file ${threadsFile} is not successful list-review-threads --unresolved-only output for ${repo}#${pr} (or a github-sourced capture-review-threads --unresolved --bodies file for it)${resolved.length > 0 ? ` (GATE-EXEC-ROUND-CAP-NO-DECLINE-RESOLVE: the file holds resolved threads; re-list with --unresolved-only; run ${unresolve} only for a thread resolved by mistake)` : ""}`);
   }
-  if (threadsFile && !source.parsed.threads.every((thread) => thread.trusted === true)) {
+  if (threadsFile && !listed.threads.every((thread) => thread.trusted === true)) {
     throw new Refusal(`threads file ${threadsFile} holds a thread without the trusted marker (ADR 0238, GATE-REVIEW-COMMENT-TRUST): comment text from a non-maintainer is never a fixer instruction; re-run dev-loops-run scripts/github/list-review-threads.mjs --repo ${repo} --pr ${pr} --unresolved-only`);
   }
   if (deltaResult && !actListFile) throw new Refusal("--delta-result applies only to an --act-list-file source");

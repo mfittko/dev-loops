@@ -963,6 +963,29 @@ test("ADR 0238: a threads file holding a thread without the trusted marker refus
   });
 });
 
+const LONG_BODY = `${"The problem statement runs long. ".repeat(20)}End.`;
+const CAPTURE = (source = { type: "github", repo: REPO, pr: PR }) => ({ ok: true, source, summary: {}, skippedUntrusted: [], threads: [{ threadId: "T1", path: "src/a.mjs", line: 3, isOutdated: false, bodies: [LONG_BODY, "second comment"] }] });
+
+test("a capture-review-threads --unresolved --bodies file is accepted and its full bodies are pinned (commit_only and full)", async () => {
+  await withFixture(async ({ files, emit }) => {
+    await writeFile(files.threads, JSON.stringify(CAPTURE()));
+    const unit = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    const read = unit.workOrder.requiredReads.find((r) => r.kind === "threads");
+    assert.equal(JSON.parse(await readFile(read.path)).threads[0].bodies[0], LONG_BODY);
+    const prompt = await readFile(unit.promptPath, "utf8");
+    assert.match(prompt, /full text in that read: the `bodies` of a capture-review-threads file/);
+  });
+});
+
+test("a capture for another PR or repo, or an unbound input-sourced capture, is refused", async () => {
+  await withFixture(async ({ files, emit }) => {
+    for (const source of [{ type: "github", repo: REPO, pr: PR + 1 }, { type: "github", repo: "x/y", pr: PR }, { type: "input", inputPath: "in.json" }, { type: "stdin" }]) {
+      await writeFile(files.threads, JSON.stringify(CAPTURE(source)));
+      await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined }), /is not successful list-review-threads --unresolved-only output/);
+    }
+  });
+});
+
 test("ADR 0238: a trust-incomplete thread is dropped from the pinned threads read so the read matches the digested payload", async () => {
   await withFixture(async ({ files, emit }) => {
     const incomplete = { ...THREADS.threads[0], threadId: "T2", trusted: false, trustIncomplete: true, body: "" };
