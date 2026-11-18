@@ -17,6 +17,7 @@ import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refi
 import { sanitizeInline } from "./post-gate-findings.mjs";
 import { findOperatorOwnedLineRefusal } from "@dev-loops/core/github/operator-owned-lines";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { hasSpikePrMarker, spikePrRefusal } from "./_spike-pr-marker.mjs";
 
 const USAGE = `Usage: ready-for-review.mjs --repo <owner/name> --pr <number> [--waive-size-budget --reason <text> [--approved-by <human>]]
 Wrapper around gh pr ready that enforces gate-evidence validation and the
@@ -207,6 +208,7 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   const headSha = prState.headRefOid;
   if (!headSha) throw new Error(`Could not resolve head SHA`);
   if (!prState.isDraft) throw new Error(`PR #${options.pr} is not in draft state`);
+  if (hasSpikePrMarker(prState.body)) throw new Error(spikePrRefusal(options.pr));
   const titleMarkers = findBlockingTitleMarkers(prState.title);
   if (titleMarkers.length > 0) throw new Error(`PR #${options.pr} cannot be marked ready: title contains merge-blocking marker(s): ${titleMarkers.join(", ")}. Remove them from the title first.`);
   const assertCiGreen = async () => { const ci = await fetchCiStatus({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild: runChildImpl }); if (ci.status === "blocked") throw new Error(`PR #${options.pr} has blocking CI checks`); if (ci.status !== "success") throw new Error(`PR #${options.pr} CI is not green`); };

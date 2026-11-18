@@ -40,6 +40,7 @@ import { evaluateAdrTripwire as defaultEvaluateAdrTripwire } from "../loop/check
 import { defaultFetchOrigin } from "../loop/standing-authorization.mjs";
 import { waiveAdrTripwire as defaultWaiveAdrTripwire } from "./waive-adr-tripwire.mjs";
 import { findAdrNumberCollisions } from "../docs/validate-decision-records.mjs";
+import { hasSpikePrMarker, spikePrRefusal } from "./_spike-pr-marker.mjs";
 import { scanDiffText } from "@dev-loops/core/security/secret-scan";
 
 const VALID_METHODS = new Set(["squash", "merge", "rebase"]);
@@ -723,6 +724,7 @@ export async function mergePr(options, runtime = {}) {
   );
   const currentHeadSha = typeof prView?.headRefOid === "string" && prView.headRefOid.trim().length > 0 ? prView.headRefOid.trim() : null;
   if (!currentHeadSha) throw new Error("Invalid gh pr view payload: missing headRefOid");
+  if (hasSpikePrMarker(prView?.body)) throw new Error(spikePrRefusal(options.pr));
 
   const baseRefName = typeof prView?.baseRefName === "string" ? prView.baseRefName.trim() : "";
   const repoRoot = resolveRepoRoot(cwd);

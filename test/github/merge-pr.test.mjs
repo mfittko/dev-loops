@@ -1740,3 +1740,10 @@ test("the default merge record comment kills a hung gh child at the timeout boun
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a PR carrying the spike no-merge marker is refused before any merge (ADR 0292)", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { body: "spike\n\n<!-- dev-loops:spike-pr no-merge -->\n" } });
+  const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
+  assert.match(threw.message, /spike size exemption/u);
+  assert.equal(calls.runChild.length, 0);
+});
