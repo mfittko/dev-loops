@@ -58,7 +58,7 @@ ADR tripwire waiver lines: a body that adds, changes or removes an
 \`adr-tripwire:allow\` line (compared with the PR's current body) is refused.
 Use \`dev-loops pr waive-adr-tripwire\` (ADR-TRIPWIRE-STANDING-WAIVER).
 Spike no-merge marker (ADR 0293): a body that removes the
-\`dev-loops:spike-pr no-merge\` marker from a spike PR is refused, and so is a
+\`dev-loops:spike-pr no-merge\` marker from a spike PR, or moves it off the last non-empty body line, is refused, and so is a
 body that adds it to a PR without it. Only \`pr create --spike-file\` binds it.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "pr": 17, "edited": ["title", "body", ...] }
@@ -370,7 +370,7 @@ export async function editPr(
       }
       const waiverRefusal = waiverLineChangeRefusal({ currentBody: baseline, nextBody: guardBody, action: "write" });
       if (waiverRefusal) throw new Error(waiverRefusal);
-      if (hasSpikePrMarker(baseline) && !hasSpikePrMarker(guardBody)) throw new Error(`refusing to remove the spike no-merge marker from PR #${options.pr}.`);
+      if (hasSpikePrMarker(baseline) && !hasSpikePrMarker(guardBody)) throw new Error(`refusing to remove the spike no-merge marker from PR #${options.pr} or move it off the last non-empty body line.`);
       if (!hasSpikePrMarker(baseline) && hasSpikePrMarker(guardBody)) throw new Error(`refusing to add the spike no-merge marker to PR #${options.pr}: only spike PR creation binds it.`);
       const unticked = untickedRows(baseline, guardBody);
       if (unticked.length > 0 && !options.allowUntick) {

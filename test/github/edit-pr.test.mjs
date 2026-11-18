@@ -378,12 +378,21 @@ test("editPr: refuses a body edit that removes the spike no-merge marker", async
 
 test("editPr: refuses a body edit that adds the spike no-merge marker to a non-spike PR", async () => {
   const { run, calls } = stubGh();
-  for (const marker of ["<!-- dev-loops:spike-pr no-merge -->", "  <!-- dev-loops:spike-pr no-merge -->  "]) {
+  for (const marker of ["<!-- dev-loops:spike-pr no-merge -->"]) {
     await assert.rejects(
       () => editPr(editOpts({ body: `Body\n\n${marker}\n` }), { run, fetchPrContext: withCurrentBody("Body\n") }),
       /refusing to add the spike no-merge marker/,
     );
   }
+  assert.equal(calls.length, 0);
+});
+
+test("editPr: refuses a body edit that moves the spike no-merge marker off the last line", async () => {
+  const { run, calls } = stubGh();
+  await assert.rejects(
+    () => editPr(editOpts({ body: "Body\n\n<!-- dev-loops:spike-pr no-merge -->\n\nTrailing text\n" }), { run, fetchPrContext: withCurrentBody("Body\n\n<!-- dev-loops:spike-pr no-merge -->\n") }),
+    /refusing to remove the spike no-merge marker/,
+  );
   assert.equal(calls.length, 0);
 });
 

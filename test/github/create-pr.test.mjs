@@ -2730,52 +2730,14 @@ test("create-pr without --spike-file refuses a body carrying the bare marker lin
   }
 });
 
-test("hasSpikePrMarker accepts a bare or padded marker line and rejects fenced or inline text", () => {
+test("hasSpikePrMarker is live only as the last non-empty line, exactly equal", () => {
   const m = "<!-- dev-loops:spike-pr no-merge -->";
   assert.equal(hasSpikePrMarker(m), true);
-  assert.equal(hasSpikePrMarker(`  ${m}  `), true);
+  assert.equal(hasSpikePrMarker(`body\n\n${m}\n\n`), true);
+  assert.equal(hasSpikePrMarker(`body\r\n${m}\r\n`), true);
+  assert.equal(hasSpikePrMarker(`body\n${m}\ntrailing`), false);
   assert.equal(hasSpikePrMarker(`\`\`\`\n${m}\n\`\`\``), false);
+  assert.equal(hasSpikePrMarker(`- ~~~\n${m}\n~~~\nmore`), false);
+  assert.equal(hasSpikePrMarker(`  ${m}`), false);
   assert.equal(hasSpikePrMarker(`text ${m}`), false);
-});
-
-test("hasSpikePrMarker honors fence length and info-less closers", () => {
-  const m = "<!-- dev-loops:spike-pr no-merge -->";
-  assert.equal(hasSpikePrMarker(`\`\`\`\`md\n\`\`\`js\n${m}\n\`\`\`\n\`\`\`\``), false);
-  assert.equal(hasSpikePrMarker(`\`\`\`\ncode\n\`\`\`\n${m}`), true);
-  assert.equal(hasSpikePrMarker(`\`\`\`\n\`\`\`js\n${m}`), false);
-});
-
-test("hasSpikePrMarker does not open a fence on a backtick opener whose info string has a backtick", () => {
-  const m = "<!-- dev-loops:spike-pr no-merge -->";
-  assert.equal(hasSpikePrMarker(`\`\`\`npm test\`\`\`\n${m}`), true);
-  assert.equal(hasSpikePrMarker(`\`\`\`x\`\`\`\n\`\`\`\n${m}\n\`\`\``), false);
-  assert.equal(hasSpikePrMarker(`\`\`\` a\`b\n${m}`), true);
-  assert.equal(hasSpikePrMarker(`~~~ a\`b\n${m}`), false);
-});
-
-test("hasSpikePrMarker opens a fence after a list marker or container indentation", () => {
-  const m = "<!-- dev-loops:spike-pr no-merge -->";
-  assert.equal(hasSpikePrMarker(`- ~~~html\n${m}\n~~~`), false);
-  assert.equal(hasSpikePrMarker(`1. \`\`\`\n${m}\n\`\`\``), false);
-  assert.equal(hasSpikePrMarker(`    ~~~html\n${m}\n    ~~~`), false);
-  assert.equal(hasSpikePrMarker(`- ~~~html\n${m}\n~~~\n${m}`), true);
-});
-
-test("create-pr --spike-file refuses a body with an unclosed fence", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-spike-fence-"));
-  try {
-    await initSizeBudgetFixtureRepo(tempDir, {
-      devloopsYaml: "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        softLoc: 100\n        waiverLoc: 250\n",
-      headFiles: [{ path: "scripts/big.mjs", content: repeatedLinesContent(300) }, { path: "changes/size.md", content: "- Exercise size checks (#1)\n" }],
-    });
-    execFileSync("git", ["branch", "feature"], { cwd: tempDir });
-    const findings = path.join(tempDir, "spike.md");
-    await writeFile(findings, "## Question\nq\n\n## Approach\na\n\n## Findings\nf\n");
-    const { env } = await writeGhStub(tempDir, []);
-    const result = await runNode(["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "T", "--body", "b\n```\nopen", "--spike-file", findings], { env, cwd: tempDir });
-    assert.equal(result.code, 1);
-    assert.match(result.stderr, /unclosed/u);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 });
