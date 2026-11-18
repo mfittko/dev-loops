@@ -19,6 +19,7 @@ import {
   VALIDATION_POSTURE_MAX_LENGTH,
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
+import { DIFF_PART_MAX_BYTES } from "@dev-loops/core/loop/review-dispatch-plan";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { verifyDispatchPromptLayoutForHead } from "../../scripts/github/verify-dispatch-prompt-layout.mjs";
 
@@ -127,8 +128,10 @@ test("work order: prompt size is independent of diff size (small vs >=100x diff)
     });
   }
   assert.ok(Buffer.byteLength(makeDiff(2000)) >= 100 * Buffer.byteLength(makeDiff(10)));
+  // Each extra diff part adds one manifest line (path, sha256, size) and nothing else.
+  const extraParts = Math.ceil(Buffer.byteLength(makeDiff(2000)) / DIFF_PART_MAX_BYTES) - 1;
   for (const scope of Object.keys(sizes[0])) {
-    assert.ok(Math.abs(sizes[1][scope] - sizes[0][scope]) <= 256, `${scope}: ${sizes[0][scope]} vs ${sizes[1][scope]}`);
+    assert.ok(Math.abs(sizes[1][scope] - sizes[0][scope]) <= 256 + 400 * extraParts, `${scope}: ${sizes[0][scope]} vs ${sizes[1][scope]}`);
     assert.ok(sizes[1][scope] < REVIEWER_WORK_ORDER_MAX_BYTES);
   }
 });
