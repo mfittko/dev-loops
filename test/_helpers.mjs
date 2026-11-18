@@ -452,12 +452,14 @@ export function repeatedLinesContent(count, { prefix = "const x" } = {}) {
  * resolvable offline: a non-git dir becomes a repo, and a repo with a commit but no `origin` gets a local one.
  */
 /**
- * An actions/checkout clone has `refs/remotes/origin/*` but no `origin/HEAD`, which the fail-closed trust-config load needs.
- * Set the symbolic ref (a ref, not config) to the fetched `origin/main` when it is missing; a dev checkout already has it.
+ * An actions/checkout pull_request clone has no `refs/remotes/origin/*` and no `origin/HEAD`, which the fail-closed trust-config load needs.
+ * Create `origin/main` from HEAD when absent, then set the symbolic ref (refs, not config); a dev checkout already has it.
  */
 export function ensureOriginHead(cwd) {
   const git = (...args) => spawnSync("git", args, { cwd, encoding: "utf8", env: GIT_FIXTURE_ENV });
-  if (git("symbolic-ref", "-q", "refs/remotes/origin/HEAD").status === 0 || git("rev-parse", "--verify", "-q", "refs/remotes/origin/main").status !== 0) return;
+  if (git("symbolic-ref", "-q", "refs/remotes/origin/HEAD").status === 0) return;
+  // A pull_request checkout fetches no remote-tracking refs at all: publish HEAD as the trusted origin/main.
+  if (git("rev-parse", "--verify", "-q", "refs/remotes/origin/main").status !== 0) git("update-ref", "refs/remotes/origin/main", "HEAD");
   git("remote", "set-head", "origin", "main");
 }
 
@@ -470,9 +472,9 @@ export function ensureTrustConfigCheckout(cwd, scriptPath) {
     return;
   }
   const url = git("config", "--get", "remote.origin.url").stdout.trim();
-  if (url) ensureOriginHead(cwd);
   // A fixture's fake github.com origin is rewritten only inside the OS temp dir, never in a real checkout.
   const fakeOrigin = /^(git@github\.com:|https:\/\/github\.com\/)/.test(url) && cacheFs.realpathSync(cwd).startsWith(cacheFs.realpathSync(os.tmpdir()) + path.sep);
+  if (url && !fakeOrigin) ensureOriginHead(cwd);
   if ((url && !fakeOrigin) || git("rev-parse", "--verify", "HEAD").status !== 0 || git("symbolic-ref", "-q", "refs/remotes/origin/HEAD").status === 0) return;
   if (git("branch", "--show-current").stdout.trim()) addLocalOrigin(cwd);
 }
