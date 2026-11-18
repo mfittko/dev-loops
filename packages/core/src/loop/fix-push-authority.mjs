@@ -148,7 +148,7 @@ export function readSequenceMarker(tmpRoot, baselineHead) {
  * pushed sha is, so a force-push is covered); a branch marker ends once the remote ref has advanced past the baseline.
  * A marker that names no branch cannot be ended by a remote ref: it stays active until `gate close-sequence` closes it as MARKER_UNREADABLE (fail closed).
  * When `repo` (the pushing checkout's owner/name) is given, a marker is skipped before the ancestry test only when its execution work order ref names a valid other owner/name
- * and `baselinePresent(baseline)` reports the baseline absent from this checkout. A same-repo marker, a marker that names no valid repo, a marker whose baseline is present
+ * and `baselinePresent(baseline)` reports the baseline absent from this checkout, and the push does not target `refs/heads/<marker.branch>` (a push to the marker's own branch is never skipped). A same-repo marker, a marker that names no valid repo, a marker whose baseline is present
  * (a fork or renamed repo), and a checkout with no `repo` keep the rules above (fail closed).
  * With several active markers a non-granted one wins, so a stale
  * granted marker cannot admit a commit_only fixer push.
@@ -161,7 +161,7 @@ export function findActiveSequence({ tmpRoot, head, remoteRef, repo, baselinePre
     if (!marker) continue;
     let markerRepo = /^fixer:([^#:]+)#[0-9]+:/u.exec(marker.execution?.workOrderRef ?? "")?.[1];
     try { if (markerRepo !== undefined) parseRepoSlugParts(markerRepo); } catch { markerRepo = undefined; } // A malformed segment names no repo (fail closed).
-    if (repo && markerRepo && !repoSlugEquals(markerRepo, repo) && !baselinePresent(baseline)) continue;
+    if (repo && markerRepo && !repoSlugEquals(markerRepo, repo) && !baselinePresent(baseline) && !(marker.branch !== undefined && remoteRef === `refs/heads/${marker.branch}`)) continue;
     if (marker.branch !== undefined && remoteRef !== undefined && remoteRef !== `refs/heads/${marker.branch}`) continue;
     let covered;
     try {

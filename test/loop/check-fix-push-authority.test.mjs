@@ -272,3 +272,14 @@ for (const bad of ["garbage1", "own er/name", "a/b/c"]) {
     });
   });
 }
+
+test("a foreign-repo marker with an absent baseline still refuses a push that targets the marker's branch", async () => {
+  await withRepo(async (root, head, git) => {
+    git("remote", "add", "origin", "https://github.com/o/a.git");
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: ABSENT, branch: "issue-b", execution: executionFor("o/b", ABSENT) });
+    const refused = checkFixPushAuthority(root, [{ sha: head, remoteRef: "refs/heads/issue-b" }]);
+    assert.equal(refused.ok, false);
+    assert.ok(refused.reason.includes(`${ABSENT}.sequence`));
+    assert.deepEqual(checkFixPushAuthority(root, [{ sha: head, remoteRef: "refs/heads/issue-c" }]), { ok: true });
+  });
+});
