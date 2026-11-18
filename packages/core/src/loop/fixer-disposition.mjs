@@ -50,7 +50,7 @@ const REPLY_NOTE_MAX_CHARS = 500;
 export function cleanReplyNote(value, label = "replyNote") {
   if (typeof value !== "string") throw new Error(`${label} must be a string`);
   if (value.length > REPLY_NOTE_MAX_CHARS) throw new Error(`${label} is over ${REPLY_NOTE_MAX_CHARS} characters`);
-  const note = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").replace(/[<>`]/g, "").replace(/ +/g, " ").trim();
+  const note = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").replace(/[<>`]/g, "").replace(/~{3,}/g, "").replace(/ +/g, " ").trim();
   if (note === "") throw new Error(`${label} is empty after sanitizing`);
   if (sanitizeCopilotSummonTokens(note) !== note) throw new Error(`${label} carries a Copilot summon token that the reply writer rewrites; reword it`);
   guardCommentBodyNoIssuePrIds(note, { ref: label });

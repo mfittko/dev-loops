@@ -25,6 +25,7 @@ import { fixerReportPath, materializationHash, pullReceiptPath, pullWorkOrder, v
 import { emitFixerWorkOrder, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
+import { operatorFocusDigestEntry } from "../../scripts/loop/_operator-focus.mjs";
 import { sealDeltaFixture } from "../loop/_seal-fixture.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
@@ -194,7 +195,7 @@ async function deliver(repoRoot, dispositions, {
   const dir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", `pr-${PR}`);
   const outputRef = path.join(dir, "f1-0000abcd", "fixer-disposition.json");
   const actListPath = path.join(dir, "act-list.json");
-  const workOrder = { role: "fixer", phase, target: { repo: REPO, pr: PR }, headSha: orderHead, mutationAuthority: { branch: "issue-1" }, outputRefs: [outputRef], ...(operatorFocus ? { operatorFocus } : {}), ...(actList ? { requiredReads: [{ kind: "act-list", path: actListPath, sha256: createHash("sha256").update(JSON.stringify(actList)).digest("hex") }] } : {}) };
+  const workOrder = { role: "fixer", phase, target: { repo: REPO, pr: PR }, headSha: orderHead, mutationAuthority: { branch: "issue-1" }, outputRefs: [outputRef], ...(operatorFocus ? { operatorFocus, ...operatorFocusDigestEntry(operatorFocus) } : {}), ...(actList ? { requiredReads: [{ kind: "act-list", path: actListPath, sha256: createHash("sha256").update(JSON.stringify(actList)).digest("hex") }] } : {}) };
   const plan = { workOrderRef: REF, workOrderDigest: workOrderDigest(workOrder), executionIdentity: "f1-0000abcd", workOrder };
   if (threads) {
     const source = path.join(dir, "threads.json");
@@ -1240,6 +1241,19 @@ for (const check of [false, true]) test(`F6 (${check ? "check" : "default"}): a 
       await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp", check }, deps), /does not match its workOrderDigest/);
       assert.equal(calls.length, 0);
     }
+  });
+});
+
+test("F6: a pinned note edited to another absolute-path string (outside workOrderDigest) refuses against operatorFocusDigest", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const focus = (replyNote) => ({ items: [{ threadId: "PRRT_T1", replyDisposition: "deferred", replyNote }] });
+    const fixerPlan = await deliver(repoRoot, [{ threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "deferred", replyNote: "/src/a: follow up" }], { operatorFocus: focus("/src/a: follow up") });
+    const plan = JSON.parse(await readFile(fixerPlan, "utf8"));
+    plan.workOrder.operatorFocus = focus("/src/b: skip the change");
+    assert.equal(workOrderDigest(plan.workOrder), plan.workOrderDigest);
+    await writeFile(fixerPlan, JSON.stringify(plan));
+    const { deps } = runtimeWithGit([t1Thread(false, null)], repoRoot, git);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp", check: false }, deps), /does not match its operatorFocusDigest/);
   });
 });
 

@@ -519,6 +519,7 @@ test("normalize: a replyNote is sanitized, capped at 500 characters and refused 
   assert.throws(() => note("x".repeat(501)), /over 500 characters/);
   assert.throws(() => note("see #123"), /issue\/PR id/);
   assert.throws(() => note("ask @copilot to retry"), /summon token/);
+  assert.throws(() => note("~~~ ask @copilot to retry"), /summon token/);
 });
 
 test("normalize: a review-body entry refuses partially_fixed and a replyNote, and accepts tackled, deferred and rejected", () => {

@@ -37,6 +37,7 @@ import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { revalidateLegacyCompletion } from "./_legacy-fixer-revalidation.mjs";
 import { authenticateOriginalPlan } from "./_fixer-emission-evidence.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
+import { operatorFocusDigestEntry } from "../loop/_operator-focus.mjs";
 import { observeHeadCiSignals } from "./observe-head-ci.mjs";
 import { normalizeHeadScopedCiContract } from "@dev-loops/core/loop/copilot-ci-status";
 
@@ -634,6 +635,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     completion,
     constructedReport: raw,
     operatorFocus: order.operatorFocus,
+    operatorFocusDigest: order.operatorFocusDigest,
     reviewId,
     reviewBodySha256,
     reviewCommitId,
@@ -862,7 +864,7 @@ async function verifyFixerDispositionCore(
   const logPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: "fixer-disposition", headSha: options.headSha, tmpRoot });
   const fullPath = path.resolve(repoRoot, logPath);
   const runtime = { env, ghCommand, runChild };
-  const { handoff, actList, deltaStatuses, completion, constructedReport, operatorFocus, reviewId, reviewBodySha256, reviewCommitId, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
+  const { handoff, actList, deltaStatuses, completion, constructedReport, operatorFocus, operatorFocusDigest, reviewId, reviewBodySha256, reviewCommitId, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
   // The observed head must be the live PR head, never a caller claim.
   const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,statusCheckRollup"], env);
   const livePayload = live.code === 0 ? (() => { try { return JSON.parse(live.stdout); } catch { return null; } })() : null;
@@ -878,6 +880,10 @@ async function verifyFixerDispositionCore(
   let gateLogin = null;
   if (Array.isArray(actList)) gateLogin = await resolveAuthenticatedLogin({ env, ghCommand, runChild });
   const actFingerprints = new Set((actList ?? []).map((item) => item?.fingerprint ?? fingerprintFinding(item)));
+  // workOrderDigest drops absolute-path strings, so a pinned note such as "/src/a: ..." is not covered by it; check the focus against its own digest.
+  if ((operatorFocusDigest ?? null) !== (operatorFocusDigestEntry(operatorFocus).operatorFocusDigest ?? null)) {
+    throw new Error(`--fixer-plan "${options.fixerPlan}" operatorFocus does not match its operatorFocusDigest; the plan was edited after emission, re-emit it`);
+  }
   assertNotesPinned(handoff, operatorFocus, (threadId) => (Array.isArray(actList) ? selectActThreadBinding(initialSnapshot, threadId, gateLogin, actFingerprints).members : []));
   if (Array.isArray(actList)) {
     assertActItemThreadsDisposed(actList, handoff, initialSnapshot, gateLogin, deltaStatuses, completion, operatorFocus);
