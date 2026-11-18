@@ -371,7 +371,7 @@ test("editPr: refuses a body edit that removes the spike no-merge marker", async
   const { run, calls } = stubGh();
   await assert.rejects(
     () => editPr(editOpts({ body: "Body\n" }), { run, fetchPrContext: withCurrentBody("Body\n\n<!-- dev-loops:spike-pr no-merge -->\n") }),
-    /SPIKE-PR-MARKER/,
+    /refusing to remove the spike no-merge marker/,
   );
   assert.equal(calls.length, 0);
 });
