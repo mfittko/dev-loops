@@ -975,6 +975,16 @@ test("ADR 0238: a trust-incomplete thread is dropped from the pinned threads rea
   });
 });
 
+test("an operator focus pin on a trust-incomplete thread refuses as a thread outside the filtered source", async () => {
+  await withFixture(async ({ root, files, emit }) => {
+    const incomplete = { ...THREADS.threads[0], threadId: "T2", trusted: false, trustIncomplete: true, body: "" };
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [THREADS.threads[0], incomplete] }));
+    const focusFile = path.join(root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ threadId: "T2", replyDisposition: "deferred", replyNote: "x" }] }));
+    await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined, operatorFocusFile: focusFile }), /not a thread of the --threads-file source/);
+  });
+});
+
 test("F1: a delta result that does not belong to this act list and head refuses before dispatch", async () => {
   await withFixture(async ({ head, files, emit }) => {
     await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: files.delta }), /--delta-result applies only to an --act-list-file source/);
@@ -3485,6 +3495,10 @@ test("operator focus: reply dispositions bind by fingerprint on an act list and 
     assert.match(await readFile(threads.promptPath, "utf8"), /Thread T1: operator reply disposition: deferred; reply note: tracked as a follow-up\n/);
     await writeFile(focusFile, JSON.stringify({ items: [{ threadId: "T9", replyDisposition: "deferred", replyNote: "x" }] }));
     await assert.rejects(() => emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined, operatorFocusFile: focusFile }), /not a thread of the --threads-file source/);
+    for (const replyNote of ["tracked in #123", "ask @copilot to retry"]) {
+      await writeFile(focusFile, JSON.stringify({ items: [{ threadId: "T1", replyDisposition: "deferred", replyNote }] }));
+      await assert.rejects(() => emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined, operatorFocusFile: focusFile }), /GATE-EXEC-OPERATOR-FOCUS/);
+    }
   });
 });
 

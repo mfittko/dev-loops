@@ -2021,7 +2021,9 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
     disposition: actList.some((item, index) => fingerprints.includes(item.fingerprint) && isResidual(index)) ? "deferred" : "tackled" }));
   const nodes = threadBindings.map(({ threadId, fingerprints }, index) => actThread(threadId, [gateComment(`c${index}`, index + 1,
     fingerprints.map((fp) => `<!-- dev-loops:finding ${fp} severity=medium angle=correctness round=1 -->`).join("\n") + `\nFixed in commit ${fixing}.`)], dispositions[index].disposition === "tackled"));
-  const plan = await emit("full", { deltaResult: deltaPath, runChild: makeGhMock([threadsCallEntry(nodes), userEntry]).runChild });
+  const focusPath = path.join(tmpRoot, "focus.json");
+  if (settings.operatorFocus) await writeFile(focusPath, JSON.stringify(settings.operatorFocus(ACT_FP, second)));
+  const plan = await emit("full", { deltaResult: deltaPath, runChild: makeGhMock([threadsCallEntry(nodes), userEntry]).runChild, ...(settings.operatorFocus ? { operatorFocusFile: focusPath } : {}) });
   let live = null;
   if (settings.complete) {
     plan.executionIdentity = `f${Date.now()}-2800abcd`;
@@ -3492,3 +3494,75 @@ test("a pinned tackled reply with a note appends it to the fixed reply", () => r
   pin: { replyDisposition: "tackled", replyNote: "see the helper" }, expectedEntry: { disposition: "tackled", replyNote: "see the helper" },
   body: (head) => `Fixed in commit ${head}. see the helper`, containment: true,
 }));
+
+// A noted deferred thread: the verifier composes the note reply, whatever the delta status or the thread's prior state.
+const NOTED_DEFERRED = [{ threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "deferred", replyNote: "tracked as a follow-up" }];
+const NOTED_BODY = "Deferred, no code change in this PR: tracked as a follow-up";
+const t1Thread = (isResolved, replyBody) => threadsCallEntry([
+  { id: "PRRT_T1", isResolved, comments: { nodes: [
+    { id: "c1", databaseId: 101, body: "please fix", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } },
+    ...(replyBody ? [{ id: "c2", databaseId: 102, body: replyBody, authorAssociation: "OWNER", author: { login: "gate-bot", __typename: "User" } }] : []),
+  ] } },
+]);
+const git = () => ({ code: 0, stdout: `${FIX_SHA}\n` });
+
+test("a noted deferred thread on a delta-blocked thread gets the note reply and resolves, not the residual", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, NOTED_DEFERRED);
+    await writeDeltaRecord(repoRoot, { items: [{ ref: "PRRT_T1", status: "not_resolved" }] });
+    const { deps, calls } = runtimeWithGit([
+      unresolvedT1(),
+      { assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/101/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` },
+      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: true } } } })}\n` },
+      t1Thread(true, NOTED_BODY),
+    ], repoRoot, git);
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+    assert.equal(result.complete, true);
+    assert.deepEqual(calls.filter((call) => call.args.includes("POST")).map((call) => JSON.parse(call.stdinText).body), [NOTED_BODY]);
+  });
+});
+
+test("re-running a noted deferred thread that is already replied and resolved posts nothing", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, NOTED_DEFERRED);
+    const { deps, calls } = runtimeWithGit([t1Thread(true, NOTED_BODY)], repoRoot, git);
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+    assert.equal(result.complete, true);
+    assert.equal(hasPost(calls), false);
+  });
+});
+
+test("a noted deferred thread resolved without the composed reply fails resolved_note_reply_missing and posts nothing", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, NOTED_DEFERRED);
+    const { deps, calls } = runtimeWithGit([t1Thread(true, "")], repoRoot, git);
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+    assert.deepEqual(result.incomplete.map((entry) => entry.failedStep), ["resolved_note_reply_missing"]);
+    assert.equal(hasPost(calls), false);
+  });
+});
+
+test("a pinned tackled reply falls back to deferred without the note when the delta status is not resolved", async () => {
+  await withRepoRoot(async (root) => {
+    const bounded = { outcome: "bounded_out", nextStep: "push_to_gate", items: [{ ref: "PRRT_T1", status: "cannot_verify" }] };
+    const f = await threadConstructFixture(root, bounded, false, false, { items: [{ threadId: "PRRT_T1", replyDisposition: "tackled", replyNote: "see the helper" }] });
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    assert.deepEqual(JSON.parse(await readFile(f.output, "utf8")).dispositions, [{ threadId: "PRRT_T1", fixingCommitSha: f.head, disposition: "deferred" }]);
+  });
+});
+
+test("a pinned ACT fingerprint sets the reply disposition and note of every thread it binds", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await completionFixture(root, "resolved", { complete: true, operatorFocus: (fp) => ({ items: [{ fingerprint: fp, replyDisposition: "deferred", replyNote: "tracked as a follow-up" }] }) });
+    const written = JSON.parse(await readFile(f.plan.workOrder.outputRefs[0], "utf8"));
+    assert.deepEqual(written.dispositions.map(({ threadId, disposition, replyNote }) => [threadId, disposition, replyNote]), [["PRRT_MERGED", "deferred", "tracked as a follow-up"], ["PRRT_SHARED", "deferred", "tracked as a follow-up"]]);
+  });
+});
+
+test("conflicting operator pins on the fingerprints of one thread refuse at construction", async () => {
+  await withRepoRoot(async (root) => {
+    await assert.rejects(completionFixture(root, "resolved", { complete: true, operatorFocus: (fp, second) => ({ items: [
+      { fingerprint: fp, replyDisposition: "deferred", replyNote: "a" }, { fingerprint: second, replyDisposition: "rejected", replyNote: "b" },
+    ] }) }), /conflicting reply dispositions/);
+  });
+});

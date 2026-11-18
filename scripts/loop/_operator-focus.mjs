@@ -5,6 +5,7 @@
  */
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { cleanReplyNote } from "@dev-loops/core/loop/fixer-disposition";
 
 export class OperatorFocusRefusal extends Error {}
 
@@ -19,6 +20,11 @@ function clean(value, label) {
   const out = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").replace(/[<>`]/g, "").replace(/ +/g, " ").trim();
   if (out === "") throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus ${label} is empty after sanitizing`);
   return out;
+}
+
+// A reply note is posted by the verifier, so it must pass the reply writer's own guards.
+function cleanNote(value, label) {
+  try { return cleanReplyNote(value, `GATE-EXEC-OPERATOR-FOCUS: operator focus ${label}`); } catch (error) { throw new OperatorFocusRefusal(error.message); }
 }
 
 /** Validate and sanitize a raw focus object. Returns null for an absent or empty focus. */
@@ -52,7 +58,7 @@ export function normalizeOperatorFocus(raw, { allowItems = false } = {}) {
         if (!REPLY_DISPOSITIONS.includes(item.replyDisposition)) throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus items[${index}].replyDisposition must be one of ${REPLY_DISPOSITIONS.join(", ")}`);
         out.replyDisposition = item.replyDisposition;
       }
-      if (item.replyNote !== undefined) out.replyNote = clean(item.replyNote, `items[${index}].replyNote`);
+      if (item.replyNote !== undefined) out.replyNote = cleanNote(item.replyNote, `items[${index}].replyNote`);
       if (out.decision === undefined && out.replyDisposition === undefined) throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus items[${index}] needs a decision or a replyDisposition`);
       if (out.replyNote !== undefined && out.replyDisposition === undefined) throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus items[${index}] has a replyNote and no replyDisposition`);
       if (out.replyDisposition !== undefined && out.replyDisposition !== "tackled" && out.replyNote === undefined) throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus items[${index}] replyDisposition ${out.replyDisposition} needs a replyNote`);

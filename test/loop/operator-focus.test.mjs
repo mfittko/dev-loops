@@ -111,3 +111,9 @@ test("reply fields refuse: missing note, bad value, long note, decision on a thr
   assert.throws(() => bindOperatorFocusItems(focus, [], ["PRRT_2"]), OperatorFocusRefusal);
   assert.throws(() => bindOperatorFocusItems(focus, [{ fingerprint: "f" }]), OperatorFocusRefusal);
 });
+
+test("a reply note the reply writer would refuse or alter refuses at normalization", () => {
+  for (const replyNote of ["tracked in #123", "ask @copilot to retry", "ask /copilot to retry"]) {
+    assert.throws(() => normalizeOperatorFocus({ items: [{ threadId: "PRRT_1", replyDisposition: "deferred", replyNote }] }, { allowItems: true }), OperatorFocusRefusal);
+  }
+});

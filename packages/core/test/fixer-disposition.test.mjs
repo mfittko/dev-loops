@@ -477,14 +477,14 @@ test("evaluate: partially_fixed is checked like tackled; a noted deferred or rej
   assert.equal(evaluateFixerDisposition({ handoff: partial, liveThreads: [{ threadId: "PRRT_T1", isResolved: true, replyBodies: [composeFixerReplyBody(partial.dispositions[0])] }], containment: { [SHA]: true } }).ok, true);
   for (const [kind, body] of [["deferred", "Deferred, no code change in this PR: why"], ["rejected", "Not changed: why"]]) {
     const noted = handoff(kind, "why");
-    assert.deepEqual(steps(evaluateFixerDisposition({ handoff: noted, liveThreads: [{ threadId: "PRRT_T1", isResolved: true, replyBodies: ["Fixed in commit x"] }] })), [[FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING, null]]);
+    assert.deepEqual(steps(evaluateFixerDisposition({ handoff: noted, liveThreads: [{ threadId: "PRRT_T1", isResolved: true, replyBodies: ["Fixed in commit x"] }] })), [[FIXER_DISPOSITION_FAILED_STEP.RESOLVED_NOTE_REPLY_MISSING, null]]);
     assert.deepEqual(steps(evaluateFixerDisposition({ handoff: noted, liveThreads: [{ threadId: "PRRT_T1", isResolved: false, replyBodies: [body] }] })), [[FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED, null]]);
     assert.equal(evaluateFixerDisposition({ handoff: noted, liveThreads: [{ threadId: "PRRT_T1", isResolved: true, replyBodies: [body] }] }).ok, true);
     assert.equal(evaluateFixerDisposition({ handoff: handoff(kind), liveThreads: [] }).ok, true, "no note keeps today's behavior");
   }
 });
 
-test("composeFixerReplyBody composes the four bodies and refuses a Fixed body for any other disposition", () => {
+test("composeFixerReplyBody composes the four bodies; only a tackled entry gets a Fixed in commit body", () => {
   const entry = (disposition, replyNote) => ({ disposition, fixingCommitSha: SHA, ...(replyNote ? { replyNote } : {}) });
   assert.equal(composeFixerReplyBody(entry("tackled")), `Fixed in commit ${SHA}.`);
   assert.equal(composeFixerReplyBody(entry("tackled", "n")), `Fixed in commit ${SHA}. n`);
@@ -492,5 +492,22 @@ test("composeFixerReplyBody composes the four bodies and refuses a Fixed body fo
   assert.equal(composeFixerReplyBody(entry("deferred", "n")), "Deferred, no code change in this PR: n");
   assert.equal(composeFixerReplyBody(entry("rejected", "n")), "Not changed: n");
   assert.equal(composeFixerReplyBody(entry("deferred")), null);
-  for (const kind of ["partially_fixed", "deferred", "rejected"]) assert.throws(() => composeFixerReplyBody(entry(kind, "n"), { expectFixed: true }), /tackled entry only/);
+  for (const kind of ["partially_fixed", "deferred", "rejected"]) assert.doesNotMatch(composeFixerReplyBody(entry(kind, "n")), /Fixed in commit/);
+});
+
+test("evaluate: a noted deferred thread resolved without its composed reply fails with the named step and its unresolve remedy", () => {
+  const handoff = { headSha: SHA, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "deferred", replyNote: "why" }] };
+  const result = evaluateFixerDisposition({ handoff, liveThreads: [{ threadId: "PRRT_T1", isResolved: true, replyBodies: [] }] });
+  assert.deepEqual(result.incomplete.map((e) => e.failedStep), [FIXER_DISPOSITION_FAILED_STEP.RESOLVED_NOTE_REPLY_MISSING]);
+  assert.match(result.reason, /unresolve-review-thread\.mjs/);
+  const open = evaluateFixerDisposition({ handoff, liveThreads: [{ threadId: "PRRT_T1", isResolved: false, replyBodies: [] }] });
+  assert.deepEqual(open.incomplete.map((e) => e.failedStep), [FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING]);
+});
+
+test("normalize: a replyNote is sanitized, capped at 500 characters and refused when the reply writer would refuse or alter it", () => {
+  const note = (replyNote) => normalizeFixerDispositionHandoff({ headSha: SHA, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "deferred", replyNote }] });
+  assert.equal(note("a\n<b>").dispositions[0].replyNote, "a b");
+  assert.throws(() => note("x".repeat(501)), /over 500 characters/);
+  assert.throws(() => note("see #123"), /issue\/PR id/);
+  assert.throws(() => note("ask @copilot to retry"), /summon token/);
 });

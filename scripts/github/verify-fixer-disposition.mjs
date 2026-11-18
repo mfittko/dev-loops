@@ -640,7 +640,11 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
 // The disposition and note of one thread. The delta status decides it, except where the operator pinned a reply:
 // a pinned deferred or rejected overrides it, and a pinned tackled or partially_fixed applies only to a resolved thread.
 function pinnedDisposition(operatorFocus, keys, deltaResolved) {
-  const pin = (operatorFocus?.items ?? []).find((item) => item.replyDisposition && keys.includes(item.threadId ?? item.fingerprint));
+  const pins = (operatorFocus?.items ?? []).filter((item) => item.replyDisposition && keys.includes(item.threadId ?? item.fingerprint));
+  const [pin] = pins;
+  if (pins.some((other) => other.replyDisposition !== pin.replyDisposition || other.replyNote !== pin.replyNote)) {
+    throw new Error(`operator focus pins conflicting reply dispositions on one thread (${pins.map((item) => item.threadId ?? item.fingerprint).join(", ")})`);
+  }
   const applies = pin && (deltaResolved || pin.replyDisposition === FIXER_DISPOSITION_KIND.DEFERRED || pin.replyDisposition === FIXER_DISPOSITION_KIND.REJECTED);
   return {
     disposition: applies ? pin.replyDisposition : deltaResolved ? FIXER_DISPOSITION_KIND.TACKLED : FIXER_DISPOSITION_KIND.DEFERRED,

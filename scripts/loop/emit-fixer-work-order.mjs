@@ -693,7 +693,6 @@ async function emitPlan({
   const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined, { allowItems: true });
   if (operatorFocusRaw?.items && !actListFile && !threadsFile) throw new OperatorFocusRefusal("GATE-EXEC-OPERATOR-FOCUS: operator focus items need an --act-list-file or --threads-file source");
   if (operatorFocusRaw?.items?.some((item) => (item.threadId !== undefined) !== Boolean(threadsFile))) throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus items bind by ${threadsFile ? "threadId" : "fingerprint"} on this source`);
-  const operatorFocus = bindOperatorFocusItems(operatorFocusRaw, actListFile ? source.parsed : undefined, threadsFile ? (source.parsed?.threads ?? []).map((thread) => thread?.threadId) : undefined);
   // A trust-incomplete thread (first comment page all untrusted, more pages exist) stays a blocker but is never a fixer source.
   // The filtered payload becomes the pinned threads read, so the read bytes and authority.sourceDigest describe the same payload.
   if (threadsFile && Array.isArray(source.parsed?.threads) && source.parsed.threads.some((thread) => thread?.trustIncomplete === true)) {
@@ -702,6 +701,8 @@ async function emitPlan({
     await capture.write(filteredPath, bytes);
     source = { read: { kind: "threads", path: filteredPath, sha256: sha256(bytes), bytes: bytes.length, required: true }, parsed: filtered };
   }
+  // Bind after the filter: a pin on a trust-incomplete thread refuses as a thread outside the source.
+  const operatorFocus = bindOperatorFocusItems(operatorFocusRaw, actListFile ? source.parsed : undefined, threadsFile ? (source.parsed?.threads ?? []).map((thread) => thread?.threadId) : undefined);
   if (threadsFile && (source.parsed?.ok !== true || !Array.isArray(source.parsed.threads) || source.parsed.repo !== repo || Number(source.parsed.pr) !== Number(pr)
     || !source.parsed.threads.every((thread) => thread?.isResolved === false))) {
     const resolved = Array.isArray(source.parsed?.threads) ? source.parsed.threads.filter((thread) => thread?.isResolved === true) : [];
