@@ -3622,3 +3622,41 @@ test("a fixer-written replyNote with no operator focus pin refuses before any re
     assert.equal(hasPost(calls), false);
   });
 });
+
+// assertNotesPinned checks both ways: a handoff entry may not drop or alter a bound operator focus pin.
+const pinForm = (replyDisposition, replyNote) => ({ items: [{ threadId: "PRRT_T1", replyDisposition, ...(replyNote ? { replyNote } : {}) }] });
+const entryForm = (disposition, replyNote) => [{ threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition, ...(replyNote ? { replyNote } : {}) }];
+
+for (const [label, pin, entry, expected] of [
+  ["pin deferred+note x, entry tackled", pinForm("deferred", "x"), entryForm("tackled"), /disagrees with its operator focus pin/],
+  ["pin rejected+note x, entry deferred without note", pinForm("rejected", "x"), entryForm("deferred"), /disagrees with its operator focus pin/],
+  ["pin deferred+note x, entry deferred+note y", pinForm("deferred", "x"), entryForm("deferred", "y"), /no matching operator focus pin/],
+  ["pin partially_fixed+note x, entry tackled", pinForm("partially_fixed", "x"), entryForm("tackled"), /disagrees with its operator focus pin/],
+]) {
+  test(`a handoff that drops its pin refuses before any reply or resolve: ${label}`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      const fixerPlan = await deliver(repoRoot, entry, { operatorFocus: pin });
+      const { deps, calls } = runtimeWithGit([unresolvedT1()], repoRoot, git);
+      await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps), expected);
+      assert.equal(hasPost(calls), false);
+    });
+  });
+}
+
+for (const [label, pin, entry] of [
+  ["pin deferred+note x, entry deferred+note x", pinForm("deferred", "x"), entryForm("deferred", "x")],
+  ["pin rejected+note x, entry rejected+note x", pinForm("rejected", "x"), entryForm("rejected", "x")],
+  ["pin tackled, entry tackled", pinForm("tackled"), entryForm("tackled")],
+  ["pin partially_fixed+note x, entry deferred without note", pinForm("partially_fixed", "x"), entryForm("deferred")],
+  ["no pin, entry tackled", null, entryForm("tackled")],
+]) {
+  test(`a handoff that honors its pin passes the pin check: ${label}`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      const fixerPlan = await deliver(repoRoot, entry, { operatorFocus: pin });
+      const { deps } = runtimeWithGit([unresolvedT1()], repoRoot, git);
+      await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps).catch((error) => {
+        assert.doesNotMatch(error.message, /operator focus pin/);
+      });
+    });
+  });
+}

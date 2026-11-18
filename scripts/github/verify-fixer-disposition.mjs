@@ -661,13 +661,25 @@ function pinnedDisposition(operatorFocus, keys, deltaResolved) {
 
 // A reply note authorizes a reply and a resolve, so only a note the operator focus pinned for that thread counts.
 // A fingerprint pin counts only when that fingerprint is a live ACT member of the entry's thread (membersOf).
+// The check runs both ways: an entry may not drop a bound pin either. A deferred or rejected pin needs the same
+// disposition and note. A tackled or partially_fixed pin needs the same entry, or a deferred entry without a note.
 function assertNotesPinned(handoff, operatorFocus, membersOf) {
+  const pins = (operatorFocus?.items ?? []).filter((item) => item.replyDisposition);
   for (const entry of handoff.dispositions) {
-    if (!entry.threadId || !entry.replyNote) continue;
-    const pinned = (operatorFocus?.items ?? []).some((item) => item.replyDisposition === entry.disposition && item.replyNote === entry.replyNote
-      && (item.threadId === entry.threadId
-        || (item.fingerprint && membersOf(entry.threadId).includes(item.fingerprint) && (!entry.fingerprint || item.fingerprint === entry.fingerprint))));
-    if (!pinned) throw new Error(`handoff entry for ${entry.threadId} carries a replyNote with no matching operator focus pin; only the operator focus carrier sets a reply note`);
+    if (!entry.threadId) continue;
+    const members = membersOf(entry.threadId);
+    const bound = pins.filter((item) => item.threadId === entry.threadId
+      || (item.fingerprint && members.includes(item.fingerprint) && (!entry.fingerprint || item.fingerprint === entry.fingerprint)));
+    if (entry.replyNote && !bound.some((item) => item.replyDisposition === entry.disposition && item.replyNote === entry.replyNote)) {
+      throw new Error(`handoff entry for ${entry.threadId} carries a replyNote with no matching operator focus pin; only the operator focus carrier sets a reply note`);
+    }
+    for (const pin of bound) {
+      const same = entry.disposition === pin.replyDisposition && (entry.replyNote ?? null) === (pin.replyNote ?? null);
+      const soft = pin.replyDisposition === FIXER_DISPOSITION_KIND.TACKLED || pin.replyDisposition === FIXER_DISPOSITION_KIND.PARTIALLY_FIXED;
+      if (!same && !(soft && entry.disposition === FIXER_DISPOSITION_KIND.DEFERRED && !entry.replyNote)) {
+        throw new Error(`handoff entry for ${entry.threadId} (${entry.disposition}) disagrees with its operator focus pin (${pin.replyDisposition}); the handoff may not drop a pinned reply`);
+      }
+    }
   }
 }
 

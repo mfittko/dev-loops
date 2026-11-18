@@ -112,6 +112,7 @@ test("reply fields refuse: missing note, bad value, long note, decision on a thr
   bad([{ threadId: "PRRT_1", decision: "d", replyDisposition: "tackled" }]);
   bad([{ threadId: "PRRT_1", fingerprint: "f", replyDisposition: "tackled" }]);
   bad([{ fingerprint: "f", replyNote: "x" }]);
+  assert.throws(() => normalizeOperatorFocus({ items: [{ fingerprint: "f", decision: "d", replyNote: "x" }] }, { allowItems: true }), /has a replyNote and no replyDisposition/);
   const focus = normalizeOperatorFocus({ items: [{ threadId: "PRRT_1", replyDisposition: "tackled" }] }, { allowItems: true });
   assert.throws(() => bindOperatorFocusItems(focus, [], ["PRRT_2"]), OperatorFocusRefusal);
   assert.throws(() => bindOperatorFocusItems(focus, [{ fingerprint: "f" }]), OperatorFocusRefusal);
