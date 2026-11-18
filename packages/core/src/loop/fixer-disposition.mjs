@@ -5,16 +5,34 @@
 // (live thread state, commit containment) is injected as data, never fetched
 // here, so the same decision is shared verbatim across every harness.
 
-/** Disposition values a handoff entry may carry. Only "tackled" entries are
- * auto-disposed by evaluateFixerDisposition; every other value keeps its
+/** Disposition values a handoff entry may carry. "tackled" and "partially_fixed"
+ * entries are auto-disposed by evaluateFixerDisposition, as is a "deferred" or
+ * "rejected" entry that carries a replyNote; every other entry keeps its
  * existing judgment path untouched (see the boundary rule's scope note). */
 export const FIXER_DISPOSITION_KIND = Object.freeze({
   TACKLED: "tackled",
+  PARTIALLY_FIXED: "partially_fixed",
   DEFERRED: "deferred",
   REJECTED: "rejected",
 });
 
-export const FIXER_DISPOSITION_FAILED_STEP = Object.freeze({
+/** The dispositions that claim a fixing commit in the PR head. */
+export const FIXER_COMMIT_CLAIM_KINDS = Object.freeze([FIXER_DISPOSITION_KIND.TACKLED, FIXER_DISPOSITION_KIND.PARTIALLY_FIXED]);
+
+/**
+ * The one reply body for a thread entry. A `Fixed in commit` body is composed for a `tackled` entry only.
+ * Returns null for a `deferred` or `rejected` entry without a replyNote: that entry posts no reply of its own.
+ */
+export function composeFixerReplyBody(entry, { expectFixed = false } = {}) {
+  const { disposition, fixingCommitSha: sha, replyNote: note } = entry;
+  if (expectFixed && disposition !== FIXER_DISPOSITION_KIND.TACKLED) throw new Error(`A "Fixed in commit" reply is composed for a tackled entry only, not ${disposition}`);
+  if (disposition === FIXER_DISPOSITION_KIND.TACKLED) return `Fixed in commit ${sha}.${note ? ` ${note}` : ""}`;
+  if (disposition === FIXER_DISPOSITION_KIND.PARTIALLY_FIXED) return `Partially fixed in commit ${sha}. Not done: ${note}`;
+  if (!note) return null;
+  return disposition === FIXER_DISPOSITION_KIND.DEFERRED ? `Deferred, no code change in this PR: ${note}` : `Not changed: ${note}`;
+}
+
+export const FIXER_DISPOSITION_FAILED_STEP =Object.freeze({
   MISSING_FROM_HANDOFF: "missing_from_handoff",
   COMMIT_NOT_CONTAINED: "commit_not_contained",
   REPLY_MISSING: "reply_missing",
@@ -248,7 +266,7 @@ export function normalizeFixerDispositionHandoff(raw, { ruleIds } = {}) {
     if (!isNonEmptyString(entry.fixingCommitSha)) {
       throw new Error(`Fixer disposition handoff entry for thread ${threadId} is missing fixingCommitSha`);
     }
-    if (String(entry.disposition).trim().toLowerCase() === FIXER_DISPOSITION_KIND.TACKLED && !/^[0-9a-fA-F]{40}$/.test(entry.fixingCommitSha.trim())) {
+    if (FIXER_COMMIT_CLAIM_KINDS.includes(String(entry.disposition).trim().toLowerCase()) && !/^[0-9a-fA-F]{40}$/.test(entry.fixingCommitSha.trim())) {
       throw new Error(`Fixer disposition handoff entry for thread ${threadId} needs fixingCommitSha as the full 40-character SHA (git rev-parse <commit>)`);
     }
     if (!isNonEmptyString(entry.disposition)) {
@@ -259,12 +277,15 @@ export function normalizeFixerDispositionHandoff(raw, { ruleIds } = {}) {
     if (!Object.values(FIXER_DISPOSITION_KIND).includes(disposition)) {
       throw new Error(`Fixer disposition handoff entry for thread ${threadId} has an unrecognized disposition: ${disposition}`);
     }
+    if (entry.replyNote !== undefined && !isNonEmptyString(entry.replyNote)) throw new Error(`Fixer disposition handoff entry for thread ${threadId} replyNote must be a non-empty string`);
+    if (disposition === FIXER_DISPOSITION_KIND.PARTIALLY_FIXED && entry.replyNote === undefined) throw new Error(`Fixer disposition handoff entry for thread ${threadId} is partially_fixed and needs a replyNote naming what is not done`);
     return {
       threadId,
       fingerprint,
       fixingCommitSha: entry.fixingCommitSha.trim(),
       disposition,
       validation: isNonEmptyString(entry.validation) ? entry.validation.trim() : null,
+      ...(entry.replyNote !== undefined ? { replyNote: entry.replyNote.trim() } : {}),
       ...normalizeSiteCoverage(entry, `Fixer disposition handoff entry for thread ${threadId}`, ruleIds),
     };
   });
@@ -322,7 +343,7 @@ export function evaluateFixerDisposition({ handoff, liveThreads = [], containmen
   // handoff counterpart at all — that gap is exactly missing_from_handoff.
   const tackledThreadIds = new Set();
   for (const entry of threadEntries) {
-    if (entry.disposition === FIXER_DISPOSITION_KIND.TACKLED) {
+    if (FIXER_COMMIT_CLAIM_KINDS.includes(entry.disposition)) {
       tackledThreadIds.add(entry.threadId);
     }
   }
@@ -361,6 +382,15 @@ export function evaluateFixerDisposition({ handoff, liveThreads = [], containmen
     if (liveThread?.isResolved !== true) {
       incomplete.push({ threadId, expectedCommit, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED });
     }
+  }
+
+  // A deferred or rejected entry with a replyNote needs its own composed reply and a resolved thread; no commit is claimed.
+  for (const entry of threadEntries.filter((e) => !FIXER_COMMIT_CLAIM_KINDS.includes(e.disposition) && e.replyNote)) {
+    const liveThread = liveByThreadId.get(entry.threadId) ?? null;
+    const body = composeFixerReplyBody(entry);
+    const failedStep = !(liveThread?.replyBodies ?? []).includes(body) ? FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING
+      : liveThread?.isResolved !== true ? FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED : null;
+    if (failedStep) incomplete.push({ threadId: entry.threadId, expectedCommit: null, failedStep });
   }
 
   // A review body has no thread: its evidence is a trusted marker comment citing the fixing commit (`liveReviews[].markerCommits`).

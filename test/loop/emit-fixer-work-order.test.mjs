@@ -3471,6 +3471,23 @@ test("operator focus: an unknown fingerprint, a threads source with items and ba
   });
 });
 
+test("operator focus: reply dispositions bind by fingerprint on an act list and by threadId on a threads source", async () => {
+  await withFixture(async ({ root, files, emit }) => {
+    const focusFile = path.join(root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: ACT_REF, replyDisposition: "partially_fixed", replyNote: "the null guard is done; the retry is not" }] }));
+    const act = await emit({ deltaResult: files.delta, operatorFocusFile: focusFile });
+    assert.deepEqual(act.workOrder.operatorFocus.items, [{ fingerprint: ACT_REF, replyDisposition: "partially_fixed", replyNote: "the null guard is done; the retry is not", summary: "null deref" }]);
+    assert.match(await readFile(act.promptPath, "utf8"), new RegExp(`Act item ${ACT_REF}: operator reply disposition: partially_fixed; reply note: the null guard is done; the retry is not\\n`));
+    await writeFile(focusFile, JSON.stringify({ items: [{ threadId: "T1", replyDisposition: "deferred", replyNote: "tracked as a follow-up" }] }));
+    const threads = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined, operatorFocusFile: focusFile });
+    assert.deepEqual(threads.workOrder.operatorFocus.items, [{ threadId: "T1", replyDisposition: "deferred", replyNote: "tracked as a follow-up" }]);
+    assert.ok(typeof threads.workOrder.operatorFocusDigest === "string");
+    assert.match(await readFile(threads.promptPath, "utf8"), /Thread T1: operator reply disposition: deferred; reply note: tracked as a follow-up\n/);
+    await writeFile(focusFile, JSON.stringify({ items: [{ threadId: "T9", replyDisposition: "deferred", replyNote: "x" }] }));
+    await assert.rejects(() => emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined, operatorFocusFile: focusFile }), /not a thread of the --threads-file source/);
+  });
+});
+
 // Drive the fixer CLI main() with captured stdout and stderr.
 async function runFixerMain(argv, opts) {
   const out = [];

@@ -27,7 +27,7 @@ import { OUT_OF_BAND_WRITE } from "../github/_gate-artifact-seal.mjs";
 import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
-  FIXER_DISPOSITION_KIND,
+  FIXER_COMMIT_CLAIM_KINDS,
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
@@ -832,9 +832,9 @@ async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot
     }
     if (!matchesLiveHead(handoff?.headSha)) continue;
     for (const entry of Array.isArray(handoff.dispositions) ? handoff.dispositions : []) {
-      if (entry?.disposition === FIXER_DISPOSITION_KIND.TACKLED && typeof entry.threadId === "string") {
+      if (FIXER_COMMIT_CLAIM_KINDS.includes(entry?.disposition) && typeof entry.threadId === "string") {
         incomplete.push({ threadId: entry.threadId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED });
-      } else if (entry?.disposition === FIXER_DISPOSITION_KIND.TACKLED && typeof entry.reviewId === "string") {
+      } else if (FIXER_COMMIT_CLAIM_KINDS.includes(entry?.disposition) && typeof entry.reviewId === "string") {
         incomplete.push({ reviewId: entry.reviewId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED });
       }
     }
@@ -904,7 +904,7 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
               const relation = await isCommitContainedByHead({ repo, commitSha: head, headSha: currentHeadSha, requireAhead: true }, runtime);
               if (!relation.contained) throw new Error("ancestor checkpoint requires an ahead live head; run a full gate round");
               const threads = typeof parsedThreads === "function" ? await parsedThreads() : parsedThreads;
-              const containment = await buildContainmentMap(handoff.dispositions.filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).map((entry) => entry.fixingCommitSha), { repo, headSha: currentHeadSha }, runtime);
+              const containment = await buildContainmentMap(handoff.dispositions.filter((entry) => FIXER_COMMIT_CLAIM_KINDS.includes(entry.disposition)).map((entry) => entry.fixingCommitSha), { repo, headSha: currentHeadSha }, runtime);
               const liveThreads = threads.threads.map((thread) => ({ threadId: thread.id, isResolved: thread.isResolved, replyBodies: threads.comments.filter((comment) => comment.threadId === thread.id).map((comment) => comment.body) }));
               const evaluation = evaluateFixerDisposition({ handoff, liveThreads, containment, liveReviews: await readHandoffReviewMarkers(handoff, { repo, pr }, runtime) });
               if (!(await readFile(planPath)).equals(planBytes)) throw new Error("active fixer plan changed during carry verification");
@@ -972,7 +972,7 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
   }
   const tackledShas = [...new Set(
     handoff.dispositions
-      .filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED)
+      .filter((entry) => FIXER_COMMIT_CLAIM_KINDS.includes(entry.disposition))
       .map((entry) => entry.fixingCommitSha),
   )];
   const containment = await buildContainmentMap(tackledShas, { repo, headSha: currentHeadSha }, runtime);

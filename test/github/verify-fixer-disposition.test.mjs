@@ -504,7 +504,7 @@ test("emitted and pulled THREAD full binds missing output without an execution d
 });
 
 // An emitted and pulled THREAD full plan whose pushed head is the baseline head (issue 2787 C3, C4).
-async function threadConstructFixture(root, recordOver, site = false, commitCandidate = false) {
+async function threadConstructFixture(root, recordOver, site = false, commitCandidate = false, operatorFocus = null) {
   root = await realpath(root);
   const head = await initPristineGitFixture(root, site);
   if (commitCandidate) execFileSync("git", ["-C", root, "commit", "-q", "--allow-empty", "-m", "fix"], { env: gitEnvNoDirOverrides() });
@@ -517,7 +517,9 @@ async function threadConstructFixture(root, recordOver, site = false, commitCand
     invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "PRRT_T1", status: "resolved" }],
     ...(recordOver?.outcome === "bounded_out" ? recordOver : {}) };
   await writeFile(recordPath, JSON.stringify(record));
-  const plan = await emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, phase: "full", threadsFile, cwd: root,
+  const operatorFocusFile = operatorFocus ? path.join(tmpRoot, "focus.json") : undefined;
+  if (operatorFocusFile) await writeFile(operatorFocusFile, JSON.stringify(operatorFocus));
+  const plan = await emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, phase: "full", threadsFile, operatorFocusFile, cwd: root,
     fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });
   await pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: root, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
   // Negative variants corrupt the authenticated record only after emission and pull.
@@ -3447,3 +3449,46 @@ test("concurrent publishReport calls on one report path never truncate the publi
     }
   });
 });
+
+// Pinned operator reply dispositions: the verifier composes each reply from the disposition, never a fixed claim.
+const replyCase = async ({ pin, expectedEntry, body, containment = false }) => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root, undefined, false, false, { items: [{ threadId: "PRRT_T1", ...pin }] });
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    assert.deepEqual(JSON.parse(await readFile(f.output, "utf8")), { headSha: f.head, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: f.head, ...expectedEntry }] });
+    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }];
+    const done = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }, { id: "c2", databaseId: 2, body: body(f.head), authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] } }];
+    const mock = f.runtimeFor([
+      threadsCallEntry(open), ...ciEntries(f.head), ...(containment ? [compareEntry(f.head, "identical", f.head)] : []),
+      { assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/1/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` },
+      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: true } } } })}\n` },
+      threadsCallEntry(done),
+    ]);
+    const result = await verifyFixerDisposition(f.options, mock.deps);
+    const bodies = mock.calls.filter((call) => call.args.includes("POST")).map((call) => JSON.parse(call.stdinText).body);
+    assert.equal(bodies.length, 1);
+    assert.equal(bodies[0], body(f.head));
+    assert.equal(mock.calls.some((call) => call.args.some((arg) => String(arg).includes("resolveReviewThread"))), true);
+    assert.equal(result.complete, true);
+  });
+};
+
+test("a pinned deferred reply with a note posts the note without a commit claim and resolves, though the delta status is resolved", () => replyCase({
+  pin: { replyDisposition: "deferred", replyNote: "tracked as a follow-up" }, expectedEntry: { disposition: "deferred", replyNote: "tracked as a follow-up" },
+  body: () => "Deferred, no code change in this PR: tracked as a follow-up",
+}));
+
+test("a pinned rejected reply with a note posts Not changed and resolves", () => replyCase({
+  pin: { replyDisposition: "rejected", replyNote: "the guard is intended" }, expectedEntry: { disposition: "rejected", replyNote: "the guard is intended" },
+  body: () => "Not changed: the guard is intended",
+}));
+
+test("a pinned partially_fixed reply names the commit and what is not done, with containment checked", () => replyCase({
+  pin: { replyDisposition: "partially_fixed", replyNote: "the retry is not done" }, expectedEntry: { disposition: "partially_fixed", replyNote: "the retry is not done" },
+  body: (head) => `Partially fixed in commit ${head}. Not done: the retry is not done`, containment: true,
+}));
+
+test("a pinned tackled reply with a note appends it to the fixed reply", () => replyCase({
+  pin: { replyDisposition: "tackled", replyNote: "see the helper" }, expectedEntry: { disposition: "tackled", replyNote: "see the helper" },
+  body: (head) => `Fixed in commit ${head}. see the helper`, containment: true,
+}));
