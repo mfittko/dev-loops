@@ -449,9 +449,11 @@ export function repeatedLinesContent(count, { prefix = "const x" } = {}) {
 
 /**
  * An actions/checkout pull_request clone has no `refs/remotes/origin/*` and no `origin/HEAD`, which the fail-closed trust-config load needs.
- * Create `origin/main` from HEAD when absent, then set the symbolic ref (refs, not config); a dev checkout already has it.
+ * Create `origin/main` from HEAD when absent, then set the symbolic ref (refs, not config).
+ * Only a GitHub Actions run (`GITHUB_ACTIONS=true`) writes refs into a real checkout; a dev checkout already has them.
  */
 export function ensureOriginHead(cwd) {
+  if (process.env.GITHUB_ACTIONS !== "true") return;
   const git = (...args) => spawnSync("git", args, { cwd, encoding: "utf8", env: GIT_FIXTURE_ENV });
   if (git("symbolic-ref", "-q", "refs/remotes/origin/HEAD").status === 0) return;
   // A pull_request checkout fetches no remote-tracking refs at all: publish HEAD as the trusted origin/main.
