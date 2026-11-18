@@ -28,6 +28,7 @@ import { verifyDispatchPromptLayoutForHead } from "./verify-dispatch-prompt-layo
 import { sanitizeScopeSegment } from "./_dispatch-units.mjs";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 const USAGE = `reconcile-residual-evidence.mjs --repo <owner/name> --pr <n> --head-sha <full-sha> --baseline <full-sha> --angle <name> --fixer-plan <path> [--record]\n${JQ_OUTPUT_USAGE}`;
 const hash = (bytes) => sha256Hex(bytes).slice(7);
@@ -282,6 +283,7 @@ export async function snapshotResidualEvidence(options, deps = {}) {
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseResidualEvidenceArgs(process.argv.slice(2)).help);
   try {
     const options = parseResidualEvidenceArgs(process.argv.slice(2));
     if (options.help) console.log(USAGE);

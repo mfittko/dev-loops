@@ -380,6 +380,31 @@ export function initGitFixture(dir, { remote, branch, commit = "init" } = {}) {
 }
 
 /**
+ * Give a repo with a commit a local bare `origin` (kept inside `.git`) whose default branch is the
+ * current branch, so the entry scripts' default-branch trust-config read resolves offline.
+ * A repo that already has a github.com `origin` keeps its slug (https is rewritten to the ssh form) and fetches
+ * through a `core.sshCommand` stub that serves the local bare repo.
+ */
+export function addLocalOrigin(dir) {
+  // The first worktree is the main checkout: its branch is the default branch, also when dir is a linked worktree.
+  const mainDir = runGitFixture(dir, ["worktree", "list", "--porcelain"]).split("\n")[0].slice("worktree ".length);
+  const branch = runGitFixture(mainDir, ["branch", "--show-current"]);
+  const gitDir = runGitFixture(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  const bare = path.join(gitDir, "fake-origin.git");
+  runGitFixture(dir, ["init", "-q", "--bare", bare]);
+  const url = spawnSync("git", ["config", "--get", "remote.origin.url"], { cwd: dir, encoding: "utf8", env: GIT_FIXTURE_ENV }).stdout.trim();
+  if (url) {
+    const stub = path.join(gitDir, "fake-ssh.sh");
+    cacheFs.writeFileSync(stub, `#!/bin/sh\nexec git upload-pack '${bare}'\n`, { mode: 0o755 });
+    runGitFixture(dir, ["config", "core.sshCommand", stub]);
+    if (url.startsWith("https://github.com/")) runGitFixture(dir, ["config", "url.git@github.com:.insteadOf", "https://github.com/"]);
+  } else runGitFixture(dir, ["remote", "add", "origin", bare]);
+  runGitFixture(dir, ["push", "-q", bare, `refs/heads/${branch}:refs/heads/${branch}`]);
+  runGitFixture(dir, ["fetch", "-q", "origin"]);
+  runGitFixture(dir, ["remote", "set-head", "origin", branch]);
+}
+
+/**
  * @param {string} workDir — an existing empty directory (e.g. a mkdtemp result)
  * @param {{
  *   baseBranch?: string,
@@ -422,7 +447,51 @@ export function repeatedLinesContent(count, { prefix = "const x" } = {}) {
   return `${lines.join("\n")}\n`;
 }
 
+/**
+ * An actions/checkout pull_request clone has no `refs/remotes/origin/*` and no `origin/HEAD`, which the fail-closed trust-config load needs.
+ * Create `origin/main` from HEAD when absent, then set the symbolic ref (refs, not config).
+ * Only a GitHub Actions run (`GITHUB_ACTIONS=true`) writes refs into a real checkout; a dev checkout already has them.
+ */
+export function ensureOriginHead(cwd) {
+  if (process.env.GITHUB_ACTIONS !== "true") return;
+  const git = (...args) => spawnSync("git", args, { cwd, encoding: "utf8", env: GIT_FIXTURE_ENV });
+  const resolved = () => git("symbolic-ref", "-q", "refs/remotes/origin/HEAD").status === 0 && git("rev-parse", "--verify", "-q", "refs/remotes/origin/HEAD^{commit}").status === 0;
+  // Parallel test workers share this checkout: a loser of the ref-lock race retries until the winner's refs resolve.
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (resolved()) return;
+    // A pull_request checkout fetches no remote-tracking refs at all: publish HEAD as the trusted origin/main.
+    if (git("rev-parse", "--verify", "-q", "refs/remotes/origin/main").status !== 0) git("update-ref", "refs/remotes/origin/main", "HEAD");
+    git("remote", "set-head", "origin", "main");
+    if (resolved()) return;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+  throw new Error(`ensureOriginHead: refs/remotes/origin/HEAD and origin/main did not resolve in ${cwd}`);
+}
+
+/**
+ * The entry scripts read the trust config from the default branch of the cwd checkout. Make a fixture cwd
+ * resolvable offline: a non-git dir becomes a repo, and a repo with a commit but no `origin` gets a local one.
+ */
+export function ensureTrustConfigCheckout(cwd, scriptPath) {
+  if (typeof cwd !== "string" || !existsSync(cwd) || (scriptPath && path.basename(scriptPath) !== "index.mjs" && !(existsSync(scriptPath) && cacheFs.readFileSync(scriptPath, "utf8").includes("loadCommentTrustConfigOrExit(")))) return;
+  const git = (...args) => spawnSync("git", args, { cwd, encoding: "utf8", env: GIT_FIXTURE_ENV });
+  if (git("rev-parse", "--git-dir").status !== 0) {
+    initGitFixture(cwd, { branch: "main" });
+    addLocalOrigin(cwd);
+    return;
+  }
+  const url = git("config", "--get", "remote.origin.url").stdout.trim();
+  // A fixture's fake github.com origin is rewritten only inside the OS temp dir, never in a real checkout.
+  const fakeOrigin = /^(git@github\.com:|https:\/\/github\.com\/)/.test(url) && cacheFs.realpathSync(cwd).startsWith(cacheFs.realpathSync(os.tmpdir()) + path.sep);
+  // Heal only the real test checkout, so temp fixtures behave the same in CI and locally.
+  const isRepoRoot = cacheFs.realpathSync(git("rev-parse", "--show-toplevel").stdout.trim()) === cacheFs.realpathSync(path.resolve(import.meta.dirname, ".."));
+  if (url && !fakeOrigin && isRepoRoot) ensureOriginHead(cwd);
+  if ((url && !fakeOrigin) || git("rev-parse", "--verify", "HEAD").status !== 0 || git("symbolic-ref", "-q", "refs/remotes/origin/HEAD").status === 0) return;
+  if (git("branch", "--show-current").stdout.trim()) addLocalOrigin(cwd);
+}
+
 export function runNode(scriptPath, args = [], options = {}) {
+  ensureTrustConfigCheckout(options.cwd ?? process.cwd(), scriptPath);
   return new Promise((resolve, reject) => {
     const child = spawn(options.execPath ?? process.execPath, [scriptPath, ...args], {
       cwd: options.cwd,
@@ -699,4 +768,10 @@ export async function withLaneRunContext(fn) {
     process.chdir(previous);
     await rm(cwd, { recursive: true, force: true });
   }
+}
+
+/** `spawnSync` for a fixture cwd: makes the cwd's default-branch trust-config read resolvable first. */
+export function spawnSyncTrusted(command, args = [], options = {}) {
+  ensureTrustConfigCheckout(options.cwd ?? process.cwd(), args[0]);
+  return spawnSync(command, args, options);
 }

@@ -33,6 +33,7 @@ import { flattenPaginatedSlurp, runGhJson } from "./post-gate-findings.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { hasLocatableShape } from "@dev-loops/core/loop/gate-fanin";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 const USAGE = `Usage: audit-review-marker-presence.mjs --repo <owner/name> --pr <number> [--head-sha <sha>] [--findings-ledger <path>]
 Advisory-only check (issue #1899): scans the PR review stream for a
@@ -60,6 +61,7 @@ Exit codes:
   1   Usage/IO/gh error; ALSO a falsy --silent/--jq predicate (the standard
       base-CLI query result per BASE-JQ-OUTPUT-GUARANTEE, not a gate failure)
   2   Invalid --jq filter
+  3   Comment trust config refused (stderr JSON with a state field)
 
 ${JQ_OUTPUT_USAGE}
 `.trim();
@@ -236,6 +238,7 @@ async function main() {
 }
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseAuditReviewMarkerPresenceCliArgs(process.argv.slice(2)).help);
   const exitCode = await main();
   process.exit(exitCode ?? 0);
 }

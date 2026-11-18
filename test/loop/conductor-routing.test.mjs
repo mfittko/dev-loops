@@ -6,45 +6,18 @@
  * matches the outer-loop's action decision.
  */
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { test } from "bun:test";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { writeGitStub } from "./outer-loop-test-helpers.mjs";
 
 const scriptPath = path.resolve("scripts/loop/outer-loop.mjs");
 
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
 
 const writeJson = writeJsonHelper;
-
-async function writeGitStub(tempDir, { porcelainOutput = "", headRef = "main" } = {}) {
-  const gitPath = path.join(tempDir, "git");
-  await writeFile(
-    gitPath,
-    [
-      "#!/usr/bin/env node",
-      "const args = process.argv.slice(2).join(' ');",
-      `if (args.includes('status') && args.includes('porcelain')) {`,
-      `  process.stdout.write(${JSON.stringify(porcelainOutput ? porcelainOutput + "\n" : "")});`,
-      `  process.exit(0);`,
-      `}`,
-      `if (args.includes('rev-parse') && args.includes('abbrev-ref')) {`,
-      `  process.stdout.write(${JSON.stringify(headRef + "\n")});`,
-      `  process.exit(0);`,
-      `}`,
-      `process.exit(0);`,
-      "",
-    ].join("\n"),
-    "utf8",
-  );
-  await chmod(gitPath, 0o755);
-  return {
-    ...process.env,
-    PATH: `${tempDir}${path.delimiter}${process.env.PATH}`,
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Integration: outer-loop emits conductorRouting in output

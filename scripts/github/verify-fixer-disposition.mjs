@@ -40,6 +40,7 @@ import { repoSlugFor } from "./_gate-artifact-paths.mjs";
 import { operatorFocusDigestEntry } from "../loop/_operator-focus.mjs";
 import { observeHeadCiSignals } from "./observe-head-ci.mjs";
 import { normalizeHeadScopedCiContract } from "@dev-loops/core/loop/copilot-ci-status";
+import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
 // Provenance mark: the sha256 of the report bytes --construct wrote, kept beside the report.
 const RESIDUAL_REPLY_MARKER = "Residual delta status:";
@@ -149,7 +150,8 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
   1  Argument error or gh/runtime failure
-  2  Invalid --jq filter`.trim();
+  2  Invalid --jq filter
+  3  Comment trust config refused (stderr JSON with a state field)`.trim();
 
 function parseError(message) {
   return Object.assign(new Error(message), { usage: USAGE });
@@ -1208,5 +1210,6 @@ async function main() {
 export { loadDeliveredHandoff };
 
 if (isDirectCliRun(import.meta.url)) {
+  loadCommentTrustConfigOrExit(undefined, () => parseVerifyFixerDispositionCliArgs(process.argv.slice(2)).help);
   await main();
 }
