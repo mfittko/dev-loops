@@ -10,6 +10,8 @@ import {
 } from "@dev-loops/core/loop/public-dev-loop-routing";
 import { CHECKPOINT_FILE, resolveCheckpointRepoRoot } from "./checkpoint-contract.mjs";
 import { ensureLaneRunContext, resolveNativeCodexContext, resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
+import { resolveWorktreePath } from "@dev-loops/core/loop/handoff-envelope";
+import { shellWord } from "../lib/timeout-flag.mjs";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { execFileSync } from "node:child_process";
@@ -1662,13 +1664,15 @@ export function buildResolveDevLoopStartupResult(input, {
  * lane worktree, instead of leaving later writers on `skipped_no_async_run_id`.
  */
 export function withClaimRunContext(result, { claim, env, cwd, repoRoot = cwd, issue, pr }) {
-  if (!claim || result?.ok !== true) return result;
+  // A needs_reconcile stop or a no-strategy route is not a started lane: keep its own nextAction and write no file.
+  if (!claim || result?.ok !== true || result.bundleKind === "needs_reconcile" || result.selectedStrategy === "none") return result;
   const runContext = ensureLaneRunContext({ env, cwd });
   if (runContext !== null) return { ...result, runContext };
   if (resolveRuntimeHarness(env) === "codex") return result;
   const [flag, kind, n] = issue !== undefined ? ["--issue", "issue", issue] : ["--pr", "pr", pr];
-  const worktree = path.join(repoRoot, "tmp", "worktrees", "dev-loops", `${kind}-${n}`);
-  const nextAction = `\`loop startup --claim\` must run from the lane's linked worktree: ${cwd} is not one, so no run-context file can be written and later gate writers would return skipped_no_async_run_id. Run \`dev-loops-run --repo-root ${repoRoot} cli/index.mjs loop ensure-worktree --repo-root ${repoRoot} ${flag} ${n}\` to create or reuse the worktree at ${worktree}, then re-run \`loop startup ${flag} ${n} --claim\` from there.`;
+  const worktree = resolveWorktreePath({ repoRoot, kind, number: n });
+  const root = shellWord(repoRoot);
+  const nextAction = `\`loop startup --claim\` must run from the lane's linked worktree: ${cwd} is not one, so no run-context file can be written and later gate writers would return skipped_no_async_run_id. Run \`dev-loops-run --repo-root ${root} cli/index.mjs loop ensure-worktree --repo-root ${root} ${flag} ${n}\` to create or reuse the worktree at ${worktree}, then re-run \`loop startup ${flag} ${n} --claim\` from there.`;
   return buildNeedsReconcileStartupResult(result.bundle ?? {}, nextAction, result.bundle?.pendingRetrospectives);
 }
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, adapter = createPiAdapter() } = {}) {

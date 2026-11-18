@@ -4596,6 +4596,22 @@ test("withClaimRunContext refuses outside a linked worktree except on native Cod
     assert.equal(refused.bundleKind, "needs_reconcile");
     assert.match(refused.nextAction, /loop ensure-worktree --repo-root \S+ --pr 9/);
     assert.deepEqual(withClaimRunContext(ok, { claim: true, env: { CODEX_THREAD_ID: "thread-1" }, cwd: root, pr: 9 }), ok);
+    // Pi and env-id lanes proceed from the main checkout with the resolved id and no file.
+    for (const [env, runId] of [[{ PI_SUBAGENT_RUN_ID: "pi-run" }, "pi-run"], [{ DEVLOOPS_RUN_ID: "env-run" }, "env-run"]]) {
+      const started = withClaimRunContext(ok, { claim: true, env, cwd: root, repoRoot: root, pr: 9 });
+      assert.deepEqual(started.runContext, { runId, minted: false, statePath: null });
+      assert.notEqual(started.bundleKind, "needs_reconcile");
+    }
+    // A needs_reconcile or no-strategy result keeps its own nextAction and writes no file.
+    for (const stop of [{ ok: true, bundleKind: "needs_reconcile", nextAction: "re-grill" }, { ok: true, selectedStrategy: "none", nextAction: "re-grill" }]) {
+      assert.deepEqual(withClaimRunContext(stop, { claim: true, env: {}, cwd: root, repoRoot: root, pr: 9 }), stop);
+    }
+    assert.throws(() => readFileSync(path.join(root, ".pi", "dev-loop-run-context.json")), { code: "ENOENT" });
+    // A repo root with a space is quoted in the emitted command.
+    const spaced = path.join(root, "My Repos");
+    mkdirSync(path.join(spaced, ".git"), { recursive: true });
+    const spacedRefusal = withClaimRunContext(ok, { claim: true, env: {}, cwd: spaced, repoRoot: spaced, pr: 9 });
+    assert.ok(spacedRefusal.nextAction.includes(`--repo-root '${spaced}' cli/index.mjs loop ensure-worktree --repo-root '${spaced}' --pr 9`));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
