@@ -17,7 +17,8 @@ const annotations = (id, message) => ({ assertArgs: ["api", `repos/owner/repo/ch
 const verifyFailed = { databaseId: 20, name: "verify", conclusion: "failure" };
 const run = async (entries) => {
   const { runChild, calls } = makeGhMock(entries);
-  return { calls, call: () => rerunFailedCi(opts, { env: {}, runChild, sleep: async () => {}, waitBudgetMs: 10_000, waitIntervalMs: 10_000 }) };
+  let clock = 0; // fake wall clock: only sleeping advances it
+  return { calls, call: () => rerunFailedCi(opts, { env: {}, runChild, now: () => clock, sleep: async (ms) => { clock += ms; }, waitBudgetMs: 10_000, waitIntervalMs: 10_000 }) };
 };
 
 test("re-runs the failed jobs of a completed run whose only failure is a timed-out smoke job", async () => {
@@ -52,7 +53,7 @@ test("an in-progress run that completes green refuses run_succeeded, not the fix
 
 test("refuses at the per-head attempt cap, without a re-run call", async () => {
   const { call, calls } = await run([list({ attempt: 3 })]);
-  await assert.rejects(call(), /attempt_cap/);
+  await assert.rejects(call(), (error) => /attempt_cap.*emit the ci-failure fixer order instead/.test(error.message) && !/escalate/.test(error.message));
   assert.equal(calls.length, 1);
 });
 
@@ -65,6 +66,17 @@ test("refuses a run with no numeric attempt, without a re-run call", async () =>
 test("the attempt predicate accepts 1 and 2 and fails closed on the cap, zero and non-numeric values", () => {
   for (const attempt of [1, 2]) assert.equal(isRerunnableAttempt(attempt), true, String(attempt));
   for (const attempt of [DEFAULT_MAX_ATTEMPTS, 4, undefined, null, "2", 0]) assert.equal(isRerunnableAttempt(attempt), false, String(attempt));
+});
+
+test("the wait budget is wall time: gh call time counts, so fewer intervals are slept than a sleep-only count allows", async () => {
+  const { runChild, calls } = makeGhMock([list({ status: "in_progress" }), list({ status: "in_progress" }), list({ status: "in_progress" })]);
+  let clock = 0;
+  let sleeps = 0;
+  const timedRunChild = async (...args) => { clock += 4_000; return runChild(...args); };
+  const call = rerunFailedCi(opts, { env: {}, runChild: timedRunChild, now: () => clock, sleep: async (ms) => { sleeps += 1; clock += ms; }, waitBudgetMs: 30_000, waitIntervalMs: 10_000 });
+  await assert.rejects(call, /run_in_progress/);
+  assert.equal(sleeps, 2); // a sleep-only count would allow 3
+  assert.equal(calls.length, 3);
 });
 
 test("refuses a smoke failure without a timeout annotation, without a re-run call", async () => {
@@ -98,6 +110,8 @@ test("isSmokeTimeoutOnlyRun reads the job and step timeout signals and rejects a
   assert.equal(await check([jobs({ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }, { databaseId: 13, name: "lint", conclusion: "failure" })]), false);
   assert.equal(await check([jobs({ databaseId: 11, name: "viewer-smoke", conclusion: "cancelled" }), annotations(11, "The run was canceled by @someone.")]), false);
   assert.equal(await check([jobs()]), false);
+  // one timed-out smoke job beside a non-timeout smoke failure is a real failure.
+  assert.equal(await check([jobs({ databaseId: 11, name: "viewer-smoke", conclusion: "cancelled" }, { databaseId: 12, name: "deck-smoke", conclusion: "failure" }), annotations(11, JOB_TIMEOUT), annotations(12, "Process completed with exit code 1.")]), false);
   // verify fails with a non-smoke job, or alone: never a smoke timeout.
   assert.equal(await check([jobs({ databaseId: 13, name: "verify-suite", conclusion: "failure" }, verifyFailed)]), false);
   assert.equal(await check([jobs(verifyFailed)]), false);

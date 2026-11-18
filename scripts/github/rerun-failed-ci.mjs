@@ -31,14 +31,16 @@ export function isSmokeOnly(failedChecks) {
   return names.length > 0 && causeNames(names).every((name) => SMOKE_JOB_NAMES.includes(name));
 }
 
-const WAIT_BUDGET_MS = 150_000; // under WAIT_CAP_MS (GATE-EXEC-BOUNDED-WAIT-CAP)
+// Wall-clock budget; the headroom under WAIT_CAP_MS (GATE-EXEC-BOUNDED-WAIT-CAP) covers the post-wait gh reads and the re-run call.
+const WAIT_BUDGET_MS = 120_000;
 const WAIT_INTERVAL_MS = 10_000;
 
-/** Polls the head's ci.yml run until it is completed or the budget ends; returns the last read. */
+/** Polls the head's ci.yml run until it is completed or the wall-clock budget ends; returns the last read. */
 export async function waitForHeadCiRun(options, runtime = {}) {
-  const { sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), waitBudgetMs = WAIT_BUDGET_MS, waitIntervalMs = WAIT_INTERVAL_MS } = runtime;
+  const { sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = Date.now, waitBudgetMs = WAIT_BUDGET_MS, waitIntervalMs = WAIT_INTERVAL_MS } = runtime;
+  const startedAt = now();
   let run = await findHeadCiRun(options, runtime);
-  for (let waited = 0; run && run.status !== "completed" && waited < waitBudgetMs; waited += waitIntervalMs) {
+  while (run && run.status !== "completed" && now() - startedAt + waitIntervalMs <= waitBudgetMs) {
     await sleep(waitIntervalMs);
     run = await findHeadCiRun(options, runtime);
   }
@@ -115,7 +117,7 @@ export async function rerunFailedCi(options, runtime = {}) {
   if (!run) throw new Error(`no_run: no ci.yml run found for head ${options.headSha}`);
   if (run.status !== "completed") throw new Error(`run_in_progress: CI run ${run.databaseId} is still ${run.status} after waiting up to ${(runtime.waitBudgetMs ?? WAIT_BUDGET_MS) / 1000}s; run this script again to keep waiting`);
   if (run.conclusion === "success") throw new Error(`run_succeeded: CI run ${run.databaseId} completed green with no failed job; run wait-pr-checks.mjs for a fresh read and do not emit a ci-failure fixer order`);
-  if (!isRerunnableAttempt(run.attempt)) throw new Error(`attempt_cap: CI run ${run.databaseId} is at attempt ${run.attempt} of ${DEFAULT_MAX_ATTEMPTS}; stop re-running and escalate`);
+  if (!isRerunnableAttempt(run.attempt)) throw new Error(`attempt_cap: CI run ${run.databaseId} is at attempt ${run.attempt} of ${DEFAULT_MAX_ATTEMPTS}; emit the ci-failure fixer order instead`);
   if (!await isSmokeTimeoutOnlyRun({ repo: options.repo, runId: run.databaseId }, runtime)) throw new Error(`not_smoke_timeout: CI run ${run.databaseId} has a failed job that is not a timed-out smoke job; emit the ci-failure fixer order instead`);
   const rerun = await runChild(ghCommand, ["run", "rerun", String(run.databaseId), "--repo", options.repo, "--failed"], env);
   if (rerun.code !== 0) throw new Error(`Failed to re-run CI run ${run.databaseId}: ${rerun.stderr.trim() || `exit code ${rerun.code}`}`);
