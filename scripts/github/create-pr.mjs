@@ -571,6 +571,10 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   }
   // No body source: pass an explicit empty body so gh never prompts for one.
   if (body === null) ghArgs = [...ghArgs, "--body", ""];
+  // The marker belongs to --spike-file PRs only: a body that carries it otherwise could never be readied or merged.
+  if (spikeFile === null && hasSpikePrMarker(body)) {
+    throw parseError("the body carries the spike no-merge marker line; it is stamped only by --spike-file (ADR 0293)");
+  }
   // The last --body wins, so the marker survives every body source.
   if (spikeFile !== null && !hasSpikePrMarker(body)) ghArgs = [...ghArgs, "--body", `${body ?? ""}\n\n${SPIKE_PR_MARKER}\n`];
   // ADR-TRIPWIRE-STANDING-WAIVER: a new PR starts with no waiver line.

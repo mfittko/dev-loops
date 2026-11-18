@@ -2,8 +2,17 @@
 // ready-for-review and merge-pr refuse a PR carrying it.
 export const SPIKE_PR_MARKER = "<!-- dev-loops:spike-pr no-merge -->";
 
+// A marker line inside a fenced code block is documentation, not the stamp.
 export function hasSpikePrMarker(body) {
-  return typeof body === "string" && body.split(/\r?\n/u).some((line) => line.trim() === SPIKE_PR_MARKER);
+  if (typeof body !== "string") return false;
+  let fence = null;
+  for (const line of body.split(/\r?\n/u)) {
+    const open = /^ {0,3}(`{3,}|~{3,})/u.exec(line);
+    if (fence === null && open) fence = open[1][0];
+    else if (fence !== null && open && open[1][0] === fence) fence = null;
+    else if (fence === null && line.trim() === SPIKE_PR_MARKER) return true;
+  }
+  return false;
 }
 
 export function spikePrRefusal(pr) {

@@ -1745,5 +1745,7 @@ test("a PR carrying the spike no-merge marker is refused before any merge (ADR 0
   const { runtime, calls } = makeRuntime({ prView: { body: "spike\n\n<!-- dev-loops:spike-pr no-merge -->\n" } });
   const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
   assert.match(threw.message, /spike size exemption/u);
+  assert.equal(threw.mergePrFailure.failures[0].precondition, "spike_pr");
+  assert.equal(threw.mergePrFailure.ok, false);
   assert.equal(calls.runChild.length, 0);
 });
