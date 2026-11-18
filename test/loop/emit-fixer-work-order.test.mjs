@@ -986,6 +986,15 @@ test("a capture-review-threads --unresolved --bodies file is accepted and its fu
   });
 });
 
+test("a list-shaped threads file whose thread carries an empty bodies array is not stamped capture", async () => {
+  await withFixture(async ({ files, emit }) => {
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], bodies: [] }] }));
+    const { workOrder, promptPath } = await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    assert.equal(workOrder.threadsShape, undefined);
+    assert.match(await readFile(promptPath, "utf8"), /excerpt of about 200 characters/);
+  });
+});
+
 test("a capture for another PR or repo, or an unbound input-sourced capture, is refused", async () => {
   await withFixture(async ({ files, emit }) => {
     for (const source of [{ type: "github", repo: REPO, pr: PR + 1 }, { type: "github", repo: "x/y", pr: PR }, { type: "input", inputPath: "in.json" }, { type: "stdin" }]) {
@@ -999,7 +1008,11 @@ test("ADR 0238: a trust-incomplete thread is dropped from the pinned threads rea
   await withFixture(async ({ files, emit }) => {
     const incomplete = { ...THREADS.threads[0], threadId: "T2", trusted: false, trustIncomplete: true, body: "" };
     await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [THREADS.threads[0], incomplete] }));
-    const { workOrder } = await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    const { workOrder, promptPath } = await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    const listPrompt = await readFile(promptPath, "utf8");
+    assert.match(listPrompt, /excerpt of about 200 characters/);
+    assert.doesNotMatch(listPrompt, /full text in its `bodies`/);
+    assert.equal(workOrder.threadsShape, undefined);
     const read = workOrder.requiredReads.find((r) => r.kind === "threads");
     assert.notEqual(read.path, files.threads, "the pinned read is the work-order-owned filtered file");
     const bytes = await readFile(read.path);

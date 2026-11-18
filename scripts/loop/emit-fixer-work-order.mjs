@@ -882,7 +882,7 @@ async function emitPlan({
     headSha: candidateHead,
     phase,
     source: source.read.kind,
-    ...(source.read.kind === "threads" && source.parsed.threads?.some((thread) => Array.isArray(thread?.bodies)) ? { threadsShape: "capture" } : {}),
+    ...(threadsFile && listed !== source.parsed ? { threadsShape: "capture" } : {}),
     gate: actListFile ? gate : undefined,
     ...(ciFile ? { failedChecks: source.parsed.failedChecks.slice(0, 50).map((check) => check.name.slice(0, 200)), ...(source.parsed.failedChecks.length > 50 ? { failedChecksOmitted: source.parsed.failedChecks.length - 50 } : {}) } : {}),
     ...(deltaFindings?.length ? { deltaFindings: deltaFindings.map(({ severity, summary, evidence, residueOf, site, lifecycle }) => ({ severity, summary, evidence, ...(lifecycle === true ? { lifecycle: true } : {}),...(residueOf === undefined ? {} : { residueOf }), ...(site === undefined ? {} : { site }) })) } : {}),
