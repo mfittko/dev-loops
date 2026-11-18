@@ -520,9 +520,13 @@ test("ensureLaneRunContext mints into the worktree once and then reuses the file
   assert.equal(minted.statePath, runContextPath(root));
   assert.equal(readRunContext({ root }).runId, minted.runId);
   assert.deepEqual(ensureLaneRunContext({ env: {}, cwd: root }), { runId: minted.runId, minted: false, statePath: null });
-  // An env run id keeps precedence and writes nothing.
+  // An env run id keeps precedence and is persisted for later env-free writers, without minting.
+  assert.deepEqual(ensureLaneRunContext({ env: { DEVLOOPS_RUN_ID: "env-run" }, cwd: root }), { runId: "env-run", minted: false, statePath: runContextPath(root) });
+  assert.equal(readRunContext({ root }).runId, "env-run");
   assert.deepEqual(ensureLaneRunContext({ env: { DEVLOOPS_RUN_ID: "env-run" }, cwd: root }), { runId: "env-run", minted: false, statePath: null });
-  assert.equal(readRunContext({ root }).runId, minted.runId);
+  const fresh = laneWorktree(null);
+  ensureLaneRunContext({ env: { DEVLOOPS_RUN_ID: "env-run" }, cwd: fresh.nested });
+  assert.equal(readRunContext({ root: fresh.root }).runId, "env-run");
   const outside = makeTempRoot();
   fs.mkdirSync(path.join(outside, ".git")); // a main checkout, independent of any ancestor of os.tmpdir()
   assert.equal(ensureLaneRunContext({ env: {}, cwd: outside }), null);
@@ -557,4 +561,15 @@ test("ensureLaneRunContext excludes the run-context file once in the common git 
   const lines = fs.readFileSync(path.join(common, "info", "exclude"), "utf8").split("\n").filter((line) => line === ".pi/dev-loop-run-context.json");
   assert.equal(lines.length, 1);
   assert.match(fs.readFileSync(path.join(common, "info", "exclude"), "utf8"), /^# existing\n/);
+});
+
+test("concurrent lane startups in a fresh worktree converge on one persisted id", async () => {
+  const { root } = laneWorktree(null);
+  const here = new URL("../src/loop/run-context.mjs", import.meta.url).href;
+  const code = `import { ensureLaneRunContext } from ${JSON.stringify(here)}; console.log(ensureLaneRunContext({ env: {}, cwd: process.argv[1] }).runId);`;
+  const { execFile } = await import("node:child_process");
+  const run = () => new Promise((resolve, reject) => execFile(process.execPath, ["--input-type=module", "-e", code, root], (e, out) => (e ? reject(e) : resolve(out.trim()))));
+  const ids = await Promise.all(Array.from({ length: 6 }, run));
+  assert.equal(new Set(ids).size, 1);
+  assert.equal(readRunContext({ root }).runId, ids[0]);
 });

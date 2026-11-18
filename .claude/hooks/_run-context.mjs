@@ -512,12 +512,36 @@ export function ensureRunId({ env = process.env, root, mintedAt, fs = fsDefault 
 export function ensureLaneRunContext({ env = process.env, cwd, mintedAt, fs = fsDefault } = {}) {
   if (resolveRuntimeHarness(env) === "codex") return null;
   const existing = resolveRunId(env, { cwd, fs });
-  if (existing) return { runId: existing, minted: false, statePath: null };
   const root = resolveRunContextRoot(cwd, { fs });
+  if (existing) {
+    // An env-supplied id is persisted so later env-free writers share the coordinator's identity.
+    const envId = RUN_ID_MARKERS.map((marker) => env?.[marker]?.trim?.()).find(Boolean);
+    if (root === null || envId !== existing || !FILE_RUN_ID_PATTERN.test(existing) || readRunContext({ root, fs })?.runId === existing) {
+      return { runId: existing, minted: false, statePath: null };
+    }
+    return { runId: existing, minted: false, statePath: writeRunContext({ runId: existing, root, mintedAt, fs }) };
+  }
   if (root === null) return null;
-  const lane = ensureRunId({ env, root, mintedAt, fs });
-  if (lane.minted) excludeRunContextFile(root, fs);
-  return lane;
+  const runId = mintRunId();
+  const file = runContextPath(root);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // Publish atomically: a hard link fails when a concurrent startup already won, and that winner's id is reused.
+  const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify({ runId, mintedAt: mintedAt ?? new Date().toISOString() }, null, 2)}\n`, "utf8");
+  try {
+    try {
+      fs.linkSync(tmp, file);
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      const winner = readRunContext({ root, fs })?.runId ?? null;
+      if (winner !== null && FILE_RUN_ID_PATTERN.test(winner)) return { runId: winner, minted: false, statePath: null };
+      fs.renameSync(tmp, file); // the file is unusable: replace it
+    }
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+  excludeRunContextFile(root, fs);
+  return { runId, minted: true, statePath: file };
 }
 
 // Keep the lane file out of `git add` in a consumer repo with no ignore entry: one line in the common git dir's info/exclude.
