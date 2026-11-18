@@ -172,7 +172,7 @@ When issue refinement would benefit from structural/slop discovery and the likel
 
 When an umbrella/epic issue must be decomposed into bounded, independently closable child slices, use **real GitHub sub-issue trees** as the default durable output. Prefer real sub-issue linkage over parent-body checklists. The parent issue body should stay lean: keep scope, acceptance criteria and non-goals there, under `SUBISSUE-LEAN-BODY-NO-DUPLICATE`.
 
-Follow the "Default decomposition flow" in [Sub-Issue Tree Contract](./sub-issue-tree-contract.md), which owns the full `manage-sub-issues.mjs` contract and `SUBISSUE-NO-ADHOC-BYPASS`. Create each child with `dev-loops-run cli/index.mjs issue create --repo <resolved-repo> --title <title> --body-file <path> --assignee @me`, then:
+Follow the "Default decomposition flow" in [Sub-Issue Tree Contract](./sub-issue-tree-contract.md), which owns the full `manage-sub-issues.mjs` contract and `SUBISSUE-NO-ADHOC-BYPASS`. Create each child with `node <dev-loops-package-root>/cli/index.mjs issue create --repo <resolved-repo> --title <title> --body-file <path> --assignee @me`, then:
 
 ```sh
 dev-loops-run scripts/github/manage-sub-issues.mjs add \

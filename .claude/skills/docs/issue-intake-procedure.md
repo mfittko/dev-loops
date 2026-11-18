@@ -172,16 +172,16 @@ When issue refinement would benefit from structural/slop discovery and the likel
 
 When an umbrella/epic issue must be decomposed into bounded, independently closable child slices, use **real GitHub sub-issue trees** as the default durable output. Prefer real sub-issue linkage over parent-body checklists. The parent issue body should stay lean: keep scope, acceptance criteria and non-goals there, under `SUBISSUE-LEAN-BODY-NO-DUPLICATE`.
 
-Follow the "Default decomposition flow" in [Sub-Issue Tree Contract](./sub-issue-tree-contract.md), which owns the full `manage-sub-issues.mjs` contract and `SUBISSUE-NO-ADHOC-BYPASS`. Create children with `gh issue create --repo <resolved-repo> --assignee @me`, then:
+Follow the "Default decomposition flow" in [Sub-Issue Tree Contract](./sub-issue-tree-contract.md), which owns the full `manage-sub-issues.mjs` contract and `SUBISSUE-NO-ADHOC-BYPASS`. Create each child with `dev-loops-run cli/index.mjs issue create --repo <resolved-repo> --title <title> --body-file <path> --assignee @me`, then:
 
 ```sh
-node <resolved-skill-scripts>/github/manage-sub-issues.mjs add \
+dev-loops-run scripts/github/manage-sub-issues.mjs add \
   --repo <resolved-repo> --issue <parent-number> --child <child-number>
-node <resolved-skill-scripts>/github/manage-sub-issues.mjs reorder \
+dev-loops-run scripts/github/manage-sub-issues.mjs reorder \
   --repo <resolved-repo> --issue <parent-number> --order <n1,n2,...>
-node <resolved-skill-scripts>/github/manage-sub-issues.mjs verify \
+dev-loops-run scripts/github/manage-sub-issues.mjs verify \
   --repo <resolved-repo> --issue <parent-number> --expected <n1,n2,...> [--ordered]
-node <resolved-skill-scripts>/github/manage-sub-issues.mjs list \
+dev-loops-run scripts/github/manage-sub-issues.mjs list \
   --repo <resolved-repo> --issue <parent-number>
 ```
 

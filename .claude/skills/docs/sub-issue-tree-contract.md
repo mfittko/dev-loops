@@ -40,7 +40,7 @@ When refining an umbrella issue into executable slices:
    parent issue body.
 2. **Define bounded child slices** — each slice must be independently closable and
    independently verifiable.
-3. **Create child issues** with `gh issue create --assignee @me` (or reuse existing issues).
+3. **Create child issues** with `dev-loops-run cli/index.mjs issue create --repo <resolved-repo> --title <title> --body-file <path> --assignee @me` (or reuse existing issues).
 4. **Attach children as real sub-issues** using `manage-sub-issues.mjs add`.
 5. **Set execution order** using `manage-sub-issues.mjs reorder` — first in the list is
    highest priority.
