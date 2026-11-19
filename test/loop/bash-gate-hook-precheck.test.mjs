@@ -358,6 +358,7 @@ const COMMENT_WRITES = [
   "gh pr reopen /bin/zsh $'\\x2dc' x",
   // The only decoded `gh` sits in an appended region (nested `$'` or tick text), after the outer shell word.
   `eval "\\$'\\x67h'" pr reopen zsh $'\\x2dc' x`,
+  `G=gh; eval "\\$G pr reopen zsh $'\\x2dc' x"; echo "$'gh'"`,
   "echo `\\gh` pr reopen zsh $'\\x2dc' x",
   // A double-quoted shell string keeps `$'...'` literal for the inner shell to decode.
   `bash -c "gh pr reopen 5 $'\\x2dc' x"`,
@@ -423,6 +424,8 @@ test("sanctioned comment writers and reads stay allowed; an unmanaged repo is un
       "/bin/bash -c 'gh issue close 5'",
       'bash -c "gh pr view 5 --json comments"',
       "gh issue close 5 --reason completed",
+      "x=$(tr $'\\n' ' ' < f)",
+      "echo $(printf $'\\t') `tr $'\\n' ' ' < f`",
       "git status",
     ]) {
       for (const agentType of [undefined, "developer"]) assert.equal(bash(root, command, agentType).decision, "allow", command);

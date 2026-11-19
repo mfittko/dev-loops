@@ -142,11 +142,15 @@ function segmentWriteKind(command) {
   const decodedOf = (text, depth = 0) => {
     const t = tokenizeShellCommand(text);
     const own = decodedWords(t.segments);
-    return [...own, ...t.ticks.flatMap((k) => decodedOf(k.slice(1, -1).replace(/\\([`$\\])/g, "$1"), depth)),
+    // A value that tokenizes back to itself is raw substitution text (`$(tr $'\n' ' ')`): its inner words are already in `own`, so stop.
+    if (depth > 0 && own.includes(text)) return [own];
+    // Returns one word list per region (own words, each tick, each nested string) so command position is judged inside its own region.
+    return [own, ...t.ticks.flatMap((k) => decodedOf(k.slice(1, -1).replace(/\\([`$\\])/g, "$1"), depth)),
       ...own.filter((v) => v.includes("$'")).flatMap((v) => depth >= 3 ? (overCap = true, []) : decodedOf(v, depth + 1))];
   };
   const plainWords = command.replace(/['"\\]/g, "").replace(/[`$();|&<>\s]+/g, " ").split(" ").filter(Boolean);
-  const words = [...plainWords, ...decodedOf(command)].filter(Boolean);
+  const regions = decodedOf(command);
+  const words = [...plainWords, ...regions.flat()].filter(Boolean);
   const splitWord = (w) => w.split(/[\s=$(){},`]+/).filter(Boolean);
   const expand = (ws) => ws.flatMap((word) =>
     [...(braceExpansions(word) ?? (overCap = true, [])).flatMap((e) => [e, ...splitWord(e)]), ...splitWord(word)
@@ -184,10 +188,15 @@ function segmentWriteKind(command) {
   const ownEnd = plainSeq.length - 1 + ownSeq.length;
   const isGh = (t) => /^(?:-[a-z]*s)?gh$/.test(t.split("/").pop());
   const ghAtDecoded = seq.findIndex((t, j) => j >= plainSeq.length - 1 && j < ownEnd && isGh(t));
-  const ghAtAppended = seq.findIndex((t, j) => j >= ownEnd && isGh(t));
-  const shellFlag = (i) => /^(?:\/(?:[^/]+\/)*)?(?:sh|bash|zsh|dash|ksh)$/.test(seq[i - 1] ?? "") &&
-    (i < plainSeq.length ? i - 1 < ghAt : i < ownEnd ? ghAtDecoded >= 0 && i - 1 < ghAtDecoded : ghAtAppended >= 0 && i - 1 < ghAtAppended);
-  const closeComment = seq.some((t, i) => t.startsWith("--comment") || (/^-[^-]*c/.test(t) && !(t === "-c" && shellFlag(i))));
+  const isShell = (t) => /^(?:\/(?:[^/]+\/)*)?(?:sh|bash|zsh|dash|ksh)$/.test(t ?? "");
+  const shellFlag = (i) => isShell(seq[i - 1]) && (i < plainSeq.length ? i - 1 < ghAt : ghAtDecoded >= 0 && i - 1 < ghAtDecoded);
+  // An appended region (tick text, nested string) is judged alone: its `-c` is a shell flag only when its own `gh` follows the shell word.
+  const regionCloseComment = regions.slice(1).some((r) => {
+    const rs = expand(r).map((t) => t.toLowerCase()).filter((t, i, all) => t !== all[i - 1]);
+    const g = rs.findIndex(isGh);
+    return rs.some((t, i) => /^-[^-]*c/.test(t) && !(t === "-c" && isShell(rs[i - 1]) && g >= 0 && i - 1 < g));
+  });
+  const closeComment = regionCloseComment || seq.some((t, i) => t.startsWith("--comment") || (/^-[^-]*c/.test(t) && i < ownEnd && !(t === "-c" && shellFlag(i))));
   // Raw comment and review writes (`OPERATOR-OWNED-LINE`): the sanctioned writers refuse an operator-owned line, a raw write does not.
   // Comment clauses win over the body clause: a graphql addComment with `-f body=...` is a comment write, not a PR-body write.
   const isComment = (issueOrPr && has((t) => t === "comment") && (bodyFlag() || editorFlag())) ||
