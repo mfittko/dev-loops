@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
 import { DEFAULT_TEST_PR_BODY, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
-import { parseUpsertCheckpointVerdictCliArgs, renderGateReviewCommentBody, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
+import { capRoundWaives, parseUpsertCheckpointVerdictCliArgs, renderGateReviewCommentBody, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
 // GATE-EXEC-ROUND-CAP + GATE-EXEC-SOFT-CAP: the cap reads only the judged ledger and counts completed rounds. Past the cap
 // only a high act item without judgeFix, a question act item, or a closed finding with a named human decision blocks;
@@ -432,20 +432,20 @@ test("the closure round line renders a normalized full SHA and refuses a short, 
 
 // A clean cap round whose post was refused at its own head posts there once the PR head has moved on.
 const CAP_HEAD = "4".repeat(40);
-async function postCleanCapRound(tempDir, { sealedVerdict = "clean", ancestor = true, headSha = CAP_HEAD, prState = {}, extraArgs = [], calls = [], postedOverrides = {}, proven = false, checkBaseFreshness, gate = "draft_gate", sealedHead = CAP_HEAD } = {}) {
+async function postCleanCapRound(tempDir, { capHead = CAP_HEAD, sealedVerdict = "clean", ancestor = true, headSha = capHead, prState = {}, extraArgs = [], calls = [], postedOverrides = {}, proven = false, checkBaseFreshness, gate = "draft_gate", sealedHead = capHead } = {}) {
   await seedPrior(repoRoot, priorHeads);
   const deltaDir = path.join(repoRoot, "tmp", "gate-delta");
   await rm(deltaDir, { recursive: true, force: true });
   if (proven) {
     // The sealed clearing record that makes the cap round count as fixed, so a ready PR reads its draft gate as satisfied.
-    const record = JSON.stringify({ reviewBaselineHead: CAP_HEAD, candidateHead: HEAD, nextStep: "push_to_gate", extension: "docs_tests_only" });
+    const record = JSON.stringify({ reviewBaselineHead: capHead, candidateHead: HEAD, nextStep: "push_to_gate", extension: "docs_tests_only" });
     await mkdir(deltaDir, { recursive: true });
-    await writeFile(path.join(deltaDir, `${CAP_HEAD}.json`), record, "utf8");
-    await writeFile(path.join(deltaDir, `${CAP_HEAD}.json.seal`), createHash("sha256").update(record).digest("hex"), "utf8");
+    await writeFile(path.join(deltaDir, `${capHead}.json`), record, "utf8");
+    await writeFile(path.join(deltaDir, `${capHead}.json.seal`), createHash("sha256").update(record).digest("hex"), "utf8");
   }
   const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-17");
-  const sealed = { repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: CAP_HEAD, verdict: sealedVerdict, overallVerdict: sealedVerdict, loggedAt: "2026-11-04T00:00:00.000Z", findings: [] };
-  await writeFile(path.join(dir, `draft_gate-${CAP_HEAD}.json`), JSON.stringify({ ...sealed, headSha: sealedHead }), "utf8");
+  const sealed = { repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: capHead, verdict: sealedVerdict, overallVerdict: sealedVerdict, loggedAt: "2026-11-04T00:00:00.000Z", findings: [] };
+  await writeFile(path.join(dir, `draft_gate-${capHead}.json`), JSON.stringify({ ...sealed, headSha: sealedHead }), "utf8");
   const ledger = path.join(tempDir, "cap-ledger.json");
   await writeFile(ledger, JSON.stringify({ ...sealed, ...postedOverrides }), "utf8");
   const posted = [];
@@ -529,20 +529,24 @@ test("a non-clean verdict at an earlier cap-round head is refused", async () => 
   }, { prefix: "dev-loops-round-cap-nonclean-" });
 });
 
-test("a cap-round post is refused on a blocked PR (failing CI allows report_blocked)", async () => {
-  await withTempDir(async (tempDir) => {
-    const out = await postCleanCapRound(tempDir, { prState: { isDraft: false, conclusion: "FAILURE" }, proven: true });
-    assert.match(out.error ?? "", /Cannot enter draft_gate/);
-  }, { prefix: "dev-loops-round-cap-blocked-" });
+test("capRoundWaives keeps the done and blocked refusals even when the draft re-evaluation allows the gate", () => {
+  const coordination = (...allowedNextActions) => ({ allowedNextActions });
+  const draftAllows = { forbiddenActions: [] };
+  assert.equal(capRoundWaives(coordination("wait_for_ci"), draftAllows, "run_draft_gate"), true);
+  assert.equal(capRoundWaives(coordination("report_blocked"), draftAllows, "run_draft_gate"), false);
+  assert.equal(capRoundWaives(coordination("report_done"), draftAllows, "run_draft_gate"), false);
+  assert.equal(capRoundWaives(coordination("wait_for_ci"), { forbiddenActions: ["run_draft_gate"] }, "run_draft_gate"), false);
 });
 
-test("a cap-round ledger headSha that is not a normalized full SHA does not become the posted head", async () => {
-  for (const ledgerHead of [`${CAP_HEAD}~0`, "", "not-a-sha"]) {
-    await withTempDir(async (tempDir) => {
-      const out = await postCleanCapRound(tempDir, { sealedHead: ledgerHead });
-      assert.match(out.error ?? "", /does not match the current PR head/, JSON.stringify(ledgerHead));
-    }, { prefix: "dev-loops-round-cap-badhead-" });
-  }
+// readClosedPriorRoundLogs lowercases the recorded head before it matches the filename, so a case variant is the one ledger form that reaches the normalization guard.
+test("a cap-round ledger headSha in uppercase posts at the lowercase SHA", async () => {
+  await withTempDir(async (tempDir) => {
+    const capHead = "abcdef".repeat(6) + "abcd";
+    const out = await postCleanCapRound(tempDir, { capHead, sealedHead: capHead.toUpperCase() });
+    assert.equal(out.error, undefined);
+    assert.ok(out.body.includes(capHead.slice(0, 7)));
+    assert.equal(out.body.includes(capHead.slice(0, 7).toUpperCase()), false);
+  }, { prefix: "dev-loops-round-cap-uppercase-head-" });
 });
 
 test("a cap-round post is refused when coordination forbids the gate for an unrelated reason (CI pending, wait_for_ci)", async () => {
@@ -550,4 +554,14 @@ test("a cap-round post is refused when coordination forbids the gate for an unre
     const out = await postCleanCapRound(tempDir, { prState: { isDraft: false, status: "IN_PROGRESS", conclusion: null }, proven: true });
     assert.match(out.error ?? "", /Cannot enter draft_gate/);
   }, { prefix: "dev-loops-round-cap-unrelated-" });
+});
+
+// End-to-end refusal of malformed ledger heads; the readClosedPriorRoundLogs identity check drops them before the normalization guard, so the uppercase test above covers the guard itself.
+test("a cap-round ledger headSha that is not the filename SHA never becomes the posted head", async () => {
+  for (const ledgerHead of [`${CAP_HEAD}~0`, "", "not-a-sha"]) {
+    await withTempDir(async (tempDir) => {
+      const out = await postCleanCapRound(tempDir, { sealedHead: ledgerHead });
+      assert.match(out.error ?? "", /does not match the current PR head/, JSON.stringify(ledgerHead));
+    }, { prefix: "dev-loops-round-cap-badhead-" });
+  }
 });

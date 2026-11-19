@@ -1868,6 +1868,11 @@ async function resolveCleanCapRoundHead({ options, cap, currentHeadSha, repoRoot
   const ancestry = await runChild("git", ["-C", repoRoot, "merge-base", "--is-ancestor", roundHead, currentHeadSha], env);
   return ancestry.code === 0 ? roundHead : null;
 }
+// The cap-round waiver holds only when the PR is neither done nor blocked and the draft-PR re-evaluation does not forbid the action.
+export function capRoundWaives(coordination, draftReevaluation, action) {
+  return !coordination.allowedNextActions.some((a) => a === PR_CHECKPOINT_ACTION.REPORT_DONE || a === PR_CHECKPOINT_ACTION.REPORT_BLOCKED)
+    && !draftReevaluation.forbiddenActions.includes(action);
+}
 function resolveGateAction(gate) {
   return gate === "draft_gate"
     ? PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE
@@ -3056,11 +3061,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         draftCapRoundFixed: false, coordinationContext, maxCopilotRounds, draftGateConfig, preApprovalGateConfig, reviewMode,
       })).forbiddenActions.includes(requestedGateAction);
     // A clean cap-round post at its own head overrides only the ready-PR and cap-fixed refusals: it stays refused when the PR is closed, blocked or done, or when coordination re-evaluated as a draft PR without the cap-fixed proof still forbids the action (for example CI not green).
-    const capRoundWaiver = capRoundHead && !coordination.allowedNextActions.some((a) => a === PR_CHECKPOINT_ACTION.REPORT_DONE || a === PR_CHECKPOINT_ACTION.REPORT_BLOCKED)
-      && !evaluatePrGateCoordination({
-        ...buildCoordinationEvaluatorInput({ draftCapRoundFixed: false, coordinationContext, maxCopilotRounds, draftGateConfig, preApprovalGateConfig, reviewMode }),
-        prDraft: true,
-      }).forbiddenActions.includes(requestedGateAction);
+    const capRoundWaiver = capRoundHead && capRoundWaives(coordination, evaluatePrGateCoordination({
+      ...buildCoordinationEvaluatorInput({ draftCapRoundFixed: false, coordinationContext, maxCopilotRounds, draftGateConfig, preApprovalGateConfig, reviewMode }),
+      prDraft: true,
+    }), requestedGateAction);
     if (gateActionForbidden && !forbidOnlyByCapFixed && !capRoundWaiver) {
       throw new Error(buildGateEntryRefusalError({ options, coordination }));
     }
