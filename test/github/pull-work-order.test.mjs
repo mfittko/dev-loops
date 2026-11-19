@@ -519,11 +519,11 @@ test("historical judge pull delegates to the index-owning new renderer and its p
     await mkdir(path.join(old, "node_modules/@dev-loops"), { recursive: true });
     await symlink(path.join(old, "packages/core"), path.join(old, "node_modules/@dev-loops/core"), "dir");
     for (const dep of ["yaml", "zod"]) await symlink(path.join(checkout, "node_modules", dep), path.join(old, "node_modules", dep), "dir");
-    const emit = async (root) => {
+    const emit = async (root, extra = []) => {
       const sources = await seedJudgeSources(root, { headSha: HEAD, pr: 800000 + parseInt(randomBytes(3).toString("hex"), 16) });
       ensureOriginHead(checkout); // linked worktrees share the checkout's refs; a tmp-dir worktree is not healed on its own
       const result = spawnSync("node", [path.join(root, "scripts/loop/emit-judge-work-order.mjs"), "--repo", sources.repo, "--pr", String(sources.pr), "--gate", sources.gate, "--head-sha", HEAD,
-        "--findings-file", sources.findingsFile, "--spec-file", sources.specFile, "--identity-file", sources.identityFile], { cwd: root, encoding: "utf8", env: (await writeGhStub(root, [{ stdout: JSON.stringify({ body: "Declared scope: fix the finding.\n" }) }], { repeatLastOnOverflow: true })).env });
+        "--findings-file", sources.findingsFile, "--spec-file", sources.specFile, "--identity-file", sources.identityFile, ...extra], { cwd: root, encoding: "utf8", env: (await writeGhStub(root, [{ stdout: JSON.stringify({ body: "Declared scope: fix the finding.\n" }) }], { repeatLastOnOverflow: true })).env });
       assert.equal(result.status, 0, result.stdout + result.stderr);
       return JSON.parse(await readFile(JSON.parse(result.stdout).planPath, "utf8"));
     };
@@ -534,7 +534,7 @@ test("historical judge pull delegates to the index-owning new renderer and its p
       const oldPull = spawnSync("node", [path.join(old, "scripts/github/pull-work-order.mjs"), previous.executionIdentity], { cwd: old, encoding: "utf8" });
       assert.equal(oldPull.status, 0, oldPull.stdout + oldPull.stderr);
       assert.equal(oldPull.stdout.includes("## Codex after-pull setup"), false, "real historical renderer is served");
-      const plan = await emit(current);
+      const plan = await emit(current, ["--harness", "codex"]);
       receipts.push(plan);
       assert.equal(plan.workOrder.executionRules.contract, path.join(current, "agents/judge.agent.md"));
       for (const contract of plan.workOrder.contracts) {
