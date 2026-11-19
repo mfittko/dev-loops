@@ -2897,7 +2897,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     if (convergedInput) {
       // A clean base merge after the fixer commit leaves the PR patch unchanged, so the fixer commit still stands for the PR head.
       const baseName = coordinationContext.prData?.baseRefName;
-      if (convergedInput.fixerCommit !== evidence.currentHeadSha && !(typeof baseName === "string" && baseName.trim()
+      if (convergedInput.fixerCommit !== evidence.currentHeadSha && !(typeof baseName === "string" && baseName.trim() && normalizeFullHeadSha(convergedInput.fixerCommit ?? "") !== null
         && await convergedCarryAccepts({ originHead: convergedInput.fixerCommit, headSha: evidence.currentHeadSha, baseRef: `origin/${baseName.trim()}`, repoRoot }))) {
         throw new Error(`--converged-json fixerCommit ${JSON.stringify(convergedInput.fixerCommit)} is not the current PR head ${evidence.currentHeadSha}; refuse to record convergence for a stale or foreign head.`);
       }

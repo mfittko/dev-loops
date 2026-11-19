@@ -56,12 +56,13 @@ async function upsertCarriedHead({ repo, pr, comments, entry }, runJson) {
   comments.push({ id: saved?.id ?? comment?.id, body });
 }
 
-// A converged record (only draft_gate writes one) stands for its fixer commit, so that commit is the origin head; every other marker keeps its own head.
-const originHeadOf = (marker) => marker?.converged?.fixerCommit || marker?.headSha;
+// A converged draft_gate record stands for its fixer commit, so that commit is the origin head; every other marker and gate keeps its own head.
+const convergedFixerOf = (marker, gate) => (gate === "draft_gate" ? marker?.converged?.fixerCommit : undefined);
+const originHeadOf = (marker, gate) => convergedFixerOf(marker, gate) || marker?.headSha;
 
 // The candidate shape under which carryGateMarker may carry (baseRef aside).
-export function isCarryCandidate(marker, currentHeadSha) {
-  const origin = originHeadOf(marker);
+export function isCarryCandidate(marker, currentHeadSha, gate) {
+  const origin = originHeadOf(marker, gate);
   return Boolean(marker?.visible) && marker.verdict === "clean" && marker.contractComplete === true
     && normalizeFullHeadSha(origin ?? "") !== null && normalizeFullHeadSha(currentHeadSha ?? "") !== null && origin !== currentHeadSha;
 }
@@ -71,13 +72,14 @@ export function isCarryCandidate(marker, currentHeadSha) {
  * the verdict carries, else the marker unchanged.
  */
 export async function carryGateMarker(marker, { gate, currentHeadSha, baseRef, repoRoot, recorded = [], record = null }) {
-  const origin = originHeadOf(marker);
-  if (!isCarryCandidate(marker, currentHeadSha) || !baseRef) return marker;
+  const origin = originHeadOf(marker, gate);
+  if (!isCarryCandidate(marker, currentHeadSha, gate) || !baseRef) return marker;
   const evidence = await computeBaseMergeCarry({ prevHead: origin, headSha: currentHeadSha, baseRef, repoRoot });
   const valid = evidence.decision === "carry_verdict"
     && validateBaseMergeCarryEvidence(evidence, { expectedSourceHead: origin, expectedNewHead: currentHeadSha }).ok;
   if (!valid) return marker;
-  const carried = { ...marker, headSha: currentHeadSha, carriedFrom: origin };
+  // A converged origin keeps the reviewed head A (where the ledger lives) as convergedFromHeadSha.
+  const carried = { ...marker, headSha: currentHeadSha, carriedFrom: origin, ...(convergedFixerOf(marker, gate) ? { convergedFromHeadSha: marker.headSha } : {}) };
   const entry = recorded.find((e) => e.gate === gate && e.originHead === origin && e.headSha === currentHeadSha);
   const digest = evidenceDigest(evidence);
   if (entry) return entry.evidenceDigest === digest ? carried : marker;
@@ -121,7 +123,7 @@ export async function fixerEmitCarryAccepts({ originHead, headSha, baseRef, repo
  * list (pass a copy: a successful record appends to it).
  */
 export async function carryFromPostedVerdict(candidate, { gate, repo, pr, currentHeadSha, repoRoot, env, runJson, comments, record = false }) {
-  if (!isCarryCandidate(candidate, currentHeadSha)) return candidate;
+  if (!isCarryCandidate(candidate, currentHeadSha, gate)) return candidate;
   let view = null;
   try {
     view = await runJson(["pr", "view", String(pr), "--repo", repo, "--json", "baseRefName"]);

@@ -262,6 +262,7 @@ test("a converged marker carries from its fixer commit to a later base merge, an
   const carried = await carry(s, convergedMarker(reviewed, fixer), cur, { written });
   assert.equal(carried.carriedFrom, fixer);
   assert.equal(carried.headSha, cur);
+  assert.equal(carried.convergedFromHeadSha, reviewed, "the reviewed head A (where the ledger lives) stays the converged source");
   assert.equal(written[0].originHead, fixer);
   assert.equal((await carry(s, convergedMarker(reviewed, fixer), cur, { recorded: written })).carriedFrom, fixer);
   const pre = { visible: true, verdict: "clean", contractComplete: true, headSha: cur, sizeOutcome: "pass", sizeTouchesT1: false };
@@ -275,6 +276,16 @@ test("a non-converged marker keeps its own head as the carry origin, and a malfo
   assert.equal((await carry(s, marker(origin), cur, { written: [] })).carriedFrom, origin);
   const malformed = { ...marker(origin), converged: { malformed: true } };
   assert.equal((await carry(s, malformed, cur, { written: [] })).carriedFrom, origin);
+});
+
+test("a converged field on a non-draft_gate marker does not redirect the carry origin", async () => {
+  const s = setup();
+  const origin = s.head();
+  const cur = s.mergeBase("docs/a.md");
+  const m = { ...convergedMarker("a".repeat(40), "b".repeat(40)), headSha: origin };
+  const carried = await carryGateMarker(m, { gate: "pre_approval_gate", currentHeadSha: cur, baseRef: "main", repoRoot: s.dir, record: async () => {} });
+  assert.equal(carried.carriedFrom, origin);
+  assert.equal(carried.convergedFromHeadSha, undefined);
 });
 
 test("a converged marker with a gate-tooling base delta after its fixer commit does not carry", async () => {
