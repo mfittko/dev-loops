@@ -177,9 +177,16 @@ function segmentWriteKind(command) {
   // ANSI-C flags the plain words lose (`$'\x2dc'` becomes `x2dc`), so command position there is judged against the first decoded
   // `gh` token (one before `plainSeq.length` covers a boundary token the dedupe merged).
   const plainSeq = expand(plainWords).map((t) => t.toLowerCase()).filter((t, i, all) => t !== all[i - 1]);
-  const ghAtDecoded = seq.findIndex((t, j) => j >= plainSeq.length - 1 && /^(?:-[a-z]*s)?gh$/.test(t.split("/").pop()));
+  // `decodedOf` appends tick text and nested `$'` values after the outer words, so command position is judged per region:
+  // the outer own words end at `ownEnd`; a `gh` that exists only in an appended region (`eval "\$'\x67h'" pr reopen zsh $'\x2dc' x`)
+  // does not make the outer `-c` a shell flag.
+  const ownSeq = expand(decodedWords(tokenizeShellCommand(command).segments)).map((t) => t.toLowerCase()).filter((t, i, all) => t !== all[i - 1]);
+  const ownEnd = plainSeq.length - 1 + ownSeq.length;
+  const isGh = (t) => /^(?:-[a-z]*s)?gh$/.test(t.split("/").pop());
+  const ghAtDecoded = seq.findIndex((t, j) => j >= plainSeq.length - 1 && j < ownEnd && isGh(t));
+  const ghAtAppended = seq.findIndex((t, j) => j >= ownEnd && isGh(t));
   const shellFlag = (i) => /^(?:\/(?:[^/]+\/)*)?(?:sh|bash|zsh|dash|ksh)$/.test(seq[i - 1] ?? "") &&
-    (i < plainSeq.length ? i - 1 < ghAt : ghAtDecoded >= 0 && i - 1 < ghAtDecoded);
+    (i < plainSeq.length ? i - 1 < ghAt : i < ownEnd ? ghAtDecoded >= 0 && i - 1 < ghAtDecoded : ghAtAppended >= 0 && i - 1 < ghAtAppended);
   const closeComment = seq.some((t, i) => t.startsWith("--comment") || (/^-[^-]*c/.test(t) && !(t === "-c" && shellFlag(i))));
   // Raw comment and review writes (`OPERATOR-OWNED-LINE`): the sanctioned writers refuse an operator-owned line, a raw write does not.
   // Comment clauses win over the body clause: a graphql addComment with `-f body=...` is a comment write, not a PR-body write.
