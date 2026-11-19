@@ -269,10 +269,11 @@ const STEP0 = /step 0/i;
 test("the gate chain runs the step 0 dispatch-tool check before validation, context, carry-forward and emit", async () => {
   for (const file of ["skills/copilot-pr-followup/SKILL.md", ".claude/skills/copilot-pr-followup/SKILL.md"]) {
     const content = await readRepo(file);
+    const chainStart = content.indexOf("Both gates run this same checkpoint review chain");
     const check = content.indexOf("0. **Capability check (step 0):**");
-    assert.ok(check !== -1, `${file}: expected the step 0 capability check`);
+    assert.ok(chainStart !== -1 && check > chainStart, `${file}: expected the step 0 capability check inside the gate chain`);
     for (const later of ["gate resolve-validation", "write-gate-context.mjs", "resolve-angle-carry-forward.mjs", "emit-fanout-dispatch.mjs"]) {
-      assert.ok(check < content.indexOf(later, check), `${file}: step 0 must precede ${later}`);
+      assert.ok(check < content.indexOf(later, chainStart), `${file}: step 0 must precede ${later}`);
     }
     assert.match(collapse(content.slice(check, content.indexOf("1. **Context (Phase 1):**"))), /`Agent` on Claude Code, `subagent` on Pi/);
   }
@@ -307,6 +308,7 @@ test("the gate-coordinator agent definition states the step 0 check", async () =
     assert.match(dispatch, STEP0, file);
     assert.match(dispatch, /`Agent` on Claude Code, `subagent` on Pi/, file);
     assert.match(dispatch, /FANOUT_UNAVAILABLE/, file);
-    assert.match(dispatch, /no emitter call, no round id/, file);
+    assert.match(dispatch, /no emitter call/, file);
+    assert.match(dispatch, /no round id/, file);
   }
 });
