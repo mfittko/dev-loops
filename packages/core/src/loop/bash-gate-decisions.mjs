@@ -247,6 +247,7 @@ function segmentRunsMergePrWithoutCheck(words) {
 
 /** Whether an unquoted heredoc body holds a `$(...)` or backtick substitution that runs merge-pr.mjs without `--check`: bash expands them for any program, so the body is read as double-quoted text. */
 function heredocBodyRunsMergePr(body) {
+  if (body.includes('"') && /merge-pr\.mjs/.test(body)) return true; // shortcut: quotes inside `$(...)` are real to bash but escaped here, so a quoted mention fails closed
   const tok = tokenizeShellCommand(`"${body.replace(/"/g, '\\"')}"`);
   if (tok.incomplete) return /merge-pr\.mjs/.test(body);
   return tok.segments.some((s) => s.words.some((w) => w.subs.some((sub) => treeRunsMergePr(sub.segments)))) || tok.ticks.some((t) => commandRunsMergePrWithoutCheck(t.slice(1, -1)));

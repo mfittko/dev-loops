@@ -246,12 +246,21 @@ function segmentRunsMergePrWithoutCheck(words) {
   return values.some((v) => v.startsWith("--check=")) || !rest.some((v, k) => k > 0 && v === "--check" && (!rest[k - 1].startsWith("-") || rest[k - 1].includes("=") || BOOLEAN_FLAGS.has(rest[k - 1])));
 }
 
-/** Walks the token tree: a program word, a `$(...)` substitution, a `-c`/`eval` payload or a shell heredoc body that runs merge-pr.mjs without `--check`. */
+/** Whether an unquoted heredoc body holds a `$(...)` or backtick substitution that runs merge-pr.mjs without `--check`: bash expands them for any program, so the body is read as double-quoted text. */
+function heredocBodyRunsMergePr(body) {
+  if (body.includes('"') && /merge-pr\.mjs/.test(body)) return true; // shortcut: quotes inside `$(...)` are real to bash but escaped here, so a quoted mention fails closed
+  const tok = tokenizeShellCommand(`"${body.replace(/"/g, '\\"')}"`);
+  if (tok.incomplete) return /merge-pr\.mjs/.test(body);
+  return tok.segments.some((s) => s.words.some((w) => w.subs.some((sub) => treeRunsMergePr(sub.segments)))) || tok.ticks.some((t) => commandRunsMergePrWithoutCheck(t.slice(1, -1)));
+}
+
+/** Walks the token tree: a program word, a `$(...)` substitution, a `-c`/`eval` payload, a substitution in an unquoted heredoc body or a shell heredoc body that runs merge-pr.mjs without `--check`. */
 function treeRunsMergePr(segments) {
   return segments.some((seg) => {
     const { values, i } = segmentProgram(seg.words);
     return segmentRunsMergePrWithoutCheck(seg.words)
       || seg.words.some((w, k) => w.subs.some((sub) => treeRunsMergePr(sub.segments)) || (isPayloadWord(seg.words, k) && commandRunsMergePrWithoutCheck(w.value)))
+      || seg.heredocs.some((h) => !h.quoted && heredocBodyRunsMergePr(h.body))
       || (/^(?:ba|z|da|k|mk|a)?sh$/.test(baseName(values[i] ?? "")) && seg.heredocs.some((h) => commandRunsMergePrWithoutCheck(h.body)));
   });
 }

@@ -581,6 +581,8 @@ const MERGE_DENY_EXTRA_FORMS = [
   'node scripts/github/merge-pr.mjs --pr 5 --check "',
   "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x <<EOF\n--check",
   "node scripts/github/merge-pr.mjs --pr 5 <<EOF\n--check",
+  'cat <<EOF\n$(node "scripts/github/merge-pr.mjs" --pr 5)\nEOF',
+  'cat <<EOF\n$("node" scripts/github/merge-pr.mjs --pr 5)\nEOF',
   "node scripts/github/merge-pr.mjs --pr 5 & echo --check",
   "node scripts/github/merge-pr.mjs --pr 5 # --check",
   "dev-loops-run scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by --check --human-approved-by x",
