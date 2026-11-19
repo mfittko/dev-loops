@@ -293,7 +293,10 @@ test("the rule states the step 0 check, the no-emitter wording and the detail fo
 
 test("the contract rule and the dev-loop agent pin the Claude Code gate topology", async () => {
   const wording = /depth that keeps the `Agent` tool/;
-  assert.match(collapse(ruleSection(await readRepo(CONTRACT_DOC))), wording);
+  const rule = collapse(ruleSection(await readRepo(CONTRACT_DOC)));
+  assert.match(rule, wording);
+  assert.match(rule, /direct child/);
+  assert.match(rule, /never routes the round through a further nested driver/);
   for (const file of ["agents/dev-loop.agent.md", ".claude/agents/dev-loop.md"]) {
     const content = collapse(await readRepo(file));
     assert.match(content, wording, file);
