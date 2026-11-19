@@ -9,7 +9,7 @@ import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, p
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { buildGateContextPath, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { renderPrBodyRead } from "../../scripts/github/write-gate-context.mjs";
-import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
+import { emitJudgeWorkOrder, main, renderWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { ensureTrustConfigCheckout, initGitFixture, withTempDir, writeGhStub } from "../_helpers.mjs";
 import { TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
@@ -101,7 +101,7 @@ test("grounded discovery preserves the neutral and Claude judge tool boundaries"
 
 test("the work order states the judge's allowed search commands and the Read offset and limit (issue 3092)", async () => {
   await withDir(async (root) => {
-    const plan = await emitJudgeWorkOrder(await seed(root));
+    const plan = await emitJudgeWorkOrder({ ...(await seed(root)), harness: "codex" });
     const text = await readFile(plan.promptPath, "utf8");
     assert.match(text, /Search with read-only `grep -n`, `rg -n`, `git show` and `git diff`/);
     assert.match(text, /`git diff` only as a range such as `origin\/main\.\.\.HEAD` or two revisions/);
@@ -145,7 +145,7 @@ test("cited rule IDs reach the judge with their text and owning doc (issue 3092)
 
 test("Codex bootstrap precedes every pinned read and binds contracts to the emitting toolchain", async () => {
   await withDir(async (root) => {
-    const plan = await emitJudgeWorkOrder(await seed(root));
+    const plan = await emitJudgeWorkOrder({ ...(await seed(root)), harness: "codex" });
     const result = pull(plan, root);
     assert.equal(result.status, 0, result.stderr);
     const setup = result.stdout.indexOf("## Codex after-pull setup");
@@ -691,7 +691,9 @@ test("a PR body Non-goals reopen line puts the slice-linkage sentence and issue 
     const plan = await emitJudgeWorkOrder(sources);
     assert.match(plan.workOrder.sliceLinkage, /^SPEC-SLICE-PR-KEEPS-CLOSING-REF: a slice PR keeps its closing reference/);
     assert.deepEqual(plan.workOrder.sliceLinkageIssues, [2883]);
-    assert.match(await readFile(plan.promptPath, "utf8"), /## Slice linkage\n\nSPEC-SLICE-PR-KEEPS-CLOSING-REF/);
+    const text = await readFile(plan.promptPath, "utf8");
+    assert.match(text, /## Slice linkage\n\nThe `sliceLinkage` and `sliceLinkageIssues` fields in the work order JSON below state the rule\./);
+    assert.equal(text.split(plan.workOrder.sliceLinkage).length - 1, 1, "the sentence is stated once, in the JSON");
     assert.equal((await armedBy(root, sources, "Closes #2883\n\n## Non-goals\n\n- no build changes\n")).sliceLinkage, undefined);
   });
 });
@@ -805,7 +807,7 @@ test("2678: the work order carries outputSchemas and a verdict built from them v
 
 test("2678: the Judgment section leaves the digest check to the pull", async () => {
   await withDir(async (root) => {
-    const plan = await emitJudgeWorkOrder(await seed(root));
+    const plan = await emitJudgeWorkOrder({ ...(await seed(root)), harness: "codex" });
     const result = pull(plan, root);
     const judgment = result.stdout.slice(result.stdout.indexOf("## Judgment"), result.stdout.indexOf("## Required reads"));
     assert.doesNotMatch(judgment, /sha256 differs/);
@@ -830,5 +832,115 @@ test("issue 3080 AC11: the work order stamps copilotBodyClusterId as the finding
     assert.ok(!text.includes("note it in the scopeDrift rationale"));
     await writeFile(path.join(root, sources.findingsFile), JSON.stringify({ overallVerdict: "clean", findings: [] }));
     assert.equal((await emitJudgeWorkOrder(sources)).workOrder.copilotBodyClusterId, 0, "an empty read gives cluster 0");
+  });
+});
+
+const renderedJson = (text) => JSON.parse(/```json\n([\s\S]*?)\n```\n$/.exec(text)[1]);
+
+test("issue 3093 AC1: the work order names the checker command, the outputRef it validates and the success output", async () => {
+  await withDir(async (root) => {
+    const plan = await emitJudgeWorkOrder(await seed(root));
+    const text = await readFile(plan.promptPath, "utf8");
+    const specRef = plan.workOrder.outputRefs.find((ref) => ref.endsWith("spec-authority-verdict.json"));
+    assert.ok(text.includes(`Validate with: \`dev-loops-run scripts/loop/check-judge-decision.mjs --file ${specRef}\``));
+    assert.ok(text.includes('prints `{"ok":true,"checked":N}` on success'));
+    assert.match(text, /validates the spec-authority verdict only/);
+  });
+});
+
+test("issue 3093 AC3: the rendered outputSchemas examples are valid verdicts for the checker", async () => {
+  const { main: check } = await import("../../scripts/loop/check-judge-decision.mjs");
+  await withDir(async (root) => {
+    const plan = await emitJudgeWorkOrder(await seed(root));
+    const { examples } = renderedJson(await readFile(plan.promptPath, "utf8")).outputSchemas["spec-authority-verdict.json"];
+    assert.equal(examples.length, 2);
+    assert.deepEqual(examples.map((example) => example.decisions[0].defectKind), ["matcher", "matcher"]);
+    assert.ok(examples[1].decisions[0].acceptedForms.length > 0 && examples[1].decisions[0].rejectedForms.length > 0);
+    assert.match(examples[1].specDigest, /^sha256:[0-9a-f]{64}$/);
+    const previousExitCode = process.exitCode;
+    try {
+      for (const [i, example] of examples.entries()) {
+        const file = path.join(root, `example-${i}.json`);
+        await writeFile(file, JSON.stringify(example));
+        let out = "";
+        await check(["--file", file], { stdout: { write: (t) => { out += t; } }, stderr: { write: (t) => { out += t; } } });
+        assert.deepEqual(JSON.parse(out), { ok: true, checked: 1 });
+      }
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
+});
+
+test("issue 3093 AC4: a pinned prior judge-verdict.json pins the spec-authority-verdict.json beside it", async () => {
+  await withDir(async (root) => {
+    const priorDir = path.join(root, "judge-fixture", "round-1");
+    await mkdir(priorDir, { recursive: true });
+    const judgePath = path.join(priorDir, "judge-verdict.json");
+    const specPath = path.join(priorDir, "spec-authority-verdict.json");
+    await writeFile(judgePath, JSON.stringify({ dispositions: [] }));
+    await writeFile(specPath, JSON.stringify({ decisions: [] }));
+    const sources = await seed(root);
+    const plan = await emitJudgeWorkOrder({ ...sources, priorVerdicts: [judgePath] });
+    const reads = plan.workOrder.requiredReads;
+    assert.equal(reads.find((read) => read.kind === "prior-judge-verdict")?.path, judgePath);
+    assert.equal(reads.find((read) => read.kind === "prior-spec-authority-verdict")?.path, specPath);
+    await rm(specPath);
+    const without = await emitJudgeWorkOrder({ ...sources, priorVerdicts: [judgePath] });
+    assert.equal(without.workOrder.requiredReads.some((read) => read.kind === "prior-spec-authority-verdict"), false);
+  });
+});
+
+test("issue 3093 AC5: the Codex setup paragraph is omitted for Claude and Pi and kept for Codex and unnamed harnesses", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    for (const harness of ["claude", "pi"]) {
+      const text = await readFile((await emitJudgeWorkOrder({ ...sources, harness })).promptPath, "utf8");
+      assert.doesNotMatch(text, /## Codex after-pull setup|command -v shasum|shasum -a 256/);
+      assert.match(text, /## Output schemas/);
+    }
+    // A legacy work order without a harness field keeps the paragraph (fail safe).
+    const { workOrder } = await emitJudgeWorkOrder({ ...sources, harness: "pi" });
+    const { harness: _dropped, ...legacy } = workOrder;
+    assert.match(renderWorkOrder(legacy), /## Codex after-pull setup/);
+    const codexText = await readFile((await emitJudgeWorkOrder({ ...sources, harness: "codex" })).promptPath, "utf8");
+    assert.match(codexText, /## Codex after-pull setup[\s\S]*command -v shasum[\s\S]*## Output schemas/);
+    assert.match(codexText, /the Codex after-pull setup above still governs Codex/);
+    assert.match(codexText, /replace their specDigest, headSha, contentDigest, index and checkedCriteria/);
+    // No flag: the harness resolves from the environment (finding 1).
+    const claudeEnv = await readFile((await emitJudgeWorkOrder({ ...sources, env: { CLAUDECODE: "1" } })).promptPath, "utf8");
+    assert.doesNotMatch(claudeEnv, /Codex after-pull setup/);
+    const codexEnv = await readFile((await emitJudgeWorkOrder({ ...sources, env: { CODEX_THREAD_ID: "t-1" } })).promptPath, "utf8");
+    assert.match(codexEnv, /## Codex after-pull setup/);
+    await assert.rejects(emitJudgeWorkOrder({ ...sources, harness: "emacs" }), /--harness must be claude, pi or codex/);
+  });
+});
+
+test("issue 3093 AC6: each required read and the slice linkage appear once in the rendering", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    await bindEvidenceToPrBody(root, sources, "Closes #2883\n\n## Non-goals\n\n- Reopen #2883 on merge: slices 2+ remain.\n");
+    const plan = await emitJudgeWorkOrder(sources);
+    const text = await readFile(plan.promptPath, "utf8");
+    for (const read of plan.workOrder.requiredReads) assert.equal(text.split(read.path).length - 1, 1, read.kind);
+    assert.equal(text.split(plan.workOrder.sliceLinkage).length - 1, 1);
+  });
+});
+
+test("issue 3093: the CLI refuses an explicit empty --harness value as invalid_harness", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const out = [];
+    const write = process.stdout.write;
+    const previousExitCode = process.exitCode;
+    process.stdout.write = (chunk) => (out.push(String(chunk)), true);
+    try {
+      await main(["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-file", sources.findingsFile,
+        "--spec-file", sources.specFile, "--identity-file", sources.identityFile, "--harness", ""], { cwd: root, fetchLivePrBody: sources.fetchLivePrBody });
+    } finally {
+      process.stdout.write = write;
+      process.exitCode = previousExitCode;
+    }
+    assert.equal(JSON.parse(out.join("")).refusal, "invalid_harness");
   });
 });

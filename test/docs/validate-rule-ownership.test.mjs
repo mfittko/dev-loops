@@ -21,6 +21,7 @@ import {
   isRefusalPathCitation,
   isRuntimeSourceFile,
   normalizeRuleEntry,
+  ruleOwnerIndex,
   validateRuleOwnership,
 } from "../../scripts/docs/validate-rule-ownership.mjs";
 
@@ -618,6 +619,21 @@ test("a null required-rules.json entry is a clean invalid_manifest_entry, not a 
     const result = await validateRuleOwnership(dir);
     assert.equal(result.ok, false);
     assert.ok(result.errors.some((e) => e.kind === "invalid_manifest_entry"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("ruleOwnerIndex maps a rule ID to its owning doc and text, and the first marker in sorted order wins (issue 3093)", async () => {
+  const dir = await fixture({
+    "skills/docs/b-doc.md": "<!-- rule: TEST-RULE-OWN -->\nThe later doc MUST lose.\n",
+    "skills/docs/a-doc.md": "<!-- rule: TEST-RULE-OWN -->\nThe first doc MUST win.\n\n<!-- rule: TEST-RULE-ONLY -->\nOnly here.\n",
+  });
+  try {
+    const owners = await ruleOwnerIndex(dir);
+    assert.deepEqual(owners.get("TEST-RULE-OWN"), { doc: "skills/docs/a-doc.md", text: "The first doc MUST win." });
+    assert.deepEqual(owners.get("TEST-RULE-ONLY"), { doc: "skills/docs/a-doc.md", text: "Only here." });
+    assert.equal(owners.has("TEST-RULE-MISSING"), false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
