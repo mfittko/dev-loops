@@ -332,7 +332,7 @@ function ghPrVerbRegex(verb) {
 
 /** A help request puts -h/--help first after the verb; gh reads a later -h as a flag value. */
 function isHelpRemainder(remainder) {
-  return ["--help", "-h"].includes(remainder.split(/\s+/)[0].toLowerCase());
+  return ["--help", "-h"].includes(remainder.split(/\s+/)[0]);
 }
 
 /**

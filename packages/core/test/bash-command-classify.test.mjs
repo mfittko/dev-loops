@@ -131,6 +131,12 @@ test("a -h value after a gh value flag does not exempt the segment; first-arg he
     assert.equal(commandContainsRawExternalWrite(`gh pr comment 42 ${flag} -h`), true, flag);
   }
   assert.equal(commandContainsRawExternalWrite("gh pr comment --help"), false);
+  assert.equal(commandContainsGhPrCreate("gh pr create -H feat --fill"), true);
+  assert.equal(isGhPrMergeCommand("gh pr merge 42 --body -h"), true);
+  const flagged = extractRepoFlagsFromGhPrMergeSegments("gh pr merge 42 --repo o/r --body -h");
+  assert.equal(flagged.length, 1);
+  assert.equal(flagged[0].explicitRepo, "o/r");
+  assert.deepEqual(extractRepoFlagsFromGhPrMergeSegments("gh pr merge --help"), []);
 });
 
 test("commandContainsGhPrMerge (all-segments, PreToolUse gate) detects merge in any segment", () => {
