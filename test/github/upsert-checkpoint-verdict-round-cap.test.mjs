@@ -427,3 +427,50 @@ test("the closure round line renders a normalized full SHA and refuses a short, 
   }
   for (const input of ["abc1234", "", "  ", null, undefined]) assert.doesNotMatch(line(input), /closure round: diff from/, String(input));
 });
+
+// A clean cap round whose post was refused at its own head posts there once the PR head has moved on.
+const CAP_HEAD = "4".repeat(40);
+async function postCleanCapRound(tempDir, { sealedVerdict = "clean", ancestor = true, headSha = CAP_HEAD } = {}) {
+  await seedPrior(repoRoot, priorHeads);
+  const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-17");
+  const sealed = { repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: CAP_HEAD, verdict: sealedVerdict, overallVerdict: sealedVerdict, loggedAt: "2026-11-04T00:00:00.000Z", findings: [] };
+  await writeFile(path.join(dir, `draft_gate-${CAP_HEAD}.json`), JSON.stringify(sealed), "utf8");
+  const ledger = path.join(tempDir, "cap-ledger.json");
+  await writeFile(ledger, JSON.stringify(sealed), "utf8");
+  const posted = [];
+  const inner = makeRunChild(posted);
+  const runChild = async (cmd, args = [], ...rest) => (cmd === "git" && args.includes("merge-base") ? { code: ancestor ? 0 : 1, stdout: "", stderr: "" } : inner(cmd, args, ...rest));
+  try {
+    const options = parseUpsertCheckpointVerdictCliArgs([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", headSha, "--findings-ledger", ledger,
+      "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 0, question: 0, nit: 0 }), "--findings-summary", "cap round", "--next-action", "follow the verdict", "--inline-reason", "cap round",
+    ]);
+    await upsertCheckpointVerdict(options, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
+    return { body: posted.join("\n") };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+test("a clean cap round posts at its own ancestor head with the cap round number", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await postCleanCapRound(tempDir);
+    assert.equal(out.error, undefined);
+    assert.equal(verdictOf(out), "clean");
+    assert.match(out.body, /round[=: ]+4\b/i);
+    assert.ok(out.body.includes(CAP_HEAD.slice(0, 7)));
+  }, { prefix: "dev-loops-round-cap-ancestor-" });
+});
+
+test("an earlier-head post without a sealed clean cap-round ledger is refused", async () => {
+  await withTempDir(async (tempDir) => {
+    assert.match((await postCleanCapRound(tempDir, { sealedVerdict: "findings_present" })).error ?? "", /does not match the current PR head/);
+    assert.match((await postCleanCapRound(tempDir, { headSha: "3".repeat(40) })).error ?? "", /does not match the current PR head/);
+  }, { prefix: "dev-loops-round-cap-ancestor-refuse-" });
+});
+
+test("a cap-round head the PR head does not descend from is refused", async () => {
+  await withTempDir(async (tempDir) => {
+    assert.match((await postCleanCapRound(tempDir, { ancestor: false })).error ?? "", /does not match the current PR head/);
+  }, { prefix: "dev-loops-round-cap-ancestor-foreign-" });
+});

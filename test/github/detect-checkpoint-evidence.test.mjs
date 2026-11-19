@@ -5066,3 +5066,15 @@ test("parseDetectCheckpointEvidenceCliArgs honors --read-only (skips the runner-
   assert.equal(parseDetectCheckpointEvidenceCliArgs(["--repo", "owner/repo", "--pr", "17"]).readOnly, undefined);
   assert.equal(parseDetectCheckpointEvidenceCliArgs(["--repo", "owner/repo", "--pr", "17", "--read-only"]).readOnly, true);
 });
+
+test("buildPreMergeGateCheck passes on a posted cap-round header at an ancestor head when every cap-round thread is resolved", () => {
+  const evidence = {
+    currentHeadSha: "c386b206",
+    draftGate: { visible: true, verdict: "clean", headSha: "981321d5" },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "c386b206", sizeOutcome: "pass", sizeTouchesT1: false },
+  };
+  const thread = (round, isResolved) => ({ isResolved, comments: { nodes: [{ body: `<!-- dev-loops:finding 0123456789abcdef severity=low angle=scope round=${round} -->` }] } });
+  const capFixed = (threads) => capRoundThreadsResolved(4, threads);
+  assert.equal(buildPreMergeGateCheck(evidence, 0, null, null, { capRoundFixed: capFixed([thread(4, true)]) }).ok, true);
+  assert.equal(buildPreMergeGateCheck({ ...evidence, draftGate: { visible: true, verdict: "findings_present" } }, 1, null, null, { capRoundFixed: capFixed([thread(4, false)]) }).ok, false);
+});

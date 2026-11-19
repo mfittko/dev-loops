@@ -66,7 +66,7 @@ import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-
 import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 import { countPrOwnCommits as realCountPrOwnCommits } from "../loop/check-pre-push-delta.mjs";
 import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
-import { buildValidationResultsPath, countCompletedRounds, buildGateContextPath, prBodySha256, readGateContext, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
+import { buildValidationResultsPath, countCompletedRounds, buildGateContextPath, isCleanCapRound, prBodySha256, readGateContext, resolveCapRound, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
@@ -1859,6 +1859,15 @@ function resolveRequestedHeadSha(requestedHeadSha, currentHeadSha) {
   }
   throw new Error(`Requested head SHA ${requestedHeadSha} does not match the current PR head SHA ${currentHeadSha}; refuse to mutate stale gate evidence.`);
 }
+// A completed cap round whose sealed ledger is clean posts at its own head once the PR head has moved past it (a refused post at that head leaves no visible record for CI).
+async function resolveCleanCapRoundHead({ options, cap, currentHeadSha, repoRoot, runChild, env }) {
+  if (options.gate !== "draft_gate" || !(cap > 0) || !/^[0-9a-f]{7,64}$/i.test(options.headSha)) return null;
+  const capRound = await resolveCapRound({ repo: options.repo, pr: options.pr, headSha: currentHeadSha }, { repoRoot }).catch(() => null);
+  const roundHead = capRound?.log?.headSha;
+  if (!isCleanCapRound(capRound) || typeof roundHead !== "string" || !roundHead.toLowerCase().startsWith(options.headSha.toLowerCase())) return null;
+  const ancestry = await runChild("git", ["-C", repoRoot, "merge-base", "--is-ancestor", roundHead, currentHeadSha], env);
+  return ancestry.code === 0 ? roundHead : null;
+}
 function resolveGateAction(gate) {
   return gate === "draft_gate"
     ? PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE
@@ -2799,6 +2808,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   let evidence = null;
   let coordination = null;
   let canonicalHeadSha = options.headSha;
+  let capRoundHead = null;
   let draftGateConfig = null;
   let preApprovalGateConfig = null;
   // The post-time fan-out enforcement descriptor (buildFanoutEnforcement's
@@ -2882,7 +2892,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const prBase = coordinationContext?.prData?.baseRefName;
     if (verdict === "clean" && !isReviewGate && checkFreshness && typeof prBase === "string" && prBase.trim()) {
       // A converged post records at the reviewed head A; the base check belongs to the current PR head (the fixer commit).
-      const stale = await staleBaseReason({ base: prBase.trim(), head: convergedInput?.fixerCommit ?? canonicalHeadSha, cwd: repoRoot, env, check: checkFreshness });
+      const stale = await staleBaseReason({ base: prBase.trim(), head: convergedInput?.fixerCommit ?? (capRoundHead ? evidence.currentHeadSha : canonicalHeadSha), cwd: repoRoot, env, check: checkFreshness });
       if (stale) throw new Error(`${stale} A clean ${options.gate} verdict is not recorded at a stale base.`);
     }
   };
@@ -2899,9 +2909,17 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       }
       canonicalHeadSha = options.headSha;
     } else {
-      canonicalHeadSha = resolveRequestedHeadSha(options.headSha, evidence.currentHeadSha);
     }
     draftGateConfig = resolveGateConfig(config, "draft");
+    if (!convergedInput) {
+      try {
+        canonicalHeadSha = resolveRequestedHeadSha(options.headSha, evidence.currentHeadSha);
+      } catch (error) {
+        capRoundHead = await resolveCleanCapRoundHead({ options, cap: draftGateConfig.maxReviewRounds, currentHeadSha: evidence.currentHeadSha, repoRoot, runChild, env });
+        if (!capRoundHead) throw error;
+        canonicalHeadSha = capRoundHead;
+      }
+    }
     preApprovalGateConfig = resolveGateConfig(config, "preApproval");
     const maxCopilotRounds = options.lightweight === true
       ? resolveEffectiveCopilotRoundCap(config, { lightweight: true })
@@ -2943,7 +2961,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
     const requestedGateAction = resolveGateAction(options.gate);
     const prIsDraft = Boolean(coordinationContext.prData?.isDraft);
-    if (options.gate === "draft_gate" && coordination.draftGateAlreadySatisfied) {
+    if (options.gate === "draft_gate" && coordination.draftGateAlreadySatisfied && !capRoundHead) {
       // The draft gate is a one-time boundary: a non-draft PR with clean draft_gate
       // evidence (on any head) has already passed it, and the pre-merge gate check
       // accepts that evidence. Re-posting is therefore a no-op, not an error —
@@ -3035,7 +3053,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       && !evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
         draftCapRoundFixed: false, coordinationContext, maxCopilotRounds, draftGateConfig, preApprovalGateConfig, reviewMode,
       })).forbiddenActions.includes(requestedGateAction);
-    if (gateActionForbidden && !forbidOnlyByCapFixed) {
+    if (gateActionForbidden && !forbidOnlyByCapFixed && !capRoundHead) {
       throw new Error(buildGateEntryRefusalError({ options, coordination }));
     }
     // Post-time fan-out evidence enforcement: refuse an under-qualified inline
