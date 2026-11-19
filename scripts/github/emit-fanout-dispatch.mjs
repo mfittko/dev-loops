@@ -728,11 +728,13 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const roundId = injectedRoundId ?? `r${Date.now()}-${randomBytes(4).toString("hex")}`;
   // Each unit's budget scales with the filtered diff it reads. A thin briefing
   // records no diff read, so every unit gets the floor.
-  const diffRead = artifact.scope?.diffSource === "none" ? undefined : sharedReads.find((read) => read?.kind === "diff");
+  const diffReads = artifact.scope?.diffSource === "none" ? [] : sharedReads.filter((read) => read?.kind === "diff");
   let diffBlocks = null;
-  if (diffRead) {
+  if (diffReads.length > 0) {
     try {
-      diffBlocks = parseDiffFileBlocks(await readFile(path.resolve(process.cwd(), diffRead.path), "utf8"));
+      const partTexts = [];
+      for (const read of diffReads) partTexts.push(await readFile(path.resolve(process.cwd(), read.path), "utf8"));
+      diffBlocks = parseDiffFileBlocks(partTexts.join(""));
     } catch (err) {
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;

@@ -129,7 +129,7 @@ if [ -z "$authority_cli" ] || [ ! -f "$authority_cli" ]; then
   authority_cli="$(git rev-parse --show-toplevel 2>/dev/null)/"scripts/loop/check-fix-push-authority.mjs
 fi
 if [ -f "$authority_cli" ]; then
-  printf '%s\\n' "$push_lines" | node "$authority_cli" || exit 1
+  printf '%s\\n' "$push_lines" | node "$authority_cli" "$@" || exit 1
 else
   common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
   sequence_marker=""
