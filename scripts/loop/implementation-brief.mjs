@@ -26,8 +26,8 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import {
   RULE_ID_CITATION_RE,
-  collectContractMarkdownFiles,
   extractRuleDefinitions,
+  ruleOwnerIndex,
 } from "../docs/validate-rule-ownership.mjs";
 import { gitEnvNoDirOverrides } from "./_repo-root-resolver.mjs";
 import { CONTRACT_DOC_RE, DEVLOOPS_CONFIG_PATHS, GATE_CONFIG_PATH } from "./check-adr-tripwire.mjs";
@@ -281,20 +281,6 @@ async function readTextOrNull(file) {
   });
 }
 
-/** The owning doc of a rule is the file that carries its `<!-- rule: ID -->` marker. */
-async function ruleOwnerIndex(repoRoot) {
-  const owners = new Map();
-  for (const file of await collectContractMarkdownFiles(repoRoot)) {
-    const rel = path.relative(repoRoot, file).split(path.sep).join("/");
-    const content = await readTextOrNull(file);
-    if (content == null) continue;
-    for (const definition of extractRuleDefinitions(content, rel)) {
-      if (!owners.has(definition.id)) owners.set(definition.id, rel);
-    }
-  }
-  return owners;
-}
-
 const matchesAdrTripwire = (relPath) =>
   CONTRACT_DOC_RE.test(relPath) || relPath === GATE_CONFIG_PATH || DEVLOOPS_CONFIG_PATH_SET.has(relPath);
 
@@ -525,7 +511,7 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
   const ruleOwners = citedRuleIds.size > 0 ? await ruleOwnerIndex(root) : new Map();
   const rules = [...citedRuleIds]
     .sort()
-    .map((id) => ({ id, doc: ruleOwners.get(id) ?? null }));
+    .map((id) => ({ id, doc: ruleOwners.get(id)?.doc ?? null }));
 
   // ADR surface: cited records plus accepted records whose text names a touched path.
   const records = await indexDecisionRecords(path.join(root, "docs", "decisions"));
