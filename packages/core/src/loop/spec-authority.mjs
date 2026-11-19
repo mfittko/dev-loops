@@ -361,6 +361,9 @@ export const SPEC_AUTHORITY_VERDICT_SCHEMA = Object.freeze({
         authorizedRemediation: "Guard the empty input in parseThing and add a test.",
         defectClass: "unguarded empty input",
         siteQuery: "parseThing readThing",
+        defectKind: "matcher",
+        acceptedForms: ["a", "abc"],
+        rejectedForms: ["", "  "],
       }],
     }),
     Object.freeze({
