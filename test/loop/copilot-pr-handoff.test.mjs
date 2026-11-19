@@ -909,12 +909,12 @@ if (args[0] === "api" && args[1] === "graphql") {
   process.exit(0);
 }
 
-if (args[0] === "api" && args[1] === "repos/owner/repo/commits/newsha/check-runs?per_page=100") {
+if (args[0] === "api" && args[3] === "repos/owner/repo/commits/newsha/check-runs?per_page=100") {
   write({ check_runs: [{ status: "COMPLETED", conclusion: "SUCCESS" }] });
   process.exit(0);
 }
 
-if (args[0] === "api" && args[1] === "repos/owner/repo/commits/newsha/status?per_page=100") {
+if (args[0] === "api" && args[3] === "repos/owner/repo/commits/newsha/status?per_page=100") {
   write({ statuses: [] });
   process.exit(0);
 }
@@ -1214,12 +1214,12 @@ if (args[0] === "api" && args[1] === "graphql") {
   process.exit(0);
 }
 
-if (args[0] === "api" && args[1] === "repos/owner/repo/commits/newsha/check-runs?per_page=100") {
+if (args[0] === "api" && args[3] === "repos/owner/repo/commits/newsha/check-runs?per_page=100") {
   write({ check_runs: [{ status: "COMPLETED", conclusion: "SUCCESS" }] });
   process.exit(0);
 }
 
-if (args[0] === "api" && args[1] === "repos/owner/repo/commits/newsha/status?per_page=100") {
+if (args[0] === "api" && args[3] === "repos/owner/repo/commits/newsha/status?per_page=100") {
   write({ statuses: [] });
   process.exit(0);
 }
@@ -1417,8 +1417,8 @@ test("copilot-pr-handoff stays at round_cap_clean_fallback (no re-request) when 
       },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
       // escape-hatch: shared significant-change detector facts + compare
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"],
@@ -1468,8 +1468,8 @@ test("copilot-pr-handoff re-requests Copilot review at the cap when a significan
       // detect requested_reviewers + performRequest pre/post checks (claimed in order)
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
       // escape-hatch: shared significant-change detector facts + compare (significant)
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"],
@@ -1536,8 +1536,8 @@ test("copilot-pr-handoff treats a suppressed_post_convergence_docs_only request 
       },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
       // escape-hatch: shared threshold detector facts + compare → significant (a code
       // file) → reopen the cycle and call request-copilot-review with force.
       {
@@ -1607,8 +1607,8 @@ test("copilot-pr-handoff stays at round_cap_clean_fallback when the compare call
       },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"],
         stdout: JSON.stringify({ headRefOid: "newsha", reviews: CAP_REVIEWS, files: [{ path: "packages/core/src/loop/foo.mjs" }] }) + "\n",
@@ -1658,8 +1658,8 @@ test("copilot-pr-handoff stays at round_cap_clean_fallback when the last reviewe
       },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"],
         stdout: JSON.stringify({ headRefOid: "newsha", reviews: sameHeadReviews, files: [{ path: "packages/core/src/loop/foo.mjs" }] }) + "\n",
@@ -1704,8 +1704,8 @@ test("copilot-pr-handoff waits for the pending Copilot review (in-flight force-r
       // and its review has not yet landed on the current head.
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
       // CAP_REVIEWS are all on older heads (oldsha-N), so there's no submitted Copilot
       // review on the current head — copilotReviewRequestStatus resolves to "requested"
       // via the no-submitted-review branch, never reaching the timeline timestamp
@@ -1753,8 +1753,8 @@ test("copilot-pr-handoff waits (fail closed) when a review is pending and the es
       },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
       { assertArgs: ["api", "repos/owner/repo/issues/17/timeline"], stdout: JSON.stringify({ login: "Copilot", created_at: "2026-06-03T00:00:00Z" }) + "\n" },
       // Escape-hatch fetch fails — significance cannot be positively determined.
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"], stdout: "", stderr: "boom", exitCode: 1 },
@@ -3190,8 +3190,8 @@ test("copilot-pr-handoff in converged-once mode does not reopen the cycle at the
       },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"],
         stdout: JSON.stringify({ headRefOid: "newsha", reviews: CAP_REVIEWS, files: [{ path: "packages/core/src/loop/foo.mjs" }] }) + "\n",
@@ -3234,8 +3234,8 @@ test("copilot-pr-handoff in converged-once mode still reopens the cycle at the c
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo"], stdout: prView },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"],
         stdout: JSON.stringify({ headRefOid: "newsha", reviews, files: [{ path: "packages/core/src/loop/foo.mjs" }] }) + "\n",
@@ -3282,8 +3282,8 @@ test("copilot-pr-handoff in converged-once mode places no request below the cap 
       },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
       // request-copilot-review: before-state, then the converged-once predicate's thread read.
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       {
@@ -3335,8 +3335,8 @@ async function runDraftGateResetScenario({ withDraftGate, factsFail = false, wat
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
       { assertArgs: ["api", "graphql"], stdout: ownThread },
       { assertArgs: ["api", "graphql"], stdout: ownThread },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
-      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"], ...(factsFail ? { stdout: "", stderr: "boom", exitCode: 1 } : { stdout: JSON.stringify({ headRefOid: "newsha", reviews, files: [{ path: "packages/core/src/loop/foo.mjs" }] }) + "\n" }) },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([withDraftGate ? [draftGateComment] : []]) + "\n" },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },

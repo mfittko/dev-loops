@@ -6,7 +6,7 @@ import { observeHeadCiSignals } from "../../scripts/github/observe-head-ci.mjs";
 // { code, stdout } result; omit an entry to default to a clean exit-0 empty read.
 function stubRunChild({ checkRuns, statuses }) {
   return async (_ghCommand, args) => {
-    const url = args[1] ?? "";
+    const url = args.at(-1) ?? "";
     if (url.includes("/check-runs")) return checkRuns ?? { code: 0, stdout: JSON.stringify({ check_runs: [] }) };
     if (url.includes("/status")) return statuses ?? { code: 0, stdout: JSON.stringify({ statuses: [] }) };
     throw new Error(`unexpected gh api url: ${url}`);
@@ -115,4 +115,36 @@ test("failed commit-status contexts are listed in statusFailures", async () => {
   );
   assert.equal(statuses.commitStatus, "failure");
   assert.deepEqual(statuses.statusFailures, [{ name: "ci/circleci", conclusion: "failure" }]);
+});
+
+test("check-runs and statuses are merged across every paginated page", async () => {
+  const skipped = { name: "gate-evidence-reporter", status: "completed", conclusion: "skipped" };
+  const { checkRuns, statuses } = await observe(
+    stubRunChild({
+      checkRuns: { code: 0, stdout: JSON.stringify([
+        { total_count: 2, check_runs: [skipped] },
+        { total_count: 2, check_runs: [{ name: "build", status: "completed", conclusion: "success" }] },
+      ]) },
+      statuses: { code: 0, stdout: JSON.stringify([
+        { statuses: [] },
+        { statuses: [{ context: "ci/circleci", state: "failure" }] },
+      ]) },
+    }),
+  );
+  assert.equal(checkRuns.ok, true);
+  assert.equal(checkRuns.rawCount, 2);
+  assert.equal(checkRuns.visibleSignal.status, "success");
+  assert.equal(statuses.rawCount, 1);
+  assert.equal(statuses.commitStatus, "failure");
+});
+
+test("a paginated read with a malformed page or failed exit fails closed", async () => {
+  const { checkRuns, statuses } = await observe(
+    stubRunChild({
+      checkRuns: { code: 0, stdout: JSON.stringify([{ check_runs: [] }, { unexpected: true }]) },
+      statuses: { code: 1, stdout: "" },
+    }),
+  );
+  assert.equal(checkRuns.ok, false);
+  assert.equal(statuses.ok, false);
 });
