@@ -127,13 +127,21 @@ export function normalizeThreadsPayload(payload, { repo, pr } = {}) {
   return { ...p, ok: bound, repo, pr, threads: p.threads.map((thread) => ({ ...thread, isResolved: false, trusted: true, body: thread.bodies.join("\n\n") })) };
 }
 
+export const OPERATOR_FOCUS_REF = "operator-focus";
+
+/** The act items an operator focus contributes when the thread source holds no thread: its `round` text. */
+export function operatorFocusActItems(operatorFocus) {
+  const summary = typeof operatorFocus?.round === "string" ? operatorFocus.round.trim() : "";
+  return summary ? [{ ref: OPERATOR_FOCUS_REF, angle: OPERATOR_FOCUS_REF, summary, judgeDisposition: "act" }] : [];
+}
+
 /**
  * Thread route: reduce successful `list-review-threads --unresolved-only` output (or a github-sourced `capture-review-threads --unresolved --bodies` file) for `repo#pr`
  * to a judge-act-list-shaped array, one act item per unresolved thread, `ref` = the `threadId`.
  * @param {unknown} payload
  * @param {{ repo: string, pr: number|string }} target
  */
-export function threadsToActList(rawPayload, { repo, pr } = {}) {
+export function threadsToActList(rawPayload, { repo, pr, operatorFocus } = {}) {
   const payload = normalizeThreadsPayload(rawPayload, { repo, pr });
   const allThreads = /** @type {any} */ (payload)?.threads;
   // A trust-incomplete thread stays a blocker but is never an act item.
@@ -146,6 +154,8 @@ export function threadsToActList(rawPayload, { repo, pr } = {}) {
   if (!threads.every((thread) => thread.trusted === true)) {
     throw new Error(`threads file for ${repo}#${pr} holds a thread without the trusted marker (ADR 0238); re-run list-review-threads --unresolved-only`);
   }
+  // With no unresolved thread, the operator focus round is the act set, so a focus-only fix still has a delta review.
+  if (threads.length === 0) return operatorFocusActItems(operatorFocus);
   // Sorted by threadId so actSetId is stable for the same thread set, whatever the capture order.
   return [...threads].sort((a, b) => (a.threadId < b.threadId ? -1 : a.threadId > b.threadId ? 1 : 0)).map((thread) => ({
     ref: thread.threadId,
@@ -213,7 +223,7 @@ function nonEmptyStrings(value) {
 }
 
 /** A PR-body act item names no file; a thread item is exempt (its ref is the thread id). Consumers align to `sequence.actItems` with `actList.filter((e) => !isDeltaBodyItem(e))`. */
-export const isDeltaBodyItem = (entry) => entry?.angle !== "review-thread" && !resolveFindingFile(entry);
+export const isDeltaBodyItem = (entry) => entry?.angle !== "review-thread" && entry?.angle !== OPERATOR_FOCUS_REF && !resolveFindingFile(entry);
 
 /**
  * Open a delta sequence for one gate round. The baseline is the head that gate

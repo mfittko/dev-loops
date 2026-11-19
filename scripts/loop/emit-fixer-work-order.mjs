@@ -17,7 +17,7 @@ import { VALID_SEVERITIES, normalizeSeverity, hasSeverityText, pastCapBlockers }
 import { EvidenceSealError, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
-import { deltaCoverageBinding, isDeltaBodyItem, normalizeThreadsPayload, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
+import { deltaCoverageBinding, isDeltaBodyItem, normalizeThreadsPayload, operatorFocusActItems, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { normalizeFixerDispositionHandoff, REVIEW_NODE_ID_PATTERN } from "@dev-loops/core/loop/fixer-disposition";
 import { readSequenceMarker, sequenceClosurePath, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
@@ -324,7 +324,7 @@ const itemPairs = (items) => [...new Set((Array.isArray(items) ? items : []).map
 
 // The commit_only phase commits unpushed; the delta review then decides whether `full` may push.
 // `delta` is the parsed --delta-result (act-list route); `threads` the unresolved threads (thread route).
-export function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidateHead, coverageBinding }) {
+export function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidateHead, coverageBinding, operatorFocus }) {
   const recordPath = gateDeltaRecordPath(tmpRoot, headSha);
   const record = readGateDeltaRecord(tmpRoot, headSha);
   const next = "emit --phase commit_only, run the delta review (dev-loops loop pre-push-delta), then emit --phase full";
@@ -360,7 +360,7 @@ export function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, c
   }
   if (!record) throw new Refusal(`--phase full with --threads-file needs a delta record at ${recordPath} from a thread-route delta review: ${next}`);
   if (record.candidateHead !== candidateHead) throw new Refusal(`--phase full refused: THREAD delta candidateHead differs from the committed candidate; review the committed candidate (${next})`);
-  const threadIds = new Set(threads.map((thread) => thread.threadId));
+  const threadIds = new Set(threads.length > 0 ? threads.map((thread) => thread.threadId) : operatorFocusActItems(operatorFocus).map((item) => item.ref));
   const refs = (Array.isArray(record.items) ? record.items : []).map((item) => item?.ref);
   const unbound = refs.filter((ref) => !threadIds.has(ref));
   if (unbound.length > 0) {
@@ -720,6 +720,8 @@ async function emitPlan({
   if (threadsFile && !listed.threads.every((thread) => thread.trusted === true)) {
     throw new Refusal(`threads file ${threadsFile} holds a thread without the trusted marker (ADR 0238, GATE-REVIEW-COMMENT-TRUST): comment text from a non-maintainer is never a fixer instruction; re-run dev-loops-run scripts/github/list-review-threads.mjs --repo ${repo} --pr ${pr} --unresolved-only`);
   }
+  // A zero-thread commit_only emission needs the operator focus round as its delta act set; without one no delta review could close its marker.
+  if (threadsFile && phase === "commit_only" && listed.threads.length === 0 && operatorFocusActItems(operatorFocus).length === 0) throw new Refusal("--phase commit_only on a --threads-file source with no unresolved thread needs an --operator-focus-file with a round: with neither there is no act set for the delta review; nothing was written");
   if (deltaResult && !actListFile) throw new Refusal("--delta-result applies only to an --act-list-file source");
   // A thread source reads the record the thread-route delta review wrote for this head (step 7 bounded_out rule), never a flag.
   const threadRecordPath = threadsFile ? gateDeltaRecordPath(tmpRoot, headSha) : null;
@@ -773,7 +775,7 @@ async function emitPlan({
     }
   }
   // A review body has no delta review route, so --phase full needs no delta record for it.
-  if (phase === "full" && !reviewId && !ciFile) assertDeltaClearsFullPhase({ tmpRoot, headSha, delta: delta?.parsed, threads: threadsFile ? source.parsed.threads : null, ...(threadsFile ? { candidateHead: execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim() } : {}) });
+  if (phase === "full" && !reviewId && !ciFile) assertDeltaClearsFullPhase({ tmpRoot, headSha, delta: delta?.parsed, threads: threadsFile ? source.parsed.threads : null, operatorFocus, ...(threadsFile ? { candidateHead: execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim() } : {}) });
 
   // Mutation authority comes from the PR itself, never from the caller.
   const prState = await fetchPr({ repo, pr });

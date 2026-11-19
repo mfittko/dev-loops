@@ -1993,3 +1993,12 @@ test("an all-body act list refuses delta_body_only_act_set with the edit-pr and 
   fs.writeFileSync(actList, JSON.stringify([BODY_ACT(1), BODY_ACT(2)]));
   await assert.rejects(runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], headAt(B)), /delta_body_only_act_set[^]*edit-pr\.mjs[^]*--converged-json/);
 });
+
+test("--threads-file with no unresolved thread builds the act set from the fixer plan's operator focus round", async () => {
+  const { dir, threadsFile } = threadsFixture({ ...THREADS, threads: [] });
+  const planPath = path.join(dir, "plan.json");
+  fs.writeFileSync(planPath, JSON.stringify({ workOrder: { operatorFocus: { round: "tighten the summary wording" } } }));
+  const input = (await runCli(threadArgs(threadsFile, "--spec-identity", "spec@1", "--fixer-plan", planPath), headAt(B))).input;
+  assert.deepEqual(input.actItems.map(({ ref, summary }) => [ref, summary]), [["operator-focus", "tighten the summary wording"]]);
+  await assert.rejects(runCli(threadArgs(threadsFile, "--spec-identity", "spec@1"), headAt(B)), /non-empty judge act list/);
+});

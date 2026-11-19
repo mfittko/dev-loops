@@ -154,7 +154,7 @@ harness dispatch. There are two delta sources: the gate judge's act list, and
 the thread route, which takes the captured set of unresolved review threads
 (`capture-review-threads --unresolved --bodies` output, or `list-review-threads --unresolved-only` output, passed with `--threads-file` in
 place of `--act-list`, with `--repo` and `--pr`). On the thread route each
-unresolved thread is one act item and its `ref` is the `threadId`. The
+unresolved thread is one act item and its `ref` is the `threadId`. With no unresolved thread, the pulled `--fixer-plan`'s operator focus `round` is the one act item (`ref` `operator-focus`), and a `commit_only` emission with neither refuses. The
 deterministic checks live in `@dev-loops/core/loop/pre-push-delta-review`; the
 dev-loop coordinator runs them through `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta`.
 

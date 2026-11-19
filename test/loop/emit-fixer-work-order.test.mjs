@@ -402,6 +402,22 @@ test("a commit_only emit under a held head lock refuses sequence_lock_busy and l
   });
 });
 
+test("a zero-thread threads commit_only emit refuses without an operator focus round and writes no marker; with one it emits and a focus-bound record clears full", async () => {
+  const { sequenceMarkerPath } = await import("@dev-loops/core/loop/fix-push-authority");
+  await withFixture(async ({ root, head, files, emit, writeRecord }) => {
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [] }));
+    const base = { phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined };
+    await assert.rejects(emit(base), /no unresolved thread needs an --operator-focus-file with a round/);
+    assert.equal(existsSync(sequenceMarkerPath(path.join(root, "tmp"), head)), false);
+    const focusFile = path.join(root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ round: "tighten the cap-round summary wording" }));
+    assert.equal((await emit({ ...base, operatorFocusFile: focusFile })).workOrder.phase, "commit_only");
+    await writeRecord({ items: [{ ref: "operator-focus", status: "resolved" }] });
+    assert.equal((await emit({ ...base, phase: "full", operatorFocusFile: focusFile })).workOrder.phase, "full");
+    await assert.rejects(emit({ ...base, phase: "full" }), /never reviewed|not threads in the threads file/);
+  });
+});
+
 test("a commit_only emit for an all-body act list refuses delta_body_only_act_set and writes no marker", async () => {
   const { sequenceMarkerPath } = await import("@dev-loops/core/loop/fix-push-authority");
   await withFixture(async ({ root, head, files, emit }) => {
@@ -1777,7 +1793,7 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
 });
 
 test("F1/F4: changing act list, threads, allowed paths, branch, phase or head changes the digest; equal inputs keep it", async () => {
-  await withFixture(async ({ wt, head, files, emit, writeRecord }) => {
+  await withFixture(async ({ root, wt, head, files, emit, writeRecord }) => {
     const base = await emit();
     assert.equal((await emit()).workOrderDigest, base.workOrderDigest);
     const variants = [
@@ -1799,7 +1815,8 @@ test("F1/F4: changing act list, threads, allowed paths, branch, phase or head ch
     variants.push(await emit());
     await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [] }));
     await writeRecord({ items: [] });
-    variants.push(await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads }));
+    await writeFile(path.join(root, "tmp", "focus.json"), JSON.stringify({ round: "zero-thread focus" }));
+    variants.push(await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, operatorFocusFile: path.join(root, "tmp", "focus.json") }));
     const digests = new Set([base, ...variants].map((unit) => unit.workOrderDigest));
     assert.equal(digests.size, variants.length + 1);
   });
