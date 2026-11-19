@@ -356,6 +356,9 @@ const COMMENT_WRITES = [
   "gh issue close bash $'\\x2d\\x63' x",
   "gh pr close bash $'\\x2dc' x",
   "gh pr reopen /bin/zsh $'\\x2dc' x",
+  // Any ANSI-C word in a gh command is denied, including the last position and a flag glued to its value.
+  "gh pr reopen 5 $'\\x2dcbody'",
+  "gh pr reopen 5 $'\\x2dcAPPROVED'",
   // The only decoded `gh` sits in an appended region (nested `$'` or tick text), after the outer shell word.
   `eval "\\$'\\x67h'" pr reopen zsh $'\\x2dc' x`,
   `G=gh; eval "\\$G pr reopen zsh $'\\x2dc' x"; echo "$'gh'"`,

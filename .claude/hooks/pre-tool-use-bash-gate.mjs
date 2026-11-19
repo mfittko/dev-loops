@@ -170,33 +170,19 @@ function segmentWriteKind(command) {
   const issueOrPr = has((t) => t === "issue" || t === "pr");
   // `comment` opens an editor on `-e`/`--editor` (or edits on `--edit-last`), so GH_EDITOR can supply the body: these count as body flags.
   const editorFlag = () => has((t) => t.startsWith("--edit") || /^-[^-]*e/.test(t));
+  // An ANSI-C `$'...'` word anywhere in a command that runs `gh` is denied: bash decodes it to flags and words
+  // the token model cannot judge (`$'\x2dc'`, `-$'c'`), so this fails closed instead of decoding and exempting.
+  if (command.includes("$'")) return "comment";
   // A `-c` that directly follows a shell word (`sh -c "..."`) is the shell's own flag. The shell word is bare or an absolute path;
   // a relative path such as the branch `feat/zsh` is an argument. The shell word must also come before the first `gh` token
   // (command position): after `gh`, a bare `zsh` is a branch argument (`gh pr reopen zsh -c x`). Consecutive duplicates from the token
   // expansion collapse first, so adjacency holds. A `-c` anywhere else, or inside a short cluster, counts.
-  const seq = tokens.map((t) => t.toLowerCase()).filter((t, i, all) => t !== all[i - 1]);
-  const ghAt = seq.findIndex((t) => /^(?:-[a-z]*s)?gh$/.test(t.split("/").pop()));
-  // Command position is judged on the plain words only, where the predecessor's own index must precede `gh`: a shell word repeated after
-  // `gh` (`sh -c "gh pr reopen sh -c x"`) is a branch argument and its `-c` counts. The decoded-word copies after `plainSeq` carry the
-  // ANSI-C flags the plain words lose (`$'\x2dc'` becomes `x2dc`), so command position there is judged against the first decoded
-  // `gh` token (one before `plainSeq.length` covers a boundary token the dedupe merged).
-  const plainSeq = expand(plainWords).map((t) => t.toLowerCase()).filter((t, i, all) => t !== all[i - 1]);
-  // `decodedOf` appends tick text and nested `$'` values after the outer words, so command position is judged per region:
-  // the outer own words end at `ownEnd`; a `gh` that exists only in an appended region (`eval "\$'\x67h'" pr reopen zsh $'\x2dc' x`)
-  // does not make the outer `-c` a shell flag.
-  const ownSeq = expand(decodedWords(tokenizeShellCommand(command).segments)).map((t) => t.toLowerCase()).filter((t, i, all) => t !== all[i - 1]);
-  const ownEnd = plainSeq.length - 1 + ownSeq.length;
   const isGh = (t) => /^(?:-[a-z]*s)?gh$/.test(t.split("/").pop());
-  const ghAtDecoded = seq.findIndex((t, j) => j >= plainSeq.length - 1 && j < ownEnd && isGh(t));
+  const seq = expand(plainWords).map((t) => t.toLowerCase()).filter((t, i, all) => t !== all[i - 1]);
+  const ghAt = seq.findIndex(isGh);
   const isShell = (t) => /^(?:\/(?:[^/]+\/)*)?(?:sh|bash|zsh|dash|ksh)$/.test(t ?? "");
-  const shellFlag = (i) => isShell(seq[i - 1]) && (i < plainSeq.length ? i - 1 < ghAt : ghAtDecoded >= 0 && i - 1 < ghAtDecoded);
-  // An appended region (tick text, nested string) is judged alone: its `-c` is a shell flag only when its own `gh` follows the shell word.
-  const regionCloseComment = regions.slice(1).some((r) => {
-    const rs = expand(r).map((t) => t.toLowerCase()).filter((t, i, all) => t !== all[i - 1]);
-    const g = rs.findIndex(isGh);
-    return rs.some((t, i) => /^-[^-]*c/.test(t) && !(t === "-c" && isShell(rs[i - 1]) && g >= 0 && i - 1 < g));
-  });
-  const closeComment = regionCloseComment || seq.some((t, i) => t.startsWith("--comment") || (/^-[^-]*c/.test(t) && i < ownEnd && !(t === "-c" && shellFlag(i))));
+  const shellFlag = (i) => isShell(seq[i - 1]) && i - 1 < ghAt;
+  const closeComment = seq.some((t, i) => t.startsWith("--comment") || (/^-[^-]*c/.test(t) && !(t === "-c" && shellFlag(i))));
   // Raw comment and review writes (`OPERATOR-OWNED-LINE`): the sanctioned writers refuse an operator-owned line, a raw write does not.
   // Comment clauses win over the body clause: a graphql addComment with `-f body=...` is a comment write, not a PR-body write.
   const isComment = (issueOrPr && has((t) => t === "comment") && (bodyFlag() || editorFlag())) ||
