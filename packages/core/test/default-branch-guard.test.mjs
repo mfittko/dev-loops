@@ -462,6 +462,10 @@ test("renderGuardHook emits a runnable script that names what it refused", () =>
   }
 });
 
+test("the generated pre-push hook forwards git's hook arguments (remote name and URL) to the authority check", () => {
+  assert.ok(renderGuardHook("pre-push", "main", null, "/x/check-fix-push-authority.mjs").includes('node "$authority_cli" "$@" || exit 1'));
+});
+
 test("the pre-push fallback refusal names the runnable close-sequence invocation", () => {
   assert.ok(renderGuardHook("pre-push", "main").includes("dev-loops-run cli/index.mjs gate close-sequence --head <baseline sha> --repo <owner/name> --pr <number>"));
 });

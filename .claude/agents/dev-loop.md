@@ -130,7 +130,7 @@ claim to the stale window. Once you have verified with native evidence that your
 are joined, run the owner-only handoff and record its status in the hand-back:
 
 ```sh
-node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs handoff --repo <owner/name> --pr <number> --run-id <the id used at claim>
+dev-loops-run scripts/loop/pr-runner-coordination.mjs handoff --repo <owner/name> --pr <number> --run-id <the id used at claim>
 ```
 
 It appends your exit signal and clears the claim in one locked write, so the successor's pre-flight

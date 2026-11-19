@@ -23,7 +23,7 @@ These routing guarantees are owned by [Copilot Loop State Graph](./copilot-loop-
 
 ## How to use the state machine in practice
 
-1. Run `node <resolved-skill-scripts>/loop/detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>`
+1. Run `dev-loops-run scripts/loop/detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>`
    to get the current Copilot-loop state, decisive snapshot fields, and recommended next action.
 
 2. After a separate `<resolved-skill-scripts>/github/request-copilot-review.mjs` call, apply `COPILOT-FOLLOWUP-REQUEST-BRANCHING` in the [follow-up skill](../copilot-pr-followup/SKILL.md), then refresh the detector normally. `--review-request-status` is unsupported. For combined detection/request/watch routing, use `copilot-pr-handoff.mjs` and consume its returned request/watch contract; it preserves its own request result, not an externally supplied override.
@@ -32,13 +32,13 @@ These routing guarantees are owned by [Copilot Loop State Graph](./copilot-loop-
    with `agentFixStatus: "applied"` and use `--input <snapshot.json>` for interpretation.
 
 4. Branch on the detector output instead of inventing a polling loop:
-   - `state=waiting_for_copilot_review` with `snapshot.copilotReviewOnCurrentHead=false`: do **not** poll manually; either run `node <resolved-skill-scripts>/loop/run-watch-cycle.mjs --repo <owner/name> --pr <number>` for persistent async waiting or report the wait state and resume later after the single detector call
-   - `state=waiting_for_ci` with `snapshot.ciStatus` in `{ "pending", "none" }`: do **not** poll manually by default; use `dev-loops-run cli/index.mjs loop watch-ci --repo <owner/name> --pr <number> --timeout 540` or `node <resolved-skill-scripts>/github/wait-pr-checks.mjs --repo <owner/name> --pr <number> --timeout 540` (one call waits at most about 170 s per `DEV-LOOP-PROBE-TIMEOUT-CEILING`; on `outcome: "pending"` run the returned `reissue` unchanged; settle-blocking with a 0/1/2 exit contract) to block-wait on the combined check/status state (provider-agnostic — CircleCI, GitHub Actions, and any external commit-status / check-run). `gh run watch <run-id>` is an Actions-only fallback when the current-head run id is already known and you know the gating checks are GitHub Actions. Either way, on `timeout`/`changed` report pending CI and resume later after the single detector refresh. Before considering the bounded exception, read [Zero-suite local-validation exception](./copilot-ci-status-contract.md#zero-suite-local-validation-exception), including its unavailable CLI input; these prerequisites cannot override a detector result of `none`.
+   - `state=waiting_for_copilot_review` with `snapshot.copilotReviewOnCurrentHead=false`: do **not** poll manually; either run `dev-loops-run scripts/loop/run-watch-cycle.mjs --repo <owner/name> --pr <number>` for persistent async waiting or report the wait state and resume later after the single detector call
+   - `state=waiting_for_ci` with `snapshot.ciStatus` in `{ "pending", "none" }`: do **not** poll manually by default; use `dev-loops-run cli/index.mjs loop watch-ci --repo <owner/name> --pr <number> --timeout 540` or `dev-loops-run scripts/github/wait-pr-checks.mjs --repo <owner/name> --pr <number> --timeout 540` (one call waits at most about 170 s per `DEV-LOOP-PROBE-TIMEOUT-CEILING`; on `outcome: "pending"` run the returned `reissue` unchanged; settle-blocking with a 0/1/2 exit contract) to block-wait on the combined check/status state (provider-agnostic — CircleCI, GitHub Actions, and any external commit-status / check-run). `gh run watch <run-id>` is an Actions-only fallback when the current-head run id is already known and you know the gating checks are GitHub Actions. Either way, on `timeout`/`changed` report pending CI and resume later after the single detector refresh. Before considering the bounded exception, read [Zero-suite local-validation exception](./copilot-ci-status-contract.md#zero-suite-local-validation-exception), including its unavailable CLI input; these prerequisites cannot override a detector result of `none`.
    - `snapshot.ciStatus="failure"` remains a stop/fix state, never a wait loop
 
-5. For reviewer-side draft-review work, run `node <resolved-skill-scripts>/loop/detect-reviewer-loop-state.mjs --repo <owner/name> --pr <number> [--local-state <path>]`.
+5. For reviewer-side draft-review work, run `dev-loops-run scripts/loop/detect-reviewer-loop-state.mjs --repo <owner/name> --pr <number> [--local-state <path>]`.
    If the state reaches `draft_review_ready`, stage the pending review with
-   `node <resolved-skill-scripts>/github/stage-reviewer-draft.mjs --repo <owner/name> --pr <number> --review-file <merged-review.json> --local-state-output <state.json>`,
+   `dev-loops-run scripts/github/stage-reviewer-draft.mjs --repo <owner/name> --pr <number> --review-file <merged-review.json> --local-state-output <state.json>`,
    then re-run the detector with `--local-state <state.json>`.
 
 6. Interpret the machine output per [Interpreting Copilot completion versus PR lifecycle completion](./copilot-loop-state-graph.md#interpreting-copilot-completion-versus-pr-lifecycle-completion); a fresh gate-coordination `nextAction` takes precedence over a `pre_approval_gate` hint. For stop states (`review_request_unavailable`,
@@ -155,7 +155,7 @@ A session that creates the branch and PR itself MUST run the pre-PR review per
 before the branch's first push and before `create-pr.mjs`; until then, the session
 and its sub-delegates commit locally and do not push. `pr create` also refuses without the review record (the guard and its writer are in `PRE-PR-BEFORE-FIRST-PUSH`).
 
-MUST use `node <resolved-skill-scripts>/github/create-pr.mjs --repo <owner/name> --assignee @me --base <base> --head <head> --title "..." --body-file <body-file>` (always draft, self-assigned by default; `--assignee @me` is the default).
+MUST use `dev-loops-run scripts/github/create-pr.mjs --repo <owner/name> --assignee @me --base <base> --head <head> --title "..." --body-file <body-file>` (always draft, self-assigned by default; `--assignee @me` is the default).
 
 <!-- rule: CLOSING-REF-BRANCH-MISMATCH -->
 `CLOSING-REF-BRANCH-MISMATCH`: `create-pr.mjs` and `edit-pr.mjs` MUST fail closed
