@@ -185,6 +185,20 @@ describe("delta trigger", () => {
     assert.throws(() => threadsToActList({ ...payload, threads: [{ ...payload.threads[0], isResolved: true }] }, { repo: "o/r", pr: 7 }), /not successful list-review-threads/);
   });
 
+  test("threadsToActList accepts a bound capture-review-threads --bodies payload and refuses an unbound one", () => {
+    const capture = (source) => ({ ok: true, source, summary: {}, skippedUntrusted: [], threads: [{ threadId: "T1", path: "a.mjs", line: 3, isOutdated: false, bodies: ["one", "two"] }] });
+    const items = threadsToActList(capture({ type: "github", repo: "o/r", pr: 7 }), { repo: "o/r", pr: 7 });
+    assert.deepEqual(items.map((item) => [item.ref, item.summary, item.file]), [["T1", "one\n\ntwo", "a.mjs"]]);
+    for (const source of [{ type: "github", repo: "o/r", pr: 8 }, { type: "input", inputPath: "x.json" }, { type: "stdin" }]) {
+      assert.throws(() => threadsToActList(capture(source), { repo: "o/r", pr: 7 }), /not successful list-review-threads/);
+    }
+    for (const bodies of [[], [1], ["ok", null]]) {
+      const bad = capture({ type: "github", repo: "o/r", pr: 7 });
+      bad.threads[0].bodies = bodies;
+      assert.throws(() => threadsToActList(bad, { repo: "o/r", pr: 7 }), /not successful list-review-threads/);
+    }
+  });
+
   test("thread-route actSetId ignores body excerpts and order; a different thread set changes it", () => {
     const mk = (threads) => startDeltaSequence({ reviewBaselineHead: A, actList: threadsToActList({ ok: true, repo: "o/r", pr: 7, threads }, { repo: "o/r", pr: 7 }) }).actSetId;
     const t = (threadId, body) => ({ trusted: true, threadId, body, isResolved: false, path: "a.mjs", line: 3 });

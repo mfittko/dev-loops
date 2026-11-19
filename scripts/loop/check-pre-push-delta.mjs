@@ -80,7 +80,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
 
   --act-list <path>       The judge-pass --out act list the fix resolves. An act item that names no file (a PR-body item) leaves the act set and is printed as bodyItems, a top-level field of the input-run output that is present only when at least one act item was dropped; edit the PR body through scripts/github/edit-pr.mjs and the next gate round verifies it. An act list of only such items refuses delta_body_only_act_set, except on the --reviewer-only route, where it yields an empty code act set and prints bodyItems
   --threads-file <path>   Thread route, in place of --act-list: successful list-review-threads --unresolved-only
-                          output for --repo/--pr. Each unresolved thread is one act item; its ref is the threadId.
+                          output, or a github-sourced capture-review-threads --unresolved --bodies file, for --repo/--pr. Each unresolved thread is one act item; its ref is the threadId.
   --repo <owner/name>     Required with --threads-file and --reviewer-only
   --pr <n>                Required with --threads-file and --reviewer-only
   --baseline <sha>        reviewBaselineHead: the head the gate round reviewed (hex SHA)
