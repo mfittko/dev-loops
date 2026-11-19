@@ -3032,7 +3032,7 @@ function renderInput(overrides = {}) {
     issueRef: "#42",
     issueBody: "Acceptance criteria: the thing works.",
     diffOutput: "diff --git a/x.mjs b/x.mjs\n+added line\n",
-    diffPath: "tmp/gate-context/owner-repo/pr-9/draft_gate-abc1234567890.diff",
+    diffPaths: ["tmp/gate-context/owner-repo/pr-9/draft_gate-abc1234567890.diff"],
     changedFiles: ["x.mjs"],
     adjacentCode: { files: [{ path: "x.mjs", role: "changed" }, { path: "y.mjs", role: "imports" }], stripped: [], truncated: [], missing: [] },
     ...overrides,
@@ -3066,7 +3066,7 @@ test("renderBriefingPrefix + renderBriefingEvidence: under-cap — inline mode, 
   assert.ok(!text.includes("Implement the thing."));
   assert.ok(text.includes("Acceptance criteria: the thing works."));
   assert.ok(!text.includes("+added line"), "the diff body lives only in the required diff read");
-  assert.ok(text.includes(`Read the filtered diff from:\n  ${renderInput().diffPath}`));
+  assert.ok(text.includes(`Read the filtered diff from:\n  ${renderInput().diffPaths[0]}`));
   assert.ok(text.includes("Changed files (1):"));
   assert.ok(text.includes("- x.mjs"));
   assert.ok(prefix.includes("verify-fresh-review-context.mjs"));
@@ -3104,7 +3104,7 @@ test("AC2 composer seam: the composed holistic dispatch prompt carries spec + di
     assert.ok(composed.includes(`/repo/worktree/tmp/e.txt\` (sha256 ${evidenceRead.sha256}`), "composed prompt must bind the evidence read");
     assert.ok(!evidence.includes("Implement the thing."), "the PR body is the separate pr-body read, not the evidence file");
     assert.ok(evidence.includes("Acceptance criteria: the thing works."), "evidence must carry the linked-issue spec text");
-    assert.ok(evidence.includes(renderInput().diffPath), "evidence must point at the diff (the required diff read)");
+    assert.ok(evidence.includes(renderInput().diffPaths[0]), "evidence must point at the diff (the required diff read)");
     assert.doesNotMatch(evidence, /\bREVIEW BRIEF\b/i);
     // The holistic angle's own independence wording made it into the suffix.
     assert.match(composed, /un-briefed/i);
@@ -3301,7 +3301,7 @@ test("renderBriefingEvidence: over-cap diff falls back to pointer mode, disclose
 
 test("renderBriefingEvidence: over-cap diff with no persisted diffPath discloses an explicit unavailable-pointer note (no crash)", () => {
   const bigDiff = "+" + "x".repeat(100);
-  const { text, prefixMode } = renderBriefingEvidence(renderInput({ diffOutput: bigDiff, diffPath: null, capBytes: 10 }));
+  const { text, prefixMode } = renderBriefingEvidence(renderInput({ diffOutput: bigDiff, diffPaths: [], capBytes: 10 }));
   assert.equal(prefixMode, "pointer");
   assert.ok(text.includes("diff pointer unavailable"));
 });
@@ -3371,7 +3371,7 @@ test("renderBriefingEvidence: a hostile issue body cannot forge a second Diff/Ch
   // content, and the attacker's forged content never leaks into them.
   const beforeFence = textLines.slice(0, closeFenceIdx).join("\n");
   const afterFence = textLines.slice(closeFenceIdx).join("\n");
-  const realDiffPointer = `Read the filtered diff from:\n  ${renderInput().diffPath}`;
+  const realDiffPointer = `Read the filtered diff from:\n  ${renderInput().diffPaths[0]}`;
   assert.ok(!beforeFence.includes(realDiffPointer), "the real diff pointer never leaks into the fenced issue body");
   assert.ok(afterFence.includes(realDiffPointer), "real diff section carries the real diff pointer");
   assert.ok(afterFence.includes("- evil.mjs"), "real changed-files section carries the real file list");
@@ -3452,7 +3452,7 @@ test("renderBriefingEvidence: an unbalanced code fence inside the PR/issue body 
   }));
 
   assert.ok(text.includes("## Diff at reviewed head"), "diff section heading survives");
-  assert.ok(text.includes(`Read the filtered diff from:\n  ${renderInput().diffPath}`), "diff pointer still renders, not swallowed by an open fence");
+  assert.ok(text.includes(`Read the filtered diff from:\n  ${renderInput().diffPaths[0]}`), "diff pointer still renders, not swallowed by an open fence");
   assert.ok(text.includes("## Changed files + adjacent-code summary"), "changed-files section survives");
 });
 
@@ -5637,7 +5637,7 @@ test("renderBriefingEvidence (AC8): a diff over the inline cap raw that collapse
   const capBytes = Math.floor((rawBytes + collapsedBytes) / 2); // strictly between raw and collapsed
   const input = {
     repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
-    diffOutput, diffPath: "tmp/x.diff", capBytes,
+    diffOutput, diffPath: "tmp/x.diff", diffPaths: ["tmp/x.diff"], filteredDiffPaths: ["tmp/x.diff"], capBytes,
   };
   const result = renderBriefingEvidence(input);
   assert.equal(result.prefixMode, "inline", "the raw diff exceeds capBytes but the collapsed diff does not");
@@ -5861,7 +5861,7 @@ test("renderScopedBriefingVariant: neither the docs-only nor the changed-files v
     repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
     evidencePath: "tmp/x.briefing-evidence.txt",
     diffPath: "tmp/x.diff",
-    filteredDiffPath: "tmp/x.filtered.diff",
+    filteredDiffPaths: ["tmp/x.filtered.diff"],
     diffOutput: [
       "diff --git a/docs/a.md b/docs/a.md",
       "index 111..222 100644",
@@ -8226,7 +8226,7 @@ test("renderBriefingEvidence carries the linked issue, diff pointer, changed-fil
   const { text, prefixMode, diffBytes } = renderBriefingEvidence({
     repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234",
     prBody: "PR BODY TEXT", issueRef: "#2", issueBody: "ISSUE BODY TEXT",
-    diffOutput: "diff --git a/x.mjs b/x.mjs\n+added\n", diffPath: "tmp/x.diff",
+    diffOutput: "diff --git a/x.mjs b/x.mjs\n+added\n", diffPaths: ["tmp/x.diff"],
     changedFiles: ["x.mjs"], adjacentCode: { files: [{ path: "y.mjs", role: "importer" }] },
     validationResultsPath: "/w/tmp/v.json",
   });

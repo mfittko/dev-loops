@@ -1542,7 +1542,7 @@ function renderCapRoundResidueLines(residue) {
  * @param {string|null} [input.issueBody] — single-issue body, rendered under `issueRef` with no `### <label>` sub-heading. Ignored when `issueSections` is given.
  * @param {{label: string, body: string}[]|null} [input.issueSections] — per-issue bodies for a multi-issue PR (structured, never pre-joined): each renders as a renderer-emitted `### <label>` line OUTSIDE any fence, followed by that issue's OWN pickFence-sized fenced block. Takes precedence over `issueBody` when non-empty.
  * @param {string|null} [input.diffOutput] — filtered diff text, when captured; sizes the pointer (prefixMode, diffBytes), never inlined
- * @param {string|null} [input.diffPath] — persisted filtered diff, the required `diff` read this file points at
+ * @param {string[]} [input.diffPaths] — persisted filtered diff parts, the required `diff` reads the pointer lines list
  * @param {string[]} [input.changedFiles]
  * @param {{path: string, reason: "default"|"configured"}[]} [input.excludedFiles] — filterDiffForInline
  *   excludedFiles; rendered as `Excluded from the filtered diff (n):` after the changed-files list, only when non-empty.
@@ -1561,7 +1561,7 @@ function renderCapRoundResidueLines(residue) {
 export function renderBriefingEvidence({
   repo, pr, gate, headSha, worktreeRoot = null,
   issueRef = null, issueBody = null, issueSections = null,
-  diffOutput = null, diffPath = null, diffPaths = null, changedFiles = [], excludedFiles = [], adjacentCode = null,
+  diffOutput = null, diffPaths = [], changedFiles = [], excludedFiles = [], adjacentCode = null,
   validationResultsPath = null,
   capRoundResidue = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
@@ -1621,7 +1621,7 @@ export function renderBriefingEvidence({
   lines.push(`## Diff at reviewed head (${headSha})`);
   lines.push("");
   const filteredBytes = hasDiffText ? persistedDiffBytes(diffOutput) : 0;
-  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPaths: diffPaths?.length ? diffPaths : (diffPath ? [diffPath] : []) })) lines.push(line);
+  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPaths })) lines.push(line);
   lines.push("");
   lines.push("## Changed files + adjacent-code summary");
   lines.push("");
@@ -1682,7 +1682,7 @@ export function renderBriefingEvidence({
  * @param {{label: string, body: string}[]|null} [input.issueSections]
  * @param {string|null} [input.diffOutput] — full diff text, when captured
  * @param {string|null} [input.diffPath] — persisted unfiltered `.diff`, linked unconditionally in the widen-back paragraph
- * @param {string|null} [input.filteredDiffPath] — persisted filtered diff (the pointer target; falls back to diffPath)
+ * @param {string[]} [input.filteredDiffPaths] — persisted filtered diff parts (the pointer targets)
  * @param {{path: string, reason: "default"|"configured"}[]} [input.excludedFiles] — filterDiffForInline
  *   excludedFiles; rendered as `Excluded from the filtered diff (n):` after the diff pointers, only when non-empty.
  * @param {string|null} [input.validationResultsPath]
@@ -1694,7 +1694,7 @@ export function renderScopedBriefingVariant(scope, {
   repo, pr, gate, headSha, evidencePath, contextPath = null, worktreeRoot = null,
   issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null,
-  filteredDiffPath = null, filteredDiffPaths = null, excludedFiles = [],
+  filteredDiffPaths = [], excludedFiles = [],
   validationResultsPath = null, adjacentCode = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
   rules = null,
@@ -1769,7 +1769,7 @@ export function renderScopedBriefingVariant(scope, {
   const diffBytes = hasDiffText ? Buffer.byteLength(collapsePureSubstitutionRuns(diffOutput), "utf8") : 0;
   const prefixMode = diffBytes > capBytes ? "pointer" : "inline";
   const filteredBytes = hasDiffText ? persistedDiffBytes(diffOutput) : 0;
-  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPaths: filteredDiffPaths?.length ? filteredDiffPaths : ((filteredDiffPath ?? diffPath) ? [filteredDiffPath ?? diffPath] : []) })) lines.push(line);
+  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPaths: filteredDiffPaths })) lines.push(line);
   if (scope === "docs-only") {
     const { docFiles, unparsedCount } = hasDiffText ? listDocFilesInDiff(diffOutput, rules) : { docFiles: [], unparsedCount: 0 };
     lines.push("");
