@@ -2908,7 +2908,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         throw new Error(`--converged-json fixerCommit ${JSON.stringify(convergedInput.fixerCommit)} is not the current PR head ${evidence.currentHeadSha}; refuse to record convergence for a stale or foreign head.`);
       }
       canonicalHeadSha = options.headSha;
-    } else {
     }
     draftGateConfig = resolveGateConfig(config, "draft");
     if (!convergedInput) {
@@ -2916,7 +2915,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         canonicalHeadSha = resolveRequestedHeadSha(options.headSha, evidence.currentHeadSha);
       } catch (error) {
         capRoundHead = await resolveCleanCapRoundHead({ options, cap: draftGateConfig.maxReviewRounds, currentHeadSha: evidence.currentHeadSha, repoRoot, runChild, env });
-        if (!capRoundHead) throw error;
+        if (!capRoundHead) {
+          const reason = draftGateConfig.maxReviewRounds > 0 ? " (no clean cap round at that head, or it is not an ancestor of the PR head)" : "";
+          throw new Error(`${error.message}${reason}`);
+        }
         canonicalHeadSha = capRoundHead;
       }
     }
@@ -2961,7 +2963,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
     const requestedGateAction = resolveGateAction(options.gate);
     const prIsDraft = Boolean(coordinationContext.prData?.isDraft);
-    if (options.gate === "draft_gate" && coordination.draftGateAlreadySatisfied && !capRoundHead) {
+    if (options.gate === "draft_gate" && coordination.draftGateAlreadySatisfied && !(capRoundHead && !(coordinationContext.gateEvidence?.draftGate?.visible && coordinationContext.gateEvidence.draftGate.verdict === "clean"))) {
       // The draft gate is a one-time boundary: a non-draft PR with clean draft_gate
       // evidence (on any head) has already passed it, and the pre-merge gate check
       // accepts that evidence. Re-posting is therefore a no-op, not an error —
@@ -3053,7 +3055,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       && !evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
         draftCapRoundFixed: false, coordinationContext, maxCopilotRounds, draftGateConfig, preApprovalGateConfig, reviewMode,
       })).forbiddenActions.includes(requestedGateAction);
-    if (gateActionForbidden && !forbidOnlyByCapFixed && !capRoundHead) {
+    // A clean cap-round post at its own head stays allowed unless the PR is closed, blocked or done.
+    const capRoundWaiver = capRoundHead && !coordination.allowedNextActions.some((a) => a === PR_CHECKPOINT_ACTION.REPORT_DONE || a === PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+    if (gateActionForbidden && !forbidOnlyByCapFixed && !capRoundWaiver) {
       throw new Error(buildGateEntryRefusalError({ options, coordination }));
     }
     // Post-time fan-out evidence enforcement: refuse an under-qualified inline
@@ -3393,6 +3397,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   }
   if (convergedInput && (convergedMarker === null || options.verdict !== "clean")) {
     throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs a clean composed verdict over a validated low/nit act list (got verdict ${JSON.stringify(options.verdict)}); post a full round instead.`);
+  }
+  if (capRoundHead && options.verdict !== "clean") {
+    throw new Error(`A post at the earlier cap-round head ${canonicalHeadSha} must compose a clean verdict (got ${JSON.stringify(options.verdict)}); post a non-clean round at the current PR head.`);
   }
   await refuseStaleBase();
   // A fully judged round takes its verdict from the judge's act list alone, so the severity floor never overrides it. A partly judged ledger keeps the floor.
