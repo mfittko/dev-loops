@@ -209,13 +209,15 @@ const LAUNCHER_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader",
 const baseName = (value) => value.split("/").pop();
 
 // An unquoted redirection word (`2>/dev/null`, `>f`, `>>`, `<`, `&>f`): bash consumes it and its target, so neither is the program or an argument.
-const REDIRECT_WORD = /^(?:\d*(?:>>?|<>|<|>&)|&>>?)\|?/;
-const REDIRECT_OPERATOR_ONLY = /^(?:\d*(?:>>?|<>|<|>&)|&>>?)\|?$/;
+const REDIRECT_WORD = /^(?:\d*(?:>>?|<>|<&|<|>&)|&>>?)\|?/;
+const REDIRECT_OPERATOR_ONLY = /^(?:\d*(?:>>?|<>|<&|<|>&)|&>>?)\|?$/;
 function stripRedirections(words) {
   const out = [];
   for (let k = 0; k < words.length; k++) {
     const w = words[k];
-    if (w.op || w.single || w.double || w.ansi || !REDIRECT_WORD.test(w.raw)) out.push(w);
+    // A heredoc or here-string op word owns the next word (delimiter or target); an unquoted redirection word is dropped with its target.
+    if (w.op) k++;
+    else if (!REDIRECT_WORD.test(w.raw)) out.push(w);
     else if (REDIRECT_OPERATOR_ONLY.test(w.raw)) k++;
   }
   return out;
@@ -252,16 +254,17 @@ function segmentRunsMergePrWithoutCheck(words) {
   const head = baseName(values[i] ?? "");
   if (/^(?:node|bun|dev-loops-run)$/.test(head)) {
     // The entrypoint is the first operand after the launcher flags; a non-executing mode (`node --check`) or another script that takes merge-pr.mjs as data is no merge.
-    // ponytail: closed list of value-taking launcher flags; an unlisted one makes its value the entrypoint, so the command is allowed. Extend the list when a launcher gains one.
-    let k = i + 1;
+    // An unlisted dashed flag may take a value, so a later merge-pr.mjs word is denied (fail closed). `-c` is non-executing for node only; elsewhere it takes a value (`bun -c bunfig.toml`).
+    let k = i + 1, unlisted = false;
     for (; k < values.length; k++) {
       const v = values[k];
       if (v === "--") { k++; break; }
       if (!v.startsWith("-")) { if (head === "bun" && v === "run") continue; break; }
-      if (LAUNCHER_NON_EXECUTING.has(v)) return false;
-      if (LAUNCHER_VALUE_FLAGS.has(v)) k++;
+      if (LAUNCHER_NON_EXECUTING.has(v) && (v !== "-c" || head === "node")) return false;
+      if (LAUNCHER_VALUE_FLAGS.has(v) || v === "-c") k++;
+      else if (!v.includes("=")) unlisted = true;
     }
-    if (baseName(values[k] ?? "") !== "merge-pr.mjs") return false;
+    if (baseName(values[k] ?? "") !== "merge-pr.mjs") return unlisted && values.slice(k).some((v) => baseName(v) === "merge-pr.mjs");
     i = k;
   } else if (head !== "merge-pr.mjs") return false;
   // Any `--check=` word voids the allow: the last `--check` token of either form wins in merge-pr, so the gate stays fail-closed and accepts only a bare `--check` word.
