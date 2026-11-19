@@ -27,7 +27,10 @@ function mockRunChild(responses) {
     if (resp.error) {
       return { code: 1, stdout: "", stderr: resp.error };
     }
-    return { code: 0, stdout: JSON.stringify(resp.payload), stderr: "" };
+    // Like GitHub, return __typename only when the query selects it (#3268).
+    const queried = args.some((a) => a.startsWith("query=") && a.includes("__typename"));
+    const body = JSON.stringify(resp.payload, (k, v) => (k === "__typename" && !queried ? undefined : v));
+    return { code: 0, stdout: body, stderr: "" };
   };
 }
 
@@ -292,6 +295,7 @@ describe("add-queue-item", () => {
       assert.equal(result.ok, true);
       assert.equal(result.item.itemId, "PVTI_existing");
       assert.equal(result.item.issueNumber, 10);
+      assert.equal(result.item.prNumber, null);
       assert.equal(result.item.status, "Next Up");
       assert.equal(result.item.alreadyPresent, true);
     });

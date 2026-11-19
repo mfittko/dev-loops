@@ -332,7 +332,7 @@ async function gateWatcherExclusivity(
   { repo, pr, head, waitKind, env, cwd },
   { recordWatchClaimImpl = defaultRecordWatchClaim, nowMs = Date.now(), staleAfterMs } = {},
 ) {
-  const runId = resolveRunId(env);
+  const runId = resolveRunId(env, { cwd });
   if (runId === null) {
     if (resolveRuntimeHarness(env) === "codex") {
       return { engaged: true, ok: false, reason: "unverified_codex_context", target: `${repo}#${pr}`, waitKind };
@@ -516,9 +516,10 @@ export async function runWatchCycle(
     recordWatchClaimImpl = defaultRecordWatchClaim,
     detectSessionActivity = false,
     spawnImpl = spawn,
+    cwd = process.cwd(),
   } = {},
 ) {
-  const leaseCwd = resolveRepoRoot(process.cwd());
+  const leaseCwd = resolveRepoRoot(cwd);
   const nowMs = Date.now();
   const exclusivityStaleAfterMs = resolveStaleRunnerMaxAgeMs({}, env);
   const gateExclusivity = (waitKind, head) => gateWatcherExclusivity(

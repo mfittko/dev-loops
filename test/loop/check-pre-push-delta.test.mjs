@@ -1940,8 +1940,39 @@ test("AC11: countPrOwnCommits is 0 for a base-only merge range and counts PR-own
   } finally { cleanup(repo); }
   const merged = reviewerOnlyRepo({ nonBaseOnlyMerge: true });
   try {
-    assert.ok(await countPrOwnCommits(merged.dir, merged.mergeHead, merged.head, "main", deps) >= 2, "a non-base-only merge and its side commit count");
+    assert.equal(await countPrOwnCommits(merged.dir, merged.mergeHead, merged.head, "main", deps), 1, "a clean non-base-only merge resolves nothing, so only its side commit counts");
   } finally { cleanup(merged); }
+  const evil = reviewerOnlyRepo({ evilMerge: true });
+  try {
+    assert.equal(await countPrOwnCommits(evil.dir, evil.mergeHead, evil.head, "main", deps), 2, "the side commit plus the resolved merge");
+  } finally { cleanup(evil); }
+  const conflict = reviewerOnlyRepo({ conflictOnly: true });
+  try {
+    assert.equal(await countPrOwnCommits(conflict.dir, conflict.fix, conflict.head, "main", deps), 1, "the conflict resolution is the only change and counts");
+  } finally { cleanup(conflict); }
+});
+
+test("countPrOwnCommits is 0 for a clean merge whose base commit touches a PR-changed file", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clean-merge-"));
+  initGitFixture(dir, { branch: "main", commit: null });
+  const git = (...args) => runGitFixture(dir, args);
+  git("config", "commit.gpgsign", "false");
+  const lines = (top, bottom) => `${top}\n1\n2\n3\n4\n5\n6\n7\n8\n9\n${bottom}\n`;
+  fs.writeFileSync(path.join(dir, "f.txt"), lines("top", "bottom"));
+  git("add", "."); git("commit", "-qm", "base");
+  git("checkout", "-qb", "pr");
+  fs.writeFileSync(path.join(dir, "f.txt"), lines("top", "pr-bottom"));
+  git("add", "."); git("commit", "-qm", "feat: f");
+  const before = git("rev-parse", "HEAD");
+  git("checkout", "-q", "main");
+  fs.writeFileSync(path.join(dir, "f.txt"), lines("base-top", "bottom"));
+  git("add", "."); git("commit", "-qm", "base moves f");
+  git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"));
+  git("checkout", "-q", "pr");
+  git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
+  try {
+    assert.equal(await countPrOwnCommits(dir, before, git("rev-parse", "HEAD"), "main", { fetchBase: () => {} }), 0);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 const BODY_ACT = (n) => { const item = { ref: `body-${n}`, severity: "low", angle: "spec", summary: `PR body finding ${n}`, judgeDisposition: "act" }; return { ...item, fingerprint: fingerprintFinding(item) }; };

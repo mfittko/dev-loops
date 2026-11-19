@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
  * wait-for-gate-units.mjs — the Claude Code join for a gate round's dispatched
- * units (GATE-EXEC-HARNESS-JOIN). One foreground, read-only process: it
- * re-checks every pending unit every 2 s until all are done, the round is
- * retired, or the timeout is reached. It writes no file and makes no network
- * call. Its one spawn is the read-only `git worktree list` behind
+ * units (GATE-EXEC-HARNESS-JOIN). One foreground process: it re-checks every
+ * pending unit every 2 s until all are done, the round is retired, or the
+ * timeout is reached. It makes no network call. Its one write is the PR runner
+ * claim heartbeat during a plan wait (as probe-ci-status does), which needs a
+ * resolvable run id. Its one spawn is the read-only `git worktree list` behind
  * resolveGateArtifactTmpRoot when no receipt root is injected.
  *
  * The count unit is the dispatch unit (one entry of the emit plan's `units`).
@@ -22,6 +23,8 @@ import { verifyPullReceipt, verifyPulledResult } from "../github/_work-order-pro
 import { CHECKPOINT_SENTINEL_PREFIX } from "../github/verify-fresh-review-context.mjs";
 import { ANY_SCOPE, findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
+import { ensureAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
+import { WATCH_HEARTBEAT_MS } from "../github/_watch-heartbeat.mjs";
 
 export const DEFAULT_TIMEOUT_MS = 540000;
 export const MAX_TIMEOUT_MS = 570000;
@@ -112,7 +115,7 @@ function selectUnits({ plan, judge, wanted }) {
     requireRound(gate, headSha);
     if (!Array.isArray(refs) || refs.length === 0 || !refs.every((ref) => typeof ref === "string")) throw new Error("judge plan carries no compact work-order reference or verdict outputRefs");
     const angles = refs.map((_, index) => (index === 0 ? "judge" : index === 1 ? "spec-authority" : `artifact-${index}`));
-    return { gate, headSha, role: "judge", units: [{ scope: "judge", angles, outputRefs: refs, ...compact(plan) }] };
+    return { gate, headSha, role: "judge", target: plan.workOrder?.target, units: [{ scope: "judge", angles, outputRefs: refs, ...compact(plan) }] };
   }
   if (!Array.isArray(plan.units)) throw new Error("emit plan has no units array");
   const units = plan.units.map((unit) => {
@@ -125,7 +128,7 @@ function selectUnits({ plan, judge, wanted }) {
   requireRound(plan.gate, plan.headSha);
   const unknown = (wanted ?? []).filter((scope) => !units.some((unit) => unit.scope === scope));
   if (unknown.length > 0) throw new Error(`unknown --unit scope(s): ${unknown.join(", ")}`);
-  return { gate: plan.gate, headSha: plan.headSha, role: "review", units: wanted === undefined ? units : units.filter((unit) => wanted.includes(unit.scope)) };
+  return { gate: plan.gate, headSha: plan.headSha, role: "review", target: { repo: plan.repo, pr: plan.pr }, units: wanted === undefined ? units : units.filter((unit) => wanted.includes(unit.scope)) };
 }
 
 // A partially written retirement.json (non-atomic writer) counts as not retired on this tick.
@@ -191,13 +194,23 @@ async function waitForArtifact({ artifact, after, timeoutMs, now, delay }) {
   }
 }
 
-export async function waitForUnits({ artifact, after, emitPlan, judgePlan, units: wanted, tmpRoot, timeoutMs = DEFAULT_TIMEOUT_MS, receiptTmpRoot, now = Date.now, delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
+export async function waitForUnits({ artifact, after, emitPlan, judgePlan, units: wanted, tmpRoot, timeoutMs = DEFAULT_TIMEOUT_MS, receiptTmpRoot, now = Date.now, delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), env = process.env, cwd = process.cwd(), ensureOwnership = ensureAsyncRunnerOwnership }) {
   if (artifact !== undefined) return waitForArtifact({ artifact, after, timeoutMs, now, delay });
   const planPath = emitPlan ?? judgePlan;
   const planStat = await stat(planPath).catch(() => { throw new Error(`plan ${planPath} does not exist`); });
-  const { gate, headSha, role, units } = selectUnits({ plan: await readPlan(planPath), judge: judgePlan !== undefined, wanted });
-  const receipts = receiptTmpRoot ?? resolveGateArtifactTmpRoot(path.dirname(path.resolve(tmpRoot)));
+  const { gate, headSha, role, target, units } = selectUnits({ plan: await readPlan(planPath), judge: judgePlan !== undefined, wanted });
+  const worktreeRoot = path.dirname(path.resolve(tmpRoot));
+  const receipts = receiptTmpRoot ?? resolveGateArtifactTmpRoot(worktreeRoot);
   const started = now();
+  // Refresh the PR runner claim like probe-ci-status, so a long join never ages it past the stale window.
+  // No-op without a resolvable run id or a plan target; a failure never affects the wait.
+  let lastHeartbeat = started;
+  const heartbeat = async () => {
+    // The standalone review route is ownership-exempt and has no teardown, so it never refreshes a claim.
+    if (gate === "review" || !target?.repo || !target?.pr || now() - lastHeartbeat < WATCH_HEARTBEAT_MS) return;
+    lastHeartbeat = now();
+    try { await ensureOwnership({ repo: target.repo, pr: target.pr, env, cwd, claimIfMissing: false, requireExisting: false }); } catch { /* best-effort */ }
+  };
   // A whole-round record retires the round; a scoped (body-only rerun) record retires only the units it names. The judge matches any scoped record, as the judge pull and judge-pass do.
   const roundRetired = () => retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs) || units.some((unit) => retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs, role === "judge" ? ANY_SCOPE : unit.scope));
   for (;;) {
@@ -211,6 +224,7 @@ export async function waitForUnits({ artifact, after, emitPlan, judgePlan, units
     if (missing.length === 0) return result("all_done", [], done);
     const remaining = timeoutMs - (now() - started);
     if (remaining <= 0) return result("timeout", missing, done);
+    await heartbeat();
     await delay(Math.min(RECHECK_INTERVAL_MS, remaining));
   }
 }
