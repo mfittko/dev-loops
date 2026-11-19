@@ -90,6 +90,8 @@ test("runProseLinkageDetector quotes the matched line and ignores mid-sentence '
     issues: [{ number: 1, children: [], body: `${buildBody({ scope: "owns root" })}\n${line}` }],
   }));
   assert.equal(run("Runs after every other child of #12 has merged.").ok, true);
+  assert.equal(run("Runs after every other\nchild of #12 has merged.").ok, true);
+  assert.equal(run("| Phase | Runs after every other child of #12 |").ok, true);
   assert.match(run("Child of #99").errors[0].message, /"Child of #99"/);
 });
 
@@ -98,7 +100,7 @@ test("runProseLinkageDetector matches each marked line form and gives a per-patt
     root: 1,
     issues: [{ number: 1, children: [], body: `${buildBody({ scope: "owns root" })}\n${line}` }],
   }));
-  for (const line of ["> Child of #4", ">> Child of #4", "## Parent: #4", "- [ ] Parent: #4", "- [x] Parent: #4", "+ sub-issue of #4", "1. Child of #4", "2) Child of #4", "| Child of #4 |", "**Parent:** #4"]) {
+  for (const line of ["> Child of #4", ">> Child of #4", "## Parent: #4", "- [ ] Parent: #4", "- [x] Parent: #4", "+ sub-issue of #4", "1. Child of #4", "2) Child of #4", "| Child of #4 |", "| Phase | Child of #4 |", "**Parent:** #4", "- Child of #4", "* Child of #4", "- [ ] Child of #4", "## Child of #4", "**Child of #4**"]) {
     assert.equal(run(line).ok, false, line);
   }
   assert.match(run("Depends on: #4").errors[0].message, /sub-issue tree order/);

@@ -11,8 +11,8 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 
 // Only "Child of #" is line-anchored, because it misfires on ordinary prose. The other labels state parentage anywhere on a line.
 // The prefix allows blockquote, heading, bullet (with task box), numbered item and table cell markers.
-const LINE_PREFIX = String.raw`^[ \t]*(?:>[ \t>]*)?(?:#{1,6}[ \t]+|[-*+][ \t]+(?:\[[ xX]\][ \t]+)?|\d+[.)][ \t]+|\|[ \t]*)?(?:\*\*)?`;
-const linkageRe = (label) => new RegExp(`${LINE_PREFIX}${label}.*$`, "imu");
+const LINE_PREFIX = String.raw`^[ \t]*(?:>[ \t>]*)?(?:#{1,6}[ \t]+|[-*+][ \t]+(?:\[[ xX]\][ \t]+)?|\d+[.)][ \t]+|\|(?:[^|\n]*\|)*[ \t]*)?(?:\*\*)?`;
+const linkageRe = (label) => new RegExp(`${LINE_PREFIX}${label}.*$`, "mu");
 const wholeLineRe = (label) => new RegExp(`^.*${label}.*$`, "imu");
 
 export const FORBIDDEN_PROSE_PATTERNS = [
