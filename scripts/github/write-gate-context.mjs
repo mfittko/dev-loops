@@ -1329,7 +1329,7 @@ function renderOptionalReadFieldsSection() {
     "## Optional read fields",
     "",
     "Query an optional read by field with `jq`; never run `jq keys` to discover its shape.",
-    "- `context` (JSON): `resolvedAngles`, `angleScopes`, `scope.diffPath`, `scope.diffSource`, `scope.changedFiles`, `adjacentCode.files[]` (`path`, `role`, `relatedTo`, `bytes`; an index, no file contents: read a file by its path), `adjacentCode.stripped`, `adjacentCode.missing`, `adjacentCode.expansion.files`, `adjacentCode.expansion.dropped`, `requiredReads`, `fanout`.",
+    "- `context` (JSON): `resolvedAngles`, `angleScopes`, `scope.diffPath`, `scope.diffSource`, `scope.changedFiles`, `adjacentCode.files[]` (`path`, `role`, `relatedTo`, `bytes`; an index, no file contents: read a file by its path), `adjacentCode.stripped`, `adjacentCode.missing`, `adjacentCode.truncated` (always empty), `adjacentCode.expansion.files`, `adjacentCode.expansion.dropped`, `requiredReads`, `fanout`.",
     "- `validation` (JSON): `allPassed`, `status`, `authority`, `headSha`, `suites[]` (`name`, `command`, `exitCode`, `outputTail`, `outputPath`).",
     "- `raw-diff`: the unfiltered unified diff; grep it, never read it whole.",
   ].join("\n");
@@ -1399,7 +1399,7 @@ function renderRequiredReadsSection(requiredReads, worktreeRoot) {
     "",
     ...(reads.length > 0 ? reads.map((read) => renderRequiredReadLine(read, worktreeRoot)) : ["- (no required reads recorded)"]),
     // Not a `- ` line, so the manifest verifier ignores it.
-    ...reads.filter((read) => read.oversized).map((read) => `Oversized diff part: \`${path.resolve(worktreeRoot, read.path)}\` holds one unsplittable unit a hunk (with its file header when it is the file's first hunk) or a file block with no hunks, above the ${DIFF_PART_MAX_BYTES}-byte or ${DIFF_PART_MAX_LINES}-line part cap; page it with offset/limit.`),
+    ...reads.filter((read) => read.oversized).map((read) => `Oversized diff part: \`${path.resolve(worktreeRoot, read.path)}\` holds one unsplittable unit: a hunk (with its file header when it is the file's first hunk) or a file block with no hunks, above the ${DIFF_PART_MAX_BYTES}-byte or ${DIFF_PART_MAX_LINES}-line part cap; page it with offset/limit.`),
   ].join("\n");
 }
 

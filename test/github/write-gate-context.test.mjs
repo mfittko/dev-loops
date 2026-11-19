@@ -4255,7 +4255,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "## Optional read fields",
       "",
       "Query an optional read by field with `jq`; never run `jq keys` to discover its shape.",
-      "- `context` (JSON): `resolvedAngles`, `angleScopes`, `scope.diffPath`, `scope.diffSource`, `scope.changedFiles`, `adjacentCode.files[]` (`path`, `role`, `relatedTo`, `bytes`; an index, no file contents: read a file by its path), `adjacentCode.stripped`, `adjacentCode.missing`, `adjacentCode.expansion.files`, `adjacentCode.expansion.dropped`, `requiredReads`, `fanout`.",
+      "- `context` (JSON): `resolvedAngles`, `angleScopes`, `scope.diffPath`, `scope.diffSource`, `scope.changedFiles`, `adjacentCode.files[]` (`path`, `role`, `relatedTo`, `bytes`; an index, no file contents: read a file by its path), `adjacentCode.stripped`, `adjacentCode.missing`, `adjacentCode.truncated` (always empty), `adjacentCode.expansion.files`, `adjacentCode.expansion.dropped`, `requiredReads`, `fanout`.",
       "- `validation` (JSON): `allPassed`, `status`, `authority`, `headSha`, `suites[]` (`name`, `command`, `exitCode`, `outputTail`, `outputPath`).",
       "- `raw-diff`: the unfiltered unified diff; grep it, never read it whole.",
       "",

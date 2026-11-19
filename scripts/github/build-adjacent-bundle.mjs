@@ -511,6 +511,7 @@ async function selectExpansion({ changed, diffText, repoRoot, importerIndex, cap
  *     stripped: [{ path, reason, role: "changed"|"imports"|"importedBy",
  *                 relatedTo: [..] }],                          // sorted by path
  *     missing: [string],                                      // sorted
+ *     truncated: [],                                          // always empty, kept for shape stability
  *     expansion: { maxFiles, maxBytes,                        // always emitted
  *                  files: [{ path, kind: "siblings"|"importer", relatedTo: [..],
  *                            names?, bytes }],
