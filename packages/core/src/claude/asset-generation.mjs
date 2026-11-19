@@ -92,7 +92,9 @@ export function stripPiOnlyBlocks(body) {
 export function rewriteCliInvocation(body) {
   return String(body)
     .split("node <dev-loops-package-root>/cli/index.mjs").join("dev-loops-run cli/index.mjs")
-    .split("node <resolved-skill-scripts>/").join("dev-loops-run scripts/");
+    // Only `<dir>/<file>` paths map to repo-root `scripts/<dir>/`; a top-level token is a skill-local
+    // script (e.g. skills/dev-loop/scripts/post-gate-verdict-fallback.mjs) the launcher cannot resolve.
+    .replace(/node <resolved-skill-scripts>\/(?=[^/\s`]+\/)/g, "dev-loops-run scripts/");
 }
 
 /**
