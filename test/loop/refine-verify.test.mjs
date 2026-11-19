@@ -120,6 +120,28 @@ test("runScopeBoundaryCrossChecker flags a shared token when one sibling's line 
   assert.ok(dup(make(["- This issue owns the API", "- Also this issue owns the API", "- Now this issue owns the API"])).some((e) => e.message.includes("'the api'")));
 });
 
+test("runScopeBoundaryCrossChecker flags a line that three of four siblings repeat", () => {
+  const tree = normalizeTreePayload({
+    root: 1,
+    issues: [
+      { number: 1, children: [2, 3, 4, 5], body: buildBody({ scope: "owns parent" }) },
+      ...[2, 3, 4, 5].map((n) => ({ number: n, parentNumber: 1, children: [], body: buildBody({ scope: `owns own${n}`, boundary: `owns own${n}${n === 5 ? "" : "\n- This issue owns the API"}` }) })),
+    ],
+  });
+  const dup = runScopeBoundaryCrossChecker(tree).errors.filter((e) => e.code === "duplicate_ownership");
+  assert.ok(dup.some((e) => e.message.includes("'the api'")));
+});
+
+test("runProseLinkageDetector flags mid-line sub-issue, Parent and Depends on forms", () => {
+  const run = (line) => runProseLinkageDetector(normalizeTreePayload({
+    root: 1,
+    issues: [{ number: 1, children: [], body: `${buildBody({ scope: "owns root" })}\n${line}` }],
+  }));
+  for (const line of ["This issue is a sub-issue of #5.", "Status: blocked. Depends on: #12", "Tracking (Parent: #12)"]) {
+    assert.equal(run(line).ok, false, line);
+  }
+});
+
 test("runScopeBoundaryCrossChecker ignores a claim repeated by all three siblings", () => {
   const tree = normalizeTreePayload({
     root: 1,

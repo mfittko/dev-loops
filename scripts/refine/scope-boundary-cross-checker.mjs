@@ -133,7 +133,7 @@ export function runScopeBoundaryCrossChecker(tree) {
         errors.push({
           code: "duplicate_ownership",
           issue: parent,
-          message: `Siblings under #${parent} claim duplicate ownership for '${token}': ${[...owners].map((n) => `#${n}`).join(", ")}. Give the claim to one sibling, or repeat it in every sibling when it is a shared constraint.`,
+          message: `Siblings under #${parent} claim duplicate ownership for '${token}': ${[...owners].map((n) => `#${n}`).join(", ")}. Give the claim to one sibling, or repeat the identical line in every sibling (three or more siblings) when it is a shared constraint.`,
           parent,
         });
       }
