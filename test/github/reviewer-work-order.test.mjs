@@ -136,14 +136,14 @@ test("work order: the prompt grows by one manifest line per diff part (small vs 
   }
 });
 
-test("work order: a filtered diff of about 60 parts makes the emitter refuse fail-closed over the prompt cap", async () => {
-  // 1000 files of ~3 KB each, so about 16 files per 40000-byte part.
+test("work order: a filtered diff of well over 60 parts makes the emitter refuse fail-closed over the prompt cap", async () => {
+  // 2000 files of ~3 KB each, about 125 parts: well past the cap even with the short temp paths of a Linux runner (manifest lines carry absolute paths).
   const fileBlock = (i) => `diff --git a/src/f${i}.mjs b/src/f${i}.mjs\n--- a/src/f${i}.mjs\n+++ b/src/f${i}.mjs\n@@ -0,0 +1,100 @@\n${Array.from({ length: 100 }, (_, n) => `+export const v${n} = ${n};`).join("\n")}\n`;
-  const diffOutput = Array.from({ length: 1000 }, (_, i) => fileBlock(i)).join("");
+  const diffOutput = Array.from({ length: 2000 }, (_, i) => fileBlock(i)).join("");
   await withTmpDir(async (repoRoot) => {
     const written = await writeRound(repoRoot, { diffOutput });
     const parts = written.artifact.requiredReads.filter((r) => r.kind === "diff");
-    assert.ok(parts.length >= 55 && parts.length <= 70, `parts: ${parts.length}`);
+    assert.ok(parts.length >= 100 && parts.length <= 150, `parts: ${parts.length}`);
     const baseEnv = { ...process.env };
     delete baseEnv.CLAUDECODE;
     const result = spawnSync("node", [emitCliPath, "--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot, encoding: "utf8", env: baseEnv });
