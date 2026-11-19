@@ -771,7 +771,7 @@ test("a writer-produced judged log with low act items and an unjudged --findings
 const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_DIR: undefined, GIT_WORK_TREE: undefined };
 // Builds main, a PR branch with commit F (the fixer commit) and a merge M of main into it; returns { f, m }.
 // The repo is a dedicated temp dir holding a copy of `template`'s .devloops; it replaces the shared `template` root (repoRoot or capOnRoot) for the call.
-async function withMergeShape(template, { baseFile = "docs/main-only.md", baseContent = "main\n", changeAfterMerge = false, side = false, criss = false, noBaseRef = false }, fn) {
+async function withMergeShape(template, { baseFile = "docs/main-only.md", baseContent = "main\n", changeAfterMerge = false, side = false, criss = false, noBaseRef = false, lagRef = false }, fn) {
   const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-converged-mergeshape-"));
   await writeFile(path.join(root, ".devloops"), await readFile(path.join(template, ".devloops"), "utf8"), "utf8");
   const swapCapOn = template === capOnRoot;
@@ -803,6 +803,7 @@ async function withMergeShape(template, { baseFile = "docs/main-only.md", baseCo
     if (changeAfterMerge) { await put("src/pr.mjs", "changed pr blob\n"); git("commit", "-qam", "own change"); }
     git("update-ref", "refs/remotes/origin/main", "main");
     if (noBaseRef) git("update-ref", "-d", "refs/remotes/origin/main");
+    if (lagRef) git("update-ref", "refs/remotes/origin/main", "main~1"); // the tracking ref lags the base commit merged into M
     return await fn({ f, m: git("rev-parse", "HEAD") });
   } finally {
     process.env.PATH = savedPath;
@@ -825,9 +826,27 @@ test("slice 5: a code-fix converged post at a base merge M after F records conve
       assert.equal(out.error, undefined);
       assert.equal(out.result.action, "updated");
       assert.match(out.body, new RegExp(`\\*\\*Converged:\\*\\* fixer \`${f}\``));
-      assert.deepEqual(heads, [m]);
+      assert.deepEqual(heads, [m, m], "one refresh before the carry classifier, one freshness check, both at M");
     }).finally(() => { FIX = savedFix; });
   }, { prefix: "dev-loops-converged-carry-code-" });
+});
+
+test("slice 5: a converged post at M records convergence when the base tracking ref lags until the freshness fetch", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("low", 1)];
+    const savedFix = FIX;
+    await withMergeShape(repoRoot, { lagRef: true }, async ({ f, m }) => {
+      FIX = f;
+      // The stub stands in for the fetch: it brings the tracking ref up to the base tip.
+      const checkBaseFreshness = async ({ base, cwd }) => {
+        execFileSync("git", ["update-ref", "refs/remotes/origin/main", "main"], { cwd, env: GIT_ENV });
+        return { ok: true, status: "base_current", base };
+      };
+      const out = await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { currentHead: m }, checkBaseFreshness });
+      assert.equal(out.error, undefined);
+      assert.equal(out.result.action, "updated");
+    }).finally(() => { FIX = savedFix; });
+  }, { prefix: "dev-loops-converged-carry-lag-" });
 });
 
 test("slice 5: a code-fix converged post whose delta result names M as candidate head is refused, though the base is fresh at M", async () => {

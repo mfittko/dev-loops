@@ -298,7 +298,10 @@ Optional:
                                             with a deltaResult is refused. Requires --gate draft_gate and
                                             --findings-ledger, with
                                             --head-sha the reviewed head A and
-                                            the PR head equal to fixerCommit.
+                                            the PR head equal to fixerCommit, or a
+                                            base merge after it that the full
+                                            base-merge carry classifier accepts
+                                            (ADR 0294).
                                             Updates A's comment to clean and
                                             records the fixer commit + delta
                                             digest. Refused unless every act
@@ -2897,6 +2900,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     if (convergedInput) {
       // A clean base merge after the fixer commit leaves the PR patch unchanged, so the fixer commit still stands for the PR head.
       const baseName = coordinationContext.prData?.baseRefName;
+      // Refresh origin/<base> first so the classifier reads the same base tip as the freshness check; the result is ignored here.
+      const refreshBase = checkBaseFreshness ?? (runChild === defaultRunChild ? defaultCheckBaseFreshness : null);
+      if (convergedInput.fixerCommit !== evidence.currentHeadSha && refreshBase && typeof baseName === "string" && baseName.trim()) {
+        await refreshBase({ base: baseName.trim(), head: evidence.currentHeadSha, cwd: repoRoot, env, trusted: true }).catch(() => null);
+      }
       if (convergedInput.fixerCommit !== evidence.currentHeadSha && !(typeof baseName === "string" && baseName.trim() && normalizeFullHeadSha(convergedInput.fixerCommit ?? "") !== null
         && await convergedCarryAccepts({ originHead: convergedInput.fixerCommit, headSha: evidence.currentHeadSha, baseRef: `origin/${baseName.trim()}`, repoRoot }))) {
         throw new Error(`--converged-json fixerCommit ${JSON.stringify(convergedInput.fixerCommit)} is not the current PR head ${evidence.currentHeadSha}; refuse to record convergence for a stale or foreign head.`);
