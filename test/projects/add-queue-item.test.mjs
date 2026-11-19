@@ -924,14 +924,14 @@ describe("add-queue-item", () => {
     });
 
     it("lands a linked-doc-only refined issue in Next Up untouched", async () => {
-      // #1866: the enqueue gate now verifies the linked refinement doc resolves
-      // (existsSync, cwd-relative) — create the referenced doc first, in a temp
-      // dir passed as `cwd` so the checkout's tmp/ is never touched (#3269).
+      // The gate resolves the linked doc against the `cwd` option, which `main` passes as `repoRoot`.
       const dir = mkdtempSync(nodePath.join(tmpdir(), "add-queue-item-"));
-      const checkoutDoc = nodePath.resolve("tmp/refinement/10-plan.md");
-      const checkoutDocExisted = existsSync(checkoutDoc);
+      const sentinel = nodePath.resolve(`tmp/refinement/.add-queue-item-sentinel-${process.pid}`);
+      mkdirSync(nodePath.dirname(sentinel), { recursive: true });
+      writeFileSync(sentinel, "", "utf-8");
       mkdirSync(nodePath.join(dir, "tmp/refinement"), { recursive: true });
       writeFileSync(nodePath.join(dir, "tmp/refinement/10-plan.md"), "# Plan\n", "utf-8");
+      try {
       try {
       const responses = [
         { payload: userPayload() },
@@ -950,9 +950,12 @@ describe("add-queue-item", () => {
       assert.equal(result.ok, true);
       assert.equal(result.item.status, "Next Up");
       assert.equal(result.refinement.refined, true);
-      assert.equal(existsSync(checkoutDoc), checkoutDocExisted);
       } finally {
         rmSync(dir, { recursive: true, force: true });
+      }
+      assert.equal(existsSync(sentinel), true);
+      } finally {
+        rmSync(sentinel, { force: true });
       }
     });
 
