@@ -27,7 +27,10 @@ function mockRunChild(responses) {
     if (resp.error) {
       return { code: 1, stdout: "", stderr: resp.error };
     }
-    return { code: 0, stdout: JSON.stringify(resp.payload), stderr: "" };
+    // Like GitHub, return __typename only when the query selects it (#3268).
+    const queried = args.some((a) => a.startsWith("query=") && a.includes("__typename"));
+    const body = JSON.stringify(resp.payload, (k, v) => (k === "__typename" && !queried ? undefined : v));
+    return { code: 0, stdout: body, stderr: "" };
   };
 }
 
@@ -256,6 +259,24 @@ describe("list-queue-items", () => {
       assert.equal(item.itemId, "PVTI_42");
       assert.equal(item.contentId, "I_kwDO_99");
       assert.equal(item.status, "Backlog");
+    });
+
+    it("lists a PullRequest item with prNumber set and issueNumber null", async () => {
+      const items = [
+        makeItem("PVTI_pr", "PR_3185", "PullRequest", 3185, "A PR", "https://github.com/mfittko/repo/pull/3185", "Backlog"),
+      ];
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: getItemsResponse(items) },
+      ];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1" },
+        { env: {}, runChild: mockRunChild(responses) },
+      );
+      assert.equal(result.items[0].prNumber, 3185);
+      assert.equal(result.items[0].issueNumber, null);
     });
 
     it("items without content are skipped", async () => {
