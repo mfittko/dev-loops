@@ -364,6 +364,8 @@ const COMMENT_WRITES = [
   // Any ANSI-C word in a gh command is denied, including the last position and a flag glued to its value.
   "gh pr reopen 5 $'\\x2dcbody'",
   "gh pr reopen 5 $'\\x2dcAPPROVED'",
+  "gh pr $'\\x72eopen' 5 $'\\x2dc' x",
+  "gh issue $'\\x63lose' 5 $'\\x2dc' x",
   "eval gh pr reopen 5 \\$\\'\\\\x2dc\\' x",
   `eval gh pr reopen 5 "$"\\'"\\x2dc"\\' x`,
   // The only decoded `gh` sits in an appended region (nested `$'` or tick text), after the outer shell word.
