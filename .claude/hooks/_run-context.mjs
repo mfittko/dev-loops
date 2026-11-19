@@ -437,10 +437,12 @@ function assertNoRedirectedRunContext(file, fs) {
  * @param {string} params.root
  * @param {string} [params.mintedAt] - ISO timestamp; defaults to now. Tests pass a fixed
  *   value for determinism; real runs get a useful inspection/recovery timestamp.
+ * @param {boolean} [params.atomic] - Publish with a hard link so a concurrent startup that already
+ *   won keeps its file; an unusable existing file is replaced.
  * @param {typeof import("node:fs")} [params.fs]
- * @returns {string} The path written.
+ * @returns {string|null} The path written, or null when `atomic` found a usable concurrent winner.
  */
-export function writeRunContext({ runId, root, mintedAt, fs = fsDefault }) {
+export function writeRunContext({ runId, root, mintedAt, atomic = false, fs = fsDefault }) {
   if (typeof runId !== "string" || runId.trim().length === 0) {
     throw new TypeError("writeRunContext: runId must be a non-empty string");
   }
@@ -451,7 +453,25 @@ export function writeRunContext({ runId, root, mintedAt, fs = fsDefault }) {
     runId: runId.trim(),
     mintedAt: mintedAt ?? new Date().toISOString(),
   };
-  fs.writeFileSync(file, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  const body = `${JSON.stringify(payload, null, 2)}\n`;
+  if (!atomic) {
+    fs.writeFileSync(file, body, "utf8");
+    return file;
+  }
+  const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  fs.writeFileSync(tmp, body, "utf8");
+  try {
+    try {
+      fs.linkSync(tmp, file);
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      const winner = readRunContext({ root, fs })?.runId ?? null;
+      if (winner !== null && FILE_RUN_ID_PATTERN.test(winner)) return null;
+      fs.renameSync(tmp, file); // the file is unusable: replace it
+    }
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
   return file;
 }
 
@@ -488,10 +508,11 @@ export function readRunContext({ root, fs = fsDefault }) {
  * @param {Record<string, string|undefined>} [params.env]
  * @param {string} [params.root]
  * @param {string} [params.mintedAt] - ISO timestamp for the state file (determinism).
+ * @param {boolean} [params.atomic] - Publish the file atomically and reuse a concurrent winner's id.
  * @param {typeof import("node:fs")} [params.fs]
  * @returns {{ runId: string, minted: boolean, statePath: string|null }}
  */
-export function ensureRunId({ env = process.env, root, mintedAt, fs = fsDefault } = {}) {
+export function ensureRunId({ env = process.env, root, mintedAt, atomic = false, fs = fsDefault } = {}) {
   const existing = resolveRunId(env);
   if (existing) {
     return { runId: existing, minted: false, statePath: null };
@@ -500,7 +521,10 @@ export function ensureRunId({ env = process.env, root, mintedAt, fs = fsDefault 
   const runId = mintRunId();
   let statePath = null;
   if (typeof root === "string" && root.length > 0) {
-    statePath = writeRunContext({ runId, root, mintedAt, fs });
+    statePath = writeRunContext({ runId, root, mintedAt, atomic, fs });
+    if (statePath === null) {
+      return { runId: readRunContext({ root, fs }).runId, minted: false, statePath: null };
+    }
   }
   return { runId, minted: true, statePath };
 }
@@ -536,27 +560,10 @@ export function ensureLaneRunContext({ env = process.env, cwd, mintedAt, fs = fs
     return { runId: existing, minted: false, statePath };
   }
   if (root === null) return null;
-  const runId = mintRunId();
-  const file = runContextPath(root);
-  assertNoRedirectedRunContext(file, fs);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  // Publish atomically: a hard link fails when a concurrent startup already won, and that winner's id is reused.
-  const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify({ runId, mintedAt: mintedAt ?? new Date().toISOString() }, null, 2)}\n`, "utf8");
-  try {
-    try {
-      fs.linkSync(tmp, file);
-    } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
-      const winner = readRunContext({ root, fs })?.runId ?? null;
-      if (winner !== null && FILE_RUN_ID_PATTERN.test(winner)) return { runId: winner, minted: false, statePath: null };
-      fs.renameSync(tmp, file); // the file is unusable: replace it
-    }
-  } finally {
-    fs.rmSync(tmp, { force: true });
-  }
-  excludeRunContextFile(root, fs);
-  return { runId, minted: true, statePath: file };
+  // Mint through ensureRunId with an atomic publish: a concurrent startup's winner id is reused.
+  const result = ensureRunId({ env, root, mintedAt, atomic: true, fs });
+  if (result.minted) excludeRunContextFile(root, fs);
+  return result;
 }
 
 // Keep the lane file out of `git add` in a consumer repo with no ignore entry: one line in the common git dir's info/exclude.

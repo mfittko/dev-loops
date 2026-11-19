@@ -549,6 +549,25 @@ test("resolveRunContextRoot accepts only a .git file naming a worktrees/<name> g
   }
 });
 
+test("ensureLaneRunContext mints through ensureRunId and ensureRunId atomic reuses a concurrent winner", () => {
+  const lane = laneWorktree(null);
+  const viaLane = ensureLaneRunContext({ env: {}, cwd: lane.root });
+  assert.equal(viaLane.minted, true);
+  assert.equal(readRunContext({ root: lane.root }).runId, viaLane.runId);
+  // ensureRunId is the minting primitive: an atomic call against an existing usable file reuses its id.
+  const winner = laneWorktree("devloops-winner");
+  const lost = ensureRunId({ env: {}, root: winner.root, atomic: true });
+  assert.deepEqual({ ...lost }, { runId: "devloops-winner", minted: false, statePath: null });
+  assert.equal(readRunContext({ root: winner.root }).runId, "devloops-winner");
+  // An unusable existing file is replaced.
+  const broken = laneWorktree(null);
+  fs.mkdirSync(path.dirname(runContextPath(broken.root)), { recursive: true });
+  fs.writeFileSync(runContextPath(broken.root), "not json");
+  const replaced = ensureRunId({ env: {}, root: broken.root, atomic: true });
+  assert.equal(replaced.minted, true);
+  assert.equal(readRunContext({ root: broken.root }).runId, replaced.runId);
+});
+
 test("ensureLaneRunContext excludes the run-context file once in the common git dir", () => {
   const common = makeTempRoot();
   fs.mkdirSync(path.join(common, "info"));
