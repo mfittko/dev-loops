@@ -158,11 +158,14 @@ function segmentWriteKind(command) {
   // `comment` opens an editor on `-e`/`--editor` (or edits on `--edit-last`), so GH_EDITOR can supply the body: these count as body flags.
   const editorFlag = () => has((t) => t.startsWith("--edit") || /^-[^-]*e/.test(t));
   // A `-c` that directly follows a shell word (`sh -c "..."`) is the shell's own flag. The shell word is bare or an absolute path;
-  // a relative path such as the branch `feat/zsh` is an argument. Consecutive duplicates from the token
+  // a relative path such as the branch `feat/zsh` is an argument. The shell word must also come before the first `gh` token
+  // (command position): after `gh`, a bare `zsh` is a branch argument (`gh pr reopen zsh -c x`). Consecutive duplicates from the token
   // expansion collapse first, so adjacency holds. A `-c` anywhere else, or inside a short cluster, counts.
   const seq = tokens.map((t) => t.toLowerCase()).filter((t, i, all) => t !== all[i - 1]);
-  const closeComment = seq.some((t, i) => t.startsWith("--comment") ||
-    (/^-[^-]*c/.test(t) && !(t === "-c" && /^(?:\/(?:[^/]+\/)*)?(?:sh|bash|zsh|dash|ksh)$/.test(seq[i - 1] ?? ""))));
+  const ghAt = seq.findIndex((t) => /^(?:-[a-z]*s)?gh$/.test(t.split("/").pop()));
+  // The decoded-word copies later in `seq` repeat tokens, so command position is the shell word's first occurrence.
+  const shellFlag = (i) => /^(?:\/(?:[^/]+\/)*)?(?:sh|bash|zsh|dash|ksh)$/.test(seq[i - 1] ?? "") && seq.indexOf(seq[i - 1]) < ghAt;
+  const closeComment = seq.some((t, i) => t.startsWith("--comment") || (/^-[^-]*c/.test(t) && !(t === "-c" && shellFlag(i))));
   // Raw comment and review writes (`OPERATOR-OWNED-LINE`): the sanctioned writers refuse an operator-owned line, a raw write does not.
   // Comment clauses win over the body clause: a graphql addComment with `-f body=...` is a comment write, not a PR-body write.
   const isComment = (issueOrPr && has((t) => t === "comment") && (bodyFlag() || editorFlag())) ||

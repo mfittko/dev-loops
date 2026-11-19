@@ -344,6 +344,8 @@ const COMMENT_WRITES = [
   `sh -c "gh pr review 5 --comment -b '${MERGE_APPROVAL}'"`,
   "gh issue close 5 --comment x",
   "gh pr reopen feat/zsh -c x",
+  "gh pr reopen zsh -c x",
+  "gh issue close bash -c x",
   "gh issue reopen 5 -c x",
   "gh pr close 5 -c x",
   "gh pr reopen 5 --comment x",
