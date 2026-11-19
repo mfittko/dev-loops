@@ -31,7 +31,7 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
   // without a new review event. The draft guard still skips draft pushes, so development
   // pushes on a draft PR start no run (#1702); the check materializes at ready_for_review,
   // a verdict-post, a verdict-shaped issue comment or a push to a ready PR.
-  assert.deepEqual(triggers.pull_request.types, ["opened", "reopened", "ready_for_review", "synchronize"]);
+  assert.deepEqual(triggers.pull_request.types, ["opened", "reopened", "ready_for_review", "synchronize", "edited"]);
   assert.match(content, /github\.event\.pull_request\.draft == false/, "the draft guard still skips draft pushes");
   // The verdict surface is a PR review: `submitted` fires for each verdict on a
   // NEW head, `edited` for the same-head in-place correction (PUT

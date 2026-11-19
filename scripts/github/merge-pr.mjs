@@ -1013,7 +1013,8 @@ export async function mergePr(options, runtime = {}) {
   const ancestryReason = resolveBaseNotIntegratedRefusal({ baseRefName, headSha: currentHeadSha, repoRoot, isAncestor });
   if (ancestryReason !== null) refuseBaseNotIntegrated(ancestryReason, { mergeClass: verdict.mergeClass });
   // The ADR waiver may have refreshed origin/<base> after the patch-id authorized the merge; the id must still match the refreshed base.
-  if (verdict.approvalMatch === "patch_id") {
+  // Any patch-id in play (the detector accepts any trusted login's marker, so a head match by the named approver does not exempt it).
+  if (currentPatchId !== null) {
     let refreshedPatchId = null;
     try { refreshedPatchId = computePatchId({ base: `origin/${baseRefName}`, head: currentHeadSha, repoRoot }); } catch { /* fail closed below */ }
     if (refreshedPatchId !== currentPatchId) {

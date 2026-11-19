@@ -74,6 +74,7 @@ test("verifyFreshHumanApproval: patch-id marker matches when head differs (match
   // different patch-id, no currentPatchId, wrong author and bot author all refuse
   assert.equal(verifyFreshHumanApproval({ ...base, comments: [{ user: { login: "mfittko" }, body: `approve merge ${OLD} patch-id ${"d".repeat(40)}` }] }).satisfied, false);
   assert.equal(verifyFreshHumanApproval({ ...base, currentPatchId: null, comments: [{ user: { login: "mfittko" }, body: `approve merge ${OLD} patch-id ${PID}` }] }).satisfied, false);
+  assert.equal(verifyFreshHumanApproval({ ...base, comments: [{ user: { login: "mfittko" }, body: `approve merge ${OLD}\npatch-id ${PID}` }] }).satisfied, false); // a line break never joins the marker
   assert.equal(verifyFreshHumanApproval({ ...base, comments: [{ user: { login: "eve" }, body: `approve merge ${OLD} patch-id ${PID}` }] }).satisfied, false);
   assert.equal(verifyFreshHumanApproval({ ...base, comments: [{ user: { login: "x[bot]" }, body: `approve merge ${OLD} patch-id ${PID}` }] }).satisfied, false);
   // a head match, bare or with a suffix, stays matchKind head

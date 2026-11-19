@@ -9,7 +9,7 @@ name: Gate evidence
 #   docs/decisions/0234-gate-evidence-tolerates-head-declared-config-keys.md
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, synchronize]
+    types: [opened, reopened, ready_for_review, synchronize, edited]
   pull_request_review:
     types: [submitted, edited]
   pull_request_review_comment:

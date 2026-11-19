@@ -164,14 +164,14 @@ export function verifyFreshHumanApproval({ approvedBy, currentHeadSha, currentPa
   // unanchored `approve merge <head>` would also match `disapprove merge <head>`
   // and `not approve merge <head>` — a fail-open on the merge-authorization
   // path. The trailing `(?:\b|$)` keeps `<head>abc` from matching `<head>`.
-  const markerRe = new RegExp(`^[ \\t>*-]*approve\\s+merge\\s+${escapeRegex(head)}(?:\\b|$)`, "im");
+  const markerRe = new RegExp(`^[ \\t>*-]*approve[ \\t]+merge[ \\t]+${escapeRegex(head)}(?:\\b|$)`, "im");
   // Patch-id form (ADR 0279): `approve merge <any 40-hex sha> patch-id <currentPatchId>`
   // survives a base-only head change; the caller supplies currentPatchId only when
   // the head contains the base tip.
   const patchId = typeof currentPatchId === "string" && /^[0-9a-f]{40}$/i.test(currentPatchId.trim()) ? currentPatchId.trim() : null;
   const patchMarkerRe = patchId === null
     ? null
-    : new RegExp(`^[ \\t>*-]*approve\\s+merge\\s+[0-9a-f]{40}\\s+patch-id\\s+${escapeRegex(patchId)}(?:\\b|$)`, "im");
+    : new RegExp(`^[ \\t>*-]*approve[ \\t]+merge[ \\t]+[0-9a-f]{40}[ \\t]+patch-id[ \\t]+${escapeRegex(patchId)}(?:\\b|$)`, "im");
   let patchMatch = false;
   for (const entry of Array.isArray(comments) ? comments : []) {
     const login = reviewLogin(entry);
