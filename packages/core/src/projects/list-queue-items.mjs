@@ -26,6 +26,7 @@ const GET_PROJECT_ITEMS = [
   "            }",
   "          }",
   "          content {",
+  "            __typename",
   "            ... on Issue { number title url id }",
   "            ... on PullRequest { number title url id }",
   "          }",
