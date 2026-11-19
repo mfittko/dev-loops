@@ -355,6 +355,7 @@ const COMMENT_WRITES = [
   "gh issue comment 5 --editor",
   "gh issue comment 5 --edit-last",
   `gh api graphql -f query='mutation { addComment(input: {subjectId: "X", body: "${MERGE_APPROVAL}"}) { clientMutationId } }'`,
+  `gh api graphql -f query='mutation($body:String!){addComment(input:{subjectId:"X",body:$body}){clientMutationId}}' -f body='${MERGE_APPROVAL}'`,
   `sh -c "gh api graphql -f query='mutation { addComment(input: {subjectId: \\"X\\", body: \\"x\\"}) { clientMutationId } }'"`,
   "gh api graphql -f query='mutation { addPullRequestReview(input: {pullRequestId: \"X\"}) { clientMutationId } }'",
   // The REST forms stay denied (by the body-write token rule).

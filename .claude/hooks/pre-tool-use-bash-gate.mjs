@@ -150,10 +150,10 @@ function segmentWriteKind(command) {
   if (overCap) return "body";
   if (!has((t) => /^(?:-[a-z]*s)?gh$/.test(t.split("/").pop()))) return null;
   const bodyFlag = () => has((t) => t.startsWith("--body") || /^-[^-]*[bf]/.test(t));
-  if ((has((t) => t === "pr") && has((t) => t === "edit" || t === "create") && bodyFlag()) ||
+  const isBody = (has((t) => t === "pr") && has((t) => t === "edit" || t === "create") && bodyFlag()) ||
     (has((t) => t === "api") && (has((t) => t.startsWith("--input")) ||
       (has((t) => /^(?:-f|--(?:raw-)?field)$/.test(t)) && has((t) => t === "body")) || has((t) => /^-fbody$/.test(t)) ||
-      (has((t) => t === "graphql") && has((t) => /update(?:pullrequest|issue)/.test(t) || t === "body"))))) return "body";
+      (has((t) => t === "graphql") && has((t) => /update(?:pullrequest|issue)/.test(t) || t === "body"))));
   const issueOrPr = has((t) => t === "issue" || t === "pr");
   // `comment` opens an editor on `-e`/`--editor` (or edits on `--edit-last`), so GH_EDITOR can supply the body: these count as body flags.
   const editorFlag = () => has((t) => t.startsWith("--edit") || /^-[^-]*e/.test(t));
@@ -163,11 +163,12 @@ function segmentWriteKind(command) {
   const closeComment = seq.some((t, i) => t.startsWith("--comment") ||
     (/^-[^-]*c/.test(t) && !(t === "-c" && /^(?:sh|bash|zsh|dash|ksh)$/.test((seq[i - 1] ?? "").split("/").pop()))));
   // Raw comment and review writes (`OPERATOR-OWNED-LINE`): the sanctioned writers refuse an operator-owned line, a raw write does not.
-  return (issueOrPr && has((t) => t === "comment") && (bodyFlag() || editorFlag())) ||
+  // Comment clauses win over the body clause: a graphql addComment with `-f body=...` is a comment write, not a PR-body write.
+  const isComment = (issueOrPr && has((t) => t === "comment") && (bodyFlag() || editorFlag())) ||
     (has((t) => t === "pr") && has((t) => t === "review") && bodyFlag()) ||
     (issueOrPr && has((t) => t === "close" || t === "reopen") && closeComment) ||
-    (has((t) => t === "api") && has((t) => t === "graphql") && has((t) => /addcomment|addpullrequestreview/.test(t)))
-    ? "comment" : null;
+    (has((t) => t === "api") && has((t) => t === "graphql") && has((t) => /addcomment|addpullrequestreview/.test(t)));
+  return isComment ? "comment" : isBody ? "body" : null;
 }
 
 let repoRoot = null;
