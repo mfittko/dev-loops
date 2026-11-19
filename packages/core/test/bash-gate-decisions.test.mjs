@@ -609,6 +609,8 @@ const MERGE_DENY_EXTRA_FORMS = [
   "coproc node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x",
   "xargs node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x </dev/null",
   "echo $(node scripts/github/merge-pr.mjs --pr 5)",
+  "cat <<EOF\n$(node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x)\nEOF",
+  "cat <<EOF\n`node scripts/github/merge-pr.mjs --pr 5`\nEOF",
   'eval "node scripts/github/merge-pr.mjs --pr 5"',
   "node scripts/github/merge-pr.mjs --repo=a/b --pr=5 --human-approved-by x --jq --check",
 ];
@@ -624,6 +626,8 @@ const MERGE_ALLOW_FORMS = [
   "bash <<EOF\nnode scripts/github/merge-pr.mjs --pr 5 --check\nEOF",
   "ksh <<EOF\nnode scripts/github/merge-pr.mjs --check --pr 5\nEOF",
   "cat <<EOF\nnode scripts/github/merge-pr.mjs --pr 5\nEOF",
+  "cat <<'EOF'\n$(node scripts/github/merge-pr.mjs --pr 5)\nEOF",
+  "cat <<EOF\n$(node scripts/github/merge-pr.mjs --pr 5 --check)\nEOF",
   "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --silent --check",
   "node scripts/github/merge-pr.mjs --repo a/b --pr 5 -s --check",
   "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --lightweight --check",
