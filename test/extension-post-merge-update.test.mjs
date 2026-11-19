@@ -854,9 +854,10 @@ test("isGhPrReadyCommand matches gh pr ready variants", () => {
   assert.equal(isGhPrReadyCommand("gh pr ready 42 --repo mfittko/dev-loops"), true);
   assert.equal(isGhPrReadyCommand("gh pr ready --help"), false);
   assert.equal(isGhPrReadyCommand("gh pr ready -h"), false);
-  assert.equal(isGhPrReadyCommand("gh pr ready 42 --help"), false);
-  assert.equal(isGhPrReadyCommand("gh pr ready 42 -h"), false);
-  assert.equal(isGhPrReadyCommand("gh pr ready --undo 42 --help"), false);
+  // A help flag counts only as the first argument after the verb.
+  assert.equal(isGhPrReadyCommand("gh pr ready 42 --help"), true);
+  assert.equal(isGhPrReadyCommand("gh pr ready 42 -h"), true);
+  assert.equal(isGhPrReadyCommand("gh pr ready --undo 42 --help"), true);
   assert.equal(isGhPrReadyCommand("gh pr merge 42"), false);
   assert.equal(isGhPrReadyCommand("git merge origin/main"), false);
   assert.equal(isGhPrReadyCommand("echo gh pr ready"), false);
