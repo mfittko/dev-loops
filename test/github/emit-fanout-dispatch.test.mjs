@@ -7,7 +7,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import { REVIEWER_VERIFIED_ITEMS_INSTRUCTION, REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, listPriorFindingsLogHeads, main, unitBudgetBasis } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { dispatchUnitScope, expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
-import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, readCompletedAnglesForHead, renderPrBodyRead, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, readCompletedAnglesForHead, renderPrBodyRead, renderRequiredReadLine, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
@@ -2639,3 +2639,50 @@ for (const gate of ["draft_gate", "pre_approval_gate"]) {
     });
   });
 }
+
+test("a multi-part filtered diff: the unit prompt lists every diff part with its size, in order, and the budget counts the whole diff", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const hunk = (n) => `@@ -${n},40 +${n},40 @@\n${Array.from({ length: 40 }, (_, i) => `+${n}-${i}-${"x".repeat(120)}`).join("\n")}\n`;
+    const diffOutput = Array.from({ length: 5 }, (_, f) => `diff --git a/src/f${f}.mjs b/src/f${f}.mjs\n--- a/src/f${f}.mjs\n+++ b/src/f${f}.mjs\n${[1, 1001, 2001, 3001, 4001, 5001].map(hunk).join("")}`).join("");
+    const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(["dry", "contradiction-lens"])]);
+    const { config } = await loadDevLoopConfig({ repoRoot: tmpDir });
+    options.config = config;
+    options.fanoutDispatch = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), ["dry", "contradiction-lens"], {});
+    options.diffOutput = diffOutput;
+    options.angleScopes = { "contradiction-lens": "changed-files" };
+    const { artifact } = await writeGateContext(options, { repoRoot: tmpDir });
+    const parts = artifact.requiredReads.filter((read) => read.kind === "diff");
+    assert.ok(parts.length >= 2);
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const { units } = JSON.parse(result.stdout);
+    assert.equal(units.length, 2, "a full-scope unit and a changed-files scoped unit");
+    const unit = units.find((u) => u.angles.includes("dry"));
+    assert.equal(unit.budgetBasis.files, 5);
+    const prompt = await readFile(path.resolve(tmpDir, unit.promptPath), "utf8");
+    const lines = parts.map((part) => renderRequiredReadLine(part, tmpDir));
+    for (const line of lines) assert.ok(prompt.includes(line), line);
+    const positions = lines.map((line) => prompt.indexOf(line));
+    assert.deepEqual(positions, [...positions].sort((a, b) => a - b), "parts are listed in order");
+    for (const u of units) {
+      assert.deepEqual(u.workOrder.requiredReads.filter((read) => read.kind === "diff").map((read) => read.path), parts.map((part) => part.path), u.scope);
+    }
+  });
+});
+
+test("the unit prompt describes the optional bundle files and their fields, under the work-order ceiling", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedRealConfiguredGroupBundle(tmpDir);
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const [unit] = JSON.parse(result.stdout).units;
+    const prompt = await readFile(path.resolve(tmpDir, unit.promptPath), "utf8");
+    const start = prompt.indexOf("## Optional read fields");
+    const section = prompt.slice(start, prompt.indexOf("\n\n## ", start));
+    assert.ok(section.length > 0 && Buffer.byteLength(section) < 900);
+    for (const field of ["adjacentCode.files[]", "`path`", "`role`", "`bytes`", "`allPassed`", "suites[]", "raw-diff"]) {
+      assert.ok(section.includes(field), field);
+    }
+    assert.ok(unit.promptBytes < REVIEWER_WORK_ORDER_MAX_BYTES);
+  });
+});
