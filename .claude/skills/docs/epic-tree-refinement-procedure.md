@@ -29,7 +29,7 @@ sub-issue tooling.
 Before starting, verify:
 
 1. The root issue and all intended children/grandchildren exist as GitHub issues in the repo.
-2. The sub-issue tree is attached (run `node <resolved-skill-scripts>/github/manage-sub-issues.mjs list --repo <repo> --issue <root>` to inspect it).
+2. The sub-issue tree is attached (run `dev-loops-run scripts/github/manage-sub-issues.mjs list --repo <repo> --issue <root>` to inspect it).
 3. You have the resolved repo slug (`owner/name`).
 
 Optional but recommended before and after edits:
@@ -133,7 +133,7 @@ After all immediate children of the root have been reconciled:
 7. Apply: `dev-loops-run cli/index.mjs issue edit --repo <repo> --issue <root> --body-file tmp/issues/<root>/refinement/root-final-body.md`
 8. Verify the sub-issue tree still reflects the correct execution order:
    ```sh
-   node <resolved-skill-scripts>/github/manage-sub-issues.mjs verify \
+   dev-loops-run scripts/github/manage-sub-issues.mjs verify \
      --repo <repo> --issue <root> --expected <n1,n2,...> --ordered
    ```
 
