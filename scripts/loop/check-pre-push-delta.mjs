@@ -428,7 +428,9 @@ async function reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyM
     const shown = parents.status === 0 && parents.stdout.trim().split(" ").length === 3
       ? gitRemergeShow(repoRoot, merge, ["--name-only", "-z"], "utf8") : null;
     if (shown?.status !== 0) throw new Error(`non_base_only_merge: merge ${merge} in ${baseline}..${head} ${shown || parents.status !== 0 ? "has a resolution diff or parents that cannot be read" : `is an octopus merge (${parents.stdout.trim().split(" ").length - 1} parents)`} (${((shown ?? parents).stderr ?? "").trim() || (shown ?? parents).error?.message}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
-    resolvedPaths.push(...shown.stdout.split("\0").filter(Boolean));
+    const paths = shown.stdout.split("\0").filter(Boolean);
+    if (paths.length === 0) continue; // a clean merge adds no change of its own
+    resolvedPaths.push(...paths);
     resolvedMerges.push(merge);
   }
   return { ownCommits, resolvedPaths, resolvedMerges };
