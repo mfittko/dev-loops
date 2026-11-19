@@ -66,7 +66,7 @@ async function seedPrior(root, heads, { extraNames = [], unreadable = [] } = {})
 
 function makeRunChild(posted, { isDraft = true, state = "OPEN", calls = [] } = {}) {
   const prJson = JSON.stringify({
-    number: 17, state, isDraft, headRefOid: HEAD, body: DEFAULT_TEST_PR_BODY,
+    number: 17, state, isDraft, headRefOid: HEAD, baseRefName: "main", body: DEFAULT_TEST_PR_BODY,
     closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
   }) + "\n";
   return async (cmd, args = [], _env, stdin = "") => {
@@ -432,7 +432,7 @@ test("the closure round line renders a normalized full SHA and refuses a short, 
 
 // A clean cap round whose post was refused at its own head posts there once the PR head has moved on.
 const CAP_HEAD = "4".repeat(40);
-async function postCleanCapRound(tempDir, { sealedVerdict = "clean", ancestor = true, headSha = CAP_HEAD, prState = {}, extraArgs = [], calls = [], postedOverrides = {}, proven = false } = {}) {
+async function postCleanCapRound(tempDir, { sealedVerdict = "clean", ancestor = true, headSha = CAP_HEAD, prState = {}, extraArgs = [], calls = [], postedOverrides = {}, proven = false, checkBaseFreshness, gate = "draft_gate" } = {}) {
   await seedPrior(repoRoot, priorHeads);
   const deltaDir = path.join(repoRoot, "tmp", "gate-delta");
   await rm(deltaDir, { recursive: true, force: true });
@@ -453,10 +453,10 @@ async function postCleanCapRound(tempDir, { sealedVerdict = "clean", ancestor = 
   const runChild = async (cmd, args = [], ...rest) => (cmd === "git" && args.includes("merge-base") ? { code: ancestor ? 0 : 1, stdout: "", stderr: "" } : inner(cmd, args, ...rest));
   try {
     const options = parseUpsertCheckpointVerdictCliArgs([
-      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", headSha, "--findings-ledger", ledger,
+      "--repo", "owner/repo", "--pr", "17", "--gate", gate, "--head-sha", headSha, "--findings-ledger", ledger,
       "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 0, question: 0, nit: 0 }), "--findings-summary", "cap round", "--next-action", "follow the verdict", "--inline-reason", "cap round", ...extraArgs,
     ]);
-    await upsertCheckpointVerdict(options, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
+    await upsertCheckpointVerdict(options, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild, checkBaseFreshness });
     return { body: posted.join("\n") };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
@@ -471,6 +471,23 @@ test("a clean cap round posts at its own ancestor head with the cap round number
     assert.match(out.body, /round[=: ]+4\b/i);
     assert.ok(out.body.includes(CAP_HEAD.slice(0, 7)));
   }, { prefix: "dev-loops-round-cap-ancestor-" });
+});
+
+test("a clean cap-round post checks base freshness against the current PR head, not the cap-round head", async () => {
+  await withTempDir(async (tempDir) => {
+    const heads = [];
+    const out = await postCleanCapRound(tempDir, { checkBaseFreshness: async ({ head }) => { heads.push(head); return { ok: true }; } });
+    assert.equal(out.error, undefined);
+    assert.deepEqual(heads, [HEAD]);
+  }, { prefix: "dev-loops-round-cap-base-fresh-" });
+});
+
+test("a pre_approval_gate stale-head refusal does not name a cap round", async () => {
+  await withTempDir(async (tempDir) => {
+    const error = (await postCleanCapRound(tempDir, { gate: "pre_approval_gate" })).error ?? "";
+    assert.match(error, /does not match the current PR head/);
+    assert.doesNotMatch(error, /no clean cap round/);
+  }, { prefix: "dev-loops-round-cap-preapproval-stale-" });
 });
 
 test("an earlier-head post without a sealed clean cap-round ledger is refused", async () => {

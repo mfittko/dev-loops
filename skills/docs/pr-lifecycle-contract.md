@@ -32,7 +32,7 @@ It does not redefine helper transport mechanics, reviewer-loop internals, conduc
 `LIFECYCLE-ONE-STATE`: Exactly **one current lifecycle state** MUST apply at a time.
 
 - The lifecycle MUST fail closed when required evidence is missing, stale, ambiguous, or unparsable (see [Fail-closed rules](#fail-closed-rules), `LIFECYCLE-FAIL-CLOSED`).
-- Every gate-crossing decision is for the **current PR head SHA**.
+- Every gate-crossing decision is for the **current PR head SHA**. The one exception is the clean `draft_gate` catch-up post at the head of a completed clean cap round that the PR head descends from (`GATE-EXEC-ROUND-CAP`).
 - Draft existence alone is **not** draft-gate readiness.
 - A draft PR MUST clear the draft-stage gate for the current head before becoming ready and requesting Copilot. Once non-draft, the transition record remains valid across head changes; requests/re-requests do not require a new draft gate.
 - Ready -> draft resets the lifecycle back into draft-stage gating.

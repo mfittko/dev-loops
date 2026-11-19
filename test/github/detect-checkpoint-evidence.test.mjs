@@ -5067,14 +5067,16 @@ test("parseDetectCheckpointEvidenceCliArgs honors --read-only (skips the runner-
   assert.equal(parseDetectCheckpointEvidenceCliArgs(["--repo", "owner/repo", "--pr", "17", "--read-only"]).readOnly, true);
 });
 
-test("buildPreMergeGateCheck passes on a posted cap-round header at an ancestor head when every cap-round thread is resolved", () => {
+test("buildPreMergeGateCheck passes on a clean draft_gate comment rendered at a cap-round ancestor head, and the unresolved thread count alone fails it", () => {
+  const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha: "981321d5", repo: "owner/repo", verdict: "clean", findingsSummary: "cap round", nextAction: "none", round: 4 });
+  const parsed = summarizeGateReviewComments([{ id: 31, body, updated_at: "2026-05-29T23:30:00Z" }]).draft_gate;
   const evidence = {
     currentHeadSha: "c386b206",
-    draftGate: { visible: true, verdict: "clean", headSha: "981321d5" },
+    draftGate: { visible: true, verdict: parsed.verdict, headSha: parsed.headSha },
     preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "c386b206", sizeOutcome: "pass", sizeTouchesT1: false },
   };
-  const thread = (round, isResolved) => ({ isResolved, comments: { nodes: [{ body: `<!-- dev-loops:finding 0123456789abcdef severity=low angle=scope round=${round} -->` }] } });
-  const capFixed = (threads) => capRoundThreadsResolved(4, threads);
-  assert.equal(buildPreMergeGateCheck(evidence, 0, null, null, { capRoundFixed: capFixed([thread(4, true)]) }).ok, true);
-  assert.equal(buildPreMergeGateCheck({ ...evidence, draftGate: { visible: true, verdict: "findings_present" } }, 1, null, null, { capRoundFixed: capFixed([thread(4, false)]) }).ok, false);
+  assert.equal(parsed.verdict, "clean");
+  assert.notEqual(parsed.headSha, evidence.currentHeadSha);
+  assert.equal(buildPreMergeGateCheck(evidence, 0).ok, true);
+  assert.equal(buildPreMergeGateCheck(evidence, 1).ok, false);
 });

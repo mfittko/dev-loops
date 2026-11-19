@@ -202,7 +202,7 @@ force a fresh review round instead.
 Required:
   --repo <owner/name>
   --pr <number>
-  --head-sha <sha>                            FULL current head commit SHA (40 or 64 hex chars) — a short prefix is rejected
+  --head-sha <sha>                            FULL current head commit SHA (40 or 64 hex chars) — a short prefix is rejected (with --gate draft_gate and a clean verdict, the head of a completed clean cap round that the PR head descends from is also accepted)
   --verdict <clean|findings_present|blocked>   Optional when --findings-ledger
                                             carries the consolidator's
                                             overallVerdict (the durable
@@ -2916,7 +2916,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       } catch (error) {
         capRoundHead = await resolveCleanCapRoundHead({ options, cap: draftGateConfig.maxReviewRounds, currentHeadSha: evidence.currentHeadSha, repoRoot, runChild, env });
         if (!capRoundHead) {
-          const reason = draftGateConfig.maxReviewRounds > 0 ? " (no clean cap round at that head, or it is not an ancestor of the PR head)" : "";
+          const reason = options.gate === "draft_gate" && draftGateConfig.maxReviewRounds > 0 ?" (no clean cap round at that head, or it is not an ancestor of the PR head)" : "";
           throw new Error(`${error.message}${reason}`);
         }
         canonicalHeadSha = capRoundHead;
