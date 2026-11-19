@@ -102,8 +102,9 @@ function nonEmpty(value) {
 
 /**
  * Trigger predicate. Delta mode runs only for a committed, not yet pushed fix
- * of a non-empty judge act list or of a non-empty set of unresolved review
- * threads (the thread route). Every other push gets no delta review.
+ * of a non-empty judge act list, of a non-empty set of unresolved review
+ * threads (the thread route) or, with no unresolved thread, of the operator
+ * focus round (counted as one thread-route item). Every other push gets no delta review.
  * @param {{ actItemCount?: number, threadItemCount?: number, fixCommitted?: boolean, fixPushed?: boolean }} input
  * @returns {"delta"|"none"}
  */

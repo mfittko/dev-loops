@@ -412,9 +412,15 @@ test("a zero-thread threads commit_only emit refuses without an operator focus r
     const focusFile = path.join(root, "tmp", "focus.json");
     await writeFile(focusFile, JSON.stringify({ round: "tighten the cap-round summary wording" }));
     assert.equal((await emit({ ...base, operatorFocusFile: focusFile })).workOrder.phase, "commit_only");
-    await writeRecord({ items: [{ ref: "operator-focus", status: "resolved" }] });
+    const focusItems = [{ ref: "operator-focus", status: "resolved" }];
+    // A record reviewed against another round's act set (the default ACT set here) never clears.
+    await writeRecord({ items: focusItems });
+    await assert.rejects(emit({ ...base, phase: "full", operatorFocusFile: focusFile }), /not reviewed against this operator focus round/);
+    const { startDeltaSequence: start } = await import("@dev-loops/core/loop/pre-push-delta-review");
+    const actSetId = start({ reviewBaselineHead: head, actList: [{ ref: "operator-focus", angle: "operator-focus", summary: "tighten the cap-round summary wording", judgeDisposition: "act" }] }).actSetId;
+    await writeRecord({ items: focusItems, actSetId });
     assert.equal((await emit({ ...base, phase: "full", operatorFocusFile: focusFile })).workOrder.phase, "full");
-    await assert.rejects(emit({ ...base, phase: "full" }), /never reviewed|not threads in the threads file/);
+    await assert.rejects(emit({ ...base, phase: "full" }), /not reviewed against this operator focus round/);
   });
 });
 

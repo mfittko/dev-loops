@@ -2000,5 +2000,23 @@ test("--threads-file with no unresolved thread builds the act set from the fixer
   fs.writeFileSync(planPath, JSON.stringify({ workOrder: { operatorFocus: { round: "tighten the summary wording" } } }));
   const input = (await runCli(threadArgs(threadsFile, "--spec-identity", "spec@1", "--fixer-plan", planPath), headAt(B))).input;
   assert.deepEqual(input.actItems.map(({ ref, summary }) => [ref, summary]), [["operator-focus", "tighten the summary wording"]]);
-  await assert.rejects(runCli(threadArgs(threadsFile, "--spec-identity", "spec@1"), headAt(B)), /non-empty judge act list/);
+  await assert.rejects(runCli(threadArgs(threadsFile, "--spec-identity", "spec@1"), headAt(B)), /no operator focus round/);
+});
+
+test("--threads-file with no unresolved thread records a locally_clear result against the operator-focus item", async () => {
+  const { dir, threadsFile } = threadsFixture({ ...THREADS, threads: [] });
+  const planPath = path.join(dir, "plan.json");
+  fs.writeFileSync(planPath, JSON.stringify({ workOrder: { operatorFocus: { round: "tighten the summary wording" } } }));
+  const sequence = startDeltaSequence({ reviewBaselineHead: A, actList: [{ ref: "operator-focus", angle: "operator-focus", summary: "tighten the summary wording", judgeDisposition: "act" }] });
+  const result = path.join(dir, "focus-result.json");
+  fs.writeFileSync(result, JSON.stringify({
+    reviewBaselineHead: A, candidateHead: B, actSetId: sequence.actSetId,
+    actionableItems: [{ ref: "operator-focus", status: "resolved", evidence: ["e"] }],
+    newFindings: [], widenedReads: [], outcome: "locally_clear",
+  }));
+  const seam = headAt(B);
+  assert.equal((await runCli(threadArgs(threadsFile, "--result", result, "--invocation", "1", "--fixer-plan", planPath), seam)).nextStep, "push");
+  const record = JSON.parse(fs.readFileSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`), "utf8"));
+  assert.deepEqual(record.items, [{ ref: "operator-focus", status: "resolved" }]);
+  assert.equal(record.nextStep, "push");
 });

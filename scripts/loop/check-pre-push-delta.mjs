@@ -72,7 +72,7 @@ import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
 const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --result-path <path> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --handback --site-coverage <path> [--worktree <dir>]   (fixer handbackCheck run)
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --result <path> --invocation <1-3> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
-       check-pre-push-delta.mjs --threads-file <path> --repo <owner/name> --pr <n> --baseline <sha> ...   (thread route: replaces --act-list)
+       check-pre-push-delta.mjs --threads-file <path> --repo <owner/name> --pr <n> --baseline <sha> ...   (thread route: replaces --act-list; with no unresolved thread the --fixer-plan's operator focus round is the one act item)
        check-pre-push-delta.mjs --reviewer-only --repo <owner/name> --pr <n> --baseline <sha> --pr-head <sha> --findings-log <cap-round log> --spec-identity <id> --result-path <path> [--worktree <dir>]   (code-range clearing, act list derived from the ledger)
        check-pre-push-delta.mjs --reviewer-only --repo <owner/name> --pr <n> --baseline <sha> --pr-head <sha> --findings-log <cap-round log> --result <path> --invocation <1-3> [--worktree <dir>]
 
@@ -232,7 +232,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
   };
 }
 
-// The operator focus the pulled fixer plan carries; an unreadable plan yields none and the coverage authentication refuses it later.
+// The operator focus the pulled fixer plan carries. The thread input and result runs read it unauthenticated; only the --handback and closure runs bind the plan through the coverage authentication. An unreadable plan yields none.
 function planOperatorFocus(fixerPlan) {
   try { return JSON.parse(readFileSync(fixerPlan, "utf8")).workOrder?.operatorFocus; } catch { return undefined; }
 }
@@ -607,12 +607,14 @@ export async function runCli(
     await roundAnglesOf(options.findingsLog, baselineSha, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target: { repo: options.repo, pr: options.pr }, route, prBase });
     if (!route.chainEnd) derivedActList = capRoundActList(log.findings, log.headSha);
   }
+  const threadActList = options.threadsFile && !options.reviewerOnly
+    ? threadsToActList(JSON.parse(readFileSync(options.threadsFile, "utf8")), { repo: options.repo, pr: options.pr, operatorFocus: options.fixerPlan ? planOperatorFocus(options.fixerPlan) : undefined })
+    : null;
+  if (threadActList?.length === 0) throw new Error("threads file holds no unresolved thread and the --fixer-plan carries no operator focus round; pass the pulled --fixer-plan of an emission that had an --operator-focus-file with a round");
   const sequence = startDeltaSequence({
     reviewBaselineHead: baselineSha,
     reviewerOnly: options.reviewerOnly,
-    actList: options.reviewerOnly ? derivedActList : options.threadsFile
-      ? threadsToActList(JSON.parse(readFileSync(options.threadsFile, "utf8")), { repo: options.repo, pr: options.pr, operatorFocus: options.fixerPlan ? planOperatorFocus(options.fixerPlan) : undefined })
-      : JSON.parse(readFileSync(options.actList, "utf8")),
+    actList: options.reviewerOnly ? derivedActList : options.threadsFile ? threadActList : JSON.parse(readFileSync(options.actList, "utf8")),
   });
   // PRE-PUSH-DELTA-PUSH-AUTHORITY: the PR head moved since the gate round reviewed it (a stray push).
   if (options.prHead && !options.reviewerOnly && revParse(options.worktree, options.prHead) !== sequence.reviewBaselineHead) {
