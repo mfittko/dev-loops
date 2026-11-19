@@ -117,20 +117,40 @@ test("work order: the emitted prompt carries no PR/issue body, diff body, or adj
   });
 });
 
-test("work order: prompt size is independent of diff size (small vs >=100x diff)", async () => {
+test("work order: the prompt stays bounded for a large single-hunk diff (one oversized part plus its Oversized diff part line)", async () => {
   const sizes = [];
+  let partCount = 0;
   for (const lines of [10, 2000]) {
     await withTmpDir(async (repoRoot) => {
-      await writeRound(repoRoot, { diffOutput: makeDiff(lines) });
+      const written = await writeRound(repoRoot, { diffOutput: makeDiff(lines) });
+      partCount = written.artifact.requiredReads.filter((r) => r.kind === "diff").length;
       const payload = runEmit(repoRoot);
       sizes.push(Object.fromEntries(payload.units.map((u) => [u.scope, u.promptBytes])));
     });
   }
   assert.ok(Buffer.byteLength(makeDiff(2000)) >= 100 * Buffer.byteLength(makeDiff(10)));
+  // Each diff part adds one manifest line (path, sha256, size); an oversized part also adds its Oversized line.
+  const extraParts = partCount;
   for (const scope of Object.keys(sizes[0])) {
-    assert.ok(Math.abs(sizes[1][scope] - sizes[0][scope]) <= 256, `${scope}: ${sizes[0][scope]} vs ${sizes[1][scope]}`);
+    assert.ok(Math.abs(sizes[1][scope] - sizes[0][scope]) <= 256 + 400 * extraParts, `${scope}: ${sizes[0][scope]} vs ${sizes[1][scope]}`);
     assert.ok(sizes[1][scope] < REVIEWER_WORK_ORDER_MAX_BYTES);
   }
+});
+
+test("work order: a filtered diff of well over 60 parts makes the emitter refuse fail-closed over the prompt cap", async () => {
+  // 2000 files of ~3 KB each, about 125 parts: well past the cap even with the short temp paths of a Linux runner (manifest lines carry absolute paths).
+  const fileBlock = (i) => `diff --git a/src/f${i}.mjs b/src/f${i}.mjs\n--- a/src/f${i}.mjs\n+++ b/src/f${i}.mjs\n@@ -0,0 +1,100 @@\n${Array.from({ length: 100 }, (_, n) => `+export const v${n} = ${n};`).join("\n")}\n`;
+  const diffOutput = Array.from({ length: 2000 }, (_, i) => fileBlock(i)).join("");
+  await withTmpDir(async (repoRoot) => {
+    const written = await writeRound(repoRoot, { diffOutput });
+    const parts = written.artifact.requiredReads.filter((r) => r.kind === "diff");
+    assert.ok(parts.length >= 100 && parts.length <= 150, `parts: ${parts.length}`);
+    const baseEnv = { ...process.env };
+    delete baseEnv.CLAUDECODE;
+    const result = spawnSync("node", [emitCliPath, "--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot, encoding: "utf8", env: baseEnv });
+    assert.equal(result.status, 1);
+    assert.match(`${result.stdout}${result.stderr}`, /GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing .*REVIEWER_WORK_ORDER_MAX_BYTES/);
+  });
 });
 
 test("work order: prompt size is independent of issue/spec body size (small vs 100x body)", async () => {

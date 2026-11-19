@@ -23,6 +23,7 @@ import {
   DEFAULT_DIFF_EXCLUDE_GLOBS,
   classifyDiffFileExclusion,
   filterDiffForInline,
+  splitDiffIntoParts,
   matchesDiffExcludeGlob,
 } from "../src/loop/review-dispatch-plan.mjs";
 
@@ -1033,5 +1034,72 @@ describe("filterDiffForInline — filtered diff for the shared per-head block (i
     assert.ok(diffIdx > staticIdx, "filtered diff must sit after the static leading span");
     assert.ok(suffixIdx > diffIdx, "the per-group suffix must sit after the filtered diff");
     assert.ok(!composed.includes("package-lock.json"), "an excluded file's hunk never reaches the composed prompt");
+  });
+});
+
+describe("splitDiffIntoParts — Read-sized diff parts", () => {
+  const hunk = (n, lines = 3, width = 10) =>
+    `@@ -${n},${lines} +${n},${lines} @@\n${Array.from({ length: lines }, () => `+${"x".repeat(width)}`).join("\n")}\n`;
+  const file = (name, hunks) => `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n${hunks.join("")}`;
+  const joined = (parts) => parts.map((p) => p.text).join("");
+
+  test("a diff under the cap is one part equal to the input", () => {
+    const diff = file("a.txt", [hunk(1)]);
+    assert.deepEqual(splitDiffIntoParts(diff), [{ text: diff, oversized: false }]);
+  });
+
+  test("empty input returns no parts", () => {
+    assert.deepEqual(splitDiffIntoParts(""), []);
+  });
+
+  test("a multi-file diff over the cap cuts only before diff --git lines", () => {
+    const files = ["a", "b", "c"].map((n) => file(`${n}.txt`, [hunk(1, 3, 40)]));
+    const diff = files.join("");
+    const maxBytes = Buffer.byteLength(files[0]) * 2;
+    const parts = splitDiffIntoParts(diff, { maxBytes });
+    assert.equal(parts.length, 2);
+    assert.equal(joined(parts), diff);
+    for (const part of parts) assert.ok(part.text.startsWith("diff --git "));
+    assert.ok(parts.every((p) => !p.oversized && Buffer.byteLength(p.text) <= maxBytes));
+  });
+
+  test("one file over the cap cuts only before @@ lines and keeps its header with the first hunk", () => {
+    const diff = file("big.txt", [hunk(1, 3, 40), hunk(20, 3, 40), hunk(40, 3, 40)]);
+    const maxBytes = Math.floor(Buffer.byteLength(diff) * 0.7);
+    const parts = splitDiffIntoParts(diff, { maxBytes });
+    assert.ok(parts.length >= 2);
+    assert.equal(joined(parts), diff);
+    assert.ok(parts[0].text.startsWith("diff --git "));
+    assert.ok(parts[0].text.includes("@@"));
+    for (const part of parts.slice(1)) assert.ok(part.text.startsWith("@@"));
+    assert.ok(parts.every((p) => Buffer.byteLength(p.text) <= maxBytes));
+  });
+
+  test("one hunk above the cap becomes its own oversized part", () => {
+    const diff = file("a.txt", [hunk(1)]) + file("big.txt", [hunk(1, 3, 10), hunk(20, 30, 40)]) + file("c.txt", [hunk(1)]);
+    const parts = splitDiffIntoParts(diff, { maxBytes: 500 });
+    assert.equal(joined(parts), diff);
+    const oversized = parts.filter((p) => p.oversized);
+    assert.equal(oversized.length, 1);
+    assert.ok(oversized[0].text.startsWith("@@ -20,30"));
+    assert.ok(parts.filter((p) => !p.oversized).every((p) => Buffer.byteLength(p.text) <= 500));
+  });
+
+  test("the byte cap counts UTF-8 bytes, not string length", () => {
+    const diff = file("a.txt", ["€", "€"].map((c, i) => `@@ -${i},1 +${i},1 @@\n+${c.repeat(30)}\n`));
+    const maxBytes = diff.length + 1;
+    assert.ok(diff.length < maxBytes && Buffer.byteLength(diff) > maxBytes);
+    const parts = splitDiffIntoParts(diff, { maxBytes });
+    assert.ok(parts.length > 1);
+    assert.equal(joined(parts), diff);
+  });
+
+  test("the line cap cuts a short-line diff that is under the byte cap", () => {
+    const files = ["a", "b", "c"].map((n) => file(`${n}.txt`, [hunk(1, 3, 1)]));
+    const diff = files.join("");
+    const parts = splitDiffIntoParts(diff, { maxLines: 12 });
+    assert.ok(parts.length > 1);
+    assert.equal(joined(parts), diff);
+    assert.ok(parts.every((p) => p.text.split("\n").length - 1 <= 12));
   });
 });
