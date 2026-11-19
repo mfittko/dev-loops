@@ -854,7 +854,7 @@ test("issue 3093 AC3: the rendered outputSchemas examples are valid verdicts for
     const plan = await emitJudgeWorkOrder(await seed(root));
     const { examples } = renderedJson(await readFile(plan.promptPath, "utf8")).outputSchemas["spec-authority-verdict.json"];
     assert.equal(examples.length, 2);
-    assert.deepEqual(examples.map((example) => example.decisions[0].defectKind), [undefined, "matcher"]);
+    assert.deepEqual(examples.map((example) => example.decisions[0].defectKind), ["matcher", "matcher"]);
     assert.ok(examples[1].decisions[0].acceptedForms.length > 0 && examples[1].decisions[0].rejectedForms.length > 0);
     assert.match(examples[1].specDigest, /^sha256:[0-9a-f]{64}$/);
     const previousExitCode = process.exitCode;
