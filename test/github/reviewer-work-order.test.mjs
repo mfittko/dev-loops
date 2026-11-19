@@ -19,7 +19,6 @@ import {
   VALIDATION_POSTURE_MAX_LENGTH,
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
-import { DIFF_PART_MAX_BYTES } from "@dev-loops/core/loop/review-dispatch-plan";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { verifyDispatchPromptLayoutForHead } from "../../scripts/github/verify-dispatch-prompt-layout.mjs";
 
@@ -118,18 +117,20 @@ test("work order: the emitted prompt carries no PR/issue body, diff body, or adj
   });
 });
 
-test("work order: the prompt grows by one manifest line per diff part (small vs >=100x diff)", async () => {
+test("work order: the prompt stays bounded for a large single-hunk diff (one oversized part plus its Oversized diff part line)", async () => {
   const sizes = [];
+  let partCount = 0;
   for (const lines of [10, 2000]) {
     await withTmpDir(async (repoRoot) => {
-      await writeRound(repoRoot, { diffOutput: makeDiff(lines) });
+      const written = await writeRound(repoRoot, { diffOutput: makeDiff(lines) });
+      partCount = written.artifact.requiredReads.filter((r) => r.kind === "diff").length;
       const payload = runEmit(repoRoot);
       sizes.push(Object.fromEntries(payload.units.map((u) => [u.scope, u.promptBytes])));
     });
   }
   assert.ok(Buffer.byteLength(makeDiff(2000)) >= 100 * Buffer.byteLength(makeDiff(10)));
-  // Each extra diff part adds one manifest line (path, sha256, size) and nothing else.
-  const extraParts = Math.ceil(Buffer.byteLength(makeDiff(2000)) / DIFF_PART_MAX_BYTES) - 1;
+  // Each diff part adds one manifest line (path, sha256, size); an oversized part also adds its Oversized line.
+  const extraParts = partCount;
   for (const scope of Object.keys(sizes[0])) {
     assert.ok(Math.abs(sizes[1][scope] - sizes[0][scope]) <= 256 + 400 * extraParts, `${scope}: ${sizes[0][scope]} vs ${sizes[1][scope]}`);
     assert.ok(sizes[1][scope] < REVIEWER_WORK_ORDER_MAX_BYTES);
