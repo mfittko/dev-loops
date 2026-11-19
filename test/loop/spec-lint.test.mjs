@@ -483,6 +483,9 @@ test("size band: waiver line, in-band line, minLoc 0 and null softLoc report no 
   assert.deepEqual(kinds(150), []);
   assert.deepEqual(kinds(10, { minLoc: 0 }), []);
   assert.deepEqual(kinds(900, { softLoc: null }), []);
+  assert.deepEqual(lintSizeForecast(forecastBody(5000), bandOf({ waiverLoc: null })), [
+    { kind: "size_band_above_soft_loc", id: "1", detail: { wloc: 5000, softLoc: 400, message: "split assessment required in the results comment (softLoc 400)" } },
+  ]);
 });
 
 test("size band: three slices report per-slice ids, split_required first then informational in forecast order", () => {
