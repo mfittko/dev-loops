@@ -2073,7 +2073,7 @@ async function sealBaselineUnit(unit, root, render = renderWorkOrder) {
 }
 
 // A report as the verifier's own --construct leaves it: the bytes plus the sha256 mark beside them.
-const ciEntries = (head) => [{ assertArgs: ["api", `repos/${REPO}/commits/${head}/check-runs?per_page=100`], stdout: "{\"check_runs\":[{\"name\":\"build\",\"status\":\"completed\",\"conclusion\":\"success\"}]}" }, { assertArgs: ["api", `repos/${REPO}/commits/${head}/status?per_page=100`], stdout: "{\"statuses\":[]}" }];
+const ciEntries = (head) => [{ assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/commits/${head}/check-runs?per_page=100`], stdout: "{\"check_runs\":[{\"name\":\"build\",\"status\":\"completed\",\"conclusion\":\"success\"}]}" }, { assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/commits/${head}/status?per_page=100`], stdout: "{\"statuses\":[]}" }];
 const writeMarked = async (file, text) => { await writeFile(file, text); await writeFile(`${file}.constructed`, sha256Hex(text)); };
 // Issue 2787 C1/C2/C4: the six numbered steps in order, the red-CI hand-back and the Edit/Write-only rule.
 function assertFullPhaseSteps(text, { push }) {
@@ -2817,7 +2817,7 @@ for (const route of ["Historical main", "OLD authority", "complete"]) test(`${ro
     assert.equal(pulled.stdout, await readFile(unit.promptPath, "utf8"));
     const bin = path.join(root, "tmp/bin");
     await mkdir(bin);
-    await writeFile(path.join(bin, "gh"), `#!/bin/sh\ncase "$1 $2" in\n'pr view') printf '%s\\n' '${JSON.stringify({ headRefOid: f.candidate })}';;\n'api graphql') printf '%s\\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}';;\n'api user') printf '%s\\n' '{"login":"bot"}';;\n"api repos/"*/check-runs*) printf '%s\\n' '{"check_runs":[{"name":"build","status":"completed","conclusion":"success"}]}';;\n"api repos/"*/status*) printf '%s\\n' '{"statuses":[]}';;\napi*) printf '%s\\n' '{"status":"ahead"}';;\n*) exit 1;;\nesac\n`);
+    await writeFile(path.join(bin, "gh"), `#!/bin/sh\ncase "$1 $2" in\n'pr view') printf '%s\\n' '${JSON.stringify({ headRefOid: f.candidate })}';;\n'api graphql') printf '%s\\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}';;\n'api user') printf '%s\\n' '{"login":"bot"}';;\n"api --paginate") case "$4" in *check-runs*) printf '%s\\n' '{"check_runs":[{"name":"build","status":"completed","conclusion":"success"}]}';; *) printf '%s\\n' '{"statuses":[]}';; esac;;\napi*) printf '%s\\n' '{"status":"ahead"}';;\n*) exit 1;;\nesac\n`);
     chmodSync(path.join(bin, "gh"), 0o755);
     const commands = [...pulled.stdout.split("## Required reads")[0].matchAll(/`(node [^`]+)`/g)].map((match) => match[1]).filter((command) => command.includes("scripts/github/verify-fixer-disposition.mjs"));
     assert.equal(commands.length, 3);

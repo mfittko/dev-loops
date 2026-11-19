@@ -868,8 +868,8 @@ function handoffEntries(fixture) {
     { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--repo", REPO], assertArgContains: ["baseRefName"], stdout: line({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD, reviews: fixture.reviews, statusCheckRollup: [ciRun] }) },
     { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`], stdout: line({ users: [], teams: [] }) },
     { matchByClaims: true, assertArgs: ["api", "graphql"], stdout: line({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) },
-    { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/commits/${HEAD}/check-runs?per_page=100`], stdout: line({ check_runs: [ciRun] }) },
-    { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/commits/${HEAD}/status?per_page=100`], stdout: line({ statuses: [] }) },
+    { matchByClaims: true, assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/commits/${HEAD}/check-runs?per_page=100`], stdout: line({ check_runs: [ciRun] }) },
+    { matchByClaims: true, assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/commits/${HEAD}/status?per_page=100`], stdout: line({ statuses: [] }) },
     ...requestEntries(fixture),
   ];
 }
