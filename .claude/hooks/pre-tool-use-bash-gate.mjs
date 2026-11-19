@@ -15,7 +15,8 @@
  *     `gh`, `issue|pr`, `comment` and a body flag or an editor flag (`--editor`, `--edit*`, a short cluster with `e`);
  *     `gh`, `pr`, `review` and a body flag; `gh`, `issue|pr`, `close|reopen` and `--comment*` or a short cluster with `c`
  *     (a `-c` directly after a shell word such as `sh` is the shell's flag and is ignored); or `gh`, `api`, `graphql`
- *     and a token holding `addComment` or `addPullRequestReview` (`segmentWriteKind`). The substring match denies
+ *     and a token holding `addComment`, `updateIssueComment` or `addPullRequestReview`, or `gh`, `api` and an
+ *     `issues/<n>/comments` or `issues/comments/<id>` write (`segmentWriteKind`). The substring match denies
  *     `addPullRequestReviewComment` and `addPullRequestReviewThread` on purpose. The deny reason names the sanctioned
  *     writers (comment-issue.mjs and edit-comment.mjs) even when the decider also denies the command.
  *   - raw `gh issue create` — blocked only from a SUBAGENT context (agent_type present); the main agent/operator
@@ -136,7 +137,14 @@ function segmentWriteKind(command) {
   // The tokenizer's decoded word values (ANSI-C `$'\x65dit'` becomes `edit`, also inside substitutions) join the set.
   // Backtick substitutions are not in `subs`: tokenize each terminated tick's text too (the text between the backticks, unescaped as bash does: \` \$ \\ lose the backslash; nested ticks recurse).
   const decodedWords = (segments) => segments.flatMap((s) => s.words.flatMap((w) => [w.value, ...decodedWords(w.subs.flatMap((x) => x.segments))]));
-  const decodedOf = (text) => { const t = tokenizeShellCommand(text); return [...decodedWords(t.segments), ...t.ticks.flatMap((k) => decodedOf(k.slice(1, -1).replace(/\\([`$\\])/g, "$1")))]; };
+  // A decoded word that still holds `$'` is a nested shell string (`bash -c "gh pr reopen 5 $'\x2dc' x"`): the inner shell decodes it,
+  // so tokenize its value again. Past the depth bound the command fails closed (overCap).
+  const decodedOf = (text, depth = 0) => {
+    const t = tokenizeShellCommand(text);
+    const own = decodedWords(t.segments);
+    return [...own, ...t.ticks.flatMap((k) => decodedOf(k.slice(1, -1).replace(/\\([`$\\])/g, "$1"), depth)),
+      ...own.filter((v) => v.includes("$'")).flatMap((v) => depth >= 3 ? (overCap = true, []) : decodedOf(v, depth + 1))];
+  };
   const plainWords = command.replace(/['"\\]/g, "").replace(/[`$();|&<>\s]+/g, " ").split(" ").filter(Boolean);
   const words = [...plainWords, ...decodedOf(command)].filter(Boolean);
   const splitWord = (w) => w.split(/[\s=$(){},`]+/).filter(Boolean);
@@ -165,10 +173,13 @@ function segmentWriteKind(command) {
   const seq = tokens.map((t) => t.toLowerCase()).filter((t, i, all) => t !== all[i - 1]);
   const ghAt = seq.findIndex((t) => /^(?:-[a-z]*s)?gh$/.test(t.split("/").pop()));
   // Command position is judged on the plain words only, where the predecessor's own index must precede `gh`: a shell word repeated after
-  // `gh` (`sh -c "gh pr reopen sh -c x"`) is a branch argument and its `-c` counts. The decoded-word copies after `plainSeq` repeat
-  // tokens, so a shell-word predecessor there is exempt; the plain words already carry every literal `-c`.
+  // `gh` (`sh -c "gh pr reopen sh -c x"`) is a branch argument and its `-c` counts. The decoded-word copies after `plainSeq` carry the
+  // ANSI-C flags the plain words lose (`$'\x2dc'` becomes `x2dc`), so command position there is judged against the first decoded
+  // `gh` token (one before `plainSeq.length` covers a boundary token the dedupe merged).
   const plainSeq = expand(plainWords).map((t) => t.toLowerCase()).filter((t, i, all) => t !== all[i - 1]);
-  const shellFlag = (i) => /^(?:\/(?:[^/]+\/)*)?(?:sh|bash|zsh|dash|ksh)$/.test(seq[i - 1] ?? "") && (i >= plainSeq.length || i - 1 < ghAt);
+  const ghAtDecoded = seq.findIndex((t, j) => j >= plainSeq.length - 1 && /^(?:-[a-z]*s)?gh$/.test(t.split("/").pop()));
+  const shellFlag = (i) => /^(?:\/(?:[^/]+\/)*)?(?:sh|bash|zsh|dash|ksh)$/.test(seq[i - 1] ?? "") &&
+    (i < plainSeq.length ? i - 1 < ghAt : ghAtDecoded >= 0 && i - 1 < ghAtDecoded);
   const closeComment = seq.some((t, i) => t.startsWith("--comment") || (/^-[^-]*c/.test(t) && !(t === "-c" && shellFlag(i))));
   // Raw comment and review writes (`OPERATOR-OWNED-LINE`): the sanctioned writers refuse an operator-owned line, a raw write does not.
   // Comment clauses win over the body clause: a graphql addComment with `-f body=...` is a comment write, not a PR-body write.
@@ -272,7 +283,7 @@ const bashGateFacts = {
   enforceCoordinator,
 };
 const COMMENT_REASON =
-  "OPERATOR-OWNED-LINE: this command holds the tokens of a raw GitHub comment or review write (gh, issue or pr, comment and a body or editor flag; pr review and a body flag; close or reopen with a comment flag; or a gh api graphql addComment or addPullRequestReview mutation), so it is blocked for every actor. " +
+  "OPERATOR-OWNED-LINE: this command holds the tokens of a raw GitHub comment or review write (gh, issue or pr, comment and a body or editor flag; pr review and a body flag; close or reopen with a comment flag; or a gh api graphql addComment, updateIssueComment or addPullRequestReview mutation, or a REST issues comment write), so it is blocked for every actor. " +
   "Post a new comment with `dev-loops-run scripts/github/comment-issue.mjs --repo <owner/repo> --issue <n> --body-file <f>` and edit one with `dev-loops-run scripts/github/edit-comment.mjs`. " +
   "To read comments, use `gh pr view <n> --json comments`.";
 const decision = decideBashGate(bashGateFacts);
