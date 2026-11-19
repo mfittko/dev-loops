@@ -98,7 +98,9 @@ function boardRunChild({
     // items query — fail only the second one (Next Up), leaving In Progress OK
     itemsQueryCount += 1;
     if (itemsError && itemsQueryCount === 2) return { code: 1, stdout: "", stderr: "boom: API unreachable" };
-    return json({ node: { items: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } });
+    // Like GitHub, content carries __typename only when the query selects it (#3268).
+    const shown = query.includes("__typename") ? nodes : nodes.map((n) => ({ ...n, content: { ...n.content, __typename: undefined } }));
+    return json({ node: { items: { nodes: shown, pageInfo: { hasNextPage: false, endCursor: null } } } });
   };
 }
 
