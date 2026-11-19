@@ -376,7 +376,7 @@ test("skill docs enforce self-assignment and draft-first rules for create comman
 
   // copilot-pr-followup routes PR creation through the canonical create-pr wrapper
   assert.match(copilotFollowupSkill, /`node <resolved-skill-scripts>\/github\/create-pr\.mjs/i);
-  assert.match(copilotFollowupSkill, /gh issue create --repo <resolved-repo> --assignee @me/i);
+  assert.match(copilotFollowupSkill, /issue create --repo <resolved-repo> --title <title> --body-file <path> --assignee @me/i);
   assert.match(copilotFollowupSkill, /node <resolved-skill-scripts>\/github\/create-pr\.mjs --repo <owner\/name> --assignee @me --base <base> --head <head> --title/i);
   assert.doesNotMatch(copilotFollowupSkill, /gh pr create --draft --repo <owner\/name> --assignee @me --base <base> --head <head> --title/i);
   assertRuleOwned("OPS-DRAFT-FIRST-PR", "skills/docs/copilot-loop-operations.md");
