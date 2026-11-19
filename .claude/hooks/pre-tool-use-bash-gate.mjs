@@ -12,11 +12,14 @@
  *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
  *   - `decideBashGate` and the token rules below decide every command; the hook has no separate pre-check list.
  *   - in a managed repo the whole command is denied for EVERY actor (`OPERATOR-OWNED-LINE`) when its tokens hold
- *     `gh`, `issue|pr`, `comment` and a body flag; `gh`, `pr`, `review` and a body flag; `gh`, `issue|pr`,
- *     `close|reopen` and `--comment`/`-c`; or `gh`, `api`, `graphql` and `addComment`/`addPullRequestReview`
- *     (`segmentWriteKind`). Sanctioned writers: comment-issue.mjs and edit-comment.mjs.
- *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
- *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
+ *     `gh`, `issue|pr`, `comment` and a body flag or an editor flag (`--editor`, `--edit*`, a short cluster with `e`);
+ *     `gh`, `pr`, `review` and a body flag; `gh`, `issue|pr`, `close|reopen` and `--comment*` or a short cluster with `c`
+ *     (a `-c` directly after a shell word such as `sh` is the shell's flag and is ignored); or `gh`, `api`, `graphql`
+ *     and a token holding `addComment` or `addPullRequestReview` (`segmentWriteKind`). The substring match denies
+ *     `addPullRequestReviewComment` and `addPullRequestReviewThread` on purpose. The deny reason names the sanctioned
+ *     writers (comment-issue.mjs and edit-comment.mjs) even when the decider also denies the command.
+ *   - raw `gh issue create` — blocked only from a SUBAGENT context (agent_type present); the main agent/operator
+ *     retains direct issue creation (#1051).
  *   - in a managed repo the whole command is denied when its tokens (any segment, any order; comma brace groups and
  *     `${VAR:-x}` forms split; a sequence group `{x..y}` stays outside the token model) hold `gh`, `pr`, `edit|create` and a body flag, or `gh`, `api` and a body
  *     field or `--input`, or `gh`, `api`, `graphql` and `updatePullRequest`, `updateIssue` or `body`
@@ -86,6 +89,7 @@ if (fixerPull) recordFixerAgentBinding(mainRoot, { agentId: input?.agent_id, ...
 // `-F body=`, `--field body=`, `--raw-field body=`) or `--input`, or `gh`, `api`, `graphql` and `updatePullRequest`/`updateIssue`/`body`. `$(`, `)`, backticks, braces and commas split tokens so a
 // command substitution or comma brace group is seen (a sequence group `{x..y}` stays literal), a `${VAR:-gh}` default counts as a token, and `gh` matches by basename (`/usr/bin/gh`). No head, wrapper or echo exemption: fails closed.
 // A process wrapper needs no parser: the rules read every token of the command.
+// Comment writes use the same token model: `comment` with a body or editor flag, `pr review` with a body flag, `close|reopen` with a comment flag, and graphql comment or review mutations.
 // `--{body,x}` expands to `--body`, `--x`: one innermost comma group per pass; a comma-less group nested in it stays literal.
 // The product of the group sizes is exponential, so a word past BRACE_EXPANSION_CAP returns null and the caller fails closed.
 const BRACE_EXPANSION_CAP = 64;
@@ -151,10 +155,17 @@ function segmentWriteKind(command) {
       (has((t) => /^(?:-f|--(?:raw-)?field)$/.test(t)) && has((t) => t === "body")) || has((t) => /^-fbody$/.test(t)) ||
       (has((t) => t === "graphql") && has((t) => /update(?:pullrequest|issue)/.test(t) || t === "body"))))) return "body";
   const issueOrPr = has((t) => t === "issue" || t === "pr");
+  // `comment` opens an editor on `-e`/`--editor` (or edits on `--edit-last`), so GH_EDITOR can supply the body: these count as body flags.
+  const editorFlag = () => has((t) => t.startsWith("--edit") || /^-[^-]*e/.test(t));
+  // A `-c` that directly follows a shell word (`sh -c "..."`) is the shell's own flag. Consecutive duplicates from the token
+  // expansion collapse first, so adjacency holds. A `-c` anywhere else, or inside a short cluster, counts.
+  const seq = tokens.map((t) => t.toLowerCase()).filter((t, i, all) => t !== all[i - 1]);
+  const closeComment = seq.some((t, i) => t.startsWith("--comment") ||
+    (/^-[^-]*c/.test(t) && !(t === "-c" && /^(?:sh|bash|zsh|dash|ksh)$/.test((seq[i - 1] ?? "").split("/").pop()))));
   // Raw comment and review writes (`OPERATOR-OWNED-LINE`): the sanctioned writers refuse an operator-owned line, a raw write does not.
-  return (issueOrPr && has((t) => t === "comment") && bodyFlag()) ||
+  return (issueOrPr && has((t) => t === "comment") && (bodyFlag() || editorFlag())) ||
     (has((t) => t === "pr") && has((t) => t === "review") && bodyFlag()) ||
-    (issueOrPr && has((t) => t === "close" || t === "reopen") && has((t) => t === "-c" || t.startsWith("--comment"))) ||
+    (issueOrPr && has((t) => t === "close" || t === "reopen") && closeComment) ||
     (has((t) => t === "api") && has((t) => t === "graphql") && has((t) => /addcomment|addpullrequestreview/.test(t)))
     ? "comment" : null;
 }
@@ -199,7 +210,7 @@ function runHelper(script, args = [], override = null, options = {}) {
 }
 if (inManagedContext) {
   // When both verbs appear (compound command), apply the stricter merge gate.
-  const pr = isMerge ? extractPrNumberFromGhPrMergeAnywhere(command) : extractPrNumberFromGhPrReadyAnywhere(command);
+  const pr = typeof command !== "string" ? null : isMerge ? extractPrNumberFromGhPrMergeAnywhere(command) : extractPrNumberFromGhPrReadyAnywhere(command);
   // STOP-HUMAN-MERGE-001 (#1622): resolve the repo's effective `autonomy.humanMergeOnly` via the
   // resolved toolchain (the hook bundle cannot import @dev-loops/core); fail
   // open (false) when the script is unavailable so the loop-level merge safety remains authoritative.
@@ -249,16 +260,17 @@ const bashGateFacts = {
   humanMergeOnly,
   enforceCoordinator,
 };
+const COMMENT_REASON =
+  "OPERATOR-OWNED-LINE: this command holds the tokens of a raw GitHub comment or review write (gh, issue or pr, comment and a body or editor flag; pr review and a body flag; close or reopen with a comment flag; or a gh api graphql addComment or addPullRequestReview mutation), so it is blocked for every actor. " +
+  "Post a new comment with `dev-loops-run scripts/github/comment-issue.mjs --repo <owner/repo> --issue <n> --body-file <f>` and edit one with `dev-loops-run scripts/github/edit-comment.mjs`. " +
+  "To read comments, use `gh pr view <n> --json comments`.";
 const decision = decideBashGate(bashGateFacts);
+// The decider decides first. A raw comment write still gets the comment reason, so every actor sees the sanctioned writers.
 if (decision.decision === "deny") {
-  emitDeny(decision.reason);
+  emitDeny(writeKind === "comment" ? COMMENT_REASON : decision.reason);
 }
 if (writeKind === "comment") {
-  emitDeny(
-    "OPERATOR-OWNED-LINE: this command holds the tokens of a raw GitHub comment or review write (gh, issue or pr, comment or review and a body flag; close or reopen with --comment; or a gh api graphql addComment or addPullRequestReview mutation), so it is blocked for every actor. " +
-    "Post a new comment with `dev-loops-run scripts/github/comment-issue.mjs --repo <owner/repo> --issue <n> --body-file <f>` and edit one with `dev-loops-run scripts/github/edit-comment.mjs`. " +
-    "To read comments, use `gh pr view <n> --json comments`.",
-  );
+  emitDeny(COMMENT_REASON);
 }
 if (writeKind === "body") {
   emitDeny(
