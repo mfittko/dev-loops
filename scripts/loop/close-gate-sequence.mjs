@@ -31,6 +31,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightFieldsSp
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { viewPr } from "../github/view-pr.mjs";
 import { pullReceiptPath } from "../github/_work-order-protocol.mjs";
+import { resolveRunId } from "@dev-loops/core/loop/run-context";
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { readGateDeltaRecord, readSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { STALE_RUNNER_DEFAULT_MAX_AGE_MS, resolveStaleRunnerMaxAgeMs } from "./_stale-runner-detection.mjs";
@@ -51,9 +52,10 @@ export const branchReflogMs = (branch) => {
   return common.status === 0 ? mtimeMs(path.resolve(common.stdout.trim(), "logs", "refs", "heads", branch)) : null;
 };
 
-/** The recorded actor: DEVLOOPS_RUN_ID, else the OS user; a uid without a passwd entry makes userInfo throw, so fall back to "unknown". */
-export const defaultActor = (env = process.env, lookup = userInfo) => {
-  if (env.DEVLOOPS_RUN_ID) return env.DEVLOOPS_RUN_ID;
+/** The recorded actor: the lane run id (resolveRunId, run-context file under cwd), else the OS user; a uid without a passwd entry makes userInfo throw, so fall back to "unknown". */
+export const defaultActor = (env = process.env, lookup = userInfo, cwd = null) => {
+  const runId = resolveRunId(env, { cwd });
+  if (runId) return runId;
   try { return lookup().username; } catch { return "unknown"; }
 };
 
@@ -225,7 +227,7 @@ if (isDirectCliRun(import.meta.url)) {
     if (preflight !== undefined) process.exitCode = preflight;
     else {
       const slug = values.repo === undefined ? undefined : parseRepoSlug(values.repo, { errorMessage: USAGE });
-      const result = await closeGateSequence({ tmpRoot: resolveGateArtifactTmpRoot(process.cwd()), head: values.head, repo: slug && `${slug.owner}/${slug.name}`, pr: values.pr && Number(values.pr) });
+      const result = await closeGateSequence({ tmpRoot: resolveGateArtifactTmpRoot(process.cwd()), head: values.head, repo: slug && `${slug.owner}/${slug.name}`, pr: values.pr && Number(values.pr), actor: defaultActor(process.env, userInfo, process.cwd()) });
       const emitted = emitResult(result, { jq: values.jq, silent: values.silent, fields: values.fields });
       process.exitCode = emitted; // 0/1 by result or --silent predicate, 2 for an invalid output flag
     }

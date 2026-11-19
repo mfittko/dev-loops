@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
+import { resolveRunId } from "@dev-loops/core/loop/run-context";
 import { watchCiStatus } from "../../scripts/github/probe-ci-status.mjs";
+import { runIdFreeEnv, withLaneRunContext } from "../_helpers.mjs";
 
 function prView(headSha, checkNames = []) {
   return JSON.stringify({
@@ -88,5 +90,21 @@ test("watchCiStatus treats a rejecting lease heartbeat as non-fatal", async () =
     // The watch still returns its normal terminal result despite the failure.
     assert.equal(result.status, "timeout");
     assert.equal(result.settled, false);
+  });
+});
+
+test("watchCiStatus heartbeats under the run id from the run-context file with no env var (issue 3224)", async () => {
+  await withLaneRunContext(async ({ runId }) => {
+    await withPendingGhStub(async (env) => {
+      const calls = [];
+      await watchCiStatus(
+        { repo: "owner/repo", pr: 7, pollIntervalMs: 60_000, timeoutMs: 120_000 },
+        advancingClockDeps(runIdFreeEnv(env), {
+          ensureOwnershipImpl: async (args) => { calls.push(resolveRunId(args.env, { cwd: args.cwd })); return { ok: true }; },
+        }),
+      );
+      assert.ok(calls.length >= 1);
+      assert.ok(calls.every((resolved) => resolved === runId));
+    });
   });
 });
