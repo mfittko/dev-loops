@@ -329,6 +329,11 @@ function ghPrVerbRegex(verb) {
   return ghSubcmdVerbRegex("pr", verb);
 }
 
+/** A help request puts -h/--help first after the verb; gh reads a later -h as a flag value. */
+function isHelpRemainder(remainder) {
+  return ["--help", "-h"].includes(remainder.split(/\s+/)[0].toLowerCase());
+}
+
 /**
  * Return the first segment in the command that is a `gh <subcmd> <verb>` call (ignoring
  * --help/-h), or null. Scans ALL segments so compound commands are caught.
@@ -339,8 +344,7 @@ function findGhSubcmdVerbSegment(command, subcmd, verb) {
     if (!re.test(segment)) continue;
     const remainder = segment.replace(re, "").trim();
     if (!remainder) return segment;
-    const args = remainder.split(/\s+/).map((a) => a.toLowerCase());
-    if (!args.includes("--help") && !args.includes("-h")) return segment;
+    if (!isHelpRemainder(remainder)) return segment;
   }
   return null;
 }
@@ -381,10 +385,7 @@ function extractRepoFlagsFromGhSubcmdVerbSegments(command, subcmd, verb) {
   for (const segment of shellSegments(command)) {
     if (!re.test(segment)) continue;
     const remainder = segment.replace(re, "").trim();
-    if (remainder) {
-      const args = remainder.split(/\s+/).map((a) => a.toLowerCase());
-      if (args.includes("--help") || args.includes("-h")) continue;
-    }
+    if (isHelpRemainder(remainder)) continue;
     out.push({ segment, explicitRepo: extractRepoFlagFromSubcmdSegment(segment, subcmd, verb) });
   }
   return out;
@@ -450,8 +451,7 @@ function isGhPrVerbCommand(command, verb) {
   if (!segment || !re.test(segment)) return false;
   const remainder = segment.replace(re, "").trim();
   if (!remainder) return true;
-  const args = remainder.split(/\s+/).map((a) => a.toLowerCase());
-  return !args.includes("--help") && !args.includes("-h");
+  return !isHelpRemainder(remainder);
 }
 
 /** Extract PR number from a single already-isolated segment (shared by both first- and all-segment paths). */
