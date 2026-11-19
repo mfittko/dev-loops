@@ -346,6 +346,11 @@ const COMMENT_WRITES = [
   "gh pr reopen feat/zsh -c x",
   "gh pr reopen zsh -c x",
   "gh issue close bash -c x",
+  // A backslash-newline continuation joins `-` and `c` into the flag `-c`.
+  "gh issue close 5 -\\\nc x",
+  "gh pr close 5 -\\\nc x",
+  "gh pr reopen 5 -\\\nc x",
+  "gh issue reopen 5 --com\\\nment x",
   // An ANSI-C quoted `-c` exists only in the decoded words, so any `$'` word in a gh command is denied.
   "gh pr reopen zsh $'\\x2dc' x",
   "gh pr reopen zsh $'\\055c' x",

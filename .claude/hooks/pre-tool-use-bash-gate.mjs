@@ -148,7 +148,8 @@ function segmentWriteKind(command) {
     return [...own, ...t.ticks.flatMap((k) => decodedOf(k.slice(1, -1).replace(/\\([`$\\])/g, "$1"), depth)),
       ...own.filter((v) => v.includes("$'")).flatMap((v) => depth >= 3 ? (overCap = true, []) : decodedOf(v, depth + 1))];
   };
-  const plainWords = command.replace(/['"\\]/g, "").replace(/[`$();|&<>\s]+/g, " ").split(" ").filter(Boolean);
+  // A backslash-newline is a line continuation: bash joins the words (`-\<nl>c` is `-c`), so delete it before the whitespace split.
+  const plainWords = command.replace(/\\\r?\n/g, "").replace(/['"\\]/g, "").replace(/[`$();|&<>\s]+/g, " ").split(" ").filter(Boolean);
   const decoded = decodedOf(command);
   const words = [...plainWords, ...decoded].filter(Boolean);
   const splitWord = (w) => w.split(/[\s=$(){},`]+/).filter(Boolean);
