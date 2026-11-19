@@ -362,8 +362,11 @@ alone is never sufficient for these PRs.
   **Fresh per-merge approval** bullet above), fed in as `humanApprovalSatisfied`. It
   accepts only the designated approver (the `--human-approved-by <login>` passed to the
   merge wrapper): a genuine `APPROVED` review on the current head SHA, or, on the
-  solo-owner path, a head-pinned `approve merge <headSha>` comment. Any other login, a
-  Copilot/bot author, or a stale approval never satisfies it.
+  solo-owner path, a head-pinned `approve merge <headSha>` comment, or a
+  `approve merge <sha> patch-id <patchId>` marker whose `<patchId>` equals the current
+  patch-id when the head contains `origin/<base>` (ADR 0279), so a base-only refresh
+  keeps it. Any other login, a Copilot/bot author, or a stale approval that matches
+  neither the head nor the patch-id never satisfies it.
   `resolveHumanReviewDecision` (same module, `reviewDecision === "APPROVED"`) is only a
   back-compat fallback for the queue-driver caller; the production `merge-pr.mjs` wiring
   (`evaluateMergePreconditions`) always uses the shared resolver.
