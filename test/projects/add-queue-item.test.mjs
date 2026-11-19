@@ -1,6 +1,6 @@
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import { main, parseCliArgs, runCli } from "../../scripts/projects/add-queue-item.mjs";
@@ -928,12 +928,14 @@ describe("add-queue-item", () => {
     });
 
     it("lands a linked-doc-only refined issue in Next Up untouched", async () => {
-      // #1866: the enqueue gate now verifies the linked refinement doc resolves
-      // (existsSync, cwd-relative) — create the referenced doc first. Cleanup
-      // runs in a finally block so a failed assertion never leaks the fixture.
-      const refinementDoc = "tmp/refinement/10-plan.md";
-      mkdirSync("tmp/refinement", { recursive: true });
-      writeFileSync(refinementDoc, "# Plan\n", "utf-8");
+      // The gate resolves the linked doc against the `cwd` option, which `main` passes as `repoRoot`.
+      const dir = mkdtempSync(nodePath.join(tmpdir(), "add-queue-item-"));
+      const sentinel = nodePath.resolve(`tmp/refinement/.add-queue-item-sentinel-${process.pid}`);
+      mkdirSync(nodePath.dirname(sentinel), { recursive: true });
+      writeFileSync(sentinel, "", "utf-8");
+      mkdirSync(nodePath.join(dir, "tmp/refinement"), { recursive: true });
+      writeFileSync(nodePath.join(dir, "tmp/refinement/10-plan.md"), "# Plan\n", "utf-8");
+      try {
       try {
       const responses = [
         { payload: userPayload() },
@@ -947,14 +949,17 @@ describe("add-queue-item", () => {
       ];
       const result = await main(
         { repo: "mfittko/dev-loops", project: "1", item: 10, nextUp: true },
-        { env: {}, runChild: mockRunChild(responses) },
+        { env: {}, runChild: mockRunChild(responses), cwd: dir },
       );
       assert.equal(result.ok, true);
       assert.equal(result.item.status, "Next Up");
       assert.equal(result.refinement.refined, true);
       } finally {
-        rmSync(refinementDoc, { force: true });
-        rmSync("tmp/refinement", { recursive: true, force: true });
+        rmSync(dir, { recursive: true, force: true });
+      }
+      assert.equal(existsSync(sentinel), true);
+      } finally {
+        rmSync(sentinel, { force: true });
       }
     });
 
