@@ -652,3 +652,23 @@ test("all refine scripts have shebangs", async () => {
     assert.match(stat, /^#!\/usr\/bin\/env node/);
   }
 });
+
+test("runProseLinkageDetector flags lowercase and uppercase 'child of #' lines", () => {
+  const run = (line) => runProseLinkageDetector(normalizeTreePayload({
+    root: 1,
+    issues: [{ number: 1, children: [], body: `${buildBody({ scope: "owns root" })}\n${line}` }],
+  }));
+  for (const line of ["child of #12", "- CHILD OF #12"]) assert.equal(run(line).ok, false, line);
+});
+
+test("runScopeBoundaryCrossChecker counts an ownership claim wrapped across lines", () => {
+  const make = (wrapped) => normalizeTreePayload({
+    root: 1,
+    issues: [
+      { number: 1, children: [2, 3], body: buildBody({ scope: "owns parent" }) },
+      ...[2, 3].map((n) => ({ number: n, parentNumber: 1, children: [], body: buildBody({ scope: `owns own${n}`, boundary: `owns own${n}\n${n === 2 ? wrapped : "- Also this issue owns API"}` }) })),
+    ],
+  });
+  const dup = runScopeBoundaryCrossChecker(make("This issue owns\nAPI. It does NOT own UI (#5).")).errors.filter((e) => e.code === "duplicate_ownership");
+  assert.ok(dup.some((e) => e.message.includes("'api'")));
+});

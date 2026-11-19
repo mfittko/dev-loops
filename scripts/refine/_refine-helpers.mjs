@@ -9,7 +9,7 @@ import { ghJson } from "@dev-loops/core/github/gh";
 import { extractSection } from "@dev-loops/core/loop/markdown-sections";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
-// Only "Child of #" is line-anchored, because it misfires on ordinary prose. The other labels state parentage anywhere on a line.
+// Only "Child of #" is line-anchored, because it misfires on ordinary prose; lowercase and uppercase forms match only as a standalone ref line. The other labels state parentage anywhere on a line.
 // The prefix allows blockquote, heading, bullet (with task box), numbered item and table cell markers.
 const LINE_PREFIX = String.raw`^[ \t]*(?:>[ \t>]*)?(?:#{1,6}[ \t]+|[-*+][ \t]+(?:\[[ xX]\][ \t]+)?|\d+[.)][ \t]+|\|(?:[^|\n]*\|)*[ \t]*)?(?:\*\*)?`;
 const linkageRe = (label) => new RegExp(`${LINE_PREFIX}${label}.*$`, "mu");
@@ -17,7 +17,7 @@ const wholeLineRe = (label) => new RegExp(`^.*${label}.*$`, "imu");
 
 export const FORBIDDEN_PROSE_PATTERNS = [
   {
-    re: linkageRe("Child of #"),
+    re: linkageRe(String.raw`(?:Child of #|(?:child of|CHILD OF) #(?=\d+(?:\*\*)?[ \t.|]*$))`),
     hint: "Link the parent through the GitHub sub-issue API and remove the line.",
   },
   {

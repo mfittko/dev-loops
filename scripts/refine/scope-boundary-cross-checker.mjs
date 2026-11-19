@@ -26,10 +26,11 @@ function extractOwnershipClaims(issue) {
   const ownershipSection = extractSection(issue.body, "Ownership") ?? "";
   const searchText = [scopeSection, ownershipSection, issue.body].filter(Boolean).join("\n");
 
-  for (const line of searchText.split(/\r?\n/gu)) {
-    for (const match of line.matchAll(/\bowns?\s+([^\n.;]+)/giu)) {
-      add(normalizeScopeToken(match[1]), line);
-    }
+  // Scan the whole text so a claim wrapped across lines ("owns\nAPI") still counts.
+  for (const match of searchText.matchAll(/\bowns?\s+([^\n.;]+)/giu)) {
+    const lineStart = searchText.lastIndexOf("\n", match.index) + 1;
+    const end = searchText.indexOf("\n", match.index + match[0].length);
+    add(normalizeScopeToken(match[1]), searchText.slice(lineStart, end === -1 ? undefined : end));
   }
 
   for (const line of scopeSection.split(/\r?\n/gu)) {
