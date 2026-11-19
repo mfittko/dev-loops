@@ -288,7 +288,7 @@ test("the rule states the step 0 check, the no-emitter wording and the detail fo
   assert.match(failClosed, /`Agent`/);
   assert.match(failClosed, /`subagent`/);
   assert.match(failClosed, /only when the harness exposes the depth/);
-  assert.ok(failClosed.includes(FANOUT_UNAVAILABLE_MESSAGE));
+  assert.ok(failClosed.includes(`${FANOUT_UNAVAILABLE_MESSAGE} (<detail>)`));
 });
 
 test("the contract rule and the dev-loop agent pin the Claude Code gate topology", async () => {
