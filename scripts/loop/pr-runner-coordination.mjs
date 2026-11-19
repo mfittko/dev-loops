@@ -24,12 +24,14 @@ const USAGE = `Usage:
   pr-runner-coordination.mjs release --repo <owner/name> --pr <number> [--run-id <id>]
   pr-runner-coordination.mjs handoff --repo <owner/name> --pr <number> [--run-id <id>]
 Durable one-runner-per-PR coordination helper.
-If --run-id is omitted for claim/assert/release/takeover, DEVLOOPS_RUN_ID is used
-(via DEVLOOPS_RUN_ID).
+If --run-id is omitted for claim/assert/release/takeover, the lane's run id is used:
+DEVLOOPS_RUN_ID, the Pi run id variable, the native Pi synthesis, then the linked worktree's
+.pi/dev-loop-run-context.json that \`loop startup --claim\` writes (never read in the main checkout).
+The routed form is \`dev-loops loop runner-coordination <command> ...\`.
 status reports stale (true|false) and staleReason for the active owner.
 takeover refuses a live (non-stale) foreign owner.
-handoff uses the verified runtime identity when one exists (a mismatching --run-id is
-ownership_lost). Without one, --run-id <the id used at claim> is the identity and
+handoff uses the verified runtime identity or the lane's run id when one exists (a
+mismatching --run-id is ownership_lost). Without one, --run-id <the id used at claim> is the identity and
 releases the claim only when it equals the active owner.
 Output:
   stdout: { "ok": true, ... }
@@ -115,10 +117,10 @@ function parseCliArgs(argv) {
   }
   return options;
 }
-function resolveRunId(explicitRunId, env) {
+function resolveRunId(explicitRunId, env, cwd) {
   return typeof explicitRunId === "string" && explicitRunId.trim().length > 0
     ? explicitRunId.trim()
-    : resolveEnvRunId(env);
+    : resolveEnvRunId(env, { cwd });
 }
 export async function runPrRunnerCoordination(options, { env = process.env, cwd = process.cwd() } = {}) {
   if (options.command === "status") {
@@ -138,7 +140,7 @@ export async function runPrRunnerCoordination(options, { env = process.env, cwd 
   if (options.command === "handoff") {
     return handoffRunnerOwnership({ repo: options.repo, pr: options.pr, runId: options.runId, env, cwd });
   }
-  const runId = resolveRunId(options.runId, env);
+  const runId = resolveRunId(options.runId, env, cwd);
   const maxAgeMs = resolveStaleRunnerMaxAgeMs({}, env);
   if (options.command === "claim") {
     return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "claim", cwd, maxAgeMs });

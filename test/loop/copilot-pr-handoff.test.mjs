@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
-import { makeGhMock as makeGhMockRaw, runIdFreeEnv, runNode as runNodeHelper, trustGhEntries, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { makeGhMock as makeGhMockRaw, runIdFreeEnv, withLaneRunContext, runNode as runNodeHelper, trustGhEntries, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 // Gate-formatted fixture comments need a maintainer identity (ADR 0248).
 const makeGhMock = (entries, options) => makeGhMockRaw(trustGhEntries(entries), options);
@@ -3396,4 +3396,14 @@ test("copilot-pr-handoff --watch-status idle applies the draft-gate reset below 
   const output = JSON.parse(idle.run.stdout);
   assert.equal(output.snapshot.copilotReviewRoundCount, 1, "the readback snapshot carries the draft-gate-adjusted count");
   assert.notEqual(output.state, "round_cap_clean_fallback");
+});
+
+test("runHandoff claims under the run id from the run-context file with no env var (issue 3224)", async () => {
+  await withLaneRunContext(async ({ cwd, runId }) => {
+    const target = { repo: "owner/repo", pr: 3224 };
+    // The claim precedes every gh read, so a failing gh child still leaves the lane's claim behind.
+    await runHandoff(target, { env: runIdFreeEnv(), runChild: async () => ({ code: 1, stdout: "", stderr: "gh unavailable" }) }).catch(() => {});
+    const { state } = await loadRunnerCoordinationState({ ...target, cwd });
+    assert.equal(state.activeRun?.runId, runId);
+  });
 });

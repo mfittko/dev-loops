@@ -26,6 +26,10 @@
  *
  * Native Codex context uses bounded first-record metadata IO via resolveNativeCodexContext;
  * CODEX_THREAD_ID is only a lookup key. Pi/Claude retain their existing marker precedence.
+ *
+ * A Claude Code Bash call does not keep an exported env var for the next call, so a lane's
+ * run id also persists in `<worktree>/.pi/dev-loop-run-context.json` (`ensureLaneRunContext`),
+ * which `resolveRunId` reads as its last fallback when the caller passes its cwd.
  */
 
 import crypto from "node:crypto";
@@ -317,13 +321,17 @@ function resolveNativePiChildSessionId(env) {
  *
  * Verified native Codex identity takes precedence over inherited carriers and fails closed.
  * Outside Codex, a run-id carrier wins when present. With none present, a native Pi async context synthesizes
- * a stable id: the child's own session id when available, else the parent session id. No
- * async context at all still returns null.
+ * a stable id: the child's own session id when available, else the parent session id.
+ * When `cwd` is given, the last fallback is the run-context file at the linked-worktree root of
+ * `cwd`, which `loop startup --claim` writes for a lane whose harness carries no env
+ * across tool calls (Claude Code). Callers that own a runner claim pass their cwd; a caller
+ * without `cwd` (hook guards, `ensureRunId`) stays env-only. No run id at all returns null.
  *
  * @param {Record<string, string|undefined>} [env]
+ * @param {{ cwd?: string|null, fs?: typeof import("node:fs") }} [options]
  * @returns {string|null} The trimmed run id, or null when no async context is present.
  */
-export function resolveRunId(env = process.env) {
+export function resolveRunId(env = process.env, { cwd = null, fs = fsDefault } = {}) {
   if (resolveRuntimeHarness(env) === "codex") {
     const native = resolveNativeCodexContext({ env });
     return native.status === "valid" ? native.runId : null;
@@ -338,7 +346,44 @@ export function resolveRunId(env = process.env) {
     const childSessionId = resolveNativePiChildSessionId(env);
     return synthesizePiRunId(childSessionId ?? env[NATIVE_PI_PARENT_SESSION_MARKER]);
   }
-  return null;
+  const root = typeof cwd === "string" && cwd.length > 0 ? resolveRunContextRoot(cwd, { fs }) : null;
+  const fileRunId = root === null ? null : readRunContext({ root, fs })?.runId ?? null;
+  // The file can arrive with PR content, so only a well-formed id becomes the lane identity.
+  return fileRunId !== null && FILE_RUN_ID_PATTERN.test(fileRunId) ? fileRunId : null;
+}
+
+const FILE_RUN_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+
+// A linked worktree's `.git` file points at `<git dir>/worktrees/<name>`; a submodule's points at `<git dir>/modules/<name>`.
+function linkedWorktreeGitDir(dir, fs) {
+  try {
+    const match = /^gitdir:\s*(.+?)\s*$/im.exec(fs.readFileSync(path.join(dir, ".git"), "utf8"));
+    const target = match === null ? null : path.resolve(dir, match[1]);
+    return target !== null && path.basename(path.dirname(target)) === "worktrees" ? target : null;
+  } catch { return null; }
+}
+
+/**
+ * The linked-worktree root of `cwd`: the nearest directory, `cwd` included, whose `.git` entry
+ * is a file naming a `worktrees/<name>` git dir. Null in the main checkout (a `.git` directory),
+ * a submodule checkout and outside a checkout, so a main
+ * agent never adopts a lane's run id, and an older main-checkout run-context file (the headless
+ * entry writes one) never acts as a lane identity.
+ *
+ * @param {string} cwd
+ * @param {{ fs?: typeof import("node:fs") }} [options]
+ * @returns {string|null}
+ */
+export function resolveRunContextRoot(cwd, { fs = fsDefault } = {}) {
+  let dir = path.resolve(cwd);
+  for (;;) {
+    let gitEntry = null;
+    try { gitEntry = fs.statSync(path.join(dir, ".git")); } catch { /* absent: keep walking up */ }
+    if (gitEntry) return gitEntry.isFile() && linkedWorktreeGitDir(dir, fs) !== null ? dir : null;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
 }
 
 /**
@@ -373,6 +418,17 @@ export function runContextPath(root) {
   return path.join(root, ".pi", RUN_CONTEXT_FILENAME);
 }
 
+// A symlinked `.pi` dir or run-context file would redirect the write outside the worktree.
+function assertNoRedirectedRunContext(file, fs) {
+  for (const target of [path.dirname(file), file]) {
+    let stat = null;
+    try { stat = fs.lstatSync(target); } catch (error) { if (error?.code !== "ENOENT") throw error; }
+    if (stat?.isSymbolicLink()) {
+      throw Object.assign(new Error(`run-context path ${target} is a symlink; remove it so the run id is not written through it`), { code: "RUN_CONTEXT_SYMLINK", path: target });
+    }
+  }
+}
+
 /**
  * Persist the run-context state file (for inspection/recovery).
  *
@@ -381,20 +437,41 @@ export function runContextPath(root) {
  * @param {string} params.root
  * @param {string} [params.mintedAt] - ISO timestamp; defaults to now. Tests pass a fixed
  *   value for determinism; real runs get a useful inspection/recovery timestamp.
+ * @param {boolean} [params.atomic] - Publish with a hard link so a concurrent startup that already
+ *   won keeps its file; an unusable existing file is replaced.
  * @param {typeof import("node:fs")} [params.fs]
- * @returns {string} The path written.
+ * @returns {string|null} The path written, or null when `atomic` found a usable concurrent winner.
  */
-export function writeRunContext({ runId, root, mintedAt, fs = fsDefault }) {
+export function writeRunContext({ runId, root, mintedAt, atomic = false, fs = fsDefault }) {
   if (typeof runId !== "string" || runId.trim().length === 0) {
     throw new TypeError("writeRunContext: runId must be a non-empty string");
   }
   const file = runContextPath(root);
+  assertNoRedirectedRunContext(file, fs);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const payload = {
     runId: runId.trim(),
     mintedAt: mintedAt ?? new Date().toISOString(),
   };
-  fs.writeFileSync(file, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  const body = `${JSON.stringify(payload, null, 2)}\n`;
+  if (!atomic) {
+    fs.writeFileSync(file, body, "utf8");
+    return file;
+  }
+  const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  fs.writeFileSync(tmp, body, "utf8");
+  try {
+    try {
+      fs.linkSync(tmp, file);
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      const winner = readRunContext({ root, fs })?.runId ?? null;
+      if (winner !== null && FILE_RUN_ID_PATTERN.test(winner)) return null;
+      fs.renameSync(tmp, file); // the file is unusable: replace it
+    }
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
   return file;
 }
 
@@ -431,10 +508,11 @@ export function readRunContext({ root, fs = fsDefault }) {
  * @param {Record<string, string|undefined>} [params.env]
  * @param {string} [params.root]
  * @param {string} [params.mintedAt] - ISO timestamp for the state file (determinism).
+ * @param {boolean} [params.atomic] - Publish the file atomically and reuse a concurrent winner's id.
  * @param {typeof import("node:fs")} [params.fs]
  * @returns {{ runId: string, minted: boolean, statePath: string|null }}
  */
-export function ensureRunId({ env = process.env, root, mintedAt, fs = fsDefault } = {}) {
+export function ensureRunId({ env = process.env, root, mintedAt, atomic = false, fs = fsDefault } = {}) {
   const existing = resolveRunId(env);
   if (existing) {
     return { runId: existing, minted: false, statePath: null };
@@ -443,7 +521,58 @@ export function ensureRunId({ env = process.env, root, mintedAt, fs = fsDefault 
   const runId = mintRunId();
   let statePath = null;
   if (typeof root === "string" && root.length > 0) {
-    statePath = writeRunContext({ runId, root, mintedAt, fs });
+    statePath = writeRunContext({ runId, root, mintedAt, atomic, fs });
+    if (statePath === null) {
+      return { runId: readRunContext({ root, fs }).runId, minted: false, statePath: null };
+    }
   }
   return { runId, minted: true, statePath };
+}
+
+/**
+ * Give a claiming lane a run id that later commands resolve without an env var.
+ *
+ * `loop startup --claim` calls this with its working directory. A run id that already
+ * resolves (env, Pi synthesis, or the worktree's run-context file) is reused; otherwise
+ * `ensureRunId` mints one and writes `<worktree>/.pi/dev-loop-run-context.json`. Native
+ * Codex keeps its verified thread identity, so this never mints or writes there.
+ *
+ * @param {object} params
+ * @param {Record<string, string|undefined>} [params.env]
+ * @param {string} params.cwd
+ * @param {string} [params.mintedAt]
+ * @param {typeof import("node:fs")} [params.fs]
+ * @returns {{ runId: string, minted: boolean, statePath: string|null }|null} Null on native
+ *   Codex, in the main checkout, or outside a checkout.
+ */
+export function ensureLaneRunContext({ env = process.env, cwd, mintedAt, fs = fsDefault } = {}) {
+  if (resolveRuntimeHarness(env) === "codex") return null;
+  const existing = resolveRunId(env, { cwd, fs });
+  const root = resolveRunContextRoot(cwd, { fs });
+  if (existing) {
+    // An env-supplied id is persisted so later env-free writers share the coordinator's identity.
+    const envId = RUN_ID_MARKERS.map((marker) => env?.[marker]?.trim?.()).find(Boolean);
+    if (root === null || envId !== existing || !FILE_RUN_ID_PATTERN.test(existing) || readRunContext({ root, fs })?.runId === existing) {
+      return { runId: existing, minted: false, statePath: null };
+    }
+    const statePath = writeRunContext({ runId: existing, root, mintedAt, fs });
+    excludeRunContextFile(root, fs);
+    return { runId: existing, minted: false, statePath };
+  }
+  if (root === null) return null;
+  // Mint through ensureRunId with an atomic publish: a concurrent startup's winner id is reused.
+  const result = ensureRunId({ env, root, mintedAt, atomic: true, fs });
+  if (result.minted) excludeRunContextFile(root, fs);
+  return result;
+}
+
+// Keep the lane file out of `git add` in a consumer repo with no ignore entry: one line in the common git dir's info/exclude.
+function excludeRunContextFile(root, fs) {
+  const entry = `.pi/${RUN_CONTEXT_FILENAME}`;
+  try {
+    const exclude = path.join(path.dirname(path.dirname(linkedWorktreeGitDir(root, fs))), "info", "exclude");
+    const current = fs.existsSync(exclude) ? fs.readFileSync(exclude, "utf8") : "";
+    if (current.split(/\r?\n/u).includes(entry)) return;
+    fs.appendFileSync(exclude, `${current === "" || current.endsWith("\n") ? "" : "\n"}${entry}\n`);
+  } catch { /* best-effort: the file is still written */ }
 }
