@@ -261,7 +261,7 @@ export function lintSizeForecast(body, { waiverLoc, softLoc, minLoc }) {
     if (typeof softLoc === "number" && wloc > softLoc && !atWaiver(wloc)) {
       return [{ kind: "size_band_above_soft_loc", id: slice, detail: { wloc, softLoc, message: `split assessment required in the results comment (softLoc ${softLoc})` } }];
     }
-    if (typeof minLoc === "number" && wloc < minLoc) {
+    if (typeof minLoc === "number" && wloc < minLoc && !atWaiver(wloc)) {
       return [{ kind: "size_band_below_min_loc", id: slice, detail: { wloc, minLoc, message: `merge assessment required in the results comment (minLoc ${minLoc})` } }];
     }
     return [];

@@ -389,6 +389,11 @@ test("size forecast: a null waiverLoc never reports size_forecast_split_required
   assert.deepEqual(lintSizeForecast("## Size forecast\n\n- forecast: slice=1 wloc=1800 files=a.mjs", { waiverLoc: 1500 }).map((f) => f.kind), ["size_forecast_split_required"]);
 });
 
+test("size forecast: a waiverLoc below minLoc gives only the split finding at or above the waiver bound", () => {
+  const body = "## Size forecast\n\n- forecast: slice=1 wloc=100 files=a.mjs";
+  assert.deepEqual(lintSizeForecast(body, { softLoc: 40, waiverLoc: 75, minLoc: 150 }).map((f) => f.kind), ["size_forecast_split_required"]);
+});
+
 test("size forecast: the split bound moves with a .devloops waiverLoc override", async () => {
   const root = await fixtureRepo();
   const body = `## Size forecast\n\n${forecastLine(1, 600)}`;
