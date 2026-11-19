@@ -1942,6 +1942,14 @@ test("AC11: countPrOwnCommits is 0 for a base-only merge range and counts PR-own
   try {
     assert.equal(await countPrOwnCommits(merged.dir, merged.mergeHead, merged.head, "main", deps), 1, "a clean non-base-only merge resolves nothing, so only its side commit counts");
   } finally { cleanup(merged); }
+  const evil = reviewerOnlyRepo({ evilMerge: true });
+  try {
+    assert.equal(await countPrOwnCommits(evil.dir, evil.mergeHead, evil.head, "main", deps), 2, "the side commit plus the resolved merge");
+  } finally { cleanup(evil); }
+  const conflict = reviewerOnlyRepo({ conflictOnly: true });
+  try {
+    assert.equal(await countPrOwnCommits(conflict.dir, conflict.fix, conflict.head, "main", deps), 1, "the conflict resolution is the only change and counts");
+  } finally { cleanup(conflict); }
 });
 
 test("countPrOwnCommits is 0 for a clean merge whose base commit touches a PR-changed file", async () => {
