@@ -4,8 +4,8 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-// Acceptance test: the real PreToolUse Bash hook denies a subagent merge-pr.mjs run without
-// --check (issue 2500). All cases run unconditionally.
+// Acceptance test: the real PreToolUse Bash hook denies a subagent merge-pr run, --check included
+// (issue 2500). All cases run unconditionally.
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const hook = path.join(repoRoot, ".claude", "hooks", "pre-tool-use-bash-gate.mjs");
 
@@ -23,8 +23,8 @@ test("a dev-loop subagent running merge-pr.mjs without --check is denied (issue 
   assert.equal(decide(MERGE, "dev-loop"), "deny");
 });
 
-test("a dev-loop subagent running merge-pr.mjs --check is allowed (issue 2500)", () => {
-  assert.equal(decide(`${MERGE} --check`, "dev-loop"), "allow");
+test("a dev-loop subagent running merge-pr.mjs --check is denied too (issue 2500)", () => {
+  assert.equal(decide(`${MERGE} --check`, "dev-loop"), "deny");
 });
 
 test("the top-level session (no agent_type) running merge-pr.mjs is allowed (issue 2500)", () => {

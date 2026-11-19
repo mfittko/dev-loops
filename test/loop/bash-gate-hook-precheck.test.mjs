@@ -223,13 +223,13 @@ test("non-body writes and reads remain allowed by the pre-check", async () => {
   });
 });
 
-test("a subagent merge-pr.mjs call is denied at the hook entry, --check and the main agent stay allowed (issue 2500)", async () => {
+test("a subagent merge-pr.mjs call, --check included, is denied at the hook entry; the main agent stays allowed (issue 2500)", async () => {
   await withManagedRepo(async (root) => {
     const merge = "dev-loops-run scripts/github/merge-pr.mjs --repo acme/widgets --pr 2630 --human-approved-by mfittko";
     const denied = bash(root, merge, "dev-loop");
     assert.equal(denied.decision, "deny");
     assert.match(denied.reason, /orchestrator/);
-    assert.equal(bash(root, `${merge} --check`, "dev-loop").decision, "allow");
+    assert.equal(bash(root, `${merge} --check`, "dev-loop").decision, "deny");
     assert.equal(bash(root, merge, undefined).decision, "allow");
   });
 });

@@ -295,10 +295,10 @@ test("2955: the issue-to-PR re-target caused by the unit's own draft PR is a con
   }
 });
 
-test("2500: the coordinator hands back merge-pr --check and never merges; a brief carries no merge step", async () => {
+test("2500: the orchestrator alone runs merge-pr (--check included); a brief carries no merge step", async () => {
   for (const doc of ["skills/dev-loop/SKILL.md", ".claude/skills/dev-loop/SKILL.md"]) {
     const text = squeeze(await readRepo(doc));
-    assert.match(text, /dev-loop coordinator never merges: at the merge-ready point it hands back the `merge-pr\.mjs --check` result/, doc);
+    assert.match(text, /dev-loop coordinator never runs `merge-pr\.mjs`, `--check` included.*orchestrator is the only actor/, doc);
   }
   for (const doc of ["skills/docs/workflow-handoff-contract.md", ".claude/skills/docs/workflow-handoff-contract.md"]) {
     const text = squeeze(await readRepo(doc));

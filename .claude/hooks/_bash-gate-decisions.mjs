@@ -47,8 +47,6 @@ import {
   commandContainsInlineInterpreter,
   inlineInterpreterDenyDetail,
   commandContainsCodeVerificationEntrypoint,
-  isPayloadWord,
-  tokenizeShellCommand,
 } from "./_bash-command-classify.mjs";
 
 /**
@@ -199,158 +197,23 @@ export function decideUnresolveOwnerDeny({ command, role }) {
   return null;
 }
 
-const ASSIGNMENT_WORD = /^[A-Za-z_]\w*=/;
-const LAUNCHER_PREFIX = /^(?:env|command|exec|nohup|time|nice|sudo|coproc|xargs)$/;
-const RESERVED_WORD = /^(?:\{|!|then|do|else|elif|if|while|until)$/;
-// The closed list of merge-pr boolean flags (parseArgs in merge-pr.mjs). A dashed word outside it is read as a value-taking option.
-// ponytail: fail-closed ceiling: a future boolean flag missing here makes a `--check` after it count as a value, so the deny fires until the list is extended.
-const BOOLEAN_FLAGS = new Set(["--check", "--stable-release", "--standing-authorization", "--lightweight", "--help", "-h", "--silent", "-s"]);
-const LAUNCHER_NON_EXECUTING = new Set(["-c", "--check", "-e", "--eval", "-p", "--print", "-h", "--help", "-v", "--version"]);
-const LAUNCHER_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "--input-type", "--title", "--repo-root"]);
-const baseName = (value) => value.replace(/\/+$/, "").split("/").pop();
-
-// An unquoted redirection word (`2>/dev/null`, `>f`, `>>`, `<`, `&>f`): bash consumes it and its target, so neither is the program or an argument.
-const REDIRECT_WORD = /^(?:\d*(?:>>?|<>|<&|<|>&)|&>>?)\|?/;
-const REDIRECT_OPERATOR_ONLY = /^(?:\d*(?:>>?|<>|<&|<|>&)|&>>?)\|?$/;
-/** The index of the first unquoted `<` or `>` in a raw word outside `$(...)` and backticks, or -1. */
-function redirectStart(raw) {
-  let quote = "", sub = 0;
-  for (let p = 0; p < raw.length; p++) {
-    const c = raw[p];
-    if (c === "\\" && quote !== "'") p++;
-    else if (quote) { if (c === quote) quote = ""; else if (quote === '"' && c === "$" && raw[p + 1] === "(") sub++; }
-    else if (c === "'" || c === '"') quote = c;
-    else if (c === "$" && raw[p + 1] === "(") { sub++; p++; }
-    else if (c === ")" && sub) sub--;
-    else if ((c === "<" || c === ">") && !sub) return p;
-  }
-  return -1;
-}
-
-function stripRedirections(words) {
-  const out = [];
-  for (let k = 0; k < words.length; k++) {
-    const w = words[k];
-    // A heredoc or here-string op word owns the next word (delimiter or target); an unquoted redirection word is dropped with its target.
-    if (w.op) k++;
-    else if (!REDIRECT_WORD.test(w.raw)) {
-      // An attached suffix (`merge-pr.mjs>/dev/null`, `node>x`) is a redirection: keep only the word before it.
-      // shortcut: a quoted prefix keeps the value cut at its first `<`/`>`, which can differ from the raw cut; fix when a quoted-prefix bypass is shown.
-      const p = redirectStart(w.raw);
-      if (p <= 0) { out.push(w); continue; }
-      const prefix = w.raw.slice(0, p);
-      out.push({ ...w, raw: prefix, value: /['"\\$`]/.test(prefix) ? w.value.split(/[<>]/)[0] : prefix });
-      if (REDIRECT_OPERATOR_ONLY.test(w.raw.slice(p))) k++;
-    } else if (REDIRECT_OPERATOR_ONLY.test(w.raw)) k++;
-  }
-  return out;
-}
-
-/** The program of one tokenized segment: its words without env assignments, redirections, `(`/`)` subshell edges and operators, and the index of the first word after the launcher prefixes. */
-function segmentProgram(allWords) {
-  const words = stripRedirections(allWords);
-  const entries = words
-    .filter((w) => !w.op &&!ASSIGNMENT_WORD.test(w.raw.replace(/^\(+/, "")))
-    .map((w) => ({ v: w.value.replace(/^\(+|\)+$/g, ""), closes: !w.raw.startsWith("(") && w.raw.endsWith(")") }))
-    .filter((e) => e.v);
-  const values = entries.map((e) => e.v);
-  let i = 0;
-  for (;;) {
-    // A `case` header runs through its first `PATTERN)` word; a `NAME()` function header or a case pattern at the head is skipped; `function NAME` skips its name.
-    if (values[i] === "case") { while (i < values.length && !entries[i].closes) i++; i++; }
-    else if (values[i] === "function") i += 2;
-    else if (entries[i]?.closes) i++;
-    else if (RESERVED_WORD.test(values[i] ?? "")) i++;
-    else if (LAUNCHER_PREFIX.test(baseName(values[i] ?? ""))) for (i++; /^(?:-|\d)/.test(values[i] ?? ""); i++);
-    // `timeout` takes options (with or without value words) and then a duration: skip through the first digit-led word. No duration means no program.
-    // The value word of `-s`/`-k`/`--signal`/`--kill-after` is skipped first, since it can start with a digit (`-s 9`).
-    else if (baseName(values[i] ?? "") === "timeout") { for (i++; i < values.length && !/^\d/.test(values[i]); i += /^(?:-s|-k|--signal|--kill-after)$/.test(values[i]) ? 2 : 1); i++; }
-    else break;
-  }
-  return { values, i };
-}
-
-/** Whether one tokenized segment runs `merge-pr.mjs` as its program (directly, or as any operand after the launcher node/bun/dev-loops-run) with no `--check` word. */
-function segmentRunsMergePrWithoutCheck(words) {
-  const { values, i: start } = segmentProgram(words);
-  let i = start;
-  const head = baseName(values[i] ?? "");
-  if (/^(?:node|bun|dev-loops-run)$/.test(head)) {
-    // The entrypoint is the first operand after the launcher flags; a non-executing mode (`node --check`) or another script that takes merge-pr.mjs as data is no merge.
-    // An unlisted dashed flag may take a value, so a later merge-pr.mjs word is denied (fail closed). `-c` is non-executing for node only; elsewhere it takes a value (`bun -c bunfig.toml`).
-    let k = i + 1, unlisted = false;
-    for (; k < values.length; k++) {
-      const v = values[k];
-      if (v === "--") { k++; break; }
-      if (!v.startsWith("-")) { if (head === "bun" && v === "run") continue; break; }
-      if (LAUNCHER_NON_EXECUTING.has(v) && (v !== "-c" || head === "node")) return false;
-      if (LAUNCHER_VALUE_FLAGS.has(v) || v === "-c") k++;
-      else if (!v.includes("=")) unlisted = true;
-    }
-    if (baseName(values[k] ?? "") !== "merge-pr.mjs") return unlisted && values.slice(k).some((v) => baseName(v) === "merge-pr.mjs");
-    i = k;
-  } else if (head !== "merge-pr.mjs") return false;
-  // Any `--check=` word voids the allow: the last `--check` token of either form wins in merge-pr, so the gate stays fail-closed and accepts only a bare `--check` word.
-  // A bare `--check` counts only after the script word, a non-dashed word or a boolean flag; any other dashed predecessor is a value-taking option.
-  const rest = values.slice(i);
-  return values.some((v) => v.startsWith("--check=")) || !rest.some((v, k) => k > 0 && v === "--check" && (!rest[k - 1].startsWith("-") || rest[k - 1].includes("=") || BOOLEAN_FLAGS.has(rest[k - 1])));
-}
-
-/** Whether an unquoted heredoc body holds a `$(...)` or backtick substitution that runs merge-pr.mjs without `--check`: bash expands them for any program, so the body is read as double-quoted text. */
-function heredocBodyRunsMergePr(body) {
-  // Each `$(...)` (by paren depth) and backtick span is its own command with real quotes; plain text, quoted or not, is inert.
-  // shortcut: a `)` inside a quote ends the span early; a truncated span that fails to tokenize falls back to the text from its opener.
-  const runs = (inner, from) => commandRunsMergePrWithoutCheck(inner) || (tokenizeShellCommand(inner).incomplete && /merge-pr\.mjs/.test(body.slice(from)));
-  for (let p = body.indexOf("$("); p >= 0; p = body.indexOf("$(", p + 2)) {
-    let depth = 1, e = p + 2;
-    for (; e < body.length && depth > 0; e++) depth += body[e] === "(" ? 1 : body[e] === ")" ? -1 : 0;
-    if (depth > 0) return /merge-pr\.mjs/.test(body.slice(p));
-    if (runs(body.slice(p + 2, e - 1), p)) return true;
-    // A span cut early by an escaped `)` or a case pattern leaves its tail here: merge-pr.mjs named before the next opener fails closed.
-    const rest = body.slice(e), next = Math.min(...[rest.indexOf("$("), rest.indexOf("`")].map((x) => (x < 0 ? rest.length : x)));
-    if (/merge-pr\.mjs/.test(rest.slice(0, next))) return true;
-  }
-  const ticks = body.split("`");
-  if (ticks.length % 2 === 0) return /merge-pr\.mjs/.test(body.slice(body.indexOf("`")));
-  return ticks.some((t, k) => k % 2 === 1 && runs(t, 0));
-}
-
-/** Walks the token tree: a program word, a `$(...)` substitution, a `-c`/`eval` payload, a substitution in an unquoted heredoc body or a shell heredoc body that runs merge-pr.mjs without `--check`. */
-function treeRunsMergePr(segments) {
-  return segments.some((seg) => {
-    const { values, i } = segmentProgram(seg.words);
-    return segmentRunsMergePrWithoutCheck(seg.words)
-      || seg.words.some((w, k) => w.subs.some((sub) => treeRunsMergePr(sub.segments)) || (isPayloadWord(seg.words, k) && commandRunsMergePrWithoutCheck(w.value)))
-      || seg.heredocs.some((h) => !h.quoted && heredocBodyRunsMergePr(h.body))
-      || (/^(?:ba|z|da|k|mk|a)?sh$/.test(baseName(values[i] ?? "")) && seg.heredocs.some((h) => commandRunsMergePrWithoutCheck(h.body)));
-  });
-}
+/** Whether the raw command text names `merge-pr`, in any form (`--check` included). */
+export const commandMentionsMergePr = (command) => typeof command === "string" && command.includes("merge-pr");
 
 /**
- * Structural check on the tokenized command (no word list): some segment's program is `scripts/github/merge-pr.mjs`
- * and no `--check` word follows it. A mention in an argument, quoted text or comment is not a program word. Incomplete tokenization fails closed.
- * ponytail: a script written to a file and run later, or a command split across variables, is not followed.
- * @param {string} command @returns {boolean}
- */
-export function commandRunsMergePrWithoutCheck(command) {
-  const tok = tokenizeShellCommand(command);
-  if (tok.incomplete) return /merge-pr\.mjs/.test(command);
-  return treeRunsMergePr(tok.segments) || tok.ticks.some((t) => commandRunsMergePrWithoutCheck(t.slice(1, -1)));
-}
-
-/**
- * Merge ownership (issue 2500): the merge is orchestrator-owned, so any subagent that runs `merge-pr.mjs` without `--check` is denied.
- * The read-only `--check` mode stays open to every actor. The top-level session (role null) keeps the script. Keys on the role name alone, like the unresolve allowlist.
+ * Merge ownership (issue 2500): `merge-pr.mjs` is orchestrator-owned, so a subagent Bash command whose raw text contains `merge-pr` is denied, `--check` included.
+ * The top-level session (role null) keeps the script. Keys on the role name alone, like the unresolve allowlist.
+ * ponytail: ceiling: a name assembled by variable or command substitution (`m=merge; ...$m-pr`) is not caught; the orchestrator is the only actor allowed to run the script.
  * @param {{command: string, role: string|null|undefined}} params
  * @returns {{ruleId: null, reason: string}|null}
  */
 export function decideMergePrOwnerDeny({ command, role }) {
-  if (typeof role !== "string" || !commandRunsMergePrWithoutCheck(command)) return null;
+  if (typeof role !== "string" || !commandMentionsMergePr(command)) return null;
   return {
     ruleId: null,
     reason:
-      `The ${normalizeAgentType(role)} agent may not merge: scripts/github/merge-pr.mjs is owned by the orchestrator (main agent). ` +
-      "Run `merge-pr.mjs --check` (read-only) at the merge-ready point and hand back its result, with the merge-pr command line composed from the approvalPath and approveMergeLine it reports, instead of merging.",
+      `The ${normalizeAgentType(role)} agent may not run merge-pr: scripts/github/merge-pr.mjs, \`--check\` included, is owned by the orchestrator (main agent). ` +
+      "Hand back the merge-ready evidence instead; the orchestrator runs `merge-pr.mjs --check` and the merge.",
   };
 }
 
