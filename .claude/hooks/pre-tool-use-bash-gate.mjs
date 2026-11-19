@@ -137,13 +137,14 @@ function segmentWriteKind(command) {
   // Backtick substitutions are not in `subs`: tokenize each terminated tick's text too (the text between the backticks, unescaped as bash does: \` \$ \\ lose the backslash; nested ticks recurse).
   const decodedWords = (segments) => segments.flatMap((s) => s.words.flatMap((w) => [w.value, ...decodedWords(w.subs.flatMap((x) => x.segments))]));
   const decodedOf = (text) => { const t = tokenizeShellCommand(text); return [...decodedWords(t.segments), ...t.ticks.flatMap((k) => decodedOf(k.slice(1, -1).replace(/\\([`$\\])/g, "$1")))]; };
-  const words = [...command.replace(/['"\\]/g, "").replace(/[`$();|&<>\s]+/g, " ").split(" "),
-    ...decodedOf(command)].filter(Boolean);
+  const plainWords = command.replace(/['"\\]/g, "").replace(/[`$();|&<>\s]+/g, " ").split(" ").filter(Boolean);
+  const words = [...plainWords, ...decodedOf(command)].filter(Boolean);
   const splitWord = (w) => w.split(/[\s=$(){},`]+/).filter(Boolean);
-  const tokens = words.flatMap((word) =>
+  const expand = (ws) => ws.flatMap((word) =>
     [...(braceExpansions(word) ?? (overCap = true, [])).flatMap((e) => [e, ...splitWord(e)]), ...splitWord(word)
       // `${G:-gh}` leaves `G:-gh`: also keep the default value. Needs a leading name, so `--body`/`-b` are untouched.
       .flatMap((t) => [t, t.replace(/^[A-Za-z_]\w*:?[-+]/, "")])]);
+  const tokens = expand(words);
   // Tokens are lower-cased: on case-insensitive filesystems `GH` runs the real gh. Every pattern below is lower-case.
   const has = (test) => tokens.some((token) => test(token.toLowerCase()));
   // `-S`/`-iS` before `gh` covers `env -Sgh` / `env -iSgh`, where the split-string value joins the option cluster.
@@ -163,8 +164,11 @@ function segmentWriteKind(command) {
   // expansion collapse first, so adjacency holds. A `-c` anywhere else, or inside a short cluster, counts.
   const seq = tokens.map((t) => t.toLowerCase()).filter((t, i, all) => t !== all[i - 1]);
   const ghAt = seq.findIndex((t) => /^(?:-[a-z]*s)?gh$/.test(t.split("/").pop()));
-  // The decoded-word copies later in `seq` repeat tokens, so command position is the shell word's first occurrence.
-  const shellFlag = (i) => /^(?:\/(?:[^/]+\/)*)?(?:sh|bash|zsh|dash|ksh)$/.test(seq[i - 1] ?? "") && seq.indexOf(seq[i - 1]) < ghAt;
+  // Command position is judged on the plain words only, where the predecessor's own index must precede `gh`: a shell word repeated after
+  // `gh` (`sh -c "gh pr reopen sh -c x"`) is a branch argument and its `-c` counts. The decoded-word copies after `plainSeq` repeat
+  // tokens, so a shell-word predecessor there is exempt; the plain words already carry every literal `-c`.
+  const plainSeq = expand(plainWords).map((t) => t.toLowerCase()).filter((t, i, all) => t !== all[i - 1]);
+  const shellFlag = (i) => /^(?:\/(?:[^/]+\/)*)?(?:sh|bash|zsh|dash|ksh)$/.test(seq[i - 1] ?? "") && (i >= plainSeq.length || i - 1 < ghAt);
   const closeComment = seq.some((t, i) => t.startsWith("--comment") || (/^-[^-]*c/.test(t) && !(t === "-c" && shellFlag(i))));
   // Raw comment and review writes (`OPERATOR-OWNED-LINE`): the sanctioned writers refuse an operator-owned line, a raw write does not.
   // Comment clauses win over the body clause: a graphql addComment with `-f body=...` is a comment write, not a PR-body write.

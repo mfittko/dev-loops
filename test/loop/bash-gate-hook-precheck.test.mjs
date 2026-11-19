@@ -353,6 +353,7 @@ const COMMENT_WRITES = [
   "gh pr reopen 5 -c'text'",
   "gh pr close 5 -dc x",
   `sh -c "gh issue close 5 -c x"`,
+  `sh -c "gh pr reopen sh -c x"`,
   // GH_EDITOR can supply the body through the editor flag.
   'GH_EDITOR="cp body.md" gh pr comment 5 -e',
   "gh issue comment 5 --editor",
