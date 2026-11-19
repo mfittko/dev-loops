@@ -76,6 +76,7 @@ Each run supersedes the previous emission for this PR, except a same-head no-com
 dispatchPayload (the --harness adapter call carrying dispatchPrompt, plus the config-resolved model on the Claude payload when non-null) unchanged; an
 unsupported harness refuses. The only operator input is --operator-focus-file, a JSON file { round?: string, items?: [{ fingerprint or threadId, decision?, replyDisposition?, replyNote? }] }
 that renders as a bounded, sanitized "Operator focus" section and is pinned by the digest (GATE-EXEC-OPERATOR-FOCUS).
+A zero-thread --threads-file commit_only emission requires an --operator-focus-file with a round, and the --phase full emission must pass the same file.
 An item decision picks among remedies its act item offers and never changes the disposition; items need an
 --act-list-file source (bound by fingerprint) or --threads-file source (bound by threadId, no decision); an unknown fingerprint or thread id refuses and writes nothing. replyDisposition (tackled, partially_fixed, deferred or rejected) with a replyNote sets the verifier reply for that thread.
 It accepts no other brief, payload or summary input.
@@ -324,7 +325,7 @@ const itemPairs = (items) => [...new Set((Array.isArray(items) ? items : []).map
 
 // The commit_only phase commits unpushed; the delta review then decides whether `full` may push.
 // `delta` is the parsed --delta-result (act-list route); `threads` the unresolved threads (thread route).
-export function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidateHead, coverageBinding, operatorFocus }) {
+export function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidateHead, coverageBinding, operatorFocus, repo, pr }) {
   const recordPath = gateDeltaRecordPath(tmpRoot, headSha);
   const record = readGateDeltaRecord(tmpRoot, headSha);
   const next = "emit --phase commit_only, run the delta review (dev-loops loop pre-push-delta), then emit --phase full";
@@ -365,6 +366,12 @@ export function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, c
     const focusItems = operatorFocusActItems(operatorFocus);
     if (focusItems.length === 0 || record.actSetId !== startDeltaSequence({ reviewBaselineHead: headSha, actList: focusItems }).actSetId) {
       throw new Refusal(`--phase full refused: the delta record ${recordPath} was not reviewed against this operator focus round (pass the --operator-focus-file the delta review used); ${next}`);
+    }
+    // PRE-PUSH-DELTA-PUSH-AUTHORITY: the focus must also be the round the fixer received in the canonical commit_only work order for this baseline.
+    let issued;
+    try { issued = JSON.parse(readFileSync(path.join(buildFixerDir({ repo, pr, tmpRoot }), PLAN_FILE), "utf8")).workOrder; } catch { issued = undefined; }
+    if (!issued || issued.phase !== "commit_only" || issued.source !== "threads" || issued.headSha !== headSha || issued.operatorFocusDigest !== operatorFocusDigestEntry(operatorFocus).operatorFocusDigest) {
+      throw new Refusal(`--phase full refused: this operator focus round is not the one in the canonical commit_only work order for ${headSha}; pass the --operator-focus-file of that emission; ${next}`);
     }
   }
   const threadIds = new Set(threads.length > 0 ? threads.map((thread) => thread.threadId) : operatorFocusActItems(operatorFocus).map((item) => item.ref));
@@ -708,6 +715,7 @@ async function emitPlan({
   if (operatorFocusRaw?.items?.some((item) => (item.threadId !== undefined) !== Boolean(threadsFile))) throw new OperatorFocusRefusal(`GATE-EXEC-OPERATOR-FOCUS: operator focus items bind by ${threadsFile ? "threadId" : "fingerprint"} on this source`);
   // A trust-incomplete thread (first comment page all untrusted, more pages exist) stays a blocker but is never a fixer source.
   // The filtered payload becomes the pinned threads read, so the read bytes and authority.sourceDigest describe the same payload.
+  const capturedThreadCount = source?.parsed?.threads?.length ?? 0;
   if (threadsFile && Array.isArray(source.parsed?.threads) && source.parsed.threads.some((thread) => thread?.trustIncomplete === true)) {
     const filtered = { ...source.parsed, threads: source.parsed.threads.filter((thread) => thread?.trustIncomplete !== true) };
     const filteredPath = path.join(dir, executionIdentity, "threads.json"), bytes = Buffer.from(`${JSON.stringify(filtered, null, 2)}\n`);
@@ -728,7 +736,7 @@ async function emitPlan({
     throw new Refusal(`threads file ${threadsFile} holds a thread without the trusted marker (ADR 0238, GATE-REVIEW-COMMENT-TRUST): comment text from a non-maintainer is never a fixer instruction; re-run dev-loops-run scripts/github/list-review-threads.mjs --repo ${repo} --pr ${pr} --unresolved-only`);
   }
   // A zero-thread commit_only emission needs the operator focus round as its delta act set; without one no delta review could close its marker.
-  if (threadsFile && phase === "commit_only" && listed.threads.length === 0 && operatorFocusActItems(operatorFocus).length === 0) throw new Refusal(`--phase commit_only on a --threads-file source with no unresolved thread${source.parsed?.threads?.length > 0 ? " (every thread is trust-incomplete, never a fixer source)" : ""} needs an --operator-focus-file with a round: with neither there is no act set for the delta review; no sequence marker was written`);
+  if (threadsFile && phase === "commit_only" && listed.threads.length === 0 && operatorFocusActItems(operatorFocus).length === 0) throw new Refusal(`--phase commit_only on a --threads-file source with no unresolved thread${capturedThreadCount > 0 ? " (every thread is trust-incomplete, never a fixer source)" : ""} needs an --operator-focus-file with a round: with neither there is no act set for the delta review; no sequence marker was written`);
   if (deltaResult && !actListFile) throw new Refusal("--delta-result applies only to an --act-list-file source");
   // A thread source reads the record the thread-route delta review wrote for this head (step 7 bounded_out rule), never a flag.
   const threadRecordPath = threadsFile ? gateDeltaRecordPath(tmpRoot, headSha) : null;
@@ -782,7 +790,7 @@ async function emitPlan({
     }
   }
   // A review body has no delta review route, so --phase full needs no delta record for it.
-  if (phase === "full" && !reviewId && !ciFile) assertDeltaClearsFullPhase({ tmpRoot, headSha, delta: delta?.parsed, threads: threadsFile ? source.parsed.threads : null, operatorFocus, ...(threadsFile ? { candidateHead: execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim() } : {}) });
+  if (phase === "full" && !reviewId && !ciFile) assertDeltaClearsFullPhase({ tmpRoot, headSha, repo, pr, delta: delta?.parsed, threads: threadsFile ? source.parsed.threads : null, operatorFocus, ...(threadsFile ? { candidateHead: execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim() } : {}) });
 
   // Mutation authority comes from the PR itself, never from the caller.
   const prState = await fetchPr({ repo, pr });

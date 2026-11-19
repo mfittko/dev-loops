@@ -421,6 +421,21 @@ test("a zero-thread threads commit_only emit refuses without an operator focus r
     await writeRecord({ items: focusItems, actSetId });
     assert.equal((await emit({ ...base, phase: "full", operatorFocusFile: focusFile })).workOrder.phase, "full");
     await assert.rejects(emit({ ...base, phase: "full" }), /not reviewed against this operator focus round/);
+    // A record that clears a weaker round never grants the push: the focus must be the round of the commit_only work order.
+    const otherFocus = path.join(root, "tmp", "other-focus.json");
+    await writeFile(otherFocus, JSON.stringify({ round: "fix a typo" }));
+    const otherId = start({ reviewBaselineHead: head, actList: [{ ref: "operator-focus", angle: "operator-focus", summary: "fix a typo", judgeDisposition: "act" }] }).actSetId;
+    await writeRecord({ items: focusItems, actSetId: otherId });
+    await assert.rejects(emit({ ...base, phase: "full", operatorFocusFile: otherFocus }), /not the one in the canonical commit_only work order/);
+  });
+});
+
+test("a zero-thread commit_only emit whose only thread is trust-incomplete names that cause and writes no marker", async () => {
+  const { sequenceMarkerPath } = await import("@dev-loops/core/loop/fix-push-authority");
+  await withFixture(async ({ root, head, files, emit }) => {
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], trustIncomplete: true }] }));
+    await assert.rejects(emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined }), /every thread is trust-incomplete/);
+    assert.equal(existsSync(sequenceMarkerPath(path.join(root, "tmp"), head)), false);
   });
 });
 

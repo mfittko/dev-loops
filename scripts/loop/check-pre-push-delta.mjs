@@ -232,9 +232,17 @@ export function parseCheckPrePushDeltaArgs(argv) {
   };
 }
 
-// The operator focus the pulled fixer plan carries. The thread input and result runs read it unauthenticated; only the --handback and closure runs bind the plan through the coverage authentication. An unreadable plan yields none.
-function planOperatorFocus(fixerPlan) {
-  try { return JSON.parse(readFileSync(fixerPlan, "utf8")).workOrder?.operatorFocus; } catch { return undefined; }
+// The operator focus of the canonical pulled commit_only threads plan for this baseline (PRE-PUSH-DELTA-PUSH-AUTHORITY). An unreadable plan yields none; any other plan refuses.
+function planOperatorFocus(fixerPlan, baselineSha, worktree) {
+  let plan;
+  try { plan = JSON.parse(readFileSync(fixerPlan, "utf8")); } catch { return undefined; }
+  const order = plan?.workOrder;
+  const canonical = fixerPlanPath(plan?.workOrderRef, realpathSync(resolveGateArtifactTmpRoot(worktree)));
+  if (!canonical || realpathSync(fixerPlan) !== path.resolve(canonical) || order?.role !== "fixer" || order.phase !== "commit_only" || order.source !== "threads"
+    || order.headSha !== baselineSha || workOrderDigest(order) !== plan.workOrderDigest) {
+    throw new Error("Delta coverage binding: --fixer-plan is not the canonical commit_only threads plan for this baseline; pass the pulled plan");
+  }
+  return order.operatorFocus;
 }
 
 function gitRevParse(worktree, rev) {
@@ -608,7 +616,7 @@ export async function runCli(
     if (!route.chainEnd) derivedActList = capRoundActList(log.findings, log.headSha);
   }
   const threadActList = options.threadsFile && !options.reviewerOnly
-    ? threadsToActList(JSON.parse(readFileSync(options.threadsFile, "utf8")), { repo: options.repo, pr: options.pr, operatorFocus: options.fixerPlan ? planOperatorFocus(options.fixerPlan) : undefined })
+    ? threadsToActList(JSON.parse(readFileSync(options.threadsFile, "utf8")), { repo: options.repo, pr: options.pr, operatorFocus: options.fixerPlan ? planOperatorFocus(options.fixerPlan, baselineSha, options.worktree) : undefined })
     : null;
   if (threadActList?.length === 0) throw new Error("threads file holds no unresolved thread and the --fixer-plan carries no operator focus round; pass the pulled --fixer-plan of an emission that had an --operator-focus-file with a round");
   const sequence = startDeltaSequence({

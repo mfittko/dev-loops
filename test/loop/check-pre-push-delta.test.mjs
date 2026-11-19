@@ -1994,19 +1994,44 @@ test("an all-body act list refuses delta_body_only_act_set with the edit-pr and 
   await assert.rejects(runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], headAt(B)), /delta_body_only_act_set[^]*edit-pr\.mjs[^]*--converged-json/);
 });
 
-test("--threads-file with no unresolved thread builds the act set from the fixer plan's operator focus round", async () => {
+// A real zero-thread commit_only emission carrying the focus round, as the fixer pulls it.
+async function focusEmission(round) {
+  const { emitFixerWorkOrder } = await import("../../scripts/loop/emit-fixer-work-order.mjs");
   const { dir, threadsFile } = threadsFixture({ ...THREADS, threads: [] });
-  const planPath = path.join(dir, "plan.json");
-  fs.writeFileSync(planPath, JSON.stringify({ workOrder: { operatorFocus: { round: "tighten the summary wording" } } }));
-  const input = (await runCli(threadArgs(threadsFile, "--spec-identity", "spec@1", "--fixer-plan", planPath), headAt(B))).input;
+  const operatorFocusFile = path.join(dir, "focus.json");
+  fs.writeFileSync(operatorFocusFile, JSON.stringify({ round }));
+  const unit = await emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "commit_only", threadsFile, operatorFocusFile, cwd: coverageRepo,
+    fetchPr: async () => ({ headRefName: "issue-1", headRefOid: A }), fetchVerdictMarkers: async () => ({ draft_gate: { visible: true, contractComplete: true } }), executionIdentity: `f${Date.now()}-${Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0")}` });
+  return { dir, threadsFile, unit, planPath: unit.planPath };
+}
+
+test("--threads-file with no unresolved thread builds the act set from the canonical plan's operator focus round and refuses a noncanonical plan", async () => {
+  const { dir, threadsFile, planPath } = await focusEmission("tighten the summary wording");
+  const input = (await runCli(threadArgs(threadsFile, "--spec-identity", "spec@1", "--fixer-plan", planPath, "--worktree", coverageRepo), headAt(B))).input;
   assert.deepEqual(input.actItems.map(({ ref, summary }) => [ref, summary]), [["operator-focus", "tighten the summary wording"]]);
   await assert.rejects(runCli(threadArgs(threadsFile, "--spec-identity", "spec@1"), headAt(B)), /no operator focus round/);
+  const handWritten = path.join(dir, "plan.json");
+  fs.writeFileSync(handWritten, JSON.stringify({ ...JSON.parse(fs.readFileSync(planPath, "utf8")), workOrder: { operatorFocus: { round: "fix a typo" } } }));
+  await assert.rejects(runCli(threadArgs(threadsFile, "--spec-identity", "spec@1", "--fixer-plan", handWritten, "--worktree", coverageRepo), headAt(B)), /not the canonical commit_only threads plan/);
+});
+
+test("a zero-thread focus sequence whose fixer hands back the baseline closes as no_commit and clears its marker", async () => {
+  const { pullWorkOrder } = await import("../../scripts/github/_work-order-protocol.mjs");
+  const { threadsFile, unit } = await focusEmission("tighten the summary wording");
+  const tmpRoot = resolveGateArtifactTmpRoot(coverageRepo);
+  await pullWorkOrder({ ref: unit.workOrderRef, digest: unit.workOrderDigest, execution: unit.executionIdentity, cwd: coverageRepo, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
+  const output = unit.workOrder.outputRefs[0];
+  fs.mkdirSync(path.dirname(output), { recursive: true });
+  fs.writeFileSync(output, JSON.stringify({ headSha: A, siteCoverage: [] }));
+  assert.notEqual(readSequenceMarker(tmpRoot, A), null);
+  const seam = headAt(A, tmpRoot);
+  const result = await runDeltaCli(threadArgs(threadsFile, "--spec-identity", "s", "--worktree", coverageRepo, "--fixer-plan", unit.planPath, "--site-coverage", output), seam);
+  assert.equal(result.outcome, "no_commit");
+  assert.equal(readSequenceMarker(tmpRoot, A), null);
 });
 
 test("--threads-file with no unresolved thread records a locally_clear result against the operator-focus item", async () => {
-  const { dir, threadsFile } = threadsFixture({ ...THREADS, threads: [] });
-  const planPath = path.join(dir, "plan.json");
-  fs.writeFileSync(planPath, JSON.stringify({ workOrder: { operatorFocus: { round: "tighten the summary wording" } } }));
+  const { dir, threadsFile, planPath } = await focusEmission("tighten the summary wording");
   const sequence = startDeltaSequence({ reviewBaselineHead: A, actList: [{ ref: "operator-focus", angle: "operator-focus", summary: "tighten the summary wording", judgeDisposition: "act" }] });
   const result = path.join(dir, "focus-result.json");
   fs.writeFileSync(result, JSON.stringify({
