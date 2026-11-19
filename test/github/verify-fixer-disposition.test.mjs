@@ -683,8 +683,8 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
         if (resolved) nodes.forEach((node) => { node.isResolved = true; node.comments.nodes.push({ id: "reply", databaseId: 99, body: `Fixed in commit ${candidate}.`, authorAssociation: "OWNER", author: { login: "bot" } }); });
         return { code: 0, stdout: threadsPayload(nodes) };
       }
-      if (args[1]?.includes("/check-runs")) return { code: 0, stdout: JSON.stringify({ check_runs: ["red", "pending"].includes(scenario) ? [{ name: "unit", status: scenario === "red" ? "completed" : "in_progress", conclusion: scenario === "red" ? "failure" : null }] : [] }) };
-      if (args[1]?.includes("/status?")) return { code: 0, stdout: JSON.stringify({ state: "pending", statuses: [] }) };
+      if (args.at(-1)?.includes("/check-runs")) return { code: 0, stdout: JSON.stringify({ check_runs: ["red", "pending"].includes(scenario) ? [{ name: "unit", status: scenario === "red" ? "completed" : "in_progress", conclusion: scenario === "red" ? "failure" : null }] : [] }) };
+      if (args.at(-1)?.includes("/status?")) return { code: 0, stdout: JSON.stringify({ state: "pending", statuses: [] }) };
       throw new Error(`unexpected call ${cmd} ${args.join(" ")}`);
     } };
     const options = { repo: REPO, pr: PR, headSha: head, fixerPlan };
@@ -1917,8 +1917,8 @@ const ACT_LIST = [{ fingerprint: ACT_FP, severity: "medium", summary: "s", file:
 const userEntry = { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "gate" })}\n` };
 // Head CI reads (check-runs, then statuses) the verifier makes before it writes, replies or resolves.
 const ciEntries = (head, { failing, runs, statuses = [], checkRunsExit = 0 } = {}) => [
-  { assertArgs: ["api", `repos/${REPO}/commits/${head}/check-runs?per_page=100`], exitCode: checkRunsExit, stdout: JSON.stringify({ check_runs: runs ?? [failing ? { name: failing, status: "completed", conclusion: "failure" } : { name: "build", status: "completed", conclusion: "success" }] }) },
-  { assertArgs: ["api", `repos/${REPO}/commits/${head}/status?per_page=100`], stdout: JSON.stringify({ statuses }) },
+  { assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/commits/${head}/check-runs?per_page=100`], exitCode: checkRunsExit, stdout: JSON.stringify({ check_runs: runs ?? [failing ? { name: failing, status: "completed", conclusion: "failure" } : { name: "build", status: "completed", conclusion: "success" }] }) },
+  { assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/commits/${head}/status?per_page=100`], stdout: JSON.stringify({ statuses }) },
 ];
 // A report as the verifier's own --construct leaves it: the bytes plus the sha256 mark beside them.
 const writeMarked = async (file, text) => { await writeFile(file, text); await writeFile(`${file}.constructed`, sha256Hex(text)); };
