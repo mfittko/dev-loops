@@ -658,7 +658,7 @@ test("runProseLinkageDetector flags lowercase and uppercase 'child of #' lines",
     root: 1,
     issues: [{ number: 1, children: [], body: `${buildBody({ scope: "owns root" })}\n${line}` }],
   }));
-  for (const line of ["child of #12", "- CHILD OF #12"]) assert.equal(run(line).ok, false, line);
+  for (const line of ["child of #12", "- CHILD OF #12", "Child Of #12", "child Of #12"]) assert.equal(run(line).ok, false, line);
 });
 
 test("runScopeBoundaryCrossChecker counts an ownership claim wrapped across lines", () => {
