@@ -17,7 +17,9 @@
  *     (a `-c` directly after a shell word such as `sh` is the shell's flag and is ignored); or `gh`, `api`, `graphql`
  *     and a token holding `addComment`, `updateIssueComment` or `addPullRequestReview`, or `gh`, `api` and an
  *     `issues/<n>/comments` or `issues/comments/<id>` write (`segmentWriteKind`). The substring match denies
- *     `addPullRequestReviewComment` and `addPullRequestReviewThread` on purpose. The deny reason names the sanctioned
+ *     `addPullRequestReviewComment` and `addPullRequestReviewThread` on purpose. A `$'...'` (ANSI-C) word in a command
+ *     that holds `gh` and also `issue|pr` with `comment|review|close|reopen`, or `api graphql`, is denied too (fail closed:
+ *     the decoded flag is not judged); a `$'...'` word in any other `gh` command (a read) passes. The deny reason names the sanctioned
  *     writers (comment-issue.mjs and edit-comment.mjs) even when the decider also denies the command.
  *   - raw `gh issue create` — blocked only from a SUBAGENT context (agent_type present); the main agent/operator
  *     retains direct issue creation (#1051).
@@ -189,14 +191,18 @@ function segmentWriteKind(command) {
     (has((t) => t === "api") && has((t) => t === "graphql") && has((t) => /addcomment|updateissuecomment|addpullrequestreview/.test(t))) ||
     // REST issue comment writes (`issues/<n>/comments`, `issues/comments/<id>`); `pulls/<n>/comments` stays a body write.
     (isBody && has((t) => t === "api") && has((t) => /issues\/(?:\d+\/)?comments(?:\/|$)/.test(t)));
-  // An ANSI-C `$'...'` word anywhere in a command that runs `gh` is denied: bash decodes it to flags and words
+  // An ANSI-C `$'...'` word in a comment-shaped or body-write command that runs `gh` is denied: bash decodes it to flags and words
   // the token model cannot judge (`$'\x2dc'`, `-$'c'`), so this fails closed instead of decoding and exempting.
   // A body write that holds one keeps the body reason; every other command gets the comment reason.
   // The decoded word set counts too: `eval gh pr reopen 5 \$\'\\x2dc\' x` has no literal `$'` in the raw text, but the outer shell hands eval the word `$'\x2dc'`.
   // Ceiling (`OPERATOR-OWNED-LINE`): a flag built at run time is not judged. A command substitution (`gh pr reopen zsh "$(printf '\x2dc')" x`)
   // or an eval string that composes `$'` from variables (`D=\$; Q=\'; eval "gh pr reopen zsh $D$Q\x2dc$Q x"`) leaves no literal flag or `$'`
   // in the raw text or the decoded words. The guard stops an instruction-following agent.
-  if ([command, ...decoded].some((w) => w.includes("$'"))) return isBody && !isComment ? "body" : "comment";
+  // Only a command whose tokens also hold a comment, review, close or reopen word (issue|pr) or `api graphql` is denied;
+  // a read or a data mention (`gh pr view 5 --jq $'.title'`) falls through to the normal return.
+  const commentShaped = (issueOrPr && has((t) => /^(?:comment|review|close|reopen)$/.test(t))) ||
+    (has((t) => t === "api") && has((t) => t === "graphql"));
+  if ([command, ...decoded].some((w) => w.includes("$'")) && (isBody || commentShaped)) return isBody && !isComment ? "body" : "comment";
   return isComment ? "comment" : isBody ? "body" : null;
 }
 

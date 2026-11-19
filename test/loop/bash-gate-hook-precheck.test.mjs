@@ -437,6 +437,9 @@ test("sanctioned comment writers and reads stay allowed; an unmanaged repo is un
       "gh issue close 5 --reason completed",
       "x=$(tr $'\\n' ' ' < f)",
       "echo $(printf $'\\t') `tr $'\\n' ' ' < f`",
+      "gh pr view 5 --jq $'.title'",
+      "gh pr list --json number | tr $'\\n' ' '",
+      "git commit -m $'fix gh pr view\\nbody'",
       "git status",
     ]) {
       for (const agentType of [undefined, "developer"]) assert.equal(bash(root, command, agentType).decision, "allow", command);
