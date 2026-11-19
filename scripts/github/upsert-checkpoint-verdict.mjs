@@ -1863,8 +1863,8 @@ function resolveRequestedHeadSha(requestedHeadSha, currentHeadSha) {
 async function resolveCleanCapRoundHead({ options, cap, currentHeadSha, repoRoot, runChild, env }) {
   if (options.gate !== "draft_gate" || !(cap > 0) || !/^[0-9a-f]{7,64}$/i.test(options.headSha)) return null;
   const capRound = await resolveCapRound({ repo: options.repo, pr: options.pr, headSha: currentHeadSha }, { repoRoot }).catch(() => null);
-  const roundHead = capRound?.log?.headSha;
-  if (!isCleanCapRound(capRound) || typeof roundHead !== "string" || !roundHead.toLowerCase().startsWith(options.headSha.toLowerCase())) return null;
+  const roundHead = normalizeFullHeadSha(capRound?.log?.headSha ?? "");
+  if (!isCleanCapRound(capRound) || !roundHead || !roundHead.startsWith(options.headSha.toLowerCase())) return null;
   const ancestry = await runChild("git", ["-C", repoRoot, "merge-base", "--is-ancestor", roundHead, currentHeadSha], env);
   return ancestry.code === 0 ? roundHead : null;
 }
@@ -3055,8 +3055,12 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       && !evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
         draftCapRoundFixed: false, coordinationContext, maxCopilotRounds, draftGateConfig, preApprovalGateConfig, reviewMode,
       })).forbiddenActions.includes(requestedGateAction);
-    // A clean cap-round post at its own head stays allowed unless the PR is closed, blocked or done.
-    const capRoundWaiver = capRoundHead && !coordination.allowedNextActions.some((a) => a === PR_CHECKPOINT_ACTION.REPORT_DONE || a === PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+    // A clean cap-round post at its own head overrides only the ready-PR and cap-fixed refusals: it stays refused when the PR is closed, blocked or done, or when coordination re-evaluated as a draft PR without the cap-fixed proof still forbids the action (for example CI not green).
+    const capRoundWaiver = capRoundHead && !coordination.allowedNextActions.some((a) => a === PR_CHECKPOINT_ACTION.REPORT_DONE || a === PR_CHECKPOINT_ACTION.REPORT_BLOCKED)
+      && !evaluatePrGateCoordination({
+        ...buildCoordinationEvaluatorInput({ draftCapRoundFixed: false, coordinationContext, maxCopilotRounds, draftGateConfig, preApprovalGateConfig, reviewMode }),
+        prDraft: true,
+      }).forbiddenActions.includes(requestedGateAction);
     if (gateActionForbidden && !forbidOnlyByCapFixed && !capRoundWaiver) {
       throw new Error(buildGateEntryRefusalError({ options, coordination }));
     }

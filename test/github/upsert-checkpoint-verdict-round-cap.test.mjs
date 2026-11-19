@@ -64,10 +64,10 @@ async function seedPrior(root, heads, { extraNames = [], unreadable = [] } = {})
   for (const name of extraNames) await writeFile(path.join(dir, name), "[]", "utf8");
 }
 
-function makeRunChild(posted, { isDraft = true, state = "OPEN", calls = [] } = {}) {
+function makeRunChild(posted, { isDraft = true, state = "OPEN", calls = [], body = DEFAULT_TEST_PR_BODY, conclusion = "SUCCESS", status = "COMPLETED" } = {}) {
   const prJson = JSON.stringify({
-    number: 17, state, isDraft, headRefOid: HEAD, baseRefName: "main", body: DEFAULT_TEST_PR_BODY,
-    closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
+    number: 17, state, isDraft, headRefOid: HEAD, baseRefName: "main", body,
+    closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status, conclusion, name: "ci" }],
   }) + "\n";
   return async (cmd, args = [], _env, stdin = "") => {
     calls.push(`${cmd} ${args.join(" ")}`);
@@ -432,7 +432,7 @@ test("the closure round line renders a normalized full SHA and refuses a short, 
 
 // A clean cap round whose post was refused at its own head posts there once the PR head has moved on.
 const CAP_HEAD = "4".repeat(40);
-async function postCleanCapRound(tempDir, { sealedVerdict = "clean", ancestor = true, headSha = CAP_HEAD, prState = {}, extraArgs = [], calls = [], postedOverrides = {}, proven = false, checkBaseFreshness, gate = "draft_gate" } = {}) {
+async function postCleanCapRound(tempDir, { sealedVerdict = "clean", ancestor = true, headSha = CAP_HEAD, prState = {}, extraArgs = [], calls = [], postedOverrides = {}, proven = false, checkBaseFreshness, gate = "draft_gate", sealedHead = CAP_HEAD } = {}) {
   await seedPrior(repoRoot, priorHeads);
   const deltaDir = path.join(repoRoot, "tmp", "gate-delta");
   await rm(deltaDir, { recursive: true, force: true });
@@ -445,7 +445,7 @@ async function postCleanCapRound(tempDir, { sealedVerdict = "clean", ancestor = 
   }
   const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-17");
   const sealed = { repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: CAP_HEAD, verdict: sealedVerdict, overallVerdict: sealedVerdict, loggedAt: "2026-11-04T00:00:00.000Z", findings: [] };
-  await writeFile(path.join(dir, `draft_gate-${CAP_HEAD}.json`), JSON.stringify(sealed), "utf8");
+  await writeFile(path.join(dir, `draft_gate-${CAP_HEAD}.json`), JSON.stringify({ ...sealed, headSha: sealedHead }), "utf8");
   const ledger = path.join(tempDir, "cap-ledger.json");
   await writeFile(ledger, JSON.stringify({ ...sealed, ...postedOverrides }), "utf8");
   const posted = [];
@@ -527,4 +527,27 @@ test("a non-clean verdict at an earlier cap-round head is refused", async () => 
     const out = await postCleanCapRound(tempDir, { postedOverrides: { verdict: "findings_present", overallVerdict: "findings_present", findings: [finding("low", "act")] } });
     assert.match(out.error ?? "", /must compose a clean verdict/);
   }, { prefix: "dev-loops-round-cap-nonclean-" });
+});
+
+test("a cap-round post is refused on a blocked PR (failing CI allows report_blocked)", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await postCleanCapRound(tempDir, { prState: { isDraft: false, conclusion: "FAILURE" }, proven: true });
+    assert.match(out.error ?? "", /Cannot enter draft_gate/);
+  }, { prefix: "dev-loops-round-cap-blocked-" });
+});
+
+test("a cap-round ledger headSha that is not a normalized full SHA does not become the posted head", async () => {
+  for (const ledgerHead of [`${CAP_HEAD}~0`, "", "not-a-sha"]) {
+    await withTempDir(async (tempDir) => {
+      const out = await postCleanCapRound(tempDir, { sealedHead: ledgerHead });
+      assert.match(out.error ?? "", /does not match the current PR head/, JSON.stringify(ledgerHead));
+    }, { prefix: "dev-loops-round-cap-badhead-" });
+  }
+});
+
+test("a cap-round post is refused when coordination forbids the gate for an unrelated reason (CI pending, wait_for_ci)", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await postCleanCapRound(tempDir, { prState: { isDraft: false, status: "IN_PROGRESS", conclusion: null }, proven: true });
+    assert.match(out.error ?? "", /Cannot enter draft_gate/);
+  }, { prefix: "dev-loops-round-cap-unrelated-" });
 });
