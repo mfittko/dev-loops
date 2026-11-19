@@ -107,7 +107,14 @@ a typed observation. The Phase 4 fixer and each Phase 5 repeat
 are dispatched by the dev-loop coordinator, and each repeat round runs in a new gate coordinator.
 If a harness cannot fan out at the gate coordinator's depth, the round fails closed with
 `FANOUT_UNAVAILABLE_MESSAGE` ([below](#fail-closed-fan-out-unavailable--route-to-conductor))
-and never degrades to inline review.
+and never degrades to inline review. Step 0 of the round checks the gate coordinator's own tool
+surface for the dispatch tool (`Agent` on Claude Code, `subagent` on Pi), before
+`gate resolve-validation`, `write-gate-context.mjs`, the carry-forward resolver and
+`emit-fanout-dispatch.mjs`. When the dispatch tool is absent, the gate coordinator returns the
+`FANOUT_UNAVAILABLE_MESSAGE` result at once: no validation, no context, no carry-forward, no
+emitter call, no round id. On Claude Code the gate coordinator MUST run at a depth that keeps the
+`Agent` tool, so the agent that acts as the dev-loop coordinator dispatches the gate coordinator
+as its direct child and never routes the round through a further nested driver.
 
 Dispatch guidance. A reviewer or judge dispatch is exactly the emitted `dispatchPrompt`. Its pulled
 work order carries the spec pointer, and its agent definition cites the rules it needs. A worker dispatch (developer, docs, quality) names the
@@ -1809,6 +1816,11 @@ constant `FANOUT_UNAVAILABLE_MESSAGE` (`@dev-loops/core/loop/gate-fanin`):
 `{ routeToConductor: true, code: "FANOUT_UNAVAILABLE" }`. Callers throw it (or check
 `err.routeToConductor === true`) to hand the gate review up to the conductor. The
 `requireFanoutProvenance` pre-merge failure message references this same contract string.
+
+The step 0 handback carries `FANOUT_UNAVAILABLE_MESSAGE` and a detail that names the missing
+dispatch tool (`Agent` or `subagent`), in the shape `fanoutUnavailableError(detail)` produces:
+`fan-out unavailable — route to conductor (<detail>)`. The detail names the spawn depth only when
+the harness exposes the depth to the agent. Claude Code does not expose it today.
 
 Under `GATE-EXEC-GATE-COORDINATOR`, the gate coordinator returns this signal to the dev-loop
 coordinator as the round's result. The dev-loop coordinator then stops for an operator's

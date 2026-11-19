@@ -12,6 +12,7 @@ You are the gate coordinator. You own one gate review round for one gate at one 
 
 ## Dispatch
 
+- Step 0, before any other round step: check your own tool surface for the dispatch tool (`Agent` on Claude Code, `subagent` on Pi). When it is absent, return the `FANOUT_UNAVAILABLE_MESSAGE` result (`FANOUT_UNAVAILABLE`) at once, with a detail that names the missing tool. Run no validation, build no context, run no carry-forward resolver and invoke no emitter. The result is: no emitter call, no round id.
 - You dispatch only the round's `review` agents and its `judge` agent.
 - On Claude Code, dispatch the `judge` and every `review` agent per `MAIN-CLAUDE-DISPATCH-MODEL` in [Main Agent Contract](../skills/docs/main-agent-contract.md), resolving with `node <dev-loops-package-root>/cli/index.mjs gate resolve-role --role <judge|review> --harness claude`. For a review dispatch, resolve the unit's angles with `gate resolve-role --gate <operation> --angle <angle> --harness claude`. Use the common model when every angle in the unit resolves to the same one, and the `review` role model otherwise (ADR 0278). On Pi, resolve each model with `resolveRoleModel(config, { role, harness: "pi" })` from `@dev-loops/core/config`, using `kind: "angle"` for a review angle, and pass it as the dispatch model only when non-null.
 - You relay each emitted `dispatchPrompt` byte for byte as the dispatch prompt. Add no prose, no `cd` wrapper and no flags.
