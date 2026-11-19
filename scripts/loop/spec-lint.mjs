@@ -240,6 +240,9 @@ const FORECAST_BULLET_RE = /^\s*(?:[-*+]|\d+[.)])\s+(?:[*_`]*forecast\b|.*wloc\s
  * `- forecast: slice=<id> wloc=<n> files=<path>,<path>`. A missing line and a
  * line at or above the resolved waiverLoc are findings, and so is a forecast
  * bullet that fails to parse (size_forecast_malformed); none can be disposed.
+ * softLoc < wloc < waiverLoc gives size_band_above_soft_loc and wloc < minLoc
+ * gives size_band_below_min_loc; both are informational and disposable through
+ * the results-comment assessment.
  */
 export function lintSizeForecast(body, { waiverLoc, softLoc, minLoc }) {
   const section = extractSection(stripFencedCode(body), "Size forecast") ?? "";

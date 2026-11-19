@@ -485,6 +485,15 @@ test("size band: waiver line, in-band line, minLoc 0 and null softLoc report no 
   assert.deepEqual(kinds(900, { softLoc: null }), []);
 });
 
+test("size band: three slices report per-slice ids, split_required first then informational in forecast order", () => {
+  const body = `## Size forecast\n\n${[45, 500, 1600].map((wloc, i) => forecastLine(i + 1, wloc)).join("\n")}`;
+  assert.deepEqual(lintSizeForecast(body, bandOf()).map((f) => [f.kind, f.id]), [
+    ["size_forecast_split_required", "3"],
+    ["size_band_below_min_loc", "1"],
+    ["size_band_above_soft_loc", "2"],
+  ]);
+});
+
 test("size band: spec-lint prints the resolved band, shipped fallbacks and .devloops overrides", async () => {
   const root = await fixtureRepo();
   const bodyFile = path.join(root, "body.md");
