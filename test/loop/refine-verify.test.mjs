@@ -92,6 +92,11 @@ test("runProseLinkageDetector quotes the matched line and ignores mid-sentence '
   assert.equal(run("Runs after every other child of #12 has merged.").ok, true);
   assert.equal(run("Runs after every other\nchild of #12 has merged.").ok, true);
   assert.equal(run("| Phase | Runs after every other child of #12 |").ok, true);
+  assert.equal(run("Owner: Parent:\n## Scope").ok, true);
+  assert.equal(run("Depends on:\n## Non-goals").ok, true);
+  assert.equal(run("**Depends on:**\n## Scope").ok, true);
+  assert.equal(run("Parent: #12").ok, false);
+  assert.equal(run("**Depends on:** #12").ok, false);
   assert.match(run("Child of #99").errors[0].message, /"Child of #99"/);
 });
 

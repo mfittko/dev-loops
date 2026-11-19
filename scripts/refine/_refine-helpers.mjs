@@ -21,11 +21,11 @@ export const FORBIDDEN_PROSE_PATTERNS = [
     hint: "Link the parent through the GitHub sub-issue API and remove the line.",
   },
   {
-    re: wholeLineRe(String.raw`Parent:(?:\*\*)?\s*#`),
+    re: wholeLineRe(String.raw`Parent:(?:\*\*)?[ \t]*#`),
     hint: "Link the parent through the GitHub sub-issue API and remove the line.",
   },
   {
-    re: wholeLineRe(String.raw`Depends on:(?:\*\*)?\s*#`),
+    re: wholeLineRe(String.raw`Depends on:(?:\*\*)?[ \t]*#`),
     hint: "Express order through sub-issue tree order and remove the line.",
   },
   {
