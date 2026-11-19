@@ -206,19 +206,41 @@ const RESERVED_WORD = /^(?:\{|!|then|do|else|elif|if|while|until)$/;
 const BOOLEAN_FLAGS = new Set(["--check", "--stable-release", "--standing-authorization", "--lightweight", "--help", "-h", "--silent", "-s"]);
 const LAUNCHER_NON_EXECUTING = new Set(["-c", "--check", "-e", "--eval", "-p", "--print", "-h", "--help", "-v", "--version"]);
 const LAUNCHER_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "--input-type", "--title", "--repo-root"]);
-const baseName = (value) => value.split("/").pop();
+const baseName = (value) => value.replace(/\/+$/, "").split("/").pop();
 
 // An unquoted redirection word (`2>/dev/null`, `>f`, `>>`, `<`, `&>f`): bash consumes it and its target, so neither is the program or an argument.
 const REDIRECT_WORD = /^(?:\d*(?:>>?|<>|<&|<|>&)|&>>?)\|?/;
 const REDIRECT_OPERATOR_ONLY = /^(?:\d*(?:>>?|<>|<&|<|>&)|&>>?)\|?$/;
+/** The index of the first unquoted `<` or `>` in a raw word outside `$(...)` and backticks, or -1. */
+function redirectStart(raw) {
+  let quote = "", sub = 0;
+  for (let p = 0; p < raw.length; p++) {
+    const c = raw[p];
+    if (c === "\\" && quote !== "'") p++;
+    else if (quote) { if (c === quote) quote = ""; else if (quote === '"' && c === "$" && raw[p + 1] === "(") sub++; }
+    else if (c === "'" || c === '"') quote = c;
+    else if (c === "$" && raw[p + 1] === "(") { sub++; p++; }
+    else if (c === ")" && sub) sub--;
+    else if ((c === "<" || c === ">") && !sub) return p;
+  }
+  return -1;
+}
+
 function stripRedirections(words) {
   const out = [];
   for (let k = 0; k < words.length; k++) {
     const w = words[k];
     // A heredoc or here-string op word owns the next word (delimiter or target); an unquoted redirection word is dropped with its target.
     if (w.op) k++;
-    else if (!REDIRECT_WORD.test(w.raw)) out.push(w);
-    else if (REDIRECT_OPERATOR_ONLY.test(w.raw)) k++;
+    else if (!REDIRECT_WORD.test(w.raw)) {
+      // An attached suffix (`merge-pr.mjs>/dev/null`, `node>x`) is a redirection: keep only the word before it.
+      // shortcut: a quoted prefix keeps the value cut at its first `<`/`>`, which can differ from the raw cut; fix when a quoted-prefix bypass is shown.
+      const p = redirectStart(w.raw);
+      if (p <= 0) { out.push(w); continue; }
+      const prefix = w.raw.slice(0, p);
+      out.push({ ...w, raw: prefix, value: /['"\\$`]/.test(prefix) ? w.value.split(/[<>]/)[0] : prefix });
+      if (REDIRECT_OPERATOR_ONLY.test(w.raw.slice(p))) k++;
+    } else if (REDIRECT_OPERATOR_ONLY.test(w.raw)) k++;
   }
   return out;
 }
@@ -283,6 +305,9 @@ function heredocBodyRunsMergePr(body) {
     for (; e < body.length && depth > 0; e++) depth += body[e] === "(" ? 1 : body[e] === ")" ? -1 : 0;
     if (depth > 0) return /merge-pr\.mjs/.test(body.slice(p));
     if (runs(body.slice(p + 2, e - 1), p)) return true;
+    // A span cut early by an escaped `)` or a case pattern leaves its tail here: merge-pr.mjs named before the next opener fails closed.
+    const rest = body.slice(e), next = Math.min(...[rest.indexOf("$("), rest.indexOf("`")].map((x) => (x < 0 ? rest.length : x)));
+    if (/merge-pr\.mjs/.test(rest.slice(0, next))) return true;
   }
   const ticks = body.split("`");
   if (ticks.length % 2 === 0) return /merge-pr\.mjs/.test(body.slice(body.indexOf("`")));

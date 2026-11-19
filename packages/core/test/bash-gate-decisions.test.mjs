@@ -583,10 +583,15 @@ const MERGE_DENY_FORMS = [
   "<<EOF node scripts/github/merge-pr.mjs --pr 5\nbody\nEOF",
   "<<< x node scripts/github/merge-pr.mjs --pr 5",
   "<& 3 node scripts/github/merge-pr.mjs --pr 5",
+  "node scripts/github/merge-pr.mjs>/dev/null --repo a/b --pr 5 --human-approved-by x",
+  "node>x scripts/github/merge-pr.mjs --pr 5",
 ];
 
 // Denied for a subagent, but not run for the top-level session here: the timeout and inline-interpreter rules would deny those forms on their own.
 const MERGE_DENY_EXTRA_FORMS = [
+  "dev-loops-run scripts/github/merge-pr.mjs/ --repo a/b --pr 5 --human-approved-by x",
+  "cat <<EOF\n$(echo \\) ; node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x)\nEOF",
+  "cat <<EOF\n$(case x in x) node scripts/github/merge-pr.mjs --pr 5;; esac)\nEOF",
   "bun -c bunfig.toml scripts/github/merge-pr.mjs --pr 5",
   "node --disable-warning ExperimentalWarning scripts/github/merge-pr.mjs --pr 5",
   'node scripts/github/merge-pr.mjs --pr 5 "',
