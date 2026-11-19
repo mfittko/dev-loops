@@ -5967,6 +5967,47 @@ test("buildGateContext (AC3): a docs-only-scoped angle emits a docs-only compani
   }
 });
 
+test("buildGateContext (#3095): a multi-part filtered diff lists every part path in the evidence file and the changed-files variant", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-multipart-"));
+  try {
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", { name: "coverage", scope: "changed-files" }, { name: "gate-evidence", mandatory: true }],
+          dynamic: { subtractive: false },
+        },
+      },
+    };
+    const file = (n) => [
+      `diff --git a/src/f${n}.mjs b/src/f${n}.mjs`,
+      "index 111..222 100644",
+      `--- a/src/f${n}.mjs`,
+      `+++ b/src/f${n}.mjs`,
+      "@@ -1,2 +1,3 @@",
+      " context line",
+      "-const x = 1;",
+      ...Array.from({ length: 2 }, (_, i) => `+const y${i} = "${"z".repeat(DIFF_PART_MAX_BYTES / 2 - 200)}";`),
+      "",
+    ].join("\n");
+    const diff = { nameStatusOutput: "M\tsrc/f1.mjs\nM\tsrc/f2.mjs\nM\tsrc/f3.mjs\n", diffOutput: [1, 2, 3].map(file).join("") };
+    const result = await buildGateContext(
+      { config, gate: "draft_gate", diff, repo: "owner/repo", pr: 91, headSha: "cafefeed123456" },
+      { repoRoot },
+    );
+    const parts = result.artifact.requiredReads.filter((r) => r.kind === "diff");
+    assert.ok(parts.length > 1, "fixture splits into several parts");
+    const variantText = await readFile(path.resolve(repoRoot, result.artifact.briefingVariants["changed-files"]), "utf8");
+    const evidenceText = await readFile(path.resolve(repoRoot, result.evidencePath), "utf8");
+    for (const part of parts) {
+      assert.ok(evidenceText.includes(`  ${part.path}`), `evidence lists ${part.path}`);
+      assert.ok(variantText.includes(`  ${part.path}`), `variant lists ${part.path}`);
+    }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("buildGateContext (AC3): a changed-files-scoped angle's companion points at the filtered diff and omits the adjacent-code bundle", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-scope-changed-"));
   try {

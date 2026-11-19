@@ -536,7 +536,7 @@ export async function buildAdjacentBundle({ changedFiles, repoRoot = process.cwd
   // No changed files → empty bundle. Return early so the empty case is O(1) and
   // skips the whole-repo scan + importer-index build entirely.
   if (changed.length === 0) {
-    return { files: [], stripped: [], missing: [], expansion: { ...caps, files: [], dropped: [] } };
+    return { files: [], stripped: [], truncated: [], missing: [], expansion: { ...caps, files: [], dropped: [] } };
   }
 
   const repoFiles = await listRepoFiles(repoRoot);
@@ -611,6 +611,7 @@ export async function buildAdjacentBundle({ changedFiles, repoRoot = process.cwd
   return {
     files,
     stripped,
+    truncated: [],
     missing: missing.sort(),
     expansion: await selectExpansion({ changed, diffText, repoRoot, importerIndex, caps, existing }),
   };

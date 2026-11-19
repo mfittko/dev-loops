@@ -116,7 +116,8 @@ test("buildAdjacentBundle includes imports (out-edges) and importers (in-edges) 
     assert.deepEqual(Object.keys(dep), ["path", "role", "relatedTo", "bytes"]);
     assert.equal(dep.bytes, Buffer.byteLength("export function helper() { return 1; }\n"));
     assert.ok(!JSON.stringify(bundle).includes("function helper"), "no file contents in the bundle");
-    assert.ok(!("truncated" in bundle) && !("maxFileBytes" in bundle));
+    assert.deepEqual(bundle.truncated, []);
+    assert.ok(!("maxFileBytes" in bundle));
 
     assert.ok(caller, "importer present (in-edge)");
     assert.equal(caller.role, "importedBy");

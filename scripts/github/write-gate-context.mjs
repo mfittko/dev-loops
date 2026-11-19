@@ -1399,7 +1399,7 @@ function renderRequiredReadsSection(requiredReads, worktreeRoot) {
     "",
     ...(reads.length > 0 ? reads.map((read) => renderRequiredReadLine(read, worktreeRoot)) : ["- (no required reads recorded)"]),
     // Not a `- ` line, so the manifest verifier ignores it.
-    ...reads.filter((read) => read.oversized).map((read) => `Oversized diff part: \`${path.resolve(worktreeRoot, read.path)}\` holds one unsplittable unit (a hunk or a file block with no hunks) above the ${DIFF_PART_MAX_BYTES}-byte or ${DIFF_PART_MAX_LINES}-line part cap; page it with offset/limit.`),
+    ...reads.filter((read) => read.oversized).map((read) => `Oversized diff part: \`${path.resolve(worktreeRoot, read.path)}\` holds one unsplittable unit a hunk (with its file header when it is the file's first hunk) or a file block with no hunks, above the ${DIFF_PART_MAX_BYTES}-byte or ${DIFF_PART_MAX_LINES}-line part cap; page it with offset/limit.`),
   ].join("\n");
 }
 
@@ -1474,14 +1474,14 @@ function persistedDiffBytes(text) {
   return Buffer.byteLength(text, "utf8") + (text.endsWith("\n") ? 0 : 1);
 }
 
-function renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes, filteredBytes, diffPath }) {
+function renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes, filteredBytes, diffPaths }) {
   if (!hasDiffText) return ["(no diff text captured for this bundle)"];
   const sizeNote = prefixMode === "pointer"
     ? `Filtered diff: ${filteredBytes} bytes. Its collapsed size (${collapsedBytes} bytes) exceeds the ${capBytes}-byte inline cap — pointer mode.`
     : `Filtered diff: ${filteredBytes} bytes.`;
   return [
     `${sizeNote} It is the required \`diff\` read; this file does not repeat it. When the prefix's \`## Required reads\` lists more than one \`diff\` part, read every part in order. Read the filtered diff from:`,
-    `  ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`,
+    ...(diffPaths.length > 0 ? diffPaths : ["(diff pointer unavailable — re-derive with git diff)"]).map((p) => `  ${p}`),
   ];
 }
 
@@ -1561,7 +1561,7 @@ function renderCapRoundResidueLines(residue) {
 export function renderBriefingEvidence({
   repo, pr, gate, headSha, worktreeRoot = null,
   issueRef = null, issueBody = null, issueSections = null,
-  diffOutput = null, diffPath = null, changedFiles = [], excludedFiles = [], adjacentCode = null,
+  diffOutput = null, diffPath = null, diffPaths = null, changedFiles = [], excludedFiles = [], adjacentCode = null,
   validationResultsPath = null,
   capRoundResidue = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
@@ -1621,7 +1621,7 @@ export function renderBriefingEvidence({
   lines.push(`## Diff at reviewed head (${headSha})`);
   lines.push("");
   const filteredBytes = hasDiffText ? persistedDiffBytes(diffOutput) : 0;
-  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPath })) lines.push(line);
+  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPaths: diffPaths?.length ? diffPaths : (diffPath ? [diffPath] : []) })) lines.push(line);
   lines.push("");
   lines.push("## Changed files + adjacent-code summary");
   lines.push("");
@@ -1636,7 +1636,7 @@ export function renderBriefingEvidence({
     lines.push(`Adjacent files (${adjacentFiles.length}):`);
     pushPathListLines(lines, adjacentFiles.map((f) => ({ path: f.path, label: `${f.path} (${f.role})` })));
     lines.push(
-      `Stripped: ${adjacentCode.stripped?.length ?? 0}, Missing: ${adjacentCode.missing?.length ?? 0}`,
+      `Stripped: ${adjacentCode.stripped?.length ?? 0}, Truncated: ${adjacentCode.truncated?.length ?? 0}, Missing: ${adjacentCode.missing?.length ?? 0}`,
     );
     pushExpansionLines(lines, adjacentCode.expansion);
   } else {
@@ -1694,7 +1694,7 @@ export function renderScopedBriefingVariant(scope, {
   repo, pr, gate, headSha, evidencePath, contextPath = null, worktreeRoot = null,
   issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null,
-  filteredDiffPath = null, excludedFiles = [],
+  filteredDiffPath = null, filteredDiffPaths = null, excludedFiles = [],
   validationResultsPath = null, adjacentCode = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
   rules = null,
@@ -1769,7 +1769,7 @@ export function renderScopedBriefingVariant(scope, {
   const diffBytes = hasDiffText ? Buffer.byteLength(collapsePureSubstitutionRuns(diffOutput), "utf8") : 0;
   const prefixMode = diffBytes > capBytes ? "pointer" : "inline";
   const filteredBytes = hasDiffText ? persistedDiffBytes(diffOutput) : 0;
-  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPath: filteredDiffPath ?? diffPath })) lines.push(line);
+  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPaths: filteredDiffPaths?.length ? filteredDiffPaths : ((filteredDiffPath ?? diffPath) ? [filteredDiffPath ?? diffPath] : []) })) lines.push(line);
   if (scope === "docs-only") {
     const { docFiles, unparsedCount } = hasDiffText ? listDocFilesInDiff(diffOutput, rules) : { docFiles: [], unparsedCount: 0 };
     lines.push("");
@@ -3195,7 +3195,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       issueBody: options.issueBody ?? null,
       issueSections: options.issueSections ?? null,
       diffOutput: inlineDiffOutput,
-      diffPath: pendingFilteredDiffParts[0]?.path ?? null,
+      diffPaths: pendingFilteredDiffParts.map((part) => part.path),
       changedFiles: options.changedFiles ?? [],
       excludedFiles: diffFilter?.excludedFiles ?? [],
       adjacentCode: options.adjacentCode ?? null,
@@ -3272,7 +3272,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           issueSections: options.issueSections ?? null,
           diffOutput: inlineDiffOutput,
           diffPath: options.diffPath ?? null,
-          filteredDiffPath: pendingFilteredDiffParts[0]?.path ?? null,
+          filteredDiffPaths: pendingFilteredDiffParts.map((part) => part.path),
           excludedFiles: diffFilter?.excludedFiles ?? [],
           validationResultsPath: options.validationResultsPath ?? null,
           adjacentCode: options.adjacentCode ?? null,
