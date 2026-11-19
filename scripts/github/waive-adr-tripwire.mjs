@@ -21,6 +21,7 @@ import { computeSpecDigest, requireSpecFromBody } from "@dev-loops/core/loop/spe
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { evaluateAdrTripwire as realEvaluateAdrTripwire } from "../loop/check-adr-tripwire.mjs";
 import { buildStandingWaiverLine, replaceStandingWaiverLine } from "../loop/adr-waiver-markers.mjs";
+import { SPIKE_PR_MARKER, hasSpikePrMarker } from "./_spike-pr-marker.mjs";
 import { defaultFetchOrigin, readStandingAuthorization as realReadStandingAuthorization } from "../loop/standing-authorization.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { fetchIssueBody as realFetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
@@ -284,7 +285,10 @@ export async function waiveAdrTripwire(options, {
 
   const { record } = authorization;
   const line = buildStandingWaiverLine({ head: headSha, issue, grantedBy: record.grantedBy, expires: record.expires, paths });
-  const nextBody = replaceStandingWaiverLine(body, line);
+  // ADR 0293: the spike marker must stay the last non-empty body line, so the waiver line goes before it.
+  const nextBody = hasSpikePrMarker(body)
+    ? `${replaceStandingWaiverLine(body.trimEnd().slice(0, -SPIKE_PR_MARKER.length), line).trimEnd()}\n\n${SPIKE_PR_MARKER}\n`
+    : replaceStandingWaiverLine(body, line);
   // The tripwire is first-marker-wins: an earlier bare marker can mask the new line.
   const effective = await evaluateAdrTripwire({ base: `origin/${prState.baseRefName}`, head: headSha, prBody: nextBody, repoRoot, env, now });
   if (effective.outcome === "block") {

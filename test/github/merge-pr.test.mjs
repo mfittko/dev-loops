@@ -1740,3 +1740,25 @@ test("the default merge record comment kills a hung gh child at the timeout boun
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a PR carrying the spike no-merge marker is refused before any merge (ADR 0293)", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { body: "spike\n\n<!-- dev-loops:spike-pr no-merge -->\n" } });
+  const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
+  assert.match(threw.message, /spike size exemption/u);
+  assert.equal(threw.mergePrFailure.failures[0].precondition, "spike_pr");
+  assert.equal(threw.mergePrFailure.ok, false);
+  assert.equal(calls.runChild.length, 0);
+});
+
+test("main --check on a spike-marked PR exits 0 with the check-shaped spike_pr failure and no merge call", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { body: "spike\n\n<!-- dev-loops:spike-pr no-merge -->\n" } });
+  const out = captureStream();
+  const code = await main(["--repo", "mfittko/dev-loops", "--pr", "5", "--check"], { ...runtime, stdout: out });
+  assert.equal(code, 0);
+  const result = JSON.parse(out.get());
+  assert.equal(result.ok, false);
+  assert.equal(result.check, true);
+  assert.equal(result.failures.length, 1);
+  assert.equal(result.failures[0].precondition, "spike_pr");
+  assert.equal(calls.runChild.length, 0);
+});
