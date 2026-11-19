@@ -22,6 +22,15 @@ function extractFailedStatusContexts(statuses) {
     }));
 }
 
+// `gh api --paginate --slurp` prints an array of page payloads; a single
+// payload object is also accepted. Returns the merged `key` array, or null
+// when any page lacks it.
+function mergePagedArray(payload, key) {
+  const pages = Array.isArray(payload) ? payload : [payload];
+  if (pages.length === 0 || !pages.every((p) => Array.isArray(p?.[key]))) return null;
+  return pages.flatMap((p) => p[key]);
+}
+
 function invalidCheckRuns() {
   return {
     ok: false,
@@ -59,10 +68,11 @@ function parseHeadCheckRuns(result, prVisibleCheckNames) {
   } catch {
     return invalidCheckRuns();
   }
-  if (!Array.isArray(payload?.check_runs)) return invalidCheckRuns();
+  const checkRuns = mergePagedArray(payload, "check_runs");
+  if (!checkRuns) return invalidCheckRuns();
 
   const { matched: loopDerivedRuns, rest: nonLoopDerivedRuns } =
-    partitionEntriesByCheckName(payload.check_runs, LOOP_DERIVED_CI_CHECK_NAMES);
+    partitionEntriesByCheckName(checkRuns, LOOP_DERIVED_CI_CHECK_NAMES);
   const loopDerivedFailureDetails =
     summarizeHeadScopedCheckRunsSignal({ check_runs: loopDerivedRuns }).status === "failure"
       ? [LOOP_DERIVED_CI_CHECK_NAME]
@@ -76,7 +86,7 @@ function parseHeadCheckRuns(result, prVisibleCheckNames) {
     : [];
   return {
     ok: true,
-    rawCount: payload.check_runs.length,
+    rawCount: checkRuns.length,
     nonLoopDerivedCount: nonLoopDerivedRuns.length,
     loopDerivedFailureDetails,
     visibleSignal: summarizeHeadScopedCheckRunsSignal({ check_runs: visibleRuns }),
@@ -95,17 +105,18 @@ function parseHeadCommitStatuses(result) {
   } catch {
     return invalidStatuses();
   }
-  if (!Array.isArray(payload?.statuses)) return invalidStatuses();
+  const allStatuses = mergePagedArray(payload, "statuses");
+  if (!allStatuses) return invalidStatuses();
 
   const { matched: loopDerivedStatuses, rest: nonLoopDerivedStatuses } =
-    partitionEntriesByCheckName(payload.statuses, LOOP_DERIVED_CI_CHECK_NAME);
+    partitionEntriesByCheckName(allStatuses, LOOP_DERIVED_CI_CHECK_NAME);
   const excludedFailureDetails =
     normalizeHeadScopedCommitStatus({ statuses: loopDerivedStatuses }) === "failure"
       ? [LOOP_DERIVED_CI_CHECK_NAME]
       : [];
   return {
     ok: true,
-    rawCount: payload.statuses.length,
+    rawCount: allStatuses.length,
     nonLoopDerivedCount: nonLoopDerivedStatuses.length,
     commitStatus: normalizeHeadScopedCommitStatus({ statuses: nonLoopDerivedStatuses }),
     excludedFailureDetails,
@@ -138,8 +149,8 @@ export async function observeHeadCiSignals(
   { env, ghCommand, runChild = defaultRunChild },
 ) {
   const [checkRunsResult, statusesResult] = await Promise.all([
-    runChild(ghCommand, ["api", `repos/${repo}/commits/${headSha}/check-runs?per_page=100`], env),
-    runChild(ghCommand, ["api", `repos/${repo}/commits/${headSha}/status?per_page=100`], env),
+    runChild(ghCommand, ["api", "--paginate", "--slurp", `repos/${repo}/commits/${headSha}/check-runs?per_page=100`], env),
+    runChild(ghCommand, ["api", "--paginate", "--slurp", `repos/${repo}/commits/${headSha}/status?per_page=100`], env),
   ]);
   return {
     checkRuns: parseHeadCheckRuns(checkRunsResult, prVisibleCheckNames),
