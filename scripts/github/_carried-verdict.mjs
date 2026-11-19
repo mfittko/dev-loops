@@ -56,9 +56,12 @@ async function upsertCarriedHead({ repo, pr, comments, entry }, runJson) {
   comments.push({ id: saved?.id ?? comment?.id, body });
 }
 
+// A converged record (only draft_gate writes one) stands for its fixer commit, so that commit is the origin head; every other marker keeps its own head.
+const originHeadOf = (marker) => marker?.converged?.fixerCommit || marker?.headSha;
+
 // The candidate shape under which carryGateMarker may carry (baseRef aside).
 export function isCarryCandidate(marker, currentHeadSha) {
-  const origin = marker?.headSha;
+  const origin = originHeadOf(marker);
   return Boolean(marker?.visible) && marker.verdict === "clean" && marker.contractComplete === true
     && normalizeFullHeadSha(origin ?? "") !== null && normalizeFullHeadSha(currentHeadSha ?? "") !== null && origin !== currentHeadSha;
 }
@@ -68,7 +71,7 @@ export function isCarryCandidate(marker, currentHeadSha) {
  * the verdict carries, else the marker unchanged.
  */
 export async function carryGateMarker(marker, { gate, currentHeadSha, baseRef, repoRoot, recorded = [], record = null }) {
-  const origin = marker?.headSha;
+  const origin = originHeadOf(marker);
   if (!isCarryCandidate(marker, currentHeadSha) || !baseRef) return marker;
   const evidence = await computeBaseMergeCarry({ prevHead: origin, headSha: currentHeadSha, baseRef, repoRoot });
   const valid = evidence.decision === "carry_verdict"
@@ -85,6 +88,17 @@ export async function carryGateMarker(marker, { gate, currentHeadSha, baseRef, r
     return marker; // fail closed: an unwritable record costs one gate round, never a crashed detector
   }
   return carried;
+}
+
+/**
+ * The converged-record recording seam (GATE-EXEC-LOW-NIT-CONVERGENCE): true only when the fixer commit's clean state stands for `headSha`
+ * under the full classifier, including the gate-tooling rule. Any failure is false.
+ */
+export async function convergedCarryAccepts({ originHead, headSha, baseRef, repoRoot }) {
+  if (!originHead || !headSha || !baseRef) return false;
+  const evidence = await computeBaseMergeCarry({ prevHead: originHead, headSha, baseRef, repoRoot });
+  return evidence.decision === "carry_verdict"
+    && validateBaseMergeCarryEvidence(evidence, { expectedSourceHead: originHead, expectedNewHead: headSha }).ok;
 }
 
 /**

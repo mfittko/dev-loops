@@ -762,3 +762,97 @@ test("a writer-produced judged log with low act items and an unjudged --findings
     assert.deepEqual(out.puts, [], "nothing is posted, so no clean body exists");
   }, { prefix: "dev-loops-converged-unjudged-json-" });
 });
+
+// Slice 5 (converged-record carry): real git, so the stubbed git on PATH is lifted for these cases.
+const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_DIR: undefined, GIT_WORK_TREE: undefined };
+// Builds main, a PR branch with commit F (the fixer commit) and a merge M of main into it; returns { f, m }. Cleans the repo up afterwards.
+async function withMergeShape(root, { baseFile = "docs/main-only.md", baseContent = "main\n", changeAfterMerge = false, side = false, criss = false, noBaseRef = false }, fn) {
+  const git = (...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { cwd: root, env: GIT_ENV, encoding: "utf8" }).trim();
+  const put = async (file, content) => { await mkdir(path.dirname(path.join(root, file)), { recursive: true }); await writeFile(path.join(root, file), content); };
+  const savedPath = process.env.PATH;
+  process.env.PATH = originalPath;
+  try {
+    git("init", "-q", "-b", "main");
+    await put("base.txt", "base\n");
+    git("add", "base.txt"); git("commit", "-qm", "base");
+    git("checkout", "-qb", "pr");
+    await put("src/pr.mjs", "pr\n");
+    git("add", "src"); git("commit", "-qm", "pr");
+    await put("src/pr.mjs", "pr fixed\n");
+    git("commit", "-qam", "fixer");
+    const f = git("rev-parse", "HEAD");
+    git("checkout", "-q", "main");
+    await put(baseFile, baseContent);
+    git("add", baseFile); git("commit", "-qm", "main change");
+    if (criss) { git("merge", "-q", "--no-ff", "--no-edit", f); }
+    git("checkout", "-q", "pr");
+    if (side) git("checkout", "-q", "-B", "pr", "main"); // F is no longer an ancestor of the PR head
+    try { git("merge", "-q", "--no-ff", "--no-edit", criss ? "main~1" : "main"); } catch {
+      // A same-path edit conflicts; resolve it by keeping the PR side, so every PR blob stays identical to F.
+      git("checkout", "--ours", "src/pr.mjs"); git("add", "src/pr.mjs"); git("commit", "-q", "--no-edit");
+    }
+    if (changeAfterMerge) { await put("src/pr.mjs", "changed pr blob\n"); git("commit", "-qam", "own change"); }
+    git("update-ref", "refs/remotes/origin/main", "main");
+    if (noBaseRef) git("update-ref", "-d", "refs/remotes/origin/main");
+    return await fn({ f, m: git("rev-parse", "HEAD") });
+  } finally {
+    process.env.PATH = savedPath;
+    await rm(path.join(root, ".git"), { recursive: true, force: true });
+    for (const dir of ["docs", "src", "scripts"]) await rm(path.join(root, dir), { recursive: true, force: true });
+    await rm(path.join(root, "base.txt"), { force: true });
+  }
+}
+
+const REFUSED = /is not the current PR head/;
+
+test("slice 5: a code-fix converged post at a base merge M after F records convergence and checks base freshness at M", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("low", 1)];
+    const savedFix = FIX;
+    await withMergeShape(repoRoot, {}, async ({ f, m }) => {
+      FIX = f;
+      const heads = [];
+      const checkBaseFreshness = async ({ head, base }) => { heads.push(head); return { ok: true, status: "base_current", base }; };
+      const out = await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { currentHead: m }, checkBaseFreshness });
+      assert.equal(out.error, undefined);
+      assert.equal(out.result.action, "updated");
+      assert.match(out.body, new RegExp(`\\*\\*Converged:\\*\\* fixer \`${f}\``));
+      assert.deepEqual(heads, [m]);
+    }).finally(() => { FIX = savedFix; });
+  }, { prefix: "dev-loops-converged-carry-code-" });
+});
+
+test("slice 5: a body-only converged post at a base merge M after F records convergence", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [bodyFinding("medium", 1), bodyFinding("low", 2)];
+    await withMergeShape(capOnRoot, {}, async ({ f, m }) => {
+      const out = await bodyOnlyPost(tempDir, { findings, fixer: f, runChildOptions: { currentHead: m } });
+      assert.equal(out.error, undefined);
+      assert.equal(out.result.action, "updated");
+      assert.match(out.body, new RegExp(`\\*\\*Converged:\\*\\* fixer \`${f}\``));
+    });
+  }, { prefix: "dev-loops-converged-carry-body-" });
+});
+
+test("slice 5: a changed PR blob, a gate-tooling base delta, a non-ancestor F, a criss-cross base and a detection failure keep the refusal", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("low", 1)];
+    const cases = {
+      "changed PR blob": { changeAfterMerge: true },
+      "gate-tooling base delta": { baseFile: "scripts/tool.mjs" },
+      "conflict-resolution merge": { baseFile: "src/pr.mjs", baseContent: "conflicting main\n" },
+      "non-ancestor F": { side: true },
+      "criss-cross merge base": { criss: true },
+      "detection failure (no base ref)": { noBaseRef: true },
+    };
+    for (const [name, shape] of Object.entries(cases)) {
+      const savedFix = FIX;
+      try {
+        await withMergeShape(repoRoot, shape, async ({ f, m }) => {
+          FIX = f;
+          assert.match((await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { currentHead: m } })).error ?? "", REFUSED, name);
+        });
+      } finally { FIX = savedFix; }
+    }
+  }, { prefix: "dev-loops-converged-carry-refuse-" });
+});

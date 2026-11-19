@@ -1664,7 +1664,7 @@ test("AC4: the review source refuses an unknown review, a wrong state, an empty 
     const earlier = await emitReview(emit, [reviewFor(head, { commit_id: "d".repeat(40) })], { runChild: compareAs("ahead") });
     assert.equal(earlier.workOrder.source, "review-body");
     // A different --head-sha still refuses as for the other sources.
-    await refuses([reviewFor(head)], /conflicting authority/, { fetchPr: async () => ({ headRefName: "issue-1", headRefOid: "b".repeat(40) }) });
+    await refuses([reviewFor(head)], new RegExp(`conflicting authority, refresh and re-emit with --head-sha ${"b".repeat(40)} \\(an act-list emit at the current PR head carries the origin verdict through the base-merge carry seam`), { fetchPr: async () => ({ headRefName: "issue-1", headRefOid: "b".repeat(40) }) });
   });
 });
 
@@ -3468,7 +3468,22 @@ test("issue 2752 slice 4: a current-head ledger written while the verdict reads 
       await writeFile(path.join(fx.root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${merged}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: merged, verdict: "blocked", loggedAt: "2026-11-03T00:00:00.000Z", findings: [] }));
       return result;
     };
-    await assert.rejects(fx.emit({ ...base, fetchVerdictMarkers }), (e) => /verdict_not_posted|changed source identity|ledger appeared/.test(e.message));
+    await assert.rejects(fx.emit({ ...base, fetchVerdictMarkers }), (e) => e.refusal === "verdict_not_posted");
+  });
+});
+
+test("issue 2752 slice 5: a ledger written after the cached carry lookup settled is caught by the re-check outside it", async () => {
+  await withFixture(async (fx) => {
+    const { merged, over } = await verdictCarryScenario(fx, { cap: 3 });
+    const base = over();
+    let reads = 0;
+    // The first verdict read belongs to the cached carry lookup; the second is the direct read after it has settled. A retained ledger is not pinned by the capture, so only the re-check sees it.
+    const fetchVerdictMarkers = async (args) => {
+      const result = await base.fetchVerdictMarkers(args);
+      if (++reads === 2) await writeFile(path.join(fx.root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${merged}.round-1.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: merged, verdict: "blocked", loggedAt: "2026-11-03T00:00:00.000Z", findings: [] }));
+      return result;
+    };
+    await assert.rejects(fx.emit({ ...base, fetchVerdictMarkers }), (e) => e.refusal === "ledger_appeared");
   });
 });
 

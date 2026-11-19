@@ -353,6 +353,7 @@ function normalizeGateMarkerSummary(summary) {
     visible: true,
     surface: normalizeVerdictSurface(summary.surface),
     headSha: summary.headSha,
+    ...(summary.converged ? { converged: summary.converged } : {}),
     ...(summary.convergedFromHeadSha ? { convergedFromHeadSha: summary.convergedFromHeadSha } : {}),
     verdict: summary.verdict,
     findingsSummary: summary.findingsSummary,

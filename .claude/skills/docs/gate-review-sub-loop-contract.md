@@ -166,6 +166,7 @@ an empty intersection of the PR diff paths and the base delta
 paths, a base delta that touches no gate tooling or config, and no conflict-resolution hunks
 in any merge commit on the PR branch line (first-parent) between the two heads. Any base change to a
 PR path, including a same-file line shift, is a full re-gate (partial carry is a later slice).
+A converged `draft_gate` record carries from its `converged.fixerCommit` as the origin head, not from the reviewed head; every other marker carries from its own head (ADR 0294).
 `full_regate` and `fallback_full` (any detection failure,
 including an origin head that the classifier finds is not an ancestor of the current head) require the full round. The
 evidence record (source head, new head, the PR blob lists at both heads, the PR diff paths, the base delta

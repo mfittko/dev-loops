@@ -27,6 +27,7 @@ import { resolveRunId } from "@dev-loops/core/loop/run-context";
 import { assertRunnerOwnership, claimRunnerOwnership, pinObservedClaim } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { checkBaseFreshness as defaultCheckBaseFreshness, staleBaseReason } from "../loop/pre-write-remote-freshness-guard.mjs";
+import { convergedCarryAccepts } from "./_carried-verdict.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
@@ -2881,8 +2882,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const checkFreshness = checkBaseFreshness ?? (runChild === defaultRunChild ? defaultCheckBaseFreshness : null);
     const prBase = coordinationContext?.prData?.baseRefName;
     if (verdict === "clean" && !isReviewGate && checkFreshness && typeof prBase === "string" && prBase.trim()) {
-      // A converged post records at the reviewed head A; the base check belongs to the current PR head (the fixer commit).
-      const stale = await staleBaseReason({ base: prBase.trim(), head: convergedInput?.fixerCommit ?? canonicalHeadSha, cwd: repoRoot, env, check: checkFreshness });
+      // A converged post records at the reviewed head A; the base check belongs to the current PR head (the fixer commit, or a base merge after it).
+      const stale = await staleBaseReason({ base: prBase.trim(), head: convergedInput ? evidence.currentHeadSha : canonicalHeadSha, cwd: repoRoot, env, check: checkFreshness });
       if (stale) throw new Error(`${stale} A clean ${options.gate} verdict is not recorded at a stale base.`);
     }
   };
@@ -2894,7 +2895,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     evidence = coordinationContext.gateEvidence;
     // A converged post updates the comment at the reviewed head A while the PR head is the fixer commit.
     if (convergedInput) {
-      if (convergedInput.fixerCommit !== evidence.currentHeadSha) {
+      // A clean base merge after the fixer commit leaves the PR patch unchanged, so the fixer commit still stands for the PR head.
+      const baseName = coordinationContext.prData?.baseRefName;
+      if (convergedInput.fixerCommit !== evidence.currentHeadSha && !(typeof baseName === "string" && baseName.trim()
+        && await convergedCarryAccepts({ originHead: convergedInput.fixerCommit, headSha: evidence.currentHeadSha, baseRef: `origin/${baseName.trim()}`, repoRoot }))) {
         throw new Error(`--converged-json fixerCommit ${JSON.stringify(convergedInput.fixerCommit)} is not the current PR head ${evidence.currentHeadSha}; refuse to record convergence for a stale or foreign head.`);
       }
       canonicalHeadSha = options.headSha;
