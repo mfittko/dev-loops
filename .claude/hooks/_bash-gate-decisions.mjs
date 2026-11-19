@@ -205,12 +205,28 @@ const RESERVED_WORD = /^(?:\{|!|then|do|else|elif|if|while|until)$/;
 // The closed list of merge-pr boolean flags (parseArgs in merge-pr.mjs). A dashed word outside it is read as a value-taking option.
 // ponytail: fail-closed ceiling: a future boolean flag missing here makes a `--check` after it count as a value, so the deny fires until the list is extended.
 const BOOLEAN_FLAGS = new Set(["--check", "--stable-release", "--standing-authorization", "--lightweight", "--help", "-h", "--silent", "-s"]);
+const LAUNCHER_NON_EXECUTING = new Set(["-c", "--check", "-e", "--eval", "-p", "--print", "-h", "--help", "-v", "--version"]);
+const LAUNCHER_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "--input-type", "--title", "--repo-root"]);
 const baseName = (value) => value.split("/").pop();
 
-/** The program of one tokenized segment: its words without env assignments, `(`/`)` subshell edges and operators, and the index of the first word after the launcher prefixes. */
-function segmentProgram(words) {
+// An unquoted redirection word (`2>/dev/null`, `>f`, `>>`, `<`, `&>f`): bash consumes it and its target, so neither is the program or an argument.
+const REDIRECT_WORD = /^(?:\d*(?:>>?|<>|<|>&)|&>>?)\|?/;
+const REDIRECT_OPERATOR_ONLY = /^(?:\d*(?:>>?|<>|<|>&)|&>>?)\|?$/;
+function stripRedirections(words) {
+  const out = [];
+  for (let k = 0; k < words.length; k++) {
+    const w = words[k];
+    if (w.op || w.single || w.double || w.ansi || !REDIRECT_WORD.test(w.raw)) out.push(w);
+    else if (REDIRECT_OPERATOR_ONLY.test(w.raw)) k++;
+  }
+  return out;
+}
+
+/** The program of one tokenized segment: its words without env assignments, redirections, `(`/`)` subshell edges and operators, and the index of the first word after the launcher prefixes. */
+function segmentProgram(allWords) {
+  const words = stripRedirections(allWords);
   const entries = words
-    .filter((w) => !w.op && !ASSIGNMENT_WORD.test(w.raw.replace(/^\(+/, "")))
+    .filter((w) => !w.op &&!ASSIGNMENT_WORD.test(w.raw.replace(/^\(+/, "")))
     .map((w) => ({ v: w.value.replace(/^\(+|\)+$/g, ""), closes: !w.raw.startsWith("(") && w.raw.endsWith(")") }))
     .filter((e) => e.v);
   const values = entries.map((e) => e.v);
@@ -236,9 +252,18 @@ function segmentRunsMergePrWithoutCheck(words) {
   let i = start;
   const head = baseName(values[i] ?? "");
   if (/^(?:node|bun|dev-loops-run)$/.test(head)) {
-    // A launcher flag may take a separate value word, so any later word named merge-pr.mjs is the script.
-    i = values.findIndex((v, k) => k > i && baseName(v) === "merge-pr.mjs");
-    if (i < 0) return false;
+    // The entrypoint is the first operand after the launcher flags; a non-executing mode (`node --check`) or another script that takes merge-pr.mjs as data is no merge.
+    // ponytail: closed list of value-taking launcher flags; an unlisted one makes its value the entrypoint, so the command is allowed. Extend the list when a launcher gains one.
+    let k = i + 1;
+    for (; k < values.length; k++) {
+      const v = values[k];
+      if (v === "--") { k++; break; }
+      if (!v.startsWith("-")) { if (head === "bun" && v === "run") continue; break; }
+      if (LAUNCHER_NON_EXECUTING.has(v)) return false;
+      if (LAUNCHER_VALUE_FLAGS.has(v)) k++;
+    }
+    if (baseName(values[k] ?? "") !== "merge-pr.mjs") return false;
+    i = k;
   } else if (head !== "merge-pr.mjs") return false;
   // Any `--check=` word voids the allow: the last `--check` token of either form wins in merge-pr, so the gate stays fail-closed and accepts only a bare `--check` word.
   // A bare `--check` counts only after the script word, a non-dashed word or a boolean flag; any other dashed predecessor is a value-taking option.
@@ -248,10 +273,18 @@ function segmentRunsMergePrWithoutCheck(words) {
 
 /** Whether an unquoted heredoc body holds a `$(...)` or backtick substitution that runs merge-pr.mjs without `--check`: bash expands them for any program, so the body is read as double-quoted text. */
 function heredocBodyRunsMergePr(body) {
-  if (body.includes('"') && /merge-pr\.mjs/.test(body)) return true; // shortcut: quotes inside `$(...)` are real to bash but escaped here, so a quoted mention fails closed
-  const tok = tokenizeShellCommand(`"${body.replace(/"/g, '\\"')}"`);
-  if (tok.incomplete) return /merge-pr\.mjs/.test(body);
-  return tok.segments.some((s) => s.words.some((w) => w.subs.some((sub) => treeRunsMergePr(sub.segments)))) || tok.ticks.some((t) => commandRunsMergePrWithoutCheck(t.slice(1, -1)));
+  // Each `$(...)` (by paren depth) and backtick span is its own command with real quotes; plain text, quoted or not, is inert.
+  // shortcut: a `)` inside a quote ends the span early; a truncated span that fails to tokenize falls back to the text from its opener.
+  const runs = (inner, from) => commandRunsMergePrWithoutCheck(inner) || (tokenizeShellCommand(inner).incomplete && /merge-pr\.mjs/.test(body.slice(from)));
+  for (let p = body.indexOf("$("); p >= 0; p = body.indexOf("$(", p + 2)) {
+    let depth = 1, e = p + 2;
+    for (; e < body.length && depth > 0; e++) depth += body[e] === "(" ? 1 : body[e] === ")" ? -1 : 0;
+    if (depth > 0) return /merge-pr\.mjs/.test(body.slice(p));
+    if (runs(body.slice(p + 2, e - 1), p)) return true;
+  }
+  const ticks = body.split("`");
+  if (ticks.length % 2 === 0) return /merge-pr\.mjs/.test(body.slice(body.indexOf("`")));
+  return ticks.some((t, k) => k % 2 === 1 && runs(t, 0));
 }
 
 /** Walks the token tree: a program word, a `$(...)` substitution, a `-c`/`eval` payload, a substitution in an unquoted heredoc body or a shell heredoc body that runs merge-pr.mjs without `--check`. */

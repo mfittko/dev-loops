@@ -573,6 +573,12 @@ const MERGE_DENY_FORMS = [
   "! node scripts/github/merge-pr.mjs --pr 5",
   "node scripts/github/merge-pr.mjs --check=false --pr 5",
   "node scripts/github/merge-pr.mjs --check --check=false --pr 5",
+  "2>/dev/null node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by operator",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by operator > --check",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 2>/dev/null",
+  "> out.txt node scripts/github/merge-pr.mjs --pr 5",
+  "cat <<EOF\n$(node scripts/github/merge-pr.mjs --repo a/b --pr 5 --human-approved-by x)\nEOF",
+  'cat <<EOF\n$(node "scripts/github/merge-pr.mjs" --repo a/b --pr 5)\nEOF',
 ];
 
 // Denied for a subagent, but not run for the top-level session here: the timeout and inline-interpreter rules would deny those forms on their own.
@@ -639,6 +645,13 @@ const MERGE_ALLOW_FORMS = [
   "node scripts/github/merge-pr.mjs --pr=5 --check",
   "node scripts/github/merge-pr.mjs --repo=a/b --pr=5 --check",
   "dev-loops-run scripts/github/merge-pr.mjs --repo a/b --pr 5 --silent --check",
+  "node --check scripts/github/merge-pr.mjs",
+  "node scripts/other.mjs scripts/github/merge-pr.mjs --pr 5",
+  "node --import ./x.mjs scripts/other.mjs scripts/github/merge-pr.mjs",
+  "2>/dev/null node scripts/github/merge-pr.mjs --repo a/b --pr 5 --check",
+  "node scripts/github/merge-pr.mjs --repo a/b --pr 5 --check > out.txt",
+  'cat <<EOF\n"scripts/github/merge-pr.mjs"\nEOF',
+  'cat <<EOF\n$(node "scripts/github/merge-pr.mjs" --repo a/b --pr 5 --check)\nEOF',
 ];
 
 test("merge-pr.mjs --check forms stay allowed for a subagent role (issue 2500)", () => {
