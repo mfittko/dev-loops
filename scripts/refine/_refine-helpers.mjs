@@ -10,11 +10,27 @@ import { extractSection } from "@dev-loops/core/loop/markdown-sections";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 // Line-anchored: only a line that opens with the linkage form states parentage.
+// The prefix allows blockquote, heading, bullet (with task box), numbered item and table cell markers.
+const LINE_PREFIX = String.raw`^[ \t]*(?:>[ \t>]*)?(?:#{1,6}[ \t]+|[-*+][ \t]+(?:\[[ xX]\][ \t]+)?|\d+[.)][ \t]+|\|[ \t]*)?(?:\*\*)?`;
+const linkageRe = (label) => new RegExp(`${LINE_PREFIX}${label}.*$`, "imu");
+
 export const FORBIDDEN_PROSE_PATTERNS = [
-  /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?Child of #.*$/imu,
-  /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?Parent:\s*#.*$/imu,
-  /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?Depends on:\s*#.*$/imu,
-  /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?sub-issue of #.*$/imu,
+  {
+    re: linkageRe("Child of #"),
+    hint: "Link the parent through the GitHub sub-issue API and remove the line.",
+  },
+  {
+    re: linkageRe(String.raw`Parent:(?:\*\*)?\s*#`),
+    hint: "Link the parent through the GitHub sub-issue API and remove the line.",
+  },
+  {
+    re: linkageRe(String.raw`Depends on:(?:\*\*)?\s*#`),
+    hint: "Express order through sub-issue tree order and remove the line.",
+  },
+  {
+    re: linkageRe("sub-issue of #"),
+    hint: "Link the parent through the GitHub sub-issue API and remove the line.",
+  },
 ];
 
 export const DEFAULT_USAGE_SUFFIX = `

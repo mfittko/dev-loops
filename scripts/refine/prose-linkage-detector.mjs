@@ -53,6 +53,11 @@ function hasDuplicateChildChecklist(issue) {
   return hasCheckedChildItem || referencedChildren.size >= 2;
 }
 
+function quoteLine(line) {
+  const text = line.trim();
+  return text.length > 120 ? `${text.slice(0, 120)}...` : text;
+}
+
 export function runProseLinkageDetector(tree) {
   const errors = [];
   const parentByChild = new Map();
@@ -65,13 +70,13 @@ export function runProseLinkageDetector(tree) {
   }
 
   for (const issue of tree.issues) {
-    for (const pattern of FORBIDDEN_PROSE_PATTERNS) {
-      const match = pattern.exec(issue.body);
+    for (const { re, hint } of FORBIDDEN_PROSE_PATTERNS) {
+      const match = re.exec(issue.body);
       if (match) {
         errors.push({
           code: "forbidden_prose_linkage",
           issue: issue.number,
-          message: `Issue body line "${match[0].trim()}" is forbidden prose linkage. Link the parent through the GitHub sub-issue API and remove the line.`,
+          message: `Issue body line "${quoteLine(match[0])}" is forbidden prose linkage. ${hint}`,
         });
       }
     }

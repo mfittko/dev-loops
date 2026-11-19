@@ -93,6 +93,33 @@ test("runProseLinkageDetector quotes the matched line and ignores mid-sentence '
   assert.match(run("Child of #99").errors[0].message, /"Child of #99"/);
 });
 
+test("runProseLinkageDetector matches each marked line form and gives a per-pattern hint", () => {
+  const run = (line) => runProseLinkageDetector(normalizeTreePayload({
+    root: 1,
+    issues: [{ number: 1, children: [], body: `${buildBody({ scope: "owns root" })}\n${line}` }],
+  }));
+  for (const line of ["> Child of #4", ">> Child of #4", "## Parent: #4", "- [ ] Parent: #4", "- [x] Parent: #4", "+ sub-issue of #4", "1. Child of #4", "2) Child of #4", "| Child of #4 |", "**Parent:** #4"]) {
+    assert.equal(run(line).ok, false, line);
+  }
+  assert.match(run("Depends on: #4").errors[0].message, /sub-issue tree order/);
+  assert.match(run("Parent: #4").errors[0].message, /sub-issue API/);
+  assert.match(run(`Child of #4 ${"x".repeat(200)}`).errors[0].message, /\.\.\."/);
+});
+
+test("runScopeBoundaryCrossChecker flags a shared token when one sibling's line differs", () => {
+  const make = (lines) => normalizeTreePayload({
+    root: 1,
+    issues: [
+      { number: 1, children: [2, 3, 4], body: buildBody({ scope: "owns parent" }) },
+      ...[2, 3, 4].map((n, i) => ({ number: n, parentNumber: 1, children: [], body: buildBody({ scope: `owns own${n}`, boundary: `owns own${n}\n${lines[i]}` }) })),
+    ],
+  });
+  const dup = (tree) => runScopeBoundaryCrossChecker(tree).errors.filter((e) => e.code === "duplicate_ownership");
+  assert.equal(dup(make(Array(3).fill("- This issue owns the API"))).length, 0);
+  assert.ok(dup(make(["- This issue owns the API", "- This issue owns the API", "- Only this issue owns the API"])).some((e) => e.message.includes("'the api'")));
+  assert.ok(dup(make(["- This issue owns the API", "- Also this issue owns the API", "- Now this issue owns the API"])).some((e) => e.message.includes("'the api'")));
+});
+
 test("runScopeBoundaryCrossChecker ignores a claim repeated by all three siblings", () => {
   const tree = normalizeTreePayload({
     root: 1,
