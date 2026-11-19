@@ -297,7 +297,7 @@ const bashGateFacts = {
   enforceCoordinator,
 };
 const COMMENT_REASON =
-  "OPERATOR-OWNED-LINE: this command holds the tokens of a raw GitHub comment or review write (gh, issue or pr, comment and a body or editor flag; pr review and a body flag; close or reopen with a comment flag; or a gh api graphql addComment, updateIssueComment or addPullRequestReview mutation, or a REST issues comment write), so it is blocked for every actor. " +
+  "OPERATOR-OWNED-LINE: this command holds the tokens of a raw GitHub comment or review write (gh, issue or pr, comment and a body or editor flag; pr review and a body flag; close or reopen with a comment flag; or a gh api graphql addComment, updateIssueComment or addPullRequestReview mutation, or a REST issues comment write; a `$'...'` ANSI-C word in a command that holds one of the comment, review, close or reopen words is denied too, because the decoded flag is not judged), so it is blocked for every actor. " +
   "Post a new comment with `dev-loops-run scripts/github/comment-issue.mjs --repo <owner/repo> --issue <n> --body-file <f>` and edit one with `dev-loops-run scripts/github/edit-comment.mjs`. " +
   "To read comments, use `gh pr view <n> --json comments`.";
 const decision = decideBashGate(bashGateFacts);
