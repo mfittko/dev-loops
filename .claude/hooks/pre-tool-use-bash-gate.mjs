@@ -167,7 +167,9 @@ function segmentWriteKind(command) {
   const isComment = (issueOrPr && has((t) => t === "comment") && (bodyFlag() || editorFlag())) ||
     (has((t) => t === "pr") && has((t) => t === "review") && bodyFlag()) ||
     (issueOrPr && has((t) => t === "close" || t === "reopen") && closeComment) ||
-    (has((t) => t === "api") && has((t) => t === "graphql") && has((t) => /addcomment|addpullrequestreview/.test(t)));
+    (has((t) => t === "api") && has((t) => t === "graphql") && has((t) => /addcomment|updateissuecomment|addpullrequestreview/.test(t))) ||
+    // REST issue comment writes (`issues/<n>/comments`, `issues/comments/<id>`); `pulls/<n>/comments` stays a body write.
+    (isBody && has((t) => t === "api") && has((t) => /issues\/(?:\d+\/)?comments(?:\/|$)/.test(t)));
   return isComment ? "comment" : isBody ? "body" : null;
 }
 

@@ -358,10 +358,11 @@ const COMMENT_WRITES = [
   `gh api graphql -f query='mutation($body:String!){addComment(input:{subjectId:"X",body:$body}){clientMutationId}}' -f body='${MERGE_APPROVAL}'`,
   `sh -c "gh api graphql -f query='mutation { addComment(input: {subjectId: \\"X\\", body: \\"x\\"}) { clientMutationId } }'"`,
   "gh api graphql -f query='mutation { addPullRequestReview(input: {pullRequestId: \"X\"}) { clientMutationId } }'",
-  // The REST forms stay denied (by the body-write token rule).
+  // The REST issue comment forms and graphql updateIssueComment get the comment reason too.
   `sh -c "gh api repos/o/r/issues/5/comments -f body=x"`,
   `sh -c "gh api -X PATCH repos/o/r/issues/comments/9 -f body=x"`,
   `sh -c "gh api repos/o/r/issues/5/comments --input f.json"`,
+  `gh api graphql -f query='mutation { updateIssueComment(input: {id: "X", body: "x"}) { clientMutationId } }'`,
 ];
 for (const command of COMMENT_WRITES) {
   test(`raw comment or review write is denied for the main agent and subagents: ${command}`, async () => {
@@ -369,11 +370,25 @@ for (const command of COMMENT_WRITES) {
       for (const agentType of COMMENT_ACTORS) {
         const { decision, reason } = bash(root, command, agentType);
         assert.equal(decision, "deny", `${command} as ${agentType ?? "main agent"}`);
-        if (!command.includes("repos/o/r")) assert.match(reason, /OPERATOR-OWNED-LINE[\s\S]*comment-issue\.mjs/, `${command} as ${agentType ?? "main agent"}`);
+        assert.match(reason, /OPERATOR-OWNED-LINE[\s\S]*comment-issue\.mjs/, `${command} as ${agentType ?? "main agent"}`);
       }
     });
   });
 }
+
+test("PR body edits, graphql updatePullRequest and PR review comment writes keep the body reason", async () => {
+  await withManagedRepo(async (root) => {
+    for (const command of [
+      "gh pr edit 5 --body x",
+      `gh api graphql -f query='mutation { updatePullRequest(input: {pullRequestId: "X", body: "x"}) { clientMutationId } }'`,
+      "gh api repos/o/r/pulls/5/comments -f body=x",
+    ]) {
+      const { decision, reason } = bash(root, command, undefined);
+      assert.equal(decision, "deny", command);
+      assert.match(reason, /ADR-TRIPWIRE-STANDING-WAIVER/, command);
+    }
+  });
+});
 
 test("sanctioned comment writers and reads stay allowed; an unmanaged repo is unchanged", async () => {
   await withManagedRepo(async (root) => {
