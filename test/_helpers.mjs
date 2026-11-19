@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER } from "@dev-loops/core/loop/run-context";
+import { ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER, ensureLaneRunContext } from "@dev-loops/core/loop/run-context";
 import { writePrePrReviewRecord } from "../scripts/loop/_pre-pr-review-record.mjs";
 import { dispatchPromptLayoutRecordPath } from "../scripts/github/record-dispatch-prompt-layout.mjs";
 
@@ -752,6 +752,22 @@ export function captureStderr(fn) {
   process.stderr.write = (chunk) => { out += String(chunk); return true; };
   try { fn(); } finally { process.stderr.write = original; }
   return out;
+}
+
+// Issue 3224: run `fn` with the process cwd inside a fake linked worktree whose run-context file
+// (minted by `loop startup --claim`) is the only run id source. Callers pass `env: runIdFreeEnv()`.
+export async function withLaneRunContext(fn) {
+  const cwd = cacheFs.realpathSync(await mkdtemp(path.join(os.tmpdir(), "lane-run-context-")));
+  const previous = process.cwd();
+  try {
+    await writeFile(path.join(cwd, ".git"), "gitdir: ./.git-common/worktrees/lane\n");
+    const lane = ensureLaneRunContext({ env: {}, cwd });
+    process.chdir(cwd);
+    return await fn({ cwd, runId: lane.runId });
+  } finally {
+    process.chdir(previous);
+    await rm(cwd, { recursive: true, force: true });
+  }
 }
 
 /** `spawnSync` for a fixture cwd: makes the cwd's default-branch trust-config read resolvable first. */

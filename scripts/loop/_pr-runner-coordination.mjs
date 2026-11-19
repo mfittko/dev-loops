@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { parseRepoSlugParts } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId, resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
+import { renderCliText } from "@dev-loops/core/loop/cli-command";
 import { WATCH_KINDS } from "@dev-loops/core/loop/watcher-exclusivity";
 import {
   loadStateFile as loadSharedStateFile,
@@ -880,7 +881,7 @@ export async function handoffRunnerOwnership({
 } = {}) {
   const normalizedRepo = normalizeRepoSlug(repo);
   const normalizedPr = normalizePr(pr);
-  const envRunId = normalizeRunId(resolveRunId(env));
+  const envRunId = normalizeRunId(resolveRunId(env, { cwd }));
   const requestedRunId = normalizeRunId(runId);
   // RUNNER-HANDOFF-TEARDOWN: without a verified identity the explicit run id is the identity (owner-only below).
   // Native Codex keeps its verified-identity requirement.
@@ -1029,7 +1030,7 @@ export async function ensureAsyncRunnerOwnership({
   // verdict to exercise the production wiring without a live stale claim.
   detectStale = detectStaleRunner,
 } = {}) {
-  const runId = normalizeRunId(resolveRunId(env));
+  const runId = normalizeRunId(resolveRunId(env, { cwd }));
   if (runId === null) {
     if ((claimIfMissing || requireExisting) && resolveRuntimeHarness(env) === "codex") {
       return buildConflict({
@@ -1141,7 +1142,7 @@ export async function releaseAsyncRunnerOwnership({
   env = process.env,
   cwd = process.cwd(),
 } = {}) {
-  const runId = normalizeRunId(resolveRunId(env));
+  const runId = normalizeRunId(resolveRunId(env, { cwd }));
   if (runId === null) {
     return {
       ok: true,
@@ -1153,7 +1154,7 @@ export async function releaseAsyncRunnerOwnership({
       exitSignals: [],
       filePath: null,
       // RUNNER-HANDOFF-TEARDOWN: a terminal stop with no env run id releases nothing (the state is not read).
-      remedy: `If you claimed this PR, run pr-runner-coordination.mjs handoff --repo ${normalizeRepoSlug(repo)} --pr ${normalizePr(pr)} --run-id <the id used at claim> to release the claim (\`handoff_noop\` with no owner, \`ownership_lost\` with a foreign owner; neither writes state).`,
+      remedy: renderCliText(`If you claimed this PR, run node <dev-loops-package-root>/cli/index.mjs loop runner-coordination handoff --repo ${normalizeRepoSlug(repo)} --pr ${normalizePr(pr)} --run-id <the id used at claim> to release the claim (\`handoff_noop\` with no owner, \`ownership_lost\` with a foreign owner; neither writes state).`, { env }),
     };
   }
   const filePath = defaultRunnerCoordinationFilePathForTarget({ repo, pr }, cwd);

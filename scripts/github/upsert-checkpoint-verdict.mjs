@@ -2741,7 +2741,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // Root cause 1: allow resurrected sessions to claim ownership when the previous
   // run's coordination record is stale. Without this, a new run ID is rejected even
   // though the old run is dead, forcing manual file deletion.
-  const envRunId = resolveRunId(env) ?? "";
+  const envRunId = resolveRunId(env, { cwd: repoRoot }) ?? "";
   if (envRunId) {
     try {
       const staleCheck = await detectStale({ repo: options.repo, pr: options.pr, cwd: repoRoot });
