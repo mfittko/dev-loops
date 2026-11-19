@@ -878,7 +878,7 @@ test("slice 5: a changed PR blob, a gate-tooling base delta, a non-ancestor F, a
     const cases = {
       "changed PR blob": { changeAfterMerge: true },
       "gate-tooling base delta": { baseFile: "scripts/tool.mjs" },
-      // Every PR blob is kept identical to F, so only the hand-resolved hunk refuses (classifier rule: classify-base-merge-carry.test.mjs "hand-resolved conflict merge").
+      // Every PR blob is kept identical to F. main edits src/pr.mjs, so the base-delta intersection refuses here; the hand-resolved hunk rule is isolated in classify-base-merge-carry.test.mjs "hand-resolved conflict merge".
       "hand-resolved conflict merge": { baseFile: "src/pr.mjs", baseContent: "conflicting main\n" },
       "non-ancestor F": { side: true },
       "criss-cross merge base": { criss: true },

@@ -1169,6 +1169,11 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
 // wrapper below strips them so no OTHER caller (e.g.
 // detect-pr-gate-coordination-state.mjs, which durably stores the whole
 // returned object) can re-expose them.
+// Fan-out keeps the origin-head marker for a carried gate so the ledger path stays at the origin head.
+// A converged carry takes the non-carried converged shape: headSha F (the scope head), convergedFromHeadSha A (the ledger head).
+export const carriedFanoutMarker = (candidate, carried) => (carried.convergedFromHeadSha
+  ? { ...candidate, headSha: carried.carriedFrom, convergedFromHeadSha: candidate.headSha, carriedFrom: carried.carriedFrom }
+  : { ...candidate, carriedFrom: carried.carriedFrom });
 async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd(), recordCarry = false } = {}) {
   const runnerOwnership = await ensureAsyncRunnerOwnership({
     repo: options.repo,
@@ -1277,8 +1282,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
       gate, repo: options.repo, pr: options.pr, currentHeadSha, repoRoot: resolveRepoRoot(cwd), env,
       runJson: (args) => runGhJson(args, { env, ghCommand, runChild }), comments: carryComments, record: recordCarry,
     });
-    // Fan-out keeps the origin-head marker for a carried gate so the ledger path stays at the origin head.
-    return carried.carriedFrom ? { marker: carried, fanoutMarker: { ...candidate, carriedFrom: carried.carriedFrom } } : { marker: filtered, fanoutMarker: filtered };
+    return carried.carriedFrom ? { marker: carried, fanoutMarker: carriedFanoutMarker(candidate, carried) } : { marker: filtered, fanoutMarker: filtered };
   };
   const { marker: draftGateMarker, fanoutMarker: rawDraftGateMarker } = await resolveGateMarker("draft_gate");
   const { marker: preApprovalGateMarker, fanoutMarker: rawPreApprovalGateMarker } = await resolveGateMarker("pre_approval_gate");

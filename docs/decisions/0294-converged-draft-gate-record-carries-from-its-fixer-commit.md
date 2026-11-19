@@ -14,7 +14,7 @@ A converged `draft_gate` record (`GATE-EXEC-LOW-NIT-CONVERGENCE`) is a clean ver
 
 The recording seam of `upsert-checkpoint-verdict.mjs --converged-json` accepts a `fixerCommit` that is not the current PR head M when `convergedCarryAccepts` in `scripts/github/_carried-verdict.mjs` holds. It runs `computeBaseMergeCarry` for F to M with the full classifier, including the gate-tooling rule, and `validateBaseMergeCarryEvidence` for the heads F and M. Both stay unchanged. The base-freshness check of `GATE-EXEC-BASE-REFRESH` then runs at M. The converged marker records F unchanged. The delta freshness and body-only own-commit checks keep reading the range A to F.
 
-`isCarryCandidate` and `carryGateMarker` take the origin head of a marker from `converged.fixerCommit` when the marker has one, and from its own head otherwise. Gate coordination and `merge-pr.mjs` then carry the converged verdict from F to M through the existing carried-heads record and acceptance path.
+`isCarryCandidate` and `carryGateMarker` take the origin head from `converged.fixerCommit` only for a `draft_gate` marker that has one (`originHeadOf`). Every other marker keeps its own head, including a `pre_approval_gate` marker with a `converged` field. The carried marker records the reviewed head A as `convergedFromHeadSha`. Gate coordination and `merge-pr.mjs` then carry the converged verdict from F to M through the existing carried-heads record and acceptance path.
 
 Any other case keeps the `fixerCommit ... is not the current PR head` refusal: a changed PR blob, a gate-tooling base delta, a conflict-resolution merge, a non-ancestor F, a criss-cross merge base or a detection failure.
 
