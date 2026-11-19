@@ -10,12 +10,17 @@
  *   - `gh pr merge` — blocked outright; use scripts/github/merge-pr.mjs. Its gate evidence check
  *     requires a clean draft_gate transition record + current-head pre_approval_gate
  *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
+ *   - `decideBashGate` and the token rules below decide every command; the hook has no separate pre-check list.
+ *   - in a managed repo the whole command is denied for EVERY actor (`OPERATOR-OWNED-LINE`) when its tokens hold
+ *     `gh`, `issue|pr`, `comment` and a body flag; `gh`, `pr`, `review` and a body flag; `gh`, `issue|pr`,
+ *     `close|reopen` and `--comment`/`-c`; or `gh`, `api`, `graphql` and `addComment`/`addPullRequestReview`
+ *     (`segmentWriteKind`). Sanctioned writers: comment-issue.mjs and edit-comment.mjs.
  *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
  *   - in a managed repo the whole command is denied when its tokens (any segment, any order; comma brace groups and
  *     `${VAR:-x}` forms split; a sequence group `{x..y}` stays outside the token model) hold `gh`, `pr`, `edit|create` and a body flag, or `gh`, `api` and a body
  *     field or `--input`, or `gh`, `api`, `graphql` and `updatePullRequest`, `updateIssue` or `body`
- *     (`segmentHoldsBodyWrite`); fails closed. Accepted false positive: a command
+ *     (`segmentWriteKind`); fails closed. Accepted false positive: a command
  *     that holds those tokens as data (a title or note that says gh) is denied too.
  *   - raw `gh pr edit` body writes (`--body`/`--body-file`/`-b`/`-F`; `gh pr create` is covered by the token rule above only) and `gh api` body writes to
  *     `pulls/<n>` or `issues/<n>` (a `body` field via `-f`/`-F`/`--field`/`--raw-field`, an
@@ -48,25 +53,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { JUDGE_AGENT_TYPE, decideBashGate, FIXER_AGENT_TYPE, isFixerPullAttempt, isUnresolveInvocation, normalizeAgentType, parseSanctionedPullLine } from "./_hook-decisions.mjs";
+import { decideBashGate, FIXER_AGENT_TYPE, normalizeAgentType, parseSanctionedPullLine } from "./_hook-decisions.mjs";
 import { listCheckouts, parseFixerPullCommand, recordFixerAgentBinding } from "./_fixer-grants.mjs";
 import {
-  commandContainsGhPrReady,
   commandContainsGhPrMerge,
-  commandContainsGhPrCreate,
-  commandContainsRawExternalWrite,
-  commandContainsGitStash,
-  commandContainsInlineInterpreter,
-  commandContainsSubIssueAdHocBypass,
-  commandContainsReplyResolveBypass,
-  commandContainsGraphqlResolveReviewThread,
-  commandContainsCopilotRequestBypass,
-  commandContainsCopilotSummonComment,
-  commandContainsDetachedWaitTool,
-  commandContainsTimeoutWrappedSanctionedTool,
-  commandContainsRawPrBodyEdit,
-  commandContainsRawPrBodyApiWrite,
-  commandContainsCodeVerificationEntrypoint,
   extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
   normalizeGitHubRepoSlug,
@@ -135,7 +125,7 @@ function braceExpansions(value) {
   }
 }
 
-function segmentHoldsBodyWrite(command) {
+function segmentWriteKind(command) {
   let overCap = false;
   // Normalize the raw text once: delete quotes and backslash, turn substitution and shell punctuation into spaces
   // (braces and commas stay for the brace rules below), so `$(gh pr "edit" ...)` and `ed"it"` need no parser.
@@ -153,12 +143,20 @@ function segmentHoldsBodyWrite(command) {
   // Tokens are lower-cased: on case-insensitive filesystems `GH` runs the real gh. Every pattern below is lower-case.
   const has = (test) => tokens.some((token) => test(token.toLowerCase()));
   // `-S`/`-iS` before `gh` covers `env -Sgh` / `env -iSgh`, where the split-string value joins the option cluster.
-  if (overCap || !has((t) => /^(?:-[a-z]*s)?gh$/.test(t.split("/").pop()))) return overCap;
-  return (has((t) => t === "pr") && has((t) => t === "edit" || t === "create") &&
-    has((t) => t.startsWith("--body") || /^-[^-]*[bf]/.test(t))) ||
+  if (overCap) return "body";
+  if (!has((t) => /^(?:-[a-z]*s)?gh$/.test(t.split("/").pop()))) return null;
+  const bodyFlag = () => has((t) => t.startsWith("--body") || /^-[^-]*[bf]/.test(t));
+  if ((has((t) => t === "pr") && has((t) => t === "edit" || t === "create") && bodyFlag()) ||
     (has((t) => t === "api") && (has((t) => t.startsWith("--input")) ||
       (has((t) => /^(?:-f|--(?:raw-)?field)$/.test(t)) && has((t) => t === "body")) || has((t) => /^-fbody$/.test(t)) ||
-      (has((t) => t === "graphql") && has((t) => /update(?:pullrequest|issue)/.test(t) || t === "body"))));
+      (has((t) => t === "graphql") && has((t) => /update(?:pullrequest|issue)/.test(t) || t === "body"))))) return "body";
+  const issueOrPr = has((t) => t === "issue" || t === "pr");
+  // Raw comment and review writes (`OPERATOR-OWNED-LINE`): the sanctioned writers refuse an operator-owned line, a raw write does not.
+  return (issueOrPr && has((t) => t === "comment") && bodyFlag()) ||
+    (has((t) => t === "pr") && has((t) => t === "review") && bodyFlag()) ||
+    (issueOrPr && has((t) => t === "close" || t === "reopen") && has((t) => t === "-c" || t.startsWith("--comment"))) ||
+    (has((t) => t === "api") && has((t) => t === "graphql") && has((t) => /addcomment|addpullrequestreview/.test(t)))
+    ? "comment" : null;
 }
 
 let repoRoot = null;
@@ -187,55 +185,8 @@ const inManagedContext =
   repoRoot != null && DEVLOOPS_CONFIG_VARIANTS.some((ext) => fs.existsSync(path.join(repoRoot, `.devloops${ext}`)));
 const managedRepoSlug = inManagedContext ? repoSlug : null;
 
-// The quick pre-check booleans below must be computed AFTER managedRepoSlug resolves: the three
-// gh-api classifiers match the managed repo's absolute `repos/<slug>/...` path form only when
-// given that slug, so computing them before resolution (with an implicit null slug) would miss an
-// absolute-path match and wrongly short-circuit to allow.
-const isReady = typeof command === "string" && commandContainsGhPrReady(command);
 const isMerge = typeof command === "string" && commandContainsGhPrMerge(command);
-const isCreate = typeof command === "string" && commandContainsGhPrCreate(command);
-const isExternalWrite = typeof command === "string" && commandContainsRawExternalWrite(command);
-const isStash = typeof command === "string" && commandContainsGitStash(command);
-// The six-guard-rule predicates (#1622) — each is decided (with scope + actor policy) inside
-// decideBashGate, so the hook must not short-circuit to allow before deciding them.
-const isInline = typeof command === "string" && commandContainsInlineInterpreter(command);
-const isSubIssue = typeof command === "string" && commandContainsSubIssueAdHocBypass(command, managedRepoSlug);
-const isReplyResolve =
-  typeof command === "string" &&
-  (commandContainsReplyResolveBypass(command, managedRepoSlug) || commandContainsGraphqlResolveReviewThread(command));
-const isRequestApi = typeof command === "string" && commandContainsCopilotRequestBypass(command, managedRepoSlug);
-const isCopilotSummon = typeof command === "string" && commandContainsCopilotSummonComment(command);
-const isWaitTool = typeof command === "string" && commandContainsDetachedWaitTool(command);
-// The `timeout N <sanctioned command>` deny is decided in the shared decider; the pre-check only
-// detects the shape, because a shape it does not name reaches `emitAllow()` before the decider runs.
-const isTimeoutWrapped = typeof command === "string" && commandContainsTimeoutWrappedSanctionedTool(command);
-// The `ADR-TRIPWIRE-STANDING-WAIVER` raw PR/issue body write shapes are decided in the shared
-// decider and denied for EVERY actor, operator and main agent included. The pre-check must
-// nominate them too, or the non-match path allows what the decider would deny.
-//
-// Those predicates anchor on a segment's command head, so a wrapped write (`timeout 300 gh pr edit
-// 5 --body-file f`, `sudo -n gh api … -f body=x`) reaches the token rule (`segmentHoldsBodyWrite`)
-// instead, which reads every token and needs no wrapper parser.
-const isSegmentBodyWrite = inManagedContext && typeof command === "string" && segmentHoldsBodyWrite(command);
-const isBodyWrite = isSegmentBodyWrite || (typeof command === "string" &&
-  (commandContainsRawPrBodyEdit(command, managedRepoSlug) || commandContainsRawPrBodyApiWrite(command, managedRepoSlug)));
-// COORDINATOR-VERIFY-BOUNDARY (#2082) — actor-scoped inside decideBashGate (agentType is
-// "dev-loop" or "gate-coordinator"), so the quick pre-check here only detects the command shape; the hook must not
-// short-circuit to allow before the decider applies the actor + enforceCoordinator scoping.
-const isVerifyEntrypoint = typeof command === "string" && commandContainsCodeVerificationEntrypoint(command);
-// The read-only judge may run only its work-order pull, check-judge-decision (ADR 0106) and read-only search commands (ADR 0269); every judge command reaches the decider.
-const isJudge = normalizeAgentType(agentType) === JUDGE_AGENT_TYPE;
-// A fixer pull attempt reaches the decider, which denies any line other than the exact one.
-const isFixerPull = isFixer && isFixerPullAttempt(command);
-// Unresolve ownership (issue 2577): the decider denies it for every agent type except the owners.
-const isUnresolve = isUnresolveInvocation(command);
-if (
-  !isReady && !isMerge && !isCreate && !isExternalWrite && !isStash &&
-  !isInline && !isSubIssue && !isReplyResolve && !isRequestApi && !isCopilotSummon && !isWaitTool &&
-  !isTimeoutWrapped && !isBodyWrite && !isVerifyEntrypoint && !isJudge && !isFixerPull && !isUnresolve
-) {
-  emitAllow();
-}
+const writeKind = inManagedContext && typeof command === "string" ? segmentWriteKind(command) : null;
 
 let gatePassed = false;
 let gateError = null;
@@ -302,7 +253,14 @@ const decision = decideBashGate(bashGateFacts);
 if (decision.decision === "deny") {
   emitDeny(decision.reason);
 }
-if (isSegmentBodyWrite) {
+if (writeKind === "comment") {
+  emitDeny(
+    "OPERATOR-OWNED-LINE: this command holds the tokens of a raw GitHub comment or review write (gh, issue or pr, comment or review and a body flag; close or reopen with --comment; or a gh api graphql addComment or addPullRequestReview mutation), so it is blocked for every actor. " +
+    "Post a new comment with `dev-loops-run scripts/github/comment-issue.mjs --repo <owner/repo> --issue <n> --body-file <f>` and edit one with `dev-loops-run scripts/github/edit-comment.mjs`. " +
+    "To read comments, use `gh pr view <n> --json comments`.",
+  );
+}
+if (writeKind === "body") {
   emitDeny(
     "ADR-TRIPWIRE-STANDING-WAIVER: this command holds the gh, pr, edit or create and body-flag tokens, or the gh, api and body-field (or --input) tokens, or the gh, api, graphql and updatePullRequest, updateIssue or body tokens, or a brace expansion too large to read, so it is blocked as a raw PR or issue body write. " +
     "To read a body, use `gh pr view <n> --json body`. " +

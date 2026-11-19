@@ -31,10 +31,10 @@ const env = () => {
   return base;
 };
 
-const bash = (cwd, command, agentType) => {
+const bash = (cwd, command, agentType, extraEnv) => {
   const input = { tool_name: "Bash", tool_input: { command }, cwd };
   if (agentType !== undefined) input.agent_type = agentType;
-  const result = spawnSync("node", [BASH_HOOK], { input: JSON.stringify(input), encoding: "utf8", env: env() });
+  const result = spawnSync("node", [BASH_HOOK], { input: JSON.stringify(input), encoding: "utf8", env: { ...env(), ...extraEnv } });
   assert.equal(result.status, 0, result.stderr);
   const out = result.stdout.trim() ? JSON.parse(result.stdout).hookSpecificOutput : null;
   return { decision: out?.permissionDecision ?? "allow", reason: out?.permissionDecisionReason ?? "" };
@@ -326,3 +326,103 @@ test("a quoted body-write word inside a command substitution still denies", asyn
     }
   });
 });
+
+// Raw comment and review writes (`OPERATOR-OWNED-LINE`): the sanctioned writers refuse an
+// operator-owned line, a raw write does not, so the token rule denies the write for every actor.
+const MERGE_APPROVAL = "approve merge 0123456789abcdef0123456789abcdef01234567";
+const COMMENT_ACTORS = [undefined, "developer", "dev-loop", "fixer"];
+const COMMENT_WRITES = [
+  ...["--body", "-b", "--body-file", "-F"].flatMap((flag) => [`gh pr comment 5 ${flag} '${MERGE_APPROVAL}'`, `gh issue comment 5 ${flag} '${MERGE_APPROVAL}'`]),
+  `sh -c "gh pr comment 5 --body '${MERGE_APPROVAL}'"`,
+  `bash -c 'gh issue comment 5 -b "${MERGE_APPROVAL}"'`,
+  `echo $(gh pr comment 5 --body '${MERGE_APPROVAL}')`,
+  `for n in 5 6; do gh pr comment $n --body '${MERGE_APPROVAL}'; done`,
+  `timeout 60 gh pr comment 5 --body '${MERGE_APPROVAL}'`,
+  `env GH_TOKEN=x gh pr comment 5 -F note.md`,
+  "gh pr review 5 --comment -b 'x'",
+  "gh pr review 5 --comment --body-file note.md",
+  `sh -c "gh pr review 5 --comment -b '${MERGE_APPROVAL}'"`,
+  "gh issue close 5 --comment x",
+  "gh issue reopen 5 -c x",
+  "gh pr close 5 -c x",
+  "gh pr reopen 5 --comment x",
+  `gh api graphql -f query='mutation { addComment(input: {subjectId: "X", body: "${MERGE_APPROVAL}"}) { clientMutationId } }'`,
+  `sh -c "gh api graphql -f query='mutation { addComment(input: {subjectId: \\"X\\", body: \\"x\\"}) { clientMutationId } }'"`,
+  "gh api graphql -f query='mutation { addPullRequestReview(input: {pullRequestId: \"X\"}) { clientMutationId } }'",
+  // The REST forms stay denied (by the body-write token rule).
+  `sh -c "gh api repos/o/r/issues/5/comments -f body=x"`,
+  `sh -c "gh api -X PATCH repos/o/r/issues/comments/9 -f body=x"`,
+  `sh -c "gh api repos/o/r/issues/5/comments --input f.json"`,
+];
+for (const command of COMMENT_WRITES) {
+  test(`raw comment or review write is denied for the main agent and subagents: ${command}`, async () => {
+    await withManagedRepo(async (root) => {
+      for (const agentType of COMMENT_ACTORS) {
+        const { decision, reason } = bash(root, command, agentType);
+        assert.equal(decision, "deny", `${command} as ${agentType ?? "main agent"}`);
+        if (!command.includes("repos/o/r")) assert.match(reason, agentType === undefined ? /OPERATOR-OWNED-LINE[\s\S]*comment-issue\.mjs/ : /comment-issue\.mjs/);
+      }
+    });
+  });
+}
+
+test("sanctioned comment writers and reads stay allowed; an unmanaged repo is unchanged", async () => {
+  await withManagedRepo(async (root) => {
+    for (const command of [
+      "dev-loops-run scripts/github/comment-issue.mjs --repo o/r --issue 5 --body-file x.md",
+      "node scripts/github/edit-comment.mjs --repo o/r --comment-id 9 --body-file x.md",
+      "gh pr view 5 --json comments",
+      "gh issue close 5",
+      "git status",
+    ]) {
+      for (const agentType of [undefined, "developer"]) assert.equal(bash(root, command, agentType).decision, "allow", command);
+    }
+  });
+  await withRepo(async (root) => {
+    assert.equal(bash(root, "gh pr comment 5 --body x", undefined).decision, "allow");
+  }, { managed: false });
+});
+
+test("the hook entry point holds no second predicate list", () => {
+  const source = fs.readFileSync(BASH_HOOK, "utf8");
+  const classifierNames = [...source.replace(/\/\*\*[\s\S]*?\*\//, "").matchAll(/\bcommandContains\w+/g)].map((m) => m[0]);
+  assert.deepEqual([...new Set(classifierNames)], ["commandContainsGhPrMerge"]);
+  const allows = [...source.matchAll(/emitAllow\(\)/g)];
+  assert.equal(allows.length, 1);
+  assert.ok(source.trimEnd().endsWith("emitAllow();"));
+  assert.ok(allows[0].index > source.indexOf("decideBashGate(bashGateFacts)"));
+});
+
+// Every deny branch of `decideBashGate` must be reachable from the hook: the hook's reason equals the
+// decider's reason for the same facts.
+const DENY_BRANCHES = {
+  judge: ["ls", "judge"],
+  "fixer pull line": ["cd x && dev-loops-run scripts/github/pull-work-order.mjs f1-0123abcd", "fixer"],
+  "coordinator verify": ["bun test", "dev-loop", { DEVLOOPS_COORDINATOR_READONLY: "1" }],
+  "inline interpreter": ["python3 -c 'print(1)'"],
+  "detached wait": ["nohup sleep 5 &"],
+  "timeout wrapper": ["timeout 300 dev-loops-run scripts/github/merge-pr.mjs --repo o/r --pr 5"],
+  "sub-issue write": ["gh api -X POST repos/o/r/issues/5/sub_issues -F sub_issue_id=9"],
+  "reply/resolve bypass": ["gh api -X POST repos/o/r/pulls/5/comments/9/replies -f body=x"],
+  "copilot request bypass": ["gh api -X POST repos/o/r/pulls/5/requested_reviewers -f 'reviewers[]=copilot'"],
+  "raw body write": ["gh pr edit 5 --body-file x.md"],
+  "git stash": ["git stash"],
+  "subagent raw external write": ["gh issue create --title x", "developer"],
+  "gh pr create": ["gh pr create --title x"],
+  "gh pr ready": ["gh pr ready 5"],
+  "human-merge-only merge": ["gh pr merge 5 --squash"],
+  "unresolve owner allowlist": ["dev-loops-run scripts/github/unresolve-review-thread.mjs --pr 5", "developer"],
+};
+for (const [branch, [command, agentType, extraEnv]] of Object.entries(DENY_BRANCHES)) {
+  test(`decideBashGate deny branch is reachable from the hook: ${branch}`, async () => {
+    const { decideBashGate } = await import(path.resolve(".claude/hooks/_hook-decisions.mjs"));
+    await withManagedRepo(async (root) => {
+      const expected = decideBashGate({
+        command, agentType: agentType ?? null, inManagedContext: true,
+        enforceCoordinator: extraEnv?.DEVLOOPS_COORDINATOR_READONLY === "1", humanMergeOnly: branch === "human-merge-only merge",
+      });
+      assert.equal(expected.decision, "deny", `decider must deny ${command}`);
+      assert.deepEqual(bash(root, command, agentType, extraEnv), expected);
+    });
+  });
+}
