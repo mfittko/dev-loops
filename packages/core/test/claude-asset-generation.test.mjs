@@ -23,6 +23,18 @@ test("rewriteCliInvocation renders the package-local CLI as the launcher form", 
   assert.equal(out.includes("npx"), false);
 });
 
+test("rewriteCliInvocation renders node <resolved-skill-scripts>/ as the dev-loops-run scripts/ launcher form", () => {
+  const out = rewriteCliInvocation("Run `node <resolved-skill-scripts>/github/manage-sub-issues.mjs add --repo r` then `node <resolved-skill-scripts>/loop/x.mjs`.");
+  assert.equal(out.includes("<resolved-skill-scripts>"), false);
+  assert.ok(out.includes("dev-loops-run scripts/github/manage-sub-issues.mjs add --repo r"));
+  assert.ok(out.includes("dev-loops-run scripts/loop/x.mjs"));
+});
+
+test("rewriteCliInvocation keeps a top-level skill-local <resolved-skill-scripts>/ script unrewritten", () => {
+  const body = "Run `node <resolved-skill-scripts>/post-gate-verdict-fallback.mjs --pr 1`.";
+  assert.equal(rewriteCliInvocation(body), body);
+});
+
 test("transformAgent and transformSkill rewrite the package-local CLI form to the launcher form", () => {
   const agentRaw = `---\nname: a\ndescription: d\ntools: [read]\n---\nRun \`node <dev-loops-package-root>/cli/index.mjs loop startup\`.\n`;
   const agent = transformAgent({ source: "agents/a.agent.md", raw: agentRaw, version: "1.2.3" });

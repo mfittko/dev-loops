@@ -412,7 +412,7 @@ test("sub-issue tree contract documents the workflow, helper commands, and lean-
   assert.match(contractContent, /add/i);
   assert.match(contractContent, /reorder/i);
   assert.match(contractContent, /verify/i);
-  assert.match(contractContent, /Default decomposition flow[\s\S]*gh issue create --assignee @me[\s\S]*verify/i);
+  assert.match(contractContent, /Default decomposition flow[\s\S]*issue create --repo <resolved-repo>[\s\S]*--assignee @me[\s\S]*verify/i);
   assert.match(contractContent, /verify.*mismatch-only.*exit 0|exits 0 for mismatch-only results/i);
   assert.match(contractContent, /lean/i);
   assert.match(contractContent, /do not maintain.*checklist.*duplicates|not.*maintain.*ordered checklist.*duplicates/i);
