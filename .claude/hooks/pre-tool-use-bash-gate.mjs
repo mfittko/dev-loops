@@ -143,14 +143,14 @@ function segmentWriteKind(command) {
     const t = tokenizeShellCommand(text);
     const own = decodedWords(t.segments);
     // A value that tokenizes back to itself is raw substitution text (`$(tr $'\n' ' ')`): its inner words are already in `own`, so stop.
-    if (depth > 0 && own.includes(text)) return [own];
-    // Returns one word list per region (own words, each tick, each nested string) so command position is judged inside its own region.
-    return [own, ...t.ticks.flatMap((k) => decodedOf(k.slice(1, -1).replace(/\\([`$\\])/g, "$1"), depth)),
+    if (depth > 0 && own.includes(text)) return own;
+    // Returns one flat word list: own words, each tick's words and each nested string's words.
+    return [...own, ...t.ticks.flatMap((k) => decodedOf(k.slice(1, -1).replace(/\\([`$\\])/g, "$1"), depth)),
       ...own.filter((v) => v.includes("$'")).flatMap((v) => depth >= 3 ? (overCap = true, []) : decodedOf(v, depth + 1))];
   };
   const plainWords = command.replace(/['"\\]/g, "").replace(/[`$();|&<>\s]+/g, " ").split(" ").filter(Boolean);
-  const regions = decodedOf(command);
-  const words = [...plainWords, ...regions.flat()].filter(Boolean);
+  const decoded = decodedOf(command);
+  const words = [...plainWords, ...decoded].filter(Boolean);
   const splitWord = (w) => w.split(/[\s=$(){},`]+/).filter(Boolean);
   const expand = (ws) => ws.flatMap((word) =>
     [...(braceExpansions(word) ?? (overCap = true, [])).flatMap((e) => [e, ...splitWord(e)]), ...splitWord(word)
@@ -170,10 +170,6 @@ function segmentWriteKind(command) {
   const issueOrPr = has((t) => t === "issue" || t === "pr");
   // `comment` opens an editor on `-e`/`--editor` (or edits on `--edit-last`), so GH_EDITOR can supply the body: these count as body flags.
   const editorFlag = () => has((t) => t.startsWith("--edit") || /^-[^-]*e/.test(t));
-  // An ANSI-C `$'...'` word anywhere in a command that runs `gh` is denied: bash decodes it to flags and words
-  // the token model cannot judge (`$'\x2dc'`, `-$'c'`), so this fails closed instead of decoding and exempting.
-  // The decoded word set counts too: `eval gh pr reopen 5 \$\'\\x2dc\' x` has no literal `$'` in the raw text, but the outer shell hands eval the word `$'\x2dc'`.
-  if ([command, ...regions.flat()].some((w) => w.includes("$'"))) return "comment";
   // A `-c` that directly follows a shell word (`sh -c "..."`) is the shell's own flag. The shell word is bare or an absolute path;
   // a relative path such as the branch `feat/zsh` is an argument. The shell word must also come before the first `gh` token
   // (command position): after `gh`, a bare `zsh` is a branch argument (`gh pr reopen zsh -c x`). Consecutive duplicates from the token
@@ -192,6 +188,14 @@ function segmentWriteKind(command) {
     (has((t) => t === "api") && has((t) => t === "graphql") && has((t) => /addcomment|updateissuecomment|addpullrequestreview/.test(t))) ||
     // REST issue comment writes (`issues/<n>/comments`, `issues/comments/<id>`); `pulls/<n>/comments` stays a body write.
     (isBody && has((t) => t === "api") && has((t) => /issues\/(?:\d+\/)?comments(?:\/|$)/.test(t)));
+  // An ANSI-C `$'...'` word anywhere in a command that runs `gh` is denied: bash decodes it to flags and words
+  // the token model cannot judge (`$'\x2dc'`, `-$'c'`), so this fails closed instead of decoding and exempting.
+  // A body write that holds one keeps the body reason; every other command gets the comment reason.
+  // The decoded word set counts too: `eval gh pr reopen 5 \$\'\\x2dc\' x` has no literal `$'` in the raw text, but the outer shell hands eval the word `$'\x2dc'`.
+  // Ceiling (`OPERATOR-OWNED-LINE`): a flag built at run time is not judged. A command substitution (`gh pr reopen zsh "$(printf '\x2dc')" x`)
+  // or an eval string that composes `$'` from variables (`D=\$; Q=\'; eval "gh pr reopen zsh $D$Q\x2dc$Q x"`) leaves no literal flag or `$'`
+  // in the raw text or the decoded words. The guard stops an instruction-following agent.
+  if ([command, ...decoded].some((w) => w.includes("$'"))) return isBody && !isComment ? "body" : "comment";
   return isComment ? "comment" : isBody ? "body" : null;
 }
 

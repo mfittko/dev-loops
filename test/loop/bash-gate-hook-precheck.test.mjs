@@ -346,7 +346,7 @@ const COMMENT_WRITES = [
   "gh pr reopen feat/zsh -c x",
   "gh pr reopen zsh -c x",
   "gh issue close bash -c x",
-  // An ANSI-C quoted `-c` exists only in the decoded words: command position still applies to it.
+  // An ANSI-C quoted `-c` exists only in the decoded words, so any `$'` word in a gh command is denied.
   "gh pr reopen zsh $'\\x2dc' x",
   "gh pr reopen zsh $'\\055c' x",
   "gh pr reopen zsh -$'c' x",
@@ -407,6 +407,7 @@ test("PR body edits, graphql updatePullRequest and PR review comment writes keep
   await withManagedRepo(async (root) => {
     for (const command of [
       "gh pr edit 5 --body x",
+      "gh pr edit 5 --body $'a\\nb'",
       `gh api graphql -f query='mutation { updatePullRequest(input: {pullRequestId: "X", body: "x"}) { clientMutationId } }'`,
       "gh api repos/o/r/pulls/5/comments -f body=x",
     ]) {
