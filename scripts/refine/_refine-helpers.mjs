@@ -9,11 +9,12 @@ import { ghJson } from "@dev-loops/core/github/gh";
 import { extractSection } from "@dev-loops/core/loop/markdown-sections";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
+// Line-anchored: only a line that opens with the linkage form states parentage.
 export const FORBIDDEN_PROSE_PATTERNS = [
-  /Child of #/iu,
-  /Parent:\s*#/iu,
-  /Depends on:\s*#/iu,
-  /sub-issue of #/iu,
+  /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?Child of #.*$/imu,
+  /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?Parent:\s*#.*$/imu,
+  /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?Depends on:\s*#.*$/imu,
+  /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?sub-issue of #.*$/imu,
 ];
 
 export const DEFAULT_USAGE_SUFFIX = `

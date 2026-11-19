@@ -66,11 +66,12 @@ export function runProseLinkageDetector(tree) {
 
   for (const issue of tree.issues) {
     for (const pattern of FORBIDDEN_PROSE_PATTERNS) {
-      if (pattern.test(issue.body)) {
+      const match = pattern.exec(issue.body);
+      if (match) {
         errors.push({
           code: "forbidden_prose_linkage",
           issue: issue.number,
-          message: `Issue body contains forbidden prose linkage pattern: ${pattern.source}`,
+          message: `Issue body line "${match[0].trim()}" is forbidden prose linkage. Link the parent through the GitHub sub-issue API and remove the line.`,
         });
       }
     }

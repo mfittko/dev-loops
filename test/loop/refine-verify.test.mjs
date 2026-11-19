@@ -84,6 +84,26 @@ test("runProseLinkageDetector fails on forbidden prose linkage", () => {
   assert.ok(result.errors.some((entry) => entry.code === "forbidden_prose_linkage"));
 });
 
+test("runProseLinkageDetector quotes the matched line and ignores mid-sentence 'child of #'", () => {
+  const run = (line) => runProseLinkageDetector(normalizeTreePayload({
+    root: 1,
+    issues: [{ number: 1, children: [], body: `${buildBody({ scope: "owns root" })}\n${line}` }],
+  }));
+  assert.equal(run("Runs after every other child of #12 has merged.").ok, true);
+  assert.match(run("Child of #99").errors[0].message, /"Child of #99"/);
+});
+
+test("runScopeBoundaryCrossChecker ignores a claim repeated by all three siblings", () => {
+  const tree = normalizeTreePayload({
+    root: 1,
+    issues: [
+      { number: 1, children: [2, 3, 4], body: buildBody({ scope: "owns parent" }) },
+      ...[2, 3, 4].map((n) => ({ number: n, parentNumber: 1, children: [], body: buildBody({ scope: `owns own${n}`, boundary: "owns own" + n + "\n- owns shared rule" }) })),
+    ],
+  });
+  assert.equal(runScopeBoundaryCrossChecker(tree).errors.filter((e) => e.code === "duplicate_ownership").length, 0);
+});
+
 test("runScopeBoundaryCrossChecker detects scope gaps and duplicate ownership", () => {
   const tree = normalizeTreePayload({
     root: 1,

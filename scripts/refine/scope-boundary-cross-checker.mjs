@@ -125,11 +125,12 @@ export function runScopeBoundaryCrossChecker(tree) {
     }
 
     for (const [token, owners] of ownersByToken.entries()) {
-      if (owners.size > 1) {
+      // shortcut: three or more siblings all repeating a claim count as shared boilerplate, not rival ownership.
+      if (owners.size > 1 && !(siblings.length >= 3 && owners.size === siblings.length)) {
         errors.push({
           code: "duplicate_ownership",
           issue: parent,
-          message: `Siblings under #${parent} claim duplicate ownership for '${token}': ${[...owners].map((n) => `#${n}`).join(", ")}.`,
+          message: `Siblings under #${parent} claim duplicate ownership for '${token}': ${[...owners].map((n) => `#${n}`).join(", ")}. Give the claim to one sibling, or repeat it in every sibling when it is a shared constraint.`,
           parent,
         });
       }
