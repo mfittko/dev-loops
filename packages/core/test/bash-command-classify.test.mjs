@@ -122,6 +122,23 @@ test("commandContainsGhPrReady (all-segments, PreToolUse gate) detects ready in 
   assert.equal(commandContainsGhPrReady("gh pr merge 1"), false);
 });
 
+test("a -h value after a gh value flag does not exempt the segment; first-arg help stays allowed", () => {
+  assert.equal(commandContainsGhPrMerge("gh pr merge 42 --squash --body -h"), true);
+  assert.equal(commandContainsGhPrMerge("gh pr merge --help"), false);
+  assert.equal(commandContainsGhPrMerge("gh pr merge -h"), false);
+  for (const flag of ["--body", "-b", "--subject", "--title"]) {
+    assert.equal(commandContainsGhPrMerge(`gh pr merge 42 ${flag} -h`), true, flag);
+    assert.equal(commandContainsRawExternalWrite(`gh pr comment 42 ${flag} -h`), true, flag);
+  }
+  assert.equal(commandContainsRawExternalWrite("gh pr comment --help"), false);
+  assert.equal(commandContainsGhPrCreate("gh pr create -H feat --fill"), true);
+  assert.equal(isGhPrMergeCommand("gh pr merge 42 --body -h"), true);
+  const flagged = extractRepoFlagsFromGhPrMergeSegments("gh pr merge 42 --repo o/r --body -h");
+  assert.equal(flagged.length, 1);
+  assert.equal(flagged[0].explicitRepo, "o/r");
+  assert.deepEqual(extractRepoFlagsFromGhPrMergeSegments("gh pr merge --help"), []);
+});
+
 test("commandContainsGhPrMerge (all-segments, PreToolUse gate) detects merge in any segment", () => {
   assert.equal(commandContainsGhPrMerge("gh pr merge 1 --squash"), true);
   assert.equal(commandContainsGhPrMerge("echo ok && gh pr merge 1 --squash"), true);

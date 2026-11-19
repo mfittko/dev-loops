@@ -80,7 +80,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
 
   --act-list <path>       The judge-pass --out act list the fix resolves. An act item that names no file (a PR-body item) leaves the act set and is printed as bodyItems, a top-level field of the input-run output that is present only when at least one act item was dropped; edit the PR body through scripts/github/edit-pr.mjs and the next gate round verifies it. An act list of only such items refuses delta_body_only_act_set, except on the --reviewer-only route, where it yields an empty code act set and prints bodyItems
   --threads-file <path>   Thread route, in place of --act-list: successful list-review-threads --unresolved-only
-                          output for --repo/--pr. Each unresolved thread is one act item; its ref is the threadId.
+                          output, or a github-sourced capture-review-threads --unresolved --bodies file, for --repo/--pr. Each unresolved thread is one act item; its ref is the threadId.
   --repo <owner/name>     Required with --threads-file and --reviewer-only
   --pr <n>                Required with --threads-file and --reviewer-only
   --baseline <sha>        reviewBaselineHead: the head the gate round reviewed (hex SHA)
@@ -400,7 +400,7 @@ function fetchAndResolveBase(worktree, base, { revParse, fetchBase }) {
   try { fetchBase(base, { repoRoot }); } catch (error) { throw new Error(`reviewer-only: git fetch origin ${base} failed (${error?.message}); cannot trust the local origin/${base} ref. Run \`git fetch origin ${base}\` and rerun`); }
   try { revParse(worktree, `origin/${base}`); } catch { throw new Error(`reviewer-only: origin/${base} does not exist in ${worktree}; run \`git fetch origin ${base}\` and rerun`); }
 }
-// The PR-own commit count of baseline..head under the reviewer-only rules: non-merge commits origin/<base> lacks plus non-base-only merges.
+// The PR-own commit count of baseline..head under the reviewer-only rules: non-merge commits origin/<base> lacks plus non-base-only merges whose remerge diff names a path.
 // The body-only converged post (ADR 0271) asks the same question, so it calls this instead of counting on its own.
 export async function countPrOwnCommits(worktree, baseline, head, base, { revParse = gitRevParse, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, fetchBase = defaultFetchOrigin, isAncestor = gitIsAncestor } = {}) {
   fetchAndResolveBase(worktree, base, { revParse, fetchBase });
@@ -428,7 +428,9 @@ async function reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyM
     const shown = parents.status === 0 && parents.stdout.trim().split(" ").length === 3
       ? gitRemergeShow(repoRoot, merge, ["--name-only", "-z"], "utf8") : null;
     if (shown?.status !== 0) throw new Error(`non_base_only_merge: merge ${merge} in ${baseline}..${head} ${shown || parents.status !== 0 ? "has a resolution diff or parents that cannot be read" : `is an octopus merge (${parents.stdout.trim().split(" ").length - 1} parents)`} (${((shown ?? parents).stderr ?? "").trim() || (shown ?? parents).error?.message}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
-    resolvedPaths.push(...shown.stdout.split("\0").filter(Boolean));
+    const paths = shown.stdout.split("\0").filter(Boolean);
+    if (paths.length === 0) continue; // a clean merge adds no change of its own
+    resolvedPaths.push(...paths);
     resolvedMerges.push(merge);
   }
   return { ownCommits, resolvedPaths, resolvedMerges };

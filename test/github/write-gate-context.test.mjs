@@ -8,7 +8,7 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import { GATE_ANGLE_SCOPES, loadDevLoopConfig, loadDevLoopConfigStrict, resolveGateAngles, resolveGateAnglesDynamic, resolveReviewerRole } from "@dev-loops/core/config";
-import { buildAngleRequestGroups, composeReviewerPromptText, INHERIT_MODEL_KEY } from "@dev-loops/core/loop/review-dispatch-plan";
+import { buildAngleRequestGroups, composeReviewerPromptText, DIFF_PART_MAX_BYTES, DIFF_PART_MAX_LINES, INHERIT_MODEL_KEY } from "@dev-loops/core/loop/review-dispatch-plan";
 import { initGitFixture, makeGhMock, runGitFixture, trustGhEntries } from "../_helpers.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
@@ -38,6 +38,7 @@ import {
   parseWriteGateContextCliArgs,
   PR_BODY_ABSENT_SENTINEL,
   rationaleFromResolver,
+  renderRequiredReadLine,
   readClosedPriorRoundLogs,
   dropBodyReadingCarriedAngles,
   readCompletedAnglesForHead,
@@ -1527,6 +1528,11 @@ test("CLI --base <ref> produces a full build-once bundle: non-null diffPath, pop
     assert.equal(byPath["src/changed.mjs"].role, "changed");
     assert.equal(byPath["src/dep.mjs"].role, "imports");
     assert.equal(byPath["src/caller.mjs"].role, "importedBy");
+    // The bundle is an index: path, role, relatedTo and bytes, never file contents.
+    for (const entry of artifact.adjacentCode.files) {
+      assert.deepEqual(Object.keys(entry), ["path", "role", "relatedTo", "bytes"]);
+    }
+    assert.ok(!JSON.stringify(artifact).includes("return helper()"), "the context JSON embeds no source text");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -3026,7 +3032,7 @@ function renderInput(overrides = {}) {
     issueRef: "#42",
     issueBody: "Acceptance criteria: the thing works.",
     diffOutput: "diff --git a/x.mjs b/x.mjs\n+added line\n",
-    diffPath: "tmp/gate-context/owner-repo/pr-9/draft_gate-abc1234567890.diff",
+    diffPaths: ["tmp/gate-context/owner-repo/pr-9/draft_gate-abc1234567890.diff"],
     changedFiles: ["x.mjs"],
     adjacentCode: { files: [{ path: "x.mjs", role: "changed" }, { path: "y.mjs", role: "imports" }], stripped: [], truncated: [], missing: [] },
     ...overrides,
@@ -3060,7 +3066,7 @@ test("renderBriefingPrefix + renderBriefingEvidence: under-cap — inline mode, 
   assert.ok(!text.includes("Implement the thing."));
   assert.ok(text.includes("Acceptance criteria: the thing works."));
   assert.ok(!text.includes("+added line"), "the diff body lives only in the required diff read");
-  assert.ok(text.includes(`Read the filtered diff from:\n  ${renderInput().diffPath}`));
+  assert.ok(text.includes(`Read the filtered diff from:\n  ${renderInput().diffPaths[0]}`));
   assert.ok(text.includes("Changed files (1):"));
   assert.ok(text.includes("- x.mjs"));
   assert.ok(prefix.includes("verify-fresh-review-context.mjs"));
@@ -3098,7 +3104,7 @@ test("AC2 composer seam: the composed holistic dispatch prompt carries spec + di
     assert.ok(composed.includes(`/repo/worktree/tmp/e.txt\` (sha256 ${evidenceRead.sha256}`), "composed prompt must bind the evidence read");
     assert.ok(!evidence.includes("Implement the thing."), "the PR body is the separate pr-body read, not the evidence file");
     assert.ok(evidence.includes("Acceptance criteria: the thing works."), "evidence must carry the linked-issue spec text");
-    assert.ok(evidence.includes(renderInput().diffPath), "evidence must point at the diff (the required diff read)");
+    assert.ok(evidence.includes(renderInput().diffPaths[0]), "evidence must point at the diff (the required diff read)");
     assert.doesNotMatch(evidence, /\bREVIEW BRIEF\b/i);
     // The holistic angle's own independence wording made it into the suffix.
     assert.match(composed, /un-briefed/i);
@@ -3295,7 +3301,7 @@ test("renderBriefingEvidence: over-cap diff falls back to pointer mode, disclose
 
 test("renderBriefingEvidence: over-cap diff with no persisted diffPath discloses an explicit unavailable-pointer note (no crash)", () => {
   const bigDiff = "+" + "x".repeat(100);
-  const { text, prefixMode } = renderBriefingEvidence(renderInput({ diffOutput: bigDiff, diffPath: null, capBytes: 10 }));
+  const { text, prefixMode } = renderBriefingEvidence(renderInput({ diffOutput: bigDiff, diffPaths: [], capBytes: 10 }));
   assert.equal(prefixMode, "pointer");
   assert.ok(text.includes("diff pointer unavailable"));
 });
@@ -3365,7 +3371,7 @@ test("renderBriefingEvidence: a hostile issue body cannot forge a second Diff/Ch
   // content, and the attacker's forged content never leaks into them.
   const beforeFence = textLines.slice(0, closeFenceIdx).join("\n");
   const afterFence = textLines.slice(closeFenceIdx).join("\n");
-  const realDiffPointer = `Read the filtered diff from:\n  ${renderInput().diffPath}`;
+  const realDiffPointer = `Read the filtered diff from:\n  ${renderInput().diffPaths[0]}`;
   assert.ok(!beforeFence.includes(realDiffPointer), "the real diff pointer never leaks into the fenced issue body");
   assert.ok(afterFence.includes(realDiffPointer), "real diff section carries the real diff pointer");
   assert.ok(afterFence.includes("- evil.mjs"), "real changed-files section carries the real file list");
@@ -3446,7 +3452,7 @@ test("renderBriefingEvidence: an unbalanced code fence inside the PR/issue body 
   }));
 
   assert.ok(text.includes("## Diff at reviewed head"), "diff section heading survives");
-  assert.ok(text.includes(`Read the filtered diff from:\n  ${renderInput().diffPath}`), "diff pointer still renders, not swallowed by an open fence");
+  assert.ok(text.includes(`Read the filtered diff from:\n  ${renderInput().diffPaths[0]}`), "diff pointer still renders, not swallowed by an open fence");
   assert.ok(text.includes("## Changed files + adjacent-code summary"), "changed-files section survives");
 });
 
@@ -4004,6 +4010,66 @@ test("buildGateContext invalidates the marker for a changed full diff even when 
   }
 });
 
+function splitFixtureDiff({ files, hunksPerFile, linesPerHunk, width }) {
+  const hunk = (n) => `@@ -${n},${linesPerHunk} +${n},${linesPerHunk} @@\n${Array.from({ length: linesPerHunk }, (_, i) => `+${n}-${i}-${"x".repeat(width)}`).join("\n")}\n`;
+  return Array.from({ length: files }, (_, f) => `diff --git a/src/f${f}.mjs b/src/f${f}.mjs\n--- a/src/f${f}.mjs\n+++ b/src/f${f}.mjs\n${Array.from({ length: hunksPerFile }, (_, h) => hunk(h * 1000 + 1)).join("")}`).join("");
+}
+
+test("buildGateContext persists a large filtered diff as Read-sized parts cut at file and hunk boundaries", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-diff-parts-"));
+  try {
+    // 5 files, ~30 KB each: several parts, no hunk above the cap.
+    const diffOutput = splitFixtureDiff({ files: 5, hunksPerFile: 6, linesPerHunk: 40, width: 120 });
+    const result = await buildGateContext({
+      repo: "owner/repo", pr: 79, gate: "draft_gate", headSha: "abc1234567890",
+      config: draftConfig({ dynamicAngles: false }),
+      diff: { nameStatusOutput: "M\tsrc/f0.mjs\n", diffOutput },
+    }, { repoRoot });
+    const parts = result.artifact.requiredReads.filter((read) => read.kind === "diff");
+    assert.ok(parts.length >= 2, `expected several parts, got ${parts.length}`);
+    let joined = "";
+    for (const part of parts) {
+      const text = await readFile(path.resolve(repoRoot, part.path), "utf8");
+      joined += text;
+      assert.ok(Buffer.byteLength(text) <= DIFF_PART_MAX_BYTES);
+      assert.ok(text.split("\n").length - 1 <= DIFF_PART_MAX_LINES);
+      assert.ok(/^(diff --git |@@)/.test(text), "a part starts at a file or hunk boundary");
+      assert.equal(part.bytes, Buffer.byteLength(text));
+      assert.equal(part.sha256, createHash("sha256").update(text).digest("hex"));
+      assert.equal(part.oversized, undefined);
+      assert.match(part.path, /\.filtered\.part-\d+-of-\d+\.diff$/);
+    }
+    assert.equal(joined, diffOutput);
+    assert.equal(existsSync(path.resolve(repoRoot, parts[0].path.replace(/\.part-\d+-of-\d+\.diff$/, ".diff"))), false, "no whole filtered diff is written");
+    const prefix = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
+    for (const part of parts) assert.ok(prefix.includes(renderRequiredReadLine(part, repoRoot)), "one manifest line per part");
+    assert.ok(!prefix.includes("Oversized diff part:"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext marks a single hunk above the part cap as an oversized part", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-diff-oversized-"));
+  try {
+    const small = splitFixtureDiff({ files: 1, hunksPerFile: 1, linesPerHunk: 3, width: 10 });
+    const big = splitFixtureDiff({ files: 1, hunksPerFile: 1, linesPerHunk: 500, width: 120 }).replace(/f0\.mjs/g, "big.mjs");
+    const result = await buildGateContext({
+      repo: "owner/repo", pr: 80, gate: "draft_gate", headSha: "abc1234567890",
+      config: draftConfig({ dynamicAngles: false }),
+      diff: { nameStatusOutput: "M\tsrc/big.mjs\n", diffOutput: small + big },
+    }, { repoRoot });
+    const parts = result.artifact.requiredReads.filter((read) => read.kind === "diff");
+    assert.equal(parts.length, 2);
+    assert.equal(parts[0].oversized, undefined);
+    assert.equal(parts[1].oversized, true);
+    const prefix = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
+    assert.ok(prefix.includes(`Oversized diff part: \`${path.resolve(repoRoot, parts[1].path)}\``));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("CLI --base preserves the prior referenced diff when later volatile validation refuses", async () => {
   const { repoRoot, baseSha, headSha: priorHead } = await makeBaseDiffRepo();
   const savedExitCode = process.exitCode;
@@ -4186,9 +4252,16 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "",
       `${SIBLING_SWEEP_CLAUSE} Rule \`GATE-REVIEW-SIBLING-SWEEP\` in skills/docs/gate-review-sub-loop-contract.md.`,
       "",
+      "## Optional read fields",
+      "",
+      "Query an optional read by field with `jq`; never run `jq keys` to discover its shape.",
+      "- `context` (JSON): `resolvedAngles`, `angleScopes`, `scope.diffPath`, `scope.diffSource`, `scope.changedFiles`, `adjacentCode.files[]` (`path`, `role`, `relatedTo`, `bytes`; an index, no file contents: read a file by its path), `adjacentCode.stripped`, `adjacentCode.missing`, `adjacentCode.truncated` (always empty), `adjacentCode.expansion.files`, `adjacentCode.expansion.dropped`, `requiredReads`, `fanout`.",
+      "- `validation` (JSON): `allPassed`, `status`, `authority`, `headSha`, `suites[]` (`name`, `command`, `exitCode`, `outputTail`, `outputPath`).",
+      "- `raw-diff`: the unfiltered unified diff; grep it, never read it whole.",
+      "",
       "## Required reads",
       "",
-      "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. The `diff` entry is the filtered diff, with lockfiles, generated trees, and configured `gates.reviewDiff.excludeGlobs` paths excluded; the optional `raw-diff` entry is the unfiltered `.diff`. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
+      "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. The `diff` entries are the filtered diff, split at file and hunk boundaries so each fits one Read; read them in order. The filtered diff excludes lockfiles, generated trees, and configured `gates.reviewDiff.excludeGlobs` paths; the optional `raw-diff` entry is the unfiltered `.diff`. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
       "",
       `- required evidence: \`${path.resolve(repoRoot)}/tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-evidence.txt\` (sha256 ${evidenceSha}, ${Buffer.byteLength(expectedEvidence)} bytes)`, // secret-scan:allow fixture head SHA in briefing snapshot (not a secret)
       `- optional context: \`${path.resolve(repoRoot)}/tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json\``, // secret-scan:allow fixture head SHA in briefing snapshot (not a secret)
@@ -5564,7 +5637,7 @@ test("renderBriefingEvidence (AC8): a diff over the inline cap raw that collapse
   const capBytes = Math.floor((rawBytes + collapsedBytes) / 2); // strictly between raw and collapsed
   const input = {
     repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
-    diffOutput, diffPath: "tmp/x.diff", capBytes,
+    diffOutput, diffPath: "tmp/x.diff", diffPaths: ["tmp/x.diff"], filteredDiffPaths: ["tmp/x.diff"], capBytes,
   };
   const result = renderBriefingEvidence(input);
   assert.equal(result.prefixMode, "inline", "the raw diff exceeds capBytes but the collapsed diff does not");
@@ -5788,7 +5861,7 @@ test("renderScopedBriefingVariant: neither the docs-only nor the changed-files v
     repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
     evidencePath: "tmp/x.briefing-evidence.txt",
     diffPath: "tmp/x.diff",
-    filteredDiffPath: "tmp/x.filtered.diff",
+    filteredDiffPaths: ["tmp/x.filtered.diff"],
     diffOutput: [
       "diff --git a/docs/a.md b/docs/a.md",
       "index 111..222 100644",
@@ -5889,6 +5962,47 @@ test("buildGateContext (AC3): a docs-only-scoped angle emits a docs-only compani
     // The full evidence file is untouched and still carries everything.
     const fullPrefixText = await readFile(path.resolve(repoRoot, result.evidencePath), "utf8");
     assert.ok(fullPrefixText.includes("src/a.mjs"));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext (#3095): a multi-part filtered diff lists every part path in the evidence file and the changed-files variant", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-multipart-"));
+  try {
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", { name: "coverage", scope: "changed-files" }, { name: "gate-evidence", mandatory: true }],
+          dynamic: { subtractive: false },
+        },
+      },
+    };
+    const file = (n) => [
+      `diff --git a/src/f${n}.mjs b/src/f${n}.mjs`,
+      "index 111..222 100644",
+      `--- a/src/f${n}.mjs`,
+      `+++ b/src/f${n}.mjs`,
+      "@@ -1,2 +1,3 @@",
+      " context line",
+      "-const x = 1;",
+      ...Array.from({ length: 2 }, (_, i) => `+const y${i} = "${"z".repeat(DIFF_PART_MAX_BYTES / 2 - 200)}";`),
+      "",
+    ].join("\n");
+    const diff = { nameStatusOutput: "M\tsrc/f1.mjs\nM\tsrc/f2.mjs\nM\tsrc/f3.mjs\n", diffOutput: [1, 2, 3].map(file).join("") };
+    const result = await buildGateContext(
+      { config, gate: "draft_gate", diff, repo: "owner/repo", pr: 91, headSha: "cafefeed123456" },
+      { repoRoot },
+    );
+    const parts = result.artifact.requiredReads.filter((r) => r.kind === "diff");
+    assert.ok(parts.length > 1, "fixture splits into several parts");
+    const variantText = await readFile(path.resolve(repoRoot, result.artifact.briefingVariants["changed-files"]), "utf8");
+    const evidenceText = await readFile(path.resolve(repoRoot, result.evidencePath), "utf8");
+    for (const part of parts) {
+      assert.ok(evidenceText.includes(`  ${part.path}`), `evidence lists ${part.path}`);
+      assert.ok(variantText.includes(`  ${part.path}`), `variant lists ${part.path}`);
+    }
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -8112,7 +8226,7 @@ test("renderBriefingEvidence carries the linked issue, diff pointer, changed-fil
   const { text, prefixMode, diffBytes } = renderBriefingEvidence({
     repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234",
     prBody: "PR BODY TEXT", issueRef: "#2", issueBody: "ISSUE BODY TEXT",
-    diffOutput: "diff --git a/x.mjs b/x.mjs\n+added\n", diffPath: "tmp/x.diff",
+    diffOutput: "diff --git a/x.mjs b/x.mjs\n+added\n", diffPaths: ["tmp/x.diff"],
     changedFiles: ["x.mjs"], adjacentCode: { files: [{ path: "y.mjs", role: "importer" }] },
     validationResultsPath: "/w/tmp/v.json",
   });

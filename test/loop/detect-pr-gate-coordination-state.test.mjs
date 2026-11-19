@@ -5,10 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, it, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { initGitFixture, runGitFixture, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, trustCommentFixtures, trustGhEntries, writeGhStub as writeGhStubRaw } from "../_helpers.mjs";
+import { initGitFixture, runGitFixture, makeGhMock, runIdFreeEnv, withLaneRunContext, runNode as runNodeHelper, trustCommentFixtures, trustGhEntries, writeGhStub as writeGhStubRaw } from "../_helpers.mjs";
 
 const writeGhStubHelper = (tempDir, entries, options) => writeGhStubRaw(tempDir, trustGhEntries(entries), options);
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
+import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
 
 import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
@@ -2425,6 +2426,39 @@ test("detect-pr-gate-coordination-state auto-releases the runner-coordination lo
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
+});
+
+test("detect-pr-gate-coordination-state releases the lane's claim from the run-context file with no env var (issue 3224)", async () => {
+  await withLaneRunContext(async ({ cwd, runId }) => {
+    const body = `${buildPlanFilePromotionMarker("docs/phases/phase-9.md")}\n\nNo AC/DoD sections at all.\n`;
+    const env = await writeGhStub(cwd, [
+      {
+        stdout: JSON.stringify({
+          number: 10,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body,
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+    const target = { repo: "owner/repo", pr: 10 };
+    await claimRunnerOwnership({ ...target, runId, cwd });
+    const result = await detectPrGateCoordinationState(target, buildMockRuntime(env));
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+    assert.equal(result.runnerRelease, undefined, "the lane's claim was released, not skipped");
+    const { state } = await loadRunnerCoordinationState({ ...target, cwd });
+    assert.equal(state.activeRun, null);
+  });
 });
 
 test("detect-pr-gate-coordination-state carries the skipped release at a terminal stop (#2884)", async () => {

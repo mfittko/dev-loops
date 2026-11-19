@@ -55,7 +55,7 @@ The work order gives you:
 1. **The consolidated ledger** — the flat per-finding array from `consolidate-fanin` (`{overallVerdict, findings}`), where each finding carries `severity`, `angle`, `summary`, `file`/`line` (when locatable), its `clusterId`, and `disposition: unjudged` (fan-in never disposes; severity is the reviewer's input to you).
 2. **The linked issue's acceptance criteria, definition of done, and non-goals** — the spec-of-record this PR closes.
 3. **The PR's declared scope** — the change summary and scope statement from the PR description, in the round's `pr-body` read.
-4. **Prior-round judge verdicts** — the judge verdict artifacts from earlier rounds at this gate, so you can detect accretion, self-renewing churn, and drift across rounds.
+4. **Prior-round judge verdicts** — the judge verdict artifacts from earlier rounds at this gate, so you can detect accretion, self-renewing churn, and drift across rounds. Each prior judge verdict also brings the prior round's `spec-authority-verdict.json` when that file exists, which shows the prior outcomes and a valid verdict shape.
 
 ## Output: the verdict artifact
 

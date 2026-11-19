@@ -132,11 +132,11 @@ join while child work is outstanding — a longest-timeout assumption is not a j
 
 ### Keeping the PR claim live through gate writers
 
-Prefix every `gate ...` writer call (`gate upsert-verdict`, `gate detect-evidence` and the rest) with `DEVLOOPS_RUN_ID=<the id used at claim>`. Without it the gate writer has no owner identity on Claude Code. Your claim then goes stale during a long child wait and the next writer call refuses it. With it, the writer heartbeats your claim and never needs a `takeover`.
+`loop startup --claim` gives your lane its run id. Run it from the lane's linked worktree. From the main checkout or outside a checkout, when no run id resolves from the environment or the Pi synthesis, it writes no file and returns a `needs_reconcile` result whose `nextAction` names the worktree path and the `loop ensure-worktree` command: create the worktree with that command, then re-run `loop startup --claim` from it (an `--issue` start does this once the worktree exists). It reuses `DEVLOOPS_RUN_ID` when set. Otherwise it writes the id to `<worktree>/.pi/dev-loop-run-context.json` and reports it as `runContext.runId`. A lane started without `--claim` (an already-assigned target, queue pickup, or a request that names no target) resolves its run id only from an existing run-context file in its linked worktree, and otherwise holds no runner claim; startup mints no run id on those routes. Run every later `gate ...` writer, probe and wait from that linked worktree (never the main checkout) in the plain routed `cli/index.mjs` form, with no `DEVLOOPS_RUN_ID=` prefix and no `export`. Each call resolves the same run id from the file. The writers and `gate wait-for-units` heartbeat your claim, so it stays fresh through long waits. When a writer still refuses with your own stale claim, run the stale-claim recovery in `RUNNER-HANDOFF-TEARDOWN` ([Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
 
 ### Releasing the PR claim at a terminal stop
 
-Prefix every `loop handoff`, `loop gate-coordination` and other terminal-reaching call with `DEVLOOPS_RUN_ID=<the id used at claim>`, so the automatic release at the terminal stop finds your identity. When a terminal result carries `runnerRelease.status: skipped_no_async_run_id` and you claimed the PR, run the explicit handoff below with `--run-id` and record its status in the hand-back (the handoff writes nothing when you hold no claim: status `handoff_noop` with no owner, `ownership_lost` with exit 1 when another run holds the claim) (`RUNNER-HANDOFF-TEARDOWN` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
+The automatic release at a terminal stop (`loop handoff`, `loop gate-coordination`) resolves the same run id. When a terminal result carries `runnerRelease.status: skipped_no_async_run_id` and you claimed the PR, run the explicit handoff below and record its status in the hand-back (the handoff writes nothing when you hold no claim: status `handoff_noop` with no owner, `ownership_lost` with exit 1 when another run holds the claim) (`RUNNER-HANDOFF-TEARDOWN` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
 
 ### Releasing the PR claim before the hand-back
 
@@ -145,14 +145,14 @@ claim to the stale window. Once you have verified with native evidence that your
 are joined, run the owner-only handoff and record its status in the hand-back:
 
 ```sh
-node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs handoff --repo <owner/name> --pr <number> --run-id <the id used at claim>
+node <dev-loops-package-root>/cli/index.mjs loop runner-coordination handoff --repo <owner/name> --pr <number>
 ```
 
 It appends your exit signal and clears the claim in one locked write, so the successor's pre-flight
 finds no claim to recover: it claims fresh with no `recovery` field. A `recovery` field appears only
 when the successor actually displaces a claim. Statuses: `handoff_recorded` (signal written, claim cleared),
 `handoff_noop` (nothing to hand off — no state write), `ownership_lost` and `run_id_required` (exit
-1, no state write). The verified runtime run id is the identity when one exists. Without one, the explicit `--run-id` is the identity, and the handoff succeeds only when it equals the active owner (`RUNNER-HANDOFF-TEARDOWN` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
+1, no state write). The lane's resolved run id (env, Pi or the run-context file) is the identity when one exists. Without one, add `--run-id <the id used at claim>`; that explicit id is the identity, and the handoff succeeds only when it equals the active owner (`RUNNER-HANDOFF-TEARDOWN` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
 
 Your successor's recovery is evidence-gated and typed: the handoff `runnerOwnership` result carries
 `recovery: { evidence: "exit_signal" | "stale_max_age", displacedRunId, maxAgeMs }` when a competing
@@ -172,6 +172,7 @@ All delegation MUST originate from the handoff envelope: the envelope's `nextAct
 The pi-subagents skill is parent-only, so delegated subagents do not receive orchestration patterns. This section exists as the minimal locally-enforced subset needed for correct delegation — it is not a restatement of the full policy. The `dev-loop` skill owns all procedural rules; this section only declares the invariants the agent MUST follow when it cannot defer to the skill:
 - One writer thread; `async: true` default; `context: "fresh"` for reviewers.
 - Every sub-loop (refine, implement, gate review round, fixer) runs in its own dedicated fresh-context agent. A gate review round runs in one gate coordinator per round, dispatched as the `gate-coordinator` agent (on Claude Code only, dispatch per `MAIN-CLAUDE-DISPATCH-MODEL` in [Main Agent Contract](../skills/docs/main-agent-contract.md) with `node <dev-loops-package-root>/cli/index.mjs gate resolve-role --role gate-coordinator --harness claude`, and do the same for each other sub-delegate role; Pi uses its own configured models), which owns reviewer fan-out, fan-in, and judge (`GATE-EXEC-GATE-COORDINATOR` in [Gate Review Sub-Loop Contract](../skills/docs/gate-review-sub-loop-contract.md)). The coordinator reads only the gate coordinator's typed round result, as `GATE-EXEC-GATE-COORDINATOR` lists it. An agent dispatched to run one of these sub-loops executes it as its assigned bounded task. The coordinator keeps its own context thin and performs no sub-loop work inline.
+- On Claude Code, the gate coordinator MUST run at a depth that keeps the `Agent` tool. The agent that acts as the dev-loop coordinator dispatches the gate coordinator as its direct child and never routes the round through a further nested driver (`GATE-EXEC-GATE-COORDINATOR`).
 - No child subagent spawning beyond assigned fan-out work. Only the `gate-coordinator` agent dispatches the round's `review` agents and judge (`GATE-EXEC-GATE-COORDINATOR`). The standalone `--review` route is the exception: its gate coordinator runs no judge phase, and the `dev-loop` agent dispatches the Phase 3.5 judge after the gate coordinator returns (`REVIEW-GATE-JUDGE-PHASE` in [Gate review comment contract](../skills/docs/gate-review-comment-contract.md#review-gate-judge-phase); procedure in [Review skill](../skills/review/SKILL.md)).
 - Bounded tasks with concrete scope, exit conditions, and validation expectations.
 - On Claude Code, your pauses and your one `SubagentHandback` follow `COORDINATOR-HANDBACK-ONE-REPORT` in [Main-agent contract](../skills/docs/main-agent-contract.md), and the child-in-flight report follows `GATE-EXEC-HARNESS-JOIN` in [Gate Review Sub-Loop Contract](../skills/docs/gate-review-sub-loop-contract.md).

@@ -42,7 +42,7 @@ test("the rule forbids every non-command wait by purpose", async () => {
 test("the gate coordinator hands back once, after the join", async () => {
   assert.match(await rule(), /hands back its round result once.*never hands back an interim completion while a dispatched unit is pending/s);
   for (const file of ["agents/gate-coordinator.agent.md", ".claude/agents/gate-coordinator.md"]) {
-    assert.match(await readRepo(file), /Return it once, after your wave join completes \(Pi: the blocking join; Claude Code: `wait-for-units` returns `all_done`\) or you stop with `units_stalled` or `round_retired`\. Never hand back an interim completion/);
+    assert.match(await readRepo(file), /Return it once, after your wave join completes \(Pi: the blocking join; Claude Code: `wait-for-units` returns `all_done`\) or you stop with `units_stalled` or `round_retired`, or at step 0 with `FANOUT_UNAVAILABLE` when the dispatch tool is absent\. Never hand back an interim completion/);
   }
 });
 
@@ -50,6 +50,7 @@ test("the gate coordinator names the command on Claude Code and does not require
   for (const file of ["agents/gate-coordinator.agent.md", ".claude/agents/gate-coordinator.md"]) {
     const text = await readRepo(file);
     assert.match(text, /gate wait-for-units/);
+    assert.match(text, /from the lane's linked worktree as `dev-loops-run --repo-root <worktree> cli\/index\.mjs gate wait-for-units`/);
     assert.doesNotMatch(text, /async: false|bg_wait/);
   }
 });
@@ -59,5 +60,5 @@ test("the join surfaces name the command and the notification join", async () =>
   assert.match(await readRepo("skills/docs/main-agent-contract.md"), /gate coordinator's completion notification is the join signal for its round and is never dismissed as a repeat/);
   assert.match(await readRepo("skills/docs/anti-patterns.md"), /on Claude Code, one foreground `[^`]*gate wait-for-units` call per wave/);
   assert.match(await readRepo(GATE_DOC), /completion is detected under Claude Code by `[^`]*gate wait-for-units`/);
-  assert.match(await readRepo(GATE_DOC), /`gate wait-for-units` is the one gate step that runs from the main checkout/);
+  assert.match(await readRepo(GATE_DOC), /`gate wait-for-units` runs from the lane's linked worktree like the other gate steps/);
 });

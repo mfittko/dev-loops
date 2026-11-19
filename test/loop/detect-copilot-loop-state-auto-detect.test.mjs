@@ -267,11 +267,11 @@ test("detect-copilot-loop-state fails closed from old-head green to new-head pen
         stdout: emptyThreads + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
         stdout: '{"check_runs":[{"status":"IN_PROGRESS","conclusion":null}]}\n',
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"],
         stdout: '{"statuses":[]}\n',
       },
     ]);
@@ -327,11 +327,11 @@ test("detect-copilot-loop-state fails closed from old-head green to new-head non
         stdout: emptyThreads + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
         stdout: '{"check_runs":[]}\n',
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"],
         stdout: '{"statuses":[]}\n',
       },
     ]);
@@ -390,11 +390,11 @@ test("detect-copilot-loop-state keeps zero-suite current-head CI at none under r
         stdout: emptyThreads + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
         stdout: '{"check_runs":[]}\n',
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"],
         stdout: '{"statuses":[]}\n',
       },
     ]);
@@ -491,7 +491,7 @@ test("detect-copilot-loop-state routes round-cap clean PRs to round_cap_clean_fa
       // DOES fire here (all reviews are off the current head) — mirror the same
       // gate-evidence-red/rest-green shape at the check-runs layer.
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
         stdout: JSON.stringify({
           check_runs: [
             { status: "COMPLETED", conclusion: "FAILURE", name: "gate-evidence" },
@@ -506,7 +506,7 @@ test("detect-copilot-loop-state routes round-cap clean PRs to round_cap_clean_fa
         }) + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"],
         stdout: '{"statuses":[]}\n',
       },
     ]);
@@ -572,7 +572,7 @@ test("detect-copilot-loop-state excludes a gate-evidence commit STATUS (not chec
         stdout: emptyThreads + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
         stdout: JSON.stringify({
           check_runs: [
             { status: "COMPLETED", conclusion: "SUCCESS", name: "test-scripts" },
@@ -580,7 +580,7 @@ test("detect-copilot-loop-state excludes a gate-evidence commit STATUS (not chec
         }) + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"],
         stdout: JSON.stringify({
           statuses: [
             { context: "gate-evidence", state: "failure" },
@@ -645,7 +645,7 @@ test("detect-copilot-loop-state keeps a genuinely-failing commit status as failu
         stdout: emptyThreads + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
         stdout: JSON.stringify({
           check_runs: [
             { status: "COMPLETED", conclusion: "SUCCESS", name: "test-scripts" },
@@ -656,7 +656,7 @@ test("detect-copilot-loop-state keeps a genuinely-failing commit status as failu
       // non-gate-evidence status alongside gate-evidence: the exclusion must
       // not mask it.
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"],
         stdout: JSON.stringify({
           statuses: [
             { context: "gate-evidence", state: "failure" },
@@ -747,11 +747,11 @@ test("detect-copilot-loop-state routes round-cap clean PRs to round_cap_clean_fa
         stdout: emptyThreads + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
         stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci-old-head"}]}\n',
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"],
         stdout: '{"statuses":[]}\n',
       },
     ]);
@@ -871,11 +871,11 @@ test("detect-copilot-loop-state refreshes current-head CI for a commented old-he
         stdout: emptyThreads + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
         stdout: '{"check_runs":[{"status":"IN_PROGRESS","conclusion":null}]}\n',
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"],
         stdout: '{"statuses":[]}\n',
       },
     ]);
@@ -930,11 +930,11 @@ test("detect-copilot-loop-state fails closed from old-head green to new-head suc
         stdout: emptyThreads + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
         stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}\n',
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"],
         stdout: '{"statuses":[]}\n',
       },
     ]);
@@ -989,11 +989,11 @@ test("detect-copilot-loop-state fails closed from old-head green to new-head fai
         stdout: emptyThreads + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
         stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"FAILURE","name":"ci-old-head"}]}\n',
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"],
         stdout: '{"statuses":[]}\n',
       },
     ]);
@@ -1053,11 +1053,11 @@ test("detect-copilot-loop-state uses head-scoped check-runs when commit status r
         stdout: emptyThreads + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
         stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"FAILURE","name":"ci-old-head"}]}\n',
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"],
         stderr: 'gh: unavailable\n',
         exitCode: 1,
       },
@@ -1123,8 +1123,8 @@ if (args[0] === "api" && args[1] === "graphql") {
   process.exit(0);
 }
 
-if (args[0] === "api" && (args[1] === "repos/owner/repo/commits/newsha/check-runs?per_page=100" || args[1] === "repos/owner/repo/commits/newsha/status?per_page=100")) {
-  const endpoint = args[1].includes("check-runs") ? "check-runs" : "status";
+if (args[0] === "api" && (args[3] === "repos/owner/repo/commits/newsha/check-runs?per_page=100" || args[3] === "repos/owner/repo/commits/newsha/status?per_page=100")) {
+  const endpoint = args[3].includes("check-runs") ? "check-runs" : "status";
   const otherEndpoint = endpoint === "check-runs" ? "status" : "check-runs";
   const markerPath = join(tempDir, endpoint + ".started");
   const otherMarkerPath = join(tempDir, otherEndpoint + ".started");
@@ -1210,11 +1210,11 @@ test("detect-copilot-loop-state keeps cancelled check-runs from being masked by 
         stdout: emptyThreads + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
         stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"CANCELLED"}]}\n',
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"],
         stdout: '{"statuses":[{"state":"success"}]}\n',
       },
     ]);
@@ -1268,11 +1268,11 @@ test("detect-copilot-loop-state treats cancelled head-scoped check runs as none"
         stdout: emptyThreads + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
         stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"CANCELLED"}]}\n',
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"],
         stdout: '{"statuses":[]}\n',
       },
     ]);
@@ -1327,11 +1327,11 @@ test("detect-copilot-loop-state treats mixed head-scoped failure-plus-pending ch
         stdout: emptyThreads + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
         stdout: '{"check_runs":[{"status":"IN_PROGRESS","conclusion":null},{"status":"COMPLETED","conclusion":"FAILURE","name":"ci-old-head"}]}\n',
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"],
         stdout: '{"statuses":[]}\n',
       },
     ]);
@@ -1516,7 +1516,7 @@ test("detect-copilot-loop-state does not false-block on hidden failed head check
         stdout: emptyThreads + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
         stdout: JSON.stringify({
           check_runs: [
             { status: "COMPLETED", conclusion: "SUCCESS", name: "ci" },
@@ -1525,7 +1525,7 @@ test("detect-copilot-loop-state does not false-block on hidden failed head check
         }) + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"],
         stdout: '{"statuses":[]}\n',
       },
     ]);
@@ -1585,7 +1585,7 @@ test("detect-copilot-loop-state downgrades visible success to none when hidden c
         stdout: emptyThreads + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
         stdout: JSON.stringify({
           check_runs: [
             { status: "COMPLETED", conclusion: "SUCCESS", name: "ci" },
@@ -1594,7 +1594,7 @@ test("detect-copilot-loop-state downgrades visible success to none when hidden c
         }) + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"],
         stdout: '{"statuses":[]}\n',
       },
     ]);
@@ -1652,7 +1652,7 @@ test("detect-copilot-loop-state preserves success when multiple hidden checks fa
         stdout: emptyThreads + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/check-runs?per_page=100"],
         stdout: JSON.stringify({
           check_runs: [
             { status: "COMPLETED", conclusion: "SUCCESS", name: "ci" },
@@ -1662,7 +1662,7 @@ test("detect-copilot-loop-state preserves success when multiple hidden checks fa
         }) + "\n",
       },
       {
-        assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"],
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/commits/newsha/status?per_page=100"],
         stdout: '{"statuses":[]}\n',
       },
     ]);

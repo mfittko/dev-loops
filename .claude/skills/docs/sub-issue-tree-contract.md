@@ -40,7 +40,7 @@ When refining an umbrella issue into executable slices:
    parent issue body.
 2. **Define bounded child slices** — each slice must be independently closable and
    independently verifiable.
-3. **Create child issues** with `gh issue create --assignee @me` (or reuse existing issues).
+3. **Create child issues** with `dev-loops-run cli/index.mjs issue create --repo <resolved-repo> --title <title> --body-file <path> --assignee @me` (or reuse existing issues).
 4. **Attach children as real sub-issues** using `manage-sub-issues.mjs add`.
 5. **Set execution order** using `manage-sub-issues.mjs reorder` — first in the list is
    highest priority.
@@ -59,7 +59,7 @@ Once a real sub-issue tree exists:
 ## Deterministic helper: `manage-sub-issues.mjs`
 
 ```sh
-node <resolved-skill-scripts>/github/manage-sub-issues.mjs <command> \
+dev-loops-run scripts/github/manage-sub-issues.mjs <command> \
   --repo <owner/name> --issue <parent-number> [options]
 ```
 
@@ -69,7 +69,7 @@ In normalized installed skill copies it may be `scripts/` inside the installed s
 ### List sub-issues
 
 ```sh
-node <resolved-skill-scripts>/github/manage-sub-issues.mjs list \
+dev-loops-run scripts/github/manage-sub-issues.mjs list \
   --repo <owner/name> --issue <parent-number>
 ```
 
@@ -92,7 +92,7 @@ Sub-issues are returned in their current tree order (highest priority first).
 ### Add a child issue as a sub-issue
 
 ```sh
-node <resolved-skill-scripts>/github/manage-sub-issues.mjs add \
+dev-loops-run scripts/github/manage-sub-issues.mjs add \
   --repo <owner/name> --issue <parent-number> --child <child-number>
 ```
 
@@ -102,7 +102,7 @@ Run this once per child issue.
 ### Set execution order
 
 ```sh
-node <resolved-skill-scripts>/github/manage-sub-issues.mjs reorder \
+dev-loops-run scripts/github/manage-sub-issues.mjs reorder \
   --repo <owner/name> --issue <parent-number> --order <n1,n2,...>
 ```
 
@@ -112,7 +112,7 @@ The first number in the list becomes the highest-priority (first) sub-issue.
 ### Verify the tree state
 
 ```sh
-node <resolved-skill-scripts>/github/manage-sub-issues.mjs verify \
+dev-loops-run scripts/github/manage-sub-issues.mjs verify \
   --repo <owner/name> --issue <parent-number> --expected <n1,n2,...> [--ordered]
 ```
 

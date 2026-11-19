@@ -58,8 +58,8 @@ async function withPollingGh(routes, fn) {
   const sha = JSON.parse(routes[0].stdout).headRefOid;
   const args = [
     ["pr", "view", "7", "--repo", "owner/repo", "--json", "headRefOid,statusCheckRollup"],
-    ["api", `repos/owner/repo/commits/${sha}/check-runs?per_page=100`],
-    ["api", `repos/owner/repo/commits/${sha}/status?per_page=100`],
+    ["api", "--paginate", "--slurp", `repos/owner/repo/commits/${sha}/check-runs?per_page=100`],
+    ["api", "--paginate", "--slurp", `repos/owner/repo/commits/${sha}/status?per_page=100`],
   ];
   const responses = new Map(args.map((argv, i) => [JSON.stringify(argv), routes[i]]));
   return fn(async (command, argv) => {
