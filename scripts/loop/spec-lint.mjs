@@ -36,7 +36,7 @@ Lint an issue body against skills/docs/required-rules.json, docs/decisions and t
 
 Output (stdout, JSON):
   { "ok": true, "findings": [{ "kind", "id", "detail" }],
-    "checks": { "sizeForecast": { "status": "ran" },
+    "checks": { "sizeForecast": { "status": "ran", "band": { "minLoc", "softLoc", "waiverLoc", "absoluteHardLoc" } },
                 "rules": { "status": "ran" } | { "status": "skipped", "reason" },
                 "adrs":  { "status": "ran" } | { "status": "skipped", "reason" } } }
 
@@ -46,6 +46,9 @@ size_forecast_missing, size_forecast_malformed, size_forecast_split_required (PL
 a line at or above the resolved default-tier waiverLoc must be split, not disposed;
 a list item that starts with the word "forecast" or contains "wloc=" and does not parse is
 size_forecast_malformed, also not disposable; non-list lines are never claimed),
+size_band_above_soft_loc (softLoc < wloc < waiverLoc; split assessment required in the results comment) and
+size_band_below_min_loc (wloc < minLoc; merge assessment required in the results comment), both informational and disposable there;
+"checks.sizeForecast.band" is the resolved planning band,
 simplest_design_missing (DESIGN-SIMPLEST-FIRST; a body with a "## Size forecast" section and no "## Simplest design" section),
 contract_doc_not_in_matrix (a contract doc in a forecast files= list that no row of a valid AC / DoD matrix names in backticks; a body without a valid matrix is not flagged).
 ADR citation forms: "ADR NNNN", "ADR-<digits>" and docs/decisions/NNNN-*.md links.
@@ -238,7 +241,7 @@ const FORECAST_BULLET_RE = /^\s*(?:[-*+]|\d+[.)])\s+(?:[*_`]*forecast\b|.*wloc\s
  * line at or above the resolved waiverLoc are findings, and so is a forecast
  * bullet that fails to parse (size_forecast_malformed); none can be disposed.
  */
-export function lintSizeForecast(body, { waiverLoc }) {
+export function lintSizeForecast(body, { waiverLoc, softLoc, minLoc }) {
   const section = extractSection(stripFencedCode(body), "Size forecast") ?? "";
   const rawLines = section.split(/\r?\n/);
   const lines = rawLines.map((line) => FORECAST_LINE_RE.exec(line)).filter(Boolean);
@@ -248,12 +251,24 @@ export function lintSizeForecast(body, { waiverLoc }) {
   const missing = lines.length === 0
     ? [{ kind: "size_forecast_missing", id: "size-forecast", detail: { reason: "no `- forecast: slice=<id> wloc=<n> files=<path>,<path>` line under `## Size forecast`" } }]
     : [];
-  if (lines.length === 0 || typeof waiverLoc !== "number") return [...missing, ...malformed];
+  if (lines.length === 0) return [...missing, ...malformed];
+  const atWaiver = (wloc) => typeof waiverLoc === "number" && wloc >= waiverLoc;
+  const informational = lines.flatMap(([, slice, raw]) => {
+    const wloc = Number(raw);
+    if (typeof softLoc === "number" && wloc > softLoc && !atWaiver(wloc)) {
+      return [{ kind: "size_band_above_soft_loc", id: slice, detail: { wloc, softLoc, message: `split assessment required in the results comment (softLoc ${softLoc})` } }];
+    }
+    if (typeof minLoc === "number" && wloc < minLoc) {
+      return [{ kind: "size_band_below_min_loc", id: slice, detail: { wloc, minLoc, message: `merge assessment required in the results comment (minLoc ${minLoc})` } }];
+    }
+    return [];
+  });
   return [
     ...malformed,
     ...lines
-      .filter(([, , wloc]) => Number(wloc) >= waiverLoc)
+      .filter(([, , wloc]) => atWaiver(Number(wloc)))
       .map(([, slice, wloc]) => ({ kind: "size_forecast_split_required", id: slice, detail: { wloc: Number(wloc), waiverLoc } })),
+    ...informational,
   ];
 }
 
@@ -295,8 +310,10 @@ export async function lintSpec({ body, repoRoot }) {
     checks.rules = { status: "ran" };
   }
   const { config } = await loadDevLoopConfigStrict({ repoRoot });
-  findings.push(...lintSizeForecast(body, resolveSizeBounds(config)));
-  checks.sizeForecast = { status: "ran" };
+  const bounds = resolveSizeBounds(config);
+  findings.push(...lintSizeForecast(body, bounds));
+  const { minLoc, softLoc, waiverLoc, absoluteHardLoc } = bounds;
+  checks.sizeForecast = { status: "ran", band: { minLoc, softLoc, waiverLoc, absoluteHardLoc } };
   findings.push(...lintSimplestDesign(body));
   findings.push(...lintContractDocsInMatrix(body));
   const decisionsDir = path.join(repoRoot, "docs", "decisions");

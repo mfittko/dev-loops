@@ -358,7 +358,7 @@ test("only cli/index.mjs wires the spec-lint lint surface; other files may reuse
 
 test("lintSpec reports simplest_design_missing for a Size forecast body without the section, and none with it", async () => {
   const root = await fixtureRepo();
-  const forecast = "## Size forecast\n\n- forecast: slice=1 wloc=10 files=a.mjs";
+  const forecast = "## Size forecast\n\n- forecast: slice=1 wloc=200 files=a.mjs";
   const kinds = async (body) => (await lintSpec({ body, repoRoot: root })).findings.map((f) => f.kind);
   assert.deepEqual(await kinds(forecast), ["simplest_design_missing"]);
   assert.deepEqual(await kinds(`${forecast}\n\n## Simplest design\n\nMinimal approach.`), []);
@@ -459,4 +459,42 @@ test("contract_doc_not_in_matrix: a forecast contract doc must be named in a mat
   const noMatrix = `## Size forecast\n\n- forecast: slice=1 wloc=90 files=${DOC}\n`;
   assert.deepEqual(lintContractDocsInMatrix(noMatrix), []);
   assert.deepEqual(lintContractDocsInMatrix(`${noMatrix}\n## AC / DoD matrix\n\nnot a table\n`), []);
+});
+
+const forecastBody = (wloc) => `## Size forecast\n\n${forecastLine(1, wloc)}`;
+const bandOf = (config) => ({ softLoc: 400, waiverLoc: 1500, minLoc: 150, ...config });
+
+test("size band: a forecast between softLoc and waiverLoc reports size_band_above_soft_loc with the bound", () => {
+  assert.deepEqual(lintSizeForecast(forecastBody(500), bandOf()), [
+    { kind: "size_band_above_soft_loc", id: "1", detail: { wloc: 500, softLoc: 400, message: "split assessment required in the results comment (softLoc 400)" } },
+  ]);
+});
+
+test("size band: a forecast below minLoc reports size_band_below_min_loc with the bound", () => {
+  assert.deepEqual(lintSizeForecast(forecastBody(45), bandOf()), [
+    { kind: "size_band_below_min_loc", id: "1", detail: { wloc: 45, minLoc: 150, message: "merge assessment required in the results comment (minLoc 150)" } },
+  ]);
+});
+
+test("size band: waiver line, in-band line, minLoc 0 and null softLoc report no size_band finding", () => {
+  const kinds = (wloc, band) => lintSizeForecast(forecastBody(wloc), bandOf(band)).map((f) => f.kind);
+  assert.deepEqual(kinds(1500), ["size_forecast_split_required"]);
+  assert.deepEqual(kinds(400), []);
+  assert.deepEqual(kinds(150), []);
+  assert.deepEqual(kinds(10, { minLoc: 0 }), []);
+  assert.deepEqual(kinds(900, { softLoc: null }), []);
+});
+
+test("size band: spec-lint prints the resolved band, shipped fallbacks and .devloops overrides", async () => {
+  const root = await fixtureRepo();
+  const bodyFile = path.join(root, "body.md");
+  await writeFile(bodyFile, forecastBody(200));
+  const bandFor = async () => {
+    const stdout = buffer();
+    assert.equal(await main(["--body-file", bodyFile, "--repo-root", root], { stdout: stdout.stream, stderr: buffer().stream }), 0);
+    return JSON.parse(stdout.read()).checks.sizeForecast.band;
+  };
+  assert.deepEqual(await bandFor(), { minLoc: 150, softLoc: 400, waiverLoc: 1500, absoluteHardLoc: 2000 });
+  await writeFile(path.join(root, ".devloops"), "version: 1\ngates:\n  size:\n    absoluteHardLoc: 900\n    planningBand:\n      minLoc: 20\n    tiers:\n      default:\n        softLoc: 300\n        waiverLoc: 600\n");
+  assert.deepEqual(await bandFor(), { minLoc: 20, softLoc: 300, waiverLoc: 600, absoluteHardLoc: 900 });
 });
