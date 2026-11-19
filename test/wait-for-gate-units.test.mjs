@@ -592,7 +592,8 @@ test("a long plan wait heartbeats the runner claim for the plan's PR", async () 
     assert.equal(result.outcome, "timeout");
     // One refresh per 45 s heartbeat window, never one per 2 s re-check.
     assert.equal(calls.length, 2);
-    assert.deepEqual(calls[0], { repo: "o/r", pr: 7, env, cwd: root, claimIfMissing: true, requireExisting: false });
+    // Refresh only: a wait with no existing claim must never create one.
+    assert.deepEqual(calls[0], { repo: "o/r", pr: 7, env, cwd: root, claimIfMissing: false, requireExisting: false });
     // A failing refresh never affects the wait.
     const failing = await run(root, planPath, { timeoutMs: 120000, ensureOwnership: async () => { throw new Error("lease boom"); } });
     assert.equal(failing.outcome, "timeout");
