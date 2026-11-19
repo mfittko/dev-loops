@@ -157,11 +157,12 @@ function segmentWriteKind(command) {
   const issueOrPr = has((t) => t === "issue" || t === "pr");
   // `comment` opens an editor on `-e`/`--editor` (or edits on `--edit-last`), so GH_EDITOR can supply the body: these count as body flags.
   const editorFlag = () => has((t) => t.startsWith("--edit") || /^-[^-]*e/.test(t));
-  // A `-c` that directly follows a shell word (`sh -c "..."`) is the shell's own flag. Consecutive duplicates from the token
+  // A `-c` that directly follows a shell word (`sh -c "..."`) is the shell's own flag. The shell word is bare or an absolute path;
+  // a relative path such as the branch `feat/zsh` is an argument. Consecutive duplicates from the token
   // expansion collapse first, so adjacency holds. A `-c` anywhere else, or inside a short cluster, counts.
   const seq = tokens.map((t) => t.toLowerCase()).filter((t, i, all) => t !== all[i - 1]);
   const closeComment = seq.some((t, i) => t.startsWith("--comment") ||
-    (/^-[^-]*c/.test(t) && !(t === "-c" && /^(?:sh|bash|zsh|dash|ksh)$/.test((seq[i - 1] ?? "").split("/").pop()))));
+    (/^-[^-]*c/.test(t) && !(t === "-c" && /^(?:\/(?:[^/]+\/)*)?(?:sh|bash|zsh|dash|ksh)$/.test(seq[i - 1] ?? ""))));
   // Raw comment and review writes (`OPERATOR-OWNED-LINE`): the sanctioned writers refuse an operator-owned line, a raw write does not.
   // Comment clauses win over the body clause: a graphql addComment with `-f body=...` is a comment write, not a PR-body write.
   const isComment = (issueOrPr && has((t) => t === "comment") && (bodyFlag() || editorFlag())) ||
@@ -268,9 +269,12 @@ const COMMENT_REASON =
   "Post a new comment with `dev-loops-run scripts/github/comment-issue.mjs --repo <owner/repo> --issue <n> --body-file <f>` and edit one with `dev-loops-run scripts/github/edit-comment.mjs`. " +
   "To read comments, use `gh pr view <n> --json comments`.";
 const decision = decideBashGate(bashGateFacts);
-// The decider decides first. A raw comment write still gets the comment reason, so every actor sees the sanctioned writers.
+// The decider decides first. Only the decider's raw write denies (the body-write rule and the generic subagent external write deny) are replaced by the comment reason;
+// a registered rule such as COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY keeps its own remedy.
 if (decision.decision === "deny") {
-  emitDeny(writeKind === "comment" ? COMMENT_REASON : decision.reason);
+  // The decision object carries no rule ID, so the reason prefix identifies the rule.
+  const genericRawWrite = /^(?:ADR-TRIPWIRE-STANDING-WAIVER:|Ad-hoc GitHub issue\/PR creation)/.test(decision.reason ?? "");
+  emitDeny(writeKind === "comment" && genericRawWrite ? COMMENT_REASON : decision.reason);
 }
 if (writeKind === "comment") {
   emitDeny(COMMENT_REASON);
