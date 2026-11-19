@@ -172,7 +172,8 @@ function segmentWriteKind(command) {
   const editorFlag = () => has((t) => t.startsWith("--edit") || /^-[^-]*e/.test(t));
   // An ANSI-C `$'...'` word anywhere in a command that runs `gh` is denied: bash decodes it to flags and words
   // the token model cannot judge (`$'\x2dc'`, `-$'c'`), so this fails closed instead of decoding and exempting.
-  if (command.includes("$'")) return "comment";
+  // The decoded word set counts too: `eval gh pr reopen 5 \$\'\\x2dc\' x` has no literal `$'` in the raw text, but the outer shell hands eval the word `$'\x2dc'`.
+  if ([command, ...regions.flat()].some((w) => w.includes("$'"))) return "comment";
   // A `-c` that directly follows a shell word (`sh -c "..."`) is the shell's own flag. The shell word is bare or an absolute path;
   // a relative path such as the branch `feat/zsh` is an argument. The shell word must also come before the first `gh` token
   // (command position): after `gh`, a bare `zsh` is a branch argument (`gh pr reopen zsh -c x`). Consecutive duplicates from the token
