@@ -15,6 +15,7 @@ function decide(command, agent_type) {
   const payload = { tool_name: "Bash", tool_input: { command }, cwd: repoRoot };
   if (agent_type) payload.agent_type = agent_type;
   const res = spawnSync("node", [hook], { input: JSON.stringify(payload), encoding: "utf8" });
+  assert.equal(res.status, 0, `hook exited ${res.status}: ${res.stderr}`);
   const json = res.stdout.trim() ? JSON.parse(res.stdout) : null;
   return json?.hookSpecificOutput?.permissionDecision ?? "allow";
 }
