@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -495,4 +495,94 @@ test("probe-copilot-review parses --timeout in seconds; --timeout-ms is a deprec
 test("probe-copilot-review warns on stderr for deprecated --timeout-ms", () => {
   const err = captureStderr(() => parseWatchCliArgs(["--repo", "o/r", "--pr", "1", "--timeout-ms", "1500"]));
   assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
+});
+
+// A fake clock lets a full-cap probe finish instantly.
+async function runFinalChunkTimeout({ headCall, args = ["--timeout", "170"], readOnlyDir = false, record: extra = {} }) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-probe-record-"));
+  const checkpointDir = path.join(tempDir, "checkpoint");
+  const file = path.join(checkpointDir, "unobservable-review-requests.json");
+  await mkdir(checkpointDir, { recursive: true });
+  await writeFile(file, JSON.stringify({ repo: "owner/repo", pr: 17, headSha: "abc", unobservableRequests: 1, timedOutProbes: 0, ...extra }));
+  await writeFile(path.join(tempDir, "gh"), [
+    "#!/bin/sh",
+    `if [ "$1" = pr ] && [ "$2" = view ]; then ${headCall}; fi`,
+    `echo '${JSON.stringify(createActivityPayload())}'`,
+  ].join("\n"), "utf8");
+  await chmod(path.join(tempDir, "gh"), 0o755);
+  if (readOnlyDir) await chmod(checkpointDir, 0o555);
+  const env = { ...process.env, PATH: `${tempDir}${path.delimiter}${process.env.PATH}`, DEV_LOOPS_GH_STUB: "1" };
+  let out = "";
+  let clock = 0;
+  try {
+    await runCli(["--repo", "owner/repo", "--pr", "17", ...args], {
+      stdout: { write: (c) => { out += c; return true; } }, env, ghCommand: "gh", checkpointDir,
+      delayImpl: async (ms) => { clock += ms; }, now: () => clock,
+    });
+    return { result: JSON.parse(out), record: JSON.parse(await readFile(file, "utf8")) };
+  } finally {
+    await chmod(checkpointDir, 0o755);
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("probe-copilot-review does not count a short --timeout probe, and a pending first chunk does not count", async () => {
+  const headCall = `echo '{"headRefOid":"abc"}'; exit 0`;
+  const short = await runFinalChunkTimeout({ headCall, args: ["--timeout", "1"] });
+  assert.equal(short.result.status, "timeout");
+  assert.equal(short.record.timedOutProbes, 0);
+  const firstChunk = await runFinalChunkTimeout({ headCall, args: ["--timeout", "600"] });
+  assert.equal(firstChunk.result.outcome, "pending");
+  assert.equal(firstChunk.record.timedOutProbes, 0);
+  assert.match(firstChunk.result.reissue, / --timeout 430$/);
+  assert.equal(firstChunk.record.probeStartedAt, 0);
+});
+
+test("probe-copilot-review counts the final chunk only after the recorded start shows a full cap of wall time", async () => {
+  const headCall = `echo '{"headRefOid":"abc"}'; exit 0`;
+  const args = ["--timeout", "5", "--baseline-ids", JSON.stringify({ reviewThreadComments: [], reviews: [], issueComments: [] })];
+  const resumed = await runFinalChunkTimeout({ headCall, args, record: { probeStartedAt: -170_000 } });
+  assert.equal(resumed.record.timedOutProbes, 1);
+  const tooSoon = await runFinalChunkTimeout({ headCall, args, record: { probeStartedAt: -1_000 } });
+  assert.equal(tooSoon.record.timedOutProbes, 0);
+  assert.equal(tooSoon.record.probeStartedAt, undefined);
+  assert.equal(resumed.record.probeStartedAt, undefined);
+});
+
+test("probe-copilot-review: a second short reissue after a counted probe does not count", async () => {
+  const headCall = `echo '{"headRefOid":"abc"}'; exit 0`;
+  const args = ["--timeout", "1", "--baseline-ids", JSON.stringify({ reviewThreadComments: [], reviews: [], issueComments: [] })];
+  const first = await runFinalChunkTimeout({ headCall, args, record: { probeStartedAt: -170_000 } });
+  assert.equal(first.record.timedOutProbes, 1);
+  const second = await runFinalChunkTimeout({ headCall, args, record: first.record });
+  assert.equal(second.record.timedOutProbes, 1);
+});
+
+test("probe-copilot-review counts nothing for a caller-supplied total budget or a short reissue", async () => {
+  const headCall = `echo '{"headRefOid":"abc"}'; exit 0`;
+  const baseline = JSON.stringify({ reviewThreadComments: [], reviews: [], issueComments: [] });
+  await assert.rejects(() => runFinalChunkTimeout({ headCall, args: ["--timeout", "1", "--total-timeout-ms", "600000"] }), /Unknown argument/);
+  const reissue = await runFinalChunkTimeout({ headCall, args: ["--timeout", "5", "--baseline-ids", baseline] });
+  assert.equal(reissue.record.timedOutProbes, 0);
+});
+
+// Root ignores directory mode bits, so the write would succeed and the test could not observe a failure.
+test.skipIf(process.getuid?.() === 0)("probe-copilot-review warns when the timed-out probe record cannot be written", async () => {
+  const { result, record } = await runFinalChunkTimeout({ headCall: `echo '{"headRefOid":"abc"}'; exit 0`, readOnlyDir: true });
+  assert.match(result.warning, /could not record the timed-out probe/);
+  assert.equal(record.timedOutProbes, 0);
+});
+
+test("probe-copilot-review counts a final-chunk timeout on the head of an earlier unobservable request", async () => {
+  const { result, record } = await runFinalChunkTimeout({ headCall: `echo '{"headRefOid":"abc"}'; exit 0` });
+  assert.equal(result.status, "timeout");
+  assert.equal(result.warning, undefined);
+  assert.equal(record.timedOutProbes, 1);
+});
+
+test("probe-copilot-review counts nothing and warns when the PR head cannot be read", async () => {
+  const { result, record } = await runFinalChunkTimeout({ headCall: "exit 1" });
+  assert.equal(record.timedOutProbes, 0);
+  assert.match(result.warning, /could not read the PR head/);
+  assert.match(formatProbeConcise(result), /warning:\s+could not read the PR head/);
 });

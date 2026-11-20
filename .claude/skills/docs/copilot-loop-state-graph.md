@@ -21,6 +21,7 @@ The machine maps observable PR/GitHub/worktree facts (the **snapshot**) to exact
 | `already_fixed_needs_reply_resolve` | Agent has applied a fix; threads still need reply/resolve on GitHub before re-request |
 | `ready_to_rerequest_review` | All threads resolved; Copilot has reviewed at least once; only re-request once the updated head is green or credibly green |
 | `review_request_unavailable` | Copilot review request returned `unavailable` and no observable in-progress review evidence exists; must stop/report |
+| `copilot_unavailable` | Copilot accepted review requests that never became observable (no requested reviewer, timeline event or review). `copilotRequestNotObservable` is set from the durable per-head record that `request-copilot-review.mjs` (one count per unobservable request) and `probe-copilot-review.mjs` (one count per timed-out probe) write under `tmp/copilot-loop/` of the main checkout (the same file from every linked worktree); both counts reach 2. The state carries `copilotUnavailableReason: "request_not_observable"`, gate coordination allows the pre-approval gate and the evidence notes that Copilot was unavailable. A request that becomes observable (status `requested` or a Copilot review) takes the normal round routing. A push resets the record |
 | <!-- term: state:waiting_for_ci --> `waiting_for_ci` | CI checks are in progress or no usable CI readiness signal exists yet; wait before proceeding |
 | `blocked_needs_user_decision` | Unexpected failure (CI failure, bad request result); requires user decision |
 | `done` | Canonical snapshot state; for a merged or closed PR, report completion without entering gates. This state is distinct from the handoff's `loopDisposition: "done"`, which can end only the Copilot sub-loop for an open PR |
@@ -32,7 +33,7 @@ The round-cap/low-signal heuristics in `copilot-loop-state.mjs` (`NEXT_ACTIONS`/
 
 Terminal states with no outgoing transitions: `no_pr`, `review_request_unavailable`,
 `blocked_needs_user_decision`, `done`, `low_signal_converged`, `round_cap_reached`,
-`round_cap_clean_fallback`.
+`round_cap_clean_fallback`, `copilot_unavailable`.
 
 - `pr_draft` -> `pr_ready_no_feedback`
   - move PR from draft to ready
@@ -82,6 +83,7 @@ Terminal states with no outgoing transitions: `no_pr`, `review_request_unavailab
 | `copilotBodyFeedbackUnresolved` | `boolean` | Whether the latest current-head Copilot review carries an unresolved BODY-level finding (a `CHANGES_REQUESTED` review, or a `COMMENTED` review whose body signals "Changes recommended"), independent of inline threads. Unioned with `unresolvedThreadCount` so a body-only finding with zero inline threads still routes to unresolved feedback. A trusted disposition record for the current head clears it (`COPILOT-STATE-BODY-DISPOSITION-RECORD`) |
 | `copilotPriorHeadBodyFeedbackUnresolved` | `boolean` | Whether the latest Copilot review sits on an earlier head and is a body-only changes-recommended or unrecognized review (no thread of its own) that no trusted disposition record names (`COPILOT-STATE-BODY-DISPOSITION-RECORD`). At the round cap it blocks `round_cap_clean_fallback` in `detect-copilot-loop-state.mjs`, `request-copilot-review.mjs` and `merge-pr.mjs`; gate coordination routes it to the judge instead (`GATE-EXEC-COPILOT-BODY-TO-JUDGE`). Below the cap, with a submitted current-head review, it routes to `blocked_needs_user_decision` (rule 9) |
 | `copilotErrorReviewCountOnCurrentHead` | `number` | Copilot error reviews on the current head (`review_error`, ADR 0114). Callers pass `summarizeCopilotReviews(...).errorReviewCountOnCurrentHead`, which excludes reviews before a draft-gate reset. When a caller omits it, `buildSnapshotFromPrFacts` counts over the unfiltered `prData.reviews` |
+| `copilotRequestNotObservable` | `boolean` | True when the per-head unobservable-request record reaches 2 requests and 2 timed-out probes on the current head, with at least one probe after the latest request; the interpreter reports `copilot_unavailable` only under the full predicate in rule 5 |
 | `ciStatus` | `"success" \| "failure" \| "pending" \| "none"` | Current CI check rollup; `none` means no usable CI readiness signal yet and is not treated as green |
 | `agentFixStatus` | `"applied" \| null` | Agent-provided: `"applied"` when code has been fixed |
 
@@ -116,6 +118,7 @@ The interpreter applies rules in priority order. The first matching rule wins.
 4. `copilotReviewRequestStatus === "unavailable"` → `review_request_unavailable`
    *(only reached when no in-progress evidence was found; the request helper returns `already-requested` instead when Copilot review is observably in progress before or after known unavailable/unrequestable failures, including the 422 collaborator case)*
 5. `copilotReviewRequestStatus === "failed"` → `blocked_needs_user_decision`
+   `copilotRequestNotObservable && copilotReviewRequestStatus === "none" && !copilotReviewOnCurrentHead && unresolvedThreadCount === 0 && !copilotBodyFeedbackUnresolved && !copilotPriorHeadBodyFeedbackUnresolved` → `copilot_unavailable` (checked in the same chain, before rule 6)
 6. `(unresolvedThreadCount > 0 || copilotBodyFeedbackUnresolved) && agentFixStatus === "applied"` → `already_fixed_needs_reply_resolve`
 7. `unresolvedThreadCount > 0 || copilotBodyFeedbackUnresolved` → `unresolved_feedback_present`
    *(Unresolved feedback always takes priority over any wait/watch path. A body-only Copilot finding — `copilotBodyFeedbackUnresolved` true with zero inline threads — routes here too, and likewise keeps the round-cap `cleanThreads` check and `ready_to_rerequest_review` clean-convergence from treating the head as clean)*

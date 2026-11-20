@@ -12,6 +12,7 @@ import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
 
 import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { recordTimedOutProbe, recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
@@ -5085,4 +5086,77 @@ test("detect-pr-gate-coordination-state reports not_verified for a noted deferre
     assert.match(result.fixerDispositionWarning.warning, /PRRT_x/);
     assert.match(result.fixerDispositionWarning.warning, /not_verified/);
   });
+});
+
+test("buildGateCoordinationEvaluatorInput passes copilotRequestNotObservable through from the snapshot", () => {
+  const build = (copilotRequestNotObservable) => buildGateCoordinationEvaluatorInput({
+    context: {
+      repo: "owner/repo",
+      pr: 1460,
+      currentHeadSha: "29aa40b7deadbeef",
+      prData: { isDraft: false, state: "OPEN", title: "Fix things", reviews: [], files: [] },
+      mergeStateStatus: "CLEAN",
+      mergeable: "MERGEABLE",
+      conflictFiles: [],
+      interpretation: { state: "ready_to_rerequest_review", sameHeadCleanConverged: false, roundCapCleanEligible: false },
+      disposition: { loopDisposition: "action_required" },
+      snapshot: { ciStatus: "success", copilotReviewRoundCount: 1, unresolvedThreadCount: 0, copilotReviewRequestStatus: "none", copilotRequestNotObservable },
+      gateEvidence: {
+        draftGate: { visible: false },
+        draftGateMarker: { visible: false },
+        preApprovalGate: { visible: false },
+        preApprovalGateMarker: { visible: false },
+      },
+      refinementArtifact: null,
+    },
+    maxCopilotRounds: 5,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    postConvergenceSignificantChange: false,
+  });
+  assert.equal(build(true).copilotRequestNotObservable, true);
+  assert.equal(build(false).copilotRequestNotObservable, false);
+});
+
+test("loadPrGateCoordinationContext reads the unobservable-request record into the snapshot and reports copilot_unavailable", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-gate-unobservable-"));
+  try {
+    const headSha = "def56789abcdef".padEnd(40, "0");
+    const key = { repo: "owner/repo", pr: 266, headSha };
+    for (let i = 0; i < 2; i += 1) {
+      await recordUnobservableRequest(key, { checkpointDir });
+      await recordTimedOutProbe(key, { checkpointDir });
+    }
+    // No Copilot review and no review_requested event on the head: the record is the only signal.
+    const entries = pathAGhEntries({ reviewBody: "unused" }).map((entry) => {
+      if (entry.assertArgs?.includes("pr") && entry.assertArgs.includes("number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files")) {
+        return { ...entry, stdout: jsonLine({ ...JSON.parse(entry.stdout), reviews: [] }) };
+      }
+      if (entry.assertArgs?.some((arg) => String(arg).includes("issues/266/comments"))) {
+        const body = ["Gate review: pre_approval_gate", `Reviewed head SHA: ${headSha}`, "Verdict: clean", "Findings summary: no issues found", "Next action: await final approval"].join("\n");
+        return { ...entry, stdout: jsonLine([[{ id: 22, body, html_url: "https://example.test/comment/22", updated_at: "2026-05-31T19:00:00Z" }]]) };
+      }
+      return entry.assertArgContains ? { ...entry, stdout: "" } : entry;
+    });
+    const env = writeGhStub(null, entries);
+    const context = await loadPrGateCoordinationContext(
+      { repo: "owner/repo", pr: 266 },
+      buildMockRuntime(env, { repoRoot: capFixtureRepoRoot, checkpointDir }),
+    );
+    assert.equal(context.snapshot.copilotRequestNotObservable, true);
+    assert.equal(context.interpretation.state, "copilot_unavailable");
+    // Clean pre_approval_gate without draft_gate evidence: the reason names copilot_unavailable, not the round cap.
+    const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
+      context,
+      maxCopilotRounds: 2,
+      draftGateConfig: { requireCi: true },
+      preApprovalGateConfig: { requireCi: true },
+      postConvergenceSignificantChange: false,
+    }));
+    assert.equal(result.gateBoundary, "draft_gate_needed");
+    assert.match(result.reason, /Copilot is unavailable \(request_not_observable\)/);
+    assert.doesNotMatch(result.reason, /Round-cap/);
+  } finally {
+    await rm(checkpointDir, { recursive: true, force: true });
+  }
 });
