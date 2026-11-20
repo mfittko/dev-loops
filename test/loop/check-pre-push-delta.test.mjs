@@ -2032,6 +2032,18 @@ test("--threads-file refuses the canonical focus plan of another PR or repo", as
   }
 });
 
+test("--threads-file refuses a canonical zero-thread plan whose mutationAuthority branch differs from the worktree branch", async () => {
+  const { threadsFile, planPath } = await focusEmission("tighten the summary wording");
+  const original = fs.readFileSync(planPath, "utf8"), plan = JSON.parse(original);
+  const { workOrderDigest } = await import("../../scripts/github/_work-order-protocol.mjs");
+  plan.workOrder.mutationAuthority = { ...plan.workOrder.mutationAuthority, branch: "some-other-branch" };
+  plan.workOrderDigest = workOrderDigest(plan.workOrder);
+  fs.writeFileSync(planPath, JSON.stringify(plan));
+  try {
+    await assert.rejects(runCli(threadArgs(threadsFile, "--spec-identity", "spec@1", "--fixer-plan", planPath, "--worktree", coverageRepo), headAt(B)), /not the canonical commit_only threads plan/);
+  } finally { fs.writeFileSync(planPath, original); } // later emissions in this file share the plan directory
+});
+
 test("a zero-thread focus sequence whose fixer hands back the baseline closes as no_commit and clears its marker", async () => {
   const { pullWorkOrder } = await import("../../scripts/github/_work-order-protocol.mjs");
   const { threadsFile, unit } = await focusEmission("tighten the summary wording");

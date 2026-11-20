@@ -232,15 +232,27 @@ export function parseCheckPrePushDeltaArgs(argv) {
   };
 }
 
+// The one fixer-plan authentication predicate (PRE-PUSH-DELTA-PUSH-AUTHORITY): canonical path, role, commit_only phase, source, baseline, target, mutationAuthority, worktree branch, workOrderRef and digest.
+// Returns null when the plan authenticates, else "path" (not the canonical plan file) or "predicate" (any other check).
+function planAuthenticationFailure({ plan, planPath, root, worktree, source, baseline, repo, pr }) {
+  const order = plan?.workOrder, target = order?.target;
+  const canonical = fixerPlanPath(plan?.workOrderRef, root);
+  if (!canonical || planPath !== path.resolve(canonical)) return "path";
+  const branch = spawnSync("git", ["-C", worktree, "branch", "--show-current"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+  return order?.role === "fixer" && order.phase === "commit_only" && order.source === source
+    && order.headSha === baseline && target?.repo === order.mutationAuthority?.repo && target?.pr === order.mutationAuthority?.pr
+    && (!repo || target.repo === repo) && (!pr || target.pr === pr)
+    && branch.status === 0 && branch.stdout.trim() === order.mutationAuthority?.branch
+    && plan.workOrderRef === `fixer:${target?.repo}#${target?.pr}:${baseline}:${plan.executionIdentity}`
+    && workOrderDigest(order) === plan.workOrderDigest ? null : "predicate";
+}
+
 // The operator focus of the canonical pulled commit_only threads plan for this baseline (PRE-PUSH-DELTA-PUSH-AUTHORITY). An unreadable or non-JSON plan and any other plan refuse.
 function planOperatorFocus(fixerPlan, baselineSha, worktree, repo, pr) {
   let plan;
   try { plan = JSON.parse(readFileSync(fixerPlan, "utf8")); } catch (error) { throw new Error(`Delta coverage binding: --fixer-plan ${fixerPlan} is unreadable or not JSON (${error.code ?? error.name}); pass the pulled plan`); }
   const order = plan?.workOrder;
-  const canonical = fixerPlanPath(plan?.workOrderRef, realpathSync(resolveGateArtifactTmpRoot(worktree)));
-  if (!canonical || realpathSync(fixerPlan) !== path.resolve(canonical) || order?.role !== "fixer" || order.phase !== "commit_only" || order.source !== "threads"
-    || order.headSha !== baselineSha || order.target?.repo !== repo || order.target?.pr !== pr
-    || plan.workOrderRef !== `fixer:${repo}#${pr}:${baselineSha}:${plan.executionIdentity}` || workOrderDigest(order) !== plan.workOrderDigest) {
+  if (planAuthenticationFailure({ plan, planPath: realpathSync(fixerPlan), root: realpathSync(resolveGateArtifactTmpRoot(worktree)), worktree, source: "threads", baseline: baselineSha, repo, pr })) {
     throw new Error("Delta coverage binding: --fixer-plan is not the canonical commit_only threads plan for this baseline; pass the pulled plan");
   }
   assertPlanSourceHasNoThreads(order);
@@ -456,16 +468,10 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
   const planPath = realpathSync(options.fixerPlan), plan = JSON.parse(readFileSync(planPath, "utf8"));
   const order = plan.workOrder, origin = { workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity };
   const refuse = (condition, reason) => { if (!condition) throw new Error(`Delta coverage binding: ${reason}`); };
-  const canonicalPlan = fixerPlanPath(plan.workOrderRef, root);
-  refuse(canonicalPlan && planPath === path.resolve(canonicalPlan), "not the canonical current fixer plan");
-  const branch = spawnSync("git", ["-C", options.worktree, "branch", "--show-current"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
-  const target = order?.target;
-  refuse(order?.role === "fixer" && order.phase === "commit_only" && order.source === (options.threadsFile ? "threads" : "act-list")
-    && order.headSha === sequence.reviewBaselineHead && target?.repo === order.mutationAuthority?.repo && target?.pr === order.mutationAuthority?.pr
-    && (!options.repo || target.repo === options.repo) && (!options.pr || target.pr === options.pr)
-    && branch.status === 0 && branch.stdout.trim() === order.mutationAuthority?.branch
-    && plan.workOrderRef === `fixer:${target?.repo}#${target?.pr}:${sequence.reviewBaselineHead}:${plan.executionIdentity}`
-    && workOrderDigest(order) === plan.workOrderDigest, "wrong role, target, phase, baseline, branch or semantic digest");
+  const failure = planAuthenticationFailure({ plan, planPath, root, worktree: options.worktree, source: options.threadsFile ? "threads" : "act-list", baseline: sequence.reviewBaselineHead, repo: options.repo, pr: options.pr });
+  refuse(failure !== "path", "not the canonical current fixer plan");
+  refuse(!failure, "wrong role, target, phase, baseline, branch or semantic digest");
+  const target = order.target;
   const unit = await locateFixerUnit({ ref: plan.workOrderRef, cwd: options.worktree, tmpRoots: [root], closureOnly });
   refuse(unit && !unit.stale && unit.executionIdentity === plan.executionIdentity, unit?.stale ?? "no current emitted unit");
   const dir = path.dirname(planPath), expectedOutput = path.join(dir, plan.executionIdentity, "fixer-disposition.json");
