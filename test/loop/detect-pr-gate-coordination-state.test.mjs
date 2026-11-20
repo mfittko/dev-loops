@@ -4655,6 +4655,23 @@ test("3105 AC15: an all-PR-body act list keeps the base integration; a mixed lis
   } finally { await rm(mixed.tempDir, { recursive: true, force: true }); }
 });
 
+// #3309: the cap-round body-only list carries every blocker the body-only poster refuses (isBlockedActItem), so coordination never names a refused remedy.
+test("3309: a cap-round all-PR-body act list blocks on a high item with a judgeFix and on a security-angle item", async () => {
+  const resolve = async (findings) => {
+    const fixture = await actListFixture({ "": { findings } });
+    try {
+      return await resolveDraftOpenActList({ repo: "owner/repo", pr: 10, currentHeadSha: fixture.headSha }, { repoRoot: fixture.tempDir, cap: 1 });
+    } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+  };
+  const clean = await resolve([BODY_ACT]);
+  assert.deepEqual({ bodyOnly: clean?.bodyOnly, blockers: clean?.blockers }, { bodyOnly: true, blockers: [] });
+  for (const item of [{ ...BODY_ACT, severity: "high", judgeFix: "edit the body" }, { ...BODY_ACT, angle: "security" }]) {
+    const result = await resolve([item]);
+    assert.equal(result?.bodyOnly, true);
+    assert.equal(result.blockers.length, 1, JSON.stringify(item));
+  }
+});
+
 // The live ledger is the current head's latest round, even when a retained same-head round sorts after it by loggedAt.
 test("3105 AC15: the act list comes from the current head's live ledger, never a retained earlier round", async () => {
   const later = "2026-11-17T00:00:00.000Z";

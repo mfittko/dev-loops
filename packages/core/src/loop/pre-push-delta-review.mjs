@@ -512,7 +512,7 @@ export function composeConvergedDraftGate({ gate, headSha, round, cap, roundActI
 }
 
 // An allowlist: a missing, blank or unknown severity blocks, like the low/nit path's isLowNitActList.
-const isBlockedActItem = (item) => !["medium", "low", "nit"].includes(String(normalizeSeverity(item?.severity)).toLowerCase()) || item?.failOpen === true || isSecurityAngle(item?.angle);
+export const isBlockedActItem = (item) => !["medium", "low", "nit"].includes(String(normalizeSeverity(item?.severity)).toLowerCase()) || item?.failOpen === true || isSecurityAngle(item?.angle);
 // A security angle is `security`, a prefixed one (`renderer-security`) and any of them with a `-delta-at-<sha>` suffix.
 // shortcut: no shared security classification exists in core; a pr-gate-coordination one would replace this.
 function isSecurityAngle(angle) { return /(^|-)security(-|$)/.test(baseAngleName(String(angle ?? ""))); }

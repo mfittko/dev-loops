@@ -4109,6 +4109,48 @@ test("a --rejudge-same-round write compares fingerprints as lists, so a duplicat
   }
 });
 
+test("a --rejudge-same-round write pairs same-fingerprint duplicates by their fields, not their input order", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-rejudge-order-"));
+  try {
+    const a = rejudgeFinding("one", { angle: "scope" });
+    const b = rejudgeFinding("one", { angle: "coverage" });
+    const { write, live } = await writeRejudgeFixture(dir, { findings: [a, b] });
+    await write(REJUDGE_HEAD, [{ ...b, remedyKind: "pr_body" }, a], { rejudgeSameRound: true });
+    const findings = JSON.parse(await readSealed(live.path)).findings;
+    assert.deepEqual(findings.map((f) => [f.angle, f.remedyKind]), [["scope", undefined], ["coverage", "pr_body"]]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a --rejudge-same-round write succeeds although a judge verdict newer than the round sits on disk", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-rejudge-judged-"));
+  try {
+    const { write, live } = await writeRejudgeFixture(dir);
+    const judgeDir = path.join(buildGateArtifactPath({ repo: "a/b", pr: 1, gate: "draft_gate", headSha: REJUDGE_HEAD, tmpRoot: path.join(dir, "tmp"), dir: "gate-judge" }), "j9999999999999-abcdef0");
+    await mkdir(judgeDir, { recursive: true });
+    await writeFile(path.join(judgeDir, "judge-verdict.json"), "{}");
+    await write(REJUDGE_HEAD, [rejudgeFinding("one", { remedyKind: "pr_body" })], { rejudgeSameRound: true });
+    assert.equal(JSON.parse(await readSealed(live.path)).findings[0].remedyKind, "pr_body");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeSealed refuses inside the lock when the live bytes differ from the bytes the caller read", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-seal-expected-"));
+  try {
+    const file = path.join(dir, "live.json");
+    await writeSealed(file, "one\n");
+    await assert.rejects(writeSealed(file, "two\n", { expectedLive: "other\n" }), (err) => err.code === "live_ledger_changed");
+    assert.equal(await readSealed(file), "one\n");
+    await writeSealed(file, "two\n", { expectedLive: "one\n" });
+    assert.equal(await readSealed(file), "two\n");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("a --rejudge-same-round write raises a live-ledger read error other than a missing or unparseable file", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-rejudge-eisdir-"));
   try {

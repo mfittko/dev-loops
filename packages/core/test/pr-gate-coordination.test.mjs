@@ -4819,14 +4819,21 @@ test("3105 AC15: a posted findings_present draft_gate verdict with an open act l
   assert.equal(blocked.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, blocked.reason);
 });
 
-test("3309: a cap-round body-only act list routes to the converged post, never the fixer; a clean converged verdict ends the block", () => {
+test("3309: a cap-round body-only act list routes to the converged post, never the fixer; a clean converged verdict ends the block", async () => {
   const head = "ab".repeat(20);
   const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
   const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict, draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record" };
   const result = evaluatePrGateCoordination({ ...base, draftOpenActList: { headSha: head, openActCount: 2, blockers: [], bodyOnly: true } });
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
   assert.match(result.agentRemedy.command, /^dev-loops-run scripts\/github\/upsert-checkpoint-verdict\.mjs --repo o\/r --pr 9 .*--converged-json/);
-  assert.equal(result.agentRemedy.command, `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo o/r --pr 9 --gate draft_gate --verdict clean --head-sha ${head} --findings-ledger <cap-round ledger> --converged-json <{ fixerCommit, actList, bodyOnly: true }>`);
+  assert.equal(result.agentRemedy.command, `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo o/r --pr 9 --gate draft_gate --verdict clean --head-sha ${head} --findings-ledger <cap-round ledger> --findings-summary <text> --next-action "mark ready for review" --execution-mode fanout_fanin --converged-json <path to a file holding { fixerCommit, actList, bodyOnly: true }>`);
+  // The filled command parses: every flag the CLI requires on draft_gate is present and --converged-json takes a path.
+  const { parseUpsertCheckpointVerdictCliArgs } = await import("../../../scripts/github/upsert-checkpoint-verdict.mjs");
+  const parsed = parseUpsertCheckpointVerdictCliArgs(["--repo", "o/r", "--pr", "9", "--gate", "draft_gate", "--verdict", "clean", "--head-sha", head, "--findings-ledger", "ledger.json", "--findings-summary", "converged", "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin", "--converged-json", "converged.json"]);
+  assert.equal(parsed.convergedJson, "converged.json");
+  // A BEHIND draft PR at the cap keeps the body-only exit instead of resolve_merge_conflicts.
+  const behind = evaluatePrGateCoordination({ ...base, mergeStateStatus: "BEHIND", mergeable: "MERGEABLE", draftOpenActList: { headSha: head, openActCount: 2, blockers: [], bodyOnly: true } });
+  assert.match(behind.agentRemedy.command, /--converged-json/, behind.reason);
   assert.match(result.agentRemedy.summary, /^Edit the PR body through scripts\/github\/edit-pr\.mjs, then post the body-only converged draft_gate verdict/);
   assert.match(result.reason, /every open act item of the current head is a PR-body item/);
   assert.doesNotMatch(result.reason, /fixer pass is not proven landed/);
@@ -4836,6 +4843,7 @@ test("3309: a cap-round body-only act list routes to the converged post, never t
   const clean = { visible: true, headSha: head, verdict: "clean", contractComplete: true };
   const done = evaluatePrGateCoordination({ ...base, draftRoundRefused: false, draftCapRoundFailure: null, draftGate: { ...clean, cleanEvidenceExists: true, currentHeadClean: true }, draftGateMarker: clean, draftOpenActList: null });
   assert.notEqual(done.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, done.reason);
+  assert.notEqual(done.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, done.reason);
 });
 
 test("3105 AC15: an eligible open act list wins over a BEHIND-only refresh, and a real conflict still resolves first", () => {

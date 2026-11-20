@@ -1823,4 +1823,8 @@ test("parseFindings refuses a remedyKind outside evidence_only and pr_body (#330
   const raw = (remedyKind) => JSON.stringify([{ severity: "low", angle: "docs", summary: "s", judgeDisposition: "act", remedyKind }]);
   assert.equal(parseFindings(raw("pr_body"))[0].remedyKind, "pr_body");
   assert.throws(() => parseFindings(raw("bogus")), /remedyKind must be one of: evidence_only, pr_body/);
+  // An unjudged finding is refused the same way (the writers refuse it unconditionally).
+  assert.throws(() => parseFindings(JSON.stringify([{ severity: "low", angle: "docs", summary: "s", remedyKind: "bogus" }])), /remedyKind must be one of: evidence_only, pr_body/);
+  assert.throws(() => parseFindings(JSON.stringify([{ severity: "low", angle: "docs", summary: "s", remedyKind: "" }])), /remedyKind must be one of: evidence_only, pr_body/);
+  assert.equal(parseFindings(JSON.stringify([{ severity: "low", angle: "docs", summary: "s", remedyKind: "pr_body" }]))[0].remedyKind, undefined);
 });

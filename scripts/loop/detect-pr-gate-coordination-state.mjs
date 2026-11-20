@@ -13,7 +13,7 @@ import {
 import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
+import { isBlockedActItem, isDeltaBodyItem } from "@dev-loops/core/loop/pre-push-delta-review";
 import { isSanctionedCopilotReviewerLogin } from "@dev-loops/core/github/comment-trust";
 import { buildSnapshotFromPrFacts, DISPOSITION, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateEarlySurface } from "./early-surface-checks.mjs";
@@ -1296,7 +1296,8 @@ export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = pr
 
 /**
  * Issue 3105 AC15 (ADR 0288): the open act list of the current head's live draft_gate ledger, or null.
- * Null when the head has no live ledger with an open act item, when every open item is a PR-body item, past the cap (cap > 0 and round > cap), and when every open item is a nit outside draft round 1.
+ * Null when the head has no live ledger with an open act item, when every open item is a PR-body item below the cap, past the cap (cap > 0 and round > cap), and when every open item is a nit outside draft round 1.
+ * At the cap round an all-PR-body list is `{ bodyOnly: true }`: its exit is the body-only converged post (GATE-EXEC-NO-DEAD-END).
  * `blockers` are the GATE-EXEC-SOFT-CAP blockers of the cap round; below the cap every act item goes to the fixer.
  * A hand-edited sealed ledger throws OUT_OF_BAND_WRITE.
  */
@@ -1313,7 +1314,7 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap }) {
   // countCompletedRounds counts the round being posted, so the live ledger's round is one less.
   const round = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead: true }) - 1;
   // The emitter refuses an all-PR-body act list (delta_body_only_act_set): its only exit is the ADR 0271 body-only converged post at the cap round, any other round keeps the earlier routing.
-  if (open.every(isDeltaBodyItem)) return cap > 0 && round === cap ? { headSha: head, openActCount: open.length, blockers: pastCapBlockers(log.findings, { round, cap }), bodyOnly: true } : null;
+  if (open.every(isDeltaBodyItem)) return cap > 0 && round === cap ? { headSha: head, openActCount: open.length, blockers: [...pastCapBlockers(log.findings, { round, cap }), ...open.filter(isBlockedActItem).map((f) => ({ kind: "round_cap_reached", reason: f.resurfaces ? "resurfaced" : "new_act", item: `[${normalizeSeverity(f.severity)}] ${String(f.summary ?? "").trim()} (blocked_item)` }))], bodyOnly: true } : null;
   // Past the cap the emitter refuses every act list (round_cap_reached), so that round keeps the earlier routing.
   if (cap > 0 && round > cap) return null;
   // The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so that list keeps the earlier routing.
