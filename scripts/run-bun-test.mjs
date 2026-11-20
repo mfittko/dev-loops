@@ -632,7 +632,12 @@ export async function runBunTest(args, {
 if (import.meta.main) {
   if (!process.versions.bun) {
     // Discovery uses the Bun.Glob global, so a Node entry re-executes the whole script under Bun.
-    const r = spawnSync(resolveBunCommand(), [fileURLToPath(import.meta.url), ...process.argv.slice(2)], { stdio: "inherit" });
+    // A non-Bun BUN_BIN would re-enter this block forever, so a second pass fails fast.
+    if (process.env.DEV_LOOPS_BUN_TEST_REEXEC) {
+      process.stderr.write(`run-bun-test: re-exec target is not Bun (BUN_BIN=${process.env.BUN_BIN ?? "unset"}).\n`);
+      process.exit(1);
+    }
+    const r = spawnSync(resolveBunCommand(), [fileURLToPath(import.meta.url), ...process.argv.slice(2)], { stdio: "inherit", env: { ...process.env, DEV_LOOPS_BUN_TEST_REEXEC: "1" } });
     if (r.error) process.stderr.write(`Cannot launch Bun (${r.error.message}); set BUN_BIN or put bun on PATH.\n`);
     process.exit(r.status ?? 1);
   }

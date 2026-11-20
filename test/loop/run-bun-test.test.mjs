@@ -983,7 +983,10 @@ test("the CLI refuses an unresolved worktree core before any @dev-loops/core imp
 
 test.skipIf(Boolean(spawnSync("node", ["--version"]).error))("the Node entry re-executes the script under Bun so Bun.Glob discovery works", () => {
   const script = path.resolve(import.meta.dir, "../../scripts/run-bun-test.mjs");
-  const r = spawnSync("node", [script, "--referencing", `unreferenced-${"needle"}-${process.pid}`], { encoding: "utf8" });
+  const r = spawnSync("node", [script, "--referencing", `unreferenced-${"needle"}-${process.pid}`], { encoding: "utf8", env: { ...process.env, BUN_BIN: process.execPath, DEV_LOOPS_BUN_TEST_REEXEC: "" } });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout + r.stderr, /No tests reference/);
+  const loop = spawnSync("node", [script, "--referencing", "x"], { encoding: "utf8", env: { ...process.env, BUN_BIN: "node", DEV_LOOPS_BUN_TEST_REEXEC: "" } });
+  assert.equal(loop.status, 1);
+  assert.match(loop.stderr, /re-exec target is not Bun/);
 });
