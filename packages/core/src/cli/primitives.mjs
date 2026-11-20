@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
+import { assertWritableBody } from "../github/issue-ops.mjs";
 
 /**
  * Shared CLI primitives for arg parsing, validation, and child process execution.
@@ -183,17 +184,19 @@ export function runChild(command, args, env = process.env, stdinText = undefined
  * @param {object} input
  * @param {string} [input.body] — inline body value, returned as-is when no bodyFile
  * @param {string} [input.bodyFile] — path to read the body from ("-" = stdin, when allowStdin)
+ * @param {boolean} [input.allowEmptyBody] — skip the empty/`null` refusal (`--allow-empty-body`); default false
  * @param {boolean} [input.allowStdin] — honor `bodyFile === "-"` as stdin (fd 0); default false
  * @returns {Promise<string | undefined>}
  */
-export async function resolveBodyOrFile({ body, bodyFile, allowStdin = false } = {}) {
-  if (bodyFile === undefined || bodyFile === null) return body;
+export async function resolveBodyOrFile({ body, bodyFile, allowStdin = false, allowEmptyBody = false } = {}) {
+  if (bodyFile === undefined || bodyFile === null) {
+    if (body !== undefined) assertWritableBody(body, "--body", allowEmptyBody);
+    return body;
+  }
   // fs/promises readFile does not accept an integer fd, so stdin (fd 0) is
   // read synchronously via readFileSync, which does accept one.
   const content = allowStdin && bodyFile === "-" ? readFileSync(0, "utf8") : await readFile(bodyFile, "utf8");
-  if (content.trim().length === 0) {
-    throw new Error(`--body-file ${bodyFile} is empty`);
-  }
+  assertWritableBody(content, `--body-file ${bodyFile}`, allowEmptyBody);
   return content;
 }
 
