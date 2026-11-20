@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
@@ -432,7 +432,7 @@ test("the closure round line renders a normalized full SHA and refuses a short, 
 
 // A clean cap round whose post was refused at its own head posts there once the PR head has moved on.
 const CAP_HEAD = "4".repeat(40);
-async function postCleanCapRound(tempDir, { capHead = CAP_HEAD, sealedVerdict = "clean", ancestor = true, headSha = capHead, prState = {}, extraArgs = [], calls = [], postedOverrides = {}, proven = false, checkBaseFreshness, gate = "draft_gate", sealedHead = capHead, issueComments = [], seal = "valid", mergeBaseCode, retained = false } = {}) {
+async function postCleanCapRound(tempDir, { capHead = CAP_HEAD, sealedVerdict = "clean", ancestor = true, headSha = capHead, prState = {}, extraArgs = [], calls = [], postedOverrides = {}, proven = false, checkBaseFreshness, gate = "draft_gate", sealedHead = capHead, issueComments = [], seal = "valid", mergeBaseCode, retained = false, sealedExtra = {} } = {}) {
   await seedPrior(repoRoot, priorHeads);
   const deltaDir = path.join(repoRoot, "tmp", "gate-delta");
   await rm(deltaDir, { recursive: true, force: true });
@@ -444,7 +444,7 @@ async function postCleanCapRound(tempDir, { capHead = CAP_HEAD, sealedVerdict = 
     await writeFile(path.join(deltaDir, `${capHead}.json.seal`), createHash("sha256").update(record).digest("hex"), "utf8");
   }
   const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-17");
-  const sealed = { repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: capHead, verdict: sealedVerdict, overallVerdict: sealedVerdict, loggedAt: "2026-11-04T00:00:00.000Z", findings: [] };
+  const sealed = { repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: capHead, verdict: sealedVerdict, overallVerdict: sealedVerdict, loggedAt: "2026-11-04T00:00:00.000Z", findings: [], ...sealedExtra };
   const sealedText = JSON.stringify({ ...sealed, headSha: sealedHead });
   const ledgerName = retained ? `draft_gate-${capHead}.round-4.json` : `draft_gate-${capHead}.json`;
   await writeFile(path.join(dir, ledgerName), sealedText, "utf8");
@@ -484,6 +484,25 @@ test("a clean cap round retained at its head posts with the cap round number and
     assert.match(out.body, /round=4\b/);
     assert.match((await postCleanCapRound(tempDir, { retained: true, seal: "none" })).error ?? "", /does not match the current PR head/);
   }, { prefix: "dev-loops-round-cap-retained-" });
+});
+
+test("a retained-only cap round passes the durable-ledger check with fan-out enforcement on", async () => {
+  await withTempDir(async (tempDir) => {
+    const devloops = path.join(repoRoot, ".devloops");
+    const original = await readFile(devloops, "utf8");
+    await writeFile(devloops, "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
+    const contextDir = path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-17");
+    await mkdir(contextDir, { recursive: true });
+    await writeFile(path.join(contextDir, `draft_gate-${CAP_HEAD}.validation.json`), JSON.stringify({ headSha: CAP_HEAD }), "utf8");
+    try {
+      const provenance = { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "reviewer-a" }, { angle: "holistic", reviewer: "reviewer-b" }] };
+      const out = await postCleanCapRound(tempDir, { retained: true, sealedExtra: { provenance }, extraArgs: ["--execution-mode", "fanout_fanin"] });
+      assert.equal(out.error, undefined);
+      assert.equal(verdictOf(out), "clean");
+    } finally {
+      await writeFile(devloops, original, "utf8");
+    }
+  }, { prefix: "dev-loops-round-cap-retained-enforced-" });
 });
 
 test("a clean cap-round post checks base freshness against the current PR head, not the cap-round head", async () => {

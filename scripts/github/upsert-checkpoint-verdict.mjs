@@ -1876,7 +1876,7 @@ async function resolveCleanCapRoundHead({ options, cap, currentHeadSha, repoRoot
   const ancestry = await runChild("git", ["-C", repoRoot, "merge-base", "--is-ancestor", roundHead, currentHeadSha], env);
   if (ancestry.code === 1) return null;
   if (ancestry.code !== 0) throw new Error(`git merge-base --is-ancestor failed (exit ${ancestry.code}) for cap-round head ${roundHead} and PR head ${currentHeadSha}; run \`git fetch origin ${roundHead} ${currentHeadSha}\` and retry.`);
-  return roundHead;
+  return { roundHead, ledgerPath: capRound.ledgerPath };
 }
 // The cap-round waiver holds only when the PR is neither done nor blocked and the draft-PR re-evaluation does not forbid the action.
 export function capRoundWaives(coordination, draftReevaluation, action) {
@@ -2161,7 +2161,7 @@ export function buildCoordinationEvaluatorInput({
 // acceptance predicate (buildFanoutEnforcement + evaluateInlineFanoutMode) so
 // the two boundaries can never drift apart. Throws when the candidate does
 // not qualify; resolves silently otherwise.
-async function enforcePostTimeFanoutMode({ repo, pr, gate, executionMode, inlineReason, headSha, convergedFixerCommit = null, config }, { env, ghCommand, repoRoot, runChild }) {
+async function enforcePostTimeFanoutMode({ repo, pr, gate, executionMode, inlineReason, headSha, convergedFixerCommit = null, ledgerPath = null, config }, { env, ghCommand, repoRoot, runChild }) {
   let hasFullLabel = false;
   let baseRef = null;
   // Light-mode facts only matter for an inline candidate under active
@@ -2198,6 +2198,8 @@ async function enforcePostTimeFanoutMode({ repo, pr, gate, executionMode, inline
     executionMode,
     inlineReason: inlineReason ?? null,
     headSha: markerHeadSha,
+    // A cap-round catch-up post reads the selected (possibly retained) artifact, not the live path.
+    ...(ledgerPath ? { ledgerPath } : {}),
     ...(convergedFixerCommit ? { convergedFromHeadSha: headSha } : {}),
   };
   const inactiveMarker = { visible: false };
@@ -2824,6 +2826,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   let coordination = null;
   let canonicalHeadSha = options.headSha;
   let capRoundHead = null;
+  let capRoundLedgerPath = null;
   let draftGateConfig = null;
   let preApprovalGateConfig = null;
   // The post-time fan-out enforcement descriptor (buildFanoutEnforcement's
@@ -2937,7 +2940,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       try {
         canonicalHeadSha = resolveRequestedHeadSha(options.headSha, evidence.currentHeadSha);
       } catch (error) {
-        capRoundHead = await resolveCleanCapRoundHead({ options, cap: draftGateConfig.maxReviewRounds, currentHeadSha: evidence.currentHeadSha, repoRoot, runChild, env });
+        const capCatchUp = await resolveCleanCapRoundHead({ options, cap: draftGateConfig.maxReviewRounds, currentHeadSha: evidence.currentHeadSha, repoRoot, runChild, env });
+        capRoundHead = capCatchUp?.roundHead ?? null;
+        capRoundLedgerPath = capCatchUp?.ledgerPath ?? null;
         if (!capRoundHead) {
           const reason = options.gate === "draft_gate" && draftGateConfig.maxReviewRounds > 0 ?" (no clean cap round at that head, or it is not an ancestor of the PR head)" : "";
           throw new Error(`${error.message}${reason}`);
@@ -3121,6 +3126,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         inlineReason: options.inlineReason,
         headSha: canonicalHeadSha,
         convergedFixerCommit: convergedInput?.fixerCommit ?? null,
+        ledgerPath: capRoundLedgerPath,
         config,
       },
       { env, ghCommand, repoRoot, runChild },
