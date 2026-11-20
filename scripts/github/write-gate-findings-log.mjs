@@ -728,7 +728,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     throw parseError("--findings and --findings-file are mutually exclusive; pass only one");
   }
   if (options.rejudgeSameRound && (options.judgeVerdict !== undefined || options.specAuthority !== undefined)) {
-    throw parseError("--rejudge-same-round does not accept --judge-verdict or --spec-authority; only the findings are compared (rejudge-input-unsupported)");
+    throw parseError("GATE-LEDGER-REJUDGE-SAME-ROUND: --rejudge-same-round does not accept --judge-verdict or --spec-authority; only the findings are compared (rejudge-input-unsupported)");
   }
   if (options.emitPlan !== undefined && options.provenance === undefined) {
     throw parseError("--emit-plan requires --provenance so the emitted units have caller-supplied provenance to validate");
@@ -1306,12 +1306,12 @@ async function overlayRejudgeOnLiveLedger(fullPath, logPath, options, findings) 
   } catch (err) {
     if (err?.code === OUT_OF_BAND_WRITE || !(err?.code === "ENOENT" || err instanceof SyntaxError)) throw err;
   }
-  if (options.gate !== "draft_gate") throw parseError("--rejudge-same-round supports only --gate draft_gate (rejudge-gate-unsupported)");
+  if (options.gate !== "draft_gate") throw parseError("GATE-LEDGER-REJUDGE-SAME-ROUND: --rejudge-same-round supports only --gate draft_gate (rejudge-gate-unsupported)");
   const sameHead = typeof live?.headSha === "string" && live.headSha.trim().toLowerCase() === options.headSha.trim().toLowerCase();
-  if (!sameHead || live.gate !== options.gate || !Array.isArray(live.findings)) throw parseError(`--rejudge-same-round needs a readable live ledger at ${logPath} for this gate and head (rejudge-no-live-ledger)`);
-  if (live.roundIdentity?.completed !== true) throw parseError(`--rejudge-same-round needs a completed live round at ${logPath} (rejudge-round-incomplete)`);
+  if (!sameHead || live.gate !== options.gate || !Array.isArray(live.findings)) throw parseError(`GATE-LEDGER-REJUDGE-SAME-ROUND: --rejudge-same-round needs a readable live ledger at ${logPath} for this gate and head (rejudge-no-live-ledger)`);
+  if (live.roundIdentity?.completed !== true) throw parseError(`GATE-LEDGER-REJUDGE-SAME-ROUND: --rejudge-same-round needs a completed live round at ${logPath} (rejudge-round-incomplete)`);
   const sorted = (list) => list.map((f) => fingerprintFinding(f)).sort();
-  if (!isDeepStrictEqual(sorted(live.findings), sorted(findings))) throw parseError(`--rejudge-same-round findings must carry the same fingerprints as the live ledger ${logPath}; a re-judge never adds or drops a finding (rejudge-fingerprint-mismatch)`);
+  if (!isDeepStrictEqual(sorted(live.findings), sorted(findings))) throw parseError(`GATE-LEDGER-REJUDGE-SAME-ROUND: --rejudge-same-round findings must carry the same fingerprints as the live ledger ${logPath}; a re-judge never adds or drops a finding (rejudge-fingerprint-mismatch)`);
   const pool = [...findings];
   const merged = live.findings.map((liveFinding) => {
     const fp = fingerprintFinding(liveFinding);
@@ -1319,10 +1319,10 @@ async function overlayRejudgeOnLiveLedger(fullPath, logPath, options, findings) 
     const { remedyKind: liveKind, ...liveRest } = liveFinding;
     const { remedyKind: inputKind, ...inputRest } = input;
     for (const field of new Set([...Object.keys(liveRest), ...Object.keys(inputRest)])) {
-      if (!isDeepStrictEqual(liveRest[field], inputRest[field])) throw parseError(`--rejudge-same-round may change only remedyKind; ${field} differs for finding ${fp} (rejudge-field-changed)`);
+      if (!isDeepStrictEqual(liveRest[field], inputRest[field])) throw parseError(`GATE-LEDGER-REJUDGE-SAME-ROUND: --rejudge-same-round may change only remedyKind; ${field} differs for finding ${fp} (rejudge-field-changed)`);
     }
     if (inputKind === liveKind) return liveFinding;
-    if (inputKind !== "pr_body" || liveKind !== undefined || liveFinding.judgeDisposition !== "act") throw parseError(`--rejudge-same-round may only add remedyKind pr_body to an act finding; finding ${fp} differs (rejudge-field-changed)`);
+    if (inputKind !== "pr_body" || liveKind !== undefined || liveFinding.judgeDisposition !== "act") throw parseError(`GATE-LEDGER-REJUDGE-SAME-ROUND: --rejudge-same-round may only add remedyKind pr_body to an act finding; finding ${fp} differs (rejudge-field-changed)`);
     return { ...liveFinding, remedyKind: "pr_body" };
   });
   return { ...live, findings: merged };
