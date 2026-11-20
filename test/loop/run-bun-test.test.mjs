@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { writeSync } from "node:fs";
 import { access, mkdir, mkdtemp, open, readFile, rm, symlink, writeFile } from "node:fs/promises";
@@ -6,7 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER, RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
-import { buildBunTestArgs, childResult, createOutputCapture, createTestProgress, discoverRepositoryTests, parseBunSummary, PER_TEST_TIMEOUT_BASE_MS, resolveBunTestFiles, resolveBunTestParallelism, resolveBunTestTimeoutMs, runBunTest, checkCoreResolutionBeforeImport } from "../../scripts/run-bun-test.mjs";
+import { buildBunTestArgs, childResult, createOutputCapture, createTestProgress, discoverRepositoryTests, parseBunSummary, PER_TEST_TIMEOUT_BASE_MS, resolveBunCommand, resolveBunTestFiles, resolveBunTestParallelism, resolveBunTestTimeoutMs, runBunTest, checkCoreResolutionBeforeImport, isEntryScript } from "../../scripts/run-bun-test.mjs";
 
 test("a nested worktree's test copies are never discovered as this checkout's own", () => {
   // Repo-root `worktrees/<name>` is a deprecated ad hoc worktree location (it is
@@ -290,7 +291,7 @@ test("the child env drops inherited run-id markers without mutating the caller e
 });
 
 test("the child env drops every async-context and harness marker without mutating the caller env", async () => {
-  const stripped = [...ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER];
+  const stripped = [...ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER, "DEV_LOOPS_BUN_TEST_REEXEC"];
   const env = { ...Object.fromEntries(stripped.map((marker) => [marker, "1"])), UNRELATED_VAR: "kept" };
   const before = { ...env };
   let childEnv;
@@ -885,6 +886,28 @@ test("referencing CLI exits safely for no matches and malformed selectors", asyn
   }
 });
 
+test("the default test command is Bun even when the host runtime is Node", () => {
+  assert.equal(resolveBunCommand({}, { node: "24.0.0" }), "bun");
+  assert.equal(resolveBunCommand({}, { bun: "1.4.1", node: "24.0.0" }), process.execPath);
+  assert.equal(resolveBunCommand({ BUN_BIN: "/opt/bun" }, { node: "24.0.0" }), "/opt/bun");
+});
+
+test("a child that fails before any output yields a non-zero result, and a clean exit with no summary fails closed", async () => {
+  const code = await runBunTest(["example.test.mjs"], {
+    captureFactory: async () => memoryCapture("", []),
+    spawnImpl: fakeChild(() => {}, [1, null]),
+    stdout: { write() {} },
+    stderr: { write() {} },
+  });
+  assert.equal(code, 1);
+  await assert.rejects(runBunTest(["example.test.mjs"], {
+    captureFactory: async () => memoryCapture("", []),
+    spawnImpl: fakeChild(() => {}, [0, null]),
+    stdout: { write() {} },
+    stderr: { write() {} },
+  }), /Could not parse Bun test summary/);
+});
+
 test("shared child result settles when a spawn error has no close event", async () => {
   const child = new EventEmitter();
   const error = new Error("spawn failed");
@@ -956,4 +979,24 @@ test("the CLI refuses an unresolved worktree core before any @dev-loops/core imp
     assert.match(stderr, /worktree_core_(unresolved|escapes)/);
     assert.doesNotMatch(stderr, /ERR_MODULE_NOT_FOUND|Cannot find/);
   } finally { await rm(fx, { recursive: true, force: true }); }
+});
+
+test.skipIf(Boolean(spawnSync("node", ["--version"]).error))("the Node entry re-executes the script under Bun so Bun.Glob discovery works", () => {
+  const script = path.resolve(import.meta.dir, "../../scripts/run-bun-test.mjs");
+  const r = spawnSync("node", [script, "--referencing", `unreferenced-${"needle"}-${process.pid}`], { encoding: "utf8", env: { ...process.env, BUN_BIN: process.execPath } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout + r.stderr, /No tests reference/);
+  const loop = spawnSync("node", [script, "--referencing", "x"], { encoding: "utf8", env: { ...process.env, BUN_BIN: "node" } });
+  assert.equal(loop.status, 1);
+  assert.match(loop.stderr, /re-exec target is not Bun/);
+});
+
+test("isEntryScript uses import.meta.main when defined and compares paths on Node 24.0 and 24.1", () => {
+  const url = new URL("../../scripts/run-bun-test.mjs", import.meta.url).href;
+  const script = path.resolve(import.meta.dir, "../../scripts/run-bun-test.mjs");
+  assert.equal(isEntryScript(true, "/other.mjs", url), true);
+  assert.equal(isEntryScript(false, script, url), false);
+  assert.equal(isEntryScript(undefined, script, url), true);
+  assert.equal(isEntryScript(undefined, "/other.mjs", url), false);
+  assert.equal(isEntryScript(undefined, undefined, url), false);
 });

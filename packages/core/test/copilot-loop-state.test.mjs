@@ -49,6 +49,7 @@ test("normalizeSnapshot returns safe defaults for an empty object", () => {
     excludedFailureDetails: [],
     copilotBodyFeedbackUnresolved: false,
     copilotPriorHeadBodyFeedbackUnresolved: false,
+    copilotRequestNotObservable: false,
     copilotErrorReviewCountOnCurrentHead: 0,
   });
 });
@@ -1686,4 +1687,54 @@ test("an error review before the draft-gate reset does not count toward the bloc
   });
   assert.equal(snapshot.copilotErrorReviewCountOnCurrentHead, 1);
   assert.equal(interpretLoopState(snapshot, { maxCopilotRounds: 3 }).state, STATE.READY_TO_REREQUEST_REVIEW);
+});
+
+// ---------------------------------------------------------------------------
+// copilot_unavailable / request_not_observable
+// ---------------------------------------------------------------------------
+
+const unobservableSnapshot = {
+  prExists: true,
+  prDraft: false,
+  copilotReviewRequestStatus: "none",
+  copilotReviewRoundCount: 0,
+  ciStatus: "success",
+  copilotRequestNotObservable: true,
+};
+
+test("unobservable requests with timed-out probes report copilot_unavailable / request_not_observable", () => {
+  const result = interpretLoopState(unobservableSnapshot, { maxCopilotRounds: 3 });
+  assert.equal(result.state, STATE.COPILOT_UNAVAILABLE);
+  assert.equal(result.copilotUnavailableReason, "request_not_observable");
+  assert.equal(summarizeLoopInterpretation(result).loopDisposition, DISPOSITION.DONE);
+});
+
+test("a request that becomes observable later is a normal round", () => {
+  const requested = interpretLoopState({ ...unobservableSnapshot, copilotReviewRequestStatus: "requested" }, { maxCopilotRounds: 3 });
+  assert.equal(requested.state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  assert.equal(requested.copilotUnavailableReason, null);
+  const reviewed = interpretLoopState({ ...unobservableSnapshot, copilotReviewPresent: true, copilotReviewOnCurrentHead: true, copilotReviewRoundCount: 1 }, { maxCopilotRounds: 3 });
+  assert.equal(reviewed.state, STATE.READY_TO_REREQUEST_REVIEW);
+});
+
+test("a dropped request in round 2+ (earlier head reviewed, current head not) reports copilot_unavailable", () => {
+  const result = interpretLoopState({
+    ...unobservableSnapshot,
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: false,
+    copilotReviewRoundCount: 1,
+  }, { maxCopilotRounds: 3 });
+  assert.equal(result.state, STATE.COPILOT_UNAVAILABLE);
+});
+
+test("an earlier-head body finding that never reached the judge blocks copilot_unavailable", () => {
+  const result = interpretLoopState({ ...unobservableSnapshot, copilotPriorHeadBodyFeedbackUnresolved: true }, { maxCopilotRounds: 3 });
+  assert.notEqual(result.state, STATE.COPILOT_UNAVAILABLE);
+});
+
+test("unresolved feedback takes priority over copilot_unavailable", () => {
+  for (const extra of [{ unresolvedThreadCount: 2 }, { copilotBodyFeedbackUnresolved: true }]) {
+    const result = interpretLoopState({ ...unobservableSnapshot, ...extra }, { maxCopilotRounds: 3 });
+    assert.equal(result.state, STATE.UNRESOLVED_FEEDBACK_PRESENT);
+  }
 });

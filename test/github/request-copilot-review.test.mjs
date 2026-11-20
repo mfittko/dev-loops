@@ -21,7 +21,7 @@ const GH_ENTRIES = Symbol("request-copilot-review gh entries");
 
 // Config-hermeticity (issue #2055): these tests assert cap=2 round behavior.
 // Resolve the round cap from a fixture repoRoot pinning refinement.maxCopilotRounds: 2
-// instead of the ambient .devloops (the repo pins maxCopilotRounds to 2 for
+// instead of the ambient .devloops (the fixture owns its cap for
 // test isolation). Assertions are
 // unchanged; the suite simply owns its cap instead of inheriting the shipped one.
 // The fixture also pins the strict Copilot convergence mode
@@ -122,11 +122,11 @@ async function unexpectedDelay(ms) {
   throw new Error(`runInProcess: unexpected delay(${ms}ms) — this test path must not enter the verification retry loop`);
 }
 
-async function runInProcess(args, entries, { env = { GH_SEQUENCE_PATH: "1" }, delayImpl = unexpectedDelay, repoRoot = capFixtureRepoRoot } = {}) {
+async function runInProcess(args, entries, { env = { GH_SEQUENCE_PATH: "1" }, delayImpl = unexpectedDelay, repoRoot = capFixtureRepoRoot, checkpointDir } = {}) {
   const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true });
   const options = parseRequestCliArgs(args);
   try {
-    const result = await performCopilotReviewRequest(options, { env, ghCommand: "gh", runChild, delayImpl, repoRoot });
+    const result = await performCopilotReviewRequest(options, { env, ghCommand: "gh", runChild, delayImpl, repoRoot, checkpointDir });
     return { result, calls };
   } catch (error) {
     // Attach the recorded gh calls to a rejection too, so a test asserting
@@ -2943,4 +2943,51 @@ test("isCopilotReviewObservableViaGraphql does not treat a copilot-x review requ
   const runChild = async () => ({ code: 0, stdout: JSON.stringify(payload), stderr: "" });
   const observable = await isCopilotReviewObservableViaGraphql({ repo: "owner/repo", pr: 17, headSha: "abc123" }, { runChild });
   assert.equal(observable, false);
+});
+
+const UNOBSERVABLE_HEAD = "a".repeat(40);
+
+function neverObservableEntries() {
+  const head = UNOBSERVABLE_HEAD;
+  const emptyRequestedReviewersEntry = {
+    assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+    stdout: '{"users":[],"teams":[]}\n',
+  };
+  const emptyReviewsEntry = {
+    assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+    stdout: `{"headRefOid":"${head}","reviews":[]}\n`,
+  };
+  const entries = [
+    emptyRequestedReviewersEntry,
+    emptyReviewsEntry,
+    {
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
+      stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
+    },
+    emptyRequestedReviewersEntry,
+    emptyReviewsEntry,
+    GRAPHQL_NOT_OBSERVED_ENTRY,
+    emptyRequestedReviewersEntry, emptyReviewsEntry,
+    emptyRequestedReviewersEntry, emptyReviewsEntry,
+    emptyRequestedReviewersEntry, emptyReviewsEntry,
+  ];
+  return entries;
+}
+
+test("a request POSTed but never observable records one unobservable request for the head", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "request-unobservable-"));
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], neverObservableEntries(), { delayImpl: async () => {}, checkpointDir });
+  assert.equal(result.status, "requested");
+  assert.match(result.detail, /not yet observable/);
+  const record = JSON.parse(await readFile(path.join(checkpointDir, "unobservable-review-requests.json"), "utf8"));
+  assert.deepEqual([record.headSha, record.unobservableRequests, record.timedOutProbes], [UNOBSERVABLE_HEAD, 1, 0]);
+});
+
+test("a failed unobservable-request record write keeps status requested and adds a warning", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "request-unobservable-"));
+  // A directory at the record path makes the write fail for every user, root included.
+  await mkdir(path.join(checkpointDir, "unobservable-review-requests.json", "keep"), { recursive: true });
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], neverObservableEntries(), { delayImpl: async () => {}, checkpointDir });
+  assert.equal(result.status, "requested");
+  assert.match(result.warning, /could not record the unobservable request/);
 });
