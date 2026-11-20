@@ -945,12 +945,14 @@ test("a refused locally_clear result followed by a no-commit re-emission keeps t
 
 
 // ADR 0255: the PR 3087 state. The cap-round head P1, a fix commit P2, then a base refresh merged in; the sequence is closed (no marker, no plan) and the head moved.
-function reviewerOnlyRepo({ conflictOnly = false, nonBaseOnlyMerge = false, evilMerge = false, octopus = false, baseChanges = false, ownChanges = false, commitAfterMerge = false, netRevert = false, resolutionGitlink = false } = {}) {
+function reviewerOnlyRepo({ conflictOnly = false, nonBaseOnlyMerge = false, evilMerge = false, octopus = false, baseChanges = false, ownChanges = false, commitAfterMerge = false, netRevert = false, resolutionGitlink = false, overlap = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-only-"));
   initGitFixture(dir, { branch: "main", commit: null });
   const git = (...args) => runGitFixture(dir, args);
   git("config", "commit.gpgsign", "false");
+  const sharedLines = (top, bottom) => `${top}\n1\n2\n3\n4\n5\n6\n7\n8\n9\n${bottom}\n`;
   fs.writeFileSync(path.join(dir, "gone.mjs"), "export const goneIdentifierName = 1;\n");
+  if (overlap) fs.writeFileSync(path.join(dir, "shared.txt"), sharedLines("top", "bottom"));
   git("add", "."); git("commit", "-qm", "base");
   git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"));
   git("checkout", "-qb", "pr");
@@ -959,12 +961,14 @@ function reviewerOnlyRepo({ conflictOnly = false, nonBaseOnlyMerge = false, evil
   const baseline = git("rev-parse", "HEAD");
   fs.writeFileSync(path.join(dir, "a.mjs"), "// uses goneIdentifierName\nexport const a = 2;\n");
   if (ownChanges) { fs.mkdirSync(path.join(dir, "changes")); fs.writeFileSync(path.join(dir, "changes", "own.md"), "own\n"); }
+  if (overlap) fs.writeFileSync(path.join(dir, "shared.txt"), sharedLines("top", "pr-bottom"));
   git("add", "."); git("commit", "-qm", "fix: a");
   if (netRevert) { fs.writeFileSync(path.join(dir, "a.mjs"), "// uses goneIdentifierName\nexport const a = 1;\n"); git("add", "."); git("commit", "-qm", "revert: a"); }
   const fix = git("rev-parse", "HEAD");
   git("checkout", "-q", "main");
   fs.writeFileSync(path.join(dir, "refreshed.txt"), "from the base\n");
   if (baseChanges) { fs.mkdirSync(path.join(dir, "changes")); fs.writeFileSync(path.join(dir, "changes", "base.md"), "base\n"); }
+  if (overlap) fs.writeFileSync(path.join(dir, "shared.txt"), sharedLines("main-top", "bottom"));
   if (conflictOnly) fs.writeFileSync(path.join(dir, "a.mjs"), "export const a = \"main\";\n");
   git("rm", "-q", "gone.mjs");
   git("add", "."); git("commit", "-qm", "base moves");
@@ -1398,6 +1402,20 @@ test("a reviewer-only run reviews a merge that is not base-only through its own 
     assert.doesNotMatch(patch, /refreshed\.txt/);
     assert.equal(evilRun.decision.outcome, "locally_clear");
   } finally { cleanup(clean); cleanup(evil); }
+});
+
+test("AC1: a reviewer-only run over a clean merge whose base touched a PR-changed file reviews that overlap and refuses only when the overlap is empty", async () => {
+  const overlap = reviewerOnlyRepo({ overlap: true });
+  const none = reviewerOnlyRepo();
+  try {
+    const at = (repo) => ({ ...repo, baseline: repo.fix, head: repo.mergeHead });
+    const run = await reviewerOnlyRun(at(overlap), {});
+    const patch = fs.readFileSync(run.input.patchPath, "utf8");
+    assert.match(patch, /shared\.txt/);
+    assert.doesNotMatch(patch, /refreshed\.txt|gone\.mjs/, "base-only paths stay out of the review");
+    assert.equal(run.decision.outcome, "locally_clear");
+    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(at(none)), "--spec-identity", "spec@1", "--result-path", path.join(none.dir, "r.json")], seam), /no PR-own commit/);
+  } finally { cleanup(overlap); cleanup(none); }
 });
 
 // ADR 0255: the reviewer-only run takes over the fixer's non-clearing record at the baseline when the refs match.

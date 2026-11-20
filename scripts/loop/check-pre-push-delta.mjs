@@ -456,7 +456,18 @@ async function reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyM
       ? gitRemergeShow(repoRoot, merge, ["--name-only", "-z"], "utf8") : null;
     if (shown?.status !== 0) throw new Error(`non_base_only_merge: merge ${merge} in ${baseline}..${head} ${shown || parents.status !== 0 ? "has a resolution diff or parents that cannot be read" : `is an octopus merge (${parents.stdout.trim().split(" ").length - 1} parents)`} (${((shown ?? parents).stderr ?? "").trim() || (shown ?? parents).error?.message}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
     const paths = shown.stdout.split("\0").filter(Boolean);
-    if (paths.length === 0) continue; // a clean merge adds no change of its own
+    if (paths.length === 0) {
+      // A clean merge adds no change of its own, but the files both parents changed since their merge base are reviewed: the delta covers where main and the PR meet.
+      const [, p1, p2] = parents.stdout.trim().split(" ");
+      const mb = spawnSync("git", ["-C", repoRoot, "merge-base", p1, p2], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+      const sideNames = (tip) => {
+        const r = spawnSync("git", ["-C", repoRoot, "diff", "--no-renames", "--name-only", "-z", mb.stdout.trim(), tip], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+        if (r.status !== 0) throw new Error(`non_base_only_merge: cannot read the paths merge ${merge} brought in (${(r.stderr ?? "").trim()}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
+        return r.stdout.split("\0").filter(Boolean);
+      };
+      if (mb.status === 0 && mb.stdout.trim()) { const main = new Set(sideNames(p2)); resolvedPaths.push(...sideNames(p1).filter((f) => main.has(f))); }
+      continue;
+    }
     resolvedPaths.push(...paths);
     resolvedMerges.push(merge);
   }
