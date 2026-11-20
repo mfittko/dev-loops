@@ -77,6 +77,7 @@ Behavior:
   - refuses with \`pre_pr_review_missing\` unless a pre-PR review record covers the branch head (PRE-PR-BEFORE-FIRST-PUSH); the writer command is in that rule.
   - refuses with \`head_unresolvable\` (a defensive fallback; the earlier pre-PR record guard normally refuses the same input with \`pre_pr_review_missing\`, which also names \`git fetch origin\`) when \`origin/<base>\` resolves but \`--head\` resolves neither locally nor as \`origin/<branch>\`; run \`git fetch origin\` and retry
   - refuses any \`adr-tripwire:allow\` line in the body, and \`--fill\`/\`--fill-verbose\`/\`--fill-first\`/\`--template\` without \`--body\`/\`--body-file\`, and \`--recover\`/\`--editor\`/\`--web\` always (gh would source a body this wrapper cannot check); write a waiver only through \`dev-loops pr waive-adr-tripwire\`
+  - refuses a \`--body\`/\`--body-file\` of literal \`null\` (a failed read written back); \`--allow-empty-body\` (boolean, consumed here, never forwarded to \`gh\`) overrides it
   - forwards every other argument to \`gh pr create\` unchanged
   - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
   - refuses with \`size_split_required_before_pr\` before creating when the local \`origin/<base>...<head>\` whole-PR logic LOC is at or above the resolved default-tier \`waiverLoc\` (PRE-PR-SIZE-CHECK); no override flag; an unknown size does not refuse
@@ -121,6 +122,8 @@ const ALLOW_REPLACEMENT_FLAG_PATTERN = /^--allow-replacement-pr(?:=(.*))?$/u;
 // `--allow-cross-issue` records a deliberate cross-issue closing reference,
 // waiving the branch-derived closing-reference mismatch guard. Consumed by the
 // wrapper (never forwarded to gh).
+// `--allow-empty-body` (boolean) lets a body of literal `null` through the shared guard.
+const ALLOW_EMPTY_BODY_FLAG_PATTERN = /^--allow-empty-body(?:=(.*))?$/iu;
 const ALLOW_CROSS_ISSUE_FLAG_PATTERN = /^--allow-cross-issue(?:=(.*))?$/iu;
 // Resolve the current git branch so the closing reference can be checked
 // against the issue the branch was cut for when `--issue` is omitted. Injectable
@@ -207,13 +210,13 @@ export { detectClosingKeyword, extractClosingIssueNumber };
 // An unreadable or empty --body-file FAILS CLOSED (throws) rather than silently
 // substituting "" (which used to let a broken/blank --body-file open a body-less
 // PR unnoticed).
-async function resolveBody(args) {
+async function resolveBody(args, allowEmptyBody = false) {
   const { body, bodyFile } = scanPrFlags(args);
   if (body !== null) {
-    return body;
+    return resolveBodyOrFile({ body, allowEmptyBody });
   }
   if (bodyFile !== null) {
-    return resolveBodyOrFile({ bodyFile, allowStdin: false });
+    return resolveBodyOrFile({ bodyFile, allowStdin: false, allowEmptyBody });
   }
   return null; // no --body/--body-file given
 }
@@ -516,6 +519,9 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   const lastCrossIssueToken = argv.filter((token) => ALLOW_CROSS_ISSUE_FLAG_PATTERN.test(token)).at(-1) ?? null;
   const allowCrossIssue = lastCrossIssueToken === "--allow-cross-issue" ||
     (typeof lastCrossIssueToken === "string" && TRUE_FLAG_VALUE_PATTERN.test(lastCrossIssueToken.slice("--allow-cross-issue=".length)));
+  const lastEmptyBodyToken = argv.filter((token) => ALLOW_EMPTY_BODY_FLAG_PATTERN.test(token)).at(-1) ?? null;
+  const allowEmptyBody = lastEmptyBodyToken === "--allow-empty-body" ||
+    (typeof lastEmptyBodyToken === "string" && TRUE_FLAG_VALUE_PATTERN.test(lastEmptyBodyToken.slice("--allow-empty-body=".length)));
   // Strip --lightweight, --issue, --allow-replacement-pr, and
   // --allow-cross-issue (each with its value in the space form) so none is
   // forwarded to `gh pr create` (which rejects unknown flags).
@@ -541,6 +547,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     }
     // Boolean flag (bare or `=value`): never consumes a following space token.
     if (ALLOW_CROSS_ISSUE_FLAG_PATTERN.test(token)) continue;
+    if (ALLOW_EMPTY_BODY_FLAG_PATTERN.test(token)) continue;
     forwardedArgv.push(token);
   }
   // When the caller gave no explicit --base/-B, resolve the default base from
@@ -559,7 +566,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   if (sources.body !== null && sources.bodyFile !== null) {
     throw parseError("--body and --body-file are mutually exclusive; pass only one");
   }
-  const body = await resolveBody(forwardedArgv);
+  const body = await resolveBody(forwardedArgv, allowEmptyBody);
   if (forwardedArgv.some((token) => token === "--recover" || token.startsWith("--recover="))) {
     throw parseError("ADR-TRIPWIRE-STANDING-WAIVER: --recover loads a saved body that this wrapper cannot check, even with --body or --body-file; remove --recover");
   }

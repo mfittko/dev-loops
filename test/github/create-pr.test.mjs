@@ -826,6 +826,29 @@ test("create-pr --body-file with an unreadable file fails closed: nonzero exit, 
   }
 });
 
+test("create-pr refuses a literal null body (inline, padded and file) and --allow-empty-body overrides without reaching gh (#3305)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-null-body-"));
+  try {
+    const nullFile = path.join(tempDir, "null.md");
+    await writeFile(nullFile, "null\n");
+    const base = ["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "Add feature"];
+    for (const bodyArgs of [["--body", "null"], ["--body", "  null  "], ["--body-file", nullFile]]) {
+      const { env, ghLogPath } = await writeGhStub(tempDir, []);
+      const result = await runNode([...base, ...bodyArgs], { env, cwd: tempDir, noRecord: true });
+      assert.notEqual(result.code, 0);
+      assert.match(result.stderr, /only `null`/);
+      assert.equal((await readGhCalls(ghLogPath)).length, 0);
+    }
+    const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
+    await runNode([...base, "--body", "null", "--allow-empty-body"], { env, cwd: tempDir, noRecord: true });
+    for (const args of await readGhCalls(ghLogPath)) {
+      assert.ok(!args.includes("--allow-empty-body"), "--allow-empty-body must not be forwarded to gh");
+    }
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 // --- arg-building tests ---
 
 test("buildCreatePrArgs injects --draft when absent", () => {
