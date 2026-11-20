@@ -101,9 +101,8 @@ before(async () => {
   assert.notEqual(fanoutOff, realDevloops, "expected to find gates.requireFanoutEvidence: true in the repo's own .devloops to patch for test isolation");
   // Config-hermeticity (issue #2055): pin the round cap to 2 so these tests own
   // their cap instead of inheriting the ambient .devloops refinement.maxCopilotRounds
-  // (the repo pins refinement.maxCopilotRounds to 2 for test isolation).
-  // Assertions are unchanged; the replace is a
-  // no-op when the ambient value is already 2 (e.g. main).
+  // (the fixture pins the cap to 2 regardless of the ambient value).
+  // Assertions are unchanged.
   // The legacy input shapes below predate the round cap, so the default fixture turns it off (the cap has its own tests).
   const patched = fanoutOff.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2").replace("\n  draft:\n", "\n  draft:\n    maxReviewRounds: 0\n");
   assert.match(patched, /maxCopilotRounds: 2/, "expected refinement.maxCopilotRounds in the repo's own .devloops to pin for test isolation");
