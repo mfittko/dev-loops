@@ -1,3 +1,3 @@
 ### Fixed
 
-- `loop pre-push-delta --reviewer-only` reviews the overlap paths of a clean base merge with an empty remerge diff, so a `locally_clear` result clears the cap-round chain instead of deadlocking (#3356)
+- `loop pre-push-delta --reviewer-only` reviews the overlap paths of a clean base merge with an empty remerge diff, so a `locally_clear` result clears the cap-round chain (#3356)
