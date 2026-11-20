@@ -1306,6 +1306,13 @@ test("classifyCopilotReviewBodyDisposition: the captured Copilot error body clas
   );
 });
 
+test("classifyCopilotReviewBodyDisposition: the Copilot quota refusal body classifies review_error", () => {
+  assert.equal(
+    classifyCopilotReviewBodyDisposition("COMMENTED", readOverviewFixture("review-error-quota.md")),
+    COPILOT_DISPOSITION.REVIEW_ERROR,
+  );
+});
+
 test("classifyCopilotReviewBodyDisposition: a disposition header wins over a quoted error sentence", () => {
   const body = `### 🟢 Approval recommended\n\n${readOverviewFixture("review-error.md")}`;
   assert.equal(classifyCopilotReviewBodyDisposition("COMMENTED", body), COPILOT_DISPOSITION.CLEAN);

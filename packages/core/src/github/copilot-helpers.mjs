@@ -46,7 +46,7 @@ export const COPILOT_DISPOSITION = Object.freeze({
   REVIEW_ERROR: "review_error",
 });
 
-const COPILOT_REVIEW_ERROR_PREFIX_RE = /^copilot encountered an error/i;
+const COPILOT_REVIEW_ERROR_PREFIX_RE = /^copilot (?:encountered an error|was unable to review this pull request)/i;
 const COPILOT_ZERO_FILE_REVIEW_RE = /wasn['’]t able to review any files|reviewed 0 out of \d+ changed files/i;
 
 /**
