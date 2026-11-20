@@ -355,7 +355,7 @@ stands over open judge act items (the first case is all low or nit, at the cap r
 clean current-head `pre_approval_gate`.
 
 A body-only cap round (`GATE-EXEC-NO-DEAD-END`, ADR 0271) renders the same line at the reviewed head with
-the fixer commit equal to the PR head, or to the commit before a carry-eligible base merge (ADR 0294; see
+the fixer commit equal to the PR head, or to a commit that a later base merge carries from under the full base-merge carry classifier (`convergedCarryAccepts`, ADR 0294; see
 `GATE-EXEC-BASE-MERGE-VERDICT-CARRY` for the converged carry origin); its digest is the sha256 of the body-only evidence (the reviewed and
 live PR-body digests and the act list), not a delta result.
 

@@ -83,8 +83,8 @@ Optional:
 Optional marker field: carriedFrom (the origin head of a carried verdict). A carried
 marker's headSha is the current head and differs from the comment summary's
 headSha; carriedFrom names the carry origin head (the fixer commit for a converged
-draft_gate marker). A converged carry also emits converged and convergedFromHeadSha (the
-reviewed head that holds the verdict and ledger).
+draft_gate marker). Any converged draft_gate marker emits converged and convergedFromHeadSha
+(the reviewed head that holds the verdict and ledger); a carried one also emits carriedFrom.
 Output (stdout, JSON; always includes preMergeGateCheck):
   {
     "ok": true,
