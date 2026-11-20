@@ -89,6 +89,12 @@ Four further Bash-gate denials carry no registered rule ID, so they stay out of 
 
 Pi parity for the merge-pr deny: it is shared-module code whose only consumer today is the Claude PreToolUse seam. Pi has no Bash-gate consumer yet (wiring is issue 3033), so `bun run test:extension` is unchanged.
 
+`OPERATOR-DECISION-RECORDER` (registered in `skills/docs/decision-record-contract.md`, ADR 0295) is a registered rule. It sits in `BASH_GATE_RULES` after `COPILOT-FOLLOWUP-WAIT-TOOLS` and carries its own `ruleId`: it denies `decision record` from any subagent (`role` non-null) and every spelling other than the plain prefix form `dev-loops-run` followed by `cli/index.mjs decision record ...` (the `--repo-root` form is denied until a live session verifies its ask pattern, ADR 0295).
+
+### Operator decision recorder on Pi
+
+The recorder rests on a per-call permission prompt, which is a Claude Code feature: the shipped `permissions.ask` rules in `.claude/settings.json` prompt the operator before every call, in default and auto mode. Pi has no permission prompt and no Bash hook (issue 3033). The recorder therefore runs only when `CLAUDECODE=1` is set (`CLAUDE_HARNESS_MARKER`). Under Pi it refuses with `reason: harness_without_permission_prompt` and names the fallback: the operator posts the decision comment by hand, as before. This is the one path where a skill or contract may tell the operator to post by hand. The Pi path stays manual until Pi has a per-call approval surface. A Pi session can set `CLAUDECODE=1` itself, so the check guards against accident and is not a security boundary. `test/github/record-operator-decision.test.mjs` runs the recorder under both environments.
+
 ### Claude-edge Bash-gate rules outside the shared module
 
 The Claude PreToolUse seam keeps two Bash-gate rules the shared module does not own, because they key on Claude role machinery with no equivalent outside that seam:

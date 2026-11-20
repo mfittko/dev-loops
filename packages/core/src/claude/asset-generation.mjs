@@ -137,7 +137,7 @@ export const WRAPPER_LAUNCHER = "dev-loops-run";
  * `inspect` are and were previously missing here, which left e.g. `dev-loops issue edit …` bare
  * and unrouted in the generated tree.
  */
-export const WRAPPER_NS = "gate|loop|pr|issue|queue|project|inspect|refine";
+export const WRAPPER_NS = "gate|loop|pr|decision|issue|queue|project|inspect|refine";
 
 /**
  * Regex source (no flags) matching a bare `node scripts/<dir>/…/<file>.mjs` invocation, at ANY

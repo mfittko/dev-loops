@@ -43,6 +43,7 @@ import {
   commandIsSleepPollLoop,
   commandIsFileMarkerPollLoop,
   commandContainsInlineInterpreter,
+  classifyDecisionRecorderCommand,
   commandContainsCodeVerificationEntrypoint,
   tokenizeShellCommand,
 } from "../src/loop/bash-command-classify.mjs";
@@ -1917,4 +1918,12 @@ test("round 3: a shell reached through env/command/exec or `<(`, a joined heredo
   // thread 5: a here-string or `-c` counts as payload only for a consumer that executes text
   for (const c of ["cat <<< 'node -e x'", "head -c 100 'node -e x'", "env head -c 100 'node -e x'", 'echo "${HOME}"']) assert.equal(commandContainsInlineInterpreter(c), false, c);
   for (const c of ["bash <<< 'node -e x'", "env bash <<< 'node -e x'", "exec sh -c 'node -e x'"]) assert.equal(commandContainsInlineInterpreter(c), true, c);
+});
+
+test("commandContainsInlineInterpreter shifts a wrapper flag value that is named like a launcher", () => {
+  for (const c of ["sudo -u node node -e 'x'", "sudo -u node python3 -c 'x'", "sudo -u bun node -e 'x'", "sudo -u dev-loops node -e 'x'", "sudo -u dev-loops-run python3 -c x"]) assert.equal(commandContainsInlineInterpreter(c), true, c);
+});
+
+test("classifyDecisionRecorderCommand keeps a launcher word after a bare wrapper flag", () => {
+  assert.notEqual(classifyDecisionRecorderCommand("sudo -n node scripts/github/record-operator-*.mjs --repo o/n"), null);
 });
