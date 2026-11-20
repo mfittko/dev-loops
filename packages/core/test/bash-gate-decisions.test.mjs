@@ -591,6 +591,9 @@ const RECORDER_SPELLINGS = [
   `dev-loops-run scripts/github/RECORD-OPERATOR-DECISION.MJS --repo o/n`,
   `dev-loops-run CLI/Index.mjs decision record --repo o/n`,
   `node scripts/github/Record-Operator-Decision.mjs --repo o/n`,
+  `env node scripts/github/record-operator-decision.mjs --repo o/n`,
+  `./scripts/github/record-operator-decision.mjs --repo o/n`,
+  `node --loader ./l.mjs scripts/github/record-operator-decision.mjs --repo o/n`,
   `dev-loops-run cli/index.mjs Decision Record --repo o/n`,
 ];
 
@@ -735,6 +738,12 @@ test("quoted prose that mentions dev-loops-run and plain runner commands are not
     `bun test packages/core/test/*decision*`,
   ]) {
     assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, command);
+  }
+});
+
+test("plain file commands on the recorder source are not denied, for the main agent and a subagent", () => {
+  for (const command of ["git add scripts/github/record-operator-decision.mjs", "git diff -- scripts/github/record-operator-decision.mjs", "git log -- scripts/github/record-operator-decision.mjs", "rg foo scripts/github/record-operator-decision.mjs"]) {
+    for (const role of [null, "developer"]) assert.equal(decideBashGateDeny({ ...BASE, role, command }), null, command);
   }
 });
 

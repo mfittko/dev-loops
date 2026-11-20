@@ -1891,7 +1891,10 @@ export function classifyDecisionRecorderCommand(command) {
     const stripped = [stripLeadingWrappers(segment), stripLeadingWrappers(segment, LAUNCHER_FLAG_TARGETS)];
     // Lowercase: a case-insensitive filesystem runs `Record-Operator-Decision.mjs` or `CLI/Index.mjs`. Only `canonical` below stays byte-exact.
     const words = segment.replace(/['"\\]/g, "").toLowerCase().split(/\s+/);
-    const script = words.some((w) => w.endsWith("record-operator-decision.mjs"));
+    // A file command (`git add`, `rg`) that only names the recorder source is no recorder spelling (ADR 0295: the path under a runner).
+    // shortcut: an allow-list of plain file commands, not of runners, so `bash -c 'node ...'` and `xargs` stay denied as before; widen it when another plain file command is blocked.
+    const fileCommand = stripped.some((s) => /^(?:git|rg|grep|cat|ls|head|tail|wc|diff|stat)$/.test(s.split(/\s+/)[0].replace(/['"\\]/g, "").toLowerCase().replace(/^.*\//, "")));
+    const script = !fileCommand && words.some((w) => w.endsWith("record-operator-decision.mjs"));
     const at = words.findIndex((w, i) => w === "decision" && words[i + 1] === "record");
     const cli = at >= 0 && words.slice(0, at).some((w) => /(?:^|\/)(?:dev-loops(?:-run)?|index\.mjs)$/.test(w));
     if (!script && !cli && !stripped.some((s) => hasUnreadableLauncherWord(s.split(/\s+/)))) continue;
