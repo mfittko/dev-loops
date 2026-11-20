@@ -432,7 +432,7 @@ test("the closure round line renders a normalized full SHA and refuses a short, 
 
 // A clean cap round whose post was refused at its own head posts there once the PR head has moved on.
 const CAP_HEAD = "4".repeat(40);
-async function postCleanCapRound(tempDir, { capHead = CAP_HEAD, sealedVerdict = "clean", ancestor = true, headSha = capHead, prState = {}, extraArgs = [], calls = [], postedOverrides = {}, proven = false, checkBaseFreshness, gate = "draft_gate", sealedHead = capHead, issueComments = [], seal = "valid", mergeBaseCode } = {}) {
+async function postCleanCapRound(tempDir, { capHead = CAP_HEAD, sealedVerdict = "clean", ancestor = true, headSha = capHead, prState = {}, extraArgs = [], calls = [], postedOverrides = {}, proven = false, checkBaseFreshness, gate = "draft_gate", sealedHead = capHead, issueComments = [], seal = "valid", mergeBaseCode, retained = false } = {}) {
   await seedPrior(repoRoot, priorHeads);
   const deltaDir = path.join(repoRoot, "tmp", "gate-delta");
   await rm(deltaDir, { recursive: true, force: true });
@@ -446,8 +446,9 @@ async function postCleanCapRound(tempDir, { capHead = CAP_HEAD, sealedVerdict = 
   const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-17");
   const sealed = { repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: capHead, verdict: sealedVerdict, overallVerdict: sealedVerdict, loggedAt: "2026-11-04T00:00:00.000Z", findings: [] };
   const sealedText = JSON.stringify({ ...sealed, headSha: sealedHead });
-  await writeFile(path.join(dir, `draft_gate-${capHead}.json`), sealedText, "utf8");
-  if (seal !== "none") await writeFile(path.join(dir, `draft_gate-${capHead}.json.seal`), `${createHash("sha256").update(seal === "valid" ? sealedText : "tampered").digest("hex")}\n`, "utf8");
+  const ledgerName = retained ? `draft_gate-${capHead}.round-4.json` : `draft_gate-${capHead}.json`;
+  await writeFile(path.join(dir, ledgerName), sealedText, "utf8");
+  if (seal !== "none") await writeFile(path.join(dir, `${ledgerName}.seal`), `${createHash("sha256").update(seal === "valid" ? sealedText : "tampered").digest("hex")}\n`, "utf8");
   const ledger = path.join(tempDir, "cap-ledger.json");
   await writeFile(ledger, JSON.stringify({ ...sealed, ...postedOverrides }), "utf8");
   const posted = [];
@@ -473,6 +474,16 @@ test("a clean cap round posts at its own ancestor head with the cap round number
     assert.match(out.body, /round[=: ]+4\b/i);
     assert.ok(out.body.includes(CAP_HEAD.slice(0, 7)));
   }, { prefix: "dev-loops-round-cap-ancestor-" });
+});
+
+test("a clean cap round retained at its head posts with the cap round number and needs its own retained seal", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await postCleanCapRound(tempDir, { retained: true });
+    assert.equal(out.error, undefined);
+    assert.equal(verdictOf(out), "clean");
+    assert.match(out.body, /round=4\b/);
+    assert.match((await postCleanCapRound(tempDir, { retained: true, seal: "none" })).error ?? "", /does not match the current PR head/);
+  }, { prefix: "dev-loops-round-cap-retained-" });
 });
 
 test("a clean cap-round post checks base freshness against the current PR head, not the cap-round head", async () => {

@@ -66,7 +66,6 @@ import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
-import { buildLogPath } from "./_gate-artifact-paths.mjs";
 import { countPrOwnCommits as realCountPrOwnCommits } from "../loop/check-pre-push-delta.mjs";
 import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
 import { buildValidationResultsPath, countCompletedRounds, buildGateContextPath, isCleanCapRound, prBodySha256, readGateContext, resolveCapRound, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
@@ -1872,9 +1871,8 @@ async function resolveCleanCapRoundHead({ options, cap, currentHeadSha, repoRoot
   const capRound = await resolveCapRound({ repo: options.repo, pr: options.pr, headSha: currentHeadSha }, { repoRoot }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; });
   const roundHead = normalizeFullHeadSha(capRound?.log?.headSha ?? "");
   if (!isCleanCapRound(capRound) || !roundHead || !roundHead.startsWith(options.headSha.toLowerCase())) return null;
-  // readSealed accepts a missing seal as legacy; the catch-up post requires the seal file (the read above verified it when present).
-  const ledgerPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: "draft_gate", headSha: roundHead, tmpRoot: resolveGateArtifactTmpRoot(repoRoot) });
-  if (!(await stat(`${path.resolve(repoRoot, ledgerPath)}.seal`).then(() => true, () => false))) return null;
+  // readSealed accepts a missing seal as legacy; the catch-up post requires the selected artifact's own seal file (live or retained; the read above verified it when present).
+  if (!(await stat(`${capRound.ledgerPath}.seal`).then(() => true, () => false))) return null;
   const ancestry = await runChild("git", ["-C", repoRoot, "merge-base", "--is-ancestor", roundHead, currentHeadSha], env);
   if (ancestry.code === 1) return null;
   if (ancestry.code !== 0) throw new Error(`git merge-base --is-ancestor failed (exit ${ancestry.code}) for cap-round head ${roundHead} and PR head ${currentHeadSha}; run \`git fetch origin ${roundHead} ${currentHeadSha}\` and retry.`);
@@ -3102,7 +3100,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // it holds no finding, so the cap has nothing to count or block.
     if (options.gate === "draft_gate" && draftGateConfig.maxReviewRounds > 0) {
       // ADR 0208: round N+1 never runs, whatever the post shape (the inline exception below included); a converged post is the one carve-out.
-      const roundNo = options.convergedJson ? 0 : await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: options.findingsLedger ? ledgerTmpRoot(options.findingsLedger) : undefined }, { repoRoot });
+      // A cap-round catch-up post publishes the already-completed cap round, never a new one.
+      const roundNo = options.convergedJson ? 0 : capRoundHead ? draftGateConfig.maxReviewRounds : await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: options.findingsLedger ? ledgerTmpRoot(options.findingsLedger) : undefined }, { repoRoot });
       if (isRoundRefused(roundNo, draftGateConfig.maxReviewRounds)) throw roundCapReachedError(roundNo, draftGateConfig.maxReviewRounds);
       const inlineVerdictOnlyClean = !options.findingsJson && !options.findingsLedger && !options.findingsFile && options.verdict === "clean"
         && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent";
@@ -3370,7 +3369,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // ADR 0208: round N+1 (count cap+1) never runs; every post but --converged-json is refused with round_cap_reached, and the cap round's fixer pass leads to ready.
     const cap = draftGateConfig?.maxReviewRounds ?? 0;
     const completedRound = options.gate === "draft_gate" && !convergedInput && cap > 0
-      ? await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot })
+      ? (capRoundHead ? cap : await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot }))
       : 0;
     // ADR 0208: round N+1 never runs; the cap round's fixer pass is the last draft step and the PR goes ready.
     if (isRoundRefused(completedRound, cap)) {
@@ -3831,6 +3830,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     },
     gh,
   );
+  // The catch-up post carries the cap round's own number (CI looks up the exact cap header), whatever the ledger-file or header count says.
+  if (capRoundHead && findingSurface) findingSurface.round = draftGateConfig.maxReviewRounds;
   // Next action follows the visible set: a non-clean round with no visible finding and no gate
   // blocker has nothing to fix, so the fix-oriented action would point at nothing. A round whose
   // findings were all suppressed by an earlier round keeps its action only when a suppressed finding is still actionable.
@@ -3851,6 +3852,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     gateEvidenceNote: coordination?.gateEvidenceNote ?? null,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
     ...(checkpointComposition ? { reviewVerdict: checkpointComposition.reviewVerdict, gateBlockers: checkpointComposition.blockers } : {}),
+    ...(capRoundHead && !findingSurface ? { round: draftGateConfig.maxReviewRounds } : {}),
     ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable, locatableFindings: findingSurface.locatable, foldedFindings: findingSurface.folded } : {}),
   });
   // ISSUE/PR-ID GUARD: the rendered gate verdict body must never emit a
