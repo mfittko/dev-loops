@@ -19,9 +19,13 @@ const record = ({ action = "reject", gate = "pre_approval_gate", review = REVIEW
   user: { login: "alice", type: "User" },
   author_association: association,
 });
+// Strict stub: only the issue comments endpoint is answered; any other gh call throws.
 const runtimeFor = (comments, root) => ({
   ledgerCheckouts: [root],
-  runChild: async () => ({ code: 0, stderr: "", stdout: comments.map((c) => `${JSON.stringify(c)}\n`).join("") }),
+  runChild: async (_cmd, argv) => {
+    assert.deepEqual(argv.slice(0, 2), ["api", `repos/${REPO}/issues/${PR}/comments`], `unexpected gh call: ${argv.join(" ")}`);
+    return { code: 0, stderr: "", stdout: comments.map((c) => `${JSON.stringify(c)}\n`).join("") };
+  },
 });
 const finding = (overrides = {}) => ({ angle: "copilot-body", severity: "low", summary: "s", reviewId: REVIEW, judgeDisposition: "reject", ...overrides });
 
@@ -77,6 +81,7 @@ describe("resolver", () => {
     ["a missing ledger", () => [record()], () => checkoutWith(null)],
     ["a ledger for another head", () => [record()], () => checkoutWith([finding()], { head: OTHER_HEAD })],
     ["an unreadable ledger", () => [record()], () => checkoutWith(null, { raw: "{not json" })],
+    ...["null", "{}", '{"findings":{}}', '{"findings":null}', "[]"].map((raw) => [`a parsed ledger ${raw} without a findings array`, () => [record()], () => checkoutWith(null, { raw })]),
     ["a ledger for another gate", () => [record()], () => checkoutWith([finding()], { gate: "draft_gate" })],
     ["no copilot-body finding", () => [record()], () => checkoutWith([finding({ angle: "tests" })])],
     ["an act disposition", () => [record()], () => checkoutWith([finding({ judgeDisposition: "act" })])],
@@ -119,6 +124,15 @@ describe("ledger integrity and cross-gate verdicts", () => {
     await writeFile(other, JSON.stringify({ findings: [finding({ judgeDisposition: "act" })] }));
     assert.equal((await resolve([record({ gate: "draft_gate" })], dir)).cleared, false);
   });
+  test("a malformed other-gate ledger copy vetoes a passing named-gate ledger; an empty findings array stays silent", async () => {
+    for (const [raw, cleared] of [['{"findings":{}}', false], ["null", false], ['{"findings":[]}', true]]) {
+      const dir = await checkoutWith([finding()]);
+      const other = path.join(dir, buildLogPath({ repo: REPO, pr: PR, gate: "draft_gate", headSha: HEAD, tmpRoot: "tmp" }));
+      await mkdir(path.dirname(other), { recursive: true });
+      await writeFile(other, raw);
+      assert.equal((await resolve([record()], dir)).cleared, cleared, raw);
+    }
+  });
   test("the other gate's ledger without a finding for the review leaves the named gate's verdict in force", async () => {
     const dir = await checkoutWith([finding()], { gate: "draft_gate" });
     const other = path.join(dir, buildLogPath({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: HEAD, tmpRoot: "tmp" }));
@@ -139,6 +153,12 @@ describe("resolveCurrentHeadBodyFeedback with a judge-bound record", () => {
     assert.equal(result.copilotBodyFeedbackUnresolved, false);
     assert.equal(result.dispositionRequired, null);
     assert.equal(result.judgeFinding.findings[0].reviewId, REVIEW);
+  });
+  test("the advisory reason names the agent-writable judge-bound forms", async () => {
+    const result = await feedback(record({ review: "PRR_other" }), await checkoutWith([finding()]));
+    assert.equal(result.copilotBodyFeedbackUnresolved, true);
+    assert.match(result.dispositionRequired.reason, /reject=<gate> or defer=<gate>/);
+    assert.match(result.dispositionRequired.markerLine, / operator -->$/);
   });
   test("a cleared operator record leaves no judge finding", async () => {
     const operator = { ...record(), body: `<!-- dev-loops:copilot-body-disposition review=${REVIEW} head=${HEAD} operator -->` };

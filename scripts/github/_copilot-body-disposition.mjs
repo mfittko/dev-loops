@@ -146,7 +146,8 @@ async function judgeLedgerClears({ repo, pr, headSha, reviewId, binding }, runti
         if (error?.code === "ENOENT") continue;
         return false;
       }
-      const mine = Array.isArray(findings) ? findings.filter((f) => f?.angle === COPILOT_BODY_ANGLE && typeof f.reviewId === "string" && f.reviewId === reviewId) : [];
+      if (!Array.isArray(findings)) return false;
+      const mine = findings.filter((f) => f?.angle === COPILOT_BODY_ANGLE && typeof f.reviewId === "string" && f.reviewId === reviewId);
       if (mine.length === 0) continue;
       if (!mine.every((f) => findingClears(f, binding))) return false;
       if (gate === binding.gate) passing += 1;
@@ -288,7 +289,7 @@ export function reviewHasOwnThread(reviewThreads, reviewId) {
  * is the parsed thread list (parseReviewThreads().threads).
  *
  * Current head: a body finding on a current-head review stays unresolved
- * unless an `operator` record names it (its review commit is the head, so no
+ * unless an `operator`, `reject=` or `defer=` record names it (its review commit is the head, so no
  * `fix` commit can be after it).
  *
  * Earlier head: when the latest Copilot review sits on an earlier head and is
@@ -342,7 +343,7 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
         dispositionRequired: {
           reviewId: currentReviewId ?? null,
           reviewCommitSha: headSha,
-          reason: "the current-head Copilot review carries body feedback with no trusted copilot-body-disposition record",
+          reason: "the current-head Copilot review carries body feedback with no trusted copilot-body-disposition record; after the gate judge disposes the finding as defer or reject, an agent-writable reject=<gate> or defer=<gate> record clears it",
           ...(record.reasonCode ? { reasonCode: record.reasonCode, reason: record.reason } : {}),
           markerLine: currentReviewId ? markerLineFor(currentReviewId, headSha) : null,
         },

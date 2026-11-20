@@ -347,7 +347,7 @@ function capFixture(dispositions = []) {
 const CAP_CASES = [
   { name: "no disposition record", dispositions: [], cleared: false },
   { name: "trusted operator record for the current head", dispositions: [dispositionComment({ reviewId: "PRR_round2" })], cleared: true },
-  // The finding sits on a current-head review, so no fix commit can be after it: only the operator form clears.
+  // The finding sits on a current-head review, so no fix commit can be after it: only the operator, reject= and defer= forms clear.
   // The compare from the review commit (HEAD) to FIX reports `behind`.
   { name: "trusted fix record for a current-head review", dispositions: [dispositionComment({ reviewId: "PRR_round2", kind: FIX })], extra: [compareEntry(HEAD, FIX, "behind")], cleared: false },
   { name: "record for a stale head", dispositions: [dispositionComment({ reviewId: "PRR_round2", head: PRIOR })], cleared: false },
