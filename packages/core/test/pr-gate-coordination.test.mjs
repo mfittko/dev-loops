@@ -4819,6 +4819,21 @@ test("3105 AC15: a posted findings_present draft_gate verdict with an open act l
   assert.equal(blocked.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, blocked.reason);
 });
 
+test("3309: a cap-round body-only act list routes to the converged post, never the fixer; a clean converged verdict ends the block", () => {
+  const head = "ab".repeat(20);
+  const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };
+  const base = { pr: 9, repo: "o/r", currentHeadSha: head, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: verdict, draftGateMarker: verdict, draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record" };
+  const result = evaluatePrGateCoordination({ ...base, draftOpenActList: { headSha: head, openActCount: 2, blockers: [], bodyOnly: true } });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+  assert.match(result.agentRemedy.command, /^dev-loops-run scripts\/github\/upsert-checkpoint-verdict\.mjs --repo o\/r --pr 9 .*--converged-json/);
+  const blocked = evaluatePrGateCoordination({ ...base, draftOpenActList: { headSha: head, openActCount: 1, blockers: [{ kind: "round_cap_reached", reason: "new_act", item: "[high] x (new_act)" }], bodyOnly: true } });
+  assert.equal(blocked.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
+  // The posted converged verdict is clean evidence at the head: the refusal no longer applies and the result is not address_review_feedback.
+  const clean = { visible: true, headSha: head, verdict: "clean", contractComplete: true };
+  const done = evaluatePrGateCoordination({ ...base, draftRoundRefused: false, draftCapRoundFailure: null, draftGate: { ...clean, cleanEvidenceExists: true, currentHeadClean: true }, draftGateMarker: clean, draftOpenActList: null });
+  assert.notEqual(done.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, done.reason);
+});
+
 test("3105 AC15: an eligible open act list wins over a BEHIND-only refresh, and a real conflict still resolves first", () => {
   const head = "ab".repeat(20);
   const verdict = { visible: true, headSha: head, verdict: "findings_present", contractComplete: true };

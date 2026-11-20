@@ -1309,10 +1309,11 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap }) {
   const log = logs.find((entry) => String(entry.headSha).trim().toLowerCase() === head);
   // The posted verdict is findings_present (the evaluator checks it); a legacy ledger may persist `clean` beside open act items.
   const open = log ? listOpenActItems(log.findings) : [];
-  // The emitter refuses an all-PR-body act list (delta_body_only_act_set), so that list keeps the earlier routing.
-  if (open.length === 0 || open.every(isDeltaBodyItem)) return null;
+  if (open.length === 0) return null;
   // countCompletedRounds counts the round being posted, so the live ledger's round is one less.
   const round = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead: true }) - 1;
+  // The emitter refuses an all-PR-body act list (delta_body_only_act_set): its only exit is the ADR 0271 body-only converged post at the cap round, any other round keeps the earlier routing.
+  if (open.every(isDeltaBodyItem)) return cap > 0 && round === cap ? { headSha: head, openActCount: open.length, blockers: pastCapBlockers(log.findings, { round, cap }), bodyOnly: true } : null;
   // Past the cap the emitter refuses every act list (round_cap_reached), so that round keeps the earlier routing.
   if (cap > 0 && round > cap) return null;
   // The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so that list keeps the earlier routing.

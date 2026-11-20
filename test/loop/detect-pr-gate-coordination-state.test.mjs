@@ -4728,6 +4728,16 @@ test("3105 AC15: a past-cap current-head round keeps the cap-round refusal", asy
   assert.doesNotMatch(result.agentRemedy?.command ?? "", /emit-fixer-work-order/);
 });
 
+// Issue 3309: a cap round of PR-body items only has no fixer route; the cap refusal names the ADR 0271 body-only converged post, and a round below the cap keeps the earlier routing.
+test("3309: a cap-round act list of PR-body items only names the body-only converged post", async () => {
+  const result = await detectCapFixture({ cap: 2, priorRounds: 1, finding: { file: undefined, severity: "low", summary: "PR body lacks non-goals" } });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+  assert.match(result.agentRemedy?.command ?? "", /upsert-checkpoint-verdict\.mjs .*--converged-json/);
+  assert.doesNotMatch(result.agentRemedy?.command ?? "", /emit-fixer-work-order|extend-cap-round-chain/);
+  const below = await detectCapFixture({ cap: 3, priorRounds: 1, finding: { file: undefined, severity: "low", summary: "PR body lacks non-goals" } });
+  assert.doesNotMatch(below.agentRemedy?.command ?? "", /converged-json/);
+});
+
 // The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so no fixer route follows it.
 test("3105 AC15: a nit-only act list in draft round 2 keeps the earlier routing", async () => {
   const result = await detectCapFixture({ cap: 4, priorRounds: 1, finding: { severity: "nit", summary: "rename x" } });
