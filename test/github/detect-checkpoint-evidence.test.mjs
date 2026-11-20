@@ -5086,3 +5086,17 @@ test("parseDetectCheckpointEvidenceCliArgs honors --read-only (skips the runner-
   assert.equal(parseDetectCheckpointEvidenceCliArgs(["--repo", "owner/repo", "--pr", "17"]).readOnly, undefined);
   assert.equal(parseDetectCheckpointEvidenceCliArgs(["--repo", "owner/repo", "--pr", "17", "--read-only"]).readOnly, true);
 });
+
+test("buildPreMergeGateCheck passes on a clean draft_gate comment rendered at a cap-round ancestor head, and the unresolved thread count alone fails it", () => {
+  const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha: "981321d5", repo: "owner/repo", verdict: "clean", findingsSummary: "cap round", nextAction: "none", round: 4 });
+  const parsed = summarizeGateReviewComments([{ id: 31, body, updated_at: "2026-05-29T23:30:00Z" }]).draft_gate;
+  const evidence = {
+    currentHeadSha: "c386b206",
+    draftGate: { visible: true, verdict: parsed.verdict, headSha: parsed.headSha },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "c386b206", sizeOutcome: "pass", sizeTouchesT1: false },
+  };
+  assert.equal(parsed.verdict, "clean");
+  assert.notEqual(parsed.headSha, evidence.currentHeadSha);
+  assert.equal(buildPreMergeGateCheck(evidence, 0).ok, true);
+  assert.equal(buildPreMergeGateCheck(evidence, 1).ok, false);
+});
