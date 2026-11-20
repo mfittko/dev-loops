@@ -223,12 +223,23 @@ test("non-body writes and reads remain allowed", async () => {
   });
 });
 
+test("a subagent merge-pr.mjs call, --check included, is denied at the hook entry; the main agent stays allowed (issue 2500)", async () => {
+  await withManagedRepo(async (root) => {
+    const merge = "dev-loops-run scripts/github/merge-pr.mjs --repo acme/widgets --pr 2630 --human-approved-by mfittko";
+    const denied = bash(root, merge, "dev-loop");
+    assert.equal(denied.decision, "deny");
+    assert.match(denied.reason, /orchestrator/);
+    assert.equal(bash(root, `${merge} --check`, "dev-loop").decision, "deny");
+    assert.equal(bash(root, merge, undefined).decision, "allow");
+  });
+});
+
 test("timeout-wrapped sanctioned commands are denied for every Claude actor", async () => {
   await withManagedRepo(async (root) => {
-    const command = "timeout 300 dev-loops-run scripts/github/merge-pr.mjs --repo acme/widgets --pr 5";
+    const command = "timeout 300 dev-loops-run scripts/github/wait-pr-checks.mjs --repo acme/widgets --pr 5";
     denyForEveryActor(root, command, /Do not wrap sanctioned dev-loops commands in `timeout N`/);
     // The bare form still reaches the decider: the wrapper is the deny, not the sanctioned script.
-    assert.equal(bash(root, "dev-loops-run scripts/github/merge-pr.mjs --repo acme/widgets --pr 5", undefined).decision, "allow");
+    assert.equal(bash(root, "dev-loops-run scripts/github/wait-pr-checks.mjs --repo acme/widgets --pr 5", undefined).decision, "allow");
   });
 });
 
