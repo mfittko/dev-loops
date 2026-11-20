@@ -1892,7 +1892,9 @@ export function classifyDecisionRecorderCommand(command) {
     const words = segment.replace(/['"\\]/g, "").toLowerCase().split(/\s+/);
     // A file command (`git add`, `rg`) that only names the recorder source is no recorder spelling (ADR 0295: the path under a runner).
     // shortcut: an allow-list of plain file commands, not of runners, so `bash -c 'node ...'` and `xargs` stay denied as before; widen it when another plain file command is blocked.
-    const fileCommand = stripped.some((s) => /^(?:git|rg|grep|cat|ls|head|tail|wc|diff|stat)$/.test(s.split(/\s+/)[0].replace(/['"\\]/g, "").toLowerCase().replace(/^.*\//, "")));
+    // A nested run keeps the segment a recorder spelling: command or process substitution, or a git exec option (`-x`, `--exec`, `bisect run`, `-c alias.x=!...`).
+    const nestedRun = /\$\(|`|[<>]\(|\s-x\b|--exec\b|\bbisect\s+run\b|alias\.[^\s=]*=["']?!/i.test(segment);
+    const fileCommand = !nestedRun && stripped.some((s) => /^(?:git|rg|grep|cat|ls|head|tail|wc|diff|stat)$/.test(s.split(/\s+/)[0].replace(/['"\\]/g, "").toLowerCase().replace(/^.*\//, "")));
     const script = !fileCommand && words.some((w) => w.endsWith("record-operator-decision.mjs"));
     const at = words.findIndex((w, i) => w === "decision" && words[i + 1] === "record");
     const cli = at >= 0 && words.slice(0, at).some((w) => /(?:^|\/)(?:dev-loops(?:-run)?|index\.mjs)$/.test(w));
