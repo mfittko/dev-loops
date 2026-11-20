@@ -547,6 +547,7 @@ test("pre_approval_gate maps to convergence inner states", () => {
     "low_signal_converged",
     "round_cap_clean_fallback",
     "internal_tooling_direct_gate",
+    "copilot_unavailable",
   ].sort());
 });
 
