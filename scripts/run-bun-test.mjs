@@ -537,8 +537,13 @@ async function finalizeCaptureOutcome(capture, { failed, stderr }) {
   return finalError;
 }
 
+// Under a non-Bun host (the dev-loops-run launcher runs Node) process.execPath is Node, which cannot run `test`.
+export function resolveBunCommand(env = process.env, runtime = process.versions) {
+  return env.BUN_BIN || (runtime.bun ? process.execPath : "bun");
+}
+
 export async function runBunTest(args, {
-  env = process.env, command = env.BUN_BIN || process.execPath, spawnImpl = spawn,
+  env = process.env, command = resolveBunCommand(env), spawnImpl = spawn,
   stdout = process.stdout, stderr = process.stderr, captureFactory = createOutputCapture,
   progressFactory = createTestProgress, repoRoot = DEFAULT_ROOT,
 } = {}) {

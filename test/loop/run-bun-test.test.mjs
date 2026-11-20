@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER, RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
-import { buildBunTestArgs, childResult, createOutputCapture, createTestProgress, discoverRepositoryTests, parseBunSummary, PER_TEST_TIMEOUT_BASE_MS, resolveBunTestFiles, resolveBunTestParallelism, resolveBunTestTimeoutMs, runBunTest, checkCoreResolutionBeforeImport } from "../../scripts/run-bun-test.mjs";
+import { buildBunTestArgs, childResult, createOutputCapture, createTestProgress, discoverRepositoryTests, parseBunSummary, PER_TEST_TIMEOUT_BASE_MS, resolveBunCommand, resolveBunTestFiles, resolveBunTestParallelism, resolveBunTestTimeoutMs, runBunTest, checkCoreResolutionBeforeImport } from "../../scripts/run-bun-test.mjs";
 
 test("a nested worktree's test copies are never discovered as this checkout's own", () => {
   // Repo-root `worktrees/<name>` is a deprecated ad hoc worktree location (it is
@@ -883,6 +883,28 @@ test("referencing CLI exits safely for no matches and malformed selectors", asyn
     assert.match(stdout + stderr, message);
     assert.doesNotMatch(stdout + stderr, /ENOENT|Retained Bun diagnostics/);
   }
+});
+
+test("the default test command is Bun even when the host runtime is Node", () => {
+  assert.equal(resolveBunCommand({}, { node: "24.0.0" }), "bun");
+  assert.equal(resolveBunCommand({}, { bun: "1.4.1", node: "24.0.0" }), process.execPath);
+  assert.equal(resolveBunCommand({ BUN_BIN: "/opt/bun" }, { node: "24.0.0" }), "/opt/bun");
+});
+
+test("a child that fails before any output yields a non-zero result, and a clean exit with no summary fails closed", async () => {
+  const code = await runBunTest(["example.test.mjs"], {
+    captureFactory: async () => memoryCapture("", []),
+    spawnImpl: fakeChild(() => {}, [1, null]),
+    stdout: { write() {} },
+    stderr: { write() {} },
+  });
+  assert.equal(code, 1);
+  await assert.rejects(runBunTest(["example.test.mjs"], {
+    captureFactory: async () => memoryCapture("", []),
+    spawnImpl: fakeChild(() => {}, [0, null]),
+    stdout: { write() {} },
+    stderr: { write() {} },
+  }), /Could not parse Bun test summary/);
 });
 
 test("shared child result settles when a spawn error has no close event", async () => {
