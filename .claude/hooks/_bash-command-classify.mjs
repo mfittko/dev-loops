@@ -1870,7 +1870,9 @@ export function commandContainsCodeVerificationEntrypoint(command) {
 }
 
 // Env assignments (a quoted value may hold spaces) and env/command/exec wrappers a recorder launch can follow.
-const LEADING_LAUNCH_WRAPPERS = /^\s*(?:(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)|env(?:\s+-\S+)*|command|exec)\s+)*/;
+const LEADING_LAUNCH_WRAPPERS = new RegExp(
+  `^\\s*(?:(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\\S*)|(?:command|exec)(?:\\s+-\\S+)*)\\s+|(?:\\S*/)?${ENV_WRAPPER})*`,
+);
 
 /**
  * Decision-recorder classification (OPERATOR-DECISION-RECORDER). Fails closed. A segment names the recorder when,
@@ -1917,10 +1919,6 @@ function hasUnreadableLauncherWord(raw) {
   if (!isRunner && !isRun && !isBare) return false;
   let i = at + 1;
   if (isRun && raw[i] === "--repo-root") i += 2;
-  // shortcut: a runner option's value is skipped only for the flags listed here; upgrade to BUN_VALUE_FLAGS if more are needed.
-  while (isRunner && raw[i] !== undefined && (raw[i] === "run" || raw[i].startsWith("-"))) {
-    i += /^(?:--env-file|--cwd|--import|--require|-r)$/.test(raw[i]) ? 2 : 1;
-  }
   const hides = (w, target) => {
     if (w === undefined || /^[A-Za-z0-9_./-]+$/.test(w)) return false;
     if (!/^[A-Za-z0-9_./*?[\]-]+$/.test(w)) return true;
@@ -1930,6 +1928,12 @@ function hasUnreadableLauncherWord(raw) {
       return true;
     }
   };
+  if (isRunner) {
+    // Scan to the first word that is a cli/index.mjs entrypoint or a glob matching the recorder script, so runner flag values need no grammar; an inline-code flag ends the scan (code string, not a recorder).
+    const entry = raw.findIndex((w, j) => j > at && (/^(?:-[ep]|--eval|--print)$/.test(w) || w.endsWith("cli/index.mjs") || (/[*?[]/.test(w) && /^[A-Za-z0-9_./*?[\]-]+$/.test(w) && hides(w, "scripts/github/record-operator-decision.mjs"))));
+    if (entry < 0 || /^-/.test(raw[entry])) return false;
+    i = entry;
+  }
   if (raw[i] === undefined) return false;
   if (isBare) return hides(raw[i], "decision") || (raw[i] === "decision" && hides(raw[i + 1], "record"));
   if (hides(raw[i], "scripts/github/record-operator-decision.mjs")) return true;
