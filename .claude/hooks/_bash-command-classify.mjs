@@ -1575,7 +1575,9 @@ export function commandContainsTimeoutWrappedSanctionedTool(command) {
 /** Wrapper binaries whose first argument is the real command to classify. */
 const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command", "nohup", "exec", "stdbuf", "setsid", "ionice", "busybox"]);
 // A bare wrapper flag (`-n`, `--user`) takes the next word as its argument, unless that word is itself the command.
-const WRAPPER_FLAG_TARGETS = new Set([...WRAPPER_BINARIES, ...SLEEP_LOOP_SHELLS, "timeout", "gtimeout", "sleep", "dev-loops-run", "dev-loops", "node", "bun"]);
+const WRAPPER_FLAG_TARGETS = new Set([...WRAPPER_BINARIES, ...SLEEP_LOOP_SHELLS, "timeout", "gtimeout", "sleep", "dev-loops-run", "dev-loops"]);
+// The decision-recorder scan also keeps a launcher word after a bare wrapper flag (`sudo -n node ...`). The shared set leaves it out so `sudo -u node node -e` still shifts the user name.
+const LAUNCHER_FLAG_TARGETS = new Set([...WRAPPER_FLAG_TARGETS, "node", "bun"]);
 
 /**
  * Strip prefixes that hide the real command head, fail-closed (over-report is
@@ -1585,7 +1587,7 @@ const WRAPPER_FLAG_TARGETS = new Set([...WRAPPER_BINARIES, ...SLEEP_LOOP_SHELLS,
  *   - a path-prefixed binary (`./x/gh`, `/usr/bin/python3`) → reduce head to its basename
  * Returns the segment with a bare, classifiable command head.
  */
-export function stripLeadingWrappers(segment) {
+export function stripLeadingWrappers(segment, flagTargets = WRAPPER_FLAG_TARGETS) {
   let s = segment.trim();
   // (a) strip leading env-assignment tokens: NAME=value. The value may be
   //   unquoted (`X=1`) or a single/double-quoted string that itself contains
@@ -1600,7 +1602,7 @@ export function stripLeadingWrappers(segment) {
   // (d) strip `timeout [options] <duration>` (e.g. `timeout -k 5 60 gh ...`), then re-normalize
   const DURATION = String.raw`(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?`;
   const TIMEOUT_PREFIX = new RegExp(String.raw`^g?timeout\s+(?:-{1,2}[\w-]+(?:=\S+|\s+(?:${DURATION}|[A-Z]+))?\s+)*${DURATION}\s+(?=\S)`, "i");
-  if (TIMEOUT_PREFIX.test(s)) return stripLeadingWrappers(s.replace(TIMEOUT_PREFIX, ""));
+  if (TIMEOUT_PREFIX.test(s)) return stripLeadingWrappers(s.replace(TIMEOUT_PREFIX, ""), flagTargets);
   // (b) strip a leading wrapper binary, then re-normalize the remainder
   const head = s.split(/\s+/, 1)[0];
   if (WRAPPER_BINARIES.has(head)) {
@@ -1608,9 +1610,9 @@ export function stripLeadingWrappers(segment) {
     while (/^-/.test(words[0] ?? "")) {
       const bare = /^(?:-[A-Za-z]|--[\w-]+)$/.test(words[0]);
       words.shift();
-      if (bare && words.length > 1 && !WRAPPER_FLAG_TARGETS.has(words[0].replace(/^.*\//, ""))) words.shift();
+      if (bare && words.length > 1 && !flagTargets.has(words[0].replace(/^.*\//, ""))) words.shift();
     }
-    if (words.length > 0) return stripLeadingWrappers(words.join(" "));
+    if (words.length > 0) return stripLeadingWrappers(words.join(" "), flagTargets);
   }
   return s;
 }
@@ -1886,12 +1888,12 @@ export function classifyDecisionRecorderCommand(command) {
   const segments = shellSegments(command.replace(/\\\r?\n/g, ""));
   let found = null;
   for (const segment of segments) {
-    const raw = stripLeadingWrappers(segment).split(/\s+/);
+    const stripped = [stripLeadingWrappers(segment), stripLeadingWrappers(segment, LAUNCHER_FLAG_TARGETS)];
     const words = segment.replace(/['"\\]/g, "").split(/\s+/);
     const script = words.some((w) => w.endsWith("record-operator-decision.mjs"));
     const at = words.findIndex((w, i) => w === "decision" && words[i + 1] === "record");
     const cli = at >= 0 && words.slice(0, at).some((w) => /(?:^|\/)(?:dev-loops(?:-run)?|index\.mjs)$/.test(w));
-    if (!script && !cli && !hasUnreadableLauncherWord(raw)) continue;
+    if (!script && !cli && !stripped.some((s) => hasUnreadableLauncherWord(s.split(/\s+/)))) continue;
     const canonical = !script && !continued && segments.length === 1 && segment.startsWith("dev-loops-run cli/index.mjs decision record ");
     found = { canonical: found?.canonical !== false && canonical };
   }
