@@ -25,6 +25,7 @@ import { clusterFindings, clustersFromStampedIds, projectClusterDisposition } fr
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
+import { rejectClosingRefRemoval } from "../loop/_slice-linkage.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "./_gate-artifact-paths.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
@@ -1035,11 +1036,15 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       // judge-pass validates the spec-authority verdict over the findings read only, so validate the same prefix and re-attach the appended Copilot cluster.
       findings = [...(await applySiblingSpecAuthorityVerdict(findings.slice(0, prefixLength), judgePath, specAuthorityIdentity, judgePlan?.workOrder)), ...findings.slice(prefixLength)];
     }
-    // A judge-pass --ledger-out input carries the bridge's coercions, but the file has no digest binding: take from it only a rejection of a finding the verdict acted or deferred, and a validated follow-up target. Every other field keeps the re-derived value, and a tail-length mismatch keeps the re-derived findings.
+    // A judge-pass --ledger-out input carries the bridge's coercions, but the file has no digest binding: take from it only a rejection the writer can re-derive (an act the pinned slice-linkage rule rejects, or a low_fix_until_cap defer), and a validated follow-up target. Every other field keeps the re-derived value, and a tail-length mismatch keeps the re-derived findings.
     if (rawFindings.length === findings.length && rawFindings.every((f) => typeof f?.judgeDisposition === "string")) {
+      const linkageRejected = findings.map((f) => ({ ...f }));
+      rejectClosingRefRemoval(linkageRejected, judgePlan?.workOrder?.sliceLinkageIssues);
       findings = findings.map((f, i) => {
         const raw = rawFindings[i];
-        if (raw.judgeDisposition === "reject" && (f.judgeDisposition === "act" || f.judgeDisposition === "defer")) {
+        const derivable = (f.judgeDisposition === "act" && linkageRejected[i].judgeDisposition === "reject")
+          || (f.judgeDisposition === "defer" && options.gate === "pre_approval_gate" && f.judgeReason?.startsWith("low_fix_until_cap ") && raw.judgeReason?.startsWith("low_fix_until_cap "));
+        if (raw.judgeDisposition === "reject" && derivable) {
           const { followUpDraft: _draft, followUpIssueNumber: _target, ...rest } = f;
           return { ...rest, judgeDisposition: "reject", ...(raw.judgeReason !== undefined ? { judgeReason: raw.judgeReason } : {}) };
         }
