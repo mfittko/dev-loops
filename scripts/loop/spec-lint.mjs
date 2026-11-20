@@ -14,6 +14,7 @@ import { parseArgs } from "node:util";
 import { loadDevLoopConfigStrict } from "@dev-loops/core/config";
 import { extractSection } from "@dev-loops/core/loop/markdown-sections";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { detectAcDodMatrix } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { pathsMissingFromMatrix } from "../github/waive-adr-tripwire.mjs";
 import { resolveSizeBounds } from "./check-size-budget.mjs";
 import { CONTRACT_DOC_RE } from "./check-adr-tripwire.mjs";
@@ -22,6 +23,7 @@ import {
   NON_RULE_TOKENS,
   RULE_ID_CITATION_RE,
   RULE_ID_SHAPE_RE,
+  ruleOwnerIndex,
   normalizeRuleEntry,
 } from "../docs/validate-rule-ownership.mjs";
 import { firstMeaningfulLine, isAcceptedOrSuperseded, splitStatus } from "../docs/validate-decision-records.mjs";
@@ -50,7 +52,7 @@ size_band_above_soft_loc (softLoc < wloc < waiverLoc; split assessment required 
 size_band_below_min_loc (wloc < minLoc; merge assessment required in the results comment), both informational and disposable there;
 "checks.sizeForecast.band" is the resolved planning band,
 simplest_design_missing (DESIGN-SIMPLEST-FIRST; a body with a "## Size forecast" section and no "## Simplest design" section),
-contract_doc_not_in_matrix (a contract doc in a forecast files= list that no row of a valid AC / DoD matrix names in backticks; a body without a valid matrix is not flagged).
+contract_doc_not_in_matrix (a contract doc in a forecast files= list that no row of a valid AC / DoD matrix names in backticks, or a contract doc owning a rule ID cited in a matrix row and named by no row; a body without a valid matrix is not flagged).
 ADR citation forms: "ADR NNNN", "ADR-<digits>" and docs/decisions/NNNN-*.md links.
 
 ${JQ_OUTPUT_USAGE}
@@ -297,6 +299,26 @@ export function lintContractDocsInMatrix(body) {
     .map((doc) => ({ kind: "contract_doc_not_in_matrix", id: doc, detail: { reason: `contract doc \`${doc}\` is in the Size forecast files but no AC / DoD matrix row names it in backticks` } }));
 }
 
+/** A rule ID cited in a matrix row whose owner is a contract doc needs that doc named, backticked, in a matrix row. */
+export async function lintRuleOwnerDocsInMatrix(body, repoRoot) {
+  const matrix = detectAcDodMatrix(body);
+  if (!matrix.found || !matrix.valid) return [];
+  const cited = new Set(matrix.rows.flatMap((row) => `${row.criterion}\n${row.evidence}`.match(RULE_ID_CITATION_RE) ?? []));
+  if (cited.size === 0) return [];
+  const owners = await ruleOwnerIndex(repoRoot);
+  const byDoc = new Map();
+  for (const token of cited) {
+    // Mirror lintRuleIds: the whole token first, the rule-shaped matches inside it only when the token has no owner.
+    const ids = owners.has(token) ? [token] : token.match(RULE_ID_SHAPE_RE) ?? [];
+    for (const id of ids) {
+      const doc = owners.get(id)?.doc;
+      if (doc && CONTRACT_DOC_RE.test(doc)) byDoc.set(doc, byDoc.get(doc) ?? id);
+    }
+  }
+  const { missing } = pathsMissingFromMatrix([...byDoc.keys()], body);
+  return missing.map((doc) => ({ kind: "contract_doc_not_in_matrix", id: doc, detail: { reason: `rule \`${byDoc.get(doc)}\` is cited in the AC / DoD matrix and owned by contract doc \`${doc}\`, but no matrix row names that doc in backticks` } }));
+}
+
 export async function lintSpec({ body, repoRoot }) {
   const rootStat = await stat(repoRoot).catch((error) => {
     if (isMissing(error)) return null;
@@ -319,6 +341,8 @@ export async function lintSpec({ body, repoRoot }) {
   checks.sizeForecast = { status: "ran", band: { minLoc, softLoc, waiverLoc, absoluteHardLoc } };
   findings.push(...lintSimplestDesign(body));
   findings.push(...lintContractDocsInMatrix(body));
+  const forecastDocs = new Set(findings.filter((f) => f.kind === "contract_doc_not_in_matrix").map((f) => f.id));
+  findings.push(...(await lintRuleOwnerDocsInMatrix(body, repoRoot)).filter((f) => !forecastDocs.has(f.id)));
   const decisionsDir = path.join(repoRoot, "docs", "decisions");
   const records = await indexDecisionRecords(decisionsDir);
   if (records) {

@@ -27,7 +27,7 @@ const scriptPath = path.resolve("scripts/loop/copilot-pr-handoff.mjs");
 let gitStubDir = null;
 // Config-hermeticity (issue #2055): resolve the Copilot round cap from a fixture
 // repoRoot mirroring the real .devloops with maxCopilotRounds pinned to 2, not
-// the ambient .devloops (the repo pins maxCopilotRounds to 2 for test
+// the ambient .devloops (the fixture owns its cap for test
 // isolation). Assertions are unchanged.
 // The fixture also pins the strict Copilot convergence mode
 // (refinement.requireCopilotConvergenceAtLatestHead: true), the behavior these
