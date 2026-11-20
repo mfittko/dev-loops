@@ -16,11 +16,18 @@ import { isDevLoopConfigSourcePath } from "../analysis/diff-analyzer.mjs";
 
 export const BASE_MERGE_CARRY_DECISIONS = Object.freeze(["carry_verdict", "full_regate", "fallback_full"]);
 
-// Paths whose change alters how a gate runs: .devloops config (isDevLoopConfigSourcePath),
-// gate contracts, scripts, agents and agent mirrors, CLI, schemas, harness extension and
-// command prompts, core source, CI workflows, and the installed dev-loops version
-// (manifests and lockfiles). Broad on purpose: a miss fails open, a hit only re-gates.
-const GATE_TOOLING_RE = /^(skills\/|scripts\/|agents\/|cli\/|lib\/|schemas\/|extension\/|commands\/|AGENTS\.md$|bunfig\.toml$|\.claude\/|\.pi\/|packages\/core\/src\/|\.github\/|package\.json$|package-lock\.json$|yarn\.lock$|pnpm-lock\.yaml$|bun\.lockb?$|packages\/[^/]+\/package\.json$)/;
+// Paths that can change a gate outcome (ADR 0295, amends ADR 0096): .devloops config
+// (isDevLoopConfigSourcePath), reviewer, judge and gate-coordinator agents with their .claude mirror,
+// gate, judge and review contracts, gate, fan-in, judge, verdict and carry scripts and core loop
+// modules, and the installed dev-loops version (package manifests). Lockfiles and every other path carry.
+const OUTCOME_NAME = "[^/]*(?:gate|fanin|fan-in|judge|verdict|carry)[^/]*";
+const GATE_TOOLING_RE = new RegExp(
+  "^(?:\\.claude/)?(?:agents/(?:review|judge|gate-coordinator)\\.(?:agent\\.)?md" +
+    "|skills/docs/[^/]*(?:gate|judge|review)[^/]*\\.md)$" +
+    `|^scripts/[^/]+/${OUTCOME_NAME}$` +
+    `|^packages/core/src/loop/${OUTCOME_NAME}$` +
+    "|^package\\.json$|^packages/[^/]+/package\\.json$",
+);
 
 export function isGateToolingPath(filePath) {
   if (typeof filePath !== "string") return false;

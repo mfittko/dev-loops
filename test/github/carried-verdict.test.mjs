@@ -157,7 +157,7 @@ test("buildPreMergeGateCheck rejects a recorded entry whose evidence differs fro
 test("fixerEmitCarryAccepts accepts a scripts/ base delta that carryGateMarker and merge acceptance refuse", async () => {
   const s = setup();
   const origin = s.head();
-  const cur = s.mergeBase("scripts/tool.mjs");
+  const cur = s.mergeBase("scripts/github/write-gate-context.mjs");
   assert.equal(await fixerEmitCarryAccepts({ originHead: origin, headSha: cur, baseRef: "main", repoRoot: s.dir }), true);
   const m = marker(origin);
   const written = [];
@@ -291,7 +291,7 @@ test("a converged field on a non-draft_gate marker does not redirect the carry o
 test("a converged marker with a gate-tooling base delta after its fixer commit does not carry", async () => {
   const s = setup();
   const fixer = s.head();
-  const cur = s.mergeBase("scripts/tool.mjs");
+  const cur = s.mergeBase("scripts/github/write-gate-context.mjs");
   const m = convergedMarker("a".repeat(40), fixer);
   assert.deepEqual(await carry(s, m, cur, { written: [] }), m);
 });

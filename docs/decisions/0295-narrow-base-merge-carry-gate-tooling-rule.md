@@ -1,0 +1,29 @@
+# 0295. The base-merge verdict carry re-gates only for paths that can change a gate outcome
+
+## Status
+
+Accepted, 2026-11-20 ([issue 3306](https://github.com/mfittko/dev-loops/issues/3306)).
+
+Amends [0096](./0096-integrate-base-before-every-gate-round.md). Record 0096 stays unedited.
+
+## Context
+
+ADR 0096 keeps gate rounds on current gate tooling. The carry classifier of ADR 0156 enforced that with a broad path list: `skills/`, `scripts/`, `agents/`, `cli/`, `lib/`, `schemas/`, `extension/`, `commands/`, `.claude/`, `.pi/`, `packages/core/src/`, `.github/`, `AGENTS.md` and the lockfiles. In this repo nearly every merge to main touches one of these paths. Nearly every clean base merge therefore classified `full_regate`. On 2026-11-19 and 2026-11-20 base merges made in-flight PRs stale about ten times a day, and each one cost a full gate round with "nothing carried forward". A change to an unrelated script, a test helper or a lockfile cannot change a review outcome.
+
+## Decision
+
+`GATE_TOOLING_RE` in `packages/core/src/loop/base-merge-verdict-carry.mjs` keeps a single source list, now limited to outcome-relevant paths:
+
+- the reviewer, judge and gate-coordinator agent definitions and their `.claude/agents/` mirrors;
+- the gate, judge and review contracts under `skills/docs/` (file names containing `gate`, `judge` or `review`) and their `.claude/` mirrors;
+- scripts and `packages/core/src/loop/` modules whose file names contain `gate`, `fanin`, `fan-in`, `judge`, `verdict` or `carry`;
+- the dev-loops config (`isDevLoopConfigSourcePath`);
+- the installed dev-loops version: `package.json` and `packages/*/package.json`.
+
+Lockfiles and every other path in the base delta carry. `classifyBaseMergeCarry`, `validateBaseMergeCarryEvidence` and the `merge-pr.mjs` precondition share the one list, so they accept and refuse the same cases. The evidence record keeps `gateToolingPaths`, now holding outcome-relevant paths only. The PR-path overlap rule and the conflict-hunk rule are unchanged.
+
+## Consequences
+
+- A clean base merge after an unrelated main merge carries the verdict and saves about one full gate round per base merge.
+- A path outside the list that in fact changes outcomes carries wrongly. The list is the single place to extend, and the name-based script match favors a hit over a miss.
+- A carried-heads record written under the old rule that no longer recomputes to the same evidence is a full re-gate, as before.

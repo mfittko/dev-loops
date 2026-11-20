@@ -163,7 +163,7 @@ scope change (any commit after the clean verdict that changes the mode or blob o
 runs the full gate round. The carry needs the same mode and
 blob object id for every PR path at both heads (raw `git diff-tree` tree entries, no rendered diff),
 an empty intersection of the PR diff paths and the base delta
-paths, a base delta that touches no gate tooling or config, and no conflict-resolution hunks
+paths, a base delta that touches no gate-outcome path (the reviewer, judge and gate-coordinator agents and their `.claude` mirrors, gate, judge and review contracts under `skills/docs/`, scripts and core loop modules named for gate, fanin, judge, verdict or carry, the `.devloops` config, and the package manifests that pin the dev-loops version; lockfiles and every other path carry, ADR 0295), and no conflict-resolution hunks
 in any merge commit on the PR branch line (first-parent) between the two heads. Any base change to a
 PR path, including a same-file line shift, is a full re-gate (partial carry is a later slice).
 A converged `draft_gate` record carries from its `converged.fixerCommit` as the origin head, not from the reviewed head; every other marker carries from its own head (ADR 0294).
