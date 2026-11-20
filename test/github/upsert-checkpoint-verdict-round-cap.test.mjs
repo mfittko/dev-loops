@@ -512,6 +512,7 @@ test("a clean cap round posts on a ready PR whose draft gate reads as satisfied,
     assert.match(out.body, /round[=: ]+4\b/i);
     assert.ok(out.body.includes(CAP_HEAD.slice(0, 7)));
     assert.equal(calls.some((c) => /pr ready|convertPullRequestToDraft/.test(c)), false);
+    assert.equal(calls.some((c) => /minimize/i.test(c)), false);
   }, { prefix: "dev-loops-round-cap-ready-" });
 });
 

@@ -4145,7 +4145,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // a prior same-gate verdict at a different head (the created path guarantees any
   // visible prior verdict is at a different head, since a same-head one would have
   // taken the `existing` branch). This saves a call on a first-ever verdict.
-  const hasSupersededPrior = !isReviewGate && (
+  const hasSupersededPrior = !isReviewGate && !capRoundHead && (
     (gateEvidence?.strict?.visible === true && !!gateEvidence.strict.headSha && gateEvidence.strict.headSha !== canonicalHeadSha)
     || (gateEvidence?.marker?.visible === true && !!gateEvidence.marker.headSha && gateEvidence.marker.headSha !== canonicalHeadSha)
   );
