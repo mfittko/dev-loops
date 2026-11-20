@@ -697,6 +697,8 @@ const SHELL_BUILT_RECORDER_SPELLINGS = [
   `bun ${'$'}{E} decision record --repo o/n`,
   `node ~/repo/scripts/github/record-operator-*.mjs --repo o/n`,
   `dev-loops-run ./scripts/github/record-operator-*.mjs --repo o/n`,
+  `node $D/record-operator-*.mjs --repo o/n`,
+  `node scripts/github/record-operator-$S.mjs --repo o/n`,
 ];
 
 test("a many-wildcard launcher word is denied in linear time", () => {
@@ -726,6 +728,9 @@ test("quoted prose that mentions dev-loops-run and plain runner commands are not
     `node cli/*.mjs gate resolve-validation`,
     `node scripts/*/validate-decision-records.mjs`,
     `node ~/tools/build.mjs`,
+    `node ~/tools/build.mjs $OUT`,
+    `node "$HOME/x.mjs" "$1"`,
+    `bun run test:unit $FILE`,
     `dev-loops-run cli/index.mjs loop tmp/*`,
     `bun test packages/core/test/*decision*`,
   ]) {

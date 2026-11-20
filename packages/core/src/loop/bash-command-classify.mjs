@@ -1957,13 +1957,15 @@ function hasUnreadableLauncherWord(rawWords) {
     // A bracket class could match the recorder word, so it fails closed.
     return w.includes("[") || globMatchesSuffix(w, target);
   };
-  // Any word outside `^[A-Za-z0-9_./-]+$` (a glob, `~`, `$E`) may expand to `cli/index.mjs`, so it is the entrypoint (fail closed). Only a following `decision record` denies it.
-  const isCli = (w) => w.endsWith("cli/index.mjs") || (!w.startsWith("-") && !/^[A-Za-z0-9_./-]+$/.test(w));
-  // A glob that could expand to the recorder script, after dropping a `~`, `$HOME` or absolute prefix before a literal `scripts/` segment.
-  const hitsScript = (w) => {
-    const s = w.replace(/^.*\/(?=scripts\/)/, "");
-    return /[*?[]/.test(s) && /^[A-Za-z0-9_./*?[\]-]+$/.test(s) && hides(s, "scripts/github/record-operator-decision.mjs");
+  // Whether a word outside `^[A-Za-z0-9_./-]+$` could expand to `target`: a run of unreadable characters (`~`, `$E`) counts as `*`, and a `~`, `$HOME` or absolute prefix before a literal `cli/` or `scripts/` segment is dropped.
+  const couldBe = (w, target) => {
+    const s = w.replace(/^.*\/(?=(?:cli|scripts)\/)/, "").replace(/\$\{?[A-Za-z0-9_]+\}?/g, "*").replace(/[^A-Za-z0-9_./*?[\]-]+/g, "*");
+    return s.includes("[") || globMatchesSuffix(s, target);
   };
+  // A word that could expand to `cli/index.mjs` is the entrypoint (fail closed). Only a following `decision record` denies it.
+  const isCli = (w) => !w.startsWith("-") && (w.endsWith("cli/index.mjs") || (!/^[A-Za-z0-9_./-]+$/.test(w) && couldBe(w, "cli/index.mjs")));
+  // A word with a literal part that could expand to the recorder script. A bare `*.ext` glob or an all-unreadable word has no literal stem, so it is data.
+  const hitsScript = (w) => !/^[A-Za-z0-9_./-]+$/.test(w) && /[A-Za-z0-9]/.test(w.replace(/\$\{?[A-Za-z0-9_]+\}?/g, "*")) && !/^[*?]+\.[A-Za-z?*]+$/.test(w) && couldBe(w, "scripts/github/record-operator-decision.mjs");
   if (isRunner) {
     // Scan to the first word that is a cli/index.mjs entrypoint or a glob or unreadable word, so runner flag values need no grammar. An inline-code flag, a `bun x` package binary or another script word ends the scan: what follows is data for that program.
     // Every candidate is checked, so an empty-expanding `$X` before a glob entrypoint hides nothing.
