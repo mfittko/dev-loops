@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { classifyDecisionRecorderCommand } from "../src/loop/bash-command-classify.mjs";
 import {
   BASH_GATE_RULES,
   decideBashGateDeny,
@@ -628,6 +629,12 @@ const SHELL_BUILT_RECORDER_SPELLINGS = [
   `bun run cli/index.mjs decision $'record' --repo o/n`,
   `node --env-file=.env scripts/github/record-operator-*.mjs --repo o/n`,
   `node --env-file .env scripts/github/record-operator-*.mjs --repo o/n`,
+  `env -u NAME dev-loops-run cli/index.mjs decision$IFS record --repo o/n`,
+  `env -C /w dev-loops-run cli/index.mjs decision$IFS record --repo o/n`,
+  `/usr/bin/env dev-loops-run cli/index.mjs decision$IFS record --repo o/n`,
+  `command -p dev-loops-run cli/index.mjs decision$IFS record --repo o/n`,
+  `node --loader ./l.mjs cli/index.mjs decision$IFS record --repo o/n`,
+  `node --experimental-loader x cli/index.mjs decision$IFS record --repo o/n`,
   `dev-loops decision$IFS record --repo o/n`,
   `dev-loops {decision,} record --repo o/n`,
   `dev-loops decision $'record' --repo o/n`,
@@ -638,9 +645,18 @@ test("quoted prose that mentions dev-loops-run and plain runner commands are not
     `git commit -m "docs: run dev-loops-run scripts/foo.mjs"`,
     `echo "use dev-loops-run scripts/a.mjs"`,
     `node scripts/github/validate-decision-records.mjs`,
+    `node "$SCRIPT"`,
+    `node $HOME/x.mjs`,
+    `node 'scripts/foo.mjs'`,
     `dev-loops status`,
   ]) {
     assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, command);
+  }
+});
+
+test("an inline-code runner command is not classified as the recorder", () => {
+  for (const command of [`node -e "console.log(1)"`, `bun -e 'console.log(1)'`, `node -p "1+1"`, `node --eval "x"`]) {
+    assert.equal(classifyDecisionRecorderCommand(command), null, command);
   }
 });
 
