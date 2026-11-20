@@ -323,7 +323,7 @@ the alias, and `-f` skips the prompt. A dispatch to an editing worker cites
 this rule by ID.
 
 <!-- rule: WORKTREE-SCRIPT-LAUNCHER-CWD -->
-`WORKTREE-SCRIPT-LAUNCHER-CWD`: an agent MUST run a repo script as `dev-loops-run --repo-root <checkout> scripts/<path>`; `--repo-root` runs the script with cwd `<checkout>`, so no `cd <checkout> &&` prefix is named. A dispatched pull line is exempt and runs bare. The judge decision-check line (`dev-loops-run scripts/loop/check-judge-decision.mjs --file <path>`) is exempt the same way.
+`WORKTREE-SCRIPT-LAUNCHER-CWD`: an agent MUST run a repo script as `dev-loops-run --repo-root <checkout> scripts/<path>`; `--repo-root` runs the script with cwd `<checkout>`, so no `cd <checkout> &&` prefix is named. A dispatched pull line is exempt and runs bare. The judge decision-check line (`dev-loops-run scripts/loop/check-judge-decision.mjs --file <path>`) is exempt the same way. The operator decision recorder runs bare from the main checkout, because the Bash hook denies its `--repo-root` spelling until the mid-pattern ask match is verified live (ADR 0295).
 Each Bash call may start in another checkout, and the working directory does
 not persist between calls. A standalone `cd <checkout>` call followed by a
 separate `dev-loops-run` call therefore runs the scripts of whichever checkout
