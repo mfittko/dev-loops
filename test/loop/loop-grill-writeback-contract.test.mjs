@@ -409,3 +409,10 @@ test("GRILL-SPEC-LINT: Step 2 runs spec-lint and Step 5 refuses grill-clean over
   const registry = JSON.parse(readFileSync(fileURLToPath(new URL("../../skills/docs/required-rules.json", import.meta.url)), "utf8"));
   assert.ok(registry.requiredRules.some((entry) => (entry.id ?? entry) === "GRILL-SPEC-LINT"));
 });
+
+test("GRILL-SPEC-LINT: a matrix-less issue is re-linted on the synthesized body before grill-clean", () => {
+  const step2 = skill.split("## Step 2 — Detect gaps")[1]?.split("## Step 3")[0] ?? "";
+  const step5 = skill.split("## Step 5 — Emit verdict")[1]?.split("## Idempotency")[0] ?? "";
+  assert.match(step2, /no valid `## AC \/ DoD matrix`[\s\S]*?skips the rule-owner check[\s\S]*?MUST run the lint again on the synthesized body/);
+  assert.match(step5, /Before emitting `grill-clean`, run spec-lint on the synthesized Step 4 body/);
+});
