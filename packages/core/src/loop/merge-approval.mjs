@@ -203,6 +203,7 @@ export const COPILOT_ABSENT_REVIEW_DISPOSITION = Object.freeze({
   ROUND_CAP_CLEAN_FALLBACK: "round_cap_clean_fallback",
   DOCS_ONLY_SUPPRESSION: "docs_only_suppression",
   COPILOT_GATE_DISABLED: "copilot_gate_disabled",
+  COPILOT_UNAVAILABLE: "copilot_unavailable",
 });
 const SANCTIONED_ABSENT_REVIEW_DISPOSITIONS = new Set(Object.values(COPILOT_ABSENT_REVIEW_DISPOSITION));
 
