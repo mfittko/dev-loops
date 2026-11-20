@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, test } from "bun:test";
 
 import { runCli } from "../../cli/index.mjs";
+import { pathsMissingFromMatrix } from "../../scripts/github/waive-adr-tripwire.mjs";
 import { indexDecisionRecords, lintContractDocsInMatrix, lintSimplestDesign, lintSizeForecast, lintSpec, main } from "../../scripts/loop/spec-lint.mjs";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -514,4 +515,19 @@ test("size band: spec-lint prints the resolved band, shipped fallbacks and .devl
   assert.deepEqual(await bandFor(), { minLoc: 150, softLoc: 400, waiverLoc: 1500, absoluteHardLoc: 2000 });
   await writeFile(path.join(root, ".devloops"), "version: 1\ngates:\n  size:\n    absoluteHardLoc: 900\n    planningBand:\n      minLoc: 20\n    tiers:\n      default:\n        softLoc: 300\n        waiverLoc: 600\n");
   assert.deepEqual(await bandFor(), { minLoc: 20, softLoc: 300, waiverLoc: 600, absoluteHardLoc: 900 });
+});
+
+const ruleMatrix = (row) => `## AC / DoD matrix\n\n| Acceptance criterion | Completion evidence |\n| --- | --- |\n| Row. | ${row} |\n`;
+
+test("contract_doc_not_in_matrix: a cited rule ID owned by a contract doc needs the doc in a matrix row", async () => {
+  const owner = "skills/docs/main-agent-contract.md";
+  const kinds = async (body) => (await lintSpec({ body, repoRoot })).findings.filter((f) => f.kind === "contract_doc_not_in_matrix");
+  const missing = await kinds(ruleMatrix("`MAIN-AGENT-FILING-BLOCKER-ONLY` holds."));
+  assert.deepEqual(missing.map((f) => f.id), [owner]);
+  assert.ok(missing[0].detail.reason.includes("MAIN-AGENT-FILING-BLOCKER-ONLY") && missing[0].detail.reason.includes(owner));
+  const fixed = ruleMatrix(`\`MAIN-AGENT-FILING-BLOCKER-ONLY\` holds in \`${owner}\`.`);
+  assert.deepEqual(await kinds(fixed), []);
+  assert.deepEqual(pathsMissingFromMatrix([owner], fixed), { matrixInvalid: false, missing: [] });
+  assert.deepEqual(await kinds(ruleMatrix("`DESIGN-SIMPLEST-FIRST` holds.")), []);
+  assert.deepEqual(await kinds("`MAIN-AGENT-FILING-BLOCKER-ONLY` holds."), []);
 });
