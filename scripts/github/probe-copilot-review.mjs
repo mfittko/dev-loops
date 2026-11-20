@@ -38,7 +38,8 @@ One call waits at most ${WAIT_CAP_MS / 1000} seconds (GATE-EXEC-BOUNDED-WAIT-CAP
 and the remaining --timeout); run it. --concise prints the outcome and the reissue line too.
 Output (stdout, JSON):
   { "ok": true, "status": "changed"|"timeout"|"idle", "repo": "...", "pr": N, "attempts": N,
-    "newComments": [...], "newReviews": [...], "newIssueComments": [...] }
+    "newComments": [...], "newReviews": [...], "newIssueComments": [...],
+    "warning"?: "the final-chunk timed-out probe was not recorded (head unreadable or record write failed)" }
 Concise mode:
   --concise, --summary      Human-readable summary: status, attempts, new-activity
                             counts, AND the current round's new Copilot comment bodies.
@@ -402,6 +403,7 @@ export function formatProbeConcise(result) {
     `Copilot probe: PR #${result.pr} (${result.repo})`,
     `  status:        ${result.status}`,
     `  attempts:      ${result.attempts}`,
+    ...(result.warning === undefined ? [] : [`  warning:       ${result.warning}`]),
     ...(result.outcome === undefined ? [] : [`  outcome:       ${result.outcome} (${result.remainingTimeoutSeconds} s left)`, `  reissue:       ${result.reissue}`]),
     `  new threadComments: ${newComments.length}`,
     `  new reviews:        ${newReviews.length}`,
@@ -450,7 +452,11 @@ export async function runCli(
     try {
       const view = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], env);
       const headSha = view.code === 0 ? parseJsonText(view.stdout)?.headRefOid : null;
-      await recordTimedOutProbe({ repo: options.repo, pr: options.pr, headSha }, { checkpointDir: watchDeps.checkpointDir });
+      if (typeof headSha === "string" && headSha.length > 0) {
+        await recordTimedOutProbe({ repo: options.repo, pr: options.pr, headSha }, { checkpointDir: watchDeps.checkpointDir });
+      } else {
+        result = { ...result, warning: "could not read the PR head, so the timed-out probe was not recorded" };
+      }
     } catch (error) {
       result = { ...result, warning: `could not record the timed-out probe: ${error?.message ?? error}` };
     }

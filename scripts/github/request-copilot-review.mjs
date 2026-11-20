@@ -73,6 +73,7 @@ Debug:
 Output (stdout, JSON):
   { "ok": true, "status": "requested"|"already-requested"|"unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_post_convergence"|"suppressed_post_convergence_docs_only"|"suppressed_draft",
     "repo": "...", "pr": N, "reviewer": "Copilot", "detail"?: "...",
+    "warning"?: "the unobservable request could not be recorded (the request itself succeeded)",
     "sameHeadCleanConverged"?: true, "violationCommentIds"?: [N], "completedRounds"?: N, "maxRounds"?: N,
     "fixerDispositionWarning"?: { "warning": "...", "incomplete": [{ "threadId": "...", "failedStep": "..." }] } }
 Request statuses:
@@ -1040,7 +1041,7 @@ async function performRequest(
     let recordWarning = null;
     try {
       await recordUnobservableRequest(
-        { repo: options.repo, pr: options.pr, headSha: before.prData?.headRefOid ?? null },
+        { repo: options.repo, pr: options.pr, headSha: currentHeadSha },
         { checkpointDir: runtime.checkpointDir },
       );
     } catch (error) {

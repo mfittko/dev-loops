@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readdir, realpath, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import {
   readRequestNotObservable,
+  recordPath,
   recordTimedOutProbe,
   recordUnobservableRequest,
 } from "../scripts/loop/_unobservable-review-request-record.mjs";
@@ -43,4 +45,43 @@ test("a probe of another head, and a null head, never count", async () => {
   assert.equal(await recordTimedOutProbe({ ...pr, headSha: "b" }, { checkpointDir }), null);
   assert.equal(await recordTimedOutProbe({ ...pr, headSha: null }, { checkpointDir }), null);
   assert.equal(await readRequestNotObservable({ ...pr, headSha: null }, { checkpointDir }), false);
+});
+
+test("a non-integer or negative prior count restarts at zero", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
+  const file = path.join(checkpointDir, "unobservable-review-requests.json");
+  await writeFile(file, JSON.stringify({ ...pr, headSha: "a", unobservableRequests: -3, timedOutProbes: "x" }));
+  const record = await recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir });
+  assert.deepEqual([record.unobservableRequests, record.timedOutProbes], [1, 0]);
+  await writeFile(file, JSON.stringify({ ...pr, headSha: "a", timedOutProbes: 1.5 }));
+  assert.equal((await recordTimedOutProbe({ ...pr, headSha: "a" }, { checkpointDir })).timedOutProbes, 1);
+});
+
+test("a failed rename removes the temp file and rethrows", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
+  // A directory at the record path makes the rename fail.
+  await mkdir(path.join(dir, "unobservable-review-requests.json", "keep"), { recursive: true });
+  await assert.rejects(recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir: dir }));
+  assert.deepEqual((await readdir(dir)).filter((name) => name.endsWith(".tmp")), []);
+});
+
+test("the default record path is the main checkout's from a linked worktree", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "unobservable-record-wt-")));
+  const main = path.join(root, "main");
+  const linked = path.join(root, "linked");
+  const git = (...args) => execFileSync("git", args, { cwd: main, stdio: "ignore" });
+  await mkdir(main);
+  git("init", "-q", "-b", "main");
+  git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init");
+  git("worktree", "add", "-q", linked, "-b", "pr");
+  const cwd = process.cwd();
+  try {
+    process.chdir(linked);
+    const fromLinked = recordPath(pr.repo, pr.pr);
+    process.chdir(main);
+    assert.equal(recordPath(pr.repo, pr.pr), fromLinked);
+    assert.ok(fromLinked.startsWith(`${main}${path.sep}`), fromLinked);
+  } finally {
+    process.chdir(cwd);
+  }
 });

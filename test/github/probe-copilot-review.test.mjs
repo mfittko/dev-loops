@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -495,4 +495,42 @@ test("probe-copilot-review parses --timeout in seconds; --timeout-ms is a deprec
 test("probe-copilot-review warns on stderr for deprecated --timeout-ms", () => {
   const err = captureStderr(() => parseWatchCliArgs(["--repo", "o/r", "--pr", "1", "--timeout-ms", "1500"]));
   assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
+});
+
+async function runFinalChunkTimeout({ headCall }) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-probe-record-"));
+  const checkpointDir = path.join(tempDir, "checkpoint");
+  const file = path.join(checkpointDir, "unobservable-review-requests.json");
+  await mkdir(checkpointDir, { recursive: true });
+  await writeFile(file, JSON.stringify({ repo: "owner/repo", pr: 17, headSha: "abc", unobservableRequests: 1, timedOutProbes: 0 }));
+  await writeFile(path.join(tempDir, "gh"), [
+    "#!/bin/sh",
+    `if [ "$1" = pr ] && [ "$2" = view ]; then ${headCall}; fi`,
+    `echo '${JSON.stringify(createActivityPayload())}'`,
+  ].join("\n"), "utf8");
+  await chmod(path.join(tempDir, "gh"), 0o755);
+  const env = { ...process.env, PATH: `${tempDir}${path.delimiter}${process.env.PATH}`, DEV_LOOPS_GH_STUB: "1" };
+  let out = "";
+  try {
+    await runCli(["--repo", "owner/repo", "--pr", "17", "--timeout", "1"], {
+      stdout: { write: (c) => { out += c; return true; } }, env, ghCommand: "gh", checkpointDir,
+    });
+    return { result: JSON.parse(out), record: JSON.parse(await readFile(file, "utf8")) };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("probe-copilot-review counts a final-chunk timeout on the head of an earlier unobservable request", async () => {
+  const { result, record } = await runFinalChunkTimeout({ headCall: `echo '{"headRefOid":"abc"}'; exit 0` });
+  assert.equal(result.status, "timeout");
+  assert.equal(result.warning, undefined);
+  assert.equal(record.timedOutProbes, 1);
+});
+
+test("probe-copilot-review counts nothing and warns when the PR head cannot be read", async () => {
+  const { result, record } = await runFinalChunkTimeout({ headCall: "exit 1" });
+  assert.equal(record.timedOutProbes, 0);
+  assert.match(result.warning, /could not read the PR head/);
+  assert.match(formatProbeConcise(result), /warning:\s+could not read the PR head/);
 });

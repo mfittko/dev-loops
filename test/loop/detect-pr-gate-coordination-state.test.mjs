@@ -4995,3 +4995,33 @@ test("detect-pr-gate-coordination-state reports not_verified for a noted deferre
     assert.match(result.fixerDispositionWarning.warning, /not_verified/);
   });
 });
+
+test("buildGateCoordinationEvaluatorInput passes copilotRequestNotObservable through from the snapshot", () => {
+  const build = (copilotRequestNotObservable) => buildGateCoordinationEvaluatorInput({
+    context: {
+      repo: "owner/repo",
+      pr: 1460,
+      currentHeadSha: "29aa40b7deadbeef",
+      prData: { isDraft: false, state: "OPEN", title: "Fix things", reviews: [], files: [] },
+      mergeStateStatus: "CLEAN",
+      mergeable: "MERGEABLE",
+      conflictFiles: [],
+      interpretation: { state: "ready_to_rerequest_review", sameHeadCleanConverged: false, roundCapCleanEligible: false },
+      disposition: { loopDisposition: "action_required" },
+      snapshot: { ciStatus: "success", copilotReviewRoundCount: 1, unresolvedThreadCount: 0, copilotReviewRequestStatus: "none", copilotRequestNotObservable },
+      gateEvidence: {
+        draftGate: { visible: false },
+        draftGateMarker: { visible: false },
+        preApprovalGate: { visible: false },
+        preApprovalGateMarker: { visible: false },
+      },
+      refinementArtifact: null,
+    },
+    maxCopilotRounds: 5,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    postConvergenceSignificantChange: false,
+  });
+  assert.equal(build(true).copilotRequestNotObservable, true);
+  assert.equal(build(false).copilotRequestNotObservable, false);
+});

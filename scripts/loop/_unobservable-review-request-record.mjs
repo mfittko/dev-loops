@@ -5,17 +5,18 @@
 // loop readers report Copilot as unavailable (`request_not_observable`) once both
 // counts reach the threshold on the same head. A push changes the head, so the
 // record never outlives the head it was counted on.
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseJsonText } from "../_core-helpers.mjs";
 import { buildDefaultCheckpointDir } from "./_checkpoint-paths.mjs";
-import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { resolveMainWorktreeRoot } from "./_repo-root-resolver.mjs";
 
 export const REQUEST_NOT_OBSERVABLE_THRESHOLD = 2;
 const FILENAME = "unobservable-review-requests.json";
 
-function recordPath(repo, pr, { checkpointDir } = {}) {
-  const dir = checkpointDir ?? path.join(resolveRepoRoot(process.cwd()), buildDefaultCheckpointDir(repo, pr));
+// Anchored at the main checkout so a record written from a PR worktree is the one merge-pr reads.
+export function recordPath(repo, pr, { checkpointDir } = {}) {
+  const dir = checkpointDir ?? path.join(resolveMainWorktreeRoot(process.cwd()), buildDefaultCheckpointDir(repo, pr));
   return path.join(dir, FILENAME);
 }
 
@@ -31,10 +32,16 @@ async function readRaw(file) {
 async function write(file, record) {
   await mkdir(path.dirname(file), { recursive: true });
   const tempPath = `${file}.${process.pid}.tmp`;
-  await writeFile(tempPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
-  await rename(tempPath, file);
+  await writeFile(tempPath, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+  try {
+    await rename(tempPath, file);
+  } catch (error) {
+    await rm(tempPath, { force: true });
+    throw error;
+  }
 }
 
+const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
 const isHead = (value) => typeof value === "string" && value.length > 0;
 
 // Counts one accepted-but-unobservable request on `headSha`; a different head restarts the count.
@@ -47,8 +54,8 @@ export async function recordUnobservableRequest({ repo, pr, headSha }, opts = {}
     repo,
     pr,
     headSha,
-    unobservableRequests: (same ? Number(prior.unobservableRequests) || 0 : 0) + 1,
-    timedOutProbes: same ? Number(prior.timedOutProbes) || 0 : 0,
+    unobservableRequests: (same ? count(prior.unobservableRequests) : 0) + 1,
+    timedOutProbes: same ? count(prior.timedOutProbes) : 0,
   };
   await write(file, record);
   return record;
@@ -60,7 +67,7 @@ export async function recordTimedOutProbe({ repo, pr, headSha }, opts = {}) {
   const file = recordPath(repo, pr, opts);
   const prior = await readRaw(file);
   if (!prior || !isHead(headSha) || prior.headSha !== headSha) return null;
-  const record = { ...prior, timedOutProbes: (Number(prior.timedOutProbes) || 0) + 1 };
+  const record = { ...prior, timedOutProbes: (count(prior.timedOutProbes)) + 1 };
   await write(file, record);
   return record;
 }
