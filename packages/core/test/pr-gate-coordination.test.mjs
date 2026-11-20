@@ -911,6 +911,7 @@ test("a one-round cap opens the pre-approval gate window after the first Copilot
 
   assert.equal(result.gateBoundary, PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW);
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert.match(result.gateEvidenceNote, /\(1\/1\)/);
 });
 
 // #1472: this is the SAME reachable branch as the test above (READY_TO_REREQUEST_REVIEW
