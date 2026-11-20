@@ -427,6 +427,31 @@ export function formatProbeConcise(result) {
   }
   return lines.join("\n");
 }
+// Shared by the probe CLI and the run-watch-cycle Copilot wait. Records a timed-out wait
+// (GATE-EXEC-BOUNDED-WAIT-CAP) and returns the result, with a warning when the record fails.
+export async function recordCopilotWaitTimeout(result, { options, requestedBaseline, startedAt, remainingMs = 0, clock = Date.now, env, ghCommand, checkpointDir }) {
+  const recordOpts = { checkpointDir };
+  try {
+    const view = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], env);
+    const headSha = view.code === 0 ? parseJsonText(view.stdout)?.headRefOid : null;
+    const key = { repo: options.repo, pr: options.pr, headSha };
+    if (typeof headSha !== "string" || headSha.length === 0) {
+      return { ...result, warning: "could not read the PR head, so the timed-out probe was not recorded" };
+    }
+    if (remainingMs > 0) {
+      // A reissued chunk (it carries --baseline-ids) keeps the start the first chunk stored.
+      if (requestedBaseline === undefined) await recordProbeStart({ ...key, startedAt }, recordOpts);
+    } else {
+      const stored = requestedBaseline === undefined ? null : await readProbeStartedAt(key, recordOpts);
+      // Either way the stored start is spent: a start backs at most one counted probe.
+      if (clock() - (stored ?? startedAt) >= WAIT_CAP_MS) await recordTimedOutProbe({ ...key, probeStartedAt: stored ?? undefined }, recordOpts);
+      else if (stored !== null) await recordProbeStart({ ...key, startedAt: undefined }, recordOpts);
+    }
+    return result;
+  } catch (error) {
+    return { ...result, warning: `could not record the timed-out probe: ${error?.message ?? error}` };
+  }
+}
 export async function runCli(
   argv = process.argv.slice(2),
   {
@@ -454,25 +479,7 @@ export async function runCli(
   // The count rests on wall time the loop observed (the start stored on the record
   // by the first chunk), never on a caller flag, so a short --timeout never counts.
   if (result.status === "timeout") {
-    const recordOpts = { checkpointDir: watchDeps.checkpointDir };
-    try {
-      const view = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], env);
-      const headSha = view.code === 0 ? parseJsonText(view.stdout)?.headRefOid : null;
-      const key = { repo: options.repo, pr: options.pr, headSha };
-      if (typeof headSha !== "string" || headSha.length === 0) {
-        result = { ...result, warning: "could not read the PR head, so the timed-out probe was not recorded" };
-      } else if (remainingMs > 0) {
-        // A reissued chunk (it carries --baseline-ids) keeps the start the first chunk stored.
-        if (requested.baseline === undefined) await recordProbeStart({ ...key, startedAt }, recordOpts);
-      } else {
-        const stored = requested.baseline === undefined ? null : await readProbeStartedAt(key, recordOpts);
-        // Either way the stored start is spent: a start backs at most one counted probe.
-        if (clock() - (stored ?? startedAt) >= WAIT_CAP_MS) await recordTimedOutProbe({ ...key, probeStartedAt: stored ?? undefined }, recordOpts);
-        else if (stored !== null) await recordProbeStart({ ...key, startedAt: undefined }, recordOpts);
-      }
-    } catch (error) {
-      result = { ...result, warning: `could not record the timed-out probe: ${error?.message ?? error}` };
-    }
+    result = await recordCopilotWaitTimeout(result, { options, requestedBaseline: requested.baseline, startedAt, remainingMs, clock, env, ghCommand, checkpointDir: watchDeps.checkpointDir });
   }
   if (result.status === "timeout" && remainingMs > 0) {
     const ids = Object.fromEntries(BASELINE_KINDS.map((kind) => [kind, baseline[kind].map((item) => item.id)]));
