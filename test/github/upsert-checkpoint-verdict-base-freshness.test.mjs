@@ -224,3 +224,35 @@ for (const [gate, isDraft] of [["draft_gate", true], ["pre_approval_gate", false
     }
   });
 }
+
+async function withContext(gate, baseFreshness, run) {
+  const contextPath = path.join(repoRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate, headSha: HEAD }));
+  await mkdir(path.dirname(contextPath), { recursive: true });
+  await writeFile(contextPath, JSON.stringify({ baseFreshness }), "utf8");
+  try {
+    await withTempDir(run, { prefix: "dev-loops-base-freshness-proof-extra-" });
+  } finally {
+    await rm(contextPath, { force: true });
+  }
+}
+
+test("a ready-PR draft_gate post with a base_current context posts the stale line between the draft conversion and the ready restore", async () => {
+  await withContext("draft_gate", { status: "base_current", base: "main" }, async (tempDir) => {
+    const out = await postClean(tempDir, STALE, { isDraft: false });
+    assert.equal(out.error, undefined);
+    assert.match(out.posted.join("\n"), /\*\*Base freshness:\*\* stale;/);
+    const convert = out.mutations.findIndex((m) => m.includes("convertPullRequestToDraft"));
+    const restore = out.mutations.findIndex((m) => m.includes("pr ready"));
+    assert.ok(convert >= 0 && restore > convert, `expected convert then restore, got ${JSON.stringify(out.mutations)}`);
+  });
+});
+
+for (const baseFreshness of [{ status: "base_stale_integrate_first" }, { status: "base_current", base: "release" }]) {
+  test(`a context recording ${JSON.stringify(baseFreshness)} is no proof and the stale post still refuses`, async () => {
+    await withContext("draft_gate", baseFreshness, async (tempDir) => {
+      const out = await postClean(tempDir, STALE);
+      assert.match(out.error, /^base_stale_integrate_first:/);
+      assert.equal(out.posted.length, 0);
+    });
+  });
+}

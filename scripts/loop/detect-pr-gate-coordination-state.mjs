@@ -1586,7 +1586,8 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     result.allowedNextActions = [PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE];
   }
   // GATE-EXEC-BASE-REFRESH: a stale head must integrate the base before a gate-run action. A fetch failure or unresolved head keeps the action (write-gate-context still refuses at dispatch).
-  if (result.nextAction === PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE || result.nextAction === PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE) {
+  // ADR 0295: the same check guards the routes a clean verdict posted with the stale-base line would otherwise reach.
+  if ([PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL, PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY].includes(result.nextAction)) {
     const checkFreshness = runtime.checkBaseFreshness ?? (runtime.runChild ? null : checkBaseFreshness);
     if (checkFreshness && prBaseRefName.length > 0 && typeof context.currentHeadSha === "string" && context.currentHeadSha.length > 0) {
       const freshness = await checkFreshness({ base: prBaseRefName, head: context.currentHeadSha, cwd: repoRoot, env: runtime.env ?? process.env, trusted: true })

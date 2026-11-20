@@ -4788,12 +4788,13 @@ describe("GATE-EXEC-BASE-REFRESH coordination", () => {
     assert.equal(result.baseFreshness.status, "base_fetch_failed");
   });
 
-  it("a non-gate-run action never calls the check", async () => {
-    let calls = 0;
-    const result = await runBaseFreshnessFixture({ withCleanDraftGate: true, checkBaseFreshness: async () => { calls += 1; return STALE; } });
-    assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
-    assert.equal(calls, 0);
-    assert.equal(result.baseFreshness, undefined);
+  // ADR 0295: a clean draft_gate verdict posted with the stale-base line must not route to ready without a base merge.
+  it("stale head at mark_ready_for_review routes to resolve_merge_conflicts", async () => {
+    const baseline = await runBaseFreshnessFixture({ withCleanDraftGate: true, checkBaseFreshness: async () => ({ ok: true, status: "base_current", base: "main" }) });
+    assert.equal(baseline.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+    const result = await runBaseFreshnessFixture({ withCleanDraftGate: true, checkBaseFreshness: async () => STALE });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS);
+    assert.match(result.reason, /base_stale_integrate_first/);
   });
 });
 

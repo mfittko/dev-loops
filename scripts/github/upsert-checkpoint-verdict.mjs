@@ -179,14 +179,15 @@ async function readReviewedBodySha256(options, headSha, repoRoot) {
   return [...found.values()][0] ?? null;
 }
 
-// GATE-EXEC-BASE-REFRESH proof that only the base moved: write-gate-context.mjs refuses a stale base and deletes a same-head context, so a base_current context at this head proves the head held the base when the round started.
-// A missing or unreadable context is no proof (fail closed).
-async function roundStartedAtCurrentBase(options, headSha, repoRoot) {
+// GATE-EXEC-BASE-REFRESH proof that only the base moved: every same-head round's write-gate-context refuses at a stale base, so any base_current context for this gate and head proves the head held the base when that context was written.
+// A missing or unreadable context, or one for another base, is no proof (fail closed).
+async function roundStartedAtCurrentBase(options, headSha, repoRoot, base) {
   const id = { repo: options.repo, pr: options.pr, gate: options.gate, headSha };
+  const checkouts = resolveLedgerCheckouts(repoRoot);
   for (const tmpRoot of [options.contextTmpRoot, undefined, ledgerTmpRoot(options.findingsLedger)]) {
-    for (const root of resolveLedgerCheckouts(repoRoot)) {
+    for (const root of checkouts) {
       const context = await readGateContext({ ...id, tmpRoot }, { repoRoot: root }).catch(() => null);
-      if (context?.baseFreshness?.status === "base_current") return true;
+      if (context?.baseFreshness?.status === "base_current" && context.baseFreshness.base === base) return true;
     }
   }
   return false;
@@ -2928,7 +2929,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       let seen;
       const stale = await staleBaseReason({ base: prBase.trim(), head: convergedInput || capRoundHead ? evidence.currentHeadSha : canonicalHeadSha, cwd: repoRoot, env, check: async (input) => (seen = await checkFreshness(input)) });
       // Only the base moved during the round: post the verdict with a visible note; the base-merge carry decides whether it stands at the new head.
-      if (stale && !convergedInput && !capRoundHead && await roundStartedAtCurrentBase(options, canonicalHeadSha, repoRoot)) {
+      if (stale && !convergedInput && !capRoundHead && await roundStartedAtCurrentBase(options, canonicalHeadSha, repoRoot, prBase.trim())) {
         staleBaseNote = `origin/${prBase.trim()} moved during the round (${seen.newerCommits.length} newer commit(s)). Merge it via scripts/loop/resolve-pr-conflicts.mjs; the base-merge carry decides whether this verdict stands at the new head.`;
         return;
       }
