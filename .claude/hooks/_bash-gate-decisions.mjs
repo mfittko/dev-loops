@@ -197,8 +197,8 @@ export function decideUnresolveOwnerDeny({ command, role }) {
   return null;
 }
 
-/** Whether the raw command text names `merge-pr`, in any form (`--check` included). */
-export const commandMentionsMergePr = (command) => typeof command === "string" && command.includes("merge-pr");
+/** Whether the raw command text names `merge-pr`, in any form (`--check` included), once quote and backslash characters are stripped (Bash drops them: `merge-""pr`, `merge\-pr`). */
+export const commandMentionsMergePr = (command) => typeof command === "string" && command.replace(/["'\\]/g, "").includes("merge-pr");
 
 /**
  * Merge ownership (issue 2500): `merge-pr.mjs` is orchestrator-owned, so a subagent Bash command whose raw text contains `merge-pr` is denied, `--check` included.

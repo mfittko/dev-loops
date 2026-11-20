@@ -304,9 +304,9 @@ test("2500: the orchestrator alone runs merge-pr (--check included); a brief car
     const text = squeeze(await readRepo(doc));
     assert.match(text, /brief never contains a merge step/, doc);
     assert.match(text, /exact `merge-pr\.mjs` command line, with `--human-approved-by <login>`.*`--standing-authorization`/, doc);
-    assert.match(text, /`approvalPath: comment_marker`.*exact `approveMergeLine`/, doc);
+    assert.match(text, /`approvalPath: comment_marker` the operator posts the exact `approveMergeLine`/, doc);
   }
   for (const doc of ["skills/dev-loop/SKILL.md", ".claude/skills/dev-loop/SKILL.md"]) {
-    assert.match(squeeze(await readRepo(doc)), /`approvalPath: comment_marker`.*exact `approveMergeLine`/, doc);
+    assert.match(squeeze(await readRepo(doc)), /`approvalPath: comment_marker` the operator posts the exact `approveMergeLine`/, doc);
   }
 });

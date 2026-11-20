@@ -570,6 +570,9 @@ const MERGE_DENY_FORMS = [
   "cat <<EOF\n$(node scripts/github/merge-pr.mjs --repo a/b --pr 5)\nEOF",
   "bash <<EOF\nnode scripts/github/merge-pr.mjs --pr 5\nEOF",
   'bash -c "node scripts/github/merge-pr.mjs --pr 5"',
+  'node scripts/github/merge-""pr.mjs --pr 5',
+  "node scripts/github/merge-''pr.mjs --pr 5",
+  "node scripts/github/merge\\-pr.mjs --pr 5",
 ];
 
 test("any subagent role is denied a command naming merge-pr, --check included (issue 2500)", () => {
