@@ -22,3 +22,7 @@ Rejected: failing closed on every headerless `COMMENTED` body with 0 threads (it
 ## Consequences
 
 A Copilot error no longer merges a PR without a Copilot review. The loop re-requests once on the same head, then asks the operator to push a new head or re-run the request wrapper. `merge-pr` reports `copilotConvergenceState: no_current_head_review` for a refused merge and adds no output field. Other Copilot failure texts keep `none` until a follow-up adds them from observed evidence.
+
+## Amendment
+
+2026-11-20 ([issue 3323](https://github.com/mfittko/dev-loops/issues/3323)): Copilot also refuses a review when the quota is exhausted. The observed body starts with "Copilot was unable to review this pull request". This text is added as a second error prefix. The Consequences line above allows this: other failure texts are added from observed evidence. The Decision text is unchanged. Both prefixes classify as `review_error` under the same rules.

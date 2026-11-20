@@ -1343,7 +1343,10 @@ test("summarizeCopilotReviews: a current-head error review is present but is no 
 
 test("classifyCopilotReviewBodyDisposition: error-body edge cases", () => {
   const error = "Copilot encountered an error and was unable to review this pull request.";
+  const quota = "Copilot was unable to review this pull request because your quota is exhausted.";
   const cases = [
+    ["COMMENTED", `\r\n  ${quota}\r\nTry again later.\r\n`, COPILOT_DISPOSITION.REVIEW_ERROR],
+    ["COMMENTED", "Copilot was unable to review this pull request because of an internal error.", COPILOT_DISPOSITION.REVIEW_ERROR],
     ["COMMENTED", `${error}\r\nYou can try again by re-requesting a review.\r\n`, COPILOT_DISPOSITION.REVIEW_ERROR],
     ["COMMENTED", `\n\n  ${error}`, COPILOT_DISPOSITION.REVIEW_ERROR],
     ["COMMENTED", null, COPILOT_DISPOSITION.NONE],
