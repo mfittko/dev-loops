@@ -148,6 +148,7 @@ const REMOVED_FLAGS = new Set([
 ]);
 // The writer's --tmp-root of a ledger at <root>/gate-findings/<slug>/pr-N/<file>; undefined for any other layout (default root).
 function ledgerTmpRoot(ledgerPath) {
+  if (!ledgerPath) return undefined;
   const parts = path.resolve(ledgerPath).split(path.sep);
   return parts.length > 4 && parts.at(-4) === "gate-findings" && /^pr-\d+$/.test(parts.at(-2)) ? parts.slice(0, -4).join(path.sep) || path.sep : undefined;
 }
@@ -179,16 +180,16 @@ async function readReviewedBodySha256(options, headSha, repoRoot) {
   return [...found.values()][0] ?? null;
 }
 
-// GATE-EXEC-BASE-REFRESH proof that only the base moved: every same-head round's write-gate-context refuses at a stale base, so any base_current context for this gate and head proves the head held the base when that context was written.
+// GATE-EXEC-BASE-REFRESH proof that only the base moved: every same-head round's write-gate-context refuses at a stale base, so a base_current context for this gate and head proves the head held the base when that context was written.
+// Only the reviewed worktree (the first checkout) counts: a context in another checkout belongs to an earlier same-head round (as in readReviewedBodySha256).
 // A missing or unreadable context, or one for another base, is no proof (fail closed).
 async function roundStartedAtCurrentBase(options, headSha, repoRoot, base) {
   const id = { repo: options.repo, pr: options.pr, gate: options.gate, headSha };
-  const checkouts = resolveLedgerCheckouts(repoRoot);
-  for (const tmpRoot of [options.contextTmpRoot, undefined, ledgerTmpRoot(options.findingsLedger)]) {
-    for (const root of checkouts) {
-      const context = await readGateContext({ ...id, tmpRoot }, { repoRoot: root }).catch(() => null);
-      if (context?.baseFreshness?.status === "base_current" && context.baseFreshness.base === base) return true;
-    }
+  const [reviewedWorktree] = resolveLedgerCheckouts(repoRoot);
+  // The ledger root (the main checkout's tmp/) is another checkout's context, so only --context-tmp-root and the default root count.
+  for (const tmpRoot of [options.contextTmpRoot, undefined]) {
+    const context = await readGateContext({ ...id, tmpRoot }, { repoRoot: reviewedWorktree }).catch(() => null);
+    if (context?.baseFreshness?.status === "base_current" && context.baseFreshness.base === base) return true;
   }
   return false;
 }

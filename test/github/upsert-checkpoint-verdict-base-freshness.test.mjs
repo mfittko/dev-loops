@@ -61,9 +61,10 @@ function makeRunChild(posted, { isDraft: initialDraft = true, mutations = [], re
   };
 }
 
-async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDraft = true, omitVerdict = false, rejectedMedium = false, partlyJudged = false, actInFindingsJson = false, rejectedInFindingsJson = false, gate = "draft_gate" } = {}) {
+async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDraft = true, omitVerdict = false, rejectedMedium = false, partlyJudged = false, actInFindingsJson = false, rejectedInFindingsJson = false, gate = "draft_gate", noLedger = false, ledgerRootLayout = false } = {}) {
   const clean = verdict === "clean";
-  const ledgerPath = path.join(tempDir, "ledger.json");
+  const ledgerPath = ledgerRootLayout ? path.join(tempDir, "gate-findings", "owner-repo", "pr-17", "ledger.json") : path.join(tempDir, "ledger.json");
+  if (ledgerRootLayout) await mkdir(path.dirname(ledgerPath), { recursive: true });
   await writeFile(ledgerPath, JSON.stringify({
     repo: "owner/repo", pr: 17, gate, headSha: HEAD, verdict, overallVerdict: rejectedMedium ? "findings_present" : verdict,
     loggedAt: "2026-11-16T00:00:00.000Z",
@@ -77,7 +78,7 @@ async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDra
   if (actInFindingsJson || rejectedInFindingsJson) await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [{ severity: "low", angle: "correctness", summary: "json finding", judgeDisposition: actInFindingsJson ? "act" : "reject", judgeRationale: "test" }] }]), "utf8");
   const options = parseUpsertCheckpointVerdictCliArgs([
     "--repo", "owner/repo", "--pr", "17", "--gate", gate, "--head-sha", HEAD, ...(omitVerdict ? [] : ["--verdict", verdict]),
-    "--findings-summary", "base freshness test", "--findings-ledger", ledgerPath, ...(actInFindingsJson || rejectedInFindingsJson ? ["--findings-json", jsonPath] : []),
+    "--findings-summary", "base freshness test", ...(noLedger ? [] : ["--findings-ledger", ledgerPath]),...(actInFindingsJson || rejectedInFindingsJson ? ["--findings-json", jsonPath] : []),
     "--next-action", "mark ready for review", "--inline-reason", "base freshness test", ...(gate === "pre_approval_gate" ? ["--size-budget-json", sizePath] : []),
     "--findings-severity-counts", JSON.stringify(clean ? { high: 0, medium: 0, low: 1, question: 0, nit: 0 } : { high: 0, medium: 1, low: 0, question: 0, nit: 0 }),
   ]);
@@ -245,6 +246,26 @@ test("a ready-PR draft_gate post with a base_current context posts the stale lin
     const restore = out.mutations.findIndex((m) => m.includes("pr ready"));
     assert.ok(convert >= 0 && restore > convert, `expected convert then restore, got ${JSON.stringify(out.mutations)}`);
   });
+});
+
+// A context outside the reviewed worktree (here the ledger root) belongs to an earlier round and is no proof.
+test("a base_current context found only under the ledger root is no proof and the stale post still refuses", async () => {
+  await withTempDir(async (tempDir) => {
+    const contextPath = buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD, tmpRoot: tempDir });
+    await mkdir(path.dirname(contextPath), { recursive: true });
+    await writeFile(contextPath, JSON.stringify({ baseFreshness: { status: "base_current", base: "main" } }), "utf8");
+    const out = await postClean(tempDir, STALE, { ledgerRootLayout: true });
+    assert.match(out.error, /^base_stale_integrate_first:/);
+    assert.equal(out.posted.length, 0);
+  }, { prefix: "dev-loops-base-freshness-ledger-root-" });
+});
+
+test("a ledger-less clean post at a stale base refuses with the base_stale_integrate_first prefix", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await postClean(tempDir, STALE, { noLedger: true });
+    assert.match(out.error, /^base_stale_integrate_first:/);
+    assert.equal(out.posted.length, 0);
+  }, { prefix: "dev-loops-base-freshness-no-ledger-" });
 });
 
 for (const baseFreshness of [{ status: "base_stale_integrate_first" }, { status: "base_current", base: "release" }]) {

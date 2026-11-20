@@ -166,7 +166,16 @@ test("a converged post checks base freshness at the fixer commit, so a merged ba
     const fresh = await post(tempDir, { findings, converged: convergedInput(findings), checkBaseFreshness: check(false) });
     assert.equal(fresh.error, undefined);
     assert.equal(fresh.result.action, "updated");
-    const stale = await post(tempDir, { findings, converged: convergedInput(findings), checkBaseFreshness: check(true) });
+    // A base_current context at the reviewed head A (ADR 0295 proof) never lifts the refusal for a converged catch-up post.
+    const ctx = path.join(repoRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A }));
+    await mkdir(path.dirname(ctx), { recursive: true });
+    await writeFile(ctx, JSON.stringify({ baseFreshness: { status: "base_current", base: "main" } }), "utf8");
+    let stale;
+    try {
+      stale = await post(tempDir, { findings, converged: convergedInput(findings), checkBaseFreshness: check(true) });
+    } finally {
+      await rm(ctx, { force: true });
+    }
     assert.match(stale.error, new RegExp(`^base_stale_integrate_first: head ${FIX} does not contain origin/main`));
     assert.deepEqual(heads, [FIX, FIX]);
   }, { prefix: "dev-loops-converged-base-" });
