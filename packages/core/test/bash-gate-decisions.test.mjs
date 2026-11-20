@@ -602,6 +602,11 @@ const RECORDER_SPELLINGS = [
   `git rebase --exec 'node scripts/github/record-operator-decision.mjs --repo o/n' HEAD~1`,
   `git bisect run node scripts/github/record-operator-decision.mjs --repo o/n`,
   `git -c alias.r='!node scripts/github/record-operator-decision.mjs --repo o/n' r`,
+  `git -c core.pager='node scripts/github/record-operator-decision.mjs --repo o/n' log`,
+  `GIT_PAGER='node scripts/github/record-operator-decision.mjs --repo o/n' git log`,
+  `git -c diff.external='node scripts/github/record-operator-decision.mjs' diff`,
+  `git difftool --extcmd='node scripts/github/record-operator-decision.mjs' x`,
+  `rg --pre scripts/github/record-operator-decision.mjs x .`,
 ];
 
 test("every non-canonical recorder spelling is denied, with and without a subagent role", () => {
