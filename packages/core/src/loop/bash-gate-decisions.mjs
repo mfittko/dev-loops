@@ -114,8 +114,9 @@ function commandContainsEvidenceWrite(command) {
  * fixture — and `packages/core/test/bash-gate-decisions.test.mjs` asserts this exact list and each
  * rule's exact reason literal, so a reordered or reworded rule fails.
  *
- * Three denies below are inline denials with no registered rule ID — the unresolve owner allowlist,
- * the `timeout`-wrapped sanctioned command deny and the subagent ad-hoc external-write deny — so they
+ * Four denies below are inline denials with no registered rule ID — the unresolve owner allowlist,
+ * the `timeout`-wrapped sanctioned command deny, the subagent ad-hoc external-write deny and the
+ * subagent merge-pr deny — so they
  * return `ruleId: null` and stay out of this list: listing them would mint rule IDs the rule registry
  * does not own.
  */
@@ -195,6 +196,26 @@ export function decideUnresolveOwnerDeny({ command, role }) {
   return null;
 }
 
+/** Whether the raw command text names `merge-pr`, in any form (`--check` included), once quote and backslash characters are stripped (Bash drops them: `merge-""pr`, `merge\-pr`). */
+export const commandMentionsMergePr = (command) => typeof command === "string" && command.replace(/\$?["']|\\/g, "").search(/merge-pr\b/) !== -1;
+
+/**
+ * Merge ownership (issue 2500): `merge-pr.mjs` is orchestrator-owned, so a subagent Bash command whose raw text contains `merge-pr` is denied, `--check` included.
+ * The top-level session (role null) keeps the script. Keys on the role name alone, like the unresolve allowlist.
+ * ponytail: ceiling: a name assembled by variable or command substitution (`m=merge; ...$m-pr`) is not caught; the orchestrator is the only actor allowed to run the script.
+ * @param {{command: string, role: string|null|undefined}} params
+ * @returns {{ruleId: null, reason: string}|null}
+ */
+export function decideMergePrOwnerDeny({ command, role }) {
+  if (typeof role !== "string" || !commandMentionsMergePr(command)) return null;
+  return {
+    ruleId: null,
+    reason:
+      `The ${normalizeAgentType(role)} agent may not run merge-pr: scripts/github/merge-pr.mjs, \`--check\` included, is owned by the orchestrator (main agent). ` +
+      "Hand back the merge-ready evidence instead; the orchestrator runs `merge-pr.mjs --check` and the merge.",
+  };
+}
+
 /**
  * Decide whether a Bash command must be denied by a dev-loop gate boundary.
  *
@@ -230,7 +251,7 @@ export function decideUnresolveOwnerDeny({ command, role }) {
  * @param {{passed: boolean, error: string|null}|null} [params.readyGate] - Draft-gate evidence
  *   probe result for the command's PR; null when the adapter did not probe.
  * @returns {{ruleId: string|null, reason: string}|null} The deny decision, or null to allow.
- *   `ruleId` is null for the three inline denies that carry no registered rule ID and for the
+ *   `ruleId` is null for the four inline denies that carry no registered rule ID and for the
  *   missing-facts deny.
  */
 export function decideBashGateDeny(facts = {}) {
@@ -261,6 +282,10 @@ export function decideBashGateDeny(facts = {}) {
   const unresolve = decideUnresolveOwnerDeny({ command, role });
   if (unresolve) {
     return unresolve;
+  }
+  const mergeOwner = decideMergePrOwnerDeny({ command, role });
+  if (mergeOwner) {
+    return mergeOwner;
   }
 
   // COORDINATOR-VERIFY-BOUNDARY: a known code-verification/build entrypoint (bun run
