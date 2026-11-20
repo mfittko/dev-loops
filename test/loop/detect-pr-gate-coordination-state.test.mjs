@@ -4681,7 +4681,7 @@ test("3309: the base-only merge carry reads the cap head's live ledger, never a 
   });
   try {
     const context = { repo: "owner/repo", pr: 10, currentHeadSha: "fe".repeat(20), prData: { baseRefName: "main" } };
-    assert.equal(await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 4, baseOnlyMerge: async () => true }), null);
+    assert.equal(await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 2, baseOnlyMerge: async () => true }), null);
   } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
 });
 
