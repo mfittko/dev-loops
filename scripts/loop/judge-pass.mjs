@@ -55,7 +55,7 @@ import {
 } from "../lib/jq-output.mjs";
 import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
 
-const USAGE = `Usage: judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --findings-file <path> --judge-verdict <path> --judge-plan <path> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>] [--tmp-root <path>]
+const USAGE = `Usage: judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --findings-file <path> --judge-verdict <path> --judge-plan <path> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>] [--tmp-root <path>] [--context-tmp-root <path>]
 
 Bridge the judge pass between gate fan-in (Phase 3) and the fixer pass (Phase 4).
 Reads the judge agent's verdict artifact, enforces current-head freshness, applies
@@ -124,6 +124,8 @@ Inputs:
                                the target already lists.
   --tmp-root <path>            Ledger root for the round count and prior-round reads; pass the
                                ledger writer's --tmp-root. Default: the main checkout's tmp/.
+  --context-tmp-root <path>    Root of the round's gate-context bundle and keyed emit plan; pass the
+                               ledger writer's --context-tmp-root. Default: tmp/.
   --repo-root <path>           Root used to resolve relative --findings-file /
                                --judge-verdict / --out / --ledger-out paths
                                (default: process.cwd()).
@@ -232,6 +234,7 @@ export function parseJudgePassCliArgs(argv) {
       "ledger-out": { type: "string" },
       "repo-root": { type: "string" },
       "tmp-root": { type: "string" },
+      "context-tmp-root": { type: "string" },
       "spec-file": { type: "string" },
       "content-digest": { type: "string" },
       "spec-authority-verdict": { type: "string" },
@@ -293,6 +296,10 @@ export function parseJudgePassCliArgs(argv) {
     }
     if (token.name === "ledger-out") {
       options.ledgerOut = token.value;
+      continue;
+    }
+    if (token.name === "context-tmp-root") {
+      options.contextTmpRoot = token.value;
       continue;
     }
     if (token.name === "tmp-root") {
@@ -981,10 +988,10 @@ export function gitShowSource(cwd, sha, file) {
 // The ledger root of the round history: the writer's --tmp-root, else the canonical root.
 const historyRoot = (options, resolvedRoot) => (options.tmpRoot ? path.resolve(resolvedRoot, options.tmpRoot) : resolveGateArtifactTmpRoot(resolvedRoot));
 
-// The fan-out round id the writer stamps on its ledger (its emit plan under the default context root), null without a readable plan.
+// The fan-out round id the writer stamps on its ledger (its emit plan under --context-tmp-root), null without a readable plan.
 async function emitPlanRoundId(options, resolvedRoot) {
   try {
-    const plan = JSON.parse(await readFile(path.resolve(resolvedRoot, buildGateEmitPlanPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha })), "utf8"));
+    const plan = JSON.parse(await readFile(path.resolve(resolvedRoot, buildGateEmitPlanPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.contextTmpRoot || "tmp" })), "utf8"));
     return typeof plan?.roundId === "string" && plan.roundId.length > 0 ? plan.roundId : null;
   } catch {
     return null;

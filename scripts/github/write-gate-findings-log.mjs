@@ -1029,8 +1029,6 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       ? clustersFromStampedIds(enriched.findings)
       : clusterFindings(enriched.findings, { headSha: options.headSha }).clusters;
     findings = projectClusterDisposition(enriched.findings, clusters);
-    // The verdict raise reads the INPUT severity, as judge-pass does: a failOpen act promotes a low to medium after the consolidator weighed it.
-    copilotActedSeverities = findings.slice(prefixLength).flatMap((f, i) => (f?.judgeDisposition === "act" ? [pinnedFindings[prefixLength + i]?.severity ?? f.severity] : []));
     assertNoProjectedForbiddenDefer(findings, clusters);
     scopeDrift = enriched.scopeDrift;
     if (specAuthorityIdentity !== undefined) {
@@ -1048,6 +1046,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
         return raw.judgeDisposition === f.judgeDisposition && f.followUpIssueNumber == null && Number.isInteger(raw.followUpIssueNumber) && raw.followUpIssueNumber > 0 ? { ...f, followUpIssueNumber: raw.followUpIssueNumber } : f;
       });
     }
+    // Read after the ledger-out coercions, as judge-pass does: a Copilot act coerced to reject raises no verdict. The raise reads the INPUT severity: a failOpen act promotes a low to medium after the consolidator weighed it.
+    copilotActedSeverities = findings.slice(prefixLength).flatMap((f, i) => (f?.judgeDisposition === "act" ? [pinnedFindings[prefixLength + i]?.severity ?? f.severity] : []));
   }
   // `resurfaces` stays only when it names a closed prior round's act item in the same file; every other act item is new.
   if (findings.some((f) => f.resurfaces !== undefined)) {
