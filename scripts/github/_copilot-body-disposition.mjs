@@ -7,9 +7,13 @@
 // current head (format owned by skills/docs/copilot-loop-state-graph.md):
 //   <!-- dev-loops:copilot-body-disposition review=<review id> head=<40-hex> fix=<40-hex> -->
 //   <!-- dev-loops:copilot-body-disposition review=<review id> head=<40-hex> operator -->
+//   <!-- dev-loops:copilot-body-disposition review=<review id> head=<40-hex> reject=<gate> -->
+//   <!-- dev-loops:copilot-body-disposition review=<review id> head=<40-hex> defer=<gate> -->
 // `fix` names a commit strictly after the dispositioned review's commit that
 // the head contains, so a `fix` record never clears a review of the current
 // head. `operator` is a human operator decision with no fixing commit.
+// `reject` and `defer` clear only when the named gate's findings ledger at the current head
+// holds a judge `reject` (or `defer` for `defer`) on every `copilot-body` finding and none is high or critical.
 //
 // FAIL CLOSED: no record, a record for another head, a foreign review id, an
 // untrusted author, a fix commit not after the review commit or not in the
@@ -27,7 +31,8 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { isCommitContainedByHead } from "./_commit-containment.mjs";
-import { repoSlugFor } from "./_gate-artifact-paths.mjs";
+import { buildLogPath, repoSlugFor } from "./_gate-artifact-paths.mjs";
+import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 
 // Synthetic angle name of the judge finding built from a Copilot review body (not a gate angle).
 export const COPILOT_BODY_ANGLE = "copilot-body";
@@ -103,6 +108,30 @@ async function isFixAfterReviewAndInHead({ repo, fixSha, reviewCommitSha, headSh
   return (await isCommitContainedByHead({ repo, commitSha: fixSha, headSha }, runtime)).contained;
 }
 
+const JUDGE_ACTION_DISPOSITIONS = { reject: ["reject"], defer: ["defer", "reject"] };
+
+// The judge-bound forms clear only against the live gate ledger at the head: some copy parses, holds at
+// least one copilot-body finding, every one carries an allowed judge disposition, none is high or critical.
+// Any other case (missing, unreadable, another head's file, act or no disposition) refuses.
+async function judgeLedgerClears({ repo, pr, headSha, binding }, runtime) {
+  const ledgerPath = buildLogPath({ repo, pr, gate: binding.gate, headSha, tmpRoot: "tmp" });
+  let checkouts;
+  try {
+    checkouts = runtime.ledgerCheckouts ?? resolveLedgerCheckouts(runtime.cwd ?? process.cwd());
+  } catch {
+    return false;
+  }
+  for (const root of checkouts) {
+    try {
+      const findings = JSON.parse(await readFile(path.resolve(root, ledgerPath), "utf8"))?.findings;
+      const body = Array.isArray(findings) ? findings.filter((f) => f?.angle === COPILOT_BODY_ANGLE) : [];
+      if (body.length > 0 && body.every((f) => JUDGE_ACTION_DISPOSITIONS[binding.action].includes(f.judgeDisposition)
+        && !["high", "critical"].includes(String(f.severity).toLowerCase()))) return true;
+    } catch { /* absent or unreadable copy: try the next checkout */ }
+  }
+  return false;
+}
+
 /**
  * Whether a trusted record clears the body finding of Copilot review
  * `reviewId` for `headSha` (always the PR's current head). `reviewCommitSha`
@@ -138,6 +167,12 @@ export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewI
     if (marker.headSha !== normalizedHead || marker.reviewId !== String(reviewId)) continue;
     if (marker.operator) {
       return { cleared: true, disposition: marker, reason: `operator disposition recorded for review ${marker.reviewId} at head ${normalizedHead}` };
+    }
+    if (marker.judgeBinding) {
+      if (await judgeLedgerClears({ repo, pr, headSha: normalizedHead, binding: marker.judgeBinding }, runtime)) {
+        return { cleared: true, disposition: marker, reason: `judge-bound ${marker.judgeBinding.action} record for review ${marker.reviewId} at head ${normalizedHead} matches the ${marker.judgeBinding.gate} ledger` };
+      }
+      continue;
     }
     if (await isFixAfterReviewAndInHead({ repo, fixSha: marker.fixSha, reviewCommitSha, headSha: normalizedHead }, runtime)) {
       return { cleared: true, disposition: marker, reason: `fix commit ${marker.fixSha} disposes review ${marker.reviewId} at head ${normalizedHead}` };

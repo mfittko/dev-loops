@@ -845,7 +845,7 @@ export async function mergePr(options, runtime = {}) {
       pr: options.pr,
       headSha: currentHeadSha,
       reviewSummary: summarizeCopilotReviews(toSharedReviewShape(rawReviews), { headSha: currentHeadSha }),
-    }, { env, ghCommand, runChild })).bodyDisposition
+    }, { env, ghCommand, runChild, cwd })).bodyDisposition
     : null;
   // The latest review decides: when a current-head review exists but the
   // latest submitted Copilot review sits on an earlier commit (Copilot reviewed

@@ -6,7 +6,8 @@
 // reports as carried, and the detector never reports carried on a head where
 // the request tool would re-request.
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, it, test } from "bun:test";
@@ -394,6 +395,43 @@ describe("round cap: body-only Copilot feedback goes to the judge unless a recor
       assert.equal(snapshot.copilotBodyFeedbackUnresolved, !cleared);
       const interpretation = interpretLoopState(snapshot, { maxCopilotRounds: 2 });
       assert.equal(interpretation.state === "round_cap_clean_fallback", cleared);
+    });
+  }
+});
+
+// A defer= record bound to the pre_approval_gate judge ledger is the agent route at the round cap.
+describe("round cap: a judge-bound defer record clears the body finding", () => {
+  const deferRecord = { ...dispositionComment({ reviewId: "PRR_round2" }), body: `<!-- dev-loops:copilot-body-disposition review=PRR_round2 head=${HEAD} defer=pre_approval_gate -->` };
+  const cases = [
+    { name: "a low finding the judge deferred", findings: [{ angle: "copilot-body", severity: "low", summary: "s", judgeDisposition: "defer" }], cleared: true },
+    { name: "a high finding the judge deferred", findings: [{ angle: "copilot-body", severity: "high", summary: "s", judgeDisposition: "defer" }], cleared: false },
+    { name: "a finding the judge acted on", findings: [{ angle: "copilot-body", severity: "low", summary: "s", judgeDisposition: "act" }], cleared: false },
+    { name: "no ledger", findings: null, cleared: false },
+  ];
+  for (const { name, findings, cleared } of cases) {
+    it(`copilot loop detector: ${name}`, async () => {
+      const ledgerRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-judge-ledger-"));
+      const previous = process.cwd();
+      try {
+        await writeFile(path.join(ledgerRoot, ".devloops"), "");
+        if (findings) {
+          const file = path.join(ledgerRoot, buildLogPath({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: HEAD, tmpRoot: "tmp" }));
+          await mkdir(path.dirname(file), { recursive: true });
+          await writeFile(file, JSON.stringify({ findings }));
+        }
+        process.chdir(ledgerRoot);
+        const fixture = capFixture([deferRecord]);
+        const { runChild } = strictRunChild([
+          { matchByClaims: true, assertArgs: ["pr", "view", String(PR)], stdout: line({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], reviews: fixture.reviews }) },
+          ...fixture.shared,
+        ]);
+        const snapshot = await autoDetectSnapshot({ repo: REPO, pr: PR, reviewRequestStatusOverride: "none" }, { env: {}, ghCommand: "gh", runChild });
+        assert.equal(snapshot.copilotBodyFeedbackUnresolved, !cleared);
+        assert.equal(interpretLoopState(snapshot, { maxCopilotRounds: 2 }).state === "round_cap_clean_fallback", cleared);
+      } finally {
+        process.chdir(previous);
+        await rm(ledgerRoot, { recursive: true, force: true });
+      }
     });
   }
 });
