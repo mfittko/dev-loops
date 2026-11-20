@@ -1995,9 +1995,9 @@ test("an all-body act list refuses delta_body_only_act_set with the edit-pr and 
 });
 
 // A real zero-thread commit_only emission carrying the focus round, as the fixer pulls it.
-async function focusEmission(round) {
+async function focusEmission(round, payload = { ...THREADS, threads: [] }) {
   const { emitFixerWorkOrder } = await import("../../scripts/loop/emit-fixer-work-order.mjs");
-  const { dir, threadsFile } = threadsFixture({ ...THREADS, threads: [] });
+  const { dir, threadsFile } = threadsFixture(payload);
   const operatorFocusFile = path.join(dir, "focus.json");
   fs.writeFileSync(operatorFocusFile, JSON.stringify({ round }));
   const unit = await emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "commit_only", threadsFile, operatorFocusFile, cwd: coverageRepo,
@@ -2015,6 +2015,12 @@ test("--threads-file with no unresolved thread builds the act set from the canon
   await assert.rejects(runCli(threadArgs(threadsFile, "--spec-identity", "spec@1", "--fixer-plan", handWritten, "--worktree", coverageRepo), headAt(B)), /not the canonical commit_only threads plan/);
   const missing = path.join(dir, "missing-plan.json");
   await assert.rejects(runCli(threadArgs(threadsFile, "--spec-identity", "spec@1", "--fixer-plan", missing, "--worktree", coverageRepo), headAt(B)), (error) => error.message.includes(`--fixer-plan ${missing} is unreadable or not JSON`) && !/no operator focus round/.test(error.message));
+});
+
+test("--threads-file refuses an empty capture paired with a canonical plan whose pinned source holds an unresolved thread", async () => {
+  const { planPath } = await focusEmission("tighten the summary wording", THREADS);
+  const { threadsFile: emptyThreads } = threadsFixture({ ...THREADS, threads: [] });
+  await assert.rejects(runCli(threadArgs(emptyThreads, "--spec-identity", "spec@1", "--fixer-plan", planPath, "--worktree", coverageRepo), headAt(B)), /pinned threads source holds an actionable thread/);
 });
 
 test("--threads-file refuses the canonical focus plan of another PR or repo", async () => {

@@ -328,6 +328,22 @@ const itemPairs = (items) => [...new Set((Array.isArray(items) ? items : []).map
 
 // PRE-PUSH-DELTA-PUSH-AUTHORITY: the zero-thread focus must be the round the fixer received in the canonical plan for this baseline.
 // The plan is the commit_only order, or the full order a first full emission renamed over it (same source, baseline and focus digest), so a re-emission stays possible.
+// A focus-only round is valid only when the plan's own pinned thread source held no actionable thread, so an empty supplied capture cannot replace the plan's threads.
+export function assertPlanSourceHasNoThreads(order) {
+  const read = (order?.requiredReads ?? []).find((entry) => entry?.kind === "threads");
+  let pinned;
+  try {
+    const bytes = readFileSync(read.path);
+    if (sha256(bytes) !== read.sha256) throw new Error("digest mismatch");
+    pinned = JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    throw new Refusal(`the canonical plan's pinned threads source is missing, altered or unreadable (${error.code ?? error.message}); re-emit --phase commit_only`);
+  }
+  if (!Array.isArray(pinned?.threads) || pinned.threads.some((thread) => thread?.trustIncomplete !== true)) {
+    throw new Refusal("the canonical plan's pinned threads source holds an actionable thread, so an operator-focus-only round cannot stand in for its delta review; review the plan's threads");
+  }
+}
+
 function assertIssuedFocus({ tmpRoot, headSha, repo, pr, operatorFocus, next }) {
   let plan;
   try { plan = JSON.parse(readFileSync(path.join(buildFixerDir({ repo, pr, tmpRoot }), PLAN_FILE), "utf8")); } catch { plan = undefined; }
@@ -335,6 +351,7 @@ function assertIssuedFocus({ tmpRoot, headSha, repo, pr, operatorFocus, next }) 
   if (!issued || !["commit_only", "full"].includes(issued.phase) || issued.source !== "threads" || issued.headSha !== headSha || workOrderDigest(issued) !== plan.workOrderDigest) {
     throw new Refusal(`--phase full refused: the canonical work order for ${headSha} is missing, altered or not a threads order of this baseline; re-emit --phase commit_only; ${next}`);
   }
+  assertPlanSourceHasNoThreads(issued);
   if (issued.operatorFocusDigest !== operatorFocusDigestEntry(operatorFocus).operatorFocusDigest) {
     throw new Refusal(`--phase full refused: this operator focus round is not the one in the canonical commit_only work order for ${headSha}; pass the --operator-focus-file of that emission; ${next}`);
   }

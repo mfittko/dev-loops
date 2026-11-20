@@ -54,7 +54,7 @@ import { HEAD_SHA_RE } from "@dev-loops/core/loop/spec-authority";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
-import { fixerPlanPath, locateFixerUnit } from "./emit-fixer-work-order.mjs";
+import { assertPlanSourceHasNoThreads, fixerPlanPath, locateFixerUnit } from "./emit-fixer-work-order.mjs";
 import { capRoundActList, clearingChainWalk } from "../github/write-gate-context.mjs";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -243,6 +243,7 @@ function planOperatorFocus(fixerPlan, baselineSha, worktree, repo, pr) {
     || plan.workOrderRef !== `fixer:${repo}#${pr}:${baselineSha}:${plan.executionIdentity}` || workOrderDigest(order) !== plan.workOrderDigest) {
     throw new Error("Delta coverage binding: --fixer-plan is not the canonical commit_only threads plan for this baseline; pass the pulled plan");
   }
+  assertPlanSourceHasNoThreads(order);
   return order.operatorFocus;
 }
 
