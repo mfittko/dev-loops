@@ -1954,13 +1954,15 @@ function hasUnreadableLauncherWord(rawWords) {
     // A bracket class could match the recorder word, so it fails closed.
     return w.includes("[") || globMatchesSuffix(w, target);
   };
+  // A glob that could expand to `cli/index.mjs` is the entrypoint too (fail closed).
+  const isCli = (w) => w.endsWith("cli/index.mjs") || (/[*?[]/.test(w) && /^[A-Za-z0-9_./*?[\]-]+$/.test(w) && hides(w, "cli/index.mjs"));
   if (isRunner) {
     // Scan to the first word that is a cli/index.mjs entrypoint or a glob matching the recorder script, so runner flag values need no grammar. An inline-code flag, a `bun x` package binary or another script word ends the scan: what follows is data for that program.
     let entry = -1;
     for (let j = at + 1; j < raw.length; j++) {
       const w = raw[j];
       if (/^(?:-[ep]|--eval|--print)$/.test(w) || (w === "x" && raw[j - 1] === head)) break;
-      if (w.endsWith("cli/index.mjs") || (/[*?[]/.test(w) && /^[A-Za-z0-9_./*?[\]-]+$/.test(w) && hides(w, "scripts/github/record-operator-decision.mjs"))) { entry = j; break; }
+      if (isCli(w) || (/[*?[]/.test(w) && /^[A-Za-z0-9_./*?[\]-]+$/.test(w) && hides(w, "scripts/github/record-operator-decision.mjs"))) { entry = j; break; }
       // A script word right after a flag is that flag's value (`--loader ./l.mjs`), so the scan goes on.
       if (/\.[cm]?[jt]s$/.test(w) && !/^-/.test(raw[j - 1])) break;
     }
@@ -1970,5 +1972,5 @@ function hasUnreadableLauncherWord(rawWords) {
   if (raw[i] === undefined) return false;
   if (isBare) return hides(raw[i], "decision") || (raw[i] === "decision" && hides(raw[i + 1], "record"));
   if (hides(raw[i], "scripts/github/record-operator-decision.mjs")) return true;
-  return raw[i].endsWith("cli/index.mjs") && (hides(raw[i + 1], "decision") || hides(raw[i + 2], "record"));
+  return isCli(raw[i]) && (hides(raw[i + 1], "decision") || hides(raw[i + 2], "record") || (raw[i + 1] === "decision" && raw[i + 2] === "record"));
 }
