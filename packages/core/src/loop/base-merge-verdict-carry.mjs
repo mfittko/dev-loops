@@ -19,7 +19,7 @@ export const BASE_MERGE_CARRY_DECISIONS = Object.freeze(["carry_verdict", "full_
 // Paths that can change a gate outcome (ADR 0296, amends ADR 0096 and ADR 0156): .devloops config
 // (isDevLoopConfigSourcePath), reviewer, judge, gate-coordinator and docs agents with their .claude mirror,
 // the gate, judge, review, acceptance-criteria, structural-quality, validation-policy, spec-authority and copilot-loop-operations contracts, the SKILL.md of the copilot-pr-followup, review, dev-loop and local-implementation skills,
-// core config (angle, persona, prompt and judge-track resolution), spec-authority.mjs (judge disposition rules), analysis/diff-analyzer.mjs (angle scope and dispatch mode), build-adjacent-bundle.mjs (reviewer input), the scripts (at any depth) and core loop modules
+// core config (angle, persona, prompt and judge-track resolution), spec-authority.mjs (judge disposition rules), analysis/diff-analyzer.mjs (angle scope and dispatch mode), analysis/change-classifier.mjs (angle selection), build-adjacent-bundle.mjs (reviewer input), the scripts (at any depth) and core loop modules
 // whose file name holds a gate, fanin, fan-in, judge, verdict, carry, review, reviewer, finding, angle, dispatch,
 // cluster, round-cap, prompt, unit-bound, disposition, evidence, checkpoint, convergence or pre-push-delta token, and the installed dev-loops version (package
 // manifests). Lockfiles and every other path carry.
@@ -34,7 +34,7 @@ const GATE_TOOLING_RE = new RegExp(
     `|^scripts/(?:[^/]+/)*${OUTCOME_NAME}$` +
     "|^scripts/github/build-adjacent-bundle\\.mjs$" +
     `|^packages/core/src/loop/${OUTCOME_NAME}$` +
-    "|^packages/core/src/(?:loop/spec-authority|analysis/diff-analyzer)\\.mjs$" +
+    "|^packages/core/src/(?:loop/spec-authority|analysis/(?:diff-analyzer|change-classifier))\\.mjs$" +
     "|^packages/core/src/config/[^/]+$" +
     "|^package\\.json$|^packages/[^/]+/package\\.json$",
 );
