@@ -545,6 +545,17 @@ test("probe-copilot-review counts the final chunk only after the recorded start 
   assert.equal(resumed.record.timedOutProbes, 1);
   const tooSoon = await runFinalChunkTimeout({ headCall, args, record: { probeStartedAt: -1_000 } });
   assert.equal(tooSoon.record.timedOutProbes, 0);
+  assert.equal(tooSoon.record.probeStartedAt, undefined);
+  assert.equal(resumed.record.probeStartedAt, undefined);
+});
+
+test("probe-copilot-review: a second short reissue after a counted probe does not count", async () => {
+  const headCall = `echo '{"headRefOid":"abc"}'; exit 0`;
+  const args = ["--timeout", "1", "--baseline-ids", JSON.stringify({ reviewThreadComments: [], reviews: [], issueComments: [] })];
+  const first = await runFinalChunkTimeout({ headCall, args, record: { probeStartedAt: -170_000 } });
+  assert.equal(first.record.timedOutProbes, 1);
+  const second = await runFinalChunkTimeout({ headCall, args, record: first.record });
+  assert.equal(second.record.timedOutProbes, 1);
 });
 
 test("probe-copilot-review counts nothing for a caller-supplied total budget or a short reissue", async () => {

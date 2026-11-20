@@ -466,7 +466,9 @@ export async function runCli(
         if (requested.baseline === undefined) await recordProbeStart({ ...key, startedAt }, recordOpts);
       } else {
         const stored = requested.baseline === undefined ? null : await readProbeStartedAt(key, recordOpts);
+        // Either way the stored start is spent: a start backs at most one counted probe.
         if (clock() - (stored ?? startedAt) >= WAIT_CAP_MS) await recordTimedOutProbe(key, recordOpts);
+        else if (stored !== null) await recordProbeStart({ ...key, startedAt: undefined }, recordOpts);
       }
     } catch (error) {
       result = { ...result, warning: `could not record the timed-out probe: ${error?.message ?? error}` };
