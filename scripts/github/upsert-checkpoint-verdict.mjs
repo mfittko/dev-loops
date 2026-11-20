@@ -179,6 +179,19 @@ async function readReviewedBodySha256(options, headSha, repoRoot) {
   return [...found.values()][0] ?? null;
 }
 
+// GATE-EXEC-BASE-REFRESH proof that only the base moved: write-gate-context.mjs refuses a stale base and deletes a same-head context, so a base_current context at this head proves the head held the base when the round started.
+// A missing or unreadable context is no proof (fail closed).
+async function roundStartedAtCurrentBase(options, headSha, repoRoot) {
+  const id = { repo: options.repo, pr: options.pr, gate: options.gate, headSha };
+  for (const tmpRoot of [options.contextTmpRoot, undefined, ledgerTmpRoot(options.findingsLedger)]) {
+    for (const root of resolveLedgerCheckouts(repoRoot)) {
+      const context = await readGateContext({ ...id, tmpRoot }, { repoRoot: root }).catch(() => null);
+      if (context?.baseFreshness?.status === "base_current") return true;
+    }
+  }
+  return false;
+}
+
 const roundCapReachedError =(round, cap) => new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs and no fixer follows. After the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`; pre_approval_gate judges what remains. When every open act item is a PR-body item, edit the PR body and run \`--converged-json\` with \`{ fixerCommit, actList, bodyOnly: true }\` instead (ADR 0271).`);
 
 const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>; on --gate review, --findings-ledger alone suffices; a draft_gate post requires --findings-ledger carrying overallVerdict while gates.draft.maxReviewRounds > 0) [--next-action <text> (required except on --gate review)] [--gate <draft_gate|pre_approval_gate|review>] [--findings-ledger <path>]
@@ -1721,7 +1734,7 @@ export function assertJudgeSpecSourceMatchesLedger(options, ledgerFindings) {
 // `nonLocatableFindings` also drives an invisible fingerprint+disposition
 // marker per finding, load-bearing for GATE-EXEC-FINDING-THREADS's
 // cross-round suppression/deferral tracking.
-export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, converged, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, closureFromHead, pr, judgeSpecSource, judgeUnavailableReason }) {
+export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, converged, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, closureFromHead, pr, judgeSpecSource, judgeUnavailableReason, staleBaseNote }) {
   const lines = [
     `### Gate review: \`${gate}\``,
   ];
@@ -1742,6 +1755,7 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     // Neither label matches a parsed field, so the parse contract is unchanged.
     ...(reviewVerdict ? [`**Review verdict:** ${reviewVerdict}`] : []),
     ...(gate === "draft_gate" && normalizeFullHeadSha(closureFromHead ?? "") ? [`closure round: diff from ${normalizeFullHeadSha(closureFromHead)}`] : []),
+    ...(staleBaseNote ? [`**Base freshness:** stale; ${staleBaseNote}`] : []),
     ...(Array.isArray(gateBlockers) && gateBlockers.length > 0 ? [`**Gate blockers:** ${formatGateBlockerCounts(gateBlockers)}`] : []),
     ...(judgeSpecSource ? [judgeSpecSource === "unavailable" ? JUDGE_UNAVAILABLE_LINES[judgeUnavailableReason] : JUDGE_SPEC_LINES[judgeSpecSource]] : []),
     ...renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy }),
@@ -2905,12 +2919,19 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   };
   // GATE-EXEC-BASE-REFRESH (issue 2885): a clean draft_gate or pre_approval_gate never records at a head that lacks origin/<base>.
   // An injected runChild test double skips the fetch unless the test injects the checker too.
+  let staleBaseNote = null;
   const refuseStaleBase = async (verdict = options.verdict) => {
     const checkFreshness = checkBaseFreshness ?? (runChild === defaultRunChild ? defaultCheckBaseFreshness : null);
     const prBase = coordinationContext?.prData?.baseRefName;
     if (verdict === "clean" && !isReviewGate && checkFreshness && typeof prBase === "string" && prBase.trim()) {
       // A converged or cap-round catch-up post records at the reviewed head; the base check belongs to the current PR head (the fixer commit, or a base merge after it).
-      const stale = await staleBaseReason({ base: prBase.trim(), head: convergedInput || capRoundHead ? evidence.currentHeadSha : canonicalHeadSha, cwd: repoRoot, env, check: checkFreshness });
+      let seen;
+      const stale = await staleBaseReason({ base: prBase.trim(), head: convergedInput || capRoundHead ? evidence.currentHeadSha : canonicalHeadSha, cwd: repoRoot, env, check: async (input) => (seen = await checkFreshness(input)) });
+      // Only the base moved during the round: post the verdict with a visible note; the base-merge carry decides whether it stands at the new head.
+      if (stale && !convergedInput && !capRoundHead && await roundStartedAtCurrentBase(options, canonicalHeadSha, repoRoot)) {
+        staleBaseNote = `origin/${prBase.trim()} moved during the round (${seen.newerCommits.length} newer commit(s)). Merge it via scripts/loop/resolve-pr-conflicts.mjs; the base-merge carry decides whether this verdict stands at the new head.`;
+        return;
+      }
       if (stale) throw new Error(`${stale} A clean ${options.gate} verdict is not recorded at a stale base.`);
     }
   };
@@ -3853,6 +3874,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     ...options,
     headSha: canonicalHeadSha,
     converged: convergedMarker,
+    staleBaseNote,
     findingsSummary: effectiveFindingsSummary,
     structuredFindings,
     gateEvidenceNote: coordination?.gateEvidenceNote ?? null,

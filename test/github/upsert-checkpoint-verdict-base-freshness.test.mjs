@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
 import { DEFAULT_TEST_PR_BODY, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
+import { buildGateContextPath } from "../../scripts/github/write-gate-context.mjs";
 import { parseUpsertCheckpointVerdictCliArgs, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
 // Issue 2885 slice 2b: a clean draft_gate verdict refuses at a head that lacks origin/<base>.
@@ -70,12 +71,14 @@ async function postClean(tempDir, checkBaseFreshness, { verdict = "clean", isDra
       ? { severity: "low", angle: "correctness", summary: "low finding", judgeDisposition: "reject", judgeRationale: "test" }
       : { severity: "medium", angle: "correctness", summary: "medium finding", judgeDisposition: "act", judgeRationale: "test" }],
   }), "utf8");
+  const sizePath = path.join(tempDir, "size.json");
+  await writeFile(sizePath, JSON.stringify({ ok: true, outcome: "pass", wholeLogicLoc: 10, t1SliceLoc: 0, waiver: { requested: false, t1Valid: false, defaultValid: false } }), "utf8");
   const jsonPath = path.join(tempDir, "findings.json");
   if (actInFindingsJson || rejectedInFindingsJson) await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [{ severity: "low", angle: "correctness", summary: "json finding", judgeDisposition: actInFindingsJson ? "act" : "reject", judgeRationale: "test" }] }]), "utf8");
   const options = parseUpsertCheckpointVerdictCliArgs([
     "--repo", "owner/repo", "--pr", "17", "--gate", gate, "--head-sha", HEAD, ...(omitVerdict ? [] : ["--verdict", verdict]),
     "--findings-summary", "base freshness test", "--findings-ledger", ledgerPath, ...(actInFindingsJson || rejectedInFindingsJson ? ["--findings-json", jsonPath] : []),
-    "--next-action", "mark ready for review", "--inline-reason", "base freshness test",
+    "--next-action", "mark ready for review", "--inline-reason", "base freshness test", ...(gate === "pre_approval_gate" ? ["--size-budget-json", sizePath] : []),
     "--findings-severity-counts", JSON.stringify(clean ? { high: 0, medium: 0, low: 1, question: 0, nit: 0 } : { high: 0, medium: 1, low: 0, question: 0, nit: 0 }),
   ]);
   const posted = [];
@@ -203,3 +206,21 @@ test("a ready-PR draft_gate post whose --findings-json adds only rejected items 
     assert.ok(convert >= 0 && restore > convert, `expected a ready restore after the draft conversion, got ${JSON.stringify(out.mutations)}`);
   }, { prefix: "dev-loops-base-freshness-findings-json-rejected-" });
 });
+
+// Issue 3346: a base_current context at the head proves only the base moved during the round.
+for (const [gate, isDraft] of [["draft_gate", true], ["pre_approval_gate", false]]) {
+  test(`a clean ${gate} post at a stale base posts with a visible stale line when the round started at a current base`, async () => {
+    const contextPath = path.join(repoRoot, buildGateContextPath({ repo: "owner/repo", pr: 17, gate, headSha: HEAD }));
+    await mkdir(path.dirname(contextPath), { recursive: true });
+    await writeFile(contextPath, JSON.stringify({ baseFreshness: { status: "base_current", base: "main" } }), "utf8");
+    try {
+      await withTempDir(async (tempDir) => {
+        const out = await postClean(tempDir, STALE, { gate, isDraft });
+        assert.equal(out.error, undefined);
+        assert.match(out.posted.join("\n"), /\*\*Verdict:\*\* clean[\s\S]*\*\*Base freshness:\*\* stale; origin\/main moved during the round \(1 newer commit\(s\)\)\. Merge it via scripts\/loop\/resolve-pr-conflicts\.mjs/);
+      }, { prefix: "dev-loops-base-freshness-proof-" });
+    } finally {
+      await rm(contextPath, { force: true });
+    }
+  });
+}
