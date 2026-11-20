@@ -233,13 +233,14 @@ export function parseCheckPrePushDeltaArgs(argv) {
 }
 
 // The operator focus of the canonical pulled commit_only threads plan for this baseline (PRE-PUSH-DELTA-PUSH-AUTHORITY). An unreadable or non-JSON plan and any other plan refuse.
-function planOperatorFocus(fixerPlan, baselineSha, worktree) {
+function planOperatorFocus(fixerPlan, baselineSha, worktree, repo, pr) {
   let plan;
   try { plan = JSON.parse(readFileSync(fixerPlan, "utf8")); } catch (error) { throw new Error(`Delta coverage binding: --fixer-plan ${fixerPlan} is unreadable or not JSON (${error.code ?? error.name}); pass the pulled plan`); }
   const order = plan?.workOrder;
   const canonical = fixerPlanPath(plan?.workOrderRef, realpathSync(resolveGateArtifactTmpRoot(worktree)));
   if (!canonical || realpathSync(fixerPlan) !== path.resolve(canonical) || order?.role !== "fixer" || order.phase !== "commit_only" || order.source !== "threads"
-    || order.headSha !== baselineSha || workOrderDigest(order) !== plan.workOrderDigest) {
+    || order.headSha !== baselineSha || order.target?.repo !== repo || order.target?.pr !== pr
+    || plan.workOrderRef !== `fixer:${repo}#${pr}:${baselineSha}:${plan.executionIdentity}` || workOrderDigest(order) !== plan.workOrderDigest) {
     throw new Error("Delta coverage binding: --fixer-plan is not the canonical commit_only threads plan for this baseline; pass the pulled plan");
   }
   return order.operatorFocus;
@@ -615,9 +616,13 @@ export async function runCli(
     await roundAnglesOf(options.findingsLog, baselineSha, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target: { repo: options.repo, pr: options.pr }, route, prBase });
     if (!route.chainEnd) derivedActList = capRoundActList(log.findings, log.headSha);
   }
-  const threadActList = options.threadsFile && !options.reviewerOnly
-    ? threadsToActList(JSON.parse(readFileSync(options.threadsFile, "utf8")), { repo: options.repo, pr: options.pr, operatorFocus: options.fixerPlan ? planOperatorFocus(options.fixerPlan, baselineSha, options.worktree) : undefined })
-    : null;
+  // The plan is read only when no unresolved thread exists, so a non-empty thread route never gates on --fixer-plan.
+  let threadActList = null;
+  if (options.threadsFile && !options.reviewerOnly) {
+    const threads = JSON.parse(readFileSync(options.threadsFile, "utf8"));
+    threadActList = threadsToActList(threads, { repo: options.repo, pr: options.pr });
+    if (threadActList.length === 0 && options.fixerPlan) threadActList = threadsToActList(threads, { repo: options.repo, pr: options.pr, operatorFocus: planOperatorFocus(options.fixerPlan, baselineSha, options.worktree, options.repo, options.pr) });
+  }
   if (threadActList?.length === 0) throw new Error("threads file holds no unresolved thread and the --fixer-plan carries no operator focus round; pass the pulled --fixer-plan of an emission that had an --operator-focus-file with a round");
   const sequence = startDeltaSequence({
     reviewBaselineHead: baselineSha,
