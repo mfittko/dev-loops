@@ -257,7 +257,7 @@ all-stale fallback. The fix pass consumes ONLY `--out`'s act list (the judge's `
 silent severity-only fallback or a silent skip of spec authority. See Gate Review Sub-Loop Contract
 Phase 3.5 and `skills/docs/spec-authority-contract.md` for the enforcement rules these flags carry.
 
-The gate coordinator writes the durable findings log only after `judge-pass`: `write-gate-findings-log --judge-verdict <verdict-path> --findings-file <judge-pass --ledger-out> --spec-authority <identity-path>`, so the log carries the coerced dispositions and `upsert-checkpoint-verdict.mjs` accepts it without a rewrite. A `fanout_fanin` `draft_gate` or `pre_approval_gate` write without `--judge-verdict` refuses `judge_verdict_required` while the round has a judge plan with no verdict yet. Posting the visible gate verdict stays with the dev-loop coordinator.
+The gate coordinator writes the durable findings log only after `judge-pass`: the full write command in the contract's [Phase 3.5](../docs/gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525), so the log carries the coerced dispositions and `upsert-checkpoint-verdict.mjs` accepts it without a rewrite. A `fanout_fanin` `draft_gate` or `pre_approval_gate` write without `--judge-verdict` refuses `judge_verdict_required` while the round has a judge plan with no verdict yet. Posting the visible gate verdict stays with the dev-loop coordinator.
 
 After the fixer commits the act-list fix and before it pushes, the dev-loop coordinator runs the
 delta-mode pre-push review (`PRE-PUSH-DELTA-TRIGGER` in the

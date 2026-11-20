@@ -4017,3 +4017,23 @@ test("3297: a fanout_fanin write without --judge-verdict refuses when a judge pl
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("3297: a derived-mode round (emit plan + fan-in ledger, no explicit mode) refuses a newer judge plan and accepts an older one", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judge-plan-derived-"));
+  try {
+    const headSha = "a7".repeat(20);
+    const contextDir = path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-53");
+    await mkdir(contextDir, { recursive: true });
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.emit-plan.json`), JSON.stringify({ ok: true, repo: "owner/repo", pr: 53, gate: "draft_gate", headSha, roundId: "r3000-aa", count: 2, units: [{ angles: ["pr-description"], group: null }, { angles: ["holistic"], group: null }] }), "utf8");
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.fanin-ledger.json`), JSON.stringify({ overallVerdict: "clean", findings: [], provenance: { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "review-a" }, { angle: "holistic", reviewer: "review-b" }] } }), "utf8");
+    const planPath = path.join(path.resolve(repoRoot, buildGateArtifactPath({ repo: "owner/repo", pr: 53, gate: "draft_gate", headSha, tmpRoot: path.join(repoRoot, "tmp"), dir: "gate-judge" })), "judge-emit-plan.json");
+    await mkdir(path.dirname(planPath), { recursive: true });
+    const base = { repo: "owner/repo", pr: 53, gate: "draft_gate", headSha, findings: JSON.stringify([]) };
+    await writeFile(planPath, JSON.stringify(judgePlanFor({ pr: 53, headSha, gate: "draft_gate", roundId: "j4000-bb" })), "utf8");
+    await assert.rejects(() => writeGateFindingsLog(base, { repoRoot }), (err) => err.message.startsWith("judge_verdict_required:") && /judge plan exists/.test(err.message));
+    await writeFile(planPath, JSON.stringify(judgePlanFor({ pr: 53, headSha, gate: "draft_gate", roundId: "j2000-aa" })), "utf8");
+    assert.equal((await writeGateFindingsLog(base, { repoRoot })).ok, true, "a judge plan older than the round binds no judge");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
