@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { closeSync, createReadStream, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, open, readFile, rm, stat } from "node:fs/promises";
@@ -28,11 +28,17 @@ export function checkCoreResolutionBeforeImport(root) {
   return { ok: false, code: "worktree_core_unresolved", message: `node_modules/@dev-loops/core does not resolve to this checkout's packages/core (WORKTREE-DEPS-ISOLATED). ${fix}` };
 }
 
+// import.meta.main exists from Node 24.2.0; on Node 24.0 and 24.1 it is undefined, so compare paths instead of failing open.
+export function isEntryScript(main, argv1 = process.argv[1], url = import.meta.url) {
+  if (main !== undefined) return main;
+  try { return Boolean(argv1) && realpathSync(argv1) === realpathSync(fileURLToPath(url)); } catch { return false; }
+}
+
 const DEFAULT_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 {
   const core = checkCoreResolutionBeforeImport(DEFAULT_ROOT);
   if (!core.ok) {
-    if (import.meta.main) { process.stderr.write(`${core.code}: ${core.message}\n`); process.exit(1); }
+    if (isEntryScript(import.meta.main)) { process.stderr.write(`${core.code}: ${core.message}\n`); process.exit(1); }
     throw Object.assign(new Error(core.message), { code: core.code });
   }
 }
@@ -537,8 +543,13 @@ async function finalizeCaptureOutcome(capture, { failed, stderr }) {
   return finalError;
 }
 
+// Under a non-Bun host (the dev-loops-run launcher runs Node) process.execPath is Node, which cannot run `test`.
+export function resolveBunCommand(env = process.env, runtime = process.versions) {
+  return env.BUN_BIN || (runtime.bun ? process.execPath : "bun");
+}
+
 export async function runBunTest(args, {
-  env = process.env, command = env.BUN_BIN || process.execPath, spawnImpl = spawn,
+  env = process.env, command = resolveBunCommand(env), spawnImpl = spawn,
   stdout = process.stdout, stderr = process.stderr, captureFactory = createOutputCapture,
   progressFactory = createTestProgress, repoRoot = DEFAULT_ROOT,
 } = {}) {
@@ -565,7 +576,8 @@ export async function runBunTest(args, {
     // on their absence behaves the same locally as in CI. The caller's env object
     // is left untouched.
     const childEnv = { ...env };
-    for (const marker of [...ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER]) delete childEnv[marker];
+    // The re-exec marker covers one hop only: bun test descendants must not inherit it.
+    for (const marker of [...ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER, "DEV_LOOPS_BUN_TEST_REEXEC"]) delete childEnv[marker];
     const child = spawnImpl(command, buildBunTestArgs(files, env), {
       env: childEnv, stdio: ["ignore", capture.fd, capture.fd],
     });
@@ -624,7 +636,18 @@ export async function runBunTest(args, {
   return returnCode;
 }
 
-if (import.meta.main) {
+if (isEntryScript(import.meta.main)) {
+  if (!process.versions.bun) {
+    // Discovery uses the Bun.Glob global, so a Node entry re-executes the whole script under Bun.
+    // A non-Bun BUN_BIN would re-enter this block forever, so a second pass fails fast.
+    if (process.env.DEV_LOOPS_BUN_TEST_REEXEC) {
+      process.stderr.write(`run-bun-test: re-exec target is not Bun (BUN_BIN=${process.env.BUN_BIN ?? "unset"}).\n`);
+      process.exit(1);
+    }
+    const r = spawnSync(resolveBunCommand(), [fileURLToPath(import.meta.url), ...process.argv.slice(2)], { stdio: "inherit", env: { ...process.env, DEV_LOOPS_BUN_TEST_REEXEC: "1" } });
+    if (r.error) process.stderr.write(`Cannot launch Bun (${r.error.message}); set BUN_BIN or put bun on PATH.\n`);
+    process.exit(r.status ?? 1);
+  }
   try { process.exitCode = await runBunTest(process.argv.slice(2)); }
   catch (error) { process.stderr.write(`${error?.message ?? error}\n`); process.exitCode = 1; }
 }

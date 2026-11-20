@@ -166,6 +166,11 @@ describe("whole-spec judge disposition", () => {
       return validateSpecAuthorityDecision({ ...wholeSpecDecision(SPEC, overrides), ...id }, { ...id, criterionIds: specCriterionIds(SPEC) });
     };
 
+    test("rejects a remedyKind outside evidence_only and pr_body, with or without a site", () => {
+      assert.throws(() => validate({ remedyKind: "other" }), /remedyKind must be one of: evidence_only, pr_body/);
+      assert.equal(validate({ remedyKind: "pr_body", defectClass: undefined, siteQuery: undefined }).remedyKind, "pr_body");
+    });
+
     test("rejects an act remediation without a defect class", () => {
       assert.throws(() => validate({ defectClass: undefined }), /defectClass/);
       assert.throws(() => validate({ defectClass: "  " }), /defectClass/);

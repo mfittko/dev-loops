@@ -1105,7 +1105,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
     // the main-worktree entry, while the multi-checkout scan still defends
     // against a forged per-worktree shadow ledger. Anchoring this read at the
     // main worktree directly would collapse that shadow-defense scan.
-    const ledgerPath = buildLogPath({ repo, pr, gate: spec.name, headSha, tmpRoot: "tmp" });
+    const ledgerPath = spec.marker.ledgerPath ?? buildLogPath({ repo, pr, gate: spec.name, headSha, tmpRoot: "tmp" });
     // Re-derive scope FAIL-CLOSED for inline verdicts only (the fan-out default
     // path pays no git I/O). scopeUnderThreshold is true ONLY when lightMode is
     // on, the PR has no gate:full label, a base ref is known, and the merge-base

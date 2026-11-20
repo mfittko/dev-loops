@@ -19,7 +19,7 @@ import { EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY } from "@dev-loops/core/loop/timeo
 // Config-hermeticity (issue #2055): the integration tests that exercise the real
 // runHandoff resolve the Copilot round cap from a fixture repoRoot mirroring the
 // real .devloops with maxCopilotRounds pinned to 2, not the ambient .devloops
-// (the repo pins maxCopilotRounds to 2 for test isolation). Assertions are
+// (the fixture owns its cap for test isolation). Assertions are
 // unchanged. runWatchCycle does not
 // forward a repoRoot to runHandoff, so inject it through a runHandoffImpl wrapper.
 // The fixture pins the strict Copilot convergence mode
@@ -1444,4 +1444,49 @@ test("execution-record telemetry: a blocked CI gate attaches a record whose outc
     "the record's outcome must reflect the FINAL disposition (pending) set by the exclusivity block, not the initial terminal guess made before the gate resolved",
   );
   assert.equal(result.executionRecord.outcome, result.cycleDisposition);
+});
+
+test("runWatchCycle records a timed-out Copilot wait so request_not_observable can fire (issue 3329)", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "watch-cycle-probe-record-"));
+  const fakeGh = path.join(dir, "gh");
+  await writeFile(fakeGh, "#!/bin/sh\necho '{\"headRefOid\":\"abc123\"}'\n", { mode: 0o755 });
+  const { recordUnobservableRequest, readRequestNotObservable } = await import("../../scripts/loop/_unobservable-review-request-record.mjs");
+  const key = { repo: "owner/repo", pr: 17, headSha: "abc123" };
+  await recordUnobservableRequest(key, { checkpointDir: dir });
+  await recordUnobservableRequest(key, { checkpointDir: dir });
+  let t = 0;
+  for (let i = 0; i < 2; i += 1) {
+    const result = await runWatchCycle(
+      { repo: "owner/repo", pr: 17, forceRerequestReview: false, probeOnly: false },
+      {
+        env: SINGLE_RUNNER_ENV,
+        ghCommand: fakeGh,
+        checkpointDir: dir,
+        now: () => { t += 200_000; return t; },
+        runHandoffImpl: async () => ({
+          ok: true,
+          action: "watch",
+          state: "waiting_for_copilot_review",
+          allowedTransitions: ["unresolved_feedback_present"],
+          nextAction: "Wait for Copilot review",
+          snapshot: { repo: "owner/repo", pr: 17, forceRerequestReview: false, probeOnly: false },
+          loopDisposition: "pending",
+          terminal: false,
+          requestWatchContract: {
+            action: "watch",
+            nextAction: "Wait for Copilot review",
+            requestStatus: "requested",
+            routingState: "copilot_request_confirmed_waiting",
+            watchEntryConfirmed: true,
+            watchArgs: { repo: "owner/repo", pr: 17, pollIntervalMs: 60_000, timeoutMs: 1_800_000 },
+          },
+          watchArgs: { repo: "owner/repo", pr: 17, pollIntervalMs: 60_000, timeoutMs: 1_800_000 },
+        }),
+        watchCopilotReviewImpl: async () => ({ ok: true, status: "timeout", repo: "owner/repo", pr: 17, attempts: 1, newComments: [], newReviews: [], newIssueComments: [] }),
+      },
+    );
+    assert.equal(result.watch.warning, undefined);
+  }
+  assert.ok(await readRequestNotObservable(key, { checkpointDir: dir }));
+  await rm(dir, { recursive: true, force: true });
 });

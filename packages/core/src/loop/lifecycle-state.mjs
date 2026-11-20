@@ -338,6 +338,7 @@ export const COPILOT_INNER_STATE_MAP = Object.freeze({
     "low_signal_converged",
     "round_cap_clean_fallback",
     "internal_tooling_direct_gate",
+    "copilot_unavailable",
   ]),
   [LIFECYCLE_STATE.MERGE]: Object.freeze([
     "done",

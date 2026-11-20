@@ -28,6 +28,7 @@ import {
 import { observeHeadCiSignals } from "../github/observe-head-ci.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
+import { readRequestNotObservable } from "./_unobservable-review-request-record.mjs";
 import { resolveCurrentHeadBodyFeedback } from "../github/_copilot-body-disposition.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
@@ -55,6 +56,7 @@ Optional (either mode):
 Output (stdout, JSON):
   { "ok": true, "snapshot": {..., "copilotReviewRoundCount": N}, "state": "...", "allowedTransitions": [...], "nextAction": "...",
     "autoRerequestEligible": true|false, "sameHeadCleanConverged": true|false,
+    "copilotUnavailableReason": "request_not_observable"|null,
     "loopDisposition": "...", "terminal": true|false }
 Error output (stderr, JSON):
   Argument/usage errors:
@@ -266,7 +268,7 @@ function normalizeMergeEnum(value) {
   return normalized.length > 0 ? normalized : null;
 }
 
-export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride, localValidationHeadSha, draftGateResetAtMs }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd } = {}) {
+export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride, localValidationHeadSha, draftGateResetAtMs, checkpointDir }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd } = {}) {
   const prData = await fetchPrView({ repo, pr }, { env, ghCommand, runChild });
   if (prData === null) {
     return normalizeSnapshot({ prExists: false });
@@ -365,6 +367,10 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
     excludedFailureDetails,
     copilotBodyFeedbackUnresolved: bodyFeedback.copilotBodyFeedbackUnresolved,
     copilotPriorHeadBodyFeedbackUnresolved: bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved,
+    copilotRequestNotObservable: await readRequestNotObservable(
+      { repo, pr, headSha: prHeadSha },
+      { checkpointDir },
+    ),
   });
   // Merge-state facts drive the base-integration preflight (never CI-wait on a
   // CONFLICTING/DIRTY branch — GitHub cannot dispatch CI there). Carried as
@@ -437,6 +443,7 @@ export async function runCli(
     nextAction: interpretation.nextAction,
     autoRerequestEligible: interpretation.autoRerequestEligible,
     sameHeadCleanConverged: interpretation.sameHeadCleanConverged,
+    copilotUnavailableReason: interpretation.copilotUnavailableReason,
     loopDisposition: interpretationSummary.loopDisposition,
     terminal: interpretationSummary.terminal,
   }, { jq: options.jq, silent: options.silent, stdout, stderr });
