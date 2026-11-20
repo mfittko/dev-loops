@@ -1535,6 +1535,26 @@ test("buildPreMergeGateCheck: a solo-owner PR clears the gate via a head-pinned 
   assert.equal(result.ok, true, JSON.stringify(result.failures));
 });
 
+test("buildPreMergeGateCheck: --patch-id lets a patch-id approve-merge comment clear the size gate", () => {
+  const patchId = "c".repeat(40);
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = "escalate";
+  evidence.comments = [{ login: "carol", body: `approve merge ${"b".repeat(40)} patch-id ${patchId}`, type: "User", trusted: true }];
+  assert.equal(buildPreMergeGateCheck(evidence, 0, null).ok, false, "refused without a patch-id");
+  assert.equal(buildPreMergeGateCheck(evidence, 0, null, null, { patchId }).ok, true);
+  assert.equal(parseDetectCheckpointEvidenceCliArgs(["--repo", "owner/repo", "--pr", "17", "--patch-id", patchId]).patchId, patchId);
+});
+
+test("parse: --patch-id accepts 40 hex in either case and rejects anything else", () => {
+  const base = ["--repo", "owner/repo", "--pr", "17", "--patch-id"];
+  for (const ok of ["0123456789abcdef0123456789abcdef01234567", "0123456789ABCDEF0123456789ABCDEF01234567"]) {
+    assert.equal(parseDetectCheckpointEvidenceCliArgs([...base, ok]).patchId, ok);
+  }
+  for (const bad of ["c0ffee", "", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "zz23456789abcdef0123456789abcdef01234567"]) {
+    assert.throws(() => parseDetectCheckpointEvidenceCliArgs([...base, bad]));
+  }
+});
+
 test("buildPreMergeGateCheck: a bot-authored \"approve merge <headSha>\" comment never satisfies the gate (AC5 fail-closed)", () => {
   const evidence = cleanEvidence();
   evidence.preApprovalGateMarker.sizeOutcome = "escalate";
