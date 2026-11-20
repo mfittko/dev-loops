@@ -1415,6 +1415,8 @@ test("AC1: a reviewer-only run over a clean merge whose base touched a PR-change
     assert.doesNotMatch(patch, /refreshed\.txt|gone\.mjs/, "base-only paths stay out of the review");
     assert.equal(run.decision.outcome, "locally_clear");
     await assert.rejects(runDeltaCli([...reviewerOnlyArgs(at(none)), "--spec-identity", "spec@1", "--result-path", path.join(none.dir, "r.json")], seam), /no PR-own commit/);
+    // A non-base-only clean merge (seam says so) whose parents share no changed path has an empty overlap and refuses.
+    await assert.rejects(runDeltaCli([...reviewerOnlyArgs(at(none)), "--spec-identity", "spec@1", "--result-path", path.join(none.dir, "r2.json")], { ...seam, baseOnlyMerge: async () => false }), /no PR-own commit/);
   } finally { cleanup(overlap); cleanup(none); }
 });
 
