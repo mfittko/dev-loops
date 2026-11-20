@@ -32,7 +32,8 @@ Pi has no permission prompt and no Bash hook (issue 3033). The recorder runs onl
 ## Consequences
 
 - A Claude Code session records `accept`, `exempt` and `defer` decisions without a `!` command, and the operator's approval is the permission prompt plus the answer file.
-- The tool cannot prove that the answer file came from the question tool. The permission prompt and the posted record make a forged answer visible, but they cannot prevent one.
+- The tool cannot prove that the answer file came from the question tool. The permission prompt and the posted record expose a forged answer after the fact.
+- The recorder runs the comment guard before any GitHub call. The guard allows the target's own number and refuses every other bare `#N`, so the orchestrator phrases the question, the answer and the body without another bare reference.
 - A consumer that adds a `permissions.allow` rule for the recorder turns the prompt off. `dev-loops status` reports it, and the hook still denies subagents and non-canonical spellings.
 - The Pi path keeps its existing manual step, a known gap.
 - Only the plain ask pattern is relied on. A consumer that runs the CLI some other way, or from another directory through `--repo-root`, gets a hook deny and runs the plain prefix form from the checkout.

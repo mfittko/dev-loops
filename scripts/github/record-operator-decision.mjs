@@ -18,7 +18,7 @@ import { isClaudeHarness } from "@dev-loops/core/loop/run-context";
 import { assertSupportedKind, buildDecisionComment, HEADER_MARKER, isFullHead, parseAnswerFile } from "@dev-loops/core/github/operator-decision-record";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: dev-loops decision record --repo <owner/name> --target <pr|issue> <number> --kind <accept|exempt|defer> [--head <40-hex>] --operator-answer-file <path> --body-file <path>
+const USAGE = `Usage: dev-loops-run cli/index.mjs decision record --repo <owner/name> --target <pr|issue> <number> --kind <accept|exempt|defer> [--head <40-hex>] --operator-answer-file <path> --body-file <path>
 Post one operator decision comment: a reason line, a \`dev-loops:operator-decision\` header, the quoted question and answer, then the body.
 The operator answer file is JSON: {"question": "...", "option": "...", "answer": "..."} as the question tool returned them.
 --head is required for a PR target (it must be the live head) and refused for an issue target.
@@ -92,13 +92,15 @@ export async function recordDecision(o, { env = process.env, ghCommand = "gh", r
   if (body.trim() === "") return refuse("empty_body", "the body file is empty");
   // The parsed fields, not the raw bytes: a JSON escape such as `:` hides the marker from a byte check.
   if ([answer.question, answer.option, answer.answer, body].some((text) => text.includes(HEADER_MARKER))) return refuse("header_marker_in_input", `the answer file and the body must not contain ${HEADER_MARKER}`);
+  // The guard runs before any GitHub read (OPERATOR-OWNED-LINE); only the target's own number may appear bare.
+  const comment = buildDecisionComment({ kind: o.kind, targetType: o.target, number: o.number, head: isPr ? o.head : null, answerBytes, answer, body });
+  const allowedRefs = [String(o.number)];
+  try { guardCommentBodyNoIssuePrIds(comment, { ref: "operator decision comment", allowedRefs }); } catch (e) { return refuse("comment_guard_refused", e.message); }
   const live = await ghJson([isPr ? "pr" : "issue", "view", String(o.number), "--repo", o.repo, "--json", isPr ? "state,headRefOid" : "state,url"], { env, ghCommand, runChild: run });
   if (!isPr && /\/pull\/\d+$/u.test(String(live.url))) return refuse("target_is_pull_request", `#${o.number} is a pull request; use --target pr`);
   if (live.state !== "OPEN") return refuse("target_closed", `the ${o.target} is ${String(live.state).toLowerCase()}`);
   if (isPr && live.headRefOid !== o.head) return refuse("stale_head", `--head is not the live head ${live.headRefOid}`);
-  const comment = buildDecisionComment({ kind: o.kind, targetType: o.target, number: o.number, head: isPr ? o.head : null, answerBytes, answer, body });
-  try { guardCommentBodyNoIssuePrIds(comment, { ref: "operator decision comment" }); } catch (e) { return refuse("comment_guard_refused", e.message); }
-  const { commentUrl } = await commentIssue({ repo: o.repo, issue: o.number, body: comment }, { env, ghCommand, run });
+  const { commentUrl } = await commentIssue({ repo: o.repo, issue: o.number, body: comment, allowedRefs }, { env, ghCommand, run });
   return { ok: true, action: "decision_recorded", repo: o.repo, target: o.target, number: o.number, kind: o.kind, commentUrl };
 }
 

@@ -143,7 +143,7 @@ test("an answer that holds an operator-owned line is refused, nothing is posted"
     const r = await recordDecision(pr(files), { env: CLAUDE, run: stub.run });
     assert.equal(r.reason, "comment_guard_refused");
     assert.match(r.detail, /OPERATOR-OWNED-LINE/);
-    assert.equal(stub.calls.length, 1);
+    assert.equal(stub.calls.length, 0);
   });
 });
 
@@ -183,5 +183,18 @@ test("runCli writes a refusal to stderr as JSON with exit 1 and maps a thrown gh
     const failed = streams();
     assert.equal(await runCli(argv, { stdout: failed.stdout, stderr: failed.stderr, env: CLAUDE, run: makeGhStub([]).run }), 1);
     assert.equal(JSON.parse(failed.err.join("")).reason, "recorder_error");
+  });
+});
+
+test("a question naming the target's own number is posted; another bare number is refused before any GitHub call", async () => {
+  await withTempDir(async (dir) => {
+    const own = await fixture(dir, { answer: JSON.stringify({ ...ANSWER, question: "Accept the residual AC of #7?" }) });
+    const ok = makeGhStub(live({ state: "OPEN", headRefOid: HEAD }));
+    assert.equal((await recordDecision(pr(own), { env: CLAUDE, run: ok.run })).ok, true);
+    const other = await fixture(dir, { answer: JSON.stringify({ ...ANSWER, question: "Accept the residual AC of #8?" }) });
+    const stub = makeGhStub(live({ state: "OPEN", headRefOid: HEAD }));
+    const r = await recordDecision(pr(other), { env: CLAUDE, run: stub.run });
+    assert.equal(r.reason, "comment_guard_refused");
+    assert.equal(stub.calls.length, 0);
   });
 });

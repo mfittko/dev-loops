@@ -638,7 +638,17 @@ const SHELL_BUILT_RECORDER_SPELLINGS = [
   `dev-loops-run --repo-root "/Users/x/My Projects/repo" scripts/github/record-operator-*.mjs --repo o/n`,
   `dev-loops-run --repo-root "/a b"/r scripts/github/record-operator-*.mjs --repo o/n`,
   `bun scripts/github/record-operator-decision.m?s --repo o/n`,
+  `time dev-loops-run cli/index.mjs decision$IFS record --repo o/n --target pr 5 --kind accept`,
+  `nice dev-loops-run cli/index.mjs decision$IFS record --repo o/n --target pr 5 --kind accept`,
 ];
+
+test("a many-wildcard launcher word is denied in linear time", () => {
+  const command = "dev-loops-run *?*?*?*?*?*?*?*?*?*?*?*?*Z; gh pr view 5";
+  const started = Date.now();
+  const decision = decideBashGateDeny({ ...BASE, role: null, command });
+  assert.ok(Date.now() - started < 1000);
+  assert.match(decision.reason, /^OPERATOR-DECISION-RECORDER/);
+});
 
 test("quoted prose that mentions dev-loops-run and plain runner commands are not denied", () => {
   for (const command of [

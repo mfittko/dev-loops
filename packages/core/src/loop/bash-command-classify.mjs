@@ -1574,7 +1574,7 @@ export function commandContainsTimeoutWrappedSanctionedTool(command) {
 /** Wrapper binaries whose first argument is the real command to classify. */
 const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command", "nohup", "exec", "stdbuf", "setsid", "ionice", "busybox"]);
 // A bare wrapper flag (`-n`, `--user`) takes the next word as its argument, unless that word is itself the command.
-const WRAPPER_FLAG_TARGETS = new Set([...WRAPPER_BINARIES, ...SLEEP_LOOP_SHELLS, "timeout", "gtimeout", "sleep"]);
+const WRAPPER_FLAG_TARGETS = new Set([...WRAPPER_BINARIES, ...SLEEP_LOOP_SHELLS, "timeout", "gtimeout", "sleep", "dev-loops-run", "dev-loops", "node", "bun"]);
 
 /**
  * Strip prefixes that hide the real command head, fail-closed (over-report is
@@ -1868,11 +1868,6 @@ export function commandContainsCodeVerificationEntrypoint(command) {
   return shellSegments(command).some((segment) => PACKAGE_MANAGER_VERIFY_RUN_RE.test(segment) || VITEST_RE.test(segment));
 }
 
-// Env assignments (a quoted value may hold spaces) and env/command/exec wrappers a recorder launch can follow.
-const LEADING_LAUNCH_WRAPPERS = new RegExp(
-  `^\\s*(?:(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\\S*)|(?:command|exec)(?:\\s+-\\S+)*)\\s+|(?:\\S*/)?${ENV_WRAPPER})*`,
-);
-
 /**
  * Decision-recorder classification (OPERATOR-DECISION-RECORDER). Fails closed. A segment names the recorder when,
  * after quotes and backslashes are stripped and backslash-newline continuations are joined, it holds a word ending
@@ -1890,7 +1885,7 @@ export function classifyDecisionRecorderCommand(command) {
   const segments = shellSegments(command.replace(/\\\r?\n/g, ""));
   let found = null;
   for (const segment of segments) {
-    const raw = segment.replace(LEADING_LAUNCH_WRAPPERS, "").split(/\s+/);
+    const raw = stripLeadingWrappers(segment).split(/\s+/);
     const words = segment.replace(/['"\\]/g, "").split(/\s+/);
     const script = words.some((w) => w.endsWith("record-operator-decision.mjs"));
     const at = words.findIndex((w, i) => w === "decision" && words[i + 1] === "record");
@@ -1902,6 +1897,23 @@ export function classifyDecisionRecorderCommand(command) {
   return found;
 }
 
+/** Whether a `*`/`?` glob matches `target` or a `/`-suffix of it, in linear time (no backtracking RegExp, so no ReDoS). */
+function globMatchesSuffix(glob, target) {
+  const starts = [0, ...[...target].flatMap((c, i) => (c === "/" ? [i + 1] : []))];
+  return starts.some((start) => {
+    const t = target.slice(start);
+    let g = 0, i = 0, star = -1, mark = 0;
+    while (i < t.length) {
+      if (g < glob.length && (glob[g] === "?" || glob[g] === t[i])) { g++; i++; }
+      else if (g < glob.length && glob[g] === "*") { star = g++; mark = i; }
+      else if (star >= 0) { g = star + 1; i = ++mark; }
+      else return false;
+    }
+    while (glob[g] === "*") g++;
+    return g === glob.length;
+  });
+}
+
 /**
  * Whether a `dev-loops-run`, `node`, `bun` or bare `dev-loops` segment has a script word, or namespace and action words after `cli/index.mjs`, that the
  * shell could expand to the recorder: a word outside `^[A-Za-z0-9_./-]+$` (`decision$IFS record`, `$'decision' record`,
@@ -1909,7 +1921,7 @@ export function classifyDecisionRecorderCommand(command) {
  * (`record-operator-*.mjs`). A glob that cannot match them (`scripts/*\/validate-decision-records.mjs`) stays allowed.
  */
 function hasUnreadableLauncherWord(raw) {
-  // Only a segment head counts (callers strip env assignments and env/command/exec wrappers), so quoted prose that mentions a launcher stays allowed.
+  // Only a segment head counts (callers strip env assignments and launch wrappers with stripLeadingWrappers), so quoted prose that mentions a launcher stays allowed.
   const at = 0;
   const head = raw[at];
   const isRunner = /(?:^|\/)(?:node|bun)$/.test(head);
@@ -1931,13 +1943,12 @@ function hasUnreadableLauncherWord(raw) {
   const hides = (w, target) => {
     if (w === undefined || /^[A-Za-z0-9_./-]+$/.test(w)) return false;
     if (!/^[A-Za-z0-9_./*?[\]-]+$/.test(w)) return true;
+    // A word with many wildcards is not a plausible program argument, so it fails closed.
+    if (w.replace(/[^*?]/g, "").length > 8) return true;
     // A bare `*.ext` glob has no literal stem, so it is data for the program, not the recorder.
     if (/^[*?]+\.[A-Za-z?*]+$/.test(w)) return false;
-    try {
-      return new RegExp(`(?:^|/)${w.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(target);
-    } catch {
-      return true;
-    }
+    // A bracket class could match the recorder word, so it fails closed.
+    return w.includes("[") || globMatchesSuffix(w, target);
   };
   if (isRunner) {
     // Scan to the first word that is a cli/index.mjs entrypoint or a glob matching the recorder script, so runner flag values need no grammar. An inline-code flag, a `bun x` package binary or another script word ends the scan: what follows is data for that program.
