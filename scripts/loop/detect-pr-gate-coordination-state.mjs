@@ -1315,8 +1315,9 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnly
   // GATE-EXEC-NO-DEAD-END: a head with no live ledger that is a base-only merge of the cap-round head A keeps A's body-only list, so the post stays reachable after the base merge.
   const baseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
   if (open.length === 0 && baseRefName) {
-    for (const prior of logs) {
-      const from = String(prior.headSha).trim().toLowerCase();
+    // Only a head's live ledger (its latest round) counts: it sorts after its retained `.round-N` siblings, so the last entry per head wins.
+    const latestPerHead = new Map(logs.map((entry) => [String(entry.headSha).trim().toLowerCase(), entry]));
+    for (const [from, prior] of latestPerHead) {
       const priorOpen = listOpenActItems(prior.findings);
       if (from === head || priorOpen.length === 0 || !priorOpen.every(isDeltaBodyItem)) continue;
       if (await baseOnlyMerge({ fromHead: from, head, mainRef: `origin/${baseRefName}`, repoRoot })) { log = prior; open = priorOpen; ledgerHead = from; break; }

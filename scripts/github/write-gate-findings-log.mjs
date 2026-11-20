@@ -117,7 +117,9 @@ Optional:
                                  field for field; only remedyKind pr_body may be added to act findings
                                  (rejudge-field-changed). A live ledger that changes between the read
                                  and the write is refused (live_ledger_changed). --judge-verdict and --spec-authority
-                                 are refused with this flag (rejudge-input-unsupported).
+                                 are refused with this flag (rejudge-input-unsupported). --verdict,
+                                 --provenance and --emit-plan are accepted and not written: the live
+                                 ledger keeps its own values.
   --spec-authority <path>        JSON { specDigest, headSha, contentDigest, checkedCriteria }
                                   (issue 2008 / ADR 0061 AC1). When supplied, stamps the log
                                   with the pinned revision identity via the ONE shared stamp

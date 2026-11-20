@@ -4674,6 +4674,17 @@ test("3309: a base-only merge head keeps the cap-round body-only list of the cap
   } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
 });
 
+test("3309: the base-only merge carry reads the cap head's live ledger, never a retained all-PR-body round under a mixed live round", async () => {
+  const fixture = await actListFixture({
+    ".round-3": { findings: [BODY_ACT], loggedAt: "2026-11-15T00:00:00.000Z" },
+    "": { findings: [BODY_ACT, ACT], loggedAt: "2026-11-16T00:00:00.000Z" },
+  });
+  try {
+    const context = { repo: "owner/repo", pr: 10, currentHeadSha: "fe".repeat(20), prData: { baseRefName: "main" } };
+    assert.equal(await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 4, baseOnlyMerge: async () => true }), null);
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+});
+
 // #3309: the cap-round body-only list carries every blocker the body-only poster refuses (isBlockedActItem), so coordination never names a refused remedy.
 test("3309: a cap-round all-PR-body act list blocks on a high item with a judgeFix and on a security-angle item", async () => {
   const resolve = async (findings) => {

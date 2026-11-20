@@ -4839,6 +4839,18 @@ test("3309: a cap-round body-only act list routes to the converged post, never t
   const carried = evaluatePrGateCoordination({ ...base, currentHeadSha: merged, draftOpenActList: { headSha: head, carriedToHead: merged, openActCount: 2, blockers: [], bodyOnly: true } });
   assert.equal(carried.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, carried.reason);
   assert.match(carried.agentRemedy.command, new RegExp(`--head-sha ${head} .*\\{ fixerCommit \\(${head}\\), actList, bodyOnly: true \\}`));
+  // The carry needs a findings_present marker at the cap head A and a carriedToHead equal to the current head; any other shape never names the converged post.
+  const carriedList = { headSha: head, carriedToHead: merged, openActCount: 2, blockers: [], bodyOnly: true };
+  const otherHead = { ...verdict, headSha: "ef".repeat(20) };
+  const cleanMarker = { ...verdict, verdict: "clean" };
+  for (const [name, input] of [
+    ["a marker at another head", { ...base, currentHeadSha: merged, draftGate: otherHead, draftGateMarker: otherHead, draftOpenActList: carriedList }],
+    ["a clean marker", { ...base, currentHeadSha: merged, draftGate: cleanMarker, draftGateMarker: cleanMarker, draftOpenActList: carriedList }],
+    ["a carriedToHead that is not the current head", { ...base, currentHeadSha: merged, draftOpenActList: { ...carriedList, carriedToHead: "ef".repeat(20) } }],
+  ]) {
+    const refused = evaluatePrGateCoordination(input);
+    assert.doesNotMatch(refused.agentRemedy?.command ?? "", /--converged-json/, name);
+  }
   assert.match(result.agentRemedy.summary, /^Edit the PR body through scripts\/github\/edit-pr\.mjs, then post the body-only converged draft_gate verdict/);
   assert.match(result.reason, /every open act item of the current head is a PR-body item/);
   assert.doesNotMatch(result.reason, /fixer pass is not proven landed/);
