@@ -138,6 +138,19 @@ test("buildPreMergeGateCheck passes with a carried marker and fails with an unca
   assert.equal(buildPreMergeGateCheck(evidence(marker(origin)), 0).ok, false);
 });
 
+// ADR 0295: a base delta that used to count as gate tooling (a lockfile, a non-outcome script) now carries and merge accepts it.
+test("buildPreMergeGateCheck accepts a carry whose base delta touches a formerly-tooling path", async () => {
+  for (const file of ["package-lock.json", "scripts/github/edit-pr.mjs"]) {
+    const s = setup();
+    const origin = s.head();
+    const cur = s.mergeBase(file);
+    const carried = await carry(s, marker(origin), cur, { written: [] });
+    assert.equal(carried.headSha, cur, file);
+    const pre = { ...carried, sizeOutcome: "pass", sizeTouchesT1: false };
+    assert.equal(buildPreMergeGateCheck({ currentHeadSha: cur, draftGate: { visible: true, verdict: "clean" }, preApprovalGateMarker: pre }, 0).ok, true, file);
+  }
+});
+
 // Tampered evidence at the merge-precondition seam: each case falls back to a full re-gate.
 test("buildPreMergeGateCheck rejects a recorded entry whose evidence differs from the recomputation", async () => {
   const s = setup();

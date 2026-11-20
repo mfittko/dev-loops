@@ -16,16 +16,24 @@ import { isDevLoopConfigSourcePath } from "../analysis/diff-analyzer.mjs";
 
 export const BASE_MERGE_CARRY_DECISIONS = Object.freeze(["carry_verdict", "full_regate", "fallback_full"]);
 
-// Paths that can change a gate outcome (ADR 0295, amends ADR 0096): .devloops config
+// Paths that can change a gate outcome (ADR 0295, amends ADR 0096 and ADR 0156): .devloops config
 // (isDevLoopConfigSourcePath), reviewer, judge and gate-coordinator agents with their .claude mirror,
-// gate, judge and review contracts, gate, fan-in, judge, verdict and carry scripts and core loop
-// modules, and the installed dev-loops version (package manifests). Lockfiles and every other path carry.
-const OUTCOME_NAME = "[^/]*(?:gate|fanin|fan-in|judge|verdict|carry)[^/]*";
+// the gate, judge, review, acceptance-criteria and structural-quality contracts, the review skills,
+// core config (angle, persona, prompt and judge-track resolution), the scripts and core loop modules
+// whose file name holds a gate, fan-in, judge, verdict, carry, review, finding, angle, dispatch,
+// cluster, round-cap, prompt, unit-bound, disposition, evidence, checkpoint, convergence or pre-push-delta token, and the installed dev-loops version (package
+// manifests). Lockfiles and every other path carry.
+// A name token matches as a whole word between "-", "_" or ".", so navigate or preview never hit.
+const word = (tokens) => `(?:[^/]*[-_.])?(?:${tokens})(?:[-_.][^/]*)?`;
+const OUTCOME_NAME = word("gates?|fanin|fan-in|judge|verdicts?|carry|reviews?|reviewers?|findings?|angles?|dispatch|clusters?|round-cap|prompts?|unit-bound|dispositions?|evidence|checkpoint|convergence|pre-push-delta");
 const GATE_TOOLING_RE = new RegExp(
   "^(?:\\.claude/)?(?:agents/(?:review|judge|gate-coordinator)\\.(?:agent\\.)?md" +
-    "|skills/docs/[^/]*(?:gate|judge|review)[^/]*\\.md)$" +
+    `|skills/docs/${word("gate|judge|review")}\\.md` +
+    "|skills/docs/(?:acceptance-criteria-verification|structural-quality)\\.md" +
+    "|skills/(?:copilot-pr-followup|review|dev-loop)/SKILL\\.md)$" +
     `|^scripts/[^/]+/${OUTCOME_NAME}$` +
     `|^packages/core/src/loop/${OUTCOME_NAME}$` +
+    "|^packages/core/src/config/[^/]+$" +
     "|^package\\.json$|^packages/[^/]+/package\\.json$",
 );
 
