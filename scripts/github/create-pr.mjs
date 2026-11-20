@@ -77,7 +77,7 @@ Behavior:
   - refuses with \`pre_pr_review_missing\` unless a pre-PR review record covers the branch head (PRE-PR-BEFORE-FIRST-PUSH); the writer command is in that rule.
   - refuses with \`head_unresolvable\` (a defensive fallback; the earlier pre-PR record guard normally refuses the same input with \`pre_pr_review_missing\`, which also names \`git fetch origin\`) when \`origin/<base>\` resolves but \`--head\` resolves neither locally nor as \`origin/<branch>\`; run \`git fetch origin\` and retry
   - refuses any \`adr-tripwire:allow\` line in the body, and \`--fill\`/\`--fill-verbose\`/\`--fill-first\`/\`--template\` without \`--body\`/\`--body-file\`, and \`--recover\`/\`--editor\`/\`--web\` always (gh would source a body this wrapper cannot check); write a waiver only through \`dev-loops pr waive-adr-tripwire\`
-  - refuses a \`--body\`/\`--body-file\` of literal \`null\` (a failed read written back); \`--allow-empty-body\` (boolean, consumed here, never forwarded to \`gh\`) overrides it
+  - refuses an empty, whitespace-only or literal \`null\` \`--body\`/\`--body-file\` (a failed read written back); \`--allow-empty-body\` (boolean: bare or \`=value\`, never a space-separated value; consumed here, never forwarded to \`gh\`) overrides all of these refusals
   - forwards every other argument to \`gh pr create\` unchanged
   - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
   - refuses with \`size_split_required_before_pr\` before creating when the local \`origin/<base>...<head>\` whole-PR logic LOC is at or above the resolved default-tier \`waiverLoc\` (PRE-PR-SIZE-CHECK); no override flag; an unknown size does not refuse
@@ -122,7 +122,7 @@ const ALLOW_REPLACEMENT_FLAG_PATTERN = /^--allow-replacement-pr(?:=(.*))?$/u;
 // `--allow-cross-issue` records a deliberate cross-issue closing reference,
 // waiving the branch-derived closing-reference mismatch guard. Consumed by the
 // wrapper (never forwarded to gh).
-// `--allow-empty-body` (boolean) lets a body of literal `null` through the shared guard.
+// `--allow-empty-body` (boolean) lets an empty, whitespace-only or literal `null` body through the shared guard.
 const ALLOW_EMPTY_BODY_FLAG_PATTERN = /^--allow-empty-body(?:=(.*))?$/iu;
 const ALLOW_CROSS_ISSUE_FLAG_PATTERN = /^--allow-cross-issue(?:=(.*))?$/iu;
 // Resolve the current git branch so the closing reference can be checked
@@ -207,9 +207,10 @@ export { detectClosingKeyword, extractClosingIssueNumber };
 // PR-body spec): gh honors `--body=<text>`, so a guard that only saw the space
 // form could be sidestepped by writing `--body=`. Never reads stdin (`gh pr
 // create` doesn't either — body always comes from an explicit --body/--body-file).
-// An unreadable or empty --body-file FAILS CLOSED (throws) rather than silently
-// substituting "" (which used to let a broken/blank --body-file open a body-less
-// PR unnoticed).
+// An unreadable, empty, whitespace-only or literal `null` --body/--body-file FAILS
+// CLOSED (throws) rather than silently substituting "" (which used to let a
+// broken/blank --body-file open a body-less PR unnoticed). `--allow-empty-body`
+// overrides the empty, whitespace-only and `null` refusals.
 async function resolveBody(args, allowEmptyBody = false) {
   const { body, bodyFile } = scanPrFlags(args);
   if (body !== null) {
@@ -506,6 +507,14 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     const next = argv[bareCrossIssueIdx + 1];
     if (typeof next === "string" && !next.startsWith("-")) {
       throw parseError("--allow-cross-issue is a boolean flag: pass it bare (--allow-cross-issue) or as --allow-cross-issue=false, never a space-separated value");
+    }
+  }
+  // --allow-empty-body is boolean like --allow-cross-issue: refuse a space-form value for the same reason.
+  const bareEmptyBodyIdx = argv.findIndex((token) => token === "--allow-empty-body");
+  if (bareEmptyBodyIdx !== -1) {
+    const next = argv[bareEmptyBodyIdx + 1];
+    if (typeof next === "string" && !next.startsWith("-")) {
+      throw parseError("--allow-empty-body is a boolean flag: pass it bare (--allow-empty-body) or as --allow-empty-body=false, never a space-separated value");
     }
   }
   const spikeFile = getFlagValue(argv, SPIKE_FILE_FLAG_PATTERN);
