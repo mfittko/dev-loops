@@ -82,7 +82,9 @@ Optional:
                               should omit this flag to keep full enforcement.
 Optional marker field: carriedFrom (the origin head of a carried verdict). A carried
 marker's headSha is the current head and differs from the comment summary's
-headSha; carriedFrom names the origin head the verdict was posted at.
+headSha; carriedFrom names the carry origin head (the fixer commit for a converged
+draft_gate marker). Any converged draft_gate marker emits converged and convergedFromHeadSha
+(the reviewed head that holds the verdict and ledger); a carried one also emits carriedFrom.
 Output (stdout, JSON; always includes preMergeGateCheck):
   {
     "ok": true,
@@ -361,6 +363,7 @@ function normalizeGateMarkerSummary(summary) {
     visible: true,
     surface: normalizeVerdictSurface(summary.surface),
     headSha: summary.headSha,
+    ...(summary.converged ? { converged: summary.converged } : {}),
     ...(summary.convergedFromHeadSha ? { convergedFromHeadSha: summary.convergedFromHeadSha } : {}),
     verdict: summary.verdict,
     findingsSummary: summary.findingsSummary,
@@ -1178,6 +1181,11 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
 // wrapper below strips them so no OTHER caller (e.g.
 // detect-pr-gate-coordination-state.mjs, which durably stores the whole
 // returned object) can re-expose them.
+// Fan-out keeps the origin-head marker for a carried gate so the ledger path stays at the origin head.
+// A converged carry takes the non-carried converged shape: headSha F (the scope head), convergedFromHeadSha A (the ledger head).
+export const carriedFanoutMarker = (candidate, carried) => (carried.convergedFromHeadSha
+  ? { ...candidate, headSha: carried.carriedFrom, convergedFromHeadSha: candidate.headSha, carriedFrom: carried.carriedFrom }
+  : { ...candidate, carriedFrom: carried.carriedFrom });
 async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd(), recordCarry = false } = {}) {
   const runnerOwnership = await ensureAsyncRunnerOwnership({
     repo: options.repo,
@@ -1286,8 +1294,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
       gate, repo: options.repo, pr: options.pr, currentHeadSha, repoRoot: resolveRepoRoot(cwd), env,
       runJson: (args) => runGhJson(args, { env, ghCommand, runChild }), comments: carryComments, record: recordCarry,
     });
-    // Fan-out keeps the origin-head marker for a carried gate so the ledger path stays at the origin head.
-    return carried.carriedFrom ? { marker: carried, fanoutMarker: { ...candidate, carriedFrom: carried.carriedFrom } } : { marker: filtered, fanoutMarker: filtered };
+    return carried.carriedFrom ? { marker: carried, fanoutMarker: carriedFanoutMarker(candidate, carried) } : { marker: filtered, fanoutMarker: filtered };
   };
   const { marker: draftGateMarker, fanoutMarker: rawDraftGateMarker } = await resolveGateMarker("draft_gate");
   const { marker: preApprovalGateMarker, fanoutMarker: rawPreApprovalGateMarker } = await resolveGateMarker("pre_approval_gate");
