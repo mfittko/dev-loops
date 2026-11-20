@@ -299,6 +299,7 @@ test("2500: the orchestrator alone runs merge-pr (--check included); a brief car
   for (const doc of ["skills/dev-loop/SKILL.md", ".claude/skills/dev-loop/SKILL.md"]) {
     const text = squeeze(await readRepo(doc));
     assert.match(text, /dev-loop coordinator never runs `merge-pr\.mjs`, `--check` included.*orchestrator is the only actor/, doc);
+    assert.match(text, /coordinator hands back the `await_final_human_approval` result of `loop gate-coordination`/, doc);
   }
   for (const doc of ["skills/docs/workflow-handoff-contract.md", ".claude/skills/docs/workflow-handoff-contract.md"]) {
     const text = squeeze(await readRepo(doc));

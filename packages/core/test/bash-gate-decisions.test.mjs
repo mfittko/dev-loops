@@ -589,6 +589,16 @@ test("any subagent role is denied a command naming merge-pr, --check included (i
   }
 });
 
+test("a subagent command naming merge-preconditions.md is allowed (issue 2500)", () => {
+  for (const command of [
+    "git add skills/docs/merge-preconditions.md",
+    "grep -n approve skills/docs/merge-preconditions.md",
+    "rg -n approve .claude/skills/docs/merge-preconditions.md",
+  ]) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: "fixer", command }), null, command);
+  }
+});
+
 test("merge-pr stays open to the top-level session and an unrelated command stays allowed (issue 2500)", () => {
   for (const command of MERGE_DENY_FORMS) {
     assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, command);
