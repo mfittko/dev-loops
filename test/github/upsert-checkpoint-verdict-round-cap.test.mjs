@@ -432,7 +432,7 @@ test("the closure round line renders a normalized full SHA and refuses a short, 
 
 // A clean cap round whose post was refused at its own head posts there once the PR head has moved on.
 const CAP_HEAD = "4".repeat(40);
-async function postCleanCapRound(tempDir, { capHead = CAP_HEAD, sealedVerdict = "clean", ancestor = true, headSha = capHead, prState = {}, extraArgs = [], calls = [], postedOverrides = {}, proven = false, checkBaseFreshness, gate = "draft_gate", sealedHead = capHead, issueComments = [] } = {}) {
+async function postCleanCapRound(tempDir, { capHead = CAP_HEAD, sealedVerdict = "clean", ancestor = true, headSha = capHead, prState = {}, extraArgs = [], calls = [], postedOverrides = {}, proven = false, checkBaseFreshness, gate = "draft_gate", sealedHead = capHead, issueComments = [], seal = "valid", mergeBaseCode } = {}) {
   await seedPrior(repoRoot, priorHeads);
   const deltaDir = path.join(repoRoot, "tmp", "gate-delta");
   await rm(deltaDir, { recursive: true, force: true });
@@ -445,19 +445,21 @@ async function postCleanCapRound(tempDir, { capHead = CAP_HEAD, sealedVerdict = 
   }
   const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-17");
   const sealed = { repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: capHead, verdict: sealedVerdict, overallVerdict: sealedVerdict, loggedAt: "2026-11-04T00:00:00.000Z", findings: [] };
-  await writeFile(path.join(dir, `draft_gate-${capHead}.json`), JSON.stringify({ ...sealed, headSha: sealedHead }), "utf8");
+  const sealedText = JSON.stringify({ ...sealed, headSha: sealedHead });
+  await writeFile(path.join(dir, `draft_gate-${capHead}.json`), sealedText, "utf8");
+  if (seal !== "none") await writeFile(path.join(dir, `draft_gate-${capHead}.json.seal`), `${createHash("sha256").update(seal === "valid" ? sealedText : "tampered").digest("hex")}\n`, "utf8");
   const ledger = path.join(tempDir, "cap-ledger.json");
   await writeFile(ledger, JSON.stringify({ ...sealed, ...postedOverrides }), "utf8");
   const posted = [];
   const inner = makeRunChild(posted, { ...prState, calls, issueComments });
-  const runChild = async (cmd, args = [], ...rest) => (cmd === "git" && args.includes("merge-base") ? { code: ancestor ? 0 : 1, stdout: "", stderr: "" } : inner(cmd, args, ...rest));
+  const runChild = async (cmd, args = [], ...rest) => (cmd === "git" && args.includes("merge-base") ? { code: mergeBaseCode ?? (ancestor ? 0 : 1), stdout: "", stderr: "" } : inner(cmd, args, ...rest));
   try {
     const options = parseUpsertCheckpointVerdictCliArgs([
       "--repo", "owner/repo", "--pr", "17", "--gate", gate, "--head-sha", headSha, "--findings-ledger", ledger,
       "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 0, question: 0, nit: 0 }), "--findings-summary", "cap round", "--next-action", "follow the verdict", "--inline-reason", "cap round", ...extraArgs,
     ]);
-    await upsertCheckpointVerdict(options, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild, checkBaseFreshness });
-    return { body: posted.join("\n") };
+    const result = await upsertCheckpointVerdict(options, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild, checkBaseFreshness });
+    return { body: posted.join("\n"), result, posted };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
@@ -501,6 +503,39 @@ test("a cap-round head the PR head does not descend from is refused", async () =
   await withTempDir(async (tempDir) => {
     assert.match((await postCleanCapRound(tempDir, { ancestor: false })).error ?? "", /does not match the current PR head/);
   }, { prefix: "dev-loops-round-cap-ancestor-foreign-" });
+});
+
+test("an unsealed clean cap-round ledger is refused", async () => {
+  await withTempDir(async (tempDir) => {
+    assert.match((await postCleanCapRound(tempDir, { seal: "none" })).error ?? "", /does not match the current PR head/);
+  }, { prefix: "dev-loops-round-cap-unsealed-" });
+});
+
+test("a seal mismatch on the cap-round ledger reaches the caller as OUT_OF_BAND_WRITE", async () => {
+  await withTempDir(async (tempDir) => {
+    const error = (await postCleanCapRound(tempDir, { seal: "mismatch" })).error ?? "";
+    assert.match(error, /gate_artifact_out_of_band_write/);
+    assert.doesNotMatch(error, /does not match the current PR head/);
+  }, { prefix: "dev-loops-round-cap-tampered-" });
+});
+
+test("a git failure in the ancestry check names the failure and the fetch remedy, not a missing ancestor", async () => {
+  await withTempDir(async (tempDir) => {
+    const error = (await postCleanCapRound(tempDir, { mergeBaseCode: 128 })).error ?? "";
+    assert.match(error, /merge-base --is-ancestor failed \(exit 128\)/);
+    assert.match(error, /git fetch origin/);
+  }, { prefix: "dev-loops-round-cap-merge-base-128-" });
+});
+
+test("a ready PR with a visible clean draft_gate verdict at the cap-round head returns the idempotent noop and posts no review", async () => {
+  await withTempDir(async (tempDir) => {
+    const visibleClean = { id: 98, user: { login: "gate-bot" }, author_association: "OWNER", body: `### Gate review: \`draft_gate\`\n\n**Reviewed head SHA:** \`${CAP_HEAD}\`\n**Verdict:** clean\n\n**Findings summary:** cap round\n\n**Next action:** follow the verdict`, html_url: "https://github.com/owner/repo/pull/17#issuecomment-98", updated_at: "2026-05-30T17:00:00Z" };
+    const out = await postCleanCapRound(tempDir, { prState: { isDraft: false }, proven: true, issueComments: [visibleClean] });
+    assert.equal(out.error, undefined);
+    assert.equal(out.result.action, "noop");
+    assert.equal(out.result.draftGateAlreadySatisfied, true);
+    assert.deepEqual(out.posted, []);
+  }, { prefix: "dev-loops-round-cap-visible-clean-noop-" });
 });
 
 test("a clean cap round posts on a ready PR whose draft gate reads as satisfied, without a draft conversion", async () => {

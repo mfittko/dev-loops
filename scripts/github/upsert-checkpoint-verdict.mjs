@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
@@ -32,6 +32,7 @@ import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
 import { escapeProse, listIssueComments, renderEvidenceOnlyLabel, resolveAuthenticatedLogin, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { VALID_DISPOSITIONS } from "./write-gate-findings-log.mjs";
+import { OUT_OF_BAND_WRITE } from "./_gate-artifact-seal.mjs";
 import {
   buildCommentableLineSet,
   buildNonLocatableFindingMarker,
@@ -63,7 +64,8 @@ import { computeSpecDigest, extractSpecFromBody, normalizeCriterionText, stampSp
 import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
-import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
+import { buildLogPath } from "./_gate-artifact-paths.mjs";
 import { countPrOwnCommits as realCountPrOwnCommits } from "../loop/check-pre-push-delta.mjs";
 import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
 import { buildValidationResultsPath, countCompletedRounds, buildGateContextPath, isCleanCapRound, prBodySha256, readGateContext, resolveCapRound, resolveDraftCapRoundFact } from "./write-gate-context.mjs";
@@ -1862,11 +1864,17 @@ function resolveRequestedHeadSha(requestedHeadSha, currentHeadSha) {
 // A completed cap round whose sealed ledger is clean posts at its own head once the PR head has moved past it (a refused post at that head leaves no visible record for CI).
 async function resolveCleanCapRoundHead({ options, cap, currentHeadSha, repoRoot, runChild, env }) {
   if (options.gate !== "draft_gate" || !(cap > 0) || !/^[0-9a-f]{7,64}$/i.test(options.headSha)) return null;
-  const capRound = await resolveCapRound({ repo: options.repo, pr: options.pr, headSha: currentHeadSha }, { repoRoot }).catch(() => null);
+  // A seal mismatch is a tamper signal: let it reach the operator; any other failure reads as no cap round.
+  const capRound = await resolveCapRound({ repo: options.repo, pr: options.pr, headSha: currentHeadSha }, { repoRoot }).catch((error) => { if (error?.code === OUT_OF_BAND_WRITE) throw error; return null; });
   const roundHead = normalizeFullHeadSha(capRound?.log?.headSha ?? "");
   if (!isCleanCapRound(capRound) || !roundHead || !roundHead.startsWith(options.headSha.toLowerCase())) return null;
+  // readSealed accepts a missing seal as legacy; the catch-up post requires the seal file (the read above verified it when present).
+  const ledgerPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: "draft_gate", headSha: roundHead, tmpRoot: resolveGateArtifactTmpRoot(repoRoot) });
+  if (!(await stat(`${path.resolve(repoRoot, ledgerPath)}.seal`).then(() => true, () => false))) return null;
   const ancestry = await runChild("git", ["-C", repoRoot, "merge-base", "--is-ancestor", roundHead, currentHeadSha], env);
-  return ancestry.code === 0 ? roundHead : null;
+  if (ancestry.code === 1) return null;
+  if (ancestry.code !== 0) throw new Error(`git merge-base --is-ancestor failed (exit ${ancestry.code}) for cap-round head ${roundHead} and PR head ${currentHeadSha}; run \`git fetch origin ${roundHead} ${currentHeadSha}\` and retry.`);
+  return roundHead;
 }
 // The cap-round waiver holds only when the PR is neither done nor blocked and the draft-PR re-evaluation does not forbid the action.
 export function capRoundWaives(coordination, draftReevaluation, action) {
