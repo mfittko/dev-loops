@@ -44,7 +44,7 @@ const ALLOWLIST = [
   ["issue, spec and PR-title parsing and plan intake: input data for the reviewer, not a rule", [
     "scripts/loop/detect-issue-refinement-artifact.mjs", "packages/core/src/loop/issue-refinement-artifact.mjs",
     "packages/core/src/loop/plan-file-promote-contract.mjs", "packages/core/src/loop/pr-title-markers.mjs",
-    "packages/core/src/loop/spec-authority.mjs", "packages/core/src/loop/normalize.mjs",
+    "packages/core/src/loop/normalize.mjs",
   ]],
 ];
 const allowlisted = (f) => ALLOWLIST.some(([, paths]) => paths.some((k) => f === k || (k.endsWith("/") && f.startsWith(k))));
@@ -88,10 +88,10 @@ test("every file a gate-tooling file imports is gate tooling or allowlisted (ADR
 });
 
 test("name tokens match whole words only", () => {
-  for (const f of ["scripts/github/navigate-pr.mjs", "scripts/github/delegate-task.mjs", "scripts/github/aggregate-stats.mjs", "scripts/github/preview-body.mjs"]) {
+  for (const f of ["scripts/github/navigate-pr.mjs", "scripts/github/delegate-task.mjs", "scripts/github/aggregate-stats.mjs", "scripts/github/preview-body.mjs", "packages/core/src/loop/spec-authority-notes.mjs", "skills/docs/copilot-loop-operations-notes.md"]) {
     assert.equal(isGateToolingPath(f), false, f);
   }
-  for (const f of ["scripts/loop/consolidate-fanin.mjs", "scripts/github/_dispatch-units.mjs", "packages/core/src/loop/reviewer-unit-bound.mjs", "skills/review/SKILL.md", ".claude/skills/dev-loop/SKILL.md"]) {
+  for (const f of ["scripts/loop/consolidate-fanin.mjs", "scripts/github/_findings-x.mjs", "packages/core/src/loop/spec-authority.mjs", "skills/docs/copilot-loop-operations.md", ".claude/skills/docs/copilot-loop-operations.md", "scripts/github/_dispatch-units.mjs", "packages/core/src/loop/reviewer-unit-bound.mjs", "skills/review/SKILL.md", ".claude/skills/dev-loop/SKILL.md"]) {
     assert.equal(isGateToolingPath(f), true, f);
   }
 });
