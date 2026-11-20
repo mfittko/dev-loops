@@ -1,3 +1,4 @@
 ### Fixed
 
 - A judge decision with `remedyKind: "pr_body"` marks a finding whose only remedy is a PR-body edit. `isDeltaBodyItem` routes it to every body-only exit (`delta_body_only_act_set`, the `loop gate-coordination` body-only branch, `composeBodyOnlyConvergedDraftGate`) even when its scope names a file, so a cap round whose act items are all PR-body items exits by the body-only converged post instead of a refused fixer or chain-extension route. `spec-authority`, `judge-pass` and `write-gate-findings-log` accept the value and carry it into the ledger (#3309)
+- `write-gate-findings-log.mjs --rejudge-same-round` rewrites the live same-head ledger in place, keeping its round number and archiving nothing, so a cap-round ledger can gain `remedyKind` without becoming round N+1. It refuses with `rejudge-no-live-ledger` or `rejudge-fingerprint-mismatch` (`GATE-LEDGER-REJUDGE-SAME-ROUND`) (#3309)

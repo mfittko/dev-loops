@@ -27,6 +27,7 @@ import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityV
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "./_gate-artifact-paths.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
+import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--verdict <clean|findings_present|blocked>] (--findings <json> | --findings-file <path>) [--tmp-root <path>] [--context-tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -106,6 +107,11 @@ Optional:
                                  write-gate-context.mjs and emit-fanout-dispatch.mjs used
                                  an explicit --tmp-root, pass that same path here. This
                                  does not change the ledger --tmp-root semantics above.
+  --rejudge-same-round           Rewrite the live same-head ledger in place: the round number is kept and no
+                                 round is archived. Refused with a typed reason unless a live ledger exists at
+                                 exactly this head and gate (rejudge-no-live-ledger) and the findings carry the
+                                 same fingerprints as it (rejudge-fingerprint-mismatch). For a re-judge that
+                                 only changes dispositions or remedyKind.
   --spec-authority <path>        JSON { specDigest, headSha, contentDigest, checkedCriteria }
                                   (issue 2008 / ADR 0061 AC1). When supplied, stamps the log
                                   with the pinned revision identity via the ONE shared stamp
@@ -581,6 +587,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       "tmp-root": { type: "string" },
       "context-tmp-root": { type: "string" },
       "spec-authority": { type: "string" },
+      "rejudge-same-round": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -687,6 +694,10 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     if (token.name === "context-tmp-root") {
       options.contextTmpRoot = requireTokenValue(token, parseError).trim();
       if (options.contextTmpRoot.length === 0) throw parseError("--context-tmp-root requires a non-empty path");
+      continue;
+    }
+    if (token.name === "rejudge-same-round") {
+      options.rejudgeSameRound = true;
       continue;
     }
     if (token.name === "spec-authority") {
@@ -910,7 +921,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     completed: options.gate === "review" || Boolean(options.judgeVerdict),
   };
   let roundCap;
-  const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, roundIdentity, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot, includeLiveCurrentHead: true }));
+  const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, roundIdentity, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot, includeLiveCurrentHead: options.rejudgeSameRound !== true }));
   // A judged round must be written with its verdict: a write without --judge-verdict while a judge execution's verdict sits on disk would persist the unjudged severity verdict.
   if (!options.judgeVerdict && options.gate !== "review") {
     const judgeRoots = [...new Set([options.contextTmpRoot, options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot), path.join(repoRoot, "tmp")].filter(Boolean))];
@@ -1230,13 +1241,27 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // helper. Pure no-op (byte-identical log) when the flag is absent.
   const stampedLog = stampOptionalSpecAuthority(log, specAuthorityIdentity);
   await mkdir(path.dirname(fullPath), { recursive: true });
-  const retainedRound = await retainSameHeadLedger(fullPath, logPath, stampedLog.roundIdentity);
+  if (options.rejudgeSameRound === true) await assertRejudgeOfLiveLedger(fullPath, logPath, options, stampedLog.findings);
+  const retainedRound = options.rejudgeSameRound === true ? null : await retainSameHeadLedger(fullPath, logPath, stampedLog.roundIdentity);
   await writeSealed(fullPath, JSON.stringify(stampedLog, null, 2) + "\n");
   return {
     ok: true, path: logPath, log: stampedLog,
     ...(retainedRound ? { retainedRound } : {}),
     ...(angleCoverage.warning ? { warning: angleCoverage.warning } : {}),
   };
+}
+// GATE-LEDGER-REJUDGE-SAME-ROUND: an in-place re-judge rewrites exactly the live ledger of this gate and head, so it needs that ledger and the same finding fingerprints.
+async function assertRejudgeOfLiveLedger(fullPath, logPath, options, findings) {
+  let live;
+  try {
+    live = JSON.parse(await readSealed(fullPath));
+  } catch (err) {
+    if (err?.code === OUT_OF_BAND_WRITE) throw err;
+  }
+  const sameHead = typeof live?.headSha === "string" && live.headSha.trim().toLowerCase() === options.headSha.trim().toLowerCase();
+  if (!sameHead || live.gate !== options.gate || !Array.isArray(live.findings)) throw parseError(`--rejudge-same-round needs a readable live ledger at ${logPath} for this gate and head (rejudge-no-live-ledger)`);
+  const prints = (list) => [...new Set(list.map((f) => fingerprintFinding(f)))].sort();
+  if (!isDeepStrictEqual(prints(live.findings), prints(findings))) throw parseError(`--rejudge-same-round findings must carry the same fingerprints as the live ledger ${logPath}; a re-judge never adds or drops a finding (rejudge-fingerprint-mismatch)`);
 }
 // A second write at the same head must not destroy a finished round: every existing live ledger (and its seal) except an in-round rewrite (at least one finding, none judged) is copied
 // to the next free `<gate>-<sha>.round-<n>.json` sibling before the rewrite. Returns the retained path, or null when there was no live ledger or it is an in-round rewrite.

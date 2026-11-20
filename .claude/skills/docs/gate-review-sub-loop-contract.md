@@ -1402,6 +1402,9 @@ Each log entry records the full disposition: severity, angle, summary, affected 
 1-based `line` (drives inline-vs-body-filed placement in `GATE-EXEC-FINDING-THREADS` below), and
 resolved-in SHA (for findings resolved in a later pass).
 
+<!-- rule: GATE-LEDGER-REJUDGE-SAME-ROUND -->
+`GATE-LEDGER-REJUDGE-SAME-ROUND` (parent: `GATE-EXEC-DISPOSITION-LEDGER`, [issue 3309](https://github.com/mfittko/dev-loops/issues/3309)): A second judged `write-gate-findings-log.mjs` write at the same head normally archives the live ledger as a retained round and opens the next round. `--rejudge-same-round` instead rewrites the live ledger in place: the round number is kept and nothing is archived, so a re-judge that only adds `remedyKind` or changes a disposition does not move a cap round past the cap. The write refuses with `rejudge-no-live-ledger` unless a readable live ledger exists at exactly this gate and head, and with `rejudge-fingerprint-mismatch` unless the findings carry the same fingerprints as that ledger (a re-judge never adds or drops a finding). Every other write validation still applies. Without the flag the write is unchanged.
+
 ### Comment trust
 
 <!-- rule: GATE-REVIEW-COMMENT-TRUST -->
