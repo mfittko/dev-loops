@@ -759,6 +759,22 @@ test("plain file commands on the recorder source are not denied, for the main ag
   }
 });
 
+test("plain file commands that quote the recorder cli are not denied; runner, launcher and nested-run spellings stay denied", () => {
+  for (const command of ['grep -rn "dev-loops-run cli/index.mjs decision record" skills/', 'git commit -m "feat(cli): add dev-loops decision record"', "rg -n 'dev-loops decision record' docs/"]) {
+    for (const role of [null, "developer"]) assert.equal(decideBashGateDeny({ ...BASE, role, command }), null, command);
+  }
+  for (const command of [
+    "node cli/index.mjs decision record --repo o/n",
+    "dev-loops decision record --repo o/n",
+    "dev-loops-run --repo-root /x cli/index.mjs decision record --repo o/n",
+    "git -c alias.x='!dev-loops-run cli/index.mjs decision record' x",
+    "rg --pre 'dev-loops-run cli/index.mjs decision record' x .",
+    "grep -n x f; node cli/index.mjs decision record --repo o/n",
+  ]) {
+    for (const role of [null, "developer"]) assert.match(decideBashGateDeny({ ...BASE, role, command })?.reason ?? "", /^OPERATOR-DECISION-RECORDER/, command);
+  }
+});
+
 test("an inline-code runner command is not classified as the recorder", () => {
   for (const command of [`node -e "console.log(1)"`, `bun -e 'console.log(1)'`, `node -p "1+1"`, `node --eval "x"`]) {
     assert.equal(classifyDecisionRecorderCommand(command), null, command);

@@ -1880,7 +1880,7 @@ export function commandContainsCodeVerificationEntrypoint(command) {
  * The `--repo-root` spelling is never canonical: its `permissions.ask` pattern is unverified in a live session.
  * Returns null when no segment names the recorder.
  * shortcut: a quoted `decision record` data word beside a launcher word counts as a mention, so a note that quotes
- * the command is denied too; judging quotes would need the full tokenizer.
+ * the command is denied too, unless the segment is a plain file command (`grep`, `git commit -m`) with no nested run; judging quotes would need the full tokenizer.
  * @param {string} command @returns {{canonical: boolean}|null}
  */
 export function classifyDecisionRecorderCommand(command) {
@@ -1898,7 +1898,7 @@ export function classifyDecisionRecorderCommand(command) {
     const fileCommand = !nestedRun && stripped.some((s) => /^(?:git|rg|grep|cat|ls|head|tail|wc|diff|stat)$/.test(s.split(/\s+/)[0].replace(/['"\\]/g, "").toLowerCase().replace(/^.*\//, "")));
     const script = !fileCommand && words.some((w) => w.endsWith("record-operator-decision.mjs"));
     const at = words.findIndex((w, i) => w === "decision" && words[i + 1] === "record");
-    const cli = at >= 0 && words.slice(0, at).some((w) => /(?:^|\/)(?:dev-loops(?:-run)?|index\.mjs)$/.test(w));
+    const cli = !fileCommand && at >= 0 && words.slice(0, at).some((w) => /(?:^|\/)(?:dev-loops(?:-run)?|index\.mjs)$/.test(w));
     if (!script && !cli && !stripped.some((s) => hasUnreadableLauncherWord(s.split(/\s+/)))) continue;
     const canonical = !script && !continued && segments.length === 1 && segment.startsWith("dev-loops-run cli/index.mjs decision record ");
     found = { canonical: found?.canonical !== false && canonical };
