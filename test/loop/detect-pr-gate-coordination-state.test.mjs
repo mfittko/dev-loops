@@ -4655,6 +4655,70 @@ test("3105 AC15: an all-PR-body act list keeps the base integration; a mixed lis
   } finally { await rm(mixed.tempDir, { recursive: true, force: true }); }
 });
 
+test("3309: a base-only merge head keeps the cap-round body-only list of the cap head, a code merge does not", async () => {
+  const fixture = await actListFixture({ "": { findings: [BODY_ACT] } });
+  try {
+    const merged = "fe".repeat(20);
+    const context = { repo: "owner/repo", pr: 10, currentHeadSha: merged, prData: { baseRefName: "main" } };
+    const seen = [];
+    const merge = (result) => async (args) => { seen.push(args.fromHead); return result; };
+    const list = await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 1, baseOnlyMerge: merge(true) });
+    assert.deepEqual(list, { headSha: fixture.headSha, carriedToHead: merged, openActCount: 1, blockers: [], bodyOnly: true });
+    assert.deepEqual(seen, [fixture.headSha]);
+    // Merge-then-post: the detector's list plus the findings_present marker still at the cap head A name the post at the merge head (the marker never carries).
+    const marker = { visible: true, headSha: fixture.headSha, verdict: "findings_present", contractComplete: true };
+    const result = evaluatePrGateCoordination({ pr: 10, repo: "owner/repo", currentHeadSha: merged, prDraft: true, lifecycleState: "pr_draft", loopDisposition: "action_required", ciStatus: "success", mergeStateStatus: "CLEAN", mergeable: "MERGEABLE", draftGate: marker, draftGateMarker: marker, draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record", draftOpenActList: list });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+    assert.match(result.agentRemedy.command, new RegExp(`--head-sha ${fixture.headSha} .*fixerCommit \\(${fixture.headSha}\\)`));
+    assert.equal(await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 1, baseOnlyMerge: merge(false) }), null);
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+});
+
+test("3309: the base-only merge carry reads the cap head's live ledger, never a retained all-PR-body round under a mixed live round", async () => {
+  const fixture = await actListFixture({
+    ".round-3": { findings: [BODY_ACT], loggedAt: "2026-11-15T00:00:00.000Z" },
+    "": { findings: [BODY_ACT, ACT], loggedAt: "2026-11-16T00:00:00.000Z" },
+  });
+  try {
+    const context = { repo: "owner/repo", pr: 10, currentHeadSha: "fe".repeat(20), prData: { baseRefName: "main" } };
+    assert.equal(await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 2, baseOnlyMerge: async () => true }), null);
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+});
+
+test("3309: the base-only merge carry picks the newest prior head, so an older all-PR-body head never wins and a mixed newest head carries nothing", async () => {
+  const olderHead = "dc".repeat(20);
+  for (const { name, newest, expected } of [
+    { name: "all-PR-body", newest: [BODY_ACT], expected: "newest" },
+    { name: "mixed", newest: [BODY_ACT, ACT], expected: null },
+  ]) {
+    const fixture = await actListFixture({ "": { findings: newest, loggedAt: "2026-11-16T00:00:00.000Z" } });
+    try {
+      await writeSealed(path.join(fixture.findingsDir, `draft_gate-${olderHead}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: olderHead, verdict: "findings_present", loggedAt: "2026-11-15T00:00:00.000Z", findings: [BODY_ACT] }));
+      const context = { repo: "owner/repo", pr: 10, currentHeadSha: "fe".repeat(20), prData: { baseRefName: "main" } };
+      // Two completed rounds (older head, then newest head): the newest head is the cap round.
+      const list = await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 2, baseOnlyMerge: async () => true });
+      assert.equal(list?.headSha ?? null, expected === "newest" ? fixture.headSha : null, name);
+    } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+  }
+});
+
+// #3309: the cap-round body-only list carries every blocker the body-only poster refuses (isBlockedActItem), so coordination never names a refused remedy.
+test("3309: a cap-round all-PR-body act list blocks on a high item with a judgeFix and on a security-angle item", async () => {
+  const resolve = async (findings) => {
+    const fixture = await actListFixture({ "": { findings } });
+    try {
+      return await resolveDraftOpenActList({ repo: "owner/repo", pr: 10, currentHeadSha: fixture.headSha }, { repoRoot: fixture.tempDir, cap: 1 });
+    } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+  };
+  const clean = await resolve([BODY_ACT]);
+  assert.deepEqual({ bodyOnly: clean?.bodyOnly, blockers: clean?.blockers }, { bodyOnly: true, blockers: [] });
+  for (const item of [{ ...BODY_ACT, severity: "high", judgeFix: "edit the body" }, { ...BODY_ACT, angle: "security" }]) {
+    const result = await resolve([item]);
+    assert.equal(result?.bodyOnly, true);
+    assert.equal(result.blockers.length, 1, JSON.stringify(item));
+  }
+});
+
 // The live ledger is the current head's latest round, even when a retained same-head round sorts after it by loggedAt.
 test("3105 AC15: the act list comes from the current head's live ledger, never a retained earlier round", async () => {
   const later = "2026-11-17T00:00:00.000Z";
@@ -4726,6 +4790,16 @@ test("3105 AC15: a past-cap current-head round keeps the cap-round refusal", asy
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
   assert.match(result.reason, /round_cap_reached/);
   assert.doesNotMatch(result.agentRemedy?.command ?? "", /emit-fixer-work-order/);
+});
+
+// Issue 3309: a cap round of PR-body items only has no fixer route; the cap refusal names the ADR 0271 body-only converged post, and a round below the cap keeps the earlier routing.
+test("3309: a cap-round act list of PR-body items only names the body-only converged post", async () => {
+  const result = await detectCapFixture({ cap: 2, priorRounds: 1, finding: { file: undefined, severity: "low", summary: "PR body lacks non-goals" } });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+  assert.match(result.agentRemedy?.command ?? "", /upsert-checkpoint-verdict\.mjs .*--converged-json/);
+  assert.doesNotMatch(result.agentRemedy?.command ?? "", /emit-fixer-work-order|extend-cap-round-chain/);
+  const below = await detectCapFixture({ cap: 3, priorRounds: 1, finding: { file: undefined, severity: "low", summary: "PR body lacks non-goals" } });
+  assert.doesNotMatch(below.agentRemedy?.command ?? "", /converged-json/);
 });
 
 // The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so no fixer route follows it.
