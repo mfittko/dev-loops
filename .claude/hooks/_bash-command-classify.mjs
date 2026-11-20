@@ -1893,8 +1893,8 @@ export function classifyDecisionRecorderCommand(command) {
     const words = segment.replace(/['"\\]/g, "").toLowerCase().split(/\s+/);
     // A file command (`git add`, `rg`) that only names the recorder source is no recorder spelling (ADR 0295: the path under a runner).
     // shortcut: an allow-list of plain file commands, not of runners, so `bash -c 'node ...'` and `xargs` stay denied as before; widen it when another plain file command is blocked.
-    // A nested run keeps the segment a recorder spelling: command or process substitution, or a git exec option (`-x`, `--exec`, `bisect run`, `-c key=value`, `--pre`, `--extcmd`, `--ext-diff`, a `GIT_*=` or `*PAGER=` env prefix).
-    const nestedRun = /\$\(|`|[<>]\(|\s-x\b|--exec\b|\bbisect\s+run\b|alias\.[^\s=]*=["']?!|\s-c\s+\S+=|--pre\b|--extcmd\b|--ext-diff\b|^\s*(?:\w+=\S*\s+)*(?:GIT_\w*|\w*PAGER)=/i.test(segment);
+    // A nested run keeps the segment a recorder spelling: command or process substitution, or a git exec option (`-x`, `--exec`, `bisect run`, `-c key=value`, `--pre`, `--extcmd`, `--ext-diff`, `submodule foreach`, `-O`, `--open-files-in-pager`, a `--*-filter` or `--*-cmd` option, a `GIT_*=` or `*PAGER=` env prefix).
+    const nestedRun = /\$\(|`|[<>]\(|\s-x\b|--exec\b|\bbisect\s+run\b|alias\.[^\s=]*=["']?!|\s-c\s+\S+=|--pre\b|--extcmd\b|--ext-diff\b|\bsubmodule\s+foreach\b|\s-O|--open-files-in-pager\b|--[\w-]*-filter\b|--[\w-]*-cmd\b|^\s*(?:\w+=\S*\s+)*(?:GIT_\w*|\w*PAGER)=/i.test(segment);
     const fileCommand = !nestedRun && stripped.some((s) => /^(?:git|rg|grep|cat|ls|head|tail|wc|diff|stat)$/.test(s.split(/\s+/)[0].replace(/['"\\]/g, "").toLowerCase().replace(/^.*\//, "")));
     const script = !fileCommand && words.some((w) => w.endsWith("record-operator-decision.mjs"));
     const at = words.findIndex((w, i) => w === "decision" && words[i + 1] === "record");
