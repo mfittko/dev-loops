@@ -1961,7 +1961,8 @@ function hasUnreadableLauncherWord(rawWords) {
     return w.includes("[") || globMatchesSuffix(w, target);
   };
   // A glob that could expand to `cli/index.mjs` is the entrypoint too (fail closed).
-  const isCli = (w) => w.endsWith("cli/index.mjs") || (/[*?[]/.test(w) && /^[A-Za-z0-9_./*?[\]-]+$/.test(w) && hides(w, "cli/index.mjs"));
+  // A path prefix before a literal `cli/` (`./cli/*.mjs`, `/abs/repo/cli/*.mjs`) is dropped too, since the bare `*.mjs` tail alone is not tried.
+  const isCli = (w) => w.endsWith("cli/index.mjs") || (/[*?[]/.test(w) && /^[A-Za-z0-9_./*?[\]-]+$/.test(w) && [w, w.replace(/^.*\/(?=cli\/)/, "")].some((x) => hides(x, "cli/index.mjs")));
   if (isRunner) {
     // Scan to the first word that is a cli/index.mjs entrypoint or a glob matching the recorder script, so runner flag values need no grammar. An inline-code flag, a `bun x` package binary or another script word ends the scan: what follows is data for that program.
     let entry = -1;
