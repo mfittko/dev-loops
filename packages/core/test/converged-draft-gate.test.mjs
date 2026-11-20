@@ -138,6 +138,13 @@ describe("composeBodyOnlyConvergedDraftGate", () => {
     assert.equal(bodyOnly(items).fixerCommit, A);
   });
 
+  test("a pr_body item that names a file composes; the same item without remedyKind is body_item_locatable", () => {
+    const withFile = { files: ["docs/x.md"] };
+    assert.equal(bodyOnly([bodyItem("medium", 1, { ...withFile, remedyKind: "pr_body" })]).fixerCommit, A);
+    assert.throws(() => bodyOnly([bodyItem("medium", 1, withFile)]), /body_item_locatable/);
+    assert.throws(() => bodyOnly([bodyItem("medium", 1, { ...withFile, angle: "review-thread", remedyKind: "pr_body" })]), /body_item_locatable/);
+  });
+
   test("refuses a question, a fail-open item and a security angle, suffixed or prefixed", () => {
     assert.throws(() => bodyOnly([bodyItem("question", 1)]), /blocked_item/);
     assert.throws(() => bodyOnly([bodyItem("medium", 1, { failOpen: true })]), /blocked_item/);

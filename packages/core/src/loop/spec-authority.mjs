@@ -338,9 +338,9 @@ export const SPEC_AUTHORITY_VERDICT_SCHEMA = Object.freeze({
     conditional: Object.freeze({
       conflictingCriteria: `non-empty array of criterion ids when outcome is one of ${SPEC_AUTHORITY_CONFLICT_OUTCOMES.join(", ")}; absent otherwise`,
       authorizedRemediation: `non-empty string when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT}`,
-      defectClass: `non-empty string when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT} (unless remedyKind is evidence_only)`,
-      siteQuery: `non-empty string (a git grep pattern or a space-separated symbol list, never an array) when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT} (unless remedyKind is evidence_only)`,
-      remedyKind: "evidence_only when the remedy changes no file; then defectClass and siteQuery are not needed",
+      defectClass: `non-empty string when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT} (unless remedyKind is evidence_only or pr_body)`,
+      siteQuery: `non-empty string (a git grep pattern or a space-separated symbol list, never an array) when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT} (unless remedyKind is evidence_only or pr_body)`,
+      remedyKind: "evidence_only when the remedy changes no file, or pr_body when the only remedy is a PR-body edit; then defectClass and siteQuery are not needed",
       defectKind: `one of: ${DEFECT_KINDS.join(", ")} (default other); matcher also needs acceptedForms[] and rejectedForms[], each a non-empty array of strings (verbatim input forms, "" allowed); doc_lag needs statedSurfaces[], a non-empty array of non-empty strings (surface locations); the lists are refused on any other defectKind`,
     }),
   }),
@@ -407,9 +407,10 @@ function inputFormList(value) {
  * guard defect also lists its accepted and rejected input forms. Doc, comment
  * or fragment lag lists every stated surface of the changed rule.
  */
+const REMEDY_KINDS_NO_SITE = ["evidence_only", "pr_body"];
 function validateRemediationScope(d) {
   // A remedy that changes no file has no defect class or site; it never reaches the fixer.
-  if (d.remedyKind === "evidence_only") return { remedyKind: "evidence_only" };
+  if (REMEDY_KINDS_NO_SITE.includes(d.remedyKind)) return { remedyKind: d.remedyKind };
   const missing = (field, what) => Object.assign(
     new Error(`spec-authority valid_compliant decision ${d.index} requires a non-empty ${field} (${what})`),
     { code: "spec_authority_decision_invalid", decisionIndex: d.index, field },
@@ -468,7 +469,7 @@ function validateRemediationScope(d) {
  *   rationale: "<non-empty>",
  *   authorizedRemediation: "<...>",       // required for valid_compliant
  *   defectClass: "<...>", siteQuery: "<...>", // required for valid_compliant unless remedyKind is "evidence_only"
- *   remedyKind?: "evidence_only",         // the remedy changes no file: no defectClass/siteQuery, never on the fixer act list
+ *   remedyKind?: "evidence_only" | "pr_body", // evidence_only: no file changes, never on the fixer act list; pr_body: the only remedy is a PR-body edit; neither needs defectClass/siteQuery
  *   defectKind?: "matcher"|"doc_lag"|"other", // matcher: acceptedForms[] + rejectedForms[]; doc_lag: statedSurfaces[]
  *   rejectedRemediations: ["<...>"]       // optional audit of rejected options
  * }

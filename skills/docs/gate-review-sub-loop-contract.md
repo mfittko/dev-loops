@@ -1155,7 +1155,7 @@ MUST come with a `defectClass` and a `siteQuery`: a non-empty string, either a `
 or a space-separated symbol list, never an array, that the fixer runs at the head. `validateSpecAuthorityDecision` rejects a `valid_compliant` decision
 that lacks either, with a typed error (`code: "spec_authority_decision_invalid"`, `decisionIndex`, `field`).
 A `valid_compliant` decision with `remedyKind: "evidence_only"` (the remedy changes no file) needs neither field and never
-enters the fixer act list. The judge runs `dev-loops-run scripts/loop/check-judge-decision.mjs --file <spec-authority-verdict path>`
+enters the fixer act list. A `valid_compliant` decision with `remedyKind: "pr_body"` (the only remedy is a PR-body edit) also needs neither field; it stays an open act item, and `isDeltaBodyItem` treats it as a PR-body item even when the item names a file, so `delta_body_only_act_set`, the gate-coordination body-only branch and `composeBodyOnlyConvergedDraftGate` (`body_item_locatable`) all route it. The judge runs `dev-loops-run scripts/loop/check-judge-decision.mjs --file <spec-authority-verdict path>`
 before it hands back. For a matcher or guard defect (`defectKind: "matcher"`), the decision also lists
 the accepted and rejected input forms (`acceptedForms[]`, `rejectedForms[]`) alongside its
 `siteQuery`, and the fix adds one test per form. For doc, comment or fragment lag (`defectKind: "doc_lag"`), `statedSurfaces[]`

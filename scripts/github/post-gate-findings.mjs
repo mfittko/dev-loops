@@ -114,7 +114,7 @@ function validateFindingsArray(parsed, flagLabel) {
     // the judge suffix in renderFindingsCommentBody is unreachable dead code.
     if (typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0) {
       entry.judgeDisposition = f.judgeDisposition.trim();
-      if (f.remedyKind === "evidence_only") entry.remedyKind = "evidence_only";
+      if (f.remedyKind === "evidence_only" || f.remedyKind === "pr_body") entry.remedyKind = f.remedyKind;
     }
     if (typeof f.judgeRationale === "string" && f.judgeRationale.trim().length > 0) {
       entry.judgeRationale = f.judgeRationale.trim();

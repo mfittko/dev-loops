@@ -1163,7 +1163,7 @@ function normalizeStructuredFinding(f) {
   if (typeof f.judgeReason === "string" && f.judgeReason.trim().length > 0) {
     entry.judgeReason = f.judgeReason.trim();
   }
-  if (f.remedyKind === "evidence_only") entry.remedyKind = "evidence_only";
+  if (f.remedyKind === "evidence_only" || f.remedyKind === "pr_body") entry.remedyKind = f.remedyKind;
   if (Number.isInteger(f.followUpIssueNumber) && f.followUpIssueNumber > 0) {
     entry.followUpIssueNumber = f.followUpIssueNumber;
   }
@@ -3268,7 +3268,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         if (lf.followUpIssueNumber == null && judged.followUpIssueNumber) lf.followUpIssueNumber = judged.followUpIssueNumber;
         // Label only when every same-fingerprint act match is evidence_only, so array order cannot hide a file-change sibling.
         const sameMatches = flatFindings.filter((f) => f.judgeDisposition === judged.judgeDisposition && same(f));
-        if (sameMatches.every((f) => f.remedyKind === "evidence_only") && !lf.remedyKind) lf.remedyKind = "evidence_only";
+        if (judged.remedyKind && sameMatches.every((f) => f.remedyKind === judged.remedyKind) && !lf.remedyKind) lf.remedyKind = judged.remedyKind;
       }
     }
     // Re-check after the merge: the early check saw only the ledger's own dispositions, not the ones just copied onto it.

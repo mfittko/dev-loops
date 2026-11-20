@@ -213,7 +213,7 @@ function nonEmptyStrings(value) {
 }
 
 /** A PR-body act item names no file; a thread item is exempt (its ref is the thread id). Consumers align to `sequence.actItems` with `actList.filter((e) => !isDeltaBodyItem(e))`. */
-export const isDeltaBodyItem = (entry) => entry?.angle !== "review-thread" && !resolveFindingFile(entry);
+export const isDeltaBodyItem = (entry) => entry?.angle !== "review-thread" && (entry?.remedyKind === "pr_body" || !resolveFindingFile(entry));
 
 /**
  * Open a delta sequence for one gate round. The baseline is the head that gate
@@ -528,7 +528,7 @@ export function composeBodyOnlyConvergedDraftGate({ gate, headSha, round, cap, r
   if (capBlockers.length > 0) throw new Error(`blocked_item: the cap round holds ${capBlockers.length} blocker(s) (${capBlockers.map((b) => b.item).join("; ")}); they need a fix commit or an operator decision, not a body-only exit`);
   const blocked = items.find(isBlockedActItem);
   if (blocked) throw new Error(`blocked_item: act item ${JSON.stringify(blocked.summary)} is not medium, low or nit, is fail-open or is from a security angle; it needs a fix commit or an operator decision, not a body-only exit (GATE-EXEC-NO-DEAD-END)`);
-  const locatable = items.find((item) => resolveFindingFile(item));
+  const locatable = items.find((item) => !isDeltaBodyItem(item));
   if (locatable) throw new Error(`body_item_locatable: act item ${JSON.stringify(locatable.summary)} names a file; it needs a fix commit and a delta review, not a body-only exit`);
   if (!reviewedBodySha) throw new Error(`body_read_unrecorded: no cap-round context records a pr-body read at ${headSha}, so a body edit cannot be shown, and write-gate-context.mjs refuses a rerun at the cap head; fix the items with a commit and run the reviewer-only delta (check-pre-push-delta.mjs --reviewer-only)`);
   if (reviewedBodySha === liveBodySha) throw new Error("body_unchanged: the live PR body digest equals the reviewed pr-body read; edit the PR body first");
