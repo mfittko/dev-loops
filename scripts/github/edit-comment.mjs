@@ -24,7 +24,7 @@ Optional:
   --allowed-refs <csv>          Comma-separated numeric issue/PR ids to allow as
                                 deliberate cross-references in the body (the
                                 no-ids-in-comments guard refuses any other #<digits>)
-  --allow-empty-body            Allow a --body or --body-file that is only `null`, or an empty --body-file.
+  --allow-empty-body            Allow a --body or --body-file that is only \`null\`, or an empty --body-file.
   --standing-authorization      Assert a recorded standing operator authorization. Clears
                                 only the Copilot body-disposition \`operator\` marker.
                                 Accepted forms: bare, =true, =1. Any other value keeps the refusal.

@@ -39,7 +39,7 @@ At least one edit:
   --enforce-grill               Opt-in GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628):
                                 refuse a body that embeds grill
                                 transcript/synthesis/Q&A headings.
-  --allow-empty-body            Allow a --body or --body-file that is only `null`, or an empty --body-file.
+  --allow-empty-body            Allow a --body or --body-file that is only \`null\`, or an empty --body-file.
   --allow-untick                Allow a body that unticks or removes a checked
                                 \`[x]\` checkbox row (a flip to \`[ ]\`, a delete,
                                 a reworded label, or a heading edit that moves
