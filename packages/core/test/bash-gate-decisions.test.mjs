@@ -680,6 +680,8 @@ const SHELL_BUILT_RECORDER_SPELLINGS = [
   `node cli/ind*.mjs decision record --repo o/n --target pr 5 --kind accept`,
   `node cli/index.mj? decision record --repo o/n`,
   `node cli/*.mjs decision record --repo o/n`,
+  `node $X cli/ind*.mjs decision record --repo o/n`,
+  `node $X scripts/github/record-operator-*.mjs --repo o/n`,
   `bun cli/i*x.mjs decision record --repo o/n`,
   `dev-loops-run cli/ind*.mjs decision record --repo o/n`,
   `node ./cli/ind*.mjs decision record --repo o/n`,

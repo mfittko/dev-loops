@@ -1966,18 +1966,16 @@ function hasUnreadableLauncherWord(rawWords) {
   };
   if (isRunner) {
     // Scan to the first word that is a cli/index.mjs entrypoint or a glob or unreadable word, so runner flag values need no grammar. An inline-code flag, a `bun x` package binary or another script word ends the scan: what follows is data for that program.
-    let entry = -1;
+    // Every candidate is checked, so an empty-expanding `$X` before a glob entrypoint hides nothing.
     for (let j = at + 1; j < raw.length; j++) {
       const w = raw[j];
       if (/^(?:-[ep]|--eval|--print)$/.test(w) || (w === "x" && raw[j - 1] === head)) break;
-      if (isCli(w) || hitsScript(w)) { entry = j; break; }
+      if (hitsScript(w)) return true;
+      if (isCli(w) && (hides(raw[j + 1], "decision") || hides(raw[j + 2], "record") || (raw[j + 1] === "decision" && raw[j + 2] === "record"))) return true;
       // A script word right after a flag is that flag's value (`--loader ./l.mjs`), so the scan goes on.
       if (/\.[cm]?[jt]s$/.test(w) && !/^-/.test(raw[j - 1])) break;
     }
-    if (entry < 0) return false;
-    i = entry;
-    if (hitsScript(raw[i])) return true;
-    return isCli(raw[i]) && (hides(raw[i + 1], "decision") || hides(raw[i + 2], "record") || (raw[i + 1] === "decision" && raw[i + 2] === "record"));
+    return false;
   }
   if (raw[i] === undefined) return false;
   if (isBare) return hides(raw[i], "decision") || (raw[i] === "decision" && hides(raw[i + 1], "record"));
