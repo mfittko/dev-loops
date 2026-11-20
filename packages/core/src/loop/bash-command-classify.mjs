@@ -1903,7 +1903,7 @@ export function classifyDecisionRecorderCommand(command) {
 }
 
 /**
- * Whether a `dev-loops-run` segment has a script word, or namespace and action words after `cli/index.mjs`, that the
+ * Whether a `dev-loops-run`, `node`, `bun` or bare `dev-loops` segment has a script word, or namespace and action words after `cli/index.mjs`, that the
  * shell could expand to the recorder: a word outside `^[A-Za-z0-9_./-]+$` (`decision$IFS record`, `$'decision' record`,
  * `{decision,} record`) or a glob that matches the recorder script or the words `decision` and `record`
  * (`record-operator-*.mjs`). A glob that cannot match them (`scripts/*\/validate-decision-records.mjs`) stays allowed.

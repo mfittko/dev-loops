@@ -65,6 +65,11 @@ const RULE_FIXTURES = [
     reason: "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through a bounded FOREGROUND probe (scripts/github/probe-copilot-review.mjs or scripts/github/wait-pr-checks.mjs with an explicit --timeout <seconds>; scripts/loop/detect-copilot-loop-state.mjs one-shot; dev-loops-run cli/index.mjs loop watch-cycle; gh run watch) — nohup/disown/tmux/screen detach, while-sleep-poll loops, and bare-`&` backgrounding of a probe/wait script are barred for the coordinator and every subagent (a backgrounded wait orphans under Claude Code, which has no async wake to join it).",
   },
   {
+    id: "OPERATOR-DECISION-RECORDER",
+    facts: { ...BASE, role: "developer", command: "dev-loops-run cli/index.mjs decision record --repo o/n --target pr 5 --kind accept" },
+    reason: "OPERATOR-DECISION-RECORDER: `decision record` runs only from the main agent as `dev-loops-run cli/index.mjs decision record ...` from the checkout, the plain prefix the operator's permission prompt matches. A subagent returns the needed decision in its hand-back, and the orchestrator asks the operator and runs the recorder. The `--repo-root` spelling, `node`, `bun`, the `scripts/github/record-operator-decision.mjs` path, `.claude/bin/dev-loops-run`, bare `dev-loops`, quoted or escaped words and extra whitespace are denied. If the command only quotes the recorder as data, rephrase it or move the text into a file.",
+  },
+  {
     id: "SUBISSUE-NO-ADHOC-BYPASS",
     facts: { ...BASE, command: "gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6" },
     reason: "SUBISSUE-NO-ADHOC-BYPASS: ad-hoc `gh api` writes to the target repo's sub_issues endpoint are blocked. Manage sub-issues via the sanctioned manage-sub-issues wrapper instead.",
@@ -178,11 +183,6 @@ const INLINE_FIXTURES = [
     reason: "Do not wrap sanctioned dev-loops commands in `timeout N`: the wrapper hides the `dev-loops-run` head from operator allow rules. Run the command bare. Wait/probe tools bound themselves with `--timeout <seconds>`; other commands rely on the harness tool-call timeout.",
   },
   {
-    name: "decision recorder from a subagent or a non-canonical spelling",
-    facts: { ...BASE, role: "developer", command: "dev-loops-run cli/index.mjs decision record --repo o/n --target pr 5 --kind accept" },
-    reason: "OPERATOR-DECISION-RECORDER: `decision record` runs only from the main agent as `dev-loops-run cli/index.mjs decision record ...` from the checkout, the plain prefix the operator's permission prompt matches. A subagent returns the needed decision in its hand-back, and the orchestrator asks the operator and runs the recorder. The `--repo-root` spelling, `node`, `bun`, the `scripts/github/record-operator-decision.mjs` path, `.claude/bin/dev-loops-run`, bare `dev-loops`, quoted or escaped words and extra whitespace are denied. If the command only quotes the recorder as data, rephrase it or move the text into a file.",
-  },
-  {
     name: "subagent ad-hoc external write",
     facts: { ...BASE, role: "developer", command: "gh issue comment 5 --body hi" },
     reason: "Ad-hoc GitHub issue/PR creation, comments, and edits from a subagent are blocked. Use the sanctioned node wrappers instead — gate-verdict comments via scripts/github/upsert-checkpoint-verdict.mjs, review-thread replies via scripts/github/reply-resolve*.mjs, board sync, issue comments via scripts/github/comment-issue.mjs, or issue-body edits via scripts/github/edit-issue.mjs. Direct `gh issue create` is reserved for the main agent / operator.",
@@ -249,8 +249,16 @@ const ORDER_PAIRS = [
   },
   {
     earlier: "COPILOT-FOLLOWUP-WAIT-TOOLS",
+    later: "OPERATOR-DECISION-RECORDER",
+    facts: { ...BASE, role: "developer" },
+    command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 & dev-loops-run cli/index.mjs decision record --kind accept",
+    laterOnly: "dev-loops-run cli/index.mjs decision record --kind accept",
+  },
+  {
+    earlier: "OPERATOR-DECISION-RECORDER",
     later: "SUBISSUE-NO-ADHOC-BYPASS",
-    command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 & gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6",
+    facts: { ...BASE, role: "developer" },
+    command: "dev-loops-run cli/index.mjs decision record --kind accept && gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6",
     laterOnly: "gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6",
   },
   {
@@ -307,7 +315,7 @@ const ORDER_PAIRS = [
 
 /**
  * The two INLINE denies (no registered rule id) sit INSIDE the same ordered body: the `timeout`-wrapped
- * sanctioned-command deny between COPILOT-FOLLOWUP-WAIT-TOOLS and SUBISSUE-NO-ADHOC-BYPASS, and the
+ * sanctioned-command deny between COPILOT-FOLLOWUP-WAIT-TOOLS and OPERATOR-DECISION-RECORDER, and the
  * subagent ad-hoc external-write deny between WORKTREE-NO-STASH and STOP-HUMAN-MERGE-001. The pair
  * table above is asserted to cover exactly the registered consecutive pairs, so an inline deny cannot
  * ride in it; each entry here pins its deny's PLACE with two commands: one that also trips the
@@ -324,20 +332,8 @@ const INLINE_ORDER_PAIRS = [
       command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 & timeout 30 dev-loops-run cli/index.mjs gate resolve-validation",
     },
     below: {
-      id: "SUBISSUE-NO-ADHOC-BYPASS",
-      command: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation && gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6",
-    },
-  },
-  {
-    name: "decision recorder from a subagent or a non-canonical spelling",
-    facts: { ...BASE, role: "developer" },
-    above: {
-      id: "COPILOT-FOLLOWUP-WAIT-TOOLS",
-      command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 & dev-loops-run cli/index.mjs decision record --kind accept",
-    },
-    below: {
-      id: "SUBISSUE-NO-ADHOC-BYPASS",
-      command: "dev-loops-run cli/index.mjs decision record --kind accept && gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6",
+      id: "OPERATOR-DECISION-RECORDER",
+      command: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation && node cli/index.mjs decision record --kind accept",
     },
   },
   {

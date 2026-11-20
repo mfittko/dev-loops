@@ -125,6 +125,7 @@ export const BASH_GATE_RULES = Object.freeze([
   "COORDINATOR-VERIFY-BOUNDARY",
   "OPS-NO-INLINE-INTERPRETER",
   "COPILOT-FOLLOWUP-WAIT-TOOLS",
+  "OPERATOR-DECISION-RECORDER",
   "SUBISSUE-NO-ADHOC-BYPASS",
   "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER",
   "COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY",
@@ -351,11 +352,11 @@ export function decideBashGateDeny(facts = {}) {
   // OPERATOR-DECISION-RECORDER: the recorder runs only through its `permissions.ask` rules, which match
   // one spelling (`dev-loops-run cli/index.mjs decision record ...`). A subagent never
   // runs it (the operator's approval prompt is for the main agent's call), and any other spelling would
-  // skip the ask rule. Inline deny with no registered rule ID (see BASH_GATE_RULES).
+  // skip the ask rule.
   const recorder = classifyDecisionRecorderCommand(command);
   if (recorder !== null && (typeof role === "string" || !recorder.canonical)) {
     return {
-      ruleId: null,
+      ruleId: "OPERATOR-DECISION-RECORDER",
       reason:
         "OPERATOR-DECISION-RECORDER: `decision record` runs only from the main agent as " +
         "`dev-loops-run cli/index.mjs decision record ...` from the checkout, the plain prefix the operator's permission prompt matches. " +

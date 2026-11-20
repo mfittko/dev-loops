@@ -90,7 +90,8 @@ export async function recordDecision(o, { env = process.env, ghCommand = "gh", r
   let answer;
   try { answer = parseAnswerFile(answerBytes.toString("utf8")); } catch (e) { return refuse("answer_file_invalid", e.message); }
   if (body.trim() === "") return refuse("empty_body", "the body file is empty");
-  if (answerBytes.toString("utf8").includes(HEADER_MARKER) || body.includes(HEADER_MARKER)) return refuse("header_marker_in_input", `the answer file and the body must not contain ${HEADER_MARKER}`);
+  // The parsed fields, not the raw bytes: a JSON escape such as `:` hides the marker from a byte check.
+  if ([answer.question, answer.option, answer.answer, body].some((text) => text.includes(HEADER_MARKER))) return refuse("header_marker_in_input", `the answer file and the body must not contain ${HEADER_MARKER}`);
   const live = await ghJson([isPr ? "pr" : "issue", "view", String(o.number), "--repo", o.repo, "--json", isPr ? "state,headRefOid" : "state,url"], { env, ghCommand, runChild: run });
   if (!isPr && /\/pull\/\d+$/u.test(String(live.url))) return refuse("target_is_pull_request", `#${o.number} is a pull request; use --target pr`);
   if (live.state !== "OPEN") return refuse("target_closed", `the ${o.target} is ${String(live.state).toLowerCase()}`);

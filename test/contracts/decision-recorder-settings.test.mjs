@@ -39,4 +39,6 @@ test("the ask patterns match the canonical spellings under the documented semant
   const tail = "decision record --repo o/n --target pr 5 --kind accept --head x --operator-answer-file a.json --body-file b.md";
   assert.ok(matches(PLAIN, `dev-loops-run cli/index.mjs ${tail}`));
   assert.ok(!matches(PLAIN, `node cli/index.mjs ${tail}`));
+  assert.ok(matches(REPO_ROOT, `dev-loops-run --repo-root /w cli/index.mjs ${tail}`));
+  assert.ok(!matches(REPO_ROOT, `dev-loops-run --repo-root /w cli/index.mjs status`));
 });
