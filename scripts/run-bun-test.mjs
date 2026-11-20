@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { closeSync, createReadStream, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, open, readFile, rm, stat } from "node:fs/promises";
@@ -630,6 +630,12 @@ export async function runBunTest(args, {
 }
 
 if (import.meta.main) {
+  if (!process.versions.bun) {
+    // Discovery uses the Bun.Glob global, so a Node entry re-executes the whole script under Bun.
+    const r = spawnSync(resolveBunCommand(), [fileURLToPath(import.meta.url), ...process.argv.slice(2)], { stdio: "inherit" });
+    if (r.error) process.stderr.write(`Cannot launch Bun (${r.error.message}); set BUN_BIN or put bun on PATH.\n`);
+    process.exit(r.status ?? 1);
+  }
   try { process.exitCode = await runBunTest(process.argv.slice(2)); }
   catch (error) { process.stderr.write(`${error?.message ?? error}\n`); process.exitCode = 1; }
 }

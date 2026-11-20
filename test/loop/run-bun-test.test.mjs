@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { writeSync } from "node:fs";
 import { access, mkdir, mkdtemp, open, readFile, rm, symlink, writeFile } from "node:fs/promises";
@@ -978,4 +979,11 @@ test("the CLI refuses an unresolved worktree core before any @dev-loops/core imp
     assert.match(stderr, /worktree_core_(unresolved|escapes)/);
     assert.doesNotMatch(stderr, /ERR_MODULE_NOT_FOUND|Cannot find/);
   } finally { await rm(fx, { recursive: true, force: true }); }
+});
+
+test.skipIf(Boolean(spawnSync("node", ["--version"]).error))("the Node entry re-executes the script under Bun so Bun.Glob discovery works", () => {
+  const script = path.resolve(import.meta.dir, "../../scripts/run-bun-test.mjs");
+  const r = spawnSync("node", [script, "--referencing", `unreferenced-${"needle"}-${process.pid}`], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout + r.stderr, /No tests reference/);
 });
