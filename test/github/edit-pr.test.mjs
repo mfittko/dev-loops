@@ -620,3 +620,14 @@ test("editPr: refuses a literal `null` body (also padded) unless --allow-empty-b
   const { run } = stubGh();
   await editPr({ repo: "o/n", pr: 5, body: "null", allowEmptyBody: true, addAssignees: [], removeAssignees: [] }, { run });
 });
+
+test("editPr: refuses a --body-file containing only `null`", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "edit-pr-"));
+  const nullPath = join(dir, "null.md");
+  writeFileSync(nullPath, "null\n");
+  const { run } = stubGh();
+  await assert.rejects(
+    () => editPr({ repo: "o/n", pr: 5, bodyFile: nullPath, addAssignees: [], removeAssignees: [] }, { run }),
+    /--body-file .* is only `null`/,
+  );
+});
