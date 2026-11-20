@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 
-import { collectDevLoopChecks, executeDevLoopsCommand, inspectResultSeverity, parseDevLoopsCommand } from "../lib/dev-loops-core.mjs";
+import { collectDevLoopChecks, findRecorderSettingsProblems, executeDevLoopsCommand, inspectResultSeverity, parseDevLoopsCommand } from "../lib/dev-loops-core.mjs";
 
 function createRuntime(overrides = {}) {
   return {
@@ -436,4 +436,34 @@ test("start-spike parses free text / --file on a SEPARATE path from the numeric 
   assert.equal(exec.kind, "start_spike");
   assert.equal(exec.mode, "question");
   assert.equal(exec.question, "Try thing?");
+});
+
+test("status reports a consumer allow rule that names the recorder and a removed ask rule", async () => {
+  const shipped = JSON.parse((await import("node:fs")).readFileSync(new URL("../.claude/settings.json", import.meta.url), "utf8"));
+  const check = async (files) => (await collectDevLoopChecks(createRuntime({ getRecorderSettingsProblems: async () => findRecorderSettingsProblems(files) }))).find((c) => c.id === "recorder-ask-rule");
+
+  assert.equal((await check([{ file: ".claude/settings.json", settings: shipped }])).ok, true);
+
+  const allowed = await check([{ file: ".claude/settings.local.json", settings: { permissions: { allow: ["Bash(dev-loops-run cli/index.mjs decision record *)"] } } }]);
+  assert.equal(allowed.ok, false);
+  assert.match(allowed.detail, /settings\.local\.json: permissions\.allow names the decision recorder/);
+
+  const removed = await check([{ file: ".claude/settings.json", settings: { permissions: { allow: ["Bash(dev-loops-run:*)"], ask: [] } } }]);
+  assert.equal(removed.ok, false);
+  assert.match(removed.detail, /permissions\.ask lacks the decision recorder/);
+
+  // The allow rule and the ask rules may sit in different files; every launcher-covering allow spelling counts.
+  const shippedAsk = { permissions: { ask: shipped.permissions.ask } };
+  for (const rule of ["Bash(dev-loops-run:*)", "Bash(dev-loops-run *)", "Bash(dev-loops-run*)", "Bash(dev-loops-run cli/index.mjs:*)", "Bash(dev-loops-run cli/index.mjs *)", "Bash(dev-loops-run cli/*)", "Bash(dev-loops-run)", "Bash"]) {
+    const allowFile = { file: "~/.claude/settings.json", settings: { permissions: { allow: [rule] } } };
+    assert.equal((await check([allowFile, { file: ".claude/settings.json", settings: shippedAsk }])).ok, true, `${rule} with ask rules in another file`);
+    assert.equal((await check([allowFile])).ok, false, `${rule} with no ask rules`);
+  }
+  assert.equal((await check([{ file: "~/.claude/settings.json", settings: { permissions: { allow: ["Bash(dev-loops-run cli/index.mjs pr:*)"] } } }])).ok, true, "a rule for another namespace does not cover the recorder");
+  for (const rule of ["Bash(dev-loops-run scripts/github/record-operator-decision.mjs *)", "Bash(dev-loops-run cli/index.mjs decision record *)"]) {
+    assert.equal((await check([{ file: "~/.claude/settings.json", settings: { permissions: { allow: [rule] } } }])).ok, false, rule);
+  }
+
+  // A runtime without a settings reader (Pi) reports no recorder check.
+  assert.equal((await collectDevLoopChecks(createRuntime())).some((c) => c.id === "recorder-ask-rule"), false);
 });
