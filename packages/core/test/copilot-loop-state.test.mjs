@@ -1727,6 +1727,11 @@ test("a dropped request in round 2+ (earlier head reviewed, current head not) re
   assert.equal(result.state, STATE.COPILOT_UNAVAILABLE);
 });
 
+test("an earlier-head body finding that never reached the judge blocks copilot_unavailable", () => {
+  const result = interpretLoopState({ ...unobservableSnapshot, copilotPriorHeadBodyFeedbackUnresolved: true }, { maxCopilotRounds: 3 });
+  assert.notEqual(result.state, STATE.COPILOT_UNAVAILABLE);
+});
+
 test("unresolved feedback takes priority over copilot_unavailable", () => {
   for (const extra of [{ unresolvedThreadCount: 2 }, { copilotBodyFeedbackUnresolved: true }]) {
     const result = interpretLoopState({ ...unobservableSnapshot, ...extra }, { maxCopilotRounds: 3 });

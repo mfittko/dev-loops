@@ -2945,9 +2945,10 @@ test("isCopilotReviewObservableViaGraphql does not treat a copilot-x review requ
   assert.equal(observable, false);
 });
 
-test("a request POSTed but never observable records one unobservable request for the head", async () => {
-  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "request-unobservable-"));
-  const head = "a".repeat(40);
+const UNOBSERVABLE_HEAD = "a".repeat(40);
+
+function neverObservableEntries() {
+  const head = UNOBSERVABLE_HEAD;
   const emptyRequestedReviewersEntry = {
     assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
     stdout: '{"users":[],"teams":[]}\n',
@@ -2970,9 +2971,23 @@ test("a request POSTed but never observable records one unobservable request for
     emptyRequestedReviewersEntry, emptyReviewsEntry,
     emptyRequestedReviewersEntry, emptyReviewsEntry,
   ];
-  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], entries, { delayImpl: async () => {}, checkpointDir });
+  return entries;
+}
+
+test("a request POSTed but never observable records one unobservable request for the head", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "request-unobservable-"));
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], neverObservableEntries(), { delayImpl: async () => {}, checkpointDir });
   assert.equal(result.status, "requested");
   assert.match(result.detail, /not yet observable/);
   const record = JSON.parse(await readFile(path.join(checkpointDir, "unobservable-review-requests.json"), "utf8"));
-  assert.deepEqual([record.headSha, record.unobservableRequests, record.timedOutProbes], [head, 1, 0]);
+  assert.deepEqual([record.headSha, record.unobservableRequests, record.timedOutProbes], [UNOBSERVABLE_HEAD, 1, 0]);
+});
+
+test("a failed unobservable-request record write keeps status requested and adds a warning", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "request-unobservable-"));
+  // A directory at the record path makes the write fail for every user, root included.
+  await mkdir(path.join(checkpointDir, "unobservable-review-requests.json", "keep"), { recursive: true });
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], neverObservableEntries(), { delayImpl: async () => {}, checkpointDir });
+  assert.equal(result.status, "requested");
+  assert.match(result.warning, /could not record the unobservable request/);
 });

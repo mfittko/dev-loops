@@ -566,7 +566,8 @@ test("probe-copilot-review counts nothing for a caller-supplied total budget or 
   assert.equal(reissue.record.timedOutProbes, 0);
 });
 
-test("probe-copilot-review warns when the timed-out probe record cannot be written", async () => {
+// Root ignores directory mode bits, so the write would succeed and the test could not observe a failure.
+test.skipIf(process.getuid?.() === 0)("probe-copilot-review warns when the timed-out probe record cannot be written", async () => {
   const { result, record } = await runFinalChunkTimeout({ headCall: `echo '{"headRefOid":"abc"}'; exit 0`, readOnlyDir: true });
   assert.match(result.warning, /could not record the timed-out probe/);
   assert.equal(record.timedOutProbes, 0);

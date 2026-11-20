@@ -418,6 +418,7 @@ export function interpretLoopState(snapshot, refinementConfig) {
     && !s.copilotReviewOnCurrentHead
     && s.unresolvedThreadCount === 0
     && !s.copilotBodyFeedbackUnresolved
+    && !s.copilotPriorHeadBodyFeedbackUnresolved
   ) {
     // A request that became observable (status requested, or a review on this
     // head) and any unresolved feedback take the normal round routing instead.

@@ -150,7 +150,8 @@ Preconditions (each refuses with a machine-readable reason naming the failing on
   (the loop's carried convergence holds across a docs-only or integrate-only
   delta, and no Copilot review is outstanding on the current head), or
   copilot_unavailable (the loop's request_not_observable record for the current
-  head: Copilot accepted review requests that never became observable). gate_evidence reuses
+  head: Copilot accepted review requests that never became observable, and no
+  Copilot review is outstanding on the current head). gate_evidence reuses
   detect-checkpoint-evidence (draft_gate + current-head pre_approval_gate with
   fan-out provenance, zero unresolved threads, a non-stale/non-foreign runner lock).
 
