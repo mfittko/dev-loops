@@ -1,2 +1,2 @@
 ### Fixed
-- The `copilot-body-disposition` record gains agent-writable `reject=<gate>` and `defer=<gate>` forms bound to the gate judge ledger at the current head, so a judged low or medium Copilot body finding clears without a fix commit, an operator marker or a head bump, also at the Copilot round cap; `merge-pr` `copilot_convergence` accepts them (#2650)
+- Agent-writable `reject=<gate>` and `defer=<gate>` copilot-body-disposition records, bound to the current-head judge ledger, clear a judged low Copilot body finding, also at the round cap (#2650)
