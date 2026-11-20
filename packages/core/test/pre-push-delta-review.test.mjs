@@ -706,6 +706,14 @@ describe("PR-body act items leave the delta act set", () => {
     assert.throws(() => startDeltaSequence({ reviewBaselineHead: A, actList: [body(1), body(2)] }), /delta_body_only_act_set[^]*edit-pr\.mjs[^]*--converged-json[^]*bodyOnly/);
   });
 
+  test("a pr_body item that names a file is a body item: an all-pr_body list refuses and a mixed list drops it from the act set", () => {
+    const fileBody = (n) => ({ ...code(n), ref: `fbody-${n}`, remedyKind: "pr_body" });
+    assert.throws(() => startDeltaSequence({ reviewBaselineHead: A, actList: [fileBody(1), fileBody(2)] }), /delta_body_only_act_set/);
+    const seq = startDeltaSequence({ reviewBaselineHead: A, actList: [code(1), fileBody(2)] });
+    assert.deepEqual(seq.bodyItems, ["fbody-2"]);
+    assert.deepEqual(seq.actItems.map((item) => item.ref), ["code-1"]);
+  });
+
   test("a thread item without a path is not a body item", () => {
     const seq = startDeltaSequence({ reviewBaselineHead: A, actList: [{ ref: "T1", angle: "review-thread", summary: "x", judgeDisposition: "act" }] });
     assert.deepEqual(seq.actItems.map((item) => item.ref), ["T1"]);

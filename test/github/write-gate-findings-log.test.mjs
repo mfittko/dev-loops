@@ -14,8 +14,9 @@ import {
   verifyEmitPlanProvenance,
   writeGateFindingsLog,
 } from "../../scripts/github/write-gate-findings-log.mjs";
-import { readSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
+import { readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { countCompletedRounds } from "../../scripts/github/write-gate-context.mjs";
+import { resolveDraftOpenActList } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { buildGateArtifactPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { existsSync } from "node:fs";
 import { isFindingsLogName, readGateFindingsLedger } from "../../scripts/github/_gate-finding-surface.mjs";
@@ -96,6 +97,19 @@ test("parseWriteGateFindingsLogCliArgs parses all required args", () => {
     contextTmpRoot: undefined,
     specAuthority: undefined,
   });
+});
+
+test("parseWriteGateFindingsLogCliArgs parses --rejudge-same-round and defaults it to unset", () => {
+  const argv = ["--repo", "owner/repo", "--pr", "42", "--gate", "draft_gate", "--head-sha", "abc1234567890abcdef000000000000000000000", "--verdict", "clean", "--findings", "[]"];
+  assert.equal(parseWriteGateFindingsLogCliArgs([...argv, "--rejudge-same-round"]).rejudgeSameRound, true);
+  assert.equal(parseWriteGateFindingsLogCliArgs(argv).rejudgeSameRound, undefined);
+});
+
+test("parseWriteGateFindingsLogCliArgs refuses --judge-verdict and --spec-authority with --rejudge-same-round", () => {
+  const argv = ["--repo", "owner/repo", "--pr", "42", "--gate", "draft_gate", "--head-sha", "abc1234567890abcdef000000000000000000000", "--verdict", "clean", "--findings", "[]", "--rejudge-same-round"];
+  for (const extra of [["--judge-verdict", "j.json"], ["--spec-authority", "s.json"]]) {
+    assert.throws(() => parseWriteGateFindingsLogCliArgs([...argv, ...extra]), /rejudge-input-unsupported/);
+  }
 });
 
 test("parseWriteGateFindingsLogCliArgs keeps --emit-plan optional and requires provenance when supplied", () => {
@@ -4000,6 +4014,197 @@ test("writeGateFindingsLog raises the verdict from the input severity of an acte
     assert.equal(written.overallVerdict, "findings_present");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Issue 3309: --rejudge-same-round rewrites the live same-head ledger in place (GATE-LEDGER-REJUDGE-SAME-ROUND).
+const REJUDGE_HEAD = "abc1234500000000000000000000000000000000";
+const rejudgeFinding = (summary, extra = {}) => ({ severity: "low", angle: "scope", summary, files: ["src/x.mjs"], line: 3, judgeDisposition: "act", judgeFix: "fix it", ...extra });
+
+async function writeRejudgeFixture(dir, { priorHeads = 0, findings = [rejudgeFinding("one")] } = {}) {
+  const write = (headSha, list, extra = {}) => writeGateFindingsLog({
+    repo: "a/b", pr: 1, gate: "draft_gate", headSha, verdict: "findings_present", findings: JSON.stringify(list), tmpRoot: path.join(dir, "tmp"), ...extra,
+  });
+  for (let i = 1; i <= priorHeads; i += 1) await write(String(i).repeat(40), [rejudgeFinding(`prior ${i}`)]);
+  return { write, live: await write(REJUDGE_HEAD, findings) };
+}
+
+test("a --rejudge-same-round write keeps the round number and archives nothing", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-rejudge-"));
+  try {
+    const { write, live } = await writeRejudgeFixture(dir);
+    const roundBefore = await countCompletedRounds({ repo: "a/b", pr: 1, gate: "draft_gate", headSha: REJUDGE_HEAD, tmpRoot: path.join(dir, "tmp") }, { repoRoot: dir, includeLiveCurrentHead: false });
+    const again = await write(REJUDGE_HEAD, [rejudgeFinding("one", { remedyKind: "pr_body" })], { rejudgeSameRound: true });
+    assert.equal(again.retainedRound, undefined);
+    assert.equal(existsSync(live.path.replace(/\.json$/, ".round-1.json")), false);
+    assert.equal(JSON.parse(await readSealed(live.path)).findings[0].remedyKind, "pr_body");
+    const roundAfter = await countCompletedRounds({ repo: "a/b", pr: 1, gate: "draft_gate", headSha: REJUDGE_HEAD, tmpRoot: path.join(dir, "tmp") }, { repoRoot: dir, includeLiveCurrentHead: false });
+    assert.equal(roundAfter, roundBefore);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a --rejudge-same-round write refuses a findings set with other fingerprints and keeps the live ledger", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-rejudge-fp-"));
+  try {
+    const { write, live } = await writeRejudgeFixture(dir);
+    await assert.rejects(write(REJUDGE_HEAD, [rejudgeFinding("one"), rejudgeFinding("two")], { rejudgeSameRound: true }), /rejudge-fingerprint-mismatch/);
+    await assert.rejects(write(REJUDGE_HEAD, [rejudgeFinding("other")], { rejudgeSameRound: true }), /rejudge-fingerprint-mismatch/);
+    assert.equal(JSON.parse(await readSealed(live.path)).findings.length, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a --rejudge-same-round write keeps every stamped field of the live ledger and changes only remedyKind", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-rejudge-keep-"));
+  try {
+    const { write, live } = await writeRejudgeFixture(dir);
+    const stamped = JSON.parse(await readSealed(live.path));
+    Object.assign(stamped, { roundIdentity: { roundId: "r1-ab", judgeExecution: "j1-ab", completed: true }, specAuthority: { specDigest: "d1", headSha: REJUDGE_HEAD, contentDigest: "c1", checkedCriteria: ["ac:1"] }, scopeDrift: { verdict: "none" }, provenance: { executionMode: "fanout", perAngle: {} }, loggedAt: "2026-01-01T00:00:00.000Z" });
+    await writeSealed(live.path, JSON.stringify(stamped, null, 2) + "\n");
+    await write(REJUDGE_HEAD, [rejudgeFinding("one", { remedyKind: "pr_body" })], { rejudgeSameRound: true });
+    const after = JSON.parse(await readSealed(live.path));
+    assert.equal(after.findings[0].remedyKind, "pr_body");
+    delete after.findings[0].remedyKind;
+    assert.deepEqual(after, stamped);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a --rejudge-same-round write refuses any change other than adding pr_body to an act finding", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-rejudge-field-"));
+  try {
+    const { write, live } = await writeRejudgeFixture(dir);
+    const before = await readSealed(live.path);
+    for (const change of [{ severity: "medium" }, { judgeDisposition: "reject", judgeReason: "no" }, { judgeFix: "other fix" }, { remedyKind: "evidence_only" }]) {
+      await assert.rejects(write(REJUDGE_HEAD, [rejudgeFinding("one", change)], { rejudgeSameRound: true }), /rejudge-field-changed/, JSON.stringify(change));
+    }
+    assert.equal(await readSealed(live.path), before);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a --rejudge-same-round write refuses an incomplete live round and a non-draft gate", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-rejudge-gate-"));
+  try {
+    const { write } = await writeRejudgeFixture(dir, { findings: [rejudgeFinding("one", { judgeDisposition: undefined, judgeFix: undefined })] });
+    await assert.rejects(write(REJUDGE_HEAD, [rejudgeFinding("one", { judgeDisposition: undefined, judgeFix: undefined })], { rejudgeSameRound: true }), /rejudge-round-incomplete/);
+    await assert.rejects(write(REJUDGE_HEAD, [rejudgeFinding("one")], { rejudgeSameRound: true, gate: "pre_approval_gate" }), /rejudge-gate-unsupported/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a --rejudge-same-round write compares fingerprints as lists, so a duplicate counts", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-rejudge-dup-"));
+  try {
+    const { write } = await writeRejudgeFixture(dir, { findings: [rejudgeFinding("one"), rejudgeFinding("one", { angle: "coverage" })] });
+    await assert.rejects(write(REJUDGE_HEAD, [rejudgeFinding("one")], { rejudgeSameRound: true }), /rejudge-fingerprint-mismatch/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a --rejudge-same-round write pairs same-fingerprint duplicates by their fields, not their input order", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-rejudge-order-"));
+  try {
+    const a = rejudgeFinding("one", { angle: "scope" });
+    const b = rejudgeFinding("one", { angle: "coverage" });
+    const { write, live } = await writeRejudgeFixture(dir, { findings: [a, b] });
+    await write(REJUDGE_HEAD, [{ ...b, remedyKind: "pr_body" }, a], { rejudgeSameRound: true });
+    const findings = JSON.parse(await readSealed(live.path)).findings;
+    assert.deepEqual(findings.map((f) => [f.angle, f.remedyKind]), [["scope", undefined], ["coverage", "pr_body"]]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a --rejudge-same-round write succeeds although a judge verdict newer than the round sits on disk", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-rejudge-judged-"));
+  try {
+    const { write, live } = await writeRejudgeFixture(dir);
+    const judgeDir = path.join(buildGateArtifactPath({ repo: "a/b", pr: 1, gate: "draft_gate", headSha: REJUDGE_HEAD, tmpRoot: path.join(dir, "tmp"), dir: "gate-judge" }), "j9999999999999-abcdef0");
+    await mkdir(judgeDir, { recursive: true });
+    await writeFile(path.join(judgeDir, "judge-verdict.json"), "{}");
+    await write(REJUDGE_HEAD, [rejudgeFinding("one", { remedyKind: "pr_body" })], { rejudgeSameRound: true });
+    assert.equal(JSON.parse(await readSealed(live.path)).findings[0].remedyKind, "pr_body");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeSealed refuses inside the lock when the live bytes differ from the bytes the caller read", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-seal-expected-"));
+  try {
+    const file = path.join(dir, "live.json");
+    await writeSealed(file, "one\n");
+    await assert.rejects(writeSealed(file, "two\n", { expectedLive: "other\n" }), (err) => err.code === "live_ledger_changed");
+    assert.equal(await readSealed(file), "one\n");
+    await writeSealed(file, "two\n", { expectedLive: "one\n" });
+    assert.equal(await readSealed(file), "two\n");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a --rejudge-same-round write raises a live-ledger read error other than a missing or unparseable file", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-rejudge-eisdir-"));
+  try {
+    const { write, live } = await writeRejudgeFixture(dir);
+    await rm(live.path, { force: true });
+    await mkdir(live.path);
+    await assert.rejects(write(REJUDGE_HEAD, [rejudgeFinding("one")], { rejudgeSameRound: true }), (err) => err.code === "EISDIR" && !/rejudge-no-live-ledger/.test(err.message));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog refuses a remedyKind outside evidence_only and pr_body", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-remedy-"));
+  try {
+    await assert.rejects(writeRejudgeFixture(dir, { findings: [rejudgeFinding("one", { remedyKind: "bogus" })] }), /remedyKind must be one of: evidence_only, pr_body/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a --rejudge-same-round write refuses when no live ledger exists at that head", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-rejudge-none-"));
+  try {
+    const { write } = await writeRejudgeFixture(dir, { priorHeads: 1 });
+    await assert.rejects(write("def1234500000000000000000000000000000000", [rejudgeFinding("one")], { rejudgeSameRound: true }), /rejudge-no-live-ledger/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("without --rejudge-same-round a second judged same-head write still archives the live ledger as a round", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-rejudge-off-"));
+  try {
+    const { write, live } = await writeRejudgeFixture(dir);
+    const again = await write(REJUDGE_HEAD, [rejudgeFinding("one", { remedyKind: "pr_body" })]);
+    assert.equal(again.retainedRound, live.path.replace(/\.json$/, ".round-1.json"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("after an in-place re-judge at the cap round the all-pr_body act list takes the body-only exit, not the fixer", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-rejudge-cap-"));
+  try {
+    const { write } = await writeRejudgeFixture(dir, { priorHeads: 3 });
+    const context = { repo: "a/b", pr: 1, currentHeadSha: REJUDGE_HEAD };
+    const before = await resolveDraftOpenActList(context, { repoRoot: dir, cap: 4 });
+    assert.equal(before.bodyOnly, undefined, "without remedyKind the act item goes to the fixer");
+    await write(REJUDGE_HEAD, [rejudgeFinding("one", { remedyKind: "pr_body" })], { rejudgeSameRound: true });
+    const after = await resolveDraftOpenActList(context, { repoRoot: dir, cap: 4 });
+    assert.equal(after.bodyOnly, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });
 
