@@ -2020,7 +2020,7 @@ export function isInRoundRewrite(log, incoming) {
  *
  * @returns {Promise<object[]>}
  */
-export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable, includeRetainedCurrentHead = false, includeLiveCurrentHead = false }) {
+export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable, includeRetainedCurrentHead = false, includeLiveCurrentHead = false, withPaths = false }) {
   let ledgerDir;
   try {
     const sampleLogPath = buildLogPath({
@@ -2076,11 +2076,11 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
     if (!retained && (sha.startsWith(head) || head.startsWith(sha)) && isInRoundRewrite(log, options.roundIdentity)) continue;
     // Rounds order by loggedAt, then head, then retained number; the live ledger (Infinity) sorts last among rounds of equal loggedAt and head.
     const retainedNumber = /\.round-(\d+)\.json$/.exec(name);
-    rounds.push({ sha, loggedAt: typeof log.loggedAt === "string" ? log.loggedAt : "", round: retainedNumber ? Number(retainedNumber[1]) : Infinity, log });
+    rounds.push({ sha, loggedAt: typeof log.loggedAt === "string" ? log.loggedAt : "", round: retainedNumber ? Number(retainedNumber[1]) : Infinity, log, ledgerPath: path.join(ledgerDir, name) });
   }
   const cmp = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
   rounds.sort((a, b) => cmp(a.loggedAt, b.loggedAt) || cmp(a.sha, b.sha) || cmp(a.round, b.round));
-  return rounds.map((round) => round.log);
+  return rounds.map((round) => (withPaths ? { log: round.log, ledgerPath: round.ledgerPath } : round.log));
 }
 
 /** Merge time of the round cap (PR 2932); a closed prior ledger never counts only when its `loggedAt` is a toISOString-form UTC timestamp earlier than it; every other closed ledger counts (ADR 0189). */
@@ -2213,7 +2213,8 @@ export async function resolveCapRound(options, { repoRoot, onFailClosed = () => 
   if (!(cap > 0) || await countCompletedRounds(ledger, { repoRoot, includeLiveCurrentHead: true }) - 1 < cap) return null;
   // An unreadable ledger counts toward the cap but readClosedPriorRoundLogs drops it, so the cap-round authority could be an earlier round: fail closed.
   let unreadable = 0;
-  const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, includeLiveCurrentHead: true, includeRetainedCurrentHead: true, onUnreadable: () => { unreadable += 1; } })).at(-1);
+  const picked = (await readClosedPriorRoundLogs(ledger, { repoRoot, includeLiveCurrentHead: true, includeRetainedCurrentHead: true, withPaths: true, onUnreadable: () => { unreadable += 1; } })).at(-1);
+  const log = picked?.log;
   // The persisted severity verdict can read `clean` for judge-act mediums whose posted review composes findings_present: an open act item makes the round a cap round too.
   if (unreadable > 0 || !log || (log.verdict !== "findings_present" && log.verdict !== "clean" && listOpenActItems(log.findings).length === 0)) { onFailClosed(); return null; }
   // An act item the sealed cap-round delta record marks resolved is fixed, not residue; with no verifiable record every act item stays.
@@ -2225,7 +2226,7 @@ export async function resolveCapRound(options, { repoRoot, onFailClosed = () => 
   const residue = (Array.isArray(log.findings) ? log.findings : []).filter((f) => (isOpenActItem(f) && !isFixed(f)) || f?.capClosed).map((f) => ({
     fingerprint: fingerprintFinding(f), file: resolveFindingFile(f) ?? null, line: Number.isInteger(f.line) ? f.line : null, title: f.judgeTitle ?? f.summary, disposition: isOpenActItem(f) ? "act" : "cap_closed",
   }));
-  return { log, residue };
+  return { log, residue, ledgerPath: picked.ledgerPath };
 }
 
 // A head is a path segment of the record lookup: only a 40 or 64 character hex SHA (after trim and lowercase) is looked up or compared.
