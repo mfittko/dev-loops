@@ -204,3 +204,30 @@ test("runCli: mid-line mentions patch", async () => {
     assert.equal(calls.length, 1);
   }
 });
+
+test("editComment: refuses a literal `null` body (also padded) unless --allow-empty-body", async () => {
+  for (const body of ["null", "  null\n"]) {
+    const { run } = stubGh([]);
+    await assert.rejects(() => editComment({ repo: "o/n", commentId: 7, body }, { run }), /--body is only `null`/);
+  }
+  const { run, calls } = stubGh([{ stdout: JSON.stringify({ html_url: COMMENT_URL }) }]);
+  await editComment({ repo: "o/n", commentId: 7, body: "null", allowEmptyBody: true }, { run });
+  assert.equal(calls.length, 1);
+});
+
+test("parseEditCommentCliArgs: --allow-empty-body sets allowEmptyBody", () => {
+  const out = parseEditCommentCliArgs(["--repo", "o/n", "--comment-id", "7", "--body", "null", "--allow-empty-body"]);
+  assert.equal(out.allowEmptyBody, true);
+});
+
+test("editComment: refuses a --body-file containing only `null`", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "edit-comment-"));
+  try {
+    const file = join(dir, "null.md");
+    await writeFile(file, "null\n");
+    const { run } = stubGh([]);
+    await assert.rejects(() => editComment({ repo: "o/n", commentId: 7, bodyFile: file }, { run }), /--body-file .* is only `null`/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
