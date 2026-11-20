@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -32,11 +32,11 @@ import {
   validateSpecAuthorityVerdict,
 } from "@dev-loops/core/loop/spec-authority";
 import { findEscalations, recurrenceFiles } from "@dev-loops/core/loop/gate-recurrence";
-import { commentDeferredFindings, fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
+import { commentDeferredFindings, fingerprintFinding } from "../github/_gate-finding-surface.mjs";
 import { readClosedPriorRoundLogs, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
-import { buildGateEmitPlanPath, buildLogPath } from "../github/_gate-artifact-paths.mjs";
-import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
+import { buildGateEmitPlanPath } from "../github/_gate-artifact-paths.mjs";
+import { OUT_OF_BAND_WRITE, readSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { raiseVerdictForActedCopilotBlock, withPinnedCopilotBodyCluster, withoutCopilotBodyDecision } from "../github/_copilot-body-disposition.mjs";
 import { codeTreeSkewNote, materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
@@ -595,32 +595,6 @@ async function applyDeferralComment(enriched, { repo, pr, gate, trackerProvider 
 }
 
 /**
- * Copy each stamped defer target onto the durable findings log for the round, matched by fingerprint, so the cap-round fixer check
- * (emit-fixer-work-order) reads the same followUpIssueNumber as the verdict poster. An absent log is left untouched; a log that readGateFindingsLedger rejects fails the pass.
- */
-async function stampDurableDeferTargets(enriched, options, resolvedRoot) {
-  const targets = new Map(enriched.filter((f) => f.judgeDisposition === "defer" && Number.isInteger(f.followUpIssueNumber)).map((f) => [f.fingerprint, f.followUpIssueNumber]));
-  // A defer that applyDeferralComment converted to reject (the PR is the only target, #2724 slice 0) is rewritten to reject on the durable log too.
-  const rejects = new Set(enriched.filter((f) => f.judgeDisposition === "reject" && f.judgeReason?.startsWith("low_fix_until_cap ")).map((f) => f.fingerprint));
-  if (targets.size === 0 && rejects.size === 0) return;
-  const logPath = path.resolve(resolvedRoot, buildLogPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }));
-  if (!(await access(logPath).then(() => true, (err) => (err?.code === "ENOENT" ? false : Promise.reject(err))))) return;
-  // One validity rule for the ledger: the canonical reader rejects a malformed log. It normalizes in memory, so the raw log is re-read to stamp it.
-  await readGateFindingsLedger(logPath);
-  // readSealed refuses a log edited after its sealed write, so the stamp never reseals (launders) an out-of-band edit (AC2).
-  const log = JSON.parse(await readSealed(logPath));
-  let changed = false;
-  for (const f of log.findings) {
-    if (f?.judgeDisposition !== "defer" || f.followUpIssueNumber != null) continue;
-    const fp = fingerprintFinding(f);
-    const target = targets.get(fp);
-    if (target !== undefined) { f.followUpIssueNumber = target; changed = true; }
-    else if (rejects.has(fp)) { f.judgeDisposition = "reject"; delete f.followUpDraft; changed = true; }
-  }
-  if (changed) await writeSealed(logPath, JSON.stringify(log, null, 2) + "\n");
-}
-
-/**
  * Read + parse a JSON artifact from disk, failing closed with an actionable
  * message. Shared by the spec-file and spec-authority-verdict loads.
  */
@@ -1105,7 +1079,6 @@ export async function judgePassCli(
       { repo: options.repo, pr: Number(options.pr), gate: options.gate, trackerProvider },
       { env, ghCommand, run, commentIssue },
     );
-    await stampDurableDeferTargets(result.enriched, options, resolvedRoot);
     result.counts = countByDisposition(result.enriched);
   }
 

@@ -74,7 +74,7 @@ in a dedicated, fresh-context **gate coordinator**, dispatched as the `gate-coor
 (ADR 0112). This is the only sanctioned round shape. The dispatch guard ignores leading and trailing whitespace within the dispatch-pointer byte cap when it matches an emitted dispatch pointer. The gate coordinator is the "gate-round capsule" of ADR 0081. It owns exactly one round
 for one gate at one head and runs every in-round step: the step 0 dispatch-tool check, gate validation, the Phase 1 context,
 Phase 1.2 carry-forward, the Phase 2 wave dispatch of `review` agents, the
-Phase 3 fan-in and durable ledger write, the Phase 3.5 judge, and `judge-pass`. A light-mode
+Phase 3 fan-in, the Phase 3.5 judge, `judge-pass`, and the durable ledger write. A light-mode
 `inline_single_agent` round also runs inside the gate coordinator. Inside a round, "conductor" in
 this contract means the gate coordinator. The dev-loop coordinator dispatches the gate
 coordinator with the round's arguments, including the prior heads for this gate that it keeps in
