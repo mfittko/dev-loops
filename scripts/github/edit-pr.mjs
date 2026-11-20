@@ -38,6 +38,7 @@ At least one edit:
   --enforce-grill               Opt-in GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628):
                                 refuse a body that embeds grill
                                 transcript/synthesis/Q&A headings.
+  --allow-empty-body            Allow a body that is only the text null (a failed read written back).
   --allow-untick                Allow a body that unticks or removes a checked
                                 \`[x]\` checkbox row (a flip to \`[ ]\`, a delete,
                                 a reworded label, or a heading edit that moves
@@ -90,6 +91,7 @@ export function parseEditPrCliArgs(argv) {
       "enforce-grill": { type: "boolean" },
       "allow-cross-issue": { type: "boolean" },
       "allow-untick": { type: "boolean" },
+      "allow-empty-body": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -110,6 +112,7 @@ export function parseEditPrCliArgs(argv) {
     enforceGrill: false,
     allowCrossIssue: false,
     allowUntick: false,
+    allowEmptyBody: false,
     jq: undefined,
     silent: false,
   };
@@ -198,6 +201,10 @@ export function parseEditPrCliArgs(argv) {
       options.enforceGrill = true;
       continue;
     }
+    if (token.name === "allow-empty-body") {
+      options.allowEmptyBody = booleanFlagValue(token.value);
+      continue;
+    }
     if (token.name === "allow-untick") {
       options.allowUntick = booleanFlagValue(token.value);
       continue;
@@ -242,7 +249,7 @@ async function resolveBody(options) {
   // Fail closed on an empty / whitespace-only file so a blank --body-file cannot
   // silently clear the PR body (USAGE promises --body/--title reject empties).
   // allowStdin: `--body-file -` reads stdin (fd 0).
-  return resolveBodyOrFile({ body: options.body, bodyFile: options.bodyFile, allowStdin: true });
+  return resolveBodyOrFile({ body: options.body, bodyFile: options.bodyFile, allowStdin: true, allowEmptyBody: options.allowEmptyBody });
 }
 
 // Read the PR's own facts needed to resolve the issue it is expected to close:

@@ -204,3 +204,13 @@ test("runCli: mid-line mentions patch", async () => {
     assert.equal(calls.length, 1);
   }
 });
+
+test("editComment: refuses a literal `null` body (also padded) unless --allow-empty-body", async () => {
+  for (const body of ["null", "  null\n"]) {
+    const { run } = stubGh([]);
+    await assert.rejects(() => editComment({ repo: "o/n", commentId: 7, body }, { run }), /--body is only `null`/);
+  }
+  const { run, calls } = stubGh([{ stdout: JSON.stringify({ html_url: COMMENT_URL }) }]);
+  await editComment({ repo: "o/n", commentId: 7, body: "null", allowEmptyBody: true }, { run });
+  assert.equal(calls.length, 1);
+});

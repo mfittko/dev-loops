@@ -607,3 +607,16 @@ test("editPr: the waiverWriter seam still refuses to move the spike marker off t
     /spike no-merge marker/,
   );
 });
+
+test("editPr: refuses a literal `null` body (also padded) unless --allow-empty-body", async () => {
+  for (const body of ["null", "  null\n"]) {
+    const { run } = stubGh();
+    await assert.rejects(
+      () => editPr({ repo: "o/n", pr: 5, body, addAssignees: [], removeAssignees: [] }, { run }),
+      /--body is only `null`/,
+    );
+  }
+  assert.equal(parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--body", "null", "--allow-empty-body"]).allowEmptyBody, true);
+  const { run } = stubGh();
+  await editPr({ repo: "o/n", pr: 5, body: "null", allowEmptyBody: true, addAssignees: [], removeAssignees: [] }, { run });
+});
