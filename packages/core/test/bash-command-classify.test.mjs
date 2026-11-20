@@ -1921,7 +1921,7 @@ test("round 3: a shell reached through env/command/exec or `<(`, a joined heredo
 });
 
 test("commandContainsInlineInterpreter shifts a wrapper flag value that is named like a launcher", () => {
-  for (const c of ["sudo -u node node -e 'x'", "sudo -u node python3 -c 'x'", "sudo -u bun node -e 'x'"]) assert.equal(commandContainsInlineInterpreter(c), true, c);
+  for (const c of ["sudo -u node node -e 'x'", "sudo -u node python3 -c 'x'", "sudo -u bun node -e 'x'", "sudo -u dev-loops node -e 'x'", "sudo -u dev-loops-run python3 -c x"]) assert.equal(commandContainsInlineInterpreter(c), true, c);
 });
 
 test("classifyDecisionRecorderCommand keeps a launcher word after a bare wrapper flag", () => {

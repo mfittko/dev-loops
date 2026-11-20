@@ -1575,9 +1575,9 @@ export function commandContainsTimeoutWrappedSanctionedTool(command) {
 /** Wrapper binaries whose first argument is the real command to classify. */
 const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command", "nohup", "exec", "stdbuf", "setsid", "ionice", "busybox"]);
 // A bare wrapper flag (`-n`, `--user`) takes the next word as its argument, unless that word is itself the command.
-const WRAPPER_FLAG_TARGETS = new Set([...WRAPPER_BINARIES, ...SLEEP_LOOP_SHELLS, "timeout", "gtimeout", "sleep", "dev-loops-run", "dev-loops"]);
+const WRAPPER_FLAG_TARGETS = new Set([...WRAPPER_BINARIES, ...SLEEP_LOOP_SHELLS, "timeout", "gtimeout", "sleep"]);
 // The decision-recorder scan also keeps a launcher word after a bare wrapper flag (`sudo -n node ...`). The shared set leaves it out so `sudo -u node node -e` still shifts the user name.
-const LAUNCHER_FLAG_TARGETS = new Set([...WRAPPER_FLAG_TARGETS, "node", "bun"]);
+const LAUNCHER_FLAG_TARGETS = new Set([...WRAPPER_FLAG_TARGETS, "node", "bun", "dev-loops-run", "dev-loops"]);
 
 /**
  * Strip prefixes that hide the real command head, fail-closed (over-report is
