@@ -211,7 +211,7 @@ export async function captureMainRelativeChangedFilesSince({ base, mainRef = "or
  * and the main-relative PR-own delta since `fromHead` is empty, so the PR-own patch is unchanged. Reuses
  * {@link captureMainRelativeChangedFilesSince}. The comparison base is the merged base point `merge-base(head, mainRef)`, never the moving
  * `mainRef` tip, so a later base advance cannot misclassify the merge; an unresolved `mainRef` is never base-only. A PR-own file at
- * `fromHead` (`merge-base(fromHead, mergedBase)..fromHead`) that equals the merged base at `head` was discarded by the merge, so it is never base-only.
+ * `fromHead` (`merge-base(fromHead, mergedBase)..fromHead`) that equals the merged base at `head` was discarded by the merge, so it is never base-only, unless the head holds that file byte-identical to `fromHead` (main landed the same change), which is carried.
  */
 export async function isBaseOnlyMergeSince({ fromHead, head, mainRef, repoRoot, runGit = runGitCommand }) {
   const ancestor = await runGit(["merge-base", "--is-ancestor", fromHead, head], { repoRoot });

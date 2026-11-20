@@ -1431,7 +1431,7 @@ test("AC1: an overlap that main changed identically to the PR is a base-only car
   } finally { cleanup(repo); }
 });
 
-test("AC1: the overlap is the union over every merge base of a criss-cross history", async () => {
+test("AC1: a criss-cross history with two merge bases does not fail the overlap route", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-only-crisscross-"));
   initGitFixture(dir, { branch: "main", commit: null });
   const git = (...args) => runGitFixture(dir, args);
@@ -1465,7 +1465,7 @@ test("AC1: the overlap is the union over every merge base of a criss-cross histo
     const patch = fs.readFileSync(run.input.patchPath, "utf8");
     assert.match(patch, /f\.txt/);
     assert.equal(run.decision.outcome, "locally_clear");
-    // e.txt is a both-sides change against only one base and its baseline..head diff is empty, so the union adds no patch for it: the criss-cross base set must at least not fail the route.
+    // shortcut: no fixture overlaps against only one merge base with a non-empty patch, so the union over bases is not pinned.
   } finally { cleanup(repo); }
 });
 
