@@ -1454,7 +1454,7 @@ test("AC1: a criss-cross history with two merge bases does not fail the overlap 
   put("f.txt", lines("pr-top", "bottom")); git("commit", "-qam", "pr 2");
   const baseline = git("rev-parse", "HEAD");
   git("checkout", "-q", "main");
-  put("f.txt", lines("top", "main-bottom")); put("e.txt", "e-pr\n"); git("commit", "-qam", "main 2");
+  put("f.txt", lines("top", "main-bottom")); put("e.txt", "e-pr\n"); put("p.txt", "p2\n"); put("m.txt", "m2\n"); git("commit", "-qam", "main 2");
   git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"));
   git("checkout", "-q", "pr");
   git("merge", "-q", "--no-ff", "-m", "refresh base", "main");
@@ -1464,8 +1464,10 @@ test("AC1: a criss-cross history with two merge bases does not fail the overlap 
     const run = await reviewerOnlyRun(repo, {});
     const patch = fs.readFileSync(run.input.patchPath, "utf8");
     assert.match(patch, /f\.txt/);
+    // p.txt overlaps only against the merge base main1 and m.txt only against pr1: a single-base implementation drops one.
+    assert.match(patch, /p\.txt/);
+    assert.match(patch, /m\.txt/);
     assert.equal(run.decision.outcome, "locally_clear");
-    // shortcut: no fixture overlaps against only one merge base with a non-empty patch, so the union over bases is not pinned.
   } finally { cleanup(repo); }
 });
 
