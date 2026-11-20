@@ -465,10 +465,10 @@ for (const [label, maxReviewRounds, expectedActs] of [["at the round cap", 1, 4]
   assert.equal(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8")).length, expectedActs);
 });
 
-test("judgePassCli: after the round's own durable ledger is written, round 1 keeps an all-nit act cluster (GATE-EXEC-LOW-FIX-UNTIL-CAP)", async () => {
+test("judgePassCli: a completed live same-head ledger counts as an earlier round, so round 2 closes an all-nit act cluster as the writer does (GATE-EXEC-LOW-FIX-UNTIL-CAP)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-own-ledger-"));
   await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
-  // The conductor runs judge-pass after write-gate-findings-log wrote this round's judged ledger at the head.
+  // The durable log is written after judge-pass: a completed ledger at the head is an earlier round of the same head.
   const ledgerDir = path.join(tmpDir, "tmp", "gate-findings", "mfittko-dev-loops", "pr-3080");
   await mkdir(ledgerDir, { recursive: true });
   await writeFile(path.join(ledgerDir, `draft_gate-${HEAD}.json`), JSON.stringify({
@@ -481,7 +481,7 @@ test("judgePassCli: after the round's own durable ledger is written, round 1 kee
     { repo: "mfittko/dev-loops", pr: "3080", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json", tmpRoot: "./tmp" },
     { repoRoot: tmpDir, ...stubDeferralDeps().deps },
   );
-  assert.equal(payload.actCount, 1, "round 1 keeps the all-nit act cluster");
+  assert.equal(payload.actCount, 0, "round 2 closes the all-nit act cluster");
 });
 
 test("runJudgePass never defers an unstamped [low, medium] duplicate cluster through the low-nit coercion (ADR 0188)", () => {

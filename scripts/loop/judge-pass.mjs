@@ -995,7 +995,9 @@ export async function judgePassCli(
     "--judge-verdict",
     parseError,
   );
-  const { lowFixCapped, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot });
+  // The durable log is written after this pass, and its writer counts the completed live same-head ledger of an earlier round: count it here too, with this judge execution as the round identity (a repeated write of this round is not counted).
+  const judgeExecution = /^j\d+-[0-9a-f]+$/.exec(path.basename(path.dirname(path.resolve(resolvedRoot, options.judgeVerdict))))?.[0] ?? null;
+  const { lowFixCapped, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot), roundIdentity: { roundId: null, judgeExecution, completed: true } }, { repoRoot: resolvedRoot, includeLiveCurrentHead: true });
   const result = runJudgePass(judged, judgeVerdict, options.headSha, { pastCap: lowFixCapped, round });
 
   // Only the pinned work order's sliceLinkageIssues arm the coercion; the emitter already read the spec and PR body Non-goals.

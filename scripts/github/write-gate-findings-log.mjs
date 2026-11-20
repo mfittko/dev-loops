@@ -886,6 +886,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // applyJudgeDispositions fails closed on a malformed verdict, an
   // out-of-range index, or dispositions that do not cover every finding.
   let findings = rawFindings;
+  let reviewerFindings = rawFindings;
   let copilotActedSeverities = [];
   let scopeDrift;
   const specAuthorityIdentity = await readSpecAuthorityIdentity(
@@ -1017,7 +1018,9 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     const copilotCluster = judgePlan?.workOrder?.copilotBodyClusterId;
     const alreadyPinned = Number.isInteger(copilotCluster) && rawFindings.length > copilotCluster && rawFindings.slice(copilotCluster).every((f) => f?.clusterId === copilotCluster && f.angle === "copilot-body");
     const prefixLength = alreadyPinned ? copilotCluster : rawFindings.length;
-    const pinnedFindings = await withPinnedCopilotBodyCluster(rawFindings.slice(0, prefixLength), judgePlan?.workOrder);
+    // Only the reviewer prefix is provenance-checked; the Copilot cluster is verified separately against its pinned file.
+    reviewerFindings = rawFindings.slice(0, prefixLength);
+    const pinnedFindings = await withPinnedCopilotBodyCluster(reviewerFindings, judgePlan?.workOrder);
     const enriched = applyJudgeDispositions(pinnedFindings, judgeVerdict, { pastCap: lowFixCapped, round });
     // Same cluster projection judge-pass applies: one judge decision per root cause, so the durable ledger
     // matches judge-pass's --ledger-out instead of dropping the cluster-normalized dispositions.
@@ -1034,6 +1037,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       // judge-pass validates the spec-authority verdict over the findings read only, so validate the same prefix and re-attach the appended Copilot cluster.
       findings = [...(await applySiblingSpecAuthorityVerdict(findings.slice(0, prefixLength), judgePath, specAuthorityIdentity, judgePlan?.workOrder)), ...findings.slice(prefixLength)];
     }
+    // A judge-pass --ledger-out input already carries the bridge's final dispositions (closing-reference and no-target coercions, follow-up targets, the Copilot cluster): the verdict was re-validated above, so keep the bridge's findings.
+    if (rawFindings.length > 0 && rawFindings.every((f) => typeof f?.judgeDisposition === "string")) findings = rawFindings;
   }
   // `resurfaces` stays only when it names a closed prior round's act item in the same file; every other act item is new.
   if (findings.some((f) => f.resurfaces !== undefined)) {
@@ -1190,7 +1195,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       pr: options.pr,
       gate: options.gate,
       headSha: options.headSha,
-    }, { repoRoot, findings: rawFindings });
+    }, { repoRoot, findings: reviewerFindings });
   }
   // Angle-coverage enforcement (fail-closed on missing mandatory angles / foreign
   // angles) only applies when provenance is actually recorded — provenance

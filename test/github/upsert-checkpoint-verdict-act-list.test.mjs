@@ -550,7 +550,7 @@ for (const { name, jsonFile, refused } of [
 }
 
 // The 3297 order: fan-in, emit and pull the judge, judge-pass --ledger-out, then the durable log from that file, then the poster.
-async function postAfterJudgePassLedgerOut(tempDir, { copilotBody }) {
+async function postAfterJudgePassLedgerOut(tempDir, { copilotBody, coerce }) {
   const tmp = path.join(tempDir, "tmp");
   const contextDir = path.join(tmp, "gate-context", "owner-repo", "pr-17");
   await mkdir(contextDir, { recursive: true });
@@ -570,6 +570,13 @@ async function postAfterJudgePassLedgerOut(tempDir, { copilotBody }) {
   await writeVerdictAfterPull(plan.workOrder.outputRefs[0], Buffer.from(JSON.stringify({ headSha: HEAD, scopeDrift: { verdict: "within_scope", rationale: "ok", driftedAreas: [] }, dispositions })));
   const ledgerOut = path.join(tempDir, "enriched.json");
   await judgePassCli({ repo: "owner/repo", pr: "17", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgePlan: plan.planPath, judgeVerdict: plan.workOrder.outputRefs[0], ledgerOut }, { repoRoot: tempDir, receiptTmpRoot });
+  // A bridge coercion (a rejection judge-pass applied after the verdict) and a Copilot follow-up target must survive the writer.
+  if (coerce) {
+    const bridged = JSON.parse(await readFile(ledgerOut, "utf8"));
+    bridged.findings[0].judgeDisposition = "reject";
+    if (copilotBody) bridged.findings[2].followUpIssueNumber = 99;
+    await writeFile(ledgerOut, JSON.stringify(bridged), "utf8");
+  }
   const written = await writeGateFindingsLog({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD, findingsFile: ledgerOut, judgeVerdict: plan.workOrder.outputRefs[0], tmpRoot: tmp, contextTmpRoot: tmp }, { repoRoot: tempDir });
   return { written, posted: await post(written.path) };
 }
@@ -588,3 +595,13 @@ for (const { name, copilotBody } of [
     }, { prefix: "dev-loops-act-list-new-order-" });
   });
 }
+
+test("3297: the writer keeps the bridge's coerced dispositions and the Copilot follow-up target", async () => {
+  await withTempDir(async (tempDir) => {
+    const { written } = await postAfterJudgePassLedgerOut(tempDir, { copilotBody: true, coerce: true });
+    const log = JSON.parse(await readFile(written.path, "utf8"));
+    assert.equal(log.findings[0].judgeDisposition, "reject");
+    assert.equal(log.findings[2].followUpIssueNumber, 99);
+    assert.equal(log.findings.length, 3);
+  }, { prefix: "dev-loops-act-list-coerce-" });
+});
