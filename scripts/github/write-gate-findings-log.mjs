@@ -725,6 +725,9 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
   if (options.findings !== undefined && options.findingsFile !== undefined) {
     throw parseError("--findings and --findings-file are mutually exclusive; pass only one");
   }
+  if (options.rejudgeSameRound && (options.judgeVerdict !== undefined || options.specAuthority !== undefined)) {
+    throw parseError("--rejudge-same-round does not accept --judge-verdict or --spec-authority; only the findings are compared (rejudge-input-unsupported)");
+  }
   if (options.emitPlan !== undefined && options.provenance === undefined) {
     throw parseError("--emit-plan requires --provenance so the emitted units have caller-supplied provenance to validate");
   }

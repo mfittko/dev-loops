@@ -14,7 +14,8 @@ contentDigest); the criterion set is the union of the decisions' checkedCriteria
 remedy needs defectClass and siteQuery; remedyKind "evidence_only" or "pr_body" (a PR-body-only remedy) needs neither.
 Exit 0 and print { ok: true, checked } when every decision is valid. Otherwise print
 { ok: false, error, decisionIndex?, code?, field? } and exit 1. decisionIndex names the failing
-decision; code and field appear only when a valid_compliant decision lacks defectClass or siteQuery.
+decision; code and field appear only when a valid_compliant decision lacks defectClass or siteQuery,
+or carries a remedyKind outside evidence_only and pr_body.
 
 ${JQ_OUTPUT_USAGE}`;
 

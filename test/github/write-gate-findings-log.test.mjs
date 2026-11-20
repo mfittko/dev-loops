@@ -105,6 +105,13 @@ test("parseWriteGateFindingsLogCliArgs parses --rejudge-same-round and defaults 
   assert.equal(parseWriteGateFindingsLogCliArgs(argv).rejudgeSameRound, undefined);
 });
 
+test("parseWriteGateFindingsLogCliArgs refuses --judge-verdict and --spec-authority with --rejudge-same-round", () => {
+  const argv = ["--repo", "owner/repo", "--pr", "42", "--gate", "draft_gate", "--head-sha", "abc1234567890abcdef000000000000000000000", "--verdict", "clean", "--findings", "[]", "--rejudge-same-round"];
+  for (const extra of [["--judge-verdict", "j.json"], ["--spec-authority", "s.json"]]) {
+    assert.throws(() => parseWriteGateFindingsLogCliArgs([...argv, ...extra]), /rejudge-input-unsupported/);
+  }
+});
+
 test("parseWriteGateFindingsLogCliArgs keeps --emit-plan optional and requires provenance when supplied", () => {
   assert.throws(() => parseWriteGateFindingsLogCliArgs([
     "--repo", "owner/repo",
@@ -4055,7 +4062,7 @@ test("a --rejudge-same-round write keeps every stamped field of the live ledger 
   try {
     const { write, live } = await writeRejudgeFixture(dir);
     const stamped = JSON.parse(await readSealed(live.path));
-    Object.assign(stamped, { specAuthority: { specDigest: "d1", headSha: REJUDGE_HEAD, contentDigest: "c1", checkedCriteria: ["ac:1"] }, scopeDrift: { verdict: "none" }, provenance: { executionMode: "fanout", perAngle: {} }, loggedAt: "2026-01-01T00:00:00.000Z" });
+    Object.assign(stamped, { roundIdentity: { roundId: "r1-ab", judgeExecution: "j1-ab", completed: true }, specAuthority: { specDigest: "d1", headSha: REJUDGE_HEAD, contentDigest: "c1", checkedCriteria: ["ac:1"] }, scopeDrift: { verdict: "none" }, provenance: { executionMode: "fanout", perAngle: {} }, loggedAt: "2026-01-01T00:00:00.000Z" });
     await writeSealed(live.path, JSON.stringify(stamped, null, 2) + "\n");
     await write(REJUDGE_HEAD, [rejudgeFinding("one", { remedyKind: "pr_body" })], { rejudgeSameRound: true });
     const after = JSON.parse(await readSealed(live.path));
