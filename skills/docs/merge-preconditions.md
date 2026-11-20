@@ -90,7 +90,7 @@ failing precondition. Only when every precondition holds does it merge and retur
 `--jq`/`--silent` base-CLI contract. It reuses `detect-checkpoint-evidence` for the
 draft_gate / current-head pre_approval_gate / threads / runner-lock / fan-out-provenance set.
 
-- `--check` is a read-only mode (issue #2500). It runs the full precondition set (a spike PR refuses at `spike_pr` alone, before the rest) and never merges, comments or writes (a stale ADR waiver is reported, not re-issued). It prints `mergeClass` (`drain` or `escalated`), `approvalPath` (`standing_authorization`, `human_review` or `comment_marker`), the exact `approveMergeLine` (`approve merge <headSha>`) for `comment_marker`, `sizeClass`, and every failing precondition. It exits 0 whenever the preconditions could be evaluated; `ok: false` carries the failures. A config load error still refuses `--check` with a nonzero exit and the stderr refusal JSON. `--human-approved-by` is optional with `--check`. Only the orchestrator runs it: the Bash gate denies every subagent command that names `merge-pr`. Without `--human-approved-by` the approval path assumes no approval exists, because the report cannot see approvals by other logins; the output carries `approverAssumed: true`. When gate evidence is unreadable or belongs to another head, `sizeClass` is `null`. When the evidence belongs to another head or lacks the size outcome or the T1 fact, `--check` reports `mergeClass`, `approvalPath` and `approveMergeLine` as `null`, and `mergeClass` stays `escalated` only when `--stable-release` forces it. A refused non-check run on an escalated PR carries the same `mergeClass`, `approvalPath`, `approveMergeLine` and `sizeClass` fields.
+- `--check` is a read-only mode (issue #2500). It runs the full precondition set (a spike PR refuses at `spike_pr` alone, before the rest) and never merges, comments or writes (a stale ADR waiver is reported, not re-issued). It prints `mergeClass` (`drain` or `escalated`), `approvalPath` (`standing_authorization`, `human_review` or `comment_marker`), the exact `approveMergeLine` (`approve merge <headSha>`, with ` patch-id <patchId>` appended when the head contains `origin/<base>`) for `comment_marker`, `approvalMatch` (`head`, `patch_id` or `null`, next to `approvalVia`), `sizeClass`, and every failing precondition. It exits 0 whenever the preconditions could be evaluated; `ok: false` carries the failures. A config load error still refuses `--check` with a nonzero exit and the stderr refusal JSON. `--human-approved-by` is optional with `--check`. Only the orchestrator runs it: the Bash gate denies every subagent command that names `merge-pr`. Without `--human-approved-by` the approval path assumes no approval exists, because the report cannot see approvals by other logins; the output carries `approverAssumed: true`. When gate evidence is unreadable or belongs to another head, `sizeClass` is `null`. When the evidence belongs to another head or lacks the size outcome or the T1 fact, `--check` reports `mergeClass`, `approvalPath` and `approveMergeLine` as `null`, and `mergeClass` stays `escalated` only when `--stable-release` forces it. A refused non-check run on an escalated PR carries the same `mergeClass`, `approvalPath`, `approveMergeLine` and `sizeClass` fields.
 - The approval gate reads only submitted reviews (`SUBMITTED_REVIEW_STATES`), through the same projection `detect-checkpoint-evidence` uses, so a later PENDING draft never shadows an earlier APPROVED review.
 - After a confirmed merge the wrapper posts a merge record comment on the PR naming `approvalVia`, the approver login and the merged head SHA. The comment has no `approve merge` line. It is fail-soft: a failure changes neither `ok`, `merged` nor the exit code.
 - The wrapper includes the `adr_tripwire` precondition: the ADR tripwire must pass at the PR head, and a stale head-pinned waiver is re-issued in-process through `waive-adr-tripwire`.
@@ -117,12 +117,21 @@ draft_gate / current-head pre_approval_gate / threads / runner-lock / fan-out-pr
 - **Fresh per-merge approval** is verified against an agent-unforgeable, head-pinned
   record, in preference order: a genuine `APPROVED` review by `<login>` on the current
   head SHA (a Copilot/bot review never satisfies it), else a head-pinned operator comment
-  marker `approve merge <headSha>` authored by `<login>`. No agent writes that marker:
+  marker `approve merge <headSha>` authored by `<login>`. The marker may carry a
+  suffix, `approve merge <headSha> patch-id <patchId>`. When the PR head contains
+  `origin/<base>` and no head-pinned record matches, a marker by `<login>` whose
+  `<patchId>` equals the current patch-id also satisfies it, so a base-only head change (a base merge) keeps the approval (ADR 0279).
+  The only supported source of the id is the `approveMergeLine` that `merge-pr --check` prints. The id is the
+  first token of `git patch-id --verbatim` over a diff with pinned git options (the exact command is in ADR 0279).
+  Whitespace and binary changes count. A change to the added or removed lines or to their three context lines changes the id.
+  When the head does not contain the base, the wrapper computes no patch-id and only a
+  head match counts. A review approval stays head-only. The result reports
+  `approvalMatch` (`head`, `patch_id` or `null`). No agent writes that marker:
   every sanctioned comment writer refuses any body line that opens with `approve merge`, and the gate writers wrap it in a code span in reviewer text
   (`OPERATOR-OWNED-LINE`, no override; the registry and its other lines are in
   [Decision Record Contract](decision-record-contract.md)). The approval check fails closed
-  on a stale (earlier-commit), agent/bot-authored, or wrong-login approval, and re-gates on
-  every head bump. The Copilot `operator` disposition
+  on a stale (earlier-commit, different patch-id), agent/bot-authored, or wrong-login approval, and re-gates on
+  every head bump that changes the patch-id. The Copilot `operator` disposition
   record that clears `copilot_convergence` follows the actor policy of
   `COPILOT-STATE-BODY-DISPOSITION-RECORD`: subagents never post it, the orchestrator posts it
   only through a comment wrapper with `--standing-authorization`, and the human may always post
@@ -353,8 +362,11 @@ alone is never sufficient for these PRs.
   **Fresh per-merge approval** bullet above), fed in as `humanApprovalSatisfied`. It
   accepts only the designated approver (the `--human-approved-by <login>` passed to the
   merge wrapper): a genuine `APPROVED` review on the current head SHA, or, on the
-  solo-owner path, a head-pinned `approve merge <headSha>` comment. Any other login, a
-  Copilot/bot author, or a stale approval never satisfies it.
+  solo-owner path, a head-pinned `approve merge <headSha>` comment, or a
+  `approve merge <sha> patch-id <patchId>` marker whose `<patchId>` equals the current
+  patch-id when the head contains `origin/<base>` (ADR 0279), so a base-only refresh
+  keeps it. Any other login, a Copilot/bot author, or a stale approval that matches
+  neither the head nor the patch-id never satisfies it.
   `resolveHumanReviewDecision` (same module, `reviewDecision === "APPROVED"`) is only a
   back-compat fallback for the queue-driver caller; the production `merge-pr.mjs` wiring
   (`evaluateMergePreconditions`) always uses the shared resolver.

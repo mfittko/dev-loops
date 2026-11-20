@@ -1,16 +1,16 @@
-// Claude PreToolUse Bash gate (`ADR-TRIPWIRE-STANDING-WAIVER`): the hook owns an allow-by-default
-// non-match path — a command shape its quick pre-check list does not name reaches `emitAllow()` and exits
-// before the shared `decideBashGate` ever runs. A deny the decider implements is therefore
-// UNREACHABLE on Claude, and fails open, until the pre-check nominates its shape.
-//
-// This suite drives the REAL hook script (the harness `test/loop/fixer-pull-line-hook.test.mjs`
-// mirrors) for the two actor-independent denies the pre-check used to leave unnamed:
+// Claude PreToolUse Bash gate: this suite drives the REAL hook script (the harness
+// `test/loop/fixer-pull-line-hook.test.mjs` mirrors). The hook holds no command list of its own: the
+// shared `decideBashGate` and the token rules in the hook decide every command, and a deny the decider
+// implements must be reachable from the hook.
+// Covered here:
 //   - `ADR-TRIPWIRE-STANDING-WAIVER`: raw `gh pr edit` body writes and `gh api` body writes to
-//     `pulls/<n>`/`issues/<n>` — including either shape behind any process wrapper, which the
+//     `pulls/<n>`/`issues/<n>`, including either shape behind any process wrapper, which the
 //     whole-command token rule (`gh`, `pr`, `edit|create` and a body flag, or `gh`, `api` and a body
-//     field or `--input`) reads without a wrapper parser — and
-//   - the `timeout N <sanctioned command>` wrapper.
-// Both apply to EVERY Claude actor, so each is asserted for the operator/main-agent payload
+//     field or `--input`) reads without a wrapper parser;
+//   - the `timeout N <sanctioned command>` wrapper;
+//   - `OPERATOR-OWNED-LINE`: raw comment and review writes, denied with the comment reason;
+//   - one fixture per deny branch of `decideBashGate`, asserting the hook returns the decider's result.
+// Each deny applies to EVERY Claude actor, so it is asserted for the operator/main-agent payload
 // (Claude exposes `agent_type` only inside a subagent, so its absence IS the main agent) and for
 // every worker role.
 import assert from "node:assert/strict";
@@ -31,10 +31,10 @@ const env = () => {
   return base;
 };
 
-const bash = (cwd, command, agentType) => {
+const bash = (cwd, command, agentType, extraEnv) => {
   const input = { tool_name: "Bash", tool_input: { command }, cwd };
   if (agentType !== undefined) input.agent_type = agentType;
-  const result = spawnSync("node", [BASH_HOOK], { input: JSON.stringify(input), encoding: "utf8", env: env() });
+  const result = spawnSync("node", [BASH_HOOK], { input: JSON.stringify(input), encoding: "utf8", env: { ...env(), ...extraEnv } });
   assert.equal(result.status, 0, result.stderr);
   const out = result.stdout.trim() ? JSON.parse(result.stdout).hookSpecificOutput : null;
   return { decision: out?.permissionDecision ?? "allow", reason: out?.permissionDecisionReason ?? "" };
@@ -80,7 +80,7 @@ for (const command of [
   "gh api -X PATCH repos/o/r/issues/5 --field body=x",
   "gh api -X PATCH repos/o/r/pulls/5 --input body.json",
   "gh api graphql -f query=mutation{updatePullRequest}",
-  // A wrapper prefix must not hide the shape from the pre-check. The hook has no wrapper parser:
+  // A wrapper prefix must not hide the shape. The hook has no wrapper parser:
   // the whole-command token rule reads every token, so any wrapper spelling reaches the deny.
   "timeout 300 gh pr edit 5 --body-file waiver.md",
   // An unplaceable wrapper option or duration changes nothing: the token rule ignores the wrapper.
@@ -180,9 +180,9 @@ for (const command of [
   });
 }
 
-test("non-body writes and reads remain allowed by the pre-check", async () => {
+test("non-body writes and reads remain allowed", async () => {
   await withManagedRepo(async (root) => {
-    // Naming the shapes must not turn the pre-check into a blanket deny: a read that merely
+    // Naming the shapes must not turn the token rules into a blanket deny: a read that merely
     // mentions a body, the sanctioned launcher writer, and the wrapper prefix in front of either
     // still pass through. (A wrapped *sanctioned* command is a separate deny, owned by the
     // `timeout N <sanctioned command>` rule, so it is asserted in the suite below.)
@@ -246,7 +246,7 @@ test("timeout-wrapped sanctioned commands are denied for every Claude actor", as
 test("both denies stay scoped to a managed repo, and the resolved-slug API form is covered", async () => {
   const bodyWrite = "gh api -X PATCH repos/acme/widgets/pulls/5 -f body=x";
   const timeoutWrap = "timeout 300 dev-loops-run scripts/github/merge-pr.mjs --repo acme/widgets --pr 5";
-  // Neither deny is a local command boundary: outside a dev-loops-managed repo the pre-check must
+  // Neither deny is a local command boundary: outside a dev-loops-managed repo the hook must
   // keep allowing them, or this change would widen the gate beyond its rule scope.
   await withRepo(async (root) => {
     for (const command of [bodyWrite, timeoutWrap, "gh pr edit 5 --body x"]) {
@@ -337,3 +337,187 @@ test("a quoted body-write word inside a command substitution still denies", asyn
     }
   });
 });
+
+// Raw comment and review writes (`OPERATOR-OWNED-LINE`): the sanctioned writers refuse an
+// operator-owned line, a raw write does not, so the token rule denies the write for every actor.
+const MERGE_APPROVAL = "approve merge 0123456789abcdef0123456789abcdef01234567";
+const COMMENT_ACTORS = [undefined, "developer", "dev-loop", "fixer"];
+const COMMENT_WRITES = [
+  ...["--body", "-b", "--body-file", "-F"].flatMap((flag) => [`gh pr comment 5 ${flag} '${MERGE_APPROVAL}'`, `gh issue comment 5 ${flag} '${MERGE_APPROVAL}'`]),
+  `sh -c "gh pr comment 5 --body '${MERGE_APPROVAL}'"`,
+  `bash -c 'gh issue comment 5 -b "${MERGE_APPROVAL}"'`,
+  `echo $(gh pr comment 5 --body '${MERGE_APPROVAL}')`,
+  `for n in 5 6; do gh pr comment $n --body '${MERGE_APPROVAL}'; done`,
+  `timeout 60 gh pr comment 5 --body '${MERGE_APPROVAL}'`,
+  `env GH_TOKEN=x gh pr comment 5 -F note.md`,
+  "gh pr review 5 --comment -b 'x'",
+  "gh pr review 5 --comment --body-file note.md",
+  `sh -c "gh pr review 5 --comment -b '${MERGE_APPROVAL}'"`,
+  "gh issue close 5 --comment x",
+  "gh pr reopen feat/zsh -c x",
+  "gh pr reopen zsh -c x",
+  "gh issue close bash -c x",
+  // A backslash-newline continuation joins `-` and `c` into the flag `-c`.
+  "gh issue close 5 -\\\nc x",
+  "gh pr close 5 -\\\nc x",
+  "gh pr reopen 5 -\\\nc x",
+  "gh issue reopen 5 --com\\\nment x",
+  // An ANSI-C quoted `-c` exists only in the decoded words, so any `$'` word in a gh command is denied.
+  "gh pr reopen zsh $'\\x2dc' x",
+  "gh pr reopen zsh $'\\055c' x",
+  "gh pr reopen zsh -$'c' x",
+  "gh pr reopen sh $'\\x2d\\x63' x",
+  "gh issue close bash $'\\x2dc' x",
+  "gh issue close bash $'\\055c' x",
+  "gh issue close bash $'\\x2d\\x63' x",
+  "gh pr close bash $'\\x2dc' x",
+  "gh pr reopen /bin/zsh $'\\x2dc' x",
+  // Any ANSI-C word in a gh command is denied, including the last position and a flag glued to its value.
+  "gh pr reopen 5 $'\\x2dcbody'",
+  "gh pr reopen 5 $'\\x2dcAPPROVED'",
+  "gh pr $'\\x72eopen' 5 $'\\x2dc' x",
+  "gh issue $'\\x63lose' 5 $'\\x2dc' x",
+  "eval gh pr reopen 5 \\$\\'\\\\x2dc\\' x",
+  `eval gh pr reopen 5 "$"\\'"\\x2dc"\\' x`,
+  // The only decoded `gh` sits in an appended region (nested `$'` or tick text), after the outer shell word.
+  `eval "\\$'\\x67h'" pr reopen zsh $'\\x2dc' x`,
+  `G=gh; eval "\\$G pr reopen zsh $'\\x2dc' x"; echo "$'gh'"`,
+  "echo `\\gh` pr reopen zsh $'\\x2dc' x",
+  // A double-quoted shell string keeps `$'...'` literal for the inner shell to decode.
+  `bash -c "gh pr reopen 5 $'\\x2dc' x"`,
+  `bash -c "gh pr comment 5 $'\\x2d\\x2dbody' x"`,
+  `sh -c "gh pr reopen zsh $'\\x2dc' x"`,
+  "gh issue reopen 5 -c x",
+  "gh pr close 5 -c x",
+  "gh pr reopen 5 --comment x",
+  "gh issue close 5 -cx",
+  "gh pr reopen 5 -c'text'",
+  "gh pr close 5 -dc x",
+  `sh -c "gh issue close 5 -c x"`,
+  `sh -c "gh pr reopen sh -c x"`,
+  // GH_EDITOR can supply the body through the editor flag.
+  'GH_EDITOR="cp body.md" gh pr comment 5 -e',
+  "gh issue comment 5 --editor",
+  "gh issue comment 5 --edit-last",
+  `gh api graphql -f query='mutation { addComment(input: {subjectId: "X", body: "${MERGE_APPROVAL}"}) { clientMutationId } }'`,
+  `gh api graphql -f query='mutation($body:String!){addComment(input:{subjectId:"X",body:$body}){clientMutationId}}' -f body='${MERGE_APPROVAL}'`,
+  `sh -c "gh api graphql -f query='mutation { addComment(input: {subjectId: \\"X\\", body: \\"x\\"}) { clientMutationId } }'"`,
+  "gh api graphql -f query='mutation { addPullRequestReview(input: {pullRequestId: \"X\"}) { clientMutationId } }'",
+  // The REST issue comment forms and graphql updateIssueComment get the comment reason too.
+  `sh -c "gh api repos/o/r/issues/5/comments -f body=x"`,
+  `sh -c "gh api -X PATCH repos/o/r/issues/comments/9 -f body=x"`,
+  `sh -c "gh api repos/o/r/issues/5/comments --input f.json"`,
+  `gh api graphql -f query='mutation { updateIssueComment(input: {id: "X", body: "x"}) { clientMutationId } }'`,
+];
+for (const command of COMMENT_WRITES) {
+  test(`raw comment or review write is denied for the main agent and subagents: ${command}`, async () => {
+    await withManagedRepo(async (root) => {
+      for (const agentType of COMMENT_ACTORS) {
+        const { decision, reason } = bash(root, command, agentType);
+        assert.equal(decision, "deny", `${command} as ${agentType ?? "main agent"}`);
+        assert.match(reason, /OPERATOR-OWNED-LINE[\s\S]*comment-issue\.mjs/, `${command} as ${agentType ?? "main agent"}`);
+      }
+    });
+  });
+}
+
+test("PR body edits, graphql updatePullRequest and PR review comment writes keep the body reason", async () => {
+  await withManagedRepo(async (root) => {
+    for (const command of [
+      "gh pr edit 5 --body x",
+      "gh pr edit 5 --body $'a\\nb'",
+      `gh api graphql -f query='mutation { updatePullRequest(input: {pullRequestId: "X", body: "x"}) { clientMutationId } }'`,
+      "gh api repos/o/r/pulls/5/comments -f body=x",
+    ]) {
+      const { decision, reason } = bash(root, command, undefined);
+      assert.equal(decision, "deny", command);
+      assert.match(reason, /ADR-TRIPWIRE-STANDING-WAIVER/, command);
+    }
+  });
+});
+
+test("sanctioned comment writers and reads stay allowed; an unmanaged repo is unchanged", async () => {
+  await withManagedRepo(async (root) => {
+    for (const command of [
+      "dev-loops-run scripts/github/comment-issue.mjs --repo o/r --issue 5 --body-file x.md",
+      "node scripts/github/edit-comment.mjs --repo o/r --comment-id 9 --body-file x.md",
+      "gh pr view 5 --json comments",
+      "gh issue close 5",
+      'sh -c "gh issue close 5"',
+      "bash -c 'gh issue close 5'",
+      "/bin/bash -c 'gh issue close 5'",
+      'bash -c "gh pr view 5 --json comments"',
+      "gh issue close 5 --reason completed",
+      "x=$(tr $'\\n' ' ' < f)",
+      "echo $(printf $'\\t') `tr $'\\n' ' ' < f`",
+      "gh pr view 5 --jq $'.title'",
+      "gh pr list --json number | tr $'\\n' ' '",
+      "git commit -m $'fix gh pr view\\nbody'",
+      "git status",
+    ]) {
+      for (const agentType of [undefined, "developer"]) assert.equal(bash(root, command, agentType).decision, "allow", command);
+    }
+  });
+  await withRepo(async (root) => {
+    assert.equal(bash(root, "gh pr comment 5 --body x", undefined).decision, "allow");
+  }, { managed: false });
+});
+
+test("a payload without a command string reaches the single allow", async () => {
+  await withManagedRepo(async (root) => {
+    const result = spawnSync("node", [BASH_HOOK], { input: JSON.stringify({ tool_name: "Bash", tool_input: {}, cwd: root }), encoding: "utf8", env: env() });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim() ? JSON.parse(result.stdout).hookSpecificOutput.permissionDecision : "allow", "allow");
+  });
+});
+
+test("the hook entry point holds no second predicate list", () => {
+  const source = fs.readFileSync(BASH_HOOK, "utf8");
+  const classifierNames = [...source.replace(/\/\*\*[\s\S]*?\*\//, "").matchAll(/\bcommandContains\w+/g)].map((m) => m[0]);
+  assert.deepEqual([...new Set(classifierNames)], ["commandContainsGhPrMerge"]);
+  const allows = [...source.matchAll(/emitAllow\(\)/g)];
+  assert.equal(allows.length, 1);
+  assert.ok(source.trimEnd().endsWith("emitAllow();"));
+  assert.ok(allows[0].index > source.indexOf("decideBashGate(bashGateFacts)"));
+});
+
+// Every deny branch of `decideBashGate` must be reachable from the hook: the hook's reason equals the
+// decider's reason for the same facts.
+const DENY_BRANCHES = {
+  judge: ["ls", "judge"],
+  "fixer pull line": ["cd x && dev-loops-run scripts/github/pull-work-order.mjs f1-0123abcd", "fixer"],
+  "coordinator verify": ["bun test", "dev-loop", { DEVLOOPS_COORDINATOR_READONLY: "1" }],
+  "coordinator verify (gate-coordinator)": ["bun test", "gate-coordinator", { DEVLOOPS_COORDINATOR_READONLY: "1" }],
+  "inline interpreter": ["python3 -c 'print(1)'"],
+  "detached wait": ["nohup sleep 5 &"],
+  "timeout wrapper": ["timeout 300 dev-loops-run scripts/github/merge-pr.mjs --repo o/r --pr 5"],
+  "sub-issue write": ["gh api -X POST repos/o/r/issues/5/sub_issues -F sub_issue_id=9"],
+  "reply/resolve bypass": ["gh api -X POST repos/o/r/pulls/5/comments/9/replies -f body=x"],
+  "copilot request bypass": ["gh api -X POST repos/o/r/pulls/5/requested_reviewers -f 'reviewers[]=copilot'"],
+  "copilot summon comment": ["gh pr comment 5 --body '/copilot re-review'"],
+  "raw body write": ["gh pr edit 5 --body-file x.md"],
+  "git stash": ["git stash"],
+  "subagent raw external write": ["gh issue create --title x", "developer"],
+  "gh pr create": ["gh pr create --title x"],
+  "gh pr ready": ["gh pr ready 5"],
+  "gh pr ready without a number": ["gh pr ready"],
+  "gh pr merge without a number": ["gh pr merge", undefined, undefined, { humanMergeOnly: false }],
+  "raw merge bypass": ["gh pr merge 5 --squash", undefined, undefined, { humanMergeOnly: false }],
+  "graphql resolveReviewThread": ["gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:\"x\"}){clientMutationId}}'"],
+  "human-merge-only merge": ["gh pr merge 5 --squash"],
+  "unresolve owner allowlist": ["dev-loops-run scripts/github/unresolve-review-thread.mjs --pr 5", "developer"],
+};
+for (const [branch, [command, agentType, extraEnv, { humanMergeOnly = branch === "human-merge-only merge" } = {}]] of Object.entries(DENY_BRANCHES)) {
+  test(`decideBashGate deny branch is reachable from the hook: ${branch}`, async () => {
+    const { decideBashGate } = await import(path.resolve(".claude/hooks/_hook-decisions.mjs"));
+    await withManagedRepo(async (root) => {
+      if (/merge/.test(command) && !humanMergeOnly) fs.writeFileSync(path.join(root, ".devloops"), "version: 1\nautonomy:\n  humanMergeOnly: false\n", "utf8");
+      const expected = decideBashGate({
+        command, agentType: agentType ?? null, inManagedContext: true,
+        enforceCoordinator: extraEnv?.DEVLOOPS_COORDINATOR_READONLY === "1", humanMergeOnly,
+      });
+      assert.equal(expected.decision, "deny", `decider must deny ${command}`);
+      assert.deepEqual(bash(root, command, agentType, extraEnv), expected);
+    });
+  });
+}

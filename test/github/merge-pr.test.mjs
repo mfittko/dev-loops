@@ -1,6 +1,6 @@
 import { test, mock } from "bun:test";
 import assert from "node:assert/strict";
-import { mergePr, parseMergePrCliArgs, main, defaultReadMergeDiff, defaultIsAncestor, defaultFetchPrHead, buildDetectEvidenceArgv, defaultPostMergeComment } from "../../scripts/github/merge-pr.mjs";
+import { mergePr, parseMergePrCliArgs, main, defaultReadMergeDiff, defaultIsAncestor, defaultComputePatchId, defaultFetchPrHead, buildDetectEvidenceArgv, defaultPostMergeComment } from "../../scripts/github/merge-pr.mjs";
 import { runChild } from "../../scripts/_cli-primitives.mjs";
 import { captureStream } from "../_helpers.mjs";
 import { scanDiffText } from "@dev-loops/core/security/secret-scan";
@@ -125,6 +125,7 @@ function makeRuntime({
       fetchPrHead: () => {},
       postMergeComment: async (c) => { calls.comments.push(c); },
       isAncestor: () => true,
+      computePatchId: () => null,
       detectOriginSlug: () => "mfittko/dev-loops",
       evaluateAdrTripwire: async () => ({ outcome: "pass" }),
       readMergeDiff: () => "",
@@ -1353,7 +1354,8 @@ test("base_not_integrated refuses a head that does not contain origin/<base> and
   const asked = [];
   runtime.isAncestor = (opts) => { asked.push({ base: opts.base, head: opts.head }); return false; };
   await assert.rejects(() => mergePr(baseOptions(), runtime), /base_not_integrated \(.*GATE-EXEC-BASE-REFRESH/);
-  assert.deepEqual(asked, [{ base: "origin/main", head: HEAD }]);
+  // One read before the evidence (patch-id gate), one for the refusal after the ADR step.
+  assert.deepEqual(asked, [{ base: "origin/main", head: HEAD }, { base: "origin/main", head: HEAD }]);
   assert.equal(mergeCalls(calls).length, 0);
 
   const ok = makeRuntime({ prView: { baseRefName: "main" } });
@@ -1411,6 +1413,117 @@ test("defaultIsAncestor answers true, false, and throws on a bad ref in a real r
   }
 });
 
+test("defaultComputePatchId counts whitespace and binary changes and survives a base-only refresh", () => {
+  const dir = mkdtempSync(join(tmpdir(), "patch-id-"));
+  try {
+    const git = (...args) => runGitFixture(dir, ["-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@t", ...args]);
+    const commitFile = (name, content, msg) => { writeFileSync(join(dir, name), content); git("add", name); git("commit", "-q", "-m", msg); };
+    git("init", "-q", "-b", "main");
+    commitFile("a.txt", "x\n", "base");
+    git("update-ref", "refs/remotes/origin/main", "HEAD");
+    const idAt = (branch, name, content) => {
+      git("checkout", "-q", "-B", branch, "refs/remotes/origin/main");
+      commitFile(name, content, branch);
+      return defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir });
+    };
+    const spaced = idAt("ws1", "f.txt", "a b\n");
+    const unspaced = idAt("ws2", "f.txt", "a  b\n");
+    const binA = idAt("bin1", "f.bin", Buffer.from([0, 1, 2, 3]));
+    const binB = idAt("bin2", "f.bin", Buffer.from([0, 1, 2, 4]));
+    assert.ok(spaced && unspaced && binA && binB);
+    assert.notEqual(spaced, unspaced);
+    assert.notEqual(binA, binB);
+    git("checkout", "-q", "ws1");
+    const before = defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir });
+    git("checkout", "-q", "-B", "other", "refs/remotes/origin/main");
+    commitFile("other.txt", "o\n", "base-only");
+    git("update-ref", "refs/remotes/origin/main", "HEAD");
+    git("checkout", "-q", "ws1");
+    git("merge", "-q", "--no-edit", "origin/main");
+    assert.equal(defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir }), before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("defaultComputePatchId binds position and bytes, ignores local diff config and fails closed", () => {
+  const dir = mkdtempSync(join(tmpdir(), "patch-id-"));
+  try {
+    const git = (...args) => runGitFixture(dir, ["-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@t", ...args]);
+    const commitFile = (name, content, msg) => { writeFileSync(join(dir, name), content); git("add", name); git("commit", "-q", "-m", msg); };
+    git("init", "-q", "-b", "main");
+    commitFile("f.js", "function a() {\n  check();\n}\nfunction b() {\n  check();\n}\n", "base");
+    git("update-ref", "refs/remotes/origin/main", "HEAD");
+    const idAt = (branch, name, content) => {
+      git("checkout", "-q", "-B", branch, "refs/remotes/origin/main");
+      commitFile(name, content, branch);
+      return defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir });
+    };
+    const inA = idAt("in-a", "f.js", "function a() {\n  check();\n  return true;\n}\nfunction b() {\n  check();\n}\n");
+    const inB = idAt("in-b", "f.js", "function a() {\n  check();\n}\nfunction b() {\n  check();\n  return true;\n}\n");
+    assert.ok(inA && inB);
+    assert.notEqual(inA, inB, "relocating an added line changes the id");
+    const latinE9 = idAt("l1", "l.txt", Buffer.from([0x63, 0x61, 0xe9, 0x0a]));
+    const latinE8 = idAt("l2", "l.txt", Buffer.from([0x63, 0x61, 0xe8, 0x0a]));
+    assert.notEqual(latinE9, latinE8, "two non-UTF-8 bytes give distinct ids");
+    git("checkout", "-q", "in-a");
+    const plain = defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir });
+    git("config", "diff.noprefix", "true");
+    assert.equal(defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir }), plain, "diff.noprefix leaves the id unchanged");
+    writeFileSync(join(dir, ".gitattributes"), "*.js -diff\n");
+    assert.equal(defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir }), plain, "an uncommitted working-tree .gitattributes leaves the id unchanged");
+    mkdirSync(join(dir, ".git", "info"), { recursive: true });
+    writeFileSync(join(dir, ".git", "info", "attributes"), "*.js -diff\n");
+    assert.equal(defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir }), plain, "a local info/attributes line leaves the id unchanged");
+    const tpl = join(dir, "tpl");
+    mkdirSync(join(tpl, "info"), { recursive: true });
+    writeFileSync(join(tpl, "info", "attributes"), "*.js -diff\n");
+    const prevTpl = process.env.GIT_TEMPLATE_DIR;
+    process.env.GIT_TEMPLATE_DIR = tpl;
+    try {
+      assert.equal(defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir }), plain, "an init template with info/attributes leaves the id unchanged");
+    } finally {
+      if (prevTpl === undefined) delete process.env.GIT_TEMPLATE_DIR; else process.env.GIT_TEMPLATE_DIR = prevTpl;
+    }
+    assert.equal(defaultComputePatchId({ base: "origin/no-such-ref", head: "HEAD", repoRoot: dir }), null, "a git error fails closed");
+    const gitlinkId = (branch, sha) => {
+      git("checkout", "-q", "-B", branch, "refs/remotes/origin/main");
+      git("update-index", "--add", "--cacheinfo", `160000,${sha},sub`);
+      git("commit", "-q", "-m", branch);
+      return defaultComputePatchId({ base: "origin/main", head: "HEAD", repoRoot: dir });
+    };
+    const prevEnv = { c: process.env.GIT_CONFIG_COUNT, k: process.env.GIT_CONFIG_KEY_0, v: process.env.GIT_CONFIG_VALUE_0 };
+    Object.assign(process.env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "diff.ignoreSubmodules", GIT_CONFIG_VALUE_0: "all" });
+    try {
+      const g1 = gitlinkId("g1", "1".repeat(40));
+      const g2 = gitlinkId("g2", "2".repeat(40));
+      assert.ok(g1 && g2);
+      assert.notEqual(g1, g2, "a gitlink-only change keeps distinct ids under an injected diff.ignoreSubmodules=all");
+    } finally {
+      for (const [name, value] of [["GIT_CONFIG_COUNT", prevEnv.c], ["GIT_CONFIG_KEY_0", prevEnv.k], ["GIT_CONFIG_VALUE_0", prevEnv.v]]) {
+        if (value === undefined) delete process.env[name]; else process.env[name] = value;
+      }
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildDetectEvidenceArgv adds --patch-id only for a non-empty patchId, and mergePr forwards the computed id", async () => {
+  const id = "c".repeat(40);
+  const argv = buildDetectEvidenceArgv({ repo: "o/r", pr: 5, patchId: id });
+  assert.deepEqual(argv.slice(-2), ["--patch-id", id]);
+  assert.equal(buildDetectEvidenceArgv({ repo: "o/r", pr: 5, patchId: null }).includes("--patch-id"), false);
+  assert.equal(buildDetectEvidenceArgv({ repo: "o/r", pr: 5, patchId: "" }).includes("--patch-id"), false);
+  const { runtime } = makeRuntime({ evidence: ESCALATED_EVIDENCE, comments: [] });
+  const seen = [];
+  const detect = runtime.detectEvidence;
+  runtime.detectEvidence = async (opts) => { seen.push(opts.patchId); return detect(opts); };
+  runtime.computePatchId = () => id;
+  await mergePr(baseOptions({ standingAuthorization: false }), runtime).catch(() => {});
+  assert.deepEqual(seen, [id]);
+});
+
 test("defaultFetchPrHead fetches the base with an explicit refspec so a restricted remote.origin.fetch cannot leave a stale ref", () => {
   const calls = [];
   defaultFetchPrHead({ pr: 7, baseRefName: "main", repoRoot: "/repo" }, (cmd, args) => { calls.push([cmd, ...args]); });
@@ -1434,14 +1547,14 @@ test("ancestry is rechecked after the ADR tripwire base refresh", async () => {
   assert.equal(mergeCalls(calls).length, 0);
 });
 
-test("the ancestry check runs once, after the ADR step and the single fetch", async () => {
+test("the refusal ancestry check runs after the ADR step and the single fetch; the patch-id gate reads it right after the fetch", async () => {
   const { runtime } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
   const order = [];
   runtime.fetchPrHead = () => { order.push("fetch"); };
   runtime.evaluateAdrTripwire = async () => { order.push("adr"); return { outcome: "pass" }; };
   runtime.isAncestor = () => { order.push("ancestry"); return true; };
   await mergePr(baseOptions(), runtime);
-  assert.deepEqual(order, ["fetch", "adr", "ancestry"]);
+  assert.deepEqual(order, ["fetch", "ancestry", "adr", "ancestry"]);
 });
 
 test("the evidence detector receives the PR base branch so the cap-fixed proof can be evaluated", async () => {
@@ -1484,6 +1597,57 @@ test("--check on the PR 2630 shape (escalated, no approval comment) reports ever
   for (const expected of ["title_markers", "size_budget_human_approval", "merge_approval", "base_not_integrated"]) assert.ok(names.includes(expected), `${expected} in ${names}`);
   assert.equal(calls.runChild.length, 0, "no merge, comment or write");
   assert.equal(calls.comments.length, 0);
+});
+
+const PATCH_ID = "c".repeat(40);
+test("a patch-id marker approves a changed head when the head contains the base (AC1)", async () => {
+  const { runtime } = makeRuntime({
+    evidence: ESCALATED_EVIDENCE,
+    comments: [{ user: { login: "mfittko" }, body: `approve merge ${OLD_HEAD} patch-id ${PATCH_ID}` }],
+  });
+  runtime.computePatchId = () => PATCH_ID;
+  const result = await mergePr(baseOptions({ standingAuthorization: false }), runtime);
+  assert.equal(result.ok, true);
+  assert.equal(result.approvalVia, "comment_marker");
+  assert.equal(result.approvalMatch, "patch_id");
+});
+
+test("a patch-id marker for a different patch-id is refused with the stale-approval reason (AC2)", async () => {
+  const { runtime } = makeRuntime({
+    evidence: ESCALATED_EVIDENCE,
+    comments: [{ user: { login: "mfittko" }, body: `approve merge ${OLD_HEAD} patch-id ${"d".repeat(40)}` }],
+  });
+  runtime.computePatchId = () => PATCH_ID;
+  const threw = await mergePr(baseOptions({ standingAuthorization: false }), runtime).catch((e) => e);
+  assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "merge_approval" && /no fresh mfittko approval on head/.test(f.reason)));
+});
+
+test("a patch-id marker is refused when the base is not contained (no patch-id computed)", async () => {
+  const { runtime } = makeRuntime({
+    evidence: ESCALATED_EVIDENCE,
+    comments: [{ user: { login: "mfittko" }, body: `approve merge ${OLD_HEAD} patch-id ${PATCH_ID}` }],
+  });
+  runtime.isAncestor = () => false;
+  runtime.computePatchId = () => { throw new Error("must not run"); };
+  const threw = await mergePr(baseOptions({ standingAuthorization: false }), runtime).catch((e) => e);
+  assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "merge_approval"));
+});
+
+test("--check reports approvalMatch and the patch-id approve-merge line (AC4)", async () => {
+  const matched = makeRuntime({
+    evidence: ESCALATED_EVIDENCE,
+    comments: [{ user: { login: "mfittko" }, body: `approve merge ${OLD_HEAD} patch-id ${PATCH_ID}` }],
+  });
+  matched.runtime.computePatchId = () => PATCH_ID;
+  const hit = await mergePr(baseOptions({ check: true, humanApprovedBy: "mfittko", standingAuthorization: false }), matched.runtime);
+  assert.equal(hit.approvalMatch, "patch_id");
+  assert.equal(hit.approveMergeLine, `approve merge ${HEAD} patch-id ${PATCH_ID}`);
+  const head = makeRuntime({ evidence: ESCALATED_EVIDENCE, comments: [{ user: { login: "mfittko" }, body: `approve merge ${HEAD}` }] });
+  const bare = await mergePr(baseOptions({ check: true, humanApprovedBy: "mfittko", standingAuthorization: false }), head.runtime);
+  assert.equal(bare.approvalMatch, "head");
+  const none = makeRuntime({ evidence: ESCALATED_EVIDENCE });
+  const missing = await mergePr(baseOptions({ check: true, humanApprovedBy: "mfittko", standingAuthorization: false }), none.runtime);
+  assert.equal(missing.approvalMatch, null);
 });
 
 test("--check without an approver passes a drain PR under a standing authorization and names the path", async () => {

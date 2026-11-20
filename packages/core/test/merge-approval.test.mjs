@@ -63,6 +63,36 @@ test("verifyFreshHumanApproval: accepts a head-pinned operator comment marker", 
   assert.equal(res.via, "comment_marker");
 });
 
+test("verifyFreshHumanApproval: patch-id marker matches when head differs (matchKind patch_id)", () => {
+  const PID = "c".repeat(40);
+  const OLD = "b".repeat(40);
+  const base = { approvedBy: "mfittko", currentHeadSha: HEAD, currentPatchId: PID };
+  const hit = verifyFreshHumanApproval({ ...base, comments: [{ user: { login: "mfittko" }, body: `approve merge ${OLD} patch-id ${PID}` }] });
+  assert.equal(hit.satisfied, true);
+  assert.equal(hit.via, "comment_marker");
+  assert.equal(hit.matchKind, "patch_id");
+  // different patch-id, no currentPatchId, wrong author and bot author all refuse
+  assert.equal(verifyFreshHumanApproval({ ...base, comments: [{ user: { login: "mfittko" }, body: `approve merge ${OLD} patch-id ${"d".repeat(40)}` }] }).satisfied, false);
+  assert.equal(verifyFreshHumanApproval({ ...base, currentPatchId: null, comments: [{ user: { login: "mfittko" }, body: `approve merge ${OLD} patch-id ${PID}` }] }).satisfied, false);
+  assert.equal(verifyFreshHumanApproval({ ...base, comments: [{ user: { login: "mfittko" }, body: `approve merge ${OLD}\npatch-id ${PID}` }] }).satisfied, false); // a line break never joins the marker
+  assert.equal(verifyFreshHumanApproval({ ...base, comments: [{ user: { login: "eve" }, body: `approve merge ${OLD} patch-id ${PID}` }] }).satisfied, false);
+  assert.equal(verifyFreshHumanApproval({ ...base, comments: [{ user: { login: "x[bot]" }, body: `approve merge ${OLD} patch-id ${PID}` }] }).satisfied, false);
+  // a head match, bare or with a suffix, stays matchKind head
+  assert.equal(verifyFreshHumanApproval({ ...base, comments: [{ user: { login: "mfittko" }, body: `approve merge ${HEAD}` }] }).matchKind, "head");
+  assert.equal(verifyFreshHumanApproval({ ...base, comments: [{ user: { login: "mfittko" }, body: `approve merge ${HEAD} patch-id ${PID}` }] }).matchKind, "head");
+  assert.equal(verifyFreshHumanApproval({ ...base, comments: [] }).matchKind, null);
+});
+
+test("evaluateMergePreconditions: approvalMatch is patch_id for a patch-id marker", () => {
+  const PID = "c".repeat(40);
+  const res = evaluateMergePreconditions({
+    humanApprovedBy: "mfittko", currentHeadSha: HEAD, currentPatchId: PID, sizeOutcome: "escalate", touchesT1: false,
+    comments: [{ user: { login: "mfittko" }, body: `approve merge ${"b".repeat(40)} patch-id ${PID}` }],
+  });
+  assert.equal(res.approvalMatch, "patch_id");
+  assert.equal(res.approvalVia, "comment_marker");
+});
+
 test("verifyFreshHumanApproval: refuses stale approval on an earlier commit", () => {
   const res = verifyFreshHumanApproval({
     approvedBy: "alice",
@@ -173,6 +203,7 @@ test("resolveMergeApprovalDecision: standing authorization allows a drain merge"
 test("resolveMergeApprovalDecision: standing authorization does NOT satisfy an escalated merge", () => {
   const res = resolveMergeApprovalDecision({ mergeClass: MERGE_CLASS.ESCALATED, standingAuthorized: true, freshApproval: { satisfied: false, reason: "no approval" } });
   assert.equal(res.authorized, false);
+  assert.equal(res.matchKind, null);
   const withFresh = resolveMergeApprovalDecision({ mergeClass: MERGE_CLASS.ESCALATED, standingAuthorized: false, freshApproval: { satisfied: true, via: "approved_review" } });
   assert.equal(withFresh.authorized, true);
 });

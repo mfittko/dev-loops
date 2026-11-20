@@ -9,7 +9,7 @@ name: Gate evidence
 #   docs/decisions/0234-gate-evidence-tolerates-head-declared-config-keys.md
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, synchronize]
+    types: [opened, reopened, ready_for_review, synchronize, edited]
   pull_request_review:
     types: [submitted, edited]
   pull_request_review_comment:
@@ -259,6 +259,26 @@ jobs:
             echo "${delim}"
           } >> "$GITHUB_OUTPUT"
 
+      # Objects only: the detector derives the approval patch-id from the PR head's
+      # diff against origin/<base> (ADR 0279) and never executes PR code. A failed
+      # fetch leaves base_ref unset, so only a head-pinned approval counts.
+      - name: Fetch PR head commit and base branch name (objects only, no PR code runs)
+        id: pr_git
+        if: steps.pr.outputs.draft == 'false'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          base_ref="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.base.ref')"
+          # checkout drops persisted credentials, so a private repo needs the token for these fetches; it travels in the environment only.
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraheader
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          export GIT_CONFIG_VALUE_0
+          # An explicit destination refspec refreshes origin/<base> to the current tip, so the patch-id is not computed against a stale base.
+          git fetch --no-tags origin "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}" "refs/pull/${PR_NUMBER}/head"
+          echo "base_ref=${base_ref}" >> "$GITHUB_OUTPUT"
+
       # --skip-fanout-ledger-check: the fan-out findings-log ledger is a
       # gitignored, worktree-local tmp/ file that only the machine that ran the
       # review has on disk, so this stateless runner can never see it. This check
@@ -288,14 +308,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_DECLARED_KEYS: ${{ github.event_name == 'issue_comment' && steps.fetch_keys.outputs.declared_keys || needs.head-declared-keys.outputs.declared_keys }}
           HEAD_DECLARED_KEYS_SHA: ${{ steps.pr.outputs.head_sha }}
+          PR_BASE_REF: ${{ steps.pr_git.outputs.base_ref }}
         run: |
           set +e
+          base_args=()
+          if [ -n "$PR_BASE_REF" ]; then base_args=(--base-ref-name "$PR_BASE_REF"); fi
           node scripts/github/detect-checkpoint-evidence.mjs \
             --repo "${{ github.repository }}" \
             --pr "${{ steps.pr.outputs.number }}" \
             --head-declared-keys="$HEAD_DECLARED_KEYS" \
             --head-declared-keys-sha="$HEAD_DECLARED_KEYS_SHA" \
             --skip-fanout-ledger-check \
+            "${base_args[@]}" \
             > gate_check_stdout.json 2> gate_check_stderr.json
           cat gate_check_stdout.json
           cat gate_check_stderr.json >&2
@@ -435,6 +459,23 @@ jobs:
             echo "${delim}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Fetch PR head commit and base branch name (objects only, no PR code runs)
+        id: pr_git
+        if: steps.decide.outputs.recompute == 'true' && steps.pr.outputs.draft == 'false'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          base_ref="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.base.ref')"
+          # checkout drops persisted credentials, so a private repo needs the token for these fetches; it travels in the environment only.
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraheader
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          export GIT_CONFIG_VALUE_0
+          # An explicit destination refspec refreshes origin/<base> to the current tip, so the patch-id is not computed against a stale base.
+          git fetch --no-tags origin "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}" "refs/pull/${PR_NUMBER}/head"
+          echo "base_ref=${base_ref}" >> "$GITHUB_OUTPUT"
+
       - name: Recompute draft_gate / pre_approval_gate evidence
         id: recompute_check
         if: steps.decide.outputs.recompute == 'true' && steps.pr.outputs.draft == 'false'
@@ -442,14 +483,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_DECLARED_KEYS: ${{ github.event_name == 'issue_comment' && steps.fetch_keys.outputs.declared_keys || needs.head-declared-keys.outputs.declared_keys }}
           HEAD_DECLARED_KEYS_SHA: ${{ steps.pr.outputs.head_sha }}
+          PR_BASE_REF: ${{ steps.pr_git.outputs.base_ref }}
         run: |
           set +e
+          base_args=()
+          if [ -n "$PR_BASE_REF" ]; then base_args=(--base-ref-name "$PR_BASE_REF"); fi
           node scripts/github/detect-checkpoint-evidence.mjs \
             --repo "${{ github.repository }}" \
             --pr "${{ steps.pr.outputs.number }}" \
             --head-declared-keys="$HEAD_DECLARED_KEYS" \
             --head-declared-keys-sha="$HEAD_DECLARED_KEYS_SHA" \
             --skip-fanout-ledger-check \
+            "${base_args[@]}" \
             > gate_check_stdout.json 2> gate_check_stderr.json
           cat gate_check_stdout.json
           cat gate_check_stderr.json >&2

@@ -244,6 +244,7 @@ export function resolveSizeBounds(config) {
     softLoc: tier.softLoc === undefined ? DEFAULT_TIER_DEFAULTS.softLoc : tier.softLoc,
     waiverLoc: tier.waiverLoc === undefined ? DEFAULT_TIER_DEFAULTS.waiverLoc : tier.waiverLoc,
     minLoc: config?.gates?.size?.planningBand?.minLoc ?? DEFAULT_PLANNING_BAND_MIN_LOC,
+    absoluteHardLoc: config?.gates?.size?.absoluteHardLoc ?? DEFAULT_ABSOLUTE_HARD_LOC,
   };
 }
 // Fail-closed threshold for the "substantially unclassified" case: the
