@@ -1131,6 +1131,8 @@ function normalizeStructuredFinding(f) {
   if (!f || typeof f !== "object" || Array.isArray(f)) {
     return null;
   }
+  // Validated before the empty-summary return so an unparseable entry cannot carry an unchecked remedyKind.
+  if (f.remedyKind !== undefined && f.remedyKind !== "evidence_only" && f.remedyKind !== "pr_body") throw new Error(`finding remedyKind must be "evidence_only" or "pr_body"`);
   const summary = typeof f.summary === "string" ? f.summary.trim() : "";
   if (summary.length === 0) {
     return null;
@@ -1165,10 +1167,7 @@ function normalizeStructuredFinding(f) {
   if (typeof f.judgeReason === "string" && f.judgeReason.trim().length > 0) {
     entry.judgeReason = f.judgeReason.trim();
   }
-  if (f.remedyKind !== undefined) {
-    if (f.remedyKind !== "evidence_only" && f.remedyKind !== "pr_body") throw new Error(`finding remedyKind must be "evidence_only" or "pr_body"`);
-    entry.remedyKind = f.remedyKind;
-  }
+  if (f.remedyKind !== undefined) entry.remedyKind = f.remedyKind;
   if (Number.isInteger(f.followUpIssueNumber) && f.followUpIssueNumber > 0) {
     entry.followUpIssueNumber = f.followUpIssueNumber;
   }

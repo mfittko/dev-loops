@@ -13012,6 +13012,11 @@ test("the structured verdict renderer keeps a balanced code span in a finding su
   assert.ok(body.includes("accepts `approve release v1.2.3` here"));
 });
 
+test("normalizeStructuredFindings refuses a bogus or empty remedyKind on an empty-summary entry (#3309)", () => {
+  const entry = (remedyKind) => ({ angle: "docs", verdict: "findings_present", findings: [{ severity: "low", summary: "", judgeDisposition: "act", remedyKind }] });
+  for (const bad of ["bogus", ""]) assert.throws(() => normalizeStructuredFindings([entry(bad)]), /remedyKind must be "evidence_only" or "pr_body"/);
+});
+
 test("normalizeStructuredFindings refuses a remedyKind outside evidence_only and pr_body (#3309)", () => {
   const finding = (remedyKind) => ({ angle: "docs", verdict: "findings_present", findings: [{ severity: "low", summary: "s", judgeDisposition: "act", remedyKind }] });
   assert.equal(normalizeStructuredFindings([finding("pr_body")])[0].findings[0].remedyKind, "pr_body");

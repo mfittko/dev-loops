@@ -4831,9 +4831,14 @@ test("3309: a cap-round body-only act list routes to the converged post, never t
   const { parseUpsertCheckpointVerdictCliArgs } = await import("../../../scripts/github/upsert-checkpoint-verdict.mjs");
   const parsed = parseUpsertCheckpointVerdictCliArgs(["--repo", "o/r", "--pr", "9", "--gate", "draft_gate", "--verdict", "clean", "--head-sha", head, "--findings-ledger", "ledger.json", "--findings-summary", "converged", "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin", "--converged-json", "converged.json"]);
   assert.equal(parsed.convergedJson, "converged.json");
-  // A BEHIND draft PR at the cap keeps the body-only exit instead of resolve_merge_conflicts.
+  // A BEHIND draft PR at the cap merges the base first: the body-only post refuses a stale base.
   const behind = evaluatePrGateCoordination({ ...base, mergeStateStatus: "BEHIND", mergeable: "MERGEABLE", draftOpenActList: { headSha: head, openActCount: 2, blockers: [], bodyOnly: true } });
-  assert.match(behind.agentRemedy.command, /--converged-json/, behind.reason);
+  assert.equal(behind.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS, behind.reason);
+  // At the base-merge head the carried list (the cap head A) names the post with --head-sha A and fixerCommit A.
+  const merged = "cd".repeat(20);
+  const carried = evaluatePrGateCoordination({ ...base, currentHeadSha: merged, draftGate: { ...verdict, headSha: merged }, draftGateMarker: { ...verdict, headSha: merged }, draftOpenActList: { headSha: head, carriedToHead: merged, openActCount: 2, blockers: [], bodyOnly: true } });
+  assert.equal(carried.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, carried.reason);
+  assert.match(carried.agentRemedy.command, new RegExp(`--head-sha ${head} .*\\{ fixerCommit \\(${head}\\), actList, bodyOnly: true \\}`));
   assert.match(result.agentRemedy.summary, /^Edit the PR body through scripts\/github\/edit-pr\.mjs, then post the body-only converged draft_gate verdict/);
   assert.match(result.reason, /every open act item of the current head is a PR-body item/);
   assert.doesNotMatch(result.reason, /fixer pass is not proven landed/);

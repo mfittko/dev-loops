@@ -31,6 +31,7 @@ import {
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
+import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { countCompletedRounds, readClosedPriorRoundLogs, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
 import { isPastRoundCap, listOpenActItems, normalizeSeverity, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
@@ -1301,20 +1302,33 @@ export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = pr
  * `blockers` are the GATE-EXEC-SOFT-CAP blockers of the cap round; below the cap every act item goes to the fixer.
  * A hand-edited sealed ledger throws OUT_OF_BAND_WRITE.
  */
-export async function resolveDraftOpenActList(context, { repoRoot, cap }) {
+export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnlyMerge = isBaseOnlyMergeSince }) {
   const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{40,64}$/.test(head)) return null;
   const options = { repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: head };
   // The live ledger at the current head is that head's latest round; retained same-head rounds are earlier rounds.
   const logs = await readClosedPriorRoundLogs(options, { repoRoot, includeLiveCurrentHead: true });
-  const log = logs.find((entry) => String(entry.headSha).trim().toLowerCase() === head);
+  let log = logs.find((entry) => String(entry.headSha).trim().toLowerCase() === head);
   // The posted verdict is findings_present (the evaluator checks it); a legacy ledger may persist `clean` beside open act items.
-  const open = log ? listOpenActItems(log.findings) : [];
+  let open = log ? listOpenActItems(log.findings) : [];
+  let ledgerHead = head;
+  // GATE-EXEC-NO-DEAD-END: a head with no live ledger that is a base-only merge of the cap-round head A keeps A's body-only list, so the post stays reachable after the base merge.
+  const baseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
+  if (open.length === 0 && baseRefName) {
+    for (const prior of logs) {
+      const from = String(prior.headSha).trim().toLowerCase();
+      const priorOpen = listOpenActItems(prior.findings);
+      if (from === head || priorOpen.length === 0 || !priorOpen.every(isDeltaBodyItem)) continue;
+      if (await baseOnlyMerge({ fromHead: from, head, mainRef: `origin/${baseRefName}`, repoRoot })) { log = prior; open = priorOpen; ledgerHead = from; break; }
+    }
+  }
   if (open.length === 0) return null;
   // countCompletedRounds counts the round being posted, so the live ledger's round is one less.
-  const round = await countCompletedRounds(options, { repoRoot, includeLiveCurrentHead: true }) - 1;
+  const round = await countCompletedRounds({ ...options, headSha: ledgerHead }, { repoRoot, includeLiveCurrentHead: true }) - 1;
   // The emitter refuses an all-PR-body act list (delta_body_only_act_set): its only exit is the ADR 0271 body-only converged post at the cap round, any other round keeps the earlier routing.
-  if (open.every(isDeltaBodyItem)) return cap > 0 && round === cap ? { headSha: head, openActCount: open.length, blockers: [...pastCapBlockers(log.findings, { round, cap }), ...open.filter(isBlockedActItem).map((f) => ({ kind: "round_cap_reached", reason: f.resurfaces ? "resurfaced" : "new_act", item: `[${normalizeSeverity(f.severity)}] ${String(f.summary ?? "").trim()} (blocked_item)` }))], bodyOnly: true } : null;
+  if (open.every(isDeltaBodyItem)) return cap > 0 && round === cap ? { headSha: ledgerHead, ...(ledgerHead !== head ? { carriedToHead: head } : {}), openActCount: open.length, blockers: [...pastCapBlockers(log.findings, { round, cap }), ...open.filter(isBlockedActItem).map((f) => ({ kind: "round_cap_reached", reason: f.resurfaces ? "resurfaced" : "new_act", item: `[${normalizeSeverity(f.severity)}] ${String(f.summary ?? "").trim()} (blocked_item)` }))], bodyOnly: true } : null;
+  // A carried list (a base-only merge of the cap head) is body-only or nothing.
+  if (ledgerHead !== head) return null;
   // Past the cap the emitter refuses every act list (round_cap_reached), so that round keeps the earlier routing.
   if (cap > 0 && round > cap) return null;
   // The emitter refuses a nit-only act list outside draft round 1 (low_fix_until_cap), so that list keeps the earlier routing.

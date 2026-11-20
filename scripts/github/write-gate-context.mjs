@@ -2188,6 +2188,7 @@ export function capRoundActList(findings, headSha) {
   return kept.map((f, i) => ({
     ref: refs[i], fingerprint: fingerprintFinding(f), judgeDisposition: "act", angle: f.angle, severity: f.severity, summary: f.judgeTitle ?? f.summary,
     judgeRationale: f.judgeRationale, file: resolveFindingFile(f) ?? undefined, line: f.line,
+    ...(f.remedyKind ? { remedyKind: f.remedyKind } : {}),
   }));
 }
 

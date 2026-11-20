@@ -1345,7 +1345,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // Issue 3105 AC15 (ADR 0288): the open draft_gate act list at the current head; the fixer route below consumes it.
   const actList = input.draftOpenActList;
   const headActList = !draftReady && draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"
-    && /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && String(actList?.headSha ?? "").toLowerCase() === currentHeadSha.toLowerCase()
+    && /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && [actList?.headSha, actList?.carriedToHead].some((h) => String(h ?? "").toLowerCase() === currentHeadSha.toLowerCase())
     && Number.isInteger(actList.openActCount) && actList.openActCount > 0
     // At the cap, AC15 replaces only the no_clearing_record refusal; an unknown (null) cap-round failure fails closed.
     && (input.draftRoundRefused !== true || input.draftCapRoundFailure === "no_clearing_record");
@@ -1354,7 +1354,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const actBlockers = headActList && Array.isArray(actList.blockers) ? actList.blockers : [];
   // An eligible draft act list wins over a BEHIND-only refresh; a real conflict (CONFLICTING, DIRTY, conflict files) still resolves first.
   const actListWinsOverBehind = mergeStateStatus === "BEHIND" && mergeable !== "CONFLICTING" && conflictFiles.length === 0
-    && headActList && actBlockers.length === 0 && (prDraft || effectiveLifecycleState === STATE.PR_DRAFT);
+    && headActList && !bodyOnlyList && actBlockers.length === 0 && (prDraft || effectiveLifecycleState === STATE.PR_DRAFT);
   if (!actListWinsOverBehind && (hasBlockedMergeStatus(mergeStateStatus) || mergeable === "CONFLICTING" || conflictFiles.length > 0)) {
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS]);
     pushUnique(forbiddenActions, CONFLICT_FORBIDDEN_ACTIONS);
@@ -1686,7 +1686,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
         ...(actBlockers.length > 0 ? { blockedOn: BLOCKED_ON.OPERATOR_DECISION } : bodyOnlyList ? remedyOrOperator(input, (r, n) => ({
-          command: `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo ${r} --pr ${n} --gate draft_gate --verdict clean --head-sha ${currentHeadSha} --findings-ledger <cap-round ledger> --findings-summary <text> --next-action "mark ready for review" --execution-mode fanout_fanin --converged-json <path to a file holding { fixerCommit, actList, bodyOnly: true }>`,
+          command: `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo ${r} --pr ${n} --gate draft_gate --verdict clean --head-sha ${actList.headSha} --findings-ledger <cap-round ledger> --findings-summary <text> --next-action "mark ready for review" --execution-mode fanout_fanin --converged-json <path to a file holding { fixerCommit${actList.carriedToHead ? ` (${actList.headSha})` : ""}, actList, bodyOnly: true }>`,
           summary: "Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged draft_gate verdict (ADR 0271); that verdict is the cap-round proof for ready-for-review and the ADR waiver.",
         })) : capRoundExit(input.draftCapRoundFailure, input)),
         reason: actBlockers.length > 0

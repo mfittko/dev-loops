@@ -4655,6 +4655,20 @@ test("3105 AC15: an all-PR-body act list keeps the base integration; a mixed lis
   } finally { await rm(mixed.tempDir, { recursive: true, force: true }); }
 });
 
+test("3309: a base-only merge head keeps the cap-round body-only list of the cap head, a code merge does not", async () => {
+  const fixture = await actListFixture({ "": { findings: [BODY_ACT] } });
+  try {
+    const merged = "fe".repeat(20);
+    const context = { repo: "owner/repo", pr: 10, currentHeadSha: merged, prData: { baseRefName: "main" } };
+    const seen = [];
+    const merge = (result) => async (args) => { seen.push(args.fromHead); return result; };
+    const list = await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 1, baseOnlyMerge: merge(true) });
+    assert.deepEqual(list, { headSha: fixture.headSha, carriedToHead: merged, openActCount: 1, blockers: [], bodyOnly: true });
+    assert.deepEqual(seen, [fixture.headSha]);
+    assert.equal(await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 1, baseOnlyMerge: merge(false) }), null);
+  } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+});
+
 // #3309: the cap-round body-only list carries every blocker the body-only poster refuses (isBlockedActItem), so coordination never names a refused remedy.
 test("3309: a cap-round all-PR-body act list blocks on a high item with a judgeFix and on a security-angle item", async () => {
   const resolve = async (findings) => {

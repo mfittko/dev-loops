@@ -53,6 +53,7 @@ import {
   resolveCapRoundFixed,
   clearingChainLastCandidates,
   capRoundCovers,
+  capRoundActList,
   clearingChainWalk,
   readGateContext,
   renderBriefingEvidence,
@@ -10758,6 +10759,16 @@ test("pre_approval_gate refusal on a ready PR with no cap round (the real resolv
     process.exitCode = priorExitCode;
     await rm(repoRoot, { recursive: true, force: true });
   }
+});
+
+test("capRoundActList carries remedyKind, so capRoundCovers treats a file-naming pr_body item as a body item (#3309)", () => {
+  const A = "a".repeat(40);
+  const base = { severity: "medium", angle: "correctness", judgeDisposition: "act", clusterId: 0 };
+  const findings = [{ ...base, summary: "code claim", files: ["src/a.mjs"] }, { ...base, clusterId: 1, summary: "body claim", files: ["src/b.mjs"], remedyKind: "pr_body" }];
+  const list = capRoundActList(findings, A);
+  assert.equal(list.find((e) => e.summary === "body claim").remedyKind, "pr_body");
+  const codeRef = list.find((e) => e.summary === "code claim").ref;
+  assert.equal(capRoundCovers({ log: { verdict: "findings_present", headSha: A, findings } }, undefined)({ items: [{ ref: codeRef }] }), true);
 });
 
 test("capRoundCovers filters body items on the kept representative, so a cluster led by a file-less member is covered by an empty record", () => {

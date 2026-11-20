@@ -471,7 +471,7 @@ function validateRemediationScope(d) {
  *   conflictingCriteria: [<ids>],         // required + non-empty for the two conflict outcomes
  *   rationale: "<non-empty>",
  *   authorizedRemediation: "<...>",       // required for valid_compliant
- *   defectClass: "<...>", siteQuery: "<...>", // required for valid_compliant unless remedyKind is "evidence_only"
+ *   defectClass: "<...>", siteQuery: "<...>", // required for valid_compliant unless remedyKind is "evidence_only" or "pr_body"
  *   remedyKind?: "evidence_only" | "pr_body", // evidence_only: no file changes, never on the fixer act list; pr_body: the only remedy is a PR-body edit; neither needs defectClass/siteQuery
  *   defectKind?: "matcher"|"doc_lag"|"other", // matcher: acceptedForms[] + rejectedForms[]; doc_lag: statedSurfaces[]
  *   rejectedRemediations: ["<...>"]       // optional audit of rejected options
