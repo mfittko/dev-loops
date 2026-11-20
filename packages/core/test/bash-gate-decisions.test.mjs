@@ -682,6 +682,10 @@ const SHELL_BUILT_RECORDER_SPELLINGS = [
   `node cli/*.mjs decision record --repo o/n`,
   `bun cli/i*x.mjs decision record --repo o/n`,
   `dev-loops-run cli/ind*.mjs decision record --repo o/n`,
+  `node ./cli/ind*.mjs decision record --repo o/n`,
+  `node /Users/x/repo/cli/ind*.mjs decision record --repo o/n`,
+  `node tmp/worktrees/w/cli/i*x.mjs decision record --repo o/n`,
+  `node /abs/scripts/github/record-operator-*.mjs --repo o/n`,
 ];
 
 test("a many-wildcard launcher word is denied in linear time", () => {

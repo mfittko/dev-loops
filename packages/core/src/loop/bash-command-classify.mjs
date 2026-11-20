@@ -1900,21 +1900,27 @@ export function classifyDecisionRecorderCommand(command) {
   return found;
 }
 
-/** Whether a `*`/`?` glob matches `target` or a `/`-suffix of it, in linear time (no backtracking RegExp, so no ReDoS). */
+/**
+ * Whether a `*`/`?` glob matches `target` or a `/`-suffix of it, in linear time (no backtracking RegExp, so no ReDoS).
+ * The glob is also tried without its leading wildcard-free path segments (`./`, `/abs/repo/`), which only a path prefix of the target could satisfy.
+ * A tail that is a bare `*.ext` glob stays out, since it would match any script.
+ */
 function globMatchesSuffix(glob, target) {
   const starts = [0, ...[...target].flatMap((c, i) => (c === "/" ? [i + 1] : []))];
-  return starts.some((start) => {
+  const tail = glob.replace(/^(?:[^*?[/]*\/)+/, "");
+  const globs = /^[*?]+\.[A-Za-z?*]+$/.test(tail) ? [glob] : [glob, tail];
+  return globs.some((gl) => starts.some((start) => {
     const t = target.slice(start);
     let g = 0, i = 0, star = -1, mark = 0;
     while (i < t.length) {
-      if (g < glob.length && (glob[g] === "?" || glob[g] === t[i])) { g++; i++; }
-      else if (g < glob.length && glob[g] === "*") { star = g++; mark = i; }
+      if (g < gl.length && (gl[g] === "?" || gl[g] === t[i])) { g++; i++; }
+      else if (g < gl.length && gl[g] === "*") { star = g++; mark = i; }
       else if (star >= 0) { g = star + 1; i = ++mark; }
       else return false;
     }
-    while (glob[g] === "*") g++;
-    return g === glob.length;
-  });
+    while (gl[g] === "*") g++;
+    return g === gl.length;
+  }));
 }
 
 /**
