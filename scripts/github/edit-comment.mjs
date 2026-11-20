@@ -24,6 +24,7 @@ Optional:
   --allowed-refs <csv>          Comma-separated numeric issue/PR ids to allow as
                                 deliberate cross-references in the body (the
                                 no-ids-in-comments guard refuses any other #<digits>)
+  --allow-empty-body            Allow a --body or --body-file that is only \`null\`, or an empty --body-file.
   --standing-authorization      Assert a recorded standing operator authorization. Clears
                                 only the Copilot body-disposition \`operator\` marker.
                                 Accepted forms: bare, =true, =1. Any other value keeps the refusal.
@@ -52,6 +53,7 @@ export function parseEditCommentCliArgs(argv) {
       "body-file": { type: "string" },
       "allowed-refs": { type: "string" },
       "standing-authorization": { type: "boolean" },
+      "allow-empty-body": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -66,6 +68,7 @@ export function parseEditCommentCliArgs(argv) {
     bodyFile: undefined,
     allowedRefs: [],
     standingAuthorization: false,
+    allowEmptyBody: false,
     jq: undefined,
     silent: false,
   };
@@ -98,6 +101,10 @@ export function parseEditCommentCliArgs(argv) {
         throw parseError("--body-file must be a non-empty path");
       }
       options.bodyFile = rawPath;
+      continue;
+    }
+    if (token.name === "allow-empty-body") {
+      options.allowEmptyBody = token.value === undefined || /^(?:true|1)$/iu.test(String(token.value).trim());
       continue;
     }
     if (token.name === "standing-authorization") {
@@ -133,7 +140,7 @@ async function resolveBody(options) {
     throw new Error("--body must not be empty");
   }
   // allowStdin: `--body-file -` reads stdin (fd 0), mirroring edit-issue.mjs.
-  return resolveBodyOrFile({ body: options.body, bodyFile: options.bodyFile, allowStdin: true });
+  return resolveBodyOrFile({ body: options.body, bodyFile: options.bodyFile, allowStdin: true, allowEmptyBody: options.allowEmptyBody });
 }
 
 // Update the comment via `gh api -X PATCH .../issues/comments/{id}`. Issue
