@@ -403,15 +403,15 @@ describe("round cap: body-only Copilot feedback goes to the judge unless a recor
 describe("round cap: a judge-bound defer record clears the body finding", () => {
   const deferRecord = { ...dispositionComment({ reviewId: "PRR_round2" }), body: `<!-- dev-loops:copilot-body-disposition review=PRR_round2 head=${HEAD} defer=pre_approval_gate -->` };
   const cases = [
-    { name: "a low finding the judge deferred", findings: [{ angle: "copilot-body", severity: "low", summary: "s", judgeDisposition: "defer" }], cleared: true },
-    { name: "a high finding the judge deferred", findings: [{ angle: "copilot-body", severity: "high", summary: "s", judgeDisposition: "defer" }], cleared: false },
-    { name: "a finding the judge acted on", findings: [{ angle: "copilot-body", severity: "low", summary: "s", judgeDisposition: "act" }], cleared: false },
+    { name: "a low finding the judge deferred", findings: [{ angle: "copilot-body", reviewId: "PRR_round2", severity: "low", summary: "s", judgeDisposition: "defer" }], cleared: true },
+    { name: "a high finding the judge deferred", findings: [{ angle: "copilot-body", reviewId: "PRR_round2", severity: "high", summary: "s", judgeDisposition: "defer" }], cleared: false },
+    { name: "a finding the judge acted on", findings: [{ angle: "copilot-body", reviewId: "PRR_round2", severity: "low", summary: "s", judgeDisposition: "act" }], cleared: false },
+    { name: "another review's rejected finding", findings: [{ angle: "copilot-body", reviewId: "PRR_other", severity: "low", summary: "s", judgeDisposition: "reject" }], cleared: false },
     { name: "no ledger", findings: null, cleared: false },
   ];
   for (const { name, findings, cleared } of cases) {
     it(`copilot loop detector: ${name}`, async () => {
       const ledgerRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-judge-ledger-"));
-      const previous = process.cwd();
       try {
         await writeFile(path.join(ledgerRoot, ".devloops"), "");
         if (findings) {
@@ -419,17 +419,15 @@ describe("round cap: a judge-bound defer record clears the body finding", () => 
           await mkdir(path.dirname(file), { recursive: true });
           await writeFile(file, JSON.stringify({ findings }));
         }
-        process.chdir(ledgerRoot);
         const fixture = capFixture([deferRecord]);
         const { runChild } = strictRunChild([
           { matchByClaims: true, assertArgs: ["pr", "view", String(PR)], stdout: line({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], reviews: fixture.reviews }) },
           ...fixture.shared,
         ]);
-        const snapshot = await autoDetectSnapshot({ repo: REPO, pr: PR, reviewRequestStatusOverride: "none" }, { env: {}, ghCommand: "gh", runChild });
+        const snapshot = await autoDetectSnapshot({ repo: REPO, pr: PR, reviewRequestStatusOverride: "none" }, { env: {}, ghCommand: "gh", runChild, cwd: ledgerRoot });
         assert.equal(snapshot.copilotBodyFeedbackUnresolved, !cleared);
         assert.equal(interpretLoopState(snapshot, { maxCopilotRounds: 2 }).state === "round_cap_clean_fallback", cleared);
       } finally {
-        process.chdir(previous);
         await rm(ledgerRoot, { recursive: true, force: true });
       }
     });

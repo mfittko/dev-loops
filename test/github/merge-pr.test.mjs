@@ -711,7 +711,7 @@ async function judgeLedgerCwd(findings) {
   return cwd;
 }
 const judgeRecord = (action, reviewId = "PRR_head") => ({ ...dispositionRecord({ reviewId }), body: `<!-- dev-loops:copilot-body-disposition review=${reviewId} head=${HEAD} ${action}=pre_approval_gate -->` });
-const bodyFinding = (overrides = {}) => ({ angle: "copilot-body", severity: "low", summary: "s", judgeDisposition: "reject", ...overrides });
+const bodyFinding = (overrides = {}) => ({ angle: "copilot-body", reviewId: "PRR_head", severity: "low", summary: "s", judgeDisposition: "reject", ...overrides });
 
 test("a reject= record backed by the judge ledger clears copilot_convergence and is named in the merge result", async () => {
   const cwd = await judgeLedgerCwd([bodyFinding()]);
@@ -731,8 +731,8 @@ test("a defer= record at the Copilot round cap with no thread merges; a high fin
     withNodeId(copilotAt(HEAD, YELLOW_BODY, "2026-01-02T00:00:00Z"), "PRR_kwDOScHU788AAAABZK9Ziw"),
   ];
   const record = judgeRecord("defer", "PRR_kwDOScHU788AAAABZK9Ziw");
-  const cwd = await judgeLedgerCwd([bodyFinding({ judgeDisposition: "defer" })]);
-  const highCwd = await judgeLedgerCwd([bodyFinding({ judgeDisposition: "defer", severity: "high" })]);
+  const cwd = await judgeLedgerCwd([bodyFinding({ reviewId: "PRR_kwDOScHU788AAAABZK9Ziw", judgeDisposition: "defer" })]);
+  const highCwd = await judgeLedgerCwd([bodyFinding({ reviewId: "PRR_kwDOScHU788AAAABZK9Ziw", judgeDisposition: "defer", severity: "high" })]);
   try {
     const { runtime } = makeRuntime({ maxCopilotRounds: 2, reviews, dispositionComments: [record] });
     const result = await mergePr(baseOptions(), { ...runtime, cwd });

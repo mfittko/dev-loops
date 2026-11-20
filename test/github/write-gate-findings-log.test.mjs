@@ -3691,7 +3691,7 @@ test("writeGateFindingsLog appends the pinned Copilot body cluster and records i
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-copilot-body-"));
   try {
     const headSha = "abc1234567890abcdef000000000000000000000";
-    const body = JSON.stringify({ angle: "copilot-body", findings: [{ severity: "medium", summary: "Refs list drops entries", recommendation: "parse both forms" }] });
+    const body = JSON.stringify({ angle: "copilot-body", findings: [{ severity: "medium", summary: "Refs list drops entries", recommendation: "parse both forms", reviewId: "PRR_body" }] });
     await writeFile(path.join(tmpDir, "body.json"), body);
     const { createHash } = await import("node:crypto");
     const workOrder = { copilotBodyClusterId: 1, requiredReads: [{ kind: "copilot-body-feedback", path: path.join(tmpDir, "body.json"), sha256: createHash("sha256").update(body).digest("hex") }] };
@@ -3706,6 +3706,7 @@ test("writeGateFindingsLog appends the pinned Copilot body cluster and records i
     });
     const written = JSON.parse(await readFile(result.path, "utf8")).findings.find((f) => f.angle === "copilot-body");
     assert.equal(written.judgeDisposition, "act");
+    assert.equal(written.reviewId, "PRR_body", "the ledger keeps the review id the judge-bound record binds to");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

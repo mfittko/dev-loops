@@ -23,7 +23,7 @@ const runtimeFor = (comments, root) => ({
   ledgerCheckouts: [root],
   runChild: async () => ({ code: 0, stderr: "", stdout: comments.map((c) => `${JSON.stringify(c)}\n`).join("") }),
 });
-const finding = (overrides = {}) => ({ angle: "copilot-body", severity: "low", summary: "s", judgeDisposition: "reject", ...overrides });
+const finding = (overrides = {}) => ({ angle: "copilot-body", severity: "low", summary: "s", reviewId: REVIEW, judgeDisposition: "reject", ...overrides });
 
 let root;
 beforeAll(async () => { root = await mkdtemp(path.join(os.tmpdir(), "judge-record-")); });
@@ -40,7 +40,7 @@ async function checkoutWith(findings, { gate = "pre_approval_gate", head = HEAD,
   } else await mkdir(dir, { recursive: true });
   return dir;
 }
-const resolve = (comments, checkout) => resolveCopilotBodyDisposition({ repo: REPO, pr: PR, headSha: HEAD, reviewId: REVIEW, reviewCommitSha: HEAD }, runtimeFor(comments, checkout));
+const resolve = (comments, checkout, reviewCommitSha = HEAD) => resolveCopilotBodyDisposition({ repo: REPO, pr: PR, headSha: HEAD, reviewId: REVIEW, reviewCommitSha }, runtimeFor(comments, checkout));
 
 describe("parser", () => {
   test("the new forms parse with a judge binding and are not operator records", () => {
@@ -81,9 +81,25 @@ describe("resolver", () => {
     ["an act disposition", () => [record()], () => checkoutWith([finding({ judgeDisposition: "act" })])],
     ["a missing disposition", () => [record()], () => checkoutWith([finding({ judgeDisposition: undefined })])],
     ["one act among rejects", () => [record()], () => checkoutWith([finding(), finding({ judgeDisposition: "act" })])],
+    ["another review's finding", () => [record()], () => checkoutWith([finding({ reviewId: "PRR_other" })])],
+    ["a finding with no reviewId", () => [record()], () => checkoutWith([finding({ reviewId: undefined })])],
+    ["a missing severity", () => [record()], () => checkoutWith([finding({ severity: undefined })])],
+    ["a legacy must-fix severity", () => [record()], () => checkoutWith([finding({ severity: "must-fix" })])],
+    ["a padded high severity", () => [record()], () => checkoutWith([finding({ severity: " high " })])],
     ["a high finding", () => [record()], () => checkoutWith([finding({ severity: "high" })])],
     ["a critical finding", () => [record({ action: "defer" })], () => checkoutWith([finding({ severity: "critical", judgeDisposition: "defer" })])],
   ];
+  test("a review on another head is never cleared by the new forms", async () => {
+    assert.equal((await resolve([record()], await checkoutWith([finding()]), OTHER_HEAD)).cleared, false);
+  });
+  test("one passing and one act ledger copy refuse; two passing copies clear", async () => {
+    const pass = await checkoutWith([finding()]);
+    const act = await checkoutWith([finding({ judgeDisposition: "act" })]);
+    const rt = runtimeFor([record()], pass);
+    const run = (checkouts) => resolveCopilotBodyDisposition({ repo: REPO, pr: PR, headSha: HEAD, reviewId: REVIEW, reviewCommitSha: HEAD }, { ...rt, ledgerCheckouts: checkouts });
+    assert.equal((await run([pass, act])).cleared, false);
+    assert.equal((await run([pass, await checkoutWith(null)])).cleared, true);
+  });
   for (const [name, comments, checkout] of refusals) {
     test(`${name} does not clear`, async () => {
       assert.equal((await resolve(comments(), await checkout())).cleared, false);
