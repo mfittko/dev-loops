@@ -306,12 +306,12 @@ const OUTCOME_PATHS = [
   "scripts/gate-x.mjs", "scripts/loop/x/gate-check.mjs", "scripts/github/build-adjacent-bundle.mjs",
   "skills/docs/validation-policy.md", "skills/docs/spec-authority-contract.md", "skills/local-implementation/SKILL.md",
   ".claude/skills/docs/validation-policy.md", ".claude/skills/docs/spec-authority-contract.md", "agents/docs.agent.md", ".claude/agents/docs.md",
-  "packages/core/src/config/config.mjs", "packages/core/src/loop/spec-authority.mjs", "skills/docs/copilot-loop-operations.md", ".claude/skills/docs/copilot-loop-operations.md", "scripts/github/_findings-x.mjs", "skills/docs/acceptance-criteria-verification.md", ".claude/skills/docs/structural-quality.md",
+  "packages/core/src/config/config.mjs", "packages/core/src/loop/spec-authority.mjs", "packages/core/src/analysis/diff-analyzer.mjs", "skills/docs/copilot-loop-operations.md", ".claude/skills/docs/copilot-loop-operations.md", "scripts/github/_findings-x.mjs", "skills/docs/acceptance-criteria-verification.md", ".claude/skills/docs/structural-quality.md",
 ];
 const NON_OUTCOME_PATHS = [
   "package-lock.json", "bun.lock", "pnpm-lock.yaml", "scripts/github/edit-pr.mjs", "test/helpers/x.mjs", "agents/developer.agent.md",
   "scripts/_core-helpers.mjs", "scripts/github/navigate.mjs", "scripts/loop/x/preview.mjs", "scripts/github/comment-issue.mjs", "skills/docs/release-runbook.md",
-  "skills/docs/worktree-guidance.md", ".claude/skills/docs/worktree-guidance.md", "skills/docs/main-agent-contract.md", "skills/docs/anti-patterns.md", "skills/docs/copilot-loop-operations-notes.md", "packages/core/src/loop/normalize.mjs", "packages/core/src/loop/spec-authority-notes.mjs", "packages/core/src/foo/bar.mjs", "schemas/a.json",
+  "skills/docs/worktree-guidance.md", ".claude/skills/docs/worktree-guidance.md", "skills/docs/main-agent-contract.md", "skills/docs/anti-patterns.md", "skills/docs/copilot-loop-operations-notes.md", "packages/core/src/loop/normalize.mjs", "packages/core/src/loop/spec-authority-notes.mjs", "packages/core/src/foo/bar.mjs", "packages/core/src/analysis/diff-analyzer-notes.mjs", "packages/core/src/analysis/other-helper.mjs", "schemas/a.json",
   "extension/readonly-role-gate.ts", "commands/loop-review.command.md", "AGENTS.md", "bunfig.toml", ".github/workflows/ci.yml",
 ];
 

@@ -18,7 +18,7 @@ const entries = ["scripts/loop/consolidate-fanin.mjs", "scripts/loop/judge-pass.
 // One reason per group. An entry ending in "/" covers a directory.
 const ALLOWLIST = [
   ["GitHub API, comment-trust, marker and diff-classification helpers: they read and write PR data and report facts, they do not decide a verdict", [
-    "packages/core/src/github/", "packages/core/src/analysis/", "packages/core/src/harness/", "packages/core/src/claude/", "packages/core/src/cli/",
+    "packages/core/src/github/", "packages/core/src/analysis/change-classifier.mjs", "packages/core/src/harness/", "packages/core/src/claude/", "packages/core/src/cli/",
   ]],
   ["generic script helpers (git, jq, head SHA, base ref, rule-id lookup, CLI primitives) and doc validators", ["scripts/lib/", "scripts/docs/", "scripts/_cli-primitives.mjs", "scripts/_core-helpers.mjs"]],
   ["GitHub read and write wrappers (view, edit, tick, pull, REST fallback): transport, not review logic", [
@@ -80,7 +80,10 @@ function reachedFiles() {
 test("every file a gate-tooling file imports is gate tooling or allowlisted (ADR 0296)", () => {
   const reached = reachedFiles();
   assert.ok(reached.length > entries.length, "the import walk reached more than the entry files");
-  for (const e of entries) assert.equal(isGateToolingPath(e), true, e);
+  for (const e of entries) {
+    assert.equal(existsSync(path.join(repoRoot, e)), true, `entry script missing: ${e}`);
+    assert.equal(isGateToolingPath(e), true, e);
+  }
   const missed = reached
     .filter((f) => /^(?:scripts|packages\/core\/src)\//.test(f))
     .filter((f) => !isGateToolingPath(f) && !allowlisted(f));

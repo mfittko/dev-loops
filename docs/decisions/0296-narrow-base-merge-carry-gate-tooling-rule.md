@@ -19,6 +19,7 @@ ADR 0096 keeps gate rounds on current gate tooling. The carry classifier of ADR 
 - `scripts/github/build-adjacent-bundle.mjs` (it builds reviewer input);
 - scripts (at any depth under `scripts/`) and `packages/core/src/loop/` modules whose file names hold one of the tokens `gate`, `fanin`, `fan-in`, `judge`, `verdict`, `carry`, `review`, `reviewer`, `finding`, `angle`, `dispatch`, `cluster`, `round-cap`, `prompt`, `unit-bound`, `disposition`, `evidence`, `checkpoint`, `convergence` or `pre-push-delta`, with an optional plural `s` on `gate`, `verdict`, `review`, `reviewer`, `finding`, `angle`, `cluster`, `prompt` and `disposition` only. A token matches as a whole word between `-`, `_` or `.`, so `navigate` or `preview` do not hit;
 - `packages/core/src/loop/spec-authority.mjs` (it owns the judge disposition outcomes);
+- `packages/core/src/analysis/diff-analyzer.mjs` (gate context uses `classifyFile` to choose the docs-only angle scope and the dispatch mode);
 - `packages/core/src/config/` (angle, persona, prompt and judge-track resolution);
 - the dev-loops config (`isDevLoopConfigSourcePath`);
 - the installed dev-loops version: `package.json` and `packages/*/package.json`.
