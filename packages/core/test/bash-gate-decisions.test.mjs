@@ -775,6 +775,10 @@ test("plain file commands that quote the recorder cli are not denied; runner, la
     "git grep --open-files-in-pager='node cli/index.mjs decision record' x",
     "git filter-branch --tree-filter 'node cli/index.mjs decision record --repo o/n' HEAD",
     "git send-email --to-cmd='node cli/index.mjs decision record --repo o/n' x",
+    "git ls-remote --upload-pack='node cli/index.mjs decision record --repo o/n' .",
+    "git fetch --upload-pack='node cli/index.mjs decision record --repo o/n' .",
+    "git clone -u 'node cli/index.mjs decision record --repo o/n' . x",
+    "git push --receive-pack='node cli/index.mjs decision record --repo o/n' .",
   ]) {
     for (const role of [null, "developer"]) assert.match(decideBashGateDeny({ ...BASE, role, command })?.reason ?? "", /^OPERATOR-DECISION-RECORDER/, command);
   }
