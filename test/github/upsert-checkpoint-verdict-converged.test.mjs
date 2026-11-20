@@ -132,7 +132,11 @@ async function post(tempDir, { findings, converged, extraArgs = [], runChildOpti
   try {
     const result = await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
       env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: root, runChild: makeRunChild({ puts, ...runChildOptions }), checkBaseFreshness,
-      countPrOwnCommits: async () => runChildOptions.countThrows ? Promise.reject(new Error(typeof runChildOptions.countThrows === "string" ? runChildOptions.countThrows : "git fetch failed")) : String(runChildOptions.ownShas ?? "").split("\n").filter(Boolean).length,
+      countPrOwnCommits: async (...countArgs) => {
+        runChildOptions.countCalls?.push(countArgs);
+        if (runChildOptions.countThrows) throw new Error(typeof runChildOptions.countThrows === "string" ? runChildOptions.countThrows : "git fetch failed");
+        return String(runChildOptions.ownShas ?? "").split("\n").filter(Boolean).length;
+      },
     });
     return { result, body: puts.join("\n") };
   } catch (error) {
@@ -761,4 +765,152 @@ test("a writer-produced judged log with low act items and an unjudged --findings
     assert.match(out.error ?? "", /needs a clean composed verdict over a validated low\/nit act list \(got verdict "findings_present"\)/);
     assert.deepEqual(out.puts, [], "nothing is posted, so no clean body exists");
   }, { prefix: "dev-loops-converged-unjudged-json-" });
+});
+
+// Slice 5 (converged-record carry): real git, so the stubbed git on PATH is lifted for these cases.
+const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_DIR: undefined, GIT_WORK_TREE: undefined };
+// Builds main, a PR branch with commit F (the fixer commit) and a merge M of main into it; returns { f, m }.
+// The repo is a dedicated temp dir holding a copy of `template`'s .devloops; it replaces the shared `template` root (repoRoot or capOnRoot) for the call.
+async function withMergeShape(template, { baseFile = "docs/main-only.md", baseContent = "main\n", changeAfterMerge = false, side = false, criss = false, noBaseRef = false, lagRef = false }, fn) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-converged-mergeshape-"));
+  await writeFile(path.join(root, ".devloops"), await readFile(path.join(template, ".devloops"), "utf8"), "utf8");
+  const swapCapOn = template === capOnRoot;
+  if (swapCapOn) capOnRoot = root; else repoRoot = root;
+  const git =(...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { cwd: root, env: GIT_ENV, encoding: "utf8" }).trim();
+  const put = async (file, content) => { await mkdir(path.dirname(path.join(root, file)), { recursive: true }); await writeFile(path.join(root, file), content); };
+  const savedPath = process.env.PATH;
+  process.env.PATH = originalPath;
+  try {
+    initGitFixture(root, { branch: "main" });
+    await put("base.txt", "base\n");
+    git("add", "base.txt"); git("commit", "-qm", "base");
+    git("checkout", "-qb", "pr");
+    await put("src/pr.mjs", "pr\n");
+    git("add", "src"); git("commit", "-qm", "pr");
+    await put("src/pr.mjs", "pr fixed\n");
+    git("commit", "-qam", "fixer");
+    const f = git("rev-parse", "HEAD");
+    git("checkout", "-q", "main");
+    await put(baseFile, baseContent);
+    git("add", baseFile); git("commit", "-qm", "main change");
+    if (criss) { git("merge", "-q", "--no-ff", "--no-edit", f); }
+    git("checkout", "-q", "pr");
+    if (side) git("checkout", "-q", "-B", "pr", "main"); // F is no longer an ancestor of the PR head
+    try { git("merge", "-q", "--no-ff", "--no-edit", criss ? "main~1" : "main"); } catch {
+      // A same-path edit conflicts; resolve it by keeping the PR side, so every PR blob stays identical to F.
+      git("checkout", "--ours", "src/pr.mjs"); git("add", "src/pr.mjs"); git("commit", "-q", "--no-edit");
+    }
+    if (changeAfterMerge) { await put("src/pr.mjs", "changed pr blob\n"); git("commit", "-qam", "own change"); }
+    git("update-ref", "refs/remotes/origin/main", "main");
+    if (noBaseRef) git("update-ref", "-d", "refs/remotes/origin/main");
+    if (lagRef) git("update-ref", "refs/remotes/origin/main", "main~1"); // the tracking ref lags the base commit merged into M
+    return await fn({ f, m: git("rev-parse", "HEAD") });
+  } finally {
+    process.env.PATH = savedPath;
+    if (swapCapOn) capOnRoot = template; else repoRoot = template;
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+const REFUSED = /is not the current PR head/;
+
+test("slice 5: a code-fix converged post at a base merge M after F records convergence and checks base freshness at M", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("low", 1)];
+    const savedFix = FIX;
+    await withMergeShape(repoRoot, {}, async ({ f, m }) => {
+      FIX = f;
+      const heads = [];
+      const checkBaseFreshness = async ({ head, base }) => { heads.push(head); return { ok: true, status: "base_current", base }; };
+      const out = await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { currentHead: m }, checkBaseFreshness });
+      assert.equal(out.error, undefined);
+      assert.equal(out.result.action, "updated");
+      assert.match(out.body, new RegExp(`\\*\\*Converged:\\*\\* fixer \`${f}\``));
+      assert.deepEqual(heads, [m, m], "one refresh before the carry classifier, one freshness check, both at M");
+    }).finally(() => { FIX = savedFix; });
+  }, { prefix: "dev-loops-converged-carry-code-" });
+});
+
+test("slice 5: a converged post at M records convergence when the base tracking ref lags until the freshness fetch", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("low", 1)];
+    const savedFix = FIX;
+    await withMergeShape(repoRoot, { lagRef: true }, async ({ f, m }) => {
+      FIX = f;
+      // The stub stands in for the fetch: it brings the tracking ref up to the base tip.
+      const checkBaseFreshness = async ({ base, cwd }) => {
+        execFileSync("git", ["update-ref", "refs/remotes/origin/main", "main"], { cwd, env: GIT_ENV });
+        return { ok: true, status: "base_current", base };
+      };
+      const out = await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { currentHead: m }, checkBaseFreshness });
+      assert.equal(out.error, undefined);
+      assert.equal(out.result.action, "updated");
+    }).finally(() => { FIX = savedFix; });
+  }, { prefix: "dev-loops-converged-carry-lag-" });
+});
+
+test("slice 5: a code-fix converged post whose delta result names M as candidate head is refused, though the base is fresh at M", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("low", 1)];
+    const savedFix = FIX;
+    await withMergeShape(repoRoot, {}, async ({ f, m }) => {
+      FIX = f;
+      const input = convergedInput(findings);
+      input.deltaResult.candidateHead = m;
+      const checkBaseFreshness = async ({ base }) => ({ ok: true, status: "base_current", base });
+      const out = await post(tempDir, { findings, converged: input, runChildOptions: { currentHead: m }, checkBaseFreshness });
+      assert.match(out.error ?? "", /deltaResult/);
+      assert.deepEqual(out.puts, []);
+    }).finally(() => { FIX = savedFix; });
+  }, { prefix: "dev-loops-converged-carry-candidate-m-" });
+});
+
+test("slice 5: a converged post with a malformed fixerCommit is refused before the carry check", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("low", 1)];
+    const savedFix = FIX;
+    try {
+      FIX = "not-a-sha";
+      assert.match((await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { currentHead: "c".repeat(40) } })).error ?? "", REFUSED);
+    } finally { FIX = savedFix; }
+  }, { prefix: "dev-loops-converged-carry-badsha-" });
+});
+
+test("slice 5: a body-only converged post at a base merge M after F records convergence", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [bodyFinding("medium", 1), bodyFinding("low", 2)];
+    await withMergeShape(capOnRoot, {}, async ({ f, m }) => {
+      const countCalls = [];
+      const out = await bodyOnlyPost(tempDir, { findings, fixer: f, runChildOptions: { currentHead: m, countCalls } });
+      assert.equal(out.error, undefined);
+      assert.equal(out.result.action, "updated");
+      assert.equal(countCalls.length, 1);
+      assert.equal(countCalls[0][2], f, "the own-commit count ends at the fixer commit F, not the base merge M");
+      assert.match(out.body, new RegExp(`\\*\\*Converged:\\*\\* fixer \`${f}\``));
+    });
+  }, { prefix: "dev-loops-converged-carry-body-" });
+});
+
+test("slice 5: a changed PR blob, a gate-tooling base delta, a non-ancestor F, a criss-cross base and a detection failure keep the refusal", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("low", 1)];
+    const cases = {
+      "changed PR blob": { changeAfterMerge: true },
+      "gate-tooling base delta": { baseFile: "scripts/tool.mjs" },
+      // Every PR blob is kept identical to F. main edits src/pr.mjs, so the base-delta intersection refuses here; the hand-resolved hunk rule is isolated in classify-base-merge-carry.test.mjs "hand-resolved conflict merge".
+      "hand-resolved conflict merge": { baseFile: "src/pr.mjs", baseContent: "conflicting main\n" },
+      "non-ancestor F": { side: true },
+      "criss-cross merge base": { criss: true },
+      "detection failure (no base ref)": { noBaseRef: true },
+    };
+    for (const [name, shape] of Object.entries(cases)) {
+      const savedFix = FIX;
+      try {
+        await withMergeShape(repoRoot, shape, async ({ f, m }) => {
+          FIX = f;
+          assert.match((await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { currentHead: m } })).error ?? "", REFUSED, name);
+        });
+      } finally { FIX = savedFix; }
+    }
+  }, { prefix: "dev-loops-converged-carry-refuse-" });
 });

@@ -71,6 +71,7 @@ A commit_only or full emission writes its sequence marker under the head's seque
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
 (default: the main checkout's tmp/; an explicit --tmp-root inside a linked worktree is refused) and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef }.
+A refusal prints { ok: false, refusal?, error } with a typed refusal code; ledger_appeared means a gate round ledger appeared at the current head during a carried emit, so re-run the emit.
 joinRef is the path for gate wait-for-units --artifact (with --after <planPath>): a full-phase fixer's final-on-write report (<outputRef>.report), else the outputRef.
 Each run supersedes the previous emission for this PR, except a same-head no-commit commit_only re-emission with a locally_clear --delta-result sealed for the canonical plan's execution: it writes fixer-emit-plan.<executionIdentity>.json beside the canonical plan, writes no sequence marker and prints that keyed path as planPath (a join target, never a delta --fixer-plan). Dispatch the printed
 dispatchPayload (the --harness adapter call carrying dispatchPrompt, plus the config-resolved model on the Claude payload when non-null) unchanged; an
@@ -107,7 +108,9 @@ export function buildFixerDir({ repo, pr, tmpRoot }) {
 }
 
 // emitFixerWorkOrder renders the message for the target harness before it rethrows.
-class Refusal extends Error {}
+class Refusal extends Error {
+  constructor(message, refusal) { super(message); if (refusal) this.refusal = refusal; }
+}
 
 async function readSource(kind, filePath, capture) {
   const bytes = await capture.read(filePath);
@@ -804,7 +807,7 @@ async function emitPlan({
   // Mutation authority comes from the PR itself, never from the caller.
   const prState = await fetchPr({ repo, pr });
   if (typeof prState?.headRefName !== "string" || !prState.headRefName) throw new Refusal(`PR ${repo}#${pr} reports no headRefName; mutation authority is missing`);
-  if (String(prState.headRefOid ?? "").toLowerCase() !== headSha) throw new Refusal(`PR ${repo}#${pr} head is ${prState.headRefOid}, not --head-sha ${headSha}; conflicting authority, refresh and re-emit`);
+  if (String(prState.headRefOid ?? "").toLowerCase() !== headSha) throw new Refusal(`PR ${repo}#${pr} head is ${prState.headRefOid}, not --head-sha ${headSha}; conflicting authority, refresh and re-emit with --head-sha ${prState.headRefOid} (an act-list emit at the current PR head carries the origin verdict through the base-merge carry seam when no PR blob changed)`);
   if (reviewId) {
     const snapshot = await loadReviewBodySnapshot({ repo, pr, reviewId, headSha, fetchReview, runtime: { env, ghCommand, runChild } });
     const snapshotPath = path.join(dir, executionIdentity, "review-body.json"), bytes = Buffer.from(`${JSON.stringify(snapshot, null, 2)}\n`);
@@ -816,9 +819,9 @@ async function emitPlan({
     const upsert = `dev-loops gate upsert-verdict --repo ${repo} --pr ${pr} --head-sha ${capRoundHead} --gate ${gate} --findings-ledger <this round's findings ledger>`;
     let markers;
     try { markers = await fetchVerdictMarkers({ repo, pr, headSha: capRoundHead, gate, runtime: { env, ghCommand, runChild } }); } catch (error) {
-      throw new Refusal(`verdict_not_posted: could not read the PR's posted verdicts (${error?.message ?? error}); post the ${gate} verdict review at ${capRoundHead} before fixing: ${upsert}`);
+      throw new Refusal(`verdict_not_posted: could not read the PR's posted verdicts (${error?.message ?? error}); post the ${gate} verdict review at ${capRoundHead} before fixing: ${upsert}`, "verdict_not_posted");
     }
-    if (!verdictPosted(markers) && !(await carryOriginHead())) throw new Refusal(`verdict_not_posted: no ${gate} verdict review is posted on ${repo}#${pr} at ${capRoundHead}; post it before fixing (GATE-EXEC-POST-BEFORE-FIX): ${upsert}`);
+    if (!verdictPosted(markers) && !(await carryOriginHead())) throw new Refusal(`verdict_not_posted: no ${gate} verdict review is posted on ${repo}#${pr} at ${capRoundHead}; post it before fixing (GATE-EXEC-POST-BEFORE-FIX): ${upsert}`, "verdict_not_posted");
   }
 
   let completion, completionRead, candidateHead = headSha, recheckCandidate = () => {}, rejectOriginalRetirement = () => {};
@@ -960,7 +963,7 @@ async function emitPlan({
   // A keyed plan records its parent execution; locateFixerUnit reports it stale once the parent is superseded or closed.
   await capture.write(tempPath, `${JSON.stringify(appendOnly ? { ...plan, parentExecutionIdentity: JSON.parse(originalBytes).executionIdentity } : plan, null, 2)}\n`);
   await capture.recheck();
-  if (carryMemo && await carryMemo && currentHeadLedgerExists()) throw new Refusal(`a gate round ledger appeared at ${headSha} while the work order was prepared; the carried verdict no longer authorizes a fixer, so re-run the emit`);
+  if (carryMemo && await carryMemo && currentHeadLedgerExists()) throw new Refusal(`a gate round ledger appeared at ${headSha} while the work order was prepared; the carried verdict no longer authorizes a fixer, so re-run the emit`, "ledger_appeared");
   rejectOriginalRetirement();
   recheckCandidate();
   // PRE-PUSH-DELTA-PUSH-AUTHORITY: the marker is written last so a refused emit never grants the push; only a full work order grants the fixer.
