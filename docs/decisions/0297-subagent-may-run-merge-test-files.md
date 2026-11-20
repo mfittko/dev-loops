@@ -1,4 +1,4 @@
-# 0296. A subagent may run the merge test files, and every run of the merge script stays denied
+# 0297. A subagent may run the merge test files, and every run of the merge script stays denied
 
 ## Status
 
