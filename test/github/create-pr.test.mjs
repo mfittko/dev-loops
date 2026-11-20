@@ -840,7 +840,8 @@ test("create-pr refuses a literal null body (inline, padded and file) and --allo
       assert.equal((await readGhCalls(ghLogPath)).length, 0);
     }
     const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
-    await runNode([...base, "--body", "null", "--allow-empty-body"], { env, cwd: tempDir, noRecord: true });
+    const override = await runNode([...base, "--body", "null", "--allow-empty-body"], { env, cwd: tempDir, noRecord: true });
+    assert.doesNotMatch(override.stderr, /only `null`/);
     for (const args of await readGhCalls(ghLogPath)) {
       assert.ok(!args.includes("--allow-empty-body"), "--allow-empty-body must not be forwarded to gh");
     }

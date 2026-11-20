@@ -1,3 +1,3 @@
 ### Fixed
 
-- `edit-pr`, `edit-comment` and `create-pr` refuse a body of literal `null` through the shared `assertWritableBody` guard in `resolveBodyOrFile`; `--allow-empty-body` (consumed by `create-pr`, never forwarded to `gh`) overrides it (#3305)
+- `edit-pr`, `edit-comment` and `create-pr` refuse a literal `null` body; `--allow-empty-body` overrides the guard and is not forwarded to `gh` (#3305)
