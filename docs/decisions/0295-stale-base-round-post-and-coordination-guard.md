@@ -19,4 +19,5 @@ ADR 0284 makes `upsert-verdict` refuse a clean `draft_gate` or `pre_approval_gat
 
 - A base move during a round no longer costs the round when the base-merge carry holds.
 - The stale line stays on the posted verdict as a visible record.
-- Coordination adds one git comparison before three more actions. A fetch failure keeps the action, as before.
+- Coordination adds one git comparison before two more actions. A fetch failure keeps the action, as before.
+- Any PR whose head lacks the base, including one whose base moved after a clean verdict, merges the base before the ready flip or final approval, and runs a full new round when the carry refuses.
