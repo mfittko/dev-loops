@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   BASH_GATE_RULES,
   decideBashGateDeny,
+  decideMergePrOwnerDeny,
   decideUnresolveOwnerDeny,
 } from "../src/loop/bash-gate-decisions.mjs";
 
@@ -555,4 +556,52 @@ test("a readyGate probe whose `error` is an empty string is refused naming ready
   assert.ok(decision, "an empty `error` must deny instead of degrading to 'not probed'");
   assert.equal(decision.ruleId, null);
   assert.match(decision.reason, /supplied no valid readyGate fact/);
+});
+
+// Issue 2500: a subagent Bash command whose raw text contains `merge-pr` is denied, `--check` included.
+const MERGE_DENY_FORMS = [
+  "dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 2630 --human-approved-by mfittko",
+  "dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5 --check",
+  "bun scripts/github/merge-pr.mjs --check --pr 5",
+  'node "scripts/github/merge-pr.mjs" --pr 5',
+  "node 'scripts/github/'merge-pr.mjs --pr 5",
+  "bun --check scripts/github/merge-pr.mjs",
+  "node scripts/github/merge-pr.mjs --pr 5 {fd}>&2",
+  "cat <<EOF\n$(node scripts/github/merge-pr.mjs --repo a/b --pr 5)\nEOF",
+  "bash <<EOF\nnode scripts/github/merge-pr.mjs --pr 5\nEOF",
+  'bash -c "node scripts/github/merge-pr.mjs --pr 5"',
+  'node scripts/github/merge-""pr.mjs --pr 5',
+  "node scripts/github/merge-''pr.mjs --pr 5",
+  "node scripts/github/merge\\-pr.mjs --pr 5",
+  "node scripts/github/merge-$''pr.mjs --pr 5",
+  'node scripts/github/merge-$""pr.mjs --pr 5',
+];
+
+test("any subagent role is denied a command naming merge-pr, --check included (issue 2500)", () => {
+  for (const role of ["dev-loop", "dev-loops:dev-loop", "gate-coordinator", "fixer"]) {
+    for (const command of MERGE_DENY_FORMS) {
+      const d = decideBashGateDeny({ ...BASE, role, command });
+      assert.ok(d, `${role}: ${command}`);
+      assert.equal(d.ruleId, null);
+      assert.equal(d.reason, decideMergePrOwnerDeny({ command, role }).reason);
+      assert.match(d.reason, /orchestrator/);
+    }
+  }
+});
+
+test("a subagent command naming merge-preconditions.md is allowed (issue 2500)", () => {
+  for (const command of [
+    "git add skills/docs/merge-preconditions.md",
+    "grep -n approve skills/docs/merge-preconditions.md",
+    "rg -n approve .claude/skills/docs/merge-preconditions.md",
+  ]) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: "fixer", command }), null, command);
+  }
+});
+
+test("merge-pr stays open to the top-level session and an unrelated command stays allowed (issue 2500)", () => {
+  for (const command of MERGE_DENY_FORMS) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, command);
+  }
+  assert.equal(decideBashGateDeny({ ...BASE, role: "fixer", command: "dev-loops-run scripts/github/wait-pr-checks.mjs --repo mfittko/dev-loops --pr 5" }), null);
 });

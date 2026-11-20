@@ -294,3 +294,20 @@ test("2955: the issue-to-PR re-target caused by the unit's own draft PR is a con
     assert.match(squeeze(await readRepo(doc)), phrase, doc);
   }
 });
+
+test("2500: the orchestrator alone runs merge-pr (--check included); a brief carries no merge step", async () => {
+  for (const doc of ["skills/dev-loop/SKILL.md", ".claude/skills/dev-loop/SKILL.md"]) {
+    const text = squeeze(await readRepo(doc));
+    assert.match(text, /dev-loop coordinator never runs `merge-pr\.mjs`, `--check` included.*orchestrator is the only actor/, doc);
+    assert.match(text, /coordinator hands back the `await_final_human_approval` result of `loop gate-coordination`/, doc);
+  }
+  for (const doc of ["skills/docs/workflow-handoff-contract.md", ".claude/skills/docs/workflow-handoff-contract.md"]) {
+    const text = squeeze(await readRepo(doc));
+    assert.match(text, /brief never contains a merge step/, doc);
+    assert.match(text, /exact `merge-pr\.mjs` command line, with `--human-approved-by <login>`.*`--standing-authorization`/, doc);
+    assert.match(text, /`approvalPath: comment_marker` the operator posts the exact `approveMergeLine`/, doc);
+  }
+  for (const doc of ["skills/dev-loop/SKILL.md", ".claude/skills/dev-loop/SKILL.md"]) {
+    assert.match(squeeze(await readRepo(doc)), /`approvalPath: comment_marker` the operator posts the exact `approveMergeLine`/, doc);
+  }
+});
