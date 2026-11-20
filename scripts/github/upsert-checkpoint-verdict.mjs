@@ -3407,7 +3407,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs a clean composed verdict over a validated low/nit act list (got verdict ${JSON.stringify(options.verdict)}); post a full round instead.`);
   }
   if (capRoundHead && options.verdict !== "clean") {
-    throw new Error(`A post at the earlier cap-round head ${canonicalHeadSha} must compose a clean verdict (got ${JSON.stringify(options.verdict)}); post a non-clean round at the current PR head.`);
+    throw new Error(`GATE-EXEC-ROUND-CAP-CATCH-UP-POST: a post at the earlier cap-round head ${canonicalHeadSha} must compose a clean verdict (got ${JSON.stringify(options.verdict)}); post a non-clean round at the current PR head.`);
   }
   await refuseStaleBase();
   // A fully judged round takes its verdict from the judge's act list alone, so the severity floor never overrides it. A partly judged ledger keeps the floor.
