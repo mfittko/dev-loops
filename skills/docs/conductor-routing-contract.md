@@ -194,6 +194,8 @@ The evaluator **MUST** apply the following first-match-wins priority order:
 
 Rule 17 also catches `low_signal_converged`, `round_cap_reached`, `round_cap_clean_fallback`, `internal_tooling_direct_gate` and `copilot_unavailable`: when no earlier row matches (for example with reviewer state `waiting_for_review_request`) they reach `needs_reconcile` with stop reason `unknown_state`.
 
+`copilot_unavailable` carries `copilotUnavailableReason: "request_not_observable"` (Copilot accepted review requests that never became observable). Gate coordination allows `run_pre_approval_gate` in that state; see the `copilot_unavailable` row in [copilot-loop-state-graph.md](copilot-loop-state-graph.md).
+
 **Copilot strong-active states** (win over reviewer wait states): `unresolved_feedback_present`, `already_fixed_needs_reply_resolve`
 
 **Copilot weak-active states** (yield to reviewer wait states): `pr_ready_no_feedback`, `ready_to_rerequest_review`

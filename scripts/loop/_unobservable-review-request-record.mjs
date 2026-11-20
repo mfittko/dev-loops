@@ -73,6 +73,22 @@ export async function recordTimedOutProbe({ repo, pr, headSha }, opts = {}) {
   return record;
 }
 
+// The first chunk of a capped probe stores its start time on the record, so a later chunk
+// can count only wall time the loop observed. Returns null without a record on that head.
+export async function recordProbeStart({ repo, pr, headSha, startedAt }, opts = {}) {
+  const file = recordPath(repo, pr, opts);
+  const prior = await readRaw(file);
+  if (!prior || !isHead(headSha) || prior.headSha !== headSha) return null;
+  const record = { ...prior, probeStartedAt: startedAt };
+  await write(file, record);
+  return record;
+}
+
+export async function readProbeStartedAt({ repo, pr, headSha }, opts = {}) {
+  const prior = await readRaw(recordPath(repo, pr, opts));
+  return prior?.headSha === headSha && Number.isFinite(prior.probeStartedAt) ? prior.probeStartedAt : null;
+}
+
 // True when the record for the current head reaches the threshold on both counts.
 export async function readRequestNotObservable({ repo, pr, headSha }, opts = {}) {
   const record = await readRaw(recordPath(repo, pr, opts));

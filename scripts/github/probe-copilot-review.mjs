@@ -13,7 +13,7 @@ import {
 } from "@dev-loops/core/loop/policy-constants";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
-import { recordTimedOutProbe } from "../loop/_unobservable-review-request-record.mjs";
+import { readProbeStartedAt, recordProbeStart, recordTimedOutProbe } from "../loop/_unobservable-review-request-record.mjs";
 import { waitWithHeartbeat } from "./_watch-heartbeat.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
@@ -39,8 +39,8 @@ and the remaining --timeout); run it. --concise prints the outcome and the reiss
 Output (stdout, JSON):
   { "ok": true, "status": "changed"|"timeout"|"idle", "repo": "...", "pr": N, "attempts": N,
     "newComments": [...], "newReviews": [...], "newIssueComments": [...],
-    "warning"?: "the final-chunk timed-out probe was not recorded (head unreadable or record write failed)" }
-  Only a probe whose total --timeout is at least ${WAIT_CAP_MS / 1000} seconds counts toward the request_not_observable threshold.
+    "warning"?: "<why the timed-out probe could not be recorded: head unreadable or record write failed>" }
+  Only a probe that waited at least ${WAIT_CAP_MS / 1000} seconds of recorded wall time (first chunk start to final timeout) counts toward the request_not_observable threshold.
 Concise mode:
   --concise, --summary      Human-readable summary: status, attempts, new-activity
                             counts, AND the current round's new Copilot comment bodies.
@@ -133,7 +133,6 @@ export function parseWatchCliArgs(argv) {
       concise: { type: "boolean" },
       summary: { type: "boolean" },
       "baseline-ids": { type: "string" },
-      "total-timeout-ms": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -192,11 +191,6 @@ export function parseWatchCliArgs(argv) {
       } catch {
         throw parseError(`--baseline-ids must be a JSON object of id arrays (${BASELINE_KINDS.join(", ")})`);
       }
-      continue;
-    }
-    if (token.name === "total-timeout-ms") {
-      // Internal: a re-issued capped wait carries the first call's total budget.
-      options.totalTimeoutMs = parsePositiveInteger(requireTokenValue(token, parseError), "--total-timeout-ms", parseError);
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -451,20 +445,28 @@ export async function runCli(
   const { timeoutMs, remainingMs } = capWait(requested.timeoutMs);
   const options = { ...requested, timeoutMs };
   let baseline;
+  const clock = watchDeps.now ?? Date.now;
+  const startedAt = clock();
   let result = await watchCopilotReview(options, { env, ghCommand, ...watchDeps, onBaseline: (b) => { baseline = b; } });
-  // The first call's total budget rides the reissue, so a short --timeout never counts as a bounded probe.
-  const totalMs = requested.totalTimeoutMs ?? requested.timeoutMs;
-  if (result.status === "timeout" && remainingMs === 0 && totalMs >= WAIT_CAP_MS) {
-    // The record counts a timed-out probe only on the head of an earlier
-    // unobservable request: the head read here must equal the record's head.
-    // The POST/probe already finished, so a failed record is a warning.
+  // The record counts a timed-out probe only on the head of an earlier
+  // unobservable request: the head read here must equal the record's head.
+  // The POST/probe already finished, so a failed record is a warning.
+  // The count rests on wall time the loop observed (the start stored on the record
+  // by the first chunk), never on a caller flag, so a short --timeout never counts.
+  if (result.status === "timeout") {
+    const recordOpts = { checkpointDir: watchDeps.checkpointDir };
     try {
       const view = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], env);
       const headSha = view.code === 0 ? parseJsonText(view.stdout)?.headRefOid : null;
-      if (typeof headSha === "string" && headSha.length > 0) {
-        await recordTimedOutProbe({ repo: options.repo, pr: options.pr, headSha }, { checkpointDir: watchDeps.checkpointDir });
-      } else {
+      const key = { repo: options.repo, pr: options.pr, headSha };
+      if (typeof headSha !== "string" || headSha.length === 0) {
         result = { ...result, warning: "could not read the PR head, so the timed-out probe was not recorded" };
+      } else if (remainingMs > 0) {
+        // A reissued chunk (it carries --baseline-ids) keeps the start the first chunk stored.
+        if (requested.baseline === undefined) await recordProbeStart({ ...key, startedAt }, recordOpts);
+      } else {
+        const stored = requested.baseline === undefined ? null : await readProbeStartedAt(key, recordOpts);
+        if (clock() - (stored ?? startedAt) >= WAIT_CAP_MS) await recordTimedOutProbe(key, recordOpts);
       }
     } catch (error) {
       result = { ...result, warning: `could not record the timed-out probe: ${error?.message ?? error}` };
@@ -472,7 +474,7 @@ export async function runCli(
   }
   if (result.status === "timeout" && remainingMs > 0) {
     const ids = Object.fromEntries(BASELINE_KINDS.map((kind) => [kind, baseline[kind].map((item) => item.id)]));
-    result = { ...result, ...pendingFields({ remainingMs, command: scriptCommand(import.meta.url), argv, carry: { "--baseline-ids": JSON.stringify(ids), "--total-timeout-ms": totalMs } }) };
+    result = { ...result, ...pendingFields({ remainingMs, command: scriptCommand(import.meta.url), argv, carry: { "--baseline-ids": JSON.stringify(ids) } }) };
   }
   if (options.concise && options.jq === undefined && !options.silent) {
     stdout.write(`${formatProbeConcise(result)}\n`);

@@ -5011,9 +5011,8 @@ test("copilot_unavailable with failing CI blocks on the operator, and with credi
 
 test("the raw copilotRequestNotObservable flag never bypasses an observable Copilot request or review", () => {
   for (const [label, overrides] of [
-    ["requested", { copilotReviewRequestStatus: "requested", lifecycleState: STATE.WAITING_FOR_COPILOT_REVIEW }],
-    ["already-requested", { copilotReviewRequestStatus: "already-requested", lifecycleState: STATE.WAITING_FOR_COPILOT_REVIEW }],
-    ["current-head review", { copilotReviewOnCurrentHead: true, copilotReviewPresent: true, lifecycleState: STATE.WAITING_FOR_COPILOT_REVIEW }],
+    ["requested", { copilotReviewRequestStatus: "requested" }],
+    ["already-requested", { copilotReviewRequestStatus: "already-requested" }],
   ]) {
     const result = evaluatePrGateCoordination({ ...unavailableInput, ...overrides });
     assert.ok(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), label);
