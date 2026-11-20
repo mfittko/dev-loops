@@ -412,9 +412,15 @@ export function interpretLoopState(snapshot, refinementConfig) {
     state = STATE.REVIEW_REQUEST_UNAVAILABLE;
   } else if (s.copilotReviewRequestStatus === "failed") {
     state = STATE.BLOCKED_NEEDS_USER_DECISION;
-  } else if (s.copilotRequestNotObservable && s.copilotReviewRequestStatus === "none" && !s.copilotReviewPresent) {
-    // A request that became observable (status requested, or a review) takes
-    // the normal round routing instead.
+  } else if (
+    s.copilotRequestNotObservable
+    && s.copilotReviewRequestStatus === "none"
+    && !s.copilotReviewOnCurrentHead
+    && s.unresolvedThreadCount === 0
+    && !s.copilotBodyFeedbackUnresolved
+  ) {
+    // A request that became observable (status requested, or a review on this
+    // head) and any unresolved feedback take the normal round routing instead.
     state = STATE.COPILOT_UNAVAILABLE;
   }
 

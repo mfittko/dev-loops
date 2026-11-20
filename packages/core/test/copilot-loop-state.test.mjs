@@ -1713,6 +1713,23 @@ test("a request that becomes observable later is a normal round", () => {
   const requested = interpretLoopState({ ...unobservableSnapshot, copilotReviewRequestStatus: "requested" }, { maxCopilotRounds: 3 });
   assert.equal(requested.state, STATE.WAITING_FOR_COPILOT_REVIEW);
   assert.equal(requested.copilotUnavailableReason, null);
-  const reviewed = interpretLoopState({ ...unobservableSnapshot, copilotReviewPresent: true, copilotReviewRoundCount: 1 }, { maxCopilotRounds: 3 });
-  assert.notEqual(reviewed.state, STATE.COPILOT_UNAVAILABLE);
+  const reviewed = interpretLoopState({ ...unobservableSnapshot, copilotReviewPresent: true, copilotReviewOnCurrentHead: true, copilotReviewRoundCount: 1 }, { maxCopilotRounds: 3 });
+  assert.equal(reviewed.state, STATE.READY_TO_REREQUEST_REVIEW);
+});
+
+test("a dropped request in round 2+ (earlier head reviewed, current head not) reports copilot_unavailable", () => {
+  const result = interpretLoopState({
+    ...unobservableSnapshot,
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: false,
+    copilotReviewRoundCount: 1,
+  }, { maxCopilotRounds: 3 });
+  assert.equal(result.state, STATE.COPILOT_UNAVAILABLE);
+});
+
+test("unresolved feedback takes priority over copilot_unavailable", () => {
+  for (const extra of [{ unresolvedThreadCount: 2 }, { copilotBodyFeedbackUnresolved: true }]) {
+    const result = interpretLoopState({ ...unobservableSnapshot, ...extra }, { maxCopilotRounds: 3 });
+    assert.equal(result.state, STATE.UNRESOLVED_FEEDBACK_PRESENT);
+  }
 });

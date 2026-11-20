@@ -14,13 +14,13 @@ const pr = { repo: "o/r", pr: 1 };
 test("two unobservable requests plus two timed-out probes on the same head reach the threshold", async () => {
   const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
   const read = () => readRequestNotObservable({ ...pr, headSha: "a" }, { checkpointDir });
-  assert.equal(await recordTimedOutProbe(pr, { checkpointDir }), null);
+  assert.equal(await recordTimedOutProbe({ ...pr, headSha: "a" }, { checkpointDir }), null);
   await recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir });
-  await recordTimedOutProbe(pr, { checkpointDir });
+  await recordTimedOutProbe({ ...pr, headSha: "a" }, { checkpointDir });
   assert.equal(await read(), false);
   await recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir });
   assert.equal(await read(), false);
-  await recordTimedOutProbe(pr, { checkpointDir });
+  await recordTimedOutProbe({ ...pr, headSha: "a" }, { checkpointDir });
   assert.equal(await read(), true);
 });
 
@@ -28,10 +28,19 @@ test("a new head resets the count and the record never applies to another head",
   const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
   for (let i = 0; i < 2; i += 1) {
     await recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir });
-    await recordTimedOutProbe(pr, { checkpointDir });
+    await recordTimedOutProbe({ ...pr, headSha: "a" }, { checkpointDir });
   }
   assert.equal(await readRequestNotObservable({ ...pr, headSha: "b" }, { checkpointDir }), false);
   const fresh = await recordUnobservableRequest({ ...pr, headSha: "b" }, { checkpointDir });
   assert.deepEqual([fresh.unobservableRequests, fresh.timedOutProbes], [1, 0]);
   assert.equal(await readRequestNotObservable({ ...pr, headSha: "a" }, { checkpointDir }), false);
+});
+
+test("a probe of another head, and a null head, never count", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
+  assert.equal(await recordUnobservableRequest({ ...pr, headSha: null }, { checkpointDir }), null);
+  await recordUnobservableRequest({ ...pr, headSha: "a" }, { checkpointDir });
+  assert.equal(await recordTimedOutProbe({ ...pr, headSha: "b" }, { checkpointDir }), null);
+  assert.equal(await recordTimedOutProbe({ ...pr, headSha: null }, { checkpointDir }), null);
+  assert.equal(await readRequestNotObservable({ ...pr, headSha: null }, { checkpointDir }), false);
 });

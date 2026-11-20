@@ -117,7 +117,7 @@ The interpreter applies rules in priority order. The first matching rule wins.
 4. `copilotReviewRequestStatus === "unavailable"` → `review_request_unavailable`
    *(only reached when no in-progress evidence was found; the request helper returns `already-requested` instead when Copilot review is observably in progress before or after known unavailable/unrequestable failures, including the 422 collaborator case)*
 5. `copilotReviewRequestStatus === "failed"` → `blocked_needs_user_decision`
-   `copilotRequestNotObservable && copilotReviewRequestStatus === "none" && !copilotReviewPresent` → `copilot_unavailable` (checked in the same chain, before rule 6)
+   `copilotRequestNotObservable && copilotReviewRequestStatus === "none" && !copilotReviewOnCurrentHead && unresolvedThreadCount === 0 && !copilotBodyFeedbackUnresolved` → `copilot_unavailable` (checked in the same chain, before rule 6)
 6. `(unresolvedThreadCount > 0 || copilotBodyFeedbackUnresolved) && agentFixStatus === "applied"` → `already_fixed_needs_reply_resolve`
 7. `unresolvedThreadCount > 0 || copilotBodyFeedbackUnresolved` → `unresolved_feedback_present`
    *(Unresolved feedback always takes priority over any wait/watch path. A body-only Copilot finding — `copilotBodyFeedbackUnresolved` true with zero inline threads — routes here too, and likewise keeps the round-cap `cleanThreads` check and `ready_to_rerequest_review` clean-convergence from treating the head as clean)*

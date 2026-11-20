@@ -427,11 +427,13 @@ function describeAcceptedCiState(ciStatus, preApprovalRequireCi) {
   return "CI not required by config";
 }
 
-// Shared remedy text for a capped PR with zero threads and failing or unconfirmed required CI.
 const COPILOT_UNAVAILABLE_REASON = "request_not_observable";
 
-function buildRoundCapCiRemedyReason({ ciStatus, copilotReviewRoundCount, maxCopilotRounds, currentHeadSha }) {
-  const prefix = `round_cap_reached at ${copilotReviewRoundCount}/${maxCopilotRounds}`;
+// Shared remedy text for a capped (or Copilot-unavailable) PR with zero threads and failing or unconfirmed required CI.
+function buildRoundCapCiRemedyReason({ ciStatus, copilotReviewRoundCount, maxCopilotRounds, currentHeadSha, copilotUnavailable = false }) {
+  const prefix = copilotUnavailable
+    ? `copilot_unavailable (${COPILOT_UNAVAILABLE_REASON})`
+    : `round_cap_reached at ${copilotReviewRoundCount}/${maxCopilotRounds}`;
   const head = `at head ${currentHeadSha ?? "unknown"} and zero unresolved threads`;
   return ciStatus === "failure"
     ? `${prefix} with failing CI (required) ${head}: fix the failing required check at the head and push, then re-run gate-coordination.`
@@ -754,7 +756,7 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
   const copilotReviewRoundCount = normalizeNonNegativeInteger(input.copilotReviewRoundCount);
   const copilotReviewOnCurrentHead = input.copilotReviewOnCurrentHead === true;
   // Copilot is unavailable: no request or wait can ever settle, so entry is not refused.
-  if (input.lifecycleState === STATE.COPILOT_UNAVAILABLE) {
+  if (input.copilotRequestNotObservable === true && copilotReviewRequestStatus === "none" && !copilotReviewOnCurrentHead) {
     return null;
   }
   const outstandingRequest = copilotReviewRequestStatus === "requested"
@@ -2152,7 +2154,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // LOW_SIGNAL_CONVERGED routing with round-cap reasoning.
   // COPILOT_UNAVAILABLE shares this routing: no Copilot round can ever land, so
   // the pre_approval_gate reviews the head itself, with the unavailability noted.
-  const copilotUnavailable = effectiveLifecycleState === STATE.COPILOT_UNAVAILABLE;
+  const copilotUnavailable = effectiveLifecycleState === STATE.COPILOT_UNAVAILABLE && unresolvedThreadCount === 0;
   if (effectiveLifecycleState === STATE.ROUND_CAP_CLEAN_FALLBACK || copilotUnavailable) {
     if (preApprovalRequireCi && (ciStatus === "failure" || ciStatus === "crediblyGreen")) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
@@ -2170,7 +2172,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-        reason: buildRoundCapCiRemedyReason({ ciStatus, copilotReviewRoundCount, maxCopilotRounds, currentHeadSha }),
+        reason: buildRoundCapCiRemedyReason({ ciStatus, copilotReviewRoundCount, maxCopilotRounds, currentHeadSha, copilotUnavailable }),
         mergeStateStatus,
         conflictFiles,
           refinementArtifact,
@@ -2192,7 +2194,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.WAIT_FOR_CI,
-        reason: "The Copilot round cap is exhausted, but the current head does not yet have green or credibly green CI, so `pre_approval_gate` remains illegal until CI settles.",
+        reason: `${copilotUnavailable ? "Copilot is unavailable (request_not_observable)" : "The Copilot round cap is exhausted"}, but the current head does not yet have green or credibly green CI, so \`pre_approval_gate\` remains illegal until CI settles.`,
         mergeStateStatus,
         conflictFiles,
           refinementArtifact,

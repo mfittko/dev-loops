@@ -32,6 +32,7 @@ import { getLastCopilotReview, getLastCopilotReviewHeadSha, fetchDeltaChangedFil
 import { resolveCurrentHeadBodyFeedback } from "./_copilot-body-disposition.mjs";
 import { detectPostConvergenceSignificantChange } from "../loop/_post-convergence-change.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
+import { readRequestNotObservable } from "../loop/_unobservable-review-request-record.mjs";
 import { resolveNamedContextState, LOOP_DERIVED_CI_CHECK_NAME } from "@dev-loops/core/loop/copilot-ci-status";
 import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-mode-write-guard";
 import { flattenPaginatedSlurp } from "./post-gate-findings.mjs";
@@ -147,7 +148,9 @@ Preconditions (each refuses with a machine-readable reason naming the failing on
   and a significant change landed since), or, with
   refinement.requireCopilotConvergenceAtLatestHead: true, docs_only_suppression
   (the loop's carried convergence holds across a docs-only or integrate-only
-  delta, and no Copilot review is outstanding on the current head). gate_evidence reuses
+  delta, and no Copilot review is outstanding on the current head), or
+  copilot_unavailable (the loop's request_not_observable record for the current
+  head: Copilot accepted review requests that never became observable). gate_evidence reuses
   detect-checkpoint-evidence (draft_gate + current-head pre_approval_gate with
   fan-out provenance, zero unresolved threads, a non-stale/non-foreign runner lock).
 
@@ -355,6 +358,11 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
   if (requireCopilotConvergenceAtLatestHead) {
     const docsOnly = await carriedDisposition(COPILOT_ABSENT_REVIEW_DISPOSITION.DOCS_ONLY_SUPPRESSION);
     if (docsOnly) return docsOnly;
+  }
+  // Copilot accepted review requests on this head that never became observable
+  // (the loop's copilot_unavailable); no review can ever land on it.
+  if (await readRequestNotObservable({ repo, pr, headSha: currentHeadSha }, { checkpointDir: runtime.checkpointDir })) {
+    return pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.COPILOT_UNAVAILABLE);
   }
   return (await isInternalOnlyPr({ repo, pr, patterns: config?.internalPathPatterns }, runtime)) ? pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.COPILOT_GATE_DISABLED) : null;
 }
@@ -729,6 +737,7 @@ export async function mergePr(options, runtime = {}) {
     isAncestor = defaultIsAncestor,
     computePatchId = defaultComputePatchId,
     postMergeComment = defaultPostMergeComment,
+    checkpointDir = undefined,
   } = runtime;
 
   assertGithubWriteStubbedInTestMode(runChild, "pr merge", { env });
@@ -832,7 +841,7 @@ export async function mergePr(options, runtime = {}) {
   const copilotAbsentReviewDisposition = rawConvergenceState === COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW
     ? await resolveCopilotAbsentReviewDisposition(
       { repo: options.repo, pr: options.pr, currentHeadSha, rawReviews, config: configLoad?.config, draftGate: evidence.draftGate, lightweight: options.lightweight === true },
-      { env, ghCommand, runChild, ghJson, detectInternalOnlyPr },
+      { env, ghCommand, runChild, ghJson, detectInternalOnlyPr, checkpointDir },
     )
     : null;
   // A current-head body finding clears through the same trusted

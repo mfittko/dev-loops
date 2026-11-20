@@ -444,8 +444,16 @@ export async function runCli(
   let baseline;
   let result = await watchCopilotReview(options, { env, ghCommand, ...watchDeps, onBaseline: (b) => { baseline = b; } });
   if (result.status === "timeout" && remainingMs === 0) {
-    // The record counts only probes that follow an unobservable request.
-    await recordTimedOutProbe({ repo: options.repo, pr: options.pr }, { checkpointDir: watchDeps.checkpointDir });
+    // The record counts a timed-out probe only on the head of an earlier
+    // unobservable request: the head read here must equal the record's head.
+    // The POST/probe already finished, so a failed record is a warning.
+    try {
+      const view = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], env);
+      const headSha = view.code === 0 ? parseJsonText(view.stdout)?.headRefOid : null;
+      await recordTimedOutProbe({ repo: options.repo, pr: options.pr, headSha }, { checkpointDir: watchDeps.checkpointDir });
+    } catch (error) {
+      result = { ...result, warning: `could not record the timed-out probe: ${error?.message ?? error}` };
+    }
   }
   if (result.status === "timeout" && remainingMs > 0) {
     const ids = Object.fromEntries(BASELINE_KINDS.map((kind) => [kind, baseline[kind].map((item) => item.id)]));

@@ -4926,6 +4926,7 @@ test("copilot_unavailable allows pre_approval_gate and notes Copilot was unavail
     currentHeadSha: "fedcba987654",
     prDraft: false,
     lifecycleState: STATE.COPILOT_UNAVAILABLE,
+    copilotRequestNotObservable: true,
     loopDisposition: DISPOSITION.DONE,
     copilotReviewRequestStatus: "none",
     unresolvedThreadCount: 0,
@@ -4946,4 +4947,33 @@ test("copilot_unavailable allows pre_approval_gate and notes Copilot was unavail
     maxCopilotRounds: 3,
     gateBoundary: result.gateBoundary,
   }), false);
+});
+
+const unavailableInput = {
+  pr: 10,
+  currentHeadSha: "fedcba987654",
+  prDraft: false,
+  lifecycleState: STATE.COPILOT_UNAVAILABLE,
+  copilotRequestNotObservable: true,
+  loopDisposition: DISPOSITION.DONE,
+  copilotReviewRequestStatus: "none",
+  unresolvedThreadCount: 0,
+  ciStatus: "success",
+  copilotReviewRoundCount: 0,
+  maxCopilotRounds: 3,
+  draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+  draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+};
+
+test("copilot_unavailable with unresolved threads does not open pre_approval_gate", () => {
+  const result = evaluatePrGateCoordination({ ...unavailableInput, unresolvedThreadCount: 2 });
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+});
+
+test("copilot_unavailable CI reasons name the unavailability, not the round cap", () => {
+  for (const ciStatus of ["failure", "pending"]) {
+    const result = evaluatePrGateCoordination({ ...unavailableInput, ciStatus });
+    assert.match(result.reason, /request_not_observable/);
+    assert.doesNotMatch(result.reason, /round[ _]cap/i);
+  }
 });

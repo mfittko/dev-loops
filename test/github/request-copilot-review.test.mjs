@@ -122,11 +122,11 @@ async function unexpectedDelay(ms) {
   throw new Error(`runInProcess: unexpected delay(${ms}ms) — this test path must not enter the verification retry loop`);
 }
 
-async function runInProcess(args, entries, { env = { GH_SEQUENCE_PATH: "1" }, delayImpl = unexpectedDelay, repoRoot = capFixtureRepoRoot } = {}) {
+async function runInProcess(args, entries, { env = { GH_SEQUENCE_PATH: "1" }, delayImpl = unexpectedDelay, repoRoot = capFixtureRepoRoot, checkpointDir } = {}) {
   const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true });
   const options = parseRequestCliArgs(args);
   try {
-    const result = await performCopilotReviewRequest(options, { env, ghCommand: "gh", runChild, delayImpl, repoRoot });
+    const result = await performCopilotReviewRequest(options, { env, ghCommand: "gh", runChild, delayImpl, repoRoot, checkpointDir });
     return { result, calls };
   } catch (error) {
     // Attach the recorded gh calls to a rejection too, so a test asserting
@@ -2943,4 +2943,36 @@ test("isCopilotReviewObservableViaGraphql does not treat a copilot-x review requ
   const runChild = async () => ({ code: 0, stdout: JSON.stringify(payload), stderr: "" });
   const observable = await isCopilotReviewObservableViaGraphql({ repo: "owner/repo", pr: 17, headSha: "abc123" }, { runChild });
   assert.equal(observable, false);
+});
+
+test("a request POSTed but never observable records one unobservable request for the head", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "request-unobservable-"));
+  const head = "a".repeat(40);
+  const emptyRequestedReviewersEntry = {
+    assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+    stdout: '{"users":[],"teams":[]}\n',
+  };
+  const emptyReviewsEntry = {
+    assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+    stdout: `{"headRefOid":"${head}","reviews":[]}\n`,
+  };
+  const entries = [
+    emptyRequestedReviewersEntry,
+    emptyReviewsEntry,
+    {
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
+      stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
+    },
+    emptyRequestedReviewersEntry,
+    emptyReviewsEntry,
+    GRAPHQL_NOT_OBSERVED_ENTRY,
+    emptyRequestedReviewersEntry, emptyReviewsEntry,
+    emptyRequestedReviewersEntry, emptyReviewsEntry,
+    emptyRequestedReviewersEntry, emptyReviewsEntry,
+  ];
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], entries, { delayImpl: async () => {}, checkpointDir });
+  assert.equal(result.status, "requested");
+  assert.match(result.detail, /not yet observable/);
+  const record = JSON.parse(await readFile(path.join(checkpointDir, "unobservable-review-requests.json"), "utf8"));
+  assert.deepEqual([record.headSha, record.unobservableRequests, record.timedOutProbes], [head, 1, 0]);
 });

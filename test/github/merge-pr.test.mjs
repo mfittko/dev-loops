@@ -1,5 +1,9 @@
 import { test, mock } from "bun:test";
 import assert from "node:assert/strict";
+import { mkdtemp } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { recordTimedOutProbe, recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { mergePr, parseMergePrCliArgs, main, defaultReadMergeDiff, defaultIsAncestor, defaultComputePatchId, defaultFetchPrHead, buildDetectEvidenceArgv, defaultPostMergeComment } from "../../scripts/github/merge-pr.mjs";
 import { runChild } from "../../scripts/_cli-primitives.mjs";
 import { captureStream } from "../_helpers.mjs";
@@ -443,6 +447,19 @@ test("no current-head Copilot review at the round cap merges via round_cap_clean
   assert.equal(result.copilotDisposition, "round_cap_clean_fallback");
   assert.ok(!calls.runChild.some((c) => String(c.args[1]).includes("/compare/")), "no compare call");
   assert.equal(calls.runChild.filter((c) => c.args[0] === "pr" && c.args[1] === "merge").length, 1);
+});
+
+test("no current-head Copilot review with an unobservable-request record merges via copilot_unavailable", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "merge-unobservable-"));
+  const pr = { repo: "mfittko/dev-loops", pr: 5 };
+  for (let i = 0; i < 2; i += 1) {
+    await recordUnobservableRequest({ ...pr, headSha: HEAD }, { checkpointDir });
+    await recordTimedOutProbe({ ...pr, headSha: HEAD }, { checkpointDir });
+  }
+  const { runtime } = makeRuntime({ maxCopilotRounds: 3 });
+  const result = await mergePr(baseOptions(), { ...runtime, checkpointDir });
+  assert.equal(result.copilotConvergenceState, "no_current_head_review");
+  assert.equal(result.copilotDisposition, "copilot_unavailable");
 });
 
 test("no current-head Copilot review after a clean review and a docs-only delta merges via docs_only_suppression", async () => {

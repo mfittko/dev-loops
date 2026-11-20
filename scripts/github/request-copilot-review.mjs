@@ -690,10 +690,11 @@ async function performRequest(
     runChild = defaultRunChild,
     delayImpl = delay,
     repoRoot = process.cwd(),
+    checkpointDir = undefined,
   } = {},
   advisory,
 ) {
-  const runtime = { env, ghCommand, runChild };
+  const runtime = { env, ghCommand, runChild, checkpointDir };
   const before = await fetchCopilotReviewState(options, runtime);
   if (before.prData?.isDraft) {
     return {
@@ -1035,12 +1036,19 @@ async function performRequest(
     // unavailable Copilot reviewer is already classified `unavailable` above
     // via the 422 path and never reaches here. The durable count lets the loop
     // report Copilot unavailable after repeated unobservable requests.
-    await recordUnobservableRequest(
-      { repo: options.repo, pr: options.pr, headSha: before.prData?.headRefOid ?? null },
-      { checkpointDir: runtime.checkpointDir },
-    );
+    // The POST already succeeded, so a failed record write is a warning, not a failure.
+    let recordWarning = null;
+    try {
+      await recordUnobservableRequest(
+        { repo: options.repo, pr: options.pr, headSha: before.prData?.headRefOid ?? null },
+        { checkpointDir: runtime.checkpointDir },
+      );
+    } catch (error) {
+      recordWarning = `could not record the unobservable request: ${error?.message ?? error}`;
+    }
     return ({
       ...requestResult,
+      ...(recordWarning ? { warning: recordWarning } : {}),
       detail: "Copilot review request POST succeeded but was not yet observable via requested_reviewers/reviews or GraphQL within the verification window; treating as eventually consistent rather than failing.",
     });
   }
