@@ -1818,3 +1818,9 @@ test("renderFindingsCommentBody labels an evidence_only act finding only (#3197)
   assert.equal(body.split("(evidence only, no file change").length - 1, 1);
   assert.match(body, /needs evidence.*judge: _act_ \(evidence only/);
 });
+
+test("parseFindings refuses a remedyKind outside evidence_only and pr_body (#3309)", () => {
+  const raw = (remedyKind) => JSON.stringify([{ severity: "low", angle: "docs", summary: "s", judgeDisposition: "act", remedyKind }]);
+  assert.equal(parseFindings(raw("pr_body"))[0].remedyKind, "pr_body");
+  assert.throws(() => parseFindings(raw("bogus")), /remedyKind must be one of: evidence_only, pr_body/);
+});

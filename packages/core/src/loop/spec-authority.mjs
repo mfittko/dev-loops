@@ -410,13 +410,16 @@ function inputFormList(value) {
 const REMEDY_KINDS_NO_SITE = ["evidence_only", "pr_body"];
 function validateRemediationScope(d) {
   // A remedy that changes no file has no defect class or site; it never reaches the fixer.
+  if (d.remedyKind !== undefined && !REMEDY_KINDS_NO_SITE.includes(d.remedyKind)) {
+    throw Object.assign(new Error(`spec-authority decision ${d.index} remedyKind must be one of: ${REMEDY_KINDS_NO_SITE.join(", ")}`), { code: "spec_authority_decision_invalid", decisionIndex: d.index, field: "remedyKind" });
+  }
   if (REMEDY_KINDS_NO_SITE.includes(d.remedyKind)) return { remedyKind: d.remedyKind };
   const missing = (field, what) => Object.assign(
     new Error(`spec-authority valid_compliant decision ${d.index} requires a non-empty ${field} (${what})`),
     { code: "spec_authority_decision_invalid", decisionIndex: d.index, field },
   );
   if (typeof d.defectClass !== "string" || d.defectClass.trim().length === 0) {
-    throw missing("defectClass", "the class of defect the remediation closes; set remedyKind \"evidence_only\" when the remedy changes no file");
+    throw missing("defectClass", "the class of defect the remediation closes; set remedyKind \"evidence_only\" when the remedy changes no file, or \"pr_body\" when the only remedy is a PR-body edit");
   }
   if (typeof d.siteQuery !== "string" || d.siteQuery.trim().length === 0) {
     throw missing("siteQuery", "a string: a git grep pattern or a space-separated symbol list the fixer runs at the head");

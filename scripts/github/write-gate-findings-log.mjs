@@ -110,8 +110,10 @@ Optional:
   --rejudge-same-round           Rewrite the live same-head ledger in place: the round number is kept and no
                                  round is archived. Refused with a typed reason unless a live ledger exists at
                                  exactly this head and gate (rejudge-no-live-ledger) and the findings carry the
-                                 same fingerprints as it (rejudge-fingerprint-mismatch). For a re-judge that
-                                 only changes dispositions or remedyKind.
+                                 same fingerprints as it (rejudge-fingerprint-mismatch). Only draft_gate, and
+                                 only a completed round (rejudge-round-incomplete). The live ledger is kept
+                                 field for field; only remedyKind pr_body may be added to act findings
+                                 (rejudge-field-changed).
   --spec-authority <path>        JSON { specDigest, headSha, contentDigest, checkedCriteria }
                                   (issue 2008 / ADR 0061 AC1). When supplied, stamps the log
                                   with the pinned revision identity via the ONE shared stamp
@@ -144,6 +146,7 @@ export const VALID_DISPOSITIONS = new Set(["unjudged", "accepted-for-fix", "defe
 // Validate + normalize a parsed --findings / --findings-file JSON array. Shared
 // by both flags so they carry identical validation — flagLabel only changes the
 // error-message prefix (--findings vs --findings-file).
+const REMEDY_KINDS = ["evidence_only", "pr_body"];
 function validateFindingsArray(parsed, flagLabel) {
   if (!Array.isArray(parsed)) {
     throw parseError(`${flagLabel} must be a JSON array`);
@@ -249,7 +252,10 @@ function validateFindingsArray(parsed, flagLabel) {
       }
       entry.judgeDisposition = jd;
     }
-    if (f.remedyKind === "evidence_only" || f.remedyKind === "pr_body") entry.remedyKind = f.remedyKind;
+    if (f.remedyKind !== undefined) {
+      if (!REMEDY_KINDS.includes(f.remedyKind)) throw parseError(`${flagLabel}[${i}].remedyKind must be one of: ${REMEDY_KINDS.join(", ")}`);
+      entry.remedyKind = f.remedyKind;
+    }
     if (f.failOpen === true) entry.failOpen = true;
     // Kept in the ledger only when it names a closed prior round's act fingerprint (writeGateFindingsLog checks).
     if (typeof f.resurfaces === "string" && /^[0-9a-f]{16}$/.test(f.resurfaces.trim())) entry.resurfaces = f.resurfaces.trim();
@@ -1241,27 +1247,45 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // helper. Pure no-op (byte-identical log) when the flag is absent.
   const stampedLog = stampOptionalSpecAuthority(log, specAuthorityIdentity);
   await mkdir(path.dirname(fullPath), { recursive: true });
-  if (options.rejudgeSameRound === true) await assertRejudgeOfLiveLedger(fullPath, logPath, options, stampedLog.findings);
-  const retainedRound = options.rejudgeSameRound === true ? null : await retainSameHeadLedger(fullPath, logPath, stampedLog.roundIdentity);
-  await writeSealed(fullPath, JSON.stringify(stampedLog, null, 2) + "\n");
+  const rejudged = options.rejudgeSameRound === true ? await overlayRejudgeOnLiveLedger(fullPath, logPath, options, stampedLog.findings) : null;
+  const retainedRound = rejudged ? null : await retainSameHeadLedger(fullPath, logPath, stampedLog.roundIdentity);
+  const written = rejudged ?? stampedLog;
+  await writeSealed(fullPath, JSON.stringify(written, null, 2) + "\n");
   return {
-    ok: true, path: logPath, log: stampedLog,
+    ok: true, path: logPath, log: written,
     ...(retainedRound ? { retainedRound } : {}),
     ...(angleCoverage.warning ? { warning: angleCoverage.warning } : {}),
   };
 }
-// GATE-LEDGER-REJUDGE-SAME-ROUND: an in-place re-judge rewrites exactly the live ledger of this gate and head, so it needs that ledger and the same finding fingerprints.
-async function assertRejudgeOfLiveLedger(fullPath, logPath, options, findings) {
+// GATE-LEDGER-REJUDGE-SAME-ROUND: an in-place re-judge overlays `remedyKind: "pr_body"` onto the live ledger of this gate and head, matched by fingerprint.
+// Every other field of the live ledger is kept as written; any other difference in the input findings refuses.
+async function overlayRejudgeOnLiveLedger(fullPath, logPath, options, findings) {
   let live;
   try {
     live = JSON.parse(await readSealed(fullPath));
   } catch (err) {
-    if (err?.code === OUT_OF_BAND_WRITE) throw err;
+    if (err?.code === OUT_OF_BAND_WRITE || !(err?.code === "ENOENT" || err instanceof SyntaxError)) throw err;
   }
+  if (options.gate !== "draft_gate") throw parseError("--rejudge-same-round supports only --gate draft_gate (rejudge-gate-unsupported)");
   const sameHead = typeof live?.headSha === "string" && live.headSha.trim().toLowerCase() === options.headSha.trim().toLowerCase();
   if (!sameHead || live.gate !== options.gate || !Array.isArray(live.findings)) throw parseError(`--rejudge-same-round needs a readable live ledger at ${logPath} for this gate and head (rejudge-no-live-ledger)`);
-  const prints = (list) => [...new Set(list.map((f) => fingerprintFinding(f)))].sort();
-  if (!isDeepStrictEqual(prints(live.findings), prints(findings))) throw parseError(`--rejudge-same-round findings must carry the same fingerprints as the live ledger ${logPath}; a re-judge never adds or drops a finding (rejudge-fingerprint-mismatch)`);
+  if (live.roundIdentity?.completed !== true) throw parseError(`--rejudge-same-round needs a completed live round at ${logPath} (rejudge-round-incomplete)`);
+  const sorted = (list) => list.map((f) => fingerprintFinding(f)).sort();
+  if (!isDeepStrictEqual(sorted(live.findings), sorted(findings))) throw parseError(`--rejudge-same-round findings must carry the same fingerprints as the live ledger ${logPath}; a re-judge never adds or drops a finding (rejudge-fingerprint-mismatch)`);
+  const pool = [...findings];
+  const merged = live.findings.map((liveFinding) => {
+    const fp = fingerprintFinding(liveFinding);
+    const input = pool.splice(pool.findIndex((f) => fingerprintFinding(f) === fp), 1)[0];
+    const { remedyKind: liveKind, ...liveRest } = liveFinding;
+    const { remedyKind: inputKind, ...inputRest } = input;
+    for (const field of new Set([...Object.keys(liveRest), ...Object.keys(inputRest)])) {
+      if (!isDeepStrictEqual(liveRest[field], inputRest[field])) throw parseError(`--rejudge-same-round may change only remedyKind; ${field} differs for finding ${fp} (rejudge-field-changed)`);
+    }
+    if (inputKind === liveKind) return liveFinding;
+    if (inputKind !== "pr_body" || liveKind !== undefined || liveFinding.judgeDisposition !== "act") throw parseError(`--rejudge-same-round may only add remedyKind pr_body to an act finding; finding ${fp} differs (rejudge-field-changed)`);
+    return { ...liveFinding, remedyKind: "pr_body" };
+  });
+  return { ...live, findings: merged };
 }
 // A second write at the same head must not destroy a finished round: every existing live ledger (and its seal) except an in-round rewrite (at least one finding, none judged) is copied
 // to the next free `<gate>-<sha>.round-<n>.json` sibling before the rewrite. Returns the retained path, or null when there was no live ledger or it is an in-round rewrite.

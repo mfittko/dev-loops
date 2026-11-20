@@ -11,7 +11,7 @@ const USAGE = `Usage: check-judge-decision.mjs --file <spec-authority-verdict.js
 Read-only. Runs the ledger writer's per-decision validator on every decision in the judge's
 spec-authority verdict file. The identities come from the verdict (specDigest, headSha,
 contentDigest); the criterion set is the union of the decisions' checkedCriteria. A code-change
-remedy needs defectClass and siteQuery; remedyKind "evidence_only" needs neither.
+remedy needs defectClass and siteQuery; remedyKind "evidence_only" or "pr_body" (a PR-body-only remedy) needs neither.
 Exit 0 and print { ok: true, checked } when every decision is valid. Otherwise print
 { ok: false, error, decisionIndex?, code?, field? } and exit 1. decisionIndex names the failing
 decision; code and field appear only when a valid_compliant decision lacks defectClass or siteQuery.

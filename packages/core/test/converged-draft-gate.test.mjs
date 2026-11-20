@@ -143,6 +143,8 @@ describe("composeBodyOnlyConvergedDraftGate", () => {
     assert.equal(bodyOnly([bodyItem("medium", 1, { ...withFile, remedyKind: "pr_body" })]).fixerCommit, A);
     assert.throws(() => bodyOnly([bodyItem("medium", 1, withFile)]), /body_item_locatable/);
     assert.throws(() => bodyOnly([bodyItem("medium", 1, { ...withFile, angle: "review-thread", remedyKind: "pr_body" })]), /body_item_locatable/);
+    // A review-thread item with no file is never a PR-body item: the refusal names the thread.
+    assert.throws(() => bodyOnly([bodyItem("medium", 1, { angle: "review-thread" })]), /body_item_locatable: .*is a review-thread item/);
   });
 
   test("refuses a question, a fail-open item and a security angle, suffixed or prefixed", () => {

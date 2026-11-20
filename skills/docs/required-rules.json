@@ -404,7 +404,7 @@
     {
       "id": "GATE-LEDGER-REJUDGE-SAME-ROUND",
       "enforcement": "runtime",
-      "enforcementNote": "Enforced by assertRejudgeOfLiveLedger in write-gate-findings-log.mjs, which refuses with rejudge-no-live-ledger or rejudge-fingerprint-mismatch; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+      "enforcementNote": "Enforced by overlayRejudgeOnLiveLedger in write-gate-findings-log.mjs, which refuses with rejudge-no-live-ledger, rejudge-fingerprint-mismatch, rejudge-field-changed, rejudge-round-incomplete or rejudge-gate-unsupported; the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-END-OF-RUN-CONTRACT",

@@ -4826,6 +4826,10 @@ test("3309: a cap-round body-only act list routes to the converged post, never t
   const result = evaluatePrGateCoordination({ ...base, draftOpenActList: { headSha: head, openActCount: 2, blockers: [], bodyOnly: true } });
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
   assert.match(result.agentRemedy.command, /^dev-loops-run scripts\/github\/upsert-checkpoint-verdict\.mjs --repo o\/r --pr 9 .*--converged-json/);
+  assert.equal(result.agentRemedy.command, `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo o/r --pr 9 --gate draft_gate --verdict clean --head-sha ${head} --findings-ledger <cap-round ledger> --converged-json <{ fixerCommit, actList, bodyOnly: true }>`);
+  assert.match(result.agentRemedy.summary, /^Edit the PR body through scripts\/github\/edit-pr\.mjs, then post the body-only converged draft_gate verdict/);
+  assert.match(result.reason, /every open act item of the current head is a PR-body item/);
+  assert.doesNotMatch(result.reason, /fixer pass is not proven landed/);
   const blocked = evaluatePrGateCoordination({ ...base, draftOpenActList: { headSha: head, openActCount: 1, blockers: [{ kind: "round_cap_reached", reason: "new_act", item: "[high] x (new_act)" }], bodyOnly: true } });
   assert.equal(blocked.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
   // The posted converged verdict is clean evidence at the head: the refusal no longer applies and the result is not address_review_feedback.

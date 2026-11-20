@@ -212,7 +212,7 @@ function nonEmptyStrings(value) {
   return Array.isArray(value) && value.length > 0 && value.every(nonEmpty);
 }
 
-/** A PR-body act item names no file; a thread item is exempt (its ref is the thread id). Consumers align to `sequence.actItems` with `actList.filter((e) => !isDeltaBodyItem(e))`. */
+/** A PR-body item names no file or carries `remedyKind: "pr_body"` (never a review-thread item); a thread item is exempt (its ref is the thread id). Consumers align to `sequence.actItems` with `actList.filter((e) => !isDeltaBodyItem(e))`. */
 export const isDeltaBodyItem = (entry) => entry?.angle !== "review-thread" && (entry?.remedyKind === "pr_body" || !resolveFindingFile(entry));
 
 /**
@@ -224,7 +224,7 @@ export const isDeltaBodyItem = (entry) => entry?.angle !== "review-thread" && (e
  */
 export function startDeltaSequence({ reviewBaselineHead, actList, reviewerOnly = false } = {}) {
   if (!nonEmpty(reviewBaselineHead)) throw new Error("delta sequence requires reviewBaselineHead");
-  // A PR-body act item names no file, so the file-reading delta reviewer can never resolve it; the next gate round verifies the body (ADR 0271).
+  // A PR-body act item (no file, or remedyKind pr_body) is one the file-reading delta reviewer can never resolve; the next gate round verifies the body (ADR 0271).
   // A thread item is exempt: its ref is the thread id the full-phase binding checks.
   // Number and validate the whole list once, so an auto ref `act-N` and an error index are the act list position every consumer sees.
   const all = Array.isArray(actList) && actList.length > 0 ? toDeltaActItems(actList) : null;
@@ -232,7 +232,7 @@ export function startDeltaSequence({ reviewBaselineHead, actList, reviewerOnly =
   const codeItems = all ? all.filter((_, i) => !isDeltaBodyItem(actList[i])) : [];
   // reviewerOnly reviews the PR-own commit range and accepts an empty act set, so an all-body list yields the empty code set instead of refusing.
   if (bodyItems.length > 0 && codeItems.length === 0 && !reviewerOnly) {
-    throw new Error(`delta_body_only_act_set: every act item names no file (PR-body items: ${bodyItems.join(", ")}), so no delta review runs. Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged verdict (upsert-checkpoint-verdict.mjs --converged-json with bodyOnly: true) at the cap round, or run the next gate round below the cap.`);
+    throw new Error(`delta_body_only_act_set: every act item is a PR-body item (no file, or remedyKind pr_body; items: ${bodyItems.join(", ")}), so no delta review runs. Edit the PR body through scripts/github/edit-pr.mjs, then post the body-only converged verdict (upsert-checkpoint-verdict.mjs --converged-json with bodyOnly: true) at the cap round, or run the next gate round below the cap.`);
   }
   const actItems = all ? codeItems : reviewerOnly && Array.isArray(actList) && actList.length === 0 ? [] : toDeltaActItems(actList);
   const actSetId = createHash("sha256")
@@ -508,7 +508,7 @@ function isSecurityAngle(angle) { return /(^|-)security(-|$)/.test(baseAngleName
 
 /**
  * Body-only cap round (ADR 0271, GATE-EXEC-NO-DEAD-END): a cap round whose open act items are all PR-body items clears with no commit.
- * Hard checks cover narrow facts only: every item names no file (a PR-body item), the live PR body digest differs from the
+ * Hard checks cover narrow facts only: every item is a PR-body item (no file, or remedyKind pr_body), the live PR body digest differs from the
  * reviewed `pr-body` read, the reviewed head..fixerCommit range holds no PR-own commit, and no item blocks (high, question, fail-open, security, missing or unknown severity).
  * Whether the edit resolves an item stays with pre_approval_gate. `fixerCommit` may equal the reviewed head.
  * Throws a typed refusal (`body_item_locatable`, `body_unchanged`, `own_commit_in_range`, `body_read_unrecorded`, `blocked_item`); returns the converged marker.
@@ -529,7 +529,9 @@ export function composeBodyOnlyConvergedDraftGate({ gate, headSha, round, cap, r
   const blocked = items.find(isBlockedActItem);
   if (blocked) throw new Error(`blocked_item: act item ${JSON.stringify(blocked.summary)} is not medium, low or nit, is fail-open or is from a security angle; it needs a fix commit or an operator decision, not a body-only exit (GATE-EXEC-NO-DEAD-END)`);
   const locatable = items.find((item) => !isDeltaBodyItem(item));
-  if (locatable) throw new Error(`body_item_locatable: act item ${JSON.stringify(locatable.summary)} names a file; it needs a fix commit and a delta review, not a body-only exit`);
+  if (locatable) throw new Error(locatable.angle === "review-thread"
+    ? `body_item_locatable: act item ${JSON.stringify(locatable.summary)} is a review-thread item; a thread is never a PR-body item, so it needs a fix commit and a delta review, not a body-only exit`
+    : `body_item_locatable: act item ${JSON.stringify(locatable.summary)} names a file and is not remedyKind pr_body; it needs a fix commit and a delta review, not a body-only exit`);
   if (!reviewedBodySha) throw new Error(`body_read_unrecorded: no cap-round context records a pr-body read at ${headSha}, so a body edit cannot be shown, and write-gate-context.mjs refuses a rerun at the cap head; fix the items with a commit and run the reviewer-only delta (check-pre-push-delta.mjs --reviewer-only)`);
   if (reviewedBodySha === liveBodySha) throw new Error("body_unchanged: the live PR body digest equals the reviewed pr-body read; edit the PR body first");
   if (ownCommits !== 0) throw new Error(`own_commit_in_range: ${headSha}..${converged.fixerCommit} holds ${ownCommits} PR-own commit(s); clear them with the reviewer-only delta review instead`);

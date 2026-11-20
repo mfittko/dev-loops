@@ -78,7 +78,7 @@ const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha
 
 Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
 
-  --act-list <path>       The judge-pass --out act list the fix resolves. An act item that names no file (a PR-body item) leaves the act set and is printed as bodyItems, a top-level field of the input-run output that is present only when at least one act item was dropped; edit the PR body through scripts/github/edit-pr.mjs and the next gate round verifies it. An act list of only such items refuses delta_body_only_act_set, except on the --reviewer-only route, where it yields an empty code act set and prints bodyItems
+  --act-list <path>       The judge-pass --out act list the fix resolves. An act item that names no file or carries remedyKind pr_body (a PR-body item) leaves the act set and is printed as bodyItems, a top-level field of the input-run output that is present only when at least one act item was dropped; edit the PR body through scripts/github/edit-pr.mjs and the next gate round verifies it. An act list of only such items refuses delta_body_only_act_set, except on the --reviewer-only route, where it yields an empty code act set and prints bodyItems
   --threads-file <path>   Thread route, in place of --act-list: successful list-review-threads --unresolved-only
                           output, or a github-sourced capture-review-threads --unresolved --bodies file, for --repo/--pr. Each unresolved thread is one act item; its ref is the threadId.
   --repo <owner/name>     Required with --threads-file and --reviewer-only
@@ -488,7 +488,7 @@ async function readPrBase(fetchPr, { repo, pr }) {
 
 // Remedies the reviewer-only refusals name (each command exists in the CLI registry; the conformance walk checks it).
 // The coordinator routes the cap-round state back to extend-cap-round-chain and this tool, so no remedy here names it.
-const FIXER_REMEDY = "The cap round's open act items need a fix commit: commit it on the PR branch (the worktree HEAD is the PR head), then rerun the reviewer-only delta. When every open act item is a PR-body item (no file named), edit the PR body and post upsert-checkpoint-verdict.mjs --converged-json with { fixerCommit, actList, bodyOnly: true } instead (ADR 0271)";
+const FIXER_REMEDY = "The cap round's open act items need a fix commit: commit it on the PR branch (the worktree HEAD is the PR head), then rerun the reviewer-only delta. When every open act item is a PR-body item (no file named, or remedyKind pr_body), edit the PR body and post upsert-checkpoint-verdict.mjs --converged-json with { fixerCommit, actList, bodyOnly: true } instead (ADR 0271)";
 // A locally_clear record or an extension at the baseline means the act items are cleared: the next range starts at the chain end.
 // Both render at use time so the form follows CLAUDECODE at the refusal, like the sibling call-time cliError.
 const chainEndRemedy = () => renderCliText("The cap round's act items are already cleared: run dev-loops gate extend-cap-round-chain --repo <owner/name> --pr <n> (its refusal names the reviewer-only delta and the baseline to use)");

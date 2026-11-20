@@ -286,7 +286,8 @@ Optional:
                                             (GATE-EXEC-LOW-NIT-CONVERGENCE):
                                             { fixerCommit, actList, deltaResult }.
                                             A cap round whose open act items are
-                                            all PR-body items (no file named)
+                                            all PR-body items (no file named, or
+                                            remedyKind pr_body)
                                             clears with no commit through
                                             { fixerCommit, actList, bodyOnly: true }
                                             and no deltaResult (ADR 0271); it
@@ -1164,7 +1165,10 @@ function normalizeStructuredFinding(f) {
   if (typeof f.judgeReason === "string" && f.judgeReason.trim().length > 0) {
     entry.judgeReason = f.judgeReason.trim();
   }
-  if (f.remedyKind === "evidence_only" || f.remedyKind === "pr_body") entry.remedyKind = f.remedyKind;
+  if (f.remedyKind !== undefined) {
+    if (f.remedyKind !== "evidence_only" && f.remedyKind !== "pr_body") throw new Error(`finding remedyKind must be "evidence_only" or "pr_body"`);
+    entry.remedyKind = f.remedyKind;
+  }
   if (Number.isInteger(f.followUpIssueNumber) && f.followUpIssueNumber > 0) {
     entry.followUpIssueNumber = f.followUpIssueNumber;
   }
@@ -2892,7 +2896,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         const roundBody = bodyCounts(roundActItems);
         const listBody = bodyCounts(convergedInput.actList);
         const differs = [...new Set([...roundBody.keys(), ...listBody.keys()])].filter((k) => (roundBody.get(k) ?? 0) !== (listBody.get(k) ?? 0));
-        if (differs.length > 0) throw new Error(`--converged-json actList and the round's act items (ledger at ${canonicalHeadSha} plus --findings-json) disagree on which items are PR-body items (no file): ${differs.join("; ")}. Give each item the same file in both lists.`);
+        if (differs.length > 0) throw new Error(`--converged-json actList and the round's act items (ledger at ${canonicalHeadSha} plus --findings-json) disagree on which items are PR-body items (no file, or remedyKind pr_body): ${differs.join("; ")}. Give each item the same file and remedyKind in both lists.`);
       }
       // A mixed list holds PR-body items the delta reviewer never sees: pass the digests of the body-only route's body-change check.
       const bodyDigests = roundActItems.some(isDeltaBodyItem) ? {
@@ -3309,7 +3313,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       if (judged) {
         lf.judgeDisposition = judged.judgeDisposition;
         if (lf.followUpIssueNumber == null && judged.followUpIssueNumber) lf.followUpIssueNumber = judged.followUpIssueNumber;
-        // Label only when every same-fingerprint act match is evidence_only, so array order cannot hide a file-change sibling.
+        // Label only when every same-fingerprint act match has the same remedyKind (evidence_only or pr_body), so array order cannot hide a file-change sibling.
         const sameMatches = flatFindings.filter((f) => f.judgeDisposition === judged.judgeDisposition && same(f));
         if (judged.remedyKind && sameMatches.every((f) => f.remedyKind === judged.remedyKind) && !lf.remedyKind) lf.remedyKind = judged.remedyKind;
       }
