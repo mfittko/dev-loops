@@ -4002,3 +4002,18 @@ test("writeGateFindingsLog raises the verdict from the input severity of an acte
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("3297: a fanout_fanin write without --judge-verdict refuses when a judge plan has no verdict yet, and writes with no judge plan", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judge-plan-"));
+  try {
+    const headSha = "c9".repeat(20);
+    const base = { repo: "o/n", pr: 28, gate: "draft_gate", headSha, verdict: "clean", tmpRoot: tmpDir, findings: JSON.stringify([]) };
+    assert.equal((await writeGateFindingsLog(base)).ok, true, "no judge plan");
+    const judgeDir = path.resolve(buildGateArtifactPath({ repo: "o/n", pr: 28, gate: "draft_gate", headSha, tmpRoot: tmpDir, dir: "gate-judge" }));
+    await mkdir(judgeDir, { recursive: true });
+    await writeFile(path.join(judgeDir, "judge-emit-plan.json"), JSON.stringify({ roundId: "j5000-ab" }), "utf8");
+    await assert.rejects(() => writeGateFindingsLog({ ...base, executionMode: "fanout_fanin" }), (err) => /^judge_verdict_required:/.test(err.message) && /write-findings-log --judge-verdict <verdict-path> --findings-file <judge-pass --ledger-out>/.test(err.message));
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});

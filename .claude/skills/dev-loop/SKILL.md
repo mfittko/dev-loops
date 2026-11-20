@@ -211,9 +211,7 @@ its work order, which pins the consolidated ledger, the spec-context output, the
 (PR declared scope and diff) and the prior-round judge verdicts. It then awaits its two verdict artifacts: the relevance verdict at
 `tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/<roundId>/judge-verdict.json` and the spec-authority
 verdict at the sibling `spec-authority-verdict.json` (its only writes). The gate coordinator
-writes the durable ledger with `write-gate-findings-log --judge-verdict <verdict-path>
---spec-authority <identity-path>` using those completed verdicts; posting the visible gate
-verdict stays with the dev-loop coordinator. The gate coordinator then runs the deterministic
+runs the deterministic
 bridge to derive the fixer's act list for Phase 4, always with the spec-authority flags, plus the
 durable-approval flags across re-entry:
 
@@ -234,6 +232,8 @@ all-stale fallback. The fix pass consumes ONLY `--out`'s act list (the judge's `
 `judge-pass` fail-closed (any case in the Gate Review Sub-Loop Contract Phase 3.5 list) means re-run the judge at the current head, never a
 silent severity-only fallback or a silent skip of spec authority. See Gate Review Sub-Loop Contract
 Phase 3.5 and `skills/docs/spec-authority-contract.md` for the enforcement rules these flags carry.
+
+The gate coordinator writes the durable findings log only after `judge-pass`: `write-gate-findings-log --judge-verdict <verdict-path> --findings-file <judge-pass --ledger-out> --spec-authority <identity-path>`, so the log carries the coerced dispositions and `upsert-checkpoint-verdict.mjs` accepts it without a rewrite. A `fanout_fanin` `draft_gate` or `pre_approval_gate` write without `--judge-verdict` refuses `judge_verdict_required` while the round has a judge plan with no verdict yet. Posting the visible gate verdict stays with the dev-loop coordinator.
 
 After the fixer commits the act-list fix and before it pushes, the dev-loop coordinator runs the
 delta-mode pre-push review (`PRE-PUSH-DELTA-TRIGGER` in the

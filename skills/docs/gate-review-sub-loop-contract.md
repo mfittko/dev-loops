@@ -1063,7 +1063,7 @@ node scripts/loop/spec-context.mjs changed-paths --base <prior_approved_head_sha
 **AC1 — one identity stamp, every durable record writer (issue 2008 / ADR 0061).** The SAME `spec-context.mjs` call also writes the round's revision-identity stamp once via `--identity-out <identity-path>` (`{ specDigest, headSha, contentDigest, checkedCriteria }`, `buildRevisionIdentity` + `specCriterionIds`; see `packages/core/src/loop/spec-authority.mjs`). The conductor passes `--spec-authority <identity-path>` to every durable record writer this round invokes, by default, on every round: `consolidate-fanin --spec-authority <identity-path>` (Phase 3's fan-in ledger), `write-gate-findings-log.mjs --spec-authority <identity-path>`, `upsert-checkpoint-verdict.mjs --spec-authority <identity-path>` (the posted verdict record), and, on a carry-forward round, `resolve-angle-carry-forward.mjs --spec-authority <identity-path>` (the carry-forward plan). Each writer threads the identity through the ONE shared `stampSpecAuthorityIdentity`/`stampOptionalSpecAuthority` helper (`scripts/lib/spec-authority-stamp.mjs`), never recomputing it, so every gate/fixer/carry-forward record pins both revision identities and the checked criteria (judge-pass's own `--ledger-out`/`--approvals-out` carry the identities natively via its `--spec-file`/`--content-digest`/`--spec-authority-verdict` flags below).
 
 **Dispatch bridge (runtime wiring).** After the judge agent writes its verdict
-artifacts and the durable ledger is written with `--judge-verdict`, the conductor runs the
+artifacts, the conductor runs the
 deterministic bridge `scripts/loop/judge-pass.mjs` (`node <dev-loops-package-root>/cli/index.mjs gate judge-pass`) to derive
 the fixer's **act list** for Phase 4: given `--findings-file` (the consolidated ledger) and
 `--judge-verdict` (the judge's relevance-verdict artifact path), `judge-pass` validates the
@@ -1090,6 +1090,8 @@ node <dev-loops-package-root>/cli/index.mjs gate judge-pass --repo <owner/name> 
   [--prior-approvals <prior-approvals-path> --approvals-out <approvals-out-path>] \
   [--changed-paths <changed-paths-path> --coverage-map <coverage-map-path>]
 ```
+
+The gate coordinator writes the durable findings log only after `judge-pass`: `write-gate-findings-log --judge-verdict <verdict-path> --findings-file <judge-pass --ledger-out> --spec-authority <identity-path>`, so the log carries the coerced dispositions and `upsert-checkpoint-verdict.mjs` accepts it without a rewrite. A `fanout_fanin` `draft_gate` or `pre_approval_gate` write without `--judge-verdict` refuses `judge_verdict_required` while the round has a judge plan with no verdict yet.
 
 The conductor hands the act list — never the full unfiltered ledger —
 to the fixer pass (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`). If `judge-pass` fails closed (stale

@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
 import { DEFAULT_TEST_PR_BODY, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
 import { parseUpsertCheckpointVerdictCliArgs, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
+import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 
 // A judge act list drives the review verdict read from the findings ledger:
 // a non-empty act list keeps the round from clean, whatever the severities.
@@ -544,3 +545,14 @@ for (const { name, jsonFile, refused } of [
     }, { prefix: "dev-loops-act-list-fingerprint-" });
   });
 }
+
+test("3297: a log written from a judge-pass --ledger-out is posted without a rewrite", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerOut = path.join(tempDir, "ledger-out.json");
+    await writeFile(ledgerOut, JSON.stringify({ overallVerdict: "findings_present", findings: [finding("medium", "act"), finding("low", "reject")] }), "utf8");
+    const written = await writeGateFindingsLog({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD, findingsFile: ledgerOut, verdict: "findings_present", tmpRoot: tempDir });
+    const posted = await post(written.path);
+    assert.equal(posted.error, undefined);
+    assert.match(posted.body, /\*\*Verdict:\*\* findings_present/);
+  }, { prefix: "dev-loops-act-list-new-order-" });
+});

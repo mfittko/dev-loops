@@ -89,7 +89,7 @@ Optional:
                                  FAILS CLOSED; an absent one changes nothing.
                                  After a judge pass the log's verdict is findings_present whenever an act item is open (blocked
                                  stays blocked). A non-review write without this flag refuses judge_verdict_required when a
-                                 j<id>/judge-verdict.json exists for the round. An explicit --verdict
+                                 j<id>/judge-verdict.json exists for the round, or a fanout_fanin round has a judge plan with no verdict yet. An explicit --verdict
                                  may equal the wrapper's overallVerdict or that composed findings_present.
   --tmp-root <path>              Root tmp directory. Default: the MAIN worktree's tmp/
                                  — the ledger is anchored at the primary git
@@ -949,6 +949,19 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     candidates.sort((a, b) => a.ms - b.ms || (a.entry < b.entry ? -1 : a.entry > b.entry ? 1 : 0));
     const latest = candidates.at(-1);
     if (latest) throw parseError(`judge_verdict_required: a judge verdict exists at ${latest.found}; pass --judge-verdict ${latest.found} so the log carries the judged verdict`);
+    // A judge plan newer than this round and every consumed judge, with no verdict yet: the log is written after judge-pass, from its --ledger-out.
+    if (executionMode === "fanout_fanin") {
+      for (const root of judgeRoots) {
+        const planPath = path.join(path.resolve(repoRoot, buildGateArtifactPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: root, dir: "gate-judge" })), "judge-emit-plan.json");
+        let planMs = 0;
+        try {
+          planMs = Number(/^j(\d+)-/.exec(JSON.parse(await readFile(planPath, "utf8"))?.roundId ?? "")?.[1]) || 0;
+        } catch { /* an absent or unreadable plan binds no judge */ }
+        if (planMs > Math.max(roundEmittedMs, consumedWatermarkMs)) {
+          throw parseError(`judge_verdict_required: a judge plan exists at ${planPath} with no verdict yet; run judge-pass, then write the log with write-findings-log --judge-verdict <verdict-path> --findings-file <judge-pass --ledger-out>`);
+        }
+      }
+    }
   }
   // The writer resolves the round before it retains the live same-head ledger, so it counts that ledger itself, but only when retention will keep it (the shared isInRoundRewrite predicate): every later reader counts it as the retained round.
   if (options.judgeVerdict) {
