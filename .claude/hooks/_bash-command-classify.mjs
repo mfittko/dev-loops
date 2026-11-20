@@ -1918,20 +1918,35 @@ function hasUnreadableLauncherWord(raw) {
   const isBare = /(?:^|\/)dev-loops$/.test(head);
   if (!isRunner && !isRun && !isBare) return false;
   let i = at + 1;
-  if (isRun && raw[i] === "--repo-root") i += 2;
+  if (isRun && raw[i] === "--repo-root") {
+    // The value is one shell word: a quoted value spans to its closing quote, so a checkout path with a space stays one word.
+    let end = i + 1;
+    const quote = /^["']/.test(raw[end] ?? "") ? raw[end][0] : null;
+    if (quote && !(raw[end].length > 1 && raw[end].endsWith(quote))) {
+      while (end < raw.length - 1 && !raw[++end].endsWith(quote));
+    }
+    i = end + 1;
+  }
   const hides = (w, target) => {
     if (w === undefined || /^[A-Za-z0-9_./-]+$/.test(w)) return false;
     if (!/^[A-Za-z0-9_./*?[\]-]+$/.test(w)) return true;
     try {
-      return new RegExp(`${w.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(target);
+      return new RegExp(`(?:^|/)${w.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(target);
     } catch {
       return true;
     }
   };
   if (isRunner) {
-    // Scan to the first word that is a cli/index.mjs entrypoint or a glob matching the recorder script, so runner flag values need no grammar; an inline-code flag ends the scan (code string, not a recorder).
-    const entry = raw.findIndex((w, j) => j > at && (/^(?:-[ep]|--eval|--print)$/.test(w) || w.endsWith("cli/index.mjs") || (/[*?[]/.test(w) && /^[A-Za-z0-9_./*?[\]-]+$/.test(w) && hides(w, "scripts/github/record-operator-decision.mjs"))));
-    if (entry < 0 || /^-/.test(raw[entry])) return false;
+    // Scan to the first word that is a cli/index.mjs entrypoint or a glob matching the recorder script, so runner flag values need no grammar. An inline-code flag, a `bun x` package binary or another script word ends the scan: what follows is data for that program.
+    let entry = -1;
+    for (let j = at + 1; j < raw.length; j++) {
+      const w = raw[j];
+      if (/^(?:-[ep]|--eval|--print)$/.test(w) || (w === "x" && raw[j - 1] === head)) break;
+      if (w.endsWith("cli/index.mjs") || (/[*?[]/.test(w) && /^[A-Za-z0-9_./*?[\]-]+$/.test(w) && hides(w, "scripts/github/record-operator-decision.mjs"))) { entry = j; break; }
+      // A script word right after a flag is that flag's value (`--loader ./l.mjs`), so the scan goes on.
+      if (/\.[cm]?[jt]s$/.test(w) && !/^-/.test(raw[j - 1])) break;
+    }
+    if (entry < 0) return false;
     i = entry;
   }
   if (raw[i] === undefined) return false;

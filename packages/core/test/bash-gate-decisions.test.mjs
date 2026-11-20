@@ -634,6 +634,9 @@ const SHELL_BUILT_RECORDER_SPELLINGS = [
   `dev-loops decision$IFS record --repo o/n`,
   `dev-loops {decision,} record --repo o/n`,
   `dev-loops decision $'record' --repo o/n`,
+  `dev-loops-run --repo-root "/Users/me/My Projects/repo" cli/index.mjs decision $'record' --repo o/n`,
+  `dev-loops-run --repo-root "/Users/x/My Projects/repo" scripts/github/record-operator-*.mjs --repo o/n`,
+  `bun scripts/github/record-operator-decision.m?s --repo o/n`,
 ];
 
 test("quoted prose that mentions dev-loops-run and plain runner commands are not denied", () => {
@@ -645,6 +648,11 @@ test("quoted prose that mentions dev-loops-run and plain runner commands are not
     `node $HOME/x.mjs`,
     `node 'scripts/foo.mjs'`,
     `dev-loops status`,
+    `dev-loops-run --repo-root "/Users/me/My Projects/repo" scripts/loop/startup.mjs`,
+    `dev-loops-run --repo-root /w scripts/loop/startup.mjs`,
+    `dev-loops-run --repo-root "/Users/x/My Projects/repo" scripts/github/merge-pr.mjs --repo o/n --pr 5`,
+    `bun x eslint *.mjs`,
+    `node scripts/x.mjs *.mjs`,
   ]) {
     assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, command);
   }

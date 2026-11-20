@@ -3,7 +3,7 @@ import { test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { parseRecordCliArgs, recordDecision } from "../../scripts/github/record-operator-decision.mjs";
+import { parseRecordCliArgs, recordDecision, runCli } from "../../scripts/github/record-operator-decision.mjs";
 import { parseDecisionHeader, answerSha256 } from "@dev-loops/core/github/operator-decision-record";
 import { makeGhStub, withTempDir } from "../_helpers.mjs";
 
@@ -167,4 +167,21 @@ test("parse: the other three kinds are not yet supported; unknown kinds and a mi
   assert.throws(() => parseRecordCliArgs([...base, "--kind", "bogus"]), /--kind must be/);
   assert.throws(() => parseRecordCliArgs(["--repo", "o/n", "--target", "pr", "--kind", "accept", "--operator-answer-file", "a", "--body-file", "b"]), /requires/);
   assert.equal(parseRecordCliArgs([...base, "--kind", "accept"]).number, 7);
+});
+
+test("runCli writes a refusal to stderr as JSON with exit 1 and maps a thrown gh failure to recorder_error", async () => {
+  await withTempDir(async (dir) => {
+    const files = await fixture(dir);
+    const argv = ["--repo", "o/n", "--target", "pr", "7", "--kind", "accept", "--head", HEAD, "--operator-answer-file", files.answerFile, "--body-file", files.bodyFile];
+    const streams = () => { const out = []; const err = []; return { out, err, stdout: { write: (s) => out.push(s) }, stderr: { write: (s) => err.push(s) } }; };
+
+    const refused = streams();
+    assert.equal(await runCli(argv, { stdout: refused.stdout, stderr: refused.stderr, env: {}, run: makeGhStub([]).run }), 1);
+    assert.equal(JSON.parse(refused.err.join("")).reason, "harness_without_permission_prompt");
+    assert.deepEqual(refused.out, []);
+
+    const failed = streams();
+    assert.equal(await runCli(argv, { stdout: failed.stdout, stderr: failed.stderr, env: CLAUDE, run: makeGhStub([]).run }), 1);
+    assert.equal(JSON.parse(failed.err.join("")).reason, "recorder_error");
+  });
 });
