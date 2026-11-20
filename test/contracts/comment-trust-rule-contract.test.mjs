@@ -65,7 +65,7 @@ test("every entry script that reads trust-filtered text loads the trust config",
   const readsDirect = (src) => /\b(isTrustedCommentAuthor|isTrustedGraphqlComment|isTrustedRestComment|parseReviewThreads|fetchAllReviewThreads(?:WithSkips)?|parseUnresolvedThreadBodies)\b/.test(src.replace(/^export \{[\s\S]*?\} from .*$/gm, ""));
   const isHelper = (f) => path.basename(f).startsWith("_");
   // shortcut: bindings imported from another entry module that never reach a trust read (paths, loaders, resolvers); add one here when an entry imports a pure helper, upgrade to a per-binding read analysis when the list grows.
-  const NON_READING_ENTRY_BINDINGS = new Set(["fixerPlanPath", "keyedFixerPlanPathForRef", "locateFixerUnit", "loadRefinementArtifact", "resolveLinkedIssuesFromPr", "buildGateEmitPlanPath"]);
+  const NON_READING_ENTRY_BINDINGS = new Set(["fixerPlanPath", "keyedFixerPlanPathForRef", "locateFixerUnit", "loadRefinementArtifact", "resolveLinkedIssuesFromPr", "buildGateEmitPlanPath", "assertPlanSourceHasNoThreads"]);
   const reads = (f, seen = new Set()) => {
     if (seen.has(f)) return false;
     seen.add(f);
