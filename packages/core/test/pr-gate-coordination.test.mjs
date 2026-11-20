@@ -4919,3 +4919,31 @@ for (const { name, evidence, clean } of [
     assert.equal(result.draftGate.cleanEvidenceExists, clean);
   });
 }
+
+test("copilot_unavailable allows pre_approval_gate and notes Copilot was unavailable", () => {
+  const input = {
+    pr: 10,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.COPILOT_UNAVAILABLE,
+    loopDisposition: DISPOSITION.DONE,
+    copilotReviewRequestStatus: "none",
+    unresolvedThreadCount: 0,
+    ciStatus: "success",
+    copilotReviewRoundCount: 0,
+    maxCopilotRounds: 3,
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+  };
+  const result = evaluatePrGateCoordination(input);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert.ok(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert.match(result.reason, /request_not_observable/);
+  assert.match(result.gateEvidenceNote, /Copilot was unavailable/);
+  assert.equal(shouldGuardCopilotReviewRequest({
+    copilotReviewRequestStatus: "none",
+    copilotUnavailable: true,
+    maxCopilotRounds: 3,
+    gateBoundary: result.gateBoundary,
+  }), false);
+});

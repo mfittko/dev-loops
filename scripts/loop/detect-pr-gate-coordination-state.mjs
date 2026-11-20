@@ -48,6 +48,7 @@ import { copilotBodyJudgePath, readReviewMarkerCommits, resolveCurrentHeadBodyFe
 import { evaluateToolchainAuthority, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
+import { readRequestNotObservable } from "./_unobservable-review-request-record.mjs";
 import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -1155,6 +1156,10 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     // A finding the judge cannot receive (failed write) keeps blocking, for both shapes.
     copilotBodyFeedbackUnresolved: bodyFeedback.copilotBodyFeedbackUnresolved && !bodyRoutedToJudge,
     copilotPriorHeadBodyFeedbackUnresolved: bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved && !bodyRoutedToJudge,
+    copilotRequestNotObservable: await readRequestNotObservable(
+      { repo: options.repo, pr: options.pr, headSha: currentHeadSha },
+      { checkpointDir: runtime.checkpointDir },
+    ),
   });
   if (snapshot.unresolvedThreadCount > 0
       && !snapshot.copilotReviewOnCurrentHead
@@ -1558,6 +1563,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     roundCapCleanFallback,
     postConvergenceSignificantChange,
     postConvergenceReviewSuppressed: context.postConvergenceReviewSuppressed === true,
+    copilotUnavailable: context.interpretation?.state === STATE.COPILOT_UNAVAILABLE,
     gateBoundary: result.gateBoundary,
   })) {
     result.gateBoundary = PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW;

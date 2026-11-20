@@ -20,6 +20,7 @@ import { buildSnapshotFromPrFacts, interpretLoopState } from "@dev-loops/core/lo
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveCopilotReviewRequestStatus } from "../loop/_copilot-review-request-status.mjs";
+import { recordUnobservableRequest } from "../loop/_unobservable-review-request-record.mjs";
 import { getLastCopilotReviewHeadSha, resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "../loop/_copilot-convergence-carry.mjs";
 import { resolveCurrentHeadBodyFeedback } from "./_copilot-body-disposition.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
@@ -1032,7 +1033,12 @@ async function performRequest(
     // cross-check above observed it within the bounded verification window.
     // Treat this as eventually consistent instead of a hard failure; a truly
     // unavailable Copilot reviewer is already classified `unavailable` above
-    // via the 422 path and never reaches here.
+    // via the 422 path and never reaches here. The durable count lets the loop
+    // report Copilot unavailable after repeated unobservable requests.
+    await recordUnobservableRequest(
+      { repo: options.repo, pr: options.pr, headSha: before.prData?.headRefOid ?? null },
+      { checkpointDir: runtime.checkpointDir },
+    );
     return ({
       ...requestResult,
       detail: "Copilot review request POST succeeded but was not yet observable via requested_reviewers/reviews or GraphQL within the verification window; treating as eventually consistent rather than failing.",

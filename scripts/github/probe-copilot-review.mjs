@@ -13,6 +13,7 @@ import {
 } from "@dev-loops/core/loop/policy-constants";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
+import { recordTimedOutProbe } from "../loop/_unobservable-review-request-record.mjs";
 import { waitWithHeartbeat } from "./_watch-heartbeat.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
 
@@ -442,6 +443,10 @@ export async function runCli(
   const options = { ...requested, timeoutMs };
   let baseline;
   let result = await watchCopilotReview(options, { env, ghCommand, ...watchDeps, onBaseline: (b) => { baseline = b; } });
+  if (result.status === "timeout" && remainingMs === 0) {
+    // The record counts only probes that follow an unobservable request.
+    await recordTimedOutProbe({ repo: options.repo, pr: options.pr }, { checkpointDir: watchDeps.checkpointDir });
+  }
   if (result.status === "timeout" && remainingMs > 0) {
     const ids = Object.fromEntries(BASELINE_KINDS.map((kind) => [kind, baseline[kind].map((item) => item.id)]));
     result = { ...result, ...pendingFields({ remainingMs, command: scriptCommand(import.meta.url), argv, carry: { "--baseline-ids": JSON.stringify(ids) } }) };
