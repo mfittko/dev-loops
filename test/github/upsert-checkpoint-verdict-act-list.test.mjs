@@ -601,11 +601,11 @@ for (const { name, copilotBody } of [
   });
 }
 
-test("3297: the writer keeps the bridge's coerced dispositions and the Copilot follow-up target", async () => {
+test("3297: the writer drops a non-re-derivable bridge rejection and keeps the Copilot follow-up target", async () => {
   await withTempDir(async (tempDir) => {
     const { written } = await postAfterJudgePassLedgerOut(tempDir, { copilotBody: true, coerce: true });
     const log = JSON.parse(await readFile(written.path, "utf8"));
-    assert.equal(log.findings[0].judgeDisposition, "reject");
+    assert.equal(log.findings[0].judgeDisposition, "act");
     assert.equal(log.findings[2].followUpIssueNumber, 99);
     assert.equal(log.findings.length, 3);
   }, { prefix: "dev-loops-act-list-coerce-" });
