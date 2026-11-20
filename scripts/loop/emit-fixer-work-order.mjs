@@ -71,6 +71,7 @@ A commit_only or full emission writes its sequence marker under the head's seque
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
 (default: the main checkout's tmp/; an explicit --tmp-root inside a linked worktree is refused) and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef }.
+A refusal prints { ok: false, refusal?, error } with a typed refusal code; ledger_appeared means a gate round ledger appeared at the current head during a carried emit, so re-run the emit.
 joinRef is the path for gate wait-for-units --artifact (with --after <planPath>): a full-phase fixer's final-on-write report (<outputRef>.report), else the outputRef.
 Each run supersedes the previous emission for this PR, except a same-head no-commit commit_only re-emission with a locally_clear --delta-result sealed for the canonical plan's execution: it writes fixer-emit-plan.<executionIdentity>.json beside the canonical plan, writes no sequence marker and prints that keyed path as planPath (a join target, never a delta --fixer-plan). Dispatch the printed
 dispatchPayload (the --harness adapter call carrying dispatchPrompt, plus the config-resolved model on the Claude payload when non-null) unchanged; an

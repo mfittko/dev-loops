@@ -351,7 +351,7 @@ The line appears only on a `clean` `draft_gate` comment, and it marks the two ca
 stands over open judge act items (the first case is all low or nit, at the cap round or later; below the cap the poster refuses a converged post and the next full round runs; the second case is the `GATE-EXEC-NO-DEAD-END` body-only post below, ADR 0271). A body without the line reads back as absent
 (unchanged). A present line that does not match the format reads back as malformed, and
 `buildPreMergeGateCheck` fails closed on it. Gate coordination treats a valid line as the
-`draft_gate` marker of the fixer commit's head. The line is not merge evidence: merge still needs a
+`draft_gate` marker of the fixer commit's head. The marker also carries from the fixer commit to a later base merge that the full base-merge carry classifier accepts (ADR 0294, `GATE-EXEC-BASE-MERGE-VERDICT-CARRY`). The line is not merge evidence: merge still needs a
 clean current-head `pre_approval_gate`.
 
 A body-only cap round (`GATE-EXEC-NO-DEAD-END`, ADR 0271) renders the same line at the reviewed head with
@@ -444,7 +444,7 @@ satisfies the gate.
 
 <!-- rule: GATE-COMMENT-DRAFT-REQUIREMENTS -->
 `GATE-COMMENT-DRAFT-REQUIREMENTS`: The PR MUST NOT leave draft unless a visible, current-head
-`clean` `draft_gate` checkpoint verdict comment exists, per the rules below. Exception: `GATE-EXEC-LOW-NIT-CONVERGENCE` lets the converged `draft_gate` comment at head A that names the fixer commit stand as the comment for the fixer head.
+`clean` `draft_gate` checkpoint verdict comment exists, per the rules below. Exception: `GATE-EXEC-LOW-NIT-CONVERGENCE` lets the converged `draft_gate` comment at head A that names the fixer commit stand as the comment for the fixer head, and for a later base merge that the full base-merge carry classifier accepts from it (ADR 0294, `GATE-EXEC-BASE-MERGE-VERDICT-CARRY`).
 
 **One-time transition boundary.** `draft_gate` records exactly one decision point: the
 draft → ready-for-review transition. Once a clean `draft_gate` comment exists on the PR and the
@@ -454,7 +454,7 @@ follow-up relies on normal review/fix loops and the recurring per-head `pre_appr
 - **Skip rule:** skip the draft gate entirely only when a clean `draft_gate` comment exists on
   the PR (any head) AND the PR has already left draft. Do not re-post it on later heads.
 - While the PR is still draft, a checkpoint verdict comment for an older head SHA does not
-  satisfy the current head. A new head requires a new current-head `draft_gate` comment, except that the converged comment of `GATE-EXEC-LOW-NIT-CONVERGENCE` at head A satisfies the fixer commit head it names.
+  satisfy the current head. A new head requires a new current-head `draft_gate` comment, except that the converged comment of `GATE-EXEC-LOW-NIT-CONVERGENCE` at head A satisfies the fixer commit head it names and a later base-merge head carried from it (`GATE-EXEC-BASE-MERGE-VERDICT-CARRY`).
 - When the `draft_gate` runs (while the PR is still draft and no clean evidence exists
   for the current head), the PR MUST receive a visible checkpoint verdict comment.
 - If the `draft_gate` verdict is `findings_present` or `blocked`, the comment MUST
