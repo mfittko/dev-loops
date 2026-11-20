@@ -18,4 +18,4 @@ The Bash gate already holds inline denials with no registered rule ID, such as t
 
 The orchestrator is the only actor that runs `merge-pr.mjs`, with or without `--check`. The check is a guardrail for cooperative agents. Its ceiling is a script name assembled at run time, such as a variable or a command substitution that joins `merge-` and `pr`, because the raw text then holds no `merge-pr`. A script written to a file and run later is the same ceiling. The deny does not follow these forms. The Claude PreToolUse seam is the only consumer today; Pi wiring is tracked in issue 3033.
 
-`mergeStateStatus: CLEAN` alone is not enough to resume approval or merge claims. Every [merge-ready precondition](../docs/merge-preconditions.md#required-before-merge) still applies.
+`mergeStateStatus: CLEAN` alone is not enough to resume approval or merge claims. Every [merge-ready precondition](../../skills/docs/merge-preconditions.md#required-before-merge) still applies.
