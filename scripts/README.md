@@ -746,7 +746,7 @@ Required:
 - `--repo <owner/name>`
 - `--pr <number>`
 - `--gate <draft_gate|pre_approval_gate>`
-- `--head-sha <sha>` — the FULL current head commit SHA (40 or 64 hex chars); a short prefix is rejected (the gate marker is keyed by it and the pre-merge check resolves the full head SHA)
+- `--head-sha <sha>` — the FULL current head commit SHA (40 or 64 hex chars), or with `--gate draft_gate` and a clean verdict the head of a completed clean cap round that the PR head descends from; a short prefix is rejected (the gate marker is keyed by it and the pre-merge check resolves the full head SHA)
 - `--verdict <clean|findings_present|blocked>`
 - `--findings-summary <text>`
 - `--next-action <text>`
