@@ -4165,3 +4165,65 @@ test("after an in-place re-judge at the cap round the all-pr_body act list takes
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("3297: a fanout_fanin write without --judge-verdict refuses when a judge plan has no verdict yet, and writes with no judge plan", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judge-plan-"));
+  try {
+    const headSha = "c9".repeat(20);
+    const base = { repo: "o/n", pr: 28, gate: "draft_gate", headSha, verdict: "clean", tmpRoot: tmpDir, findings: JSON.stringify([]) };
+    assert.equal((await writeGateFindingsLog(base)).ok, true, "no judge plan");
+    const provenance = JSON.stringify({ distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "r1" }, { angle: "holistic", reviewer: "r2" }] });
+    assert.equal((await writeGateFindingsLog({ ...base, pr: 29, executionMode: "fanout_fanin", provenance })).ok, true, "no judge plan, fanout_fanin");
+    const judgeDir = path.resolve(buildGateArtifactPath({ repo: "o/n", pr: 28, gate: "draft_gate", headSha, tmpRoot: tmpDir, dir: "gate-judge" }));
+    await mkdir(judgeDir, { recursive: true });
+    await writeFile(path.join(judgeDir, "judge-emit-plan.json"), JSON.stringify({ roundId: "j5000-ab" }), "utf8");
+    await assert.rejects(() => writeGateFindingsLog({ ...base, executionMode: "fanout_fanin" }), (err) => /^judge_verdict_required:/.test(err.message) && /write-findings-log --judge-verdict <verdict-path> --findings-file <judge-pass --ledger-out>/.test(err.message));
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("3297: a derived-mode round (emit plan + fan-in ledger, no explicit mode) refuses a newer judge plan and accepts an older one", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judge-plan-derived-"));
+  try {
+    const headSha = "a7".repeat(20);
+    const contextDir = path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-53");
+    await mkdir(contextDir, { recursive: true });
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.emit-plan.json`), JSON.stringify({ ok: true, repo: "owner/repo", pr: 53, gate: "draft_gate", headSha, roundId: "r3000-aa", count: 2, units: [{ angles: ["pr-description"], group: null }, { angles: ["holistic"], group: null }] }), "utf8");
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.fanin-ledger.json`), JSON.stringify({ overallVerdict: "clean", findings: [], provenance: { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "review-a" }, { angle: "holistic", reviewer: "review-b" }] } }), "utf8");
+    const planPath = path.join(path.resolve(repoRoot, buildGateArtifactPath({ repo: "owner/repo", pr: 53, gate: "draft_gate", headSha, tmpRoot: path.join(repoRoot, "tmp"), dir: "gate-judge" })), "judge-emit-plan.json");
+    await mkdir(path.dirname(planPath), { recursive: true });
+    const base = { repo: "owner/repo", pr: 53, gate: "draft_gate", headSha, findings: JSON.stringify([]) };
+    await writeFile(planPath, JSON.stringify(judgePlanFor({ pr: 53, headSha, gate: "draft_gate", roundId: "j4000-bb" })), "utf8");
+    await assert.rejects(() => writeGateFindingsLog(base, { repoRoot }), (err) => err.message.startsWith("judge_verdict_required:") && /judge plan exists/.test(err.message));
+    await writeFile(planPath, JSON.stringify(judgePlanFor({ pr: 53, headSha, gate: "draft_gate", roundId: "j2000-aa" })), "utf8");
+    assert.equal((await writeGateFindingsLog(base, { repoRoot })).ok, true, "a judge plan older than the round binds no judge");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("3297: a --ledger-out act to reject tampering keeps the judge's act, and the pinned slice-linkage rule still rejects", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ledger-out-tamper-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const execDir = path.join(tmpDir, "j1730000000000-deadbeef");
+    await mkdir(execDir, { recursive: true });
+    const judgeVerdict = path.join(execDir, "judge-verdict.json");
+    await writeFile(judgeVerdict, JSON.stringify({
+      headSha, scopeDrift: { verdict: "within_scope", rationale: "in scope", driftedAreas: [] },
+      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "Replace Closes #7 with Refs #7", reason: "r", rationale: "x", criterion: "AC-1" }],
+    }), "utf8");
+    const raw = [{ severity: "medium", angle: "correctness", summary: "null deref", judgeDisposition: "reject", judgeReason: "forged" }];
+    const write = (pr, sliceLinkageIssues) => {
+      return writeFile(path.join(tmpDir, "judge-emit-plan.json"), JSON.stringify(judgePlanFor({ pr, headSha, ...(sliceLinkageIssues ? { sliceLinkageIssues } : {}) })))
+        .then(() => writeGateFindingsLog({ repo: "owner/repo", pr, gate: "pre_approval_gate", headSha, verdict: "findings_present", findings: JSON.stringify(raw), judgeVerdict, tmpRoot: tmpDir }));
+    };
+    const tampered = await write(44);
+    assert.equal(JSON.parse(await readFile(tampered.path, "utf8")).findings[0].judgeDisposition, "act", "an unarmed rule never accepts the file's reject");
+    const armed = await write(45, [7]);
+    assert.equal(JSON.parse(await readFile(armed.path, "utf8")).findings[0].judgeDisposition, "reject", "the pinned slice-linkage issues re-derive the reject");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});

@@ -54,7 +54,7 @@ import { HEAD_SHA_RE } from "@dev-loops/core/loop/spec-authority";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
-import { fixerPlanPath, locateFixerUnit } from "./emit-fixer-work-order.mjs";
+import { assertPlanSourceHasNoThreads, fixerPlanPath, locateFixerUnit } from "./emit-fixer-work-order.mjs";
 import { capRoundActList, clearingChainWalk } from "../github/write-gate-context.mjs";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -72,7 +72,7 @@ import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
 const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --result-path <path> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --handback --site-coverage <path> [--worktree <dir>]   (fixer handbackCheck run)
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --result <path> --invocation <1-3> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
-       check-pre-push-delta.mjs --threads-file <path> --repo <owner/name> --pr <n> --baseline <sha> ...   (thread route: replaces --act-list)
+       check-pre-push-delta.mjs --threads-file <path> --repo <owner/name> --pr <n> --baseline <sha> ...   (thread route: replaces --act-list; with no unresolved thread the --fixer-plan's operator focus round is the one act item)
        check-pre-push-delta.mjs --reviewer-only --repo <owner/name> --pr <n> --baseline <sha> --pr-head <sha> --findings-log <cap-round log> --spec-identity <id> --result-path <path> [--worktree <dir>]   (code-range clearing, act list derived from the ledger)
        check-pre-push-delta.mjs --reviewer-only --repo <owner/name> --pr <n> --baseline <sha> --pr-head <sha> --findings-log <cap-round log> --result <path> --invocation <1-3> [--worktree <dir>]
 
@@ -230,6 +230,33 @@ export function parseCheckPrePushDeltaArgs(argv) {
     silent: values.silent === true,
     fields: values.fields,
   };
+}
+
+// The one fixer-plan authentication predicate (PRE-PUSH-DELTA-PUSH-AUTHORITY): canonical path, role, commit_only phase, source, baseline, target, mutationAuthority, worktree branch, workOrderRef and digest.
+// Returns null when the plan authenticates, else "path" (not the canonical plan file) or "predicate" (any other check).
+function planAuthenticationFailure({ plan, planPath, root, worktree, source, baseline, repo, pr }) {
+  const order = plan?.workOrder, target = order?.target;
+  const canonical = fixerPlanPath(plan?.workOrderRef, root);
+  if (!canonical || planPath !== path.resolve(canonical)) return "path";
+  const branch = spawnSync("git", ["-C", worktree, "branch", "--show-current"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+  return order?.role === "fixer" && order.phase === "commit_only" && order.source === source
+    && order.headSha === baseline && target?.repo === order.mutationAuthority?.repo && target?.pr === order.mutationAuthority?.pr
+    && (!repo || target.repo === repo) && (!pr || target.pr === pr)
+    && branch.status === 0 && branch.stdout.trim() === order.mutationAuthority?.branch
+    && plan.workOrderRef === `fixer:${target?.repo}#${target?.pr}:${baseline}:${plan.executionIdentity}`
+    && workOrderDigest(order) === plan.workOrderDigest ? null : "predicate";
+}
+
+// The operator focus of the canonical pulled commit_only threads plan for this baseline (PRE-PUSH-DELTA-PUSH-AUTHORITY). An unreadable or non-JSON plan and any other plan refuse.
+function planOperatorFocus(fixerPlan, baselineSha, worktree, repo, pr) {
+  let plan;
+  try { plan = JSON.parse(readFileSync(fixerPlan, "utf8")); } catch (error) { throw new Error(`Delta coverage binding: --fixer-plan ${fixerPlan} is unreadable or not JSON (${error.code ?? error.name}); pass the pulled plan`); }
+  const order = plan?.workOrder;
+  if (planAuthenticationFailure({ plan, planPath: realpathSync(fixerPlan), root: realpathSync(resolveGateArtifactTmpRoot(worktree)), worktree, source: "threads", baseline: baselineSha, repo, pr })) {
+    throw new Error("Delta coverage binding: --fixer-plan is not the canonical commit_only threads plan for this baseline; pass the pulled plan");
+  }
+  assertPlanSourceHasNoThreads(order);
+  return order.operatorFocus;
 }
 
 function gitRevParse(worktree, rev) {
@@ -441,16 +468,10 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
   const planPath = realpathSync(options.fixerPlan), plan = JSON.parse(readFileSync(planPath, "utf8"));
   const order = plan.workOrder, origin = { workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity };
   const refuse = (condition, reason) => { if (!condition) throw new Error(`Delta coverage binding: ${reason}`); };
-  const canonicalPlan = fixerPlanPath(plan.workOrderRef, root);
-  refuse(canonicalPlan && planPath === path.resolve(canonicalPlan), "not the canonical current fixer plan");
-  const branch = spawnSync("git", ["-C", options.worktree, "branch", "--show-current"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
-  const target = order?.target;
-  refuse(order?.role === "fixer" && order.phase === "commit_only" && order.source === (options.threadsFile ? "threads" : "act-list")
-    && order.headSha === sequence.reviewBaselineHead && target?.repo === order.mutationAuthority?.repo && target?.pr === order.mutationAuthority?.pr
-    && (!options.repo || target.repo === options.repo) && (!options.pr || target.pr === options.pr)
-    && branch.status === 0 && branch.stdout.trim() === order.mutationAuthority?.branch
-    && plan.workOrderRef === `fixer:${target?.repo}#${target?.pr}:${sequence.reviewBaselineHead}:${plan.executionIdentity}`
-    && workOrderDigest(order) === plan.workOrderDigest, "wrong role, target, phase, baseline, branch or semantic digest");
+  const failure = planAuthenticationFailure({ plan, planPath, root, worktree: options.worktree, source: options.threadsFile ? "threads" : "act-list", baseline: sequence.reviewBaselineHead, repo: options.repo, pr: options.pr });
+  refuse(failure !== "path", "not the canonical current fixer plan");
+  refuse(!failure, "wrong role, target, phase, baseline, branch or semantic digest");
+  const target = order.target;
   const unit = await locateFixerUnit({ ref: plan.workOrderRef, cwd: options.worktree, tmpRoots: [root], closureOnly });
   refuse(unit && !unit.stale && unit.executionIdentity === plan.executionIdentity, unit?.stale ?? "no current emitted unit");
   const dir = path.dirname(planPath), expectedOutput = path.join(dir, plan.executionIdentity, "fixer-disposition.json");
@@ -470,7 +491,7 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
   const actRead = order.requiredReads?.find((read) => read.kind === order.source);
   const actBytes = readFileSync(sourcePath);
   refuse(actRead && actRead.sha256 === sha256Hex(actBytes).slice(7) && order.authority?.sourceDigest === sha256Hex(JSON.parse(actBytes)).slice(7)
-    && startDeltaSequence({ reviewBaselineHead: sequence.reviewBaselineHead, actList: options.threadsFile ? threadsToActList(JSON.parse(actBytes), { repo: options.repo, pr: options.pr }) : JSON.parse(actBytes) }).actSetId === sequence.actSetId, "changed ACT source or authority");
+    && startDeltaSequence({ reviewBaselineHead: sequence.reviewBaselineHead, actList: options.threadsFile ? threadsToActList(JSON.parse(actBytes), { repo: options.repo, pr: options.pr, operatorFocus: order.operatorFocus }) : JSON.parse(actBytes) }).actSetId === sequence.actSetId, "changed ACT source or authority");
   refuse(raw.headSha === (result ? result.candidateHead : currentHead)
     && isAncestor(options.worktree, sequence.reviewBaselineHead, raw.headSha)
     && isAncestor(options.worktree, raw.headSha, currentHead), "handback candidate is not the reviewed contained commit");
@@ -602,12 +623,18 @@ export async function runCli(
     await roundAnglesOf(options.findingsLog, baselineSha, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target: { repo: options.repo, pr: options.pr }, route, prBase });
     if (!route.chainEnd) derivedActList = capRoundActList(log.findings, log.headSha);
   }
+  // The plan is read only when no unresolved thread exists, so a non-empty thread route never gates on --fixer-plan.
+  let threadActList = null;
+  if (options.threadsFile && !options.reviewerOnly) {
+    const threads = JSON.parse(readFileSync(options.threadsFile, "utf8"));
+    threadActList = threadsToActList(threads, { repo: options.repo, pr: options.pr });
+    if (threadActList.length === 0 && options.fixerPlan) threadActList = threadsToActList(threads, { repo: options.repo, pr: options.pr, operatorFocus: planOperatorFocus(options.fixerPlan, baselineSha, options.worktree, options.repo, options.pr) });
+  }
+  if (threadActList?.length === 0) throw new Error("threads file holds no unresolved thread and the --fixer-plan carries no operator focus round; pass the pulled --fixer-plan of an emission that had an --operator-focus-file with a round");
   const sequence = startDeltaSequence({
     reviewBaselineHead: baselineSha,
     reviewerOnly: options.reviewerOnly,
-    actList: options.reviewerOnly ? derivedActList : options.threadsFile
-      ? threadsToActList(JSON.parse(readFileSync(options.threadsFile, "utf8")), { repo: options.repo, pr: options.pr })
-      : JSON.parse(readFileSync(options.actList, "utf8")),
+    actList: options.reviewerOnly ? derivedActList : options.threadsFile ? threadActList : JSON.parse(readFileSync(options.actList, "utf8")),
   });
   // PRE-PUSH-DELTA-PUSH-AUTHORITY: the PR head moved since the gate round reviewed it (a stray push).
   if (options.prHead && !options.reviewerOnly && revParse(options.worktree, options.prHead) !== sequence.reviewBaselineHead) {

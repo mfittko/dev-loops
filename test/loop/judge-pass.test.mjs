@@ -15,8 +15,8 @@ import {
 } from "../../scripts/loop/judge-pass.mjs";
 import { trustCommentFixtures } from "../_helpers.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
+import { buildGateEmitPlanPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { hasReopenLine, rejectClosingRefRemoval, sliceLinkageIssues } from "../../scripts/loop/_slice-linkage.mjs";
-import { readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { resolveDraftRoundCap } from "../../scripts/github/write-gate-context.mjs";
 import { dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 import { shellQuote } from "../../scripts/lib/checkout-delegation-refusal.mjs";
@@ -465,10 +465,10 @@ for (const [label, maxReviewRounds, expectedActs] of [["at the round cap", 1, 4]
   assert.equal(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8")).length, expectedActs);
 });
 
-test("judgePassCli: after the round's own durable ledger is written, round 1 keeps an all-nit act cluster (GATE-EXEC-LOW-FIX-UNTIL-CAP)", async () => {
+test("judgePassCli: a completed live same-head ledger counts as an earlier round, so round 2 closes an all-nit act cluster as the writer does (GATE-EXEC-LOW-FIX-UNTIL-CAP)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-own-ledger-"));
   await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
-  // The conductor runs judge-pass after write-gate-findings-log wrote this round's judged ledger at the head.
+  // The durable log is written after judge-pass: a completed ledger at the head is an earlier round of the same head.
   const ledgerDir = path.join(tmpDir, "tmp", "gate-findings", "mfittko-dev-loops", "pr-3080");
   await mkdir(ledgerDir, { recursive: true });
   await writeFile(path.join(ledgerDir, `draft_gate-${HEAD}.json`), JSON.stringify({
@@ -479,6 +479,29 @@ test("judgePassCli: after the round's own durable ledger is written, round 1 kee
   await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tidy" }] })));
   const payload = await judgePassCli(
     { repo: "mfittko/dev-loops", pr: "3080", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json", tmpRoot: "./tmp" },
+    { repoRoot: tmpDir, ...stubDeferralDeps().deps },
+  );
+  assert.equal(payload.actCount, 0, "round 2 closes the all-nit act cluster");
+});
+
+test("judgePassCli: a re-judge in the same emit round (new j<id>, same roundId) counts the live ledger as the same round, as the writer does", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-same-round-"));
+  await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
+  const ledgerDir = path.join(tmpDir, "tmp", "gate-findings", "mfittko-dev-loops", "pr-3080");
+  await mkdir(ledgerDir, { recursive: true });
+  await writeFile(path.join(ledgerDir, `draft_gate-${HEAD}.json`), JSON.stringify({
+    repo: "mfittko/dev-loops", pr: 3080, gate: "draft_gate", headSha: HEAD, verdict: "findings_present", loggedAt: "2026-11-05T00:00:00.000Z",
+    roundIdentity: { roundId: "r1-aa", judgeExecution: "j1-aa", completed: true },
+    findings: [finding({ severity: "nit", summary: "a nit", judgeDisposition: "act" })],
+  }));
+  const planPath = path.join(tmpDir, buildGateEmitPlanPath({ repo: "mfittko/dev-loops", pr: 3080, gate: "draft_gate", headSha: HEAD }));
+  await mkdir(path.dirname(planPath), { recursive: true });
+  await writeFile(planPath, JSON.stringify({ roundId: "r1-aa" }));
+  await mkdir(path.join(tmpDir, "j2-bb"));
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ severity: "nit", summary: "a nit" })] }));
+  await writeFile(path.join(tmpDir, "j2-bb", "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tidy" }] })));
+  const payload = await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "3080", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./j2-bb/judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json", tmpRoot: "./tmp" },
     { repoRoot: tmpDir, ...stubDeferralDeps().deps },
   );
   assert.equal(payload.actCount, 1, "round 1 keeps the all-nit act cluster");
@@ -727,15 +750,13 @@ function stubDeferralDeps({ closing = [], listed = [] } = {}) {
   return { deps: { run, commentIssue }, runCalls, commentCalls };
 }
 
-async function runDeferRound({ findings, dispositions, deps, config, pr = "1658", gate = "draft_gate", durable, seal = false, tamper = false }) {
+async function runDeferRound({ findings, dispositions, deps, config, pr = "1658", gate = "draft_gate", durable }) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-defer-"));
   // A durable findings log written before the pass (write-gate-findings-log --judge-verdict never records a defer target).
   const durablePath = path.join(tmpDir, "tmp", "gate-findings", "mfittko-dev-loops", `pr-${pr}`, `${gate}-${HEAD}.json`);
   if (durable) {
     await mkdir(path.dirname(durablePath), { recursive: true });
     await writeFile(durablePath, JSON.stringify(Array.isArray(durable) ? { repo: "mfittko/dev-loops", pr: Number(pr), gate, headSha: HEAD, verdict: "findings_present", findings: durable } : durable));
-    if (seal) await writeSealed(durablePath, await readFile(durablePath, "utf8"));
-    if (tamper) await writeFile(durablePath, `${await readFile(durablePath, "utf8")}\n`);
   }
   if (config) await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify(config));
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
@@ -748,51 +769,17 @@ async function runDeferRound({ findings, dispositions, deps, config, pr = "1658"
   return { payload, enriched, tmpDir, durableLog: Array.isArray(durable) ? JSON.parse(await readFile(durablePath, "utf8")) : undefined };
 }
 
-test("judgePassCli: the defer target reaches the durable findings log the cap-round fixer check reads (AC4a)", async () => {
+test("judgePassCli: a round-2 pass at the same head leaves the round-1 live durable log byte-identical", async () => {
   const { deps } = stubDeferralDeps({ closing: [2425] });
-  const durable = [finding({ summary: "fix this", judgeDisposition: "act" }), finding({ summary: "defer this", severity: "medium", judgeDisposition: "defer" })];
-  const { durableLog } = await runDeferRound({
-    findings: [finding({ summary: "fix this" }), finding({ summary: "defer this", severity: "medium" })],
-    dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" }, { index: 1, ...DEFER }],
+  const durable = [finding({ summary: "defer this", severity: "medium", judgeDisposition: "defer" })];
+  const { durableLog, enriched } = await runDeferRound({
+    findings: [finding({ summary: "defer this", severity: "medium" })],
+    dispositions: [{ index: 0, ...DEFER }],
     deps, durable,
   });
-  assert.equal(durableLog.findings[1].followUpIssueNumber, 2425);
-  assert.equal(durableLog.findings[0].followUpIssueNumber, undefined, "an act item gets no target");
+  assert.equal(enriched.findings[0].followUpIssueNumber, 2425, "the enriched ledger carries the target for the writer's --ledger-out merge");
+  assert.deepEqual(durableLog.findings, durable, "judge-pass never writes the durable log");
 });
-
-test("judgePassCli: a stamped sealed durable findings log still passes readSealed (AC2)", async () => {
-  const { deps } = stubDeferralDeps({ closing: [2425] });
-  const { tmpDir } = await runDeferRound({
-    findings: [finding({ summary: "defer this", severity: "medium" })],
-    dispositions: [{ index: 0, ...DEFER }],
-    deps, durable: [finding({ summary: "defer this", severity: "medium", judgeDisposition: "defer" })], seal: true,
-  });
-  const logPath = path.join(tmpDir, "tmp", "gate-findings", "mfittko-dev-loops", "pr-1658", `draft_gate-${HEAD}.json`);
-  assert.equal(JSON.parse(await readSealed(logPath)).findings[0].followUpIssueNumber, 2425);
-});
-
-test("judgePassCli: a sealed then hand-edited durable findings log fails the defer stamp with the out-of-band code (AC2)", async () => {
-  const { deps } = stubDeferralDeps({ closing: [2425] });
-  await assert.rejects(runDeferRound({
-    findings: [finding({ summary: "defer this", severity: "medium" })],
-    dispositions: [{ index: 0, ...DEFER }],
-    deps, durable: [finding({ summary: "defer this", severity: "medium", judgeDisposition: "defer" })], seal: true, tamper: true,
-  }), /gate_artifact_out_of_band_write/);
-});
-
-for (const [label, durable] of [
-  ["malformed (no ledger identity)", { findings: [finding({ summary: "defer this", severity: "medium", judgeDisposition: "defer" })] }],
-  ["without a findings array", { repo: "mfittko/dev-loops", pr: 1658, gate: "draft_gate", headSha: HEAD, verdict: "findings_present" }],
-]) {
-  test(`judgePassCli: a durable findings log ${label} fails the pass instead of skipping the stamp`, async () => {
-    const { deps } = stubDeferralDeps({ closing: [2425] });
-    await assert.rejects(runDeferRound({
-      findings: [finding({ summary: "defer this", severity: "medium" })],
-      dispositions: [{ index: 0, ...DEFER }],
-      deps, durable,
-    }), /Gate findings ledger/);
-  });
-}
 
 const DEFER = { disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } };
 
@@ -2168,9 +2155,7 @@ test("judgePassCli at pre_approval_gate rewrites the durable log entry to reject
     deps: stubDeferralDeps().deps, pr: "2724", gate: "pre_approval_gate",
     durable: [finding({ severity: "low", summary: "low one", judgeDisposition: "defer", followUpDraft: { title: "t", body: "d" } })],
   });
-  assert.equal(durableLog.findings[0].judgeDisposition, "reject");
-  assert.equal(durableLog.findings[0].followUpDraft, undefined);
-  assert.equal(durableLog.findings[0].followUpIssueNumber, undefined);
+  assert.equal(durableLog.findings[0].judgeDisposition, "defer", "judge-pass leaves the durable log to the writer");
 });
 
 test("judgePassCli at pre_approval_gate rejects every member of a mixed low+nit cluster when the only target is the PR itself", async () => {
@@ -2183,8 +2168,7 @@ test("judgePassCli at pre_approval_gate rejects every member of a mixed low+nit 
     durable: [{ ...low, judgeDisposition: "defer", followUpDraft: { title: "t", body: "d" } }, { ...nit, judgeDisposition: "defer", followUpDraft: { title: "t", body: "d" } }],
   });
   assert.deepEqual(enriched.findings.map((f) => f.judgeDisposition), ["reject", "reject"]);
-  assert.deepEqual(durableLog.findings.map((f) => f.judgeDisposition), ["reject", "reject"]);
-  assert.deepEqual(durableLog.findings.map((f) => f.followUpIssueNumber), [undefined, undefined]);
+  assert.deepEqual(durableLog.findings.map((f) => f.judgeDisposition), ["defer", "defer"], "judge-pass leaves the durable log to the writer");
 });
 
 test("pre_approval_gate: failOpen low stays a medium act, mixed medium and low keeps the medium act, a question stays open", () => {

@@ -24,7 +24,7 @@ import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { readSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
-import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
+import { assertDeltaClearsFullPhase, assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { addLocalOrigin, ensureOriginHead, makeGhMock, runIdFreeEnv, withTempDir, withoutClaudeCode } from "../_helpers.mjs";
@@ -399,6 +399,60 @@ test("a commit_only emit under a held head lock refuses sequence_lock_busy and l
     } finally { Date.now = realNow; }
     assert.equal(existsSync(sequenceMarkerPath(tmpRoot, head)), false);
     assert.equal((await readdir(tmpRoot, { recursive: true })).some((f) => /fixer-emit-plan\.json$/.test(f)), false);
+  });
+});
+
+test("a zero-thread threads commit_only emit refuses without an operator focus round and writes no marker; with one it emits and a focus-bound record clears full", async () => {
+  const { sequenceMarkerPath } = await import("@dev-loops/core/loop/fix-push-authority");
+  await withFixture(async ({ root, head, files, emit, writeRecord }) => {
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [] }));
+    const base = { phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined };
+    await assert.rejects(emit(base), /no unresolved thread needs an --operator-focus-file with a round/);
+    assert.equal(existsSync(sequenceMarkerPath(path.join(root, "tmp"), head)), false);
+    const focusFile = path.join(root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ round: "tighten the cap-round summary wording" }));
+    const commitOnly = await emit({ ...base, operatorFocusFile: focusFile });
+    assert.equal(commitOnly.workOrder.phase, "commit_only");
+    const focusItems = [{ ref: "operator-focus", status: "resolved" }];
+    // A record that clears a weaker round never grants the push: while the canonical plan is still the commit_only order, only the focus digest can refuse it.
+    const { startDeltaSequence: startOther } = await import("@dev-loops/core/loop/pre-push-delta-review");
+    const otherFocus = path.join(root, "tmp", "other-focus.json");
+    await writeFile(otherFocus, JSON.stringify({ round: "fix a typo" }));
+    const otherId = startOther({ reviewBaselineHead: head, actList: [{ ref: "operator-focus", angle: "operator-focus", summary: "fix a typo", judgeDisposition: "act" }] }).actSetId;
+    await writeRecord({ items: focusItems, actSetId: otherId });
+    await assert.rejects(emit({ ...base, phase: "full", operatorFocusFile: otherFocus }), /not the one in the canonical commit_only work order/);
+    // A plan whose operatorFocusDigest was altered without its workOrderDigest grants nothing, even for the issued focus round.
+    const plan = JSON.parse(readFileSync(commitOnly.planPath, "utf8"));
+    const goodBytes = readFileSync(commitOnly.planPath, "utf8");
+    const { actSetId: focusActSetId } = startOther({ reviewBaselineHead: head, actList: [{ ref: "operator-focus", angle: "operator-focus", summary: "tighten the cap-round summary wording", judgeDisposition: "act" }] });
+    await writeRecord({ items: focusItems, actSetId: focusActSetId });
+    const checkFull = () => assertDeltaClearsFullPhase({ tmpRoot: path.join(root, "tmp"), headSha: head, repo: REPO, pr: PR, threads: [], operatorFocus: commitOnly.workOrder.operatorFocus, candidateHead: head });
+    checkFull();
+    await writeFile(commitOnly.planPath, JSON.stringify({ ...plan, workOrder: { ...plan.workOrder, operatorFocusDigest: "0".repeat(64) } }));
+    assert.throws(checkFull, /missing, altered or not a threads order/);
+    await writeFile(commitOnly.planPath, goodBytes);
+    await writeRecord({ items: focusItems });
+    // A record reviewed against another round's act set (the default ACT set here) never clears.
+    await writeRecord({ items: focusItems });
+    await assert.rejects(emit({ ...base, phase: "full", operatorFocusFile: focusFile }), /not reviewed against this operator focus round/);
+    const { startDeltaSequence: start } = await import("@dev-loops/core/loop/pre-push-delta-review");
+    const actSetId = start({ reviewBaselineHead: head, actList: [{ ref: "operator-focus", angle: "operator-focus", summary: "tighten the cap-round summary wording", judgeDisposition: "act" }] }).actSetId;
+    await writeRecord({ items: focusItems, actSetId });
+    assert.equal((await emit({ ...base, phase: "full", operatorFocusFile: focusFile })).workOrder.phase, "full");
+    await assert.rejects(emit({ ...base, phase: "full" }), /not reviewed against this operator focus round/);
+    // The first full emission renamed its plan over the canonical one; a re-emission with the same focus still succeeds and another focus still refuses.
+    assert.equal((await emit({ ...base, phase: "full", operatorFocusFile: focusFile })).workOrder.phase, "full");
+    await writeRecord({ items: focusItems, actSetId: otherId });
+    await assert.rejects(emit({ ...base, phase: "full", operatorFocusFile: otherFocus }), /not the one in the canonical commit_only work order/);
+  });
+});
+
+test("a zero-thread commit_only emit whose only thread is trust-incomplete names that cause and writes no marker", async () => {
+  const { sequenceMarkerPath } = await import("@dev-loops/core/loop/fix-push-authority");
+  await withFixture(async ({ root, head, files, emit }) => {
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], trustIncomplete: true }] }));
+    await assert.rejects(emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined }), /every thread is trust-incomplete/);
+    assert.equal(existsSync(sequenceMarkerPath(path.join(root, "tmp"), head)), false);
   });
 });
 
@@ -1785,7 +1839,7 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
 });
 
 test("F1/F4: changing act list, threads, allowed paths, branch, phase or head changes the digest; equal inputs keep it", async () => {
-  await withFixture(async ({ wt, head, files, emit, writeRecord }) => {
+  await withFixture(async ({ root, wt, head, files, emit, writeRecord }) => {
     const base = await emit();
     assert.equal((await emit()).workOrderDigest, base.workOrderDigest);
     const variants = [
@@ -1807,7 +1861,8 @@ test("F1/F4: changing act list, threads, allowed paths, branch, phase or head ch
     variants.push(await emit());
     await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [] }));
     await writeRecord({ items: [] });
-    variants.push(await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads }));
+    await writeFile(path.join(root, "tmp", "focus.json"), JSON.stringify({ round: "zero-thread focus" }));
+    variants.push(await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, operatorFocusFile: path.join(root, "tmp", "focus.json") }));
     const digests = new Set([base, ...variants].map((unit) => unit.workOrderDigest));
     assert.equal(digests.size, variants.length + 1);
   });
