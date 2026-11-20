@@ -28,11 +28,17 @@ export function checkCoreResolutionBeforeImport(root) {
   return { ok: false, code: "worktree_core_unresolved", message: `node_modules/@dev-loops/core does not resolve to this checkout's packages/core (WORKTREE-DEPS-ISOLATED). ${fix}` };
 }
 
+// import.meta.main exists from Node 24.2.0; on Node 24.0 and 24.1 it is undefined, so compare paths instead of failing open.
+export function isEntryScript(main, argv1 = process.argv[1], url = import.meta.url) {
+  if (main !== undefined) return main;
+  try { return Boolean(argv1) && realpathSync(argv1) === realpathSync(fileURLToPath(url)); } catch { return false; }
+}
+
 const DEFAULT_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 {
   const core = checkCoreResolutionBeforeImport(DEFAULT_ROOT);
   if (!core.ok) {
-    if (import.meta.main) { process.stderr.write(`${core.code}: ${core.message}\n`); process.exit(1); }
+    if (isEntryScript(import.meta.main)) { process.stderr.write(`${core.code}: ${core.message}\n`); process.exit(1); }
     throw Object.assign(new Error(core.message), { code: core.code });
   }
 }
@@ -570,7 +576,8 @@ export async function runBunTest(args, {
     // on their absence behaves the same locally as in CI. The caller's env object
     // is left untouched.
     const childEnv = { ...env };
-    for (const marker of [...ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER]) delete childEnv[marker];
+    // The re-exec marker covers one hop only: bun test descendants must not inherit it.
+    for (const marker of [...ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER, "DEV_LOOPS_BUN_TEST_REEXEC"]) delete childEnv[marker];
     const child = spawnImpl(command, buildBunTestArgs(files, env), {
       env: childEnv, stdio: ["ignore", capture.fd, capture.fd],
     });
@@ -629,7 +636,7 @@ export async function runBunTest(args, {
   return returnCode;
 }
 
-if (import.meta.main) {
+if (isEntryScript(import.meta.main)) {
   if (!process.versions.bun) {
     // Discovery uses the Bun.Glob global, so a Node entry re-executes the whole script under Bun.
     // A non-Bun BUN_BIN would re-enter this block forever, so a second pass fails fast.
