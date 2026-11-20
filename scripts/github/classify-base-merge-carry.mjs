@@ -54,7 +54,7 @@ async function rawEntries(runGit, repoRoot, from, to) {
   return entries.sort();
 }
 const entryPath = (e) => e.split("\t").slice(0, -2).join("\t");
-// Path bytes are decoded as latin1 (one-to-one), so distinct non-UTF-8 paths stay distinct; the gate-tooling matcher only needs ASCII prefixes.
+// Path bytes are decoded as latin1 (one-to-one), so distinct non-UTF-8 paths stay distinct; the gate-tooling matcher only matches ASCII directory names and file-name tokens.
 // A criss-cross history has several merge bases; any ambiguity fails closed.
 async function singleMergeBase(runGit, repoRoot, baseRef, head) {
   const bases = lines(await git(runGit, repoRoot, ["merge-base", "--all", baseRef, head]));

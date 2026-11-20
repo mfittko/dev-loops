@@ -138,6 +138,19 @@ test("buildPreMergeGateCheck passes with a carried marker and fails with an unca
   assert.equal(buildPreMergeGateCheck(evidence(marker(origin)), 0).ok, false);
 });
 
+// ADR 0296: a base delta that used to count as gate tooling (a lockfile, a non-outcome script) now carries and merge accepts it.
+test("buildPreMergeGateCheck accepts a carry whose base delta touches a formerly-tooling path", async () => {
+  for (const file of ["package-lock.json", "scripts/github/edit-pr.mjs"]) {
+    const s = setup();
+    const origin = s.head();
+    const cur = s.mergeBase(file);
+    const carried = await carry(s, marker(origin), cur, { written: [] });
+    assert.equal(carried.headSha, cur, file);
+    const pre = { ...carried, sizeOutcome: "pass", sizeTouchesT1: false };
+    assert.equal(buildPreMergeGateCheck({ currentHeadSha: cur, draftGate: { visible: true, verdict: "clean" }, preApprovalGateMarker: pre }, 0).ok, true, file);
+  }
+});
+
 // Tampered evidence at the merge-precondition seam: each case falls back to a full re-gate.
 test("buildPreMergeGateCheck rejects a recorded entry whose evidence differs from the recomputation", async () => {
   const s = setup();
@@ -154,10 +167,10 @@ test("buildPreMergeGateCheck rejects a recorded entry whose evidence differs fro
 });
 
 // Issue 2752 slice 4: the fixer-emit seam accepts a tooling base delta, but gate-round carry and merge acceptance keep the tooling rule.
-test("fixerEmitCarryAccepts accepts a scripts/ base delta that carryGateMarker and merge acceptance refuse", async () => {
+test("fixerEmitCarryAccepts accepts a gate-script base delta that carryGateMarker and merge acceptance refuse", async () => {
   const s = setup();
   const origin = s.head();
-  const cur = s.mergeBase("scripts/tool.mjs");
+  const cur = s.mergeBase("scripts/github/write-gate-context.mjs");
   assert.equal(await fixerEmitCarryAccepts({ originHead: origin, headSha: cur, baseRef: "main", repoRoot: s.dir }), true);
   const m = marker(origin);
   const written = [];
@@ -291,7 +304,7 @@ test("a converged field on a non-draft_gate marker does not redirect the carry o
 test("a converged marker with a gate-tooling base delta after its fixer commit does not carry", async () => {
   const s = setup();
   const fixer = s.head();
-  const cur = s.mergeBase("scripts/tool.mjs");
+  const cur = s.mergeBase("scripts/github/write-gate-context.mjs");
   const m = convergedMarker("a".repeat(40), fixer);
   assert.deepEqual(await carry(s, m, cur, { written: [] }), m);
 });
