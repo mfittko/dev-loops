@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, test } from "bun:test";
 import { hasOperatorDispositionMarker, operatorMarkerWrapPattern, parseCopilotBodyDispositionMarker } from "../../packages/core/src/github/copilot-body-disposition-marker.mjs";
-import { resolveCopilotBodyDisposition } from "../../scripts/github/_copilot-body-disposition.mjs";
+import { resolveCopilotBodyDisposition, resolveCurrentHeadBodyFeedback } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 
 const REPO = "o/r";
@@ -31,12 +31,13 @@ afterAll(async () => { await rm(root, { recursive: true, force: true }); });
 
 let seq = 0;
 // Each case gets its own checkout so ledgers never leak between cases.
-async function checkoutWith(findings, { gate = "pre_approval_gate", head = HEAD, raw = null } = {}) {
+async function checkoutWith(findings, { gate = "pre_approval_gate", head = HEAD, raw = null, seal = null } = {}) {
   const dir = path.join(root, `case-${seq++}`);
   if (findings !== null || raw !== null) {
     const file = path.join(dir, buildLogPath({ repo: REPO, pr: PR, gate, headSha: head, tmpRoot: "tmp" }));
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, raw ?? JSON.stringify({ findings }));
+    if (seal !== null) await writeFile(`${file}.seal`, seal);
   } else await mkdir(dir, { recursive: true });
   return dir;
 }
@@ -105,4 +106,44 @@ describe("resolver", () => {
       assert.equal((await resolve(comments(), await checkout())).cleared, false);
     });
   }
+});
+
+describe("ledger integrity and cross-gate verdicts", () => {
+  test("a ledger whose seal does not match its bytes does not clear", async () => {
+    assert.equal((await resolve([record()], await checkoutWith([finding()], { seal: `${"0".repeat(64)}\n` }))).cleared, false);
+  });
+  test("a later pre_approval_gate act verdict stops a reject=draft_gate record from clearing", async () => {
+    const dir = await checkoutWith([finding()], { gate: "draft_gate" });
+    const other = path.join(dir, buildLogPath({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: HEAD, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(other), { recursive: true });
+    await writeFile(other, JSON.stringify({ findings: [finding({ judgeDisposition: "act" })] }));
+    assert.equal((await resolve([record({ gate: "draft_gate" })], dir)).cleared, false);
+  });
+  test("the other gate's ledger without a finding for the review leaves the named gate's verdict in force", async () => {
+    const dir = await checkoutWith([finding()], { gate: "draft_gate" });
+    const other = path.join(dir, buildLogPath({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: HEAD, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(other), { recursive: true });
+    await writeFile(other, JSON.stringify({ findings: [finding({ angle: "tests", judgeDisposition: "act" })] }));
+    assert.equal((await resolve([record({ gate: "draft_gate" })], dir)).cleared, true);
+  });
+});
+
+describe("resolveCurrentHeadBodyFeedback with a judge-bound record", () => {
+  const review = { id: REVIEW, state: "COMMENTED", author: { login: "copilot-pull-request-reviewer[bot]" }, commit: { oid: HEAD }, submittedAt: "2026-05-31T20:10:00Z", body: "### 🟡 Changes recommended\n\nFix the thing." };
+  const summary = { hasBodyFindingOnCurrentHead: true, bodyFindingReviewId: REVIEW, effectiveCopilotReviews: [review] };
+  // The review's inline threads are all reply-resolved as rejected.
+  const reviewThreads = [{ isResolved: true, comments: { nodes: [{ pullRequestReview: { id: REVIEW }, body: "Rejected: out of scope." }] } }];
+  const feedback = (comment, checkout) => resolveCurrentHeadBodyFeedback({ repo: REPO, pr: PR, headSha: HEAD, reviewSummary: summary, reviewThreads }, runtimeFor([comment], checkout));
+  test("a cleared judge-bound record clears the body finding and keeps the judge finding stamped with the reviewId", async () => {
+    const result = await feedback(record(), await checkoutWith([finding()]));
+    assert.equal(result.copilotBodyFeedbackUnresolved, false);
+    assert.equal(result.dispositionRequired, null);
+    assert.equal(result.judgeFinding.findings[0].reviewId, REVIEW);
+  });
+  test("a cleared operator record leaves no judge finding", async () => {
+    const operator = { ...record(), body: `<!-- dev-loops:copilot-body-disposition review=${REVIEW} head=${HEAD} operator -->` };
+    const result = await feedback(operator, await checkoutWith(null));
+    assert.equal(result.copilotBodyFeedbackUnresolved, false);
+    assert.equal(result.judgeFinding, null);
+  });
 });

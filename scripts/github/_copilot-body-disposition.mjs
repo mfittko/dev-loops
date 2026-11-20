@@ -29,6 +29,7 @@ import { bareMarkdown, parseCopilotBodyDispositionMarker } from "@dev-loops/core
 import { isSanctionedCopilotReviewerLogin, isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { readSealed } from "./_gate-artifact-seal.mjs";
 import path from "node:path";
 import { isCommitContainedByHead } from "./_commit-containment.mjs";
 import { VALID_SEVERITIES, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
@@ -120,28 +121,36 @@ const findingClears = (finding, binding) => {
   return JUDGE_ACTION_DISPOSITIONS[binding.action].includes(finding.judgeDisposition)
     && VALID_SEVERITIES.has(severity) && severity !== "high" && severity !== "critical";
 };
+const JUDGE_GATES = ["draft_gate", "pre_approval_gate"];
 async function judgeLedgerClears({ repo, pr, headSha, reviewId, binding }, runtime) {
   let checkouts;
-  let ledgerPath;
   try {
-    ledgerPath = buildLogPath({ repo, pr, gate: binding.gate, headSha, tmpRoot: "tmp" });
     checkouts = runtime.ledgerCheckouts ?? resolveLedgerCheckouts(runtime.cwd ?? runtime.repoRoot ?? process.cwd());
   } catch {
     return false;
   }
   let passing = 0;
-  for (const root of checkouts) {
-    let findings;
+  // The named gate must supply a passing finding; the other gate's ledger at the same head may only agree or be silent.
+  for (const gate of [binding.gate, ...JUDGE_GATES.filter((g) => g !== binding.gate)]) {
+    let ledgerPath;
     try {
-      findings = JSON.parse(await readFile(path.resolve(root, ledgerPath), "utf8"))?.findings;
-    } catch (error) {
-      if (error?.code === "ENOENT") continue;
+      ledgerPath = buildLogPath({ repo, pr, gate, headSha, tmpRoot: "tmp" });
+    } catch {
       return false;
     }
-    const mine = Array.isArray(findings) ? findings.filter((f) => f?.angle === COPILOT_BODY_ANGLE && typeof f.reviewId === "string" && f.reviewId === reviewId) : [];
-    if (mine.length === 0) continue;
-    if (!mine.every((f) => findingClears(f, binding))) return false;
-    passing += 1;
+    for (const root of checkouts) {
+      let findings;
+      try {
+        findings = JSON.parse(await readSealed(path.resolve(root, ledgerPath)))?.findings;
+      } catch (error) {
+        if (error?.code === "ENOENT") continue;
+        return false;
+      }
+      const mine = Array.isArray(findings) ? findings.filter((f) => f?.angle === COPILOT_BODY_ANGLE && typeof f.reviewId === "string" && f.reviewId === reviewId) : [];
+      if (mine.length === 0) continue;
+      if (!mine.every((f) => findingClears(f, binding))) return false;
+      if (gate === binding.gate) passing += 1;
+    }
   }
   return passing > 0;
 }

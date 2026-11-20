@@ -242,7 +242,7 @@ async function finishCarry({ repo, pr, currentHeadSha, prData, sourceHeadSha, de
       reason: `the prior Copilot review is body-only changes-recommended or unrecognized with no thread of its own and no trusted disposition record naming it`,
     };
   }
-  if (belowCapUnclean && record.disposition?.operator !== true && !record.disposition?.judgeBinding) {
+  if (belowCapUnclean && record.disposition?.operator !== true) {
     return { carried: false, reason: "a fix-form disposition does not converge a body-only review below the round cap (COPILOT-STATE-CONVERGED-BELOW-CAP)" };
   }
   return { ...carried, bodyDisposition: record.disposition };
