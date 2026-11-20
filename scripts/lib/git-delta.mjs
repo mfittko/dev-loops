@@ -232,6 +232,9 @@ export async function isBaseOnlyMergeSince({ fromHead, head, mainRef, repoRoot, 
   const prOwnAtFromHead = await names(ownBase.stdout.trim(), fromHead);
   const prOwnAtHead = await names(mergedBase, head);
   if (!prOwnAtFromHead || !prOwnAtHead) return false;
-  for (const file of prOwnAtFromHead) if (!prOwnAtHead.has(file)) return false;
+  // A file the head holds byte-identical to fromHead (main landed the same change) is carried, not discarded.
+  const changedSinceFromHead = await names(fromHead, head);
+  if (!changedSinceFromHead) return false;
+  for (const file of prOwnAtFromHead) if (!prOwnAtHead.has(file) && changedSinceFromHead.has(file)) return false;
   return true;
 }

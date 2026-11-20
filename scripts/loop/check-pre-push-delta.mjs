@@ -428,14 +428,14 @@ function fetchAndResolveBase(worktree, base, { revParse, fetchBase }) {
   try { revParse(worktree, `origin/${base}`); } catch { throw new Error(`reviewer-only: origin/${base} does not exist in ${worktree}; run \`git fetch origin ${base}\` and rerun`); }
 }
 // The PR-own commit count of baseline..head under the reviewer-only rules: non-merge commits origin/<base> lacks plus non-base-only merges whose remerge diff names a path.
-// A clean merge whose parents overlap adds review paths but no PR-own commit, so it is excluded from this count.
+// A clean merge whose parents overlap adds review paths and counts as one PR-own commit: the body-only post must not carry a verdict across it unreviewed.
 // The body-only converged post (ADR 0271) asks the same question, so it calls this instead of counting on its own.
 export async function countPrOwnCommits(worktree, baseline, head, base, { revParse = gitRevParse, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, fetchBase = defaultFetchOrigin, isAncestor = gitIsAncestor } = {}) {
   fetchAndResolveBase(worktree, base, { revParse, fetchBase });
   // A head that does not descend from the baseline (reset or force-pushed backward) has an empty baseline..head range, which must not read as "no PR-own commit".
   if (baseline !== head && !isAncestor(worktree, baseline, head)) throw new Error(`own_commit_in_range: ${head} does not descend from the reviewed head ${baseline}; the head moved backward or sideways, so the range holds code the cap round never reviewed`);
-  const { ownCommits, resolvedMerges } = await reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base });
-  return ownCommits + resolvedMerges.length;
+  const { ownCommits, resolvedMerges, overlapMerges } = await reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyMerge, revList, base });
+  return ownCommits + resolvedMerges.length + overlapMerges;
 }
 async function reviewerOnlyBase(worktree, baseline, head, deps) {
   const { base } = deps;
@@ -450,6 +450,7 @@ async function reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyM
   const ownCommits = revList(worktree, baseline, head, ["--no-merges", `^origin/${base}`]).length;
   // A merge that is not base-only is reviewed through its resolution diff (`git show --remerge-diff`: the merge against an automatic remerge of its parents), whose paths join the PR-own paths.
   const resolvedPaths = [], resolvedMerges = [];
+  let overlapMerges = 0;
   for (const merge of revList(worktree, baseline, head, ["--merges", `^origin/${base}`])) {
     if (await baseOnlyMerge({ fromHead: revParse(worktree, `${merge}^1`), head: merge, mainRef: `origin/${base}`, repoRoot })) continue;
     const parents = spawnSync("git", ["-C", repoRoot, "rev-list", "--parents", "-n", "1", merge], { encoding: "utf8", env: gitEnvNoDirOverrides() });
@@ -460,21 +461,27 @@ async function reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyM
     if (paths.length === 0) {
       // A clean merge adds no change of its own, but the files both parents changed since their merge base are reviewed: the delta covers where main and the PR meet.
       const [, p1, p2] = parents.stdout.trim().split(" ");
-      const mb = spawnSync("git", ["-C", repoRoot, "merge-base", p1, p2], { encoding: "utf8", env: gitEnvNoDirOverrides() });
-      const sideNames = (tip) => {
-        const r = spawnSync("git", ["-C", repoRoot, "diff", "--no-renames", "--no-relative", "--no-ext-diff", "--ignore-submodules=none", "--name-only", "-z", mb.stdout.trim(), tip], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+      // Criss-cross history has several best bases (the ort merge used a virtual base of all of them): union the overlap over every one.
+      const mb = spawnSync("git", ["-C", repoRoot, "merge-base", "--all", p1, p2], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+      const sideNames = (base, tip) => {
+        const r = spawnSync("git", ["-C", repoRoot, "diff", "--no-renames", "--no-relative", "--no-ext-diff", "--ignore-submodules=none", "--name-only", "-z", base, tip], { encoding: "utf8", env: gitEnvNoDirOverrides() });
         if (r.status !== 0) throw new Error(`non_base_only_merge: cannot read the paths merge ${merge} brought in (${(r.stderr ?? "").trim()}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
         return r.stdout.split("\0").filter(Boolean);
       };
       if (mb.status !== 0 || !mb.stdout.trim()) throw new Error(`non_base_only_merge: cannot read the merge base of merge ${merge} (${(mb.stderr ?? "").trim()}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
-      const main = new Set(sideNames(p2));
-      resolvedPaths.push(...sideNames(p1).filter((f) => main.has(f)));
+      const overlap = new Set();
+      for (const base of mb.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
+        const main = new Set(sideNames(base, p2));
+        for (const f of sideNames(base, p1)) if (main.has(f)) overlap.add(f);
+      }
+      resolvedPaths.push(...overlap);
+      if (overlap.size > 0) overlapMerges += 1;
       continue;
     }
     resolvedPaths.push(...paths);
     resolvedMerges.push(merge);
   }
-  return { ownCommits, resolvedPaths, resolvedMerges };
+  return { ownCommits, resolvedPaths, resolvedMerges, overlapMerges };
 }
 
 async function authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor, { closureOnly = false } = {}) {
