@@ -167,7 +167,7 @@ test("buildPreMergeGateCheck rejects a recorded entry whose evidence differs fro
 });
 
 // Issue 2752 slice 4: the fixer-emit seam accepts a tooling base delta, but gate-round carry and merge acceptance keep the tooling rule.
-test("fixerEmitCarryAccepts accepts a scripts/ base delta that carryGateMarker and merge acceptance refuse", async () => {
+test("fixerEmitCarryAccepts accepts a gate-script base delta that carryGateMarker and merge acceptance refuse", async () => {
   const s = setup();
   const origin = s.head();
   const cur = s.mergeBase("scripts/github/write-gate-context.mjs");

@@ -303,9 +303,14 @@ const OUTCOME_PATHS = [
   "scripts/github/write-gate-context.mjs", "scripts/loop/consolidate-fanin.mjs", "scripts/loop/check-judge-decision.mjs",
   "scripts/github/_carried-verdict.mjs", "packages/core/src/loop/base-merge-verdict-carry.mjs",
   ".devloops", "package.json", "packages/core/package.json",
+  "scripts/gate-x.mjs", "scripts/loop/x/gate-check.mjs", "scripts/github/build-adjacent-bundle.mjs",
+  "skills/docs/validation-policy.md", "skills/docs/spec-authority-contract.md", "skills/local-implementation/SKILL.md",
+  ".claude/skills/docs/validation-policy.md", ".claude/skills/docs/spec-authority-contract.md", "agents/docs.agent.md", ".claude/agents/docs.md",
+  "packages/core/src/config/config.mjs", "skills/docs/acceptance-criteria-verification.md", ".claude/skills/docs/structural-quality.md",
 ];
 const NON_OUTCOME_PATHS = [
   "package-lock.json", "bun.lock", "pnpm-lock.yaml", "scripts/github/edit-pr.mjs", "test/helpers/x.mjs", "agents/developer.agent.md",
+  "scripts/_core-helpers.mjs", "scripts/github/navigate.mjs", "scripts/loop/x/preview.mjs", "scripts/github/comment-issue.mjs", "skills/docs/release-runbook.md",
   "skills/docs/worktree-guidance.md", ".claude/skills/docs/worktree-guidance.md", "packages/core/src/foo/bar.mjs", "schemas/a.json",
   "extension/readonly-role-gate.ts", "commands/loop-review.command.md", "AGENTS.md", "bunfig.toml", ".github/workflows/ci.yml",
 ];

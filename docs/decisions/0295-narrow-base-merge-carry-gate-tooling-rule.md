@@ -14,9 +14,10 @@ ADR 0096 keeps gate rounds on current gate tooling. The carry classifier of ADR 
 
 `GATE_TOOLING_RE` in `packages/core/src/loop/base-merge-verdict-carry.mjs` keeps a single source list, now limited to outcome-relevant paths:
 
-- the reviewer, judge and gate-coordinator agent definitions and their `.claude/agents/` mirrors;
-- the gate, judge and review contracts under `skills/docs/` (file names with a `gate`, `judge` or `review` token), `acceptance-criteria-verification.md` and `structural-quality.md`, with their `.claude/` mirrors, and the `copilot-pr-followup`, `review` and `dev-loop` `SKILL.md` files;
-- scripts and `packages/core/src/loop/` modules whose file names hold one of the tokens `gate`, `fanin`, `fan-in`, `judge`, `verdict`, `carry`, `review`, `reviewer`, `finding`, `angle`, `dispatch`, `cluster`, `round-cap`, `prompt`, `unit-bound`, `disposition`, `evidence`, `checkpoint`, `convergence` or `pre-push-delta`, with an optional plural `s` on the singular nouns. A token matches as a whole word between `-`, `_` or `.`, so `navigate` or `preview` do not hit;
+- the reviewer, judge, gate-coordinator and docs agent definitions and their `.claude/agents/` mirrors;
+- the gate, judge and review contracts under `skills/docs/` (file names with a `gate`, `judge` or `review` token), `acceptance-criteria-verification.md`, `structural-quality.md`, `validation-policy.md` and `spec-authority-contract.md`, with their `.claude/` mirrors, and the `copilot-pr-followup`, `review`, `dev-loop` and `local-implementation` `SKILL.md` files;
+- `scripts/github/build-adjacent-bundle.mjs` (it builds reviewer input);
+- scripts (at any depth under `scripts/`) and `packages/core/src/loop/` modules whose file names hold one of the tokens `gate`, `fanin`, `fan-in`, `judge`, `verdict`, `carry`, `review`, `reviewer`, `finding`, `angle`, `dispatch`, `cluster`, `round-cap`, `prompt`, `unit-bound`, `disposition`, `evidence`, `checkpoint`, `convergence` or `pre-push-delta`, with an optional plural `s` on `gate`, `verdict`, `review`, `reviewer`, `finding`, `angle`, `cluster`, `prompt` and `disposition` only. A token matches as a whole word between `-`, `_` or `.`, so `navigate` or `preview` do not hit;
 - `packages/core/src/config/` (angle, persona, prompt and judge-track resolution);
 - the dev-loops config (`isDevLoopConfigSourcePath`);
 - the installed dev-loops version: `package.json` and `packages/*/package.json`.

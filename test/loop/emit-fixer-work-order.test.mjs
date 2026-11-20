@@ -3472,7 +3472,7 @@ test("issue 2752 slice 4: an act-list emit at a base-merged head carries the ver
   });
 });
 
-test("issue 2752 slice 4: the seam ignores the gate-tooling rule (scripts/ and .devloops in the base delta)", async () => {
+test("issue 2752 slice 4: the seam ignores the gate-tooling rule (a gate-script and .devloops in the base delta)", async () => {
   for (const baseFile of ["scripts/github/write-gate-context.mjs", ".devloops"]) {
     await withFixture(async (fx) => {
       const { over } = await verdictCarryScenario(fx, { baseFile });
