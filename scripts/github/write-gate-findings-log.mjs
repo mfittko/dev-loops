@@ -25,6 +25,7 @@ import { clusterFindings, clustersFromStampedIds, projectClusterDisposition } fr
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
+import { rejectClosingRefRemoval } from "../loop/_slice-linkage.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "./_gate-artifact-paths.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { loadCommentTrustConfigOrExit } from "./_comment-trust-config.mjs";
@@ -89,8 +90,9 @@ Optional:
                                  FAILS CLOSED; an absent one changes nothing.
                                  After a judge pass the log's verdict is findings_present whenever an act item is open (blocked
                                  stays blocked). A non-review write without this flag refuses judge_verdict_required when a
-                                 j<id>/judge-verdict.json exists for the round. An explicit --verdict
-                                 may equal the wrapper's overallVerdict or that composed findings_present.
+                                 j<id>/judge-verdict.json exists for the round, or a fanout_fanin round has a judge plan with
+                                 no verdict yet. An explicit --verdict may equal the wrapper's overallVerdict or that composed
+                                 findings_present.
   --tmp-root <path>              Root tmp directory. Default: the MAIN worktree's tmp/
                                  — the ledger is anchored at the primary git
                                  worktree so the merge (running from the main checkout)
@@ -885,6 +887,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // applyJudgeDispositions fails closed on a malformed verdict, an
   // out-of-range index, or dispositions that do not cover every finding.
   let findings = rawFindings;
+  let reviewerFindings = rawFindings;
   let copilotActedSeverities = [];
   let scopeDrift;
   const specAuthorityIdentity = await readSpecAuthorityIdentity(
@@ -949,6 +952,19 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     candidates.sort((a, b) => a.ms - b.ms || (a.entry < b.entry ? -1 : a.entry > b.entry ? 1 : 0));
     const latest = candidates.at(-1);
     if (latest) throw parseError(`judge_verdict_required: a judge verdict exists at ${latest.found}; pass --judge-verdict ${latest.found} so the log carries the judged verdict`);
+    // A judge plan newer than this round and every consumed judge, with no verdict yet: the log is written after judge-pass, from its --ledger-out.
+    if (executionMode === "fanout_fanin") {
+      for (const root of judgeRoots) {
+        const planPath = path.join(path.resolve(repoRoot, buildGateArtifactPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: root, dir: "gate-judge" })), "judge-emit-plan.json");
+        let planMs = 0;
+        try {
+          planMs = Number(/^j(\d+)-/.exec(JSON.parse(await readFile(planPath, "utf8"))?.roundId ?? "")?.[1]) || 0;
+        } catch { /* an absent or unreadable plan binds no judge */ }
+        if (planMs > Math.max(roundEmittedMs, consumedWatermarkMs)) {
+          throw parseError(`judge_verdict_required: a judge plan exists at ${planPath} with no verdict yet; run judge-pass, then write the log with write-findings-log --judge-verdict <verdict-path> --findings-file <judge-pass --ledger-out>`);
+        }
+      }
+    }
   }
   // The writer resolves the round before it retains the live same-head ledger, so it counts that ledger itself, but only when retention will keep it (the shared isInRoundRewrite predicate): every later reader counts it as the retained round.
   if (options.judgeVerdict) {
@@ -999,7 +1015,13 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     if (!inJudgeDir && pinningPlan) {
       throw parseError(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${judgePlanPath} pins a copilot-body-feedback read, so the judge verdict must sit in its judge execution directory (<gate>-<head>/j<id>/judge-verdict.json), not ${options.judgeVerdict}`);
     }
-    const pinnedFindings = await withPinnedCopilotBodyCluster(rawFindings, judgePlan?.workOrder);
+    // A judge-pass --ledger-out file already carries the Copilot cluster as its tail: re-pin from the prefix so the cluster is not appended twice.
+    const copilotCluster = judgePlan?.workOrder?.copilotBodyClusterId;
+    const alreadyPinned = Number.isInteger(copilotCluster) && rawFindings.length > copilotCluster && rawFindings.slice(copilotCluster).every((f) => f?.clusterId === copilotCluster && f.angle === "copilot-body");
+    const prefixLength = alreadyPinned ? copilotCluster : rawFindings.length;
+    // Only the reviewer prefix is provenance-checked; the Copilot cluster is verified separately against its pinned file.
+    reviewerFindings = rawFindings.slice(0, prefixLength);
+    const pinnedFindings = await withPinnedCopilotBodyCluster(reviewerFindings, judgePlan?.workOrder);
     const enriched = applyJudgeDispositions(pinnedFindings, judgeVerdict, { pastCap: lowFixCapped, round });
     // Same cluster projection judge-pass applies: one judge decision per root cause, so the durable ledger
     // matches judge-pass's --ledger-out instead of dropping the cluster-normalized dispositions.
@@ -1008,14 +1030,29 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       ? clustersFromStampedIds(enriched.findings)
       : clusterFindings(enriched.findings, { headSha: options.headSha }).clusters;
     findings = projectClusterDisposition(enriched.findings, clusters);
-    // The verdict raise reads the INPUT severity, as judge-pass does: a failOpen act promotes a low to medium after the consolidator weighed it.
-    copilotActedSeverities = findings.slice(rawFindings.length).flatMap((f, i) => (f?.judgeDisposition === "act" ? [pinnedFindings[rawFindings.length + i]?.severity ?? f.severity] : []));
     assertNoProjectedForbiddenDefer(findings, clusters);
     scopeDrift = enriched.scopeDrift;
     if (specAuthorityIdentity !== undefined) {
       // judge-pass validates the spec-authority verdict over the findings read only, so validate the same prefix and re-attach the appended Copilot cluster.
-      findings = [...(await applySiblingSpecAuthorityVerdict(findings.slice(0, rawFindings.length), judgePath, specAuthorityIdentity, judgePlan?.workOrder)), ...findings.slice(rawFindings.length)];
+      findings = [...(await applySiblingSpecAuthorityVerdict(findings.slice(0, prefixLength), judgePath, specAuthorityIdentity, judgePlan?.workOrder)), ...findings.slice(prefixLength)];
     }
+    // A judge-pass --ledger-out input carries the bridge's coercions, but the file has no digest binding: take from it only a rejection the writer can re-derive (an act the pinned slice-linkage rule rejects, or a low_fix_until_cap defer), and a validated follow-up target. Every other field keeps the re-derived value, and a tail-length mismatch keeps the re-derived findings.
+    if (rawFindings.length === findings.length && rawFindings.every((f) => typeof f?.judgeDisposition === "string")) {
+      const linkageRejected = findings.map((f) => ({ ...f }));
+      rejectClosingRefRemoval(linkageRejected, judgePlan?.workOrder?.sliceLinkageIssues);
+      findings = findings.map((f, i) => {
+        const raw = rawFindings[i];
+        const derivable = (f.judgeDisposition === "act" && linkageRejected[i].judgeDisposition === "reject")
+          || (f.judgeDisposition === "defer" && options.gate === "pre_approval_gate" && f.judgeReason?.startsWith("low_fix_until_cap ") && raw.judgeReason?.startsWith("low_fix_until_cap "));
+        if (raw.judgeDisposition === "reject" && derivable) {
+          const { followUpDraft: _draft, followUpIssueNumber: _target, ...rest } = f;
+          return { ...rest, judgeDisposition: "reject", ...(raw.judgeReason !== undefined ? { judgeReason: raw.judgeReason } : {}) };
+        }
+        return raw.judgeDisposition === f.judgeDisposition && f.followUpIssueNumber == null && Number.isInteger(raw.followUpIssueNumber) && raw.followUpIssueNumber > 0 ? { ...f, followUpIssueNumber: raw.followUpIssueNumber } : f;
+      });
+    }
+    // Read after the ledger-out coercions, as judge-pass does: a Copilot act coerced to reject raises no verdict. The raise reads the INPUT severity: a failOpen act promotes a low to medium after the consolidator weighed it.
+    copilotActedSeverities = findings.slice(prefixLength).flatMap((f, i) => (f?.judgeDisposition === "act" ? [pinnedFindings[prefixLength + i]?.severity ?? f.severity] : []));
   }
   // `resurfaces` stays only when it names a closed prior round's act item in the same file; every other act item is new.
   if (findings.some((f) => f.resurfaces !== undefined)) {
@@ -1172,7 +1209,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       pr: options.pr,
       gate: options.gate,
       headSha: options.headSha,
-    }, { repoRoot, findings: rawFindings });
+    }, { repoRoot, findings: reviewerFindings });
   }
   // Angle-coverage enforcement (fail-closed on missing mandatory angles / foreign
   // angles) only applies when provenance is actually recorded — provenance
