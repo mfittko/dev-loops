@@ -334,7 +334,7 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
     }
     if (currentReviews.length === 0) currentReviews = [resolveLatestCopilotReview({ reviews: effective }).review];
     const judgeFinding = { angle: COPILOT_BODY_ANGLE, findings: currentReviews.flatMap((r) => buildJudgeFinding(r).findings) };
-    // A judge-bound record clears only while the ledger carries the finding, so the finding stays routed to the judge and a re-run ledger keeps it.
+    // A judge-bound record clears only while the ledger carries the finding, so the detector keeps the judge finding and a re-run ledger keeps it.
     return record.cleared
       ? { ...settled, bodyDisposition: record.disposition, judgeFinding: record.disposition?.judgeBinding ? judgeFinding : null }
       : {
