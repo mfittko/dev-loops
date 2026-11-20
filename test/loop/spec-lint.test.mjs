@@ -535,8 +535,11 @@ test("contract_doc_not_in_matrix: a cited rule ID owned by a contract doc needs 
   assert.deepEqual(await kinds("`XXX-YYY-ZZZ` holds."), []);
   assert.deepEqual((await kinds(ruleMatrix("`XXX-A-ZZZ` holds."))).map((f) => f.id), [owner]);
   assert.deepEqual((await kinds(ruleMatrix("`XXX-YYY-ZZZ-2` holds."))).map((f) => f.id), [owner]);
-  // Wiring and dedup: the forecast finding and the rule-cite finding for one doc collapse to one.
-  const body = `${ruleMatrix("`XXX-YYY-ZZZ` holds.")}${FORECAST.replace("files=a.mjs", `files=${owner}`)}`;
+  // Wiring: with the default forecast, lintSpec still reports the owner doc through the rule-cite lint.
+  const ruleOnly = (await lintSpec({ body: `${ruleMatrix("`XXX-YYY-ZZZ` holds.")}${FORECAST}`, repoRoot: root })).findings.filter((f) => f.kind === "contract_doc_not_in_matrix");
+  assert.deepEqual(ruleOnly.map((f) => f.id), [owner]);
+  // Dedup: the forecast finding and the rule-cite finding for one doc collapse to one.
+  const body =`${ruleMatrix("`XXX-YYY-ZZZ` holds.")}${FORECAST.replace("files=a.mjs", `files=${owner}`)}`;
   const found = (await lintSpec({ body, repoRoot: root })).findings.filter((f) => f.kind === "contract_doc_not_in_matrix");
   assert.deepEqual(found.map((f) => f.id), [owner]);
 });
