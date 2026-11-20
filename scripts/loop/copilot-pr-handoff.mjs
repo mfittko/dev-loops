@@ -359,7 +359,8 @@ export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env
       }
       // The loop's own fixer disposition markers are tool output, whatever login `gh` posts under.
       // shortcut: markers are not matched to loop records, a pasted marker silences a comment; upgrade if abused.
-      if (parseReviewBodyDispositionMarkers(body).length > 0 || parseCopilotBodyDispositionMarker(body)?.fixSha) {
+      const copilotMarker = parseCopilotBodyDispositionMarker(body);
+      if (parseReviewBodyDispositionMarkers(body).length > 0 || copilotMarker?.fixSha || copilotMarker?.judgeBinding) {
         continue;
       }
       humanComments.push({
