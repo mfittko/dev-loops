@@ -31,6 +31,7 @@ const TEST_FILES = [
   "test/github/merge-pr.test.mjs",
   "test/github/merge-pr-act-list.test.mjs",
   "test/contracts/pre-tool-use-bash-gate-merge-pr.test.mjs",
+  "test/github/merge-pr-other.test.mjs",
 ];
 
 for (const file of TEST_FILES) {
@@ -42,6 +43,12 @@ for (const file of TEST_FILES) {
 
 test("a test path does not shield a merge script run in the same command (issue 3345)", () => {
   assert.equal(decide(`bun test ${TEST_FILES[0]}; ${MERGE}`, "developer"), "deny");
+});
+
+test("a developer subagent running the merge script with a bare node command is denied (issue 3345)", () => {
+  assert.equal(decide("node scripts/github/merge-pr.mjs", "developer"), "deny");
+  assert.equal(decide("node scripts/github/merge-pr.mjs --check", "developer"), "deny");
+  assert.equal(decide('node scripts/github/merge-""pr.mjs', "developer"), "deny");
 });
 
 test("the top-level session (no agent_type) running merge-pr.mjs is allowed (issue 2500)", () => {
