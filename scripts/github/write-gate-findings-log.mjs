@@ -1037,8 +1037,17 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       // judge-pass validates the spec-authority verdict over the findings read only, so validate the same prefix and re-attach the appended Copilot cluster.
       findings = [...(await applySiblingSpecAuthorityVerdict(findings.slice(0, prefixLength), judgePath, specAuthorityIdentity, judgePlan?.workOrder)), ...findings.slice(prefixLength)];
     }
-    // A judge-pass --ledger-out input already carries the bridge's final dispositions (closing-reference and no-target coercions, follow-up targets, the Copilot cluster): the verdict was re-validated above, so keep the bridge's findings.
-    if (rawFindings.length > 0 && rawFindings.every((f) => typeof f?.judgeDisposition === "string")) findings = rawFindings;
+    // A judge-pass --ledger-out input carries the bridge's coercions, but the file has no digest binding: take from it only a rejection of a finding the verdict acted or deferred, and a validated follow-up target. Every other field keeps the re-derived value, and a tail-length mismatch keeps the re-derived findings.
+    if (rawFindings.length === findings.length && rawFindings.every((f) => typeof f?.judgeDisposition === "string")) {
+      findings = findings.map((f, i) => {
+        const raw = rawFindings[i];
+        if (raw.judgeDisposition === "reject" && (f.judgeDisposition === "act" || f.judgeDisposition === "defer")) {
+          const { followUpDraft: _draft, followUpIssueNumber: _target, ...rest } = f;
+          return { ...rest, judgeDisposition: "reject", ...(raw.judgeReason !== undefined ? { judgeReason: raw.judgeReason } : {}) };
+        }
+        return raw.judgeDisposition === f.judgeDisposition && f.followUpIssueNumber == null && Number.isInteger(raw.followUpIssueNumber) && raw.followUpIssueNumber > 0 ? { ...f, followUpIssueNumber: raw.followUpIssueNumber } : f;
+      });
+    }
   }
   // `resurfaces` stays only when it names a closed prior round's act item in the same file; every other act item is new.
   if (findings.some((f) => f.resurfaces !== undefined)) {

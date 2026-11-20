@@ -550,7 +550,7 @@ for (const { name, jsonFile, refused } of [
 }
 
 // The 3297 order: fan-in, emit and pull the judge, judge-pass --ledger-out, then the durable log from that file, then the poster.
-async function postAfterJudgePassLedgerOut(tempDir, { copilotBody, coerce }) {
+async function postAfterJudgePassLedgerOut(tempDir, { copilotBody, coerce, tamper }) {
   const tmp = path.join(tempDir, "tmp");
   const contextDir = path.join(tmp, "gate-context", "owner-repo", "pr-17");
   await mkdir(contextDir, { recursive: true });
@@ -576,6 +576,11 @@ async function postAfterJudgePassLedgerOut(tempDir, { copilotBody, coerce }) {
     bridged.findings[0].judgeDisposition = "reject";
     if (copilotBody) bridged.findings[2].followUpIssueNumber = 99;
     await writeFile(ledgerOut, JSON.stringify(bridged), "utf8");
+  }
+  if (tamper) {
+    const edited = JSON.parse(await readFile(ledgerOut, "utf8"));
+    edited.findings[1].judgeDisposition = "act";
+    await writeFile(ledgerOut, JSON.stringify(edited), "utf8");
   }
   const written = await writeGateFindingsLog({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD, findingsFile: ledgerOut, judgeVerdict: plan.workOrder.outputRefs[0], tmpRoot: tmp, contextTmpRoot: tmp }, { repoRoot: tempDir });
   return { written, posted: await post(written.path) };
@@ -604,4 +609,12 @@ test("3297: the writer keeps the bridge's coerced dispositions and the Copilot f
     assert.equal(log.findings[2].followUpIssueNumber, 99);
     assert.equal(log.findings.length, 3);
   }, { prefix: "dev-loops-act-list-coerce-" });
+});
+
+test("3297: the writer keeps the re-derived reject when a hand-edited ledger-out flips it to act", async () => {
+  await withTempDir(async (tempDir) => {
+    const { written } = await postAfterJudgePassLedgerOut(tempDir, { copilotBody: false, coerce: false, tamper: true });
+    const log = JSON.parse(await readFile(written.path, "utf8"));
+    assert.equal(log.findings[1].judgeDisposition, "reject");
+  }, { prefix: "dev-loops-act-list-tamper-" });
 });

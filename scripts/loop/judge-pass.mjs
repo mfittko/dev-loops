@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { access, mkdir, realpath, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -35,7 +35,7 @@ import { findEscalations, recurrenceFiles } from "@dev-loops/core/loop/gate-recu
 import { commentDeferredFindings, fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
 import { readClosedPriorRoundLogs, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
-import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
+import { buildGateEmitPlanPath, buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { raiseVerdictForActedCopilotBlock, withPinnedCopilotBodyCluster, withoutCopilotBodyDecision } from "../github/_copilot-body-disposition.mjs";
@@ -981,6 +981,16 @@ export function gitShowSource(cwd, sha, file) {
 // The ledger root of the round history: the writer's --tmp-root, else the canonical root.
 const historyRoot = (options, resolvedRoot) => (options.tmpRoot ? path.resolve(resolvedRoot, options.tmpRoot) : resolveGateArtifactTmpRoot(resolvedRoot));
 
+// The fan-out round id the writer stamps on its ledger (its emit plan under the default context root), null without a readable plan.
+async function emitPlanRoundId(options, resolvedRoot) {
+  try {
+    const plan = JSON.parse(await readFile(path.resolve(resolvedRoot, buildGateEmitPlanPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha })), "utf8"));
+    return typeof plan?.roundId === "string" && plan.roundId.length > 0 ? plan.roundId : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function judgePassCli(
   options,
   { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, commentIssue, receiptTmpRoot, readPriorLogs = readClosedPriorRoundLogs, hasCommit = hasCommitInRepo, readSource = gitShowSource } = {},
@@ -997,7 +1007,7 @@ export async function judgePassCli(
   );
   // The durable log is written after this pass, and its writer counts the completed live same-head ledger of an earlier round: count it here too, with this judge execution as the round identity (a repeated write of this round is not counted).
   const judgeExecution = /^j\d+-[0-9a-f]+$/.exec(path.basename(path.dirname(path.resolve(resolvedRoot, options.judgeVerdict))))?.[0] ?? null;
-  const { lowFixCapped, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot), roundIdentity: { roundId: null, judgeExecution, completed: true } }, { repoRoot: resolvedRoot, includeLiveCurrentHead: true });
+  const { lowFixCapped, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot), roundIdentity: { roundId: await emitPlanRoundId(options, resolvedRoot), judgeExecution, completed: true } }, { repoRoot: resolvedRoot, includeLiveCurrentHead: true });
   const result = runJudgePass(judged, judgeVerdict, options.headSha, { pastCap: lowFixCapped, round });
 
   // Only the pinned work order's sliceLinkageIssues arm the coercion; the emitter already read the spec and PR body Non-goals.

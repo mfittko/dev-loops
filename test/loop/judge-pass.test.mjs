@@ -15,6 +15,7 @@ import {
 } from "../../scripts/loop/judge-pass.mjs";
 import { trustCommentFixtures } from "../_helpers.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
+import { buildGateEmitPlanPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { hasReopenLine, rejectClosingRefRemoval, sliceLinkageIssues } from "../../scripts/loop/_slice-linkage.mjs";
 import { readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { resolveDraftRoundCap } from "../../scripts/github/write-gate-context.mjs";
@@ -482,6 +483,29 @@ test("judgePassCli: a completed live same-head ledger counts as an earlier round
     { repoRoot: tmpDir, ...stubDeferralDeps().deps },
   );
   assert.equal(payload.actCount, 0, "round 2 closes the all-nit act cluster");
+});
+
+test("judgePassCli: a re-judge in the same emit round (new j<id>, same roundId) counts the live ledger as the same round, as the writer does", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-same-round-"));
+  await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
+  const ledgerDir = path.join(tmpDir, "tmp", "gate-findings", "mfittko-dev-loops", "pr-3080");
+  await mkdir(ledgerDir, { recursive: true });
+  await writeFile(path.join(ledgerDir, `draft_gate-${HEAD}.json`), JSON.stringify({
+    repo: "mfittko/dev-loops", pr: 3080, gate: "draft_gate", headSha: HEAD, verdict: "findings_present", loggedAt: "2026-11-05T00:00:00.000Z",
+    roundIdentity: { roundId: "r1-aa", judgeExecution: "j1-aa", completed: true },
+    findings: [finding({ severity: "nit", summary: "a nit", judgeDisposition: "act" })],
+  }));
+  const planPath = path.join(tmpDir, buildGateEmitPlanPath({ repo: "mfittko/dev-loops", pr: 3080, gate: "draft_gate", headSha: HEAD }));
+  await mkdir(path.dirname(planPath), { recursive: true });
+  await writeFile(planPath, JSON.stringify({ roundId: "r1-aa" }));
+  await mkdir(path.join(tmpDir, "j2-bb"));
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ severity: "nit", summary: "a nit" })] }));
+  await writeFile(path.join(tmpDir, "j2-bb", "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tidy" }] })));
+  const payload = await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "3080", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./j2-bb/judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json", tmpRoot: "./tmp" },
+    { repoRoot: tmpDir, ...stubDeferralDeps().deps },
+  );
+  assert.equal(payload.actCount, 1, "round 1 keeps the all-nit act cluster");
 });
 
 test("runJudgePass never defers an unstamped [low, medium] duplicate cluster through the low-nit coercion (ADR 0188)", () => {
