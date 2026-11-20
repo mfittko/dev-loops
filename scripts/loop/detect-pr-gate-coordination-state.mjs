@@ -1274,6 +1274,55 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   };
 }
 
+/** A snapshot older than this is refetched; one gate round finishes well inside it. */
+export const PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS = 10 * 60 * 1000;
+
+// An injected runChild test double stays off the shared tmp root unless the test names its own `coordinationSnapshotRoot`.
+const coordinationSnapshotPath = (options, runtime) => {
+  const root = runtime.coordinationSnapshotRoot
+    ?? (runtime.runChild === undefined || runtime.runChild === defaultRunChild ? resolveGateArtifactTmpRoot(runtime.repoRoot ?? resolveRepoRoot(process.cwd())) : null);
+  return root && path.join(root, "gate-coordination", repoSlugFor(options.repo), `pr-${options.pr}`, "context-snapshot.json");
+};
+
+/** Persists the loaded context atomically; a write failure never fails the caller. */
+export async function writePrGateCoordinationSnapshot(options, runtime, context, nowMs = Date.now()) {
+  try {
+    const file = coordinationSnapshotPath(options, runtime);
+    if (!file) return;
+    await mkdir(path.dirname(file), { recursive: true });
+    const tempPath = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+    const snapshot = { repo: options.repo, pr: options.pr, headSha: context.currentHeadSha, lightweight: options.lightweight === true, fetchedAtMs: nowMs, context };
+    await writeFile(tempPath, JSON.stringify(snapshot));
+    await rename(tempPath, file);
+  } catch { /* best effort */ }
+}
+
+export async function deletePrGateCoordinationSnapshot(options, runtime = {}) {
+  try {
+    const file = coordinationSnapshotPath(options, runtime);
+    if (file) await rm(file, { force: true });
+  } catch { /* best effort */ }
+}
+
+/**
+ * Returns `{ context, reused }`: the persisted context when it matches repo, PR, lightweight, the exact full expected head and the age bound; otherwise a fresh load that is persisted.
+ */
+export async function loadPrGateCoordinationContextReusingSnapshot(options, runtime = {}, { expectedHeadSha, maxAgeMs = PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS, nowMs = Date.now() } = {}) {
+  if (typeof expectedHeadSha === "string" && /^([0-9a-f]{40}|[0-9a-f]{64})$/i.test(expectedHeadSha)) {
+    try {
+      const snap = JSON.parse(await readFile(coordinationSnapshotPath(options, runtime) ?? "", "utf8"));
+      if (snap.repo === options.repo && snap.pr === options.pr && snap.lightweight === (options.lightweight === true)
+        && typeof snap.headSha === "string" && snap.headSha.toLowerCase() === expectedHeadSha.toLowerCase()
+        && Number.isFinite(snap.fetchedAtMs) && nowMs >= snap.fetchedAtMs && nowMs - snap.fetchedAtMs < maxAgeMs && snap.context) {
+        return { context: snap.context, reused: true };
+      }
+    } catch { /* missing or unparsable: fetch fresh */ }
+  }
+  const context = await loadPrGateCoordinationContext(options, runtime);
+  await writePrGateCoordinationSnapshot(options, runtime, context, nowMs);
+  return { context, reused: false };
+}
+
 // Composes the formal-request guard's round-cap exemption from both shapes
 // that must suppress it — the interpreter's own roundCapCleanEligible
 // (round_cap_clean_fallback) and the evaluator's independent ROUND_CAP_REACHED
@@ -1440,6 +1489,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const config = (await loadDevLoopConfigStrict({ repoRoot })).config ?? {};
   // ADR 0117 (issue 3139): an open self-hosting PR is answered by its own head's toolchain; another checkout refuses inside the loader, before any shared gate state is written.
   const context = await loadPrGateCoordinationContext(options, { ...runtime, guardToolchain: true });
+  await writePrGateCoordinationSnapshot(options, runtime, context);
   const { toolchain } = context;
   const draftGateConfig = resolveGateConfig(config, "draft");
   const preApprovalGateConfig = resolveGateConfig(config, "preApproval");

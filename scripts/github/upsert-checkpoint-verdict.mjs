@@ -14,7 +14,7 @@ import { parseAllowedRefsCsv, parsePrNumber, requireTokenValue, runChild as defa
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghGraphql as runGhGraphql, ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { minimizeSupersededGateReviews } from "./_minimize-superseded-verdicts.mjs";
-import { loadPrGateCoordinationContext, loadRefinementArtifact } from "../loop/detect-pr-gate-coordination-state.mjs";
+import { deletePrGateCoordinationSnapshot, loadPrGateCoordinationContext, loadPrGateCoordinationContextReusingSnapshot, loadRefinementArtifact } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
 import { CHECKBOX_ROW_RE, checklistLineScopes, checklistSectionLineIndices, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { applyTick } from "./tick-verified-checkboxes.mjs";
@@ -2038,12 +2038,14 @@ async function verifyPostedSurface({ repo, pr, surface, commentId }, { env, ghCo
 // The convert/markPrReady mutations are individually idempotent, so
 // concurrent cooperating runners cause at most a transient draft flicker,
 // never a stuck draft (only a hard crash mid-transition can leave one).
-async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild = defaultRunChild, checkBaseFreshness }) {
+async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild = defaultRunChild, checkBaseFreshness, coordinationSnapshotRoot }) {
   process.stderr.write(
     `[draft_gate] ${options.repo}#${options.pr} is ready but needs clean draft_gate evidence; ` +
     `temporarily converting to draft to post the verdict, then restoring ready.\n`,
   );
   const conversion = await convertPrToDraft({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
+  // The conversion changed the draft state the snapshot recorded; the re-entry must read it live.
+  await deletePrGateCoordinationSnapshot({ repo: options.repo, pr: options.pr }, { repoRoot, runChild, coordinationSnapshotRoot });
   let result;
   try {
     // The PR is now a draft, so RUN_DRAFT_GATE is the legal action. Re-enter with
@@ -2054,7 +2056,7 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
     // with a clear error instead of recursing indefinitely (exit 13).
     result = await upsertCheckpointVerdict(
       { ...options, _draftTransitionInProgress: true },
-      { env, ghCommand, repoRoot, runChild, checkBaseFreshness },
+      { env, ghCommand, repoRoot, runChild, checkBaseFreshness, coordinationSnapshotRoot },
     );
   } catch (error) {
     if (conversion.alreadyDraft !== true) {
@@ -2742,8 +2744,15 @@ export async function assertGateValidationArtifact({ repo, pr, gate, headSha, re
   );
 }
 
-export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, detectStale = detectStaleRunner, countPrOwnCommits = realCountPrOwnCommits, checkBaseFreshness } = {}) {
-  const gh = { env, ghCommand, repoRoot, runChild };
+export async function upsertCheckpointVerdict(options, runtime = {}) {
+  const result = await postCheckpointVerdict(options, runtime);
+  // A later step must not read pre-post gate evidence from the pre-flight snapshot.
+  if (result?.ok) await deletePrGateCoordinationSnapshot({ repo: options.repo, pr: options.pr }, { repoRoot: runtime.repoRoot ?? process.cwd(), runChild: runtime.runChild, coordinationSnapshotRoot: runtime.coordinationSnapshotRoot });
+  return result;
+}
+
+async function postCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, detectStale = detectStaleRunner, countPrOwnCommits = realCountPrOwnCommits, checkBaseFreshness, coordinationSnapshotRoot } = {}) {
+  const gh = { env, ghCommand, repoRoot, runChild, coordinationSnapshotRoot };
   // Optional --spec-authority stamps the RETURNED result (this script's
   // durable verdict record — it posts no file of its own) with the pinned
   // revision identity, via the ONE shared stamp helper (ADR 0061). Read up
@@ -2921,7 +2930,16 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // Thread the light-dispatch signal so the context interpreter and the
     // maxCopilotRounds resolution below use the same composed lightweight cap
     // — the two must never disagree at the cap boundary.
-    coordinationContext = await loadPrGateCoordinationContext({ repo: options.repo, pr: options.pr, lightweight: options.lightweight === true }, gh);
+    const coordinationOptions = { repo: options.repo, pr: options.pr, lightweight: options.lightweight === true };
+    const loaded = await loadPrGateCoordinationContextReusingSnapshot(coordinationOptions, gh, { expectedHeadSha: options.headSha });
+    coordinationContext = loaded.context;
+    if (loaded.reused) {
+      // A reused snapshot is only as current as its head: one cheap live read, and a moved head loads fresh.
+      const live = await runGhJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], { env, ghCommand, runChild });
+      if (String(live?.headRefOid ?? "").toLowerCase() !== String(coordinationContext.currentHeadSha ?? "").toLowerCase()) {
+        coordinationContext = await loadPrGateCoordinationContext(coordinationOptions, gh);
+      }
+    }
     evidence = coordinationContext.gateEvidence;
     // A converged post updates the comment at the reviewed head A while the PR head is the fixer commit.
     if (convergedInput) {
@@ -3058,7 +3076,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         earlyVerdict = composeReviewVerdict(earlyLedger.overallVerdict, earlyLedger.findings ?? []);
       }
       await refuseStaleBase(earlyVerdict);
-      return await postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild, checkBaseFreshness });
+      return await postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild, checkBaseFreshness, coordinationSnapshotRoot });
     }
     // Fail closed on a lagged draft-state read: we are re-entering FROM
     // postDraftGateViaDraftTransition (which just converted the PR to draft) yet the

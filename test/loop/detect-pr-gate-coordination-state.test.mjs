@@ -11,7 +11,7 @@ const writeGhStubHelper = (tempDir, entries, options) => writeGhStubRaw(tempDir,
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 import { claimRunnerOwnership, loadRunnerCoordinationState } from "../../scripts/loop/_pr-runner-coordination.mjs";
 
-import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, resolveFixerDispositionInput, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, fetchCopilotEverFormallyRequested, buildGateCoordinationEvaluatorInput, countPrChangedLines, resolveDraftOpenActList, TERMINAL_RUNNER_RELEASE_ACTIONS, writePrGateCoordinationSnapshot, loadPrGateCoordinationContextReusingSnapshot, PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { recordTimedOutProbe, recordUnobservableRequest } from "../../scripts/loop/_unobservable-review-request-record.mjs";
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
@@ -5142,4 +5142,78 @@ test("loadPrGateCoordinationContext reads the unobservable-request record into t
   } finally {
     await rm(checkpointDir, { recursive: true, force: true });
   }
+});
+
+describe("pull-request coordination snapshot", () => {
+  const HEAD = "a".repeat(40);
+  const options = { repo: "owner/repo", pr: 10 };
+  const context = { repo: "owner/repo", pr: 10, currentHeadSha: HEAD, prData: { isDraft: true }, gateEvidence: { draftGateSatisfied: false } };
+  const failingRuntime = (root) => {
+    const calls = [];
+    return { calls, runtime: { coordinationSnapshotRoot: root, repoRoot: root, env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild: async (cmd, args) => { calls.push(args); throw new Error("fresh fetch attempted"); } } };
+  };
+  const withRoot = async (fn) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-coordination-snapshot-"));
+    try { await fn(root); } finally { await rm(root, { recursive: true, force: true }); }
+  };
+  const snapshotFile = (root) => path.join(root, "gate-coordination", "owner-repo", "pr-10", "context-snapshot.json");
+
+  it("writes the head SHA, lightweight flag and fetch time with the context", async () => {
+    await withRoot(async (root) => {
+      await writePrGateCoordinationSnapshot({ ...options, lightweight: true }, { coordinationSnapshotRoot: root }, context, 1234);
+      assert.deepEqual(JSON.parse(await readFile(snapshotFile(root), "utf8")), { repo: "owner/repo", pr: 10, headSha: HEAD, lightweight: true, fetchedAtMs: 1234, context });
+    });
+  });
+
+  it("reuses a fresh snapshot for the same PR and head without fetching", async () => {
+    await withRoot(async (root) => {
+      await writePrGateCoordinationSnapshot(options, { coordinationSnapshotRoot: root }, context, 1000);
+      const { runtime, calls } = failingRuntime(root);
+      const loaded = await loadPrGateCoordinationContextReusingSnapshot(options, runtime, { expectedHeadSha: HEAD, nowMs: 1000 + PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS - 1 });
+      assert.deepEqual(loaded, { context, reused: true });
+      assert.equal(calls.length, 0);
+    });
+  });
+
+  for (const [name, expected, reuseOptions, nowMs] of [
+    ["is stale", HEAD, options, 1000 + PR_GATE_COORDINATION_SNAPSHOT_MAX_AGE_MS],
+    ["has another head", "b".repeat(40), options, 1001],
+    ["has an abbreviated expected head", HEAD.slice(0, 7), options, 1001],
+    ["has a missing expected head", undefined, options, 1001],
+    ["has another lightweight value", HEAD, { ...options, lightweight: true }, 1001],
+    ["is for another PR", HEAD, { ...options, pr: 11 }, 1001],
+  ]) {
+    it(`fetches fresh when the snapshot ${name}`, async () => {
+      await withRoot(async (root) => {
+        await writePrGateCoordinationSnapshot(options, { coordinationSnapshotRoot: root }, context, 1000);
+        const { runtime, calls } = failingRuntime(root);
+        await assert.rejects(loadPrGateCoordinationContextReusingSnapshot(reuseOptions, runtime, { expectedHeadSha: expected, nowMs }), /fresh fetch attempted/);
+        assert.ok(calls.length > 0);
+      });
+    });
+  }
+
+  it("fetches fresh when the snapshot file is missing or unparsable", async () => {
+    await withRoot(async (root) => {
+      const { runtime } = failingRuntime(root);
+      await assert.rejects(loadPrGateCoordinationContextReusingSnapshot(options, runtime, { expectedHeadSha: HEAD }), /fresh fetch attempted/);
+      await mkdir(path.dirname(snapshotFile(root)), { recursive: true });
+      await writeFile(snapshotFile(root), "{not json");
+      await assert.rejects(loadPrGateCoordinationContextReusingSnapshot(options, runtime, { expectedHeadSha: HEAD }), /fresh fetch attempted/);
+    });
+  });
+
+  it("a real loaded context survives the JSON round trip through the snapshot", async () => {
+    await withRoot(async (root) => {
+      const env = { [GH_MOCK_ENTRIES]: pathAGhEntries({ reviewBody: "ok", atCap: false }) };
+      const runtime = buildMockRuntime(env, { repoRoot: capFixtureRepoRoot, coordinationSnapshotRoot: root });
+      const real = { repo: "owner/repo", pr: 266 };
+      const live = await loadPrGateCoordinationContext(real, runtime);
+      await writePrGateCoordinationSnapshot(real, runtime, live);
+      const snap = JSON.parse(await readFile(snapshotFile(root).replace("pr-10", "pr-266"), "utf8"));
+      assert.equal(snap.headSha, live.currentHeadSha);
+      assert.deepEqual(snap.context, JSON.parse(JSON.stringify(live)));
+      assert.equal(typeof snap.fetchedAtMs, "number");
+    });
+  });
 });

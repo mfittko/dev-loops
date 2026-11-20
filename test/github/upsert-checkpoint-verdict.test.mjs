@@ -30,6 +30,7 @@ import { buildFanoutEnforcement, buildPreMergeGateCheck, deriveEvidenceState, de
 import { buildLogPath, writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { buildValidationResultsPath } from "../../scripts/github/write-gate-context.mjs";
+import { loadPrGateCoordinationContextReusingSnapshot } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
@@ -199,6 +200,7 @@ const runNode = async (args = [], options = {}) => {
       // (#2185): a test may pass a fake evaluatePrSizeBudget to assert the
       // derived fields without a real git diff.
       ...(options.evaluatePrSizeBudget ? { evaluatePrSizeBudget: options.evaluatePrSizeBudget } : {}),
+      ...(options.coordinationSnapshotRoot ? { coordinationSnapshotRoot: options.coordinationSnapshotRoot } : {}),
     });
     process.stderr.write = originalWrite;
     const inlineWarning = buildInlineExecutionWarning(options_.executionMode, options_.inlineReason);
@@ -982,6 +984,54 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
       blockCleanOnFindingSeverities: ["high"],
     });
   }, { prefix: "dev-loops-upsert-gate-review-create-" });
+});
+
+const SNAPSHOT_HEAD = "abc1234000000000000000000000000000000000";
+const snapshotCoordinationEntries = (headRefOid = SNAPSHOT_HEAD) => [
+  { assertArgs: ["pr", "view", "17", "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid, body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n" },
+  { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+  { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+  { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: JSON.stringify({ headRefOid }) + "\n" },
+  { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+];
+const snapshotLiveHeadEntry = (headRefOid = SNAPSHOT_HEAD) => ({ assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: JSON.stringify({ headRefOid }) + "\n" });
+const snapshotPostEntries = () => [
+  { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n' },
+];
+const snapshotVerdictArgs = ["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", SNAPSHOT_HEAD, "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}', "--findings-summary", "no issues found", "--next-action", "mark ready for review"];
+const seedCoordinationSnapshot = async (root) => {
+  const { runChild } = makeGhMockRaw(snapshotCoordinationEntries());
+  await loadPrGateCoordinationContextReusingSnapshot({ repo: "owner/repo", pr: 17, lightweight: false }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: fanoutDisabledRepoRoot, runChild, coordinationSnapshotRoot: root }, { expectedHeadSha: SNAPSHOT_HEAD });
+  return path.join(root, "gate-coordination", "owner-repo", "pr-17", "context-snapshot.json");
+};
+
+test("upsert-checkpoint-verdict reuses the coordination snapshot, re-reads the live head and comments, and deletes the snapshot after posting", async () => {
+  await withTempDir(async (tempDir) => {
+    const snapshotFile = await seedCoordinationSnapshot(tempDir);
+    const env = await writeGhStub(tempDir, [snapshotLiveHeadEntry(), ...snapshotPostEntries()]);
+    const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const ghArgs = result.calls.filter((c) => c.command === "gh").map((c) => c.args.join(" "));
+    assert.match(ghArgs[0], /pr view 17 --repo owner\/repo --json headRefOid$/);
+    assert.equal(ghArgs.some((a) => a.includes("--json number,state,isDraft")), false, "the coordination context is not refetched");
+    assert.match(ghArgs.at(-1), /pulls\/17\/reviews/);
+    assert.equal(await readFile(snapshotFile, "utf8").catch(() => null), null);
+  }, { prefix: "dev-loops-upsert-snapshot-reuse-" });
+});
+
+test("upsert-checkpoint-verdict discards a reused snapshot whose head moved and loads fresh", async () => {
+  await withTempDir(async (tempDir) => {
+    await seedCoordinationSnapshot(tempDir);
+    const env = await writeGhStub(tempDir, [
+      snapshotLiveHeadEntry("def4567000000000000000000000000000000000"),
+      ...snapshotCoordinationEntries(),
+      ...snapshotPostEntries(),
+    ]);
+    const result = await runNode(snapshotVerdictArgs, { env, coordinationSnapshotRoot: tempDir });
+    const ghArgs = result.calls.filter((c) => c.command === "gh").map((c) => c.args.join(" "));
+    assert.match(ghArgs[0], /--json headRefOid$/);
+    assert.match(ghArgs[1], /--json number,state,isDraft,headRefOid/);
+  }, { prefix: "dev-loops-upsert-snapshot-moved-" });
 });
 
 test("upsert-checkpoint-verdict ignores a caller next action on a clean draft_gate (#3197)", async () => {
