@@ -99,3 +99,26 @@ test("a probe start is stored only on a record of the same head and a new reques
   await recordUnobservableRequest(key, { checkpointDir });
   assert.equal(await readProbeStartedAt(key, { checkpointDir }), null);
 });
+
+test("the threshold needs a timed-out probe after the latest unobservable request", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
+  const key = { ...pr, headSha: "a" };
+  const read = () => readRequestNotObservable(key, { checkpointDir });
+  await recordUnobservableRequest(key, { checkpointDir });
+  await recordTimedOutProbe(key, { checkpointDir });
+  await recordTimedOutProbe(key, { checkpointDir });
+  await recordUnobservableRequest(key, { checkpointDir });
+  assert.equal(await read(), false);
+  await recordTimedOutProbe(key, { checkpointDir });
+  assert.equal(await read(), true);
+});
+
+test("a second recordTimedOutProbe with the already consumed start leaves the count unchanged", async () => {
+  const checkpointDir = await mkdtemp(path.join(os.tmpdir(), "unobservable-record-"));
+  const key = { ...pr, headSha: "a" };
+  await recordUnobservableRequest(key, { checkpointDir });
+  await recordProbeStart({ ...key, startedAt: 5 }, { checkpointDir });
+  assert.equal((await recordTimedOutProbe({ ...key, probeStartedAt: 5 }, { checkpointDir })).timedOutProbes, 1);
+  assert.equal(await recordTimedOutProbe({ ...key, probeStartedAt: 5 }, { checkpointDir }), null);
+  assert.equal((await recordTimedOutProbe(key, { checkpointDir })).timedOutProbes, 2);
+});

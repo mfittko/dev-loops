@@ -2245,7 +2245,9 @@ function evaluatePrGateCoordinationCore(input = {}) {
           preApprovalGate,
           mergeStateStatus,
           conflictFiles,
-          underlyingReason: "Round-cap clean fallback has clean pre_approval_gate but no clean draft_gate evidence.",
+          underlyingReason: copilotUnavailable
+            ? `Copilot is unavailable (${COPILOT_UNAVAILABLE_REASON}) and the current head has clean pre_approval_gate but no clean draft_gate evidence.`
+            : "Round-cap clean fallback has clean pre_approval_gate but no clean draft_gate evidence.",
           refinementArtifact,
           effectiveLifecycleState,
         });

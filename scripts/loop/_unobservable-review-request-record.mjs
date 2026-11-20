@@ -5,6 +5,7 @@
 // loop readers report Copilot as unavailable (`request_not_observable`) once both
 // counts reach the threshold on the same head. A push changes the head, so the
 // record never outlives the head it was counted on.
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseJsonText } from "../_core-helpers.mjs";
@@ -31,9 +32,9 @@ async function readRaw(file) {
 
 async function write(file, record) {
   await mkdir(path.dirname(file), { recursive: true });
-  const tempPath = `${file}.${process.pid}.tmp`;
-  await writeFile(tempPath, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+  const tempPath = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
+    await writeFile(tempPath, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
     await rename(tempPath, file);
   } catch (error) {
     await rm(tempPath, { force: true });
@@ -44,7 +45,7 @@ async function write(file, record) {
 const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
 const isHead = (value) => typeof value === "string" && value.length > 0;
 
-// shortcut: this and recordTimedOutProbe do an unlocked read-modify-write, so two concurrent writers for one PR can lose an increment; the loss only undercounts and delays copilot_unavailable, add a lock if that delay matters.
+// shortcut: this and recordTimedOutProbe do an unlocked read-modify-write, so two concurrent writers for one PR can lose an increment; the loss undercounts and delays copilot_unavailable. recordTimedOutProbe re-reads and compares the consumed start, which leaves a narrow read-to-write window that could still count twice; add a lock if that matters.
 // Counts one accepted-but-unobservable request on `headSha`; a different head restarts the count.
 export async function recordUnobservableRequest({ repo, pr, headSha }, opts = {}) {
   if (!isHead(headSha)) return null;
@@ -57,6 +58,7 @@ export async function recordUnobservableRequest({ repo, pr, headSha }, opts = {}
     headSha,
     unobservableRequests: (same ? count(prior.unobservableRequests) : 0) + 1,
     timedOutProbes: same ? count(prior.timedOutProbes) : 0,
+    probesSinceLastRequest: 0,
   };
   await write(file, record);
   return record;
@@ -64,13 +66,15 @@ export async function recordUnobservableRequest({ repo, pr, headSha }, opts = {}
 
 // Counts one timed-out probe of `headSha`. Without a prior unobservable request
 // on that same head there is nothing to count.
-export async function recordTimedOutProbe({ repo, pr, headSha }, opts = {}) {
+export async function recordTimedOutProbe({ repo, pr, headSha, probeStartedAt }, opts = {}) {
   const file = recordPath(repo, pr, opts);
   const prior = await readRaw(file);
   if (!prior || !isHead(headSha) || prior.headSha !== headSha) return null;
+  // A start the caller read must still be the stored one, so a concurrent chunk cannot count it twice.
+  if (probeStartedAt !== undefined && prior.probeStartedAt !== probeStartedAt) return null;
   // The stored start backs at most one counted probe, so it is dropped here.
   const { probeStartedAt: _consumed, ...rest } = prior;
-  const record = { ...rest, timedOutProbes: count(prior.timedOutProbes) + 1 };
+  const record = { ...rest, timedOutProbes: count(prior.timedOutProbes) + 1, probesSinceLastRequest: count(prior.probesSinceLastRequest) + 1 };
   await write(file, record);
   return record;
 }
@@ -99,5 +103,6 @@ export async function readRequestNotObservable({ repo, pr, headSha }, opts = {})
     && isHead(headSha)
     && record.headSha === headSha
     && reached(record.unobservableRequests)
-    && reached(record.timedOutProbes);
+    && reached(record.timedOutProbes)
+    && count(record.probesSinceLastRequest) >= 1;
 }
