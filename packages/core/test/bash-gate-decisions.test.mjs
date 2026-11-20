@@ -615,7 +615,26 @@ const SHELL_BUILT_RECORDER_SPELLINGS = [
   `dev-loops-run cli/index.mjs $(echo decision) record --repo o/n`,
   `dev-loops-run scripts/github/record-operator-decision.m?s --repo o/n`,
   `dev-loops-run scripts/github/record-operator-*.mjs --repo o/n`,
+  ...["node", "bun"].flatMap((runner) => [
+    `${runner} cli/index.mjs decision$IFS record --repo o/n`,
+    `${runner} cli/index.mjs decision $'record' --repo o/n`,
+    `${runner} scripts/github/record-operator-*.mjs --repo o/n`,
+  ]),
+  `dev-loops decision$IFS record --repo o/n`,
+  `dev-loops {decision,} record --repo o/n`,
+  `dev-loops decision $'record' --repo o/n`,
 ];
+
+test("quoted prose that mentions dev-loops-run and plain runner commands are not denied", () => {
+  for (const command of [
+    `git commit -m "docs: run dev-loops-run scripts/foo.mjs"`,
+    `echo "use dev-loops-run scripts/a.mjs"`,
+    `node scripts/github/validate-decision-records.mjs`,
+    `dev-loops status`,
+  ]) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, command);
+  }
+});
 
 test("a shell-built or globbed recorder word is denied, with and without a subagent role", () => {
   for (const command of SHELL_BUILT_RECORDER_SPELLINGS) {

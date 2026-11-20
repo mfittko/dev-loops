@@ -1905,10 +1905,16 @@ export function classifyDecisionRecorderCommand(command) {
  * (`record-operator-*.mjs`). A glob that cannot match them (`scripts/*\/validate-decision-records.mjs`) stays allowed.
  */
 function hasUnreadableLauncherWord(raw) {
-  const at = raw.findIndex((w) => /(?:^|\/)dev-loops-run$/.test(w));
+  // Only a segment head counts (after env assignments), so quoted prose that mentions a launcher stays allowed.
+  const at = raw.findIndex((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
   if (at < 0) return false;
+  const head = raw[at];
+  const isRunner = /(?:^|\/)(?:node|bun)$/.test(head);
+  const isRun = /(?:^|\/)dev-loops-run$/.test(head);
+  const isBare = /(?:^|\/)dev-loops$/.test(head);
+  if (!isRunner && !isRun && !isBare) return false;
   let i = at + 1;
-  if (raw[i] === "--repo-root") i += 2;
+  if (isRun && raw[i] === "--repo-root") i += 2;
   const hides = (w, target) => {
     if (w === undefined || /^[A-Za-z0-9_./-]+$/.test(w)) return false;
     if (!/^[A-Za-z0-9_./*?[\]-]+$/.test(w)) return true;
@@ -1919,6 +1925,7 @@ function hasUnreadableLauncherWord(raw) {
     }
   };
   if (raw[i] === undefined) return false;
+  if (isBare) return hides(raw[i], "decision") || (raw[i] === "decision" && hides(raw[i + 1], "record"));
   if (hides(raw[i], "scripts/github/record-operator-decision.mjs")) return true;
   return raw[i].endsWith("cli/index.mjs") && (hides(raw[i + 1], "decision") || hides(raw[i + 2], "record"));
 }

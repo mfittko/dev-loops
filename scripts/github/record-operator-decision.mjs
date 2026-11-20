@@ -25,7 +25,11 @@ The operator answer file is JSON: {"question": "...", "option": "...", "answer":
 The kinds approve-merge, adr-allow and copilot-disposition are not yet supported.
 Runs only under Claude Code (CLAUDECODE=1) behind the \`permissions.ask\` prompt; elsewhere it refuses with
 reason harness_without_permission_prompt and the operator posts the line by hand.
+Success (stdout, JSON): { "ok": true, "action": "decision_recorded", "repo": "...", "target": "...", "number": 0, "kind": "...", "commentUrl": "..." }
 Refusal (stderr, JSON, exit 1): { "ok": false, "refused": true, "reason": "<code>", "detail": "..." }
+Reason codes: harness_without_permission_prompt, head_required, head_forbidden, head_malformed, file_unreadable,
+answer_file_invalid, empty_body, header_marker_in_input, comment_guard_refused, target_closed, target_is_pull_request,
+stale_head, recorder_error.
 ${JQ_OUTPUT_USAGE}`.trim();
 const parseError = buildParseError(USAGE);
 

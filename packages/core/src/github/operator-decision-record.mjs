@@ -43,7 +43,7 @@ export function parseAnswerFile(text) {
 /** SHA-256 of the full answer-file bytes (a Buffer; a string hashes as UTF-8). */
 export const answerSha256 = (answerBytes) => createHash("sha256").update(answerBytes).digest("hex");
 
-const quote = (text) => text.split(/\r?\n/u).map((line) => `> ${line}`).join("\n");
+const quote = (text) => text.split(/\r\n|\r|\n/u).map((line) => `> ${line}`).join("\n");
 
 /** The decision comment. `head` is a 40-hex SHA for a PR target and null for an issue target. */
 export function buildDecisionComment({ kind, targetType, number, head, answerBytes, answer, body }) {

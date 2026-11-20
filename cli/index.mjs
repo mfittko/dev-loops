@@ -623,14 +623,19 @@ export function createCliRuntime({
       }
       return repoRoot;
     },
-    // Parsed Claude settings of the working checkout and the user; an absent or unparsable file reports nothing.
+    // Parsed Claude settings of the repo toplevel (the cwd outside a git repo) and the user.
+    // An absent file reports nothing; a file that exists but does not parse is reported.
     async getRecorderSettingsProblems() {
+      const top = spawnResult("git", ["rev-parse", "--show-toplevel"], { cwd: effectiveCwd });
+      const projectRoot = top.ok && top.stdout.trim() ? top.stdout.trim() : effectiveCwd;
       const files = [
-        path.join(effectiveCwd, ".claude/settings.json"),
-        path.join(effectiveCwd, ".claude/settings.local.json"),
+        path.join(projectRoot, ".claude/settings.json"),
+        path.join(projectRoot, ".claude/settings.local.json"),
         path.join(homedir(), ".claude/settings.json"),
       ].flatMap((file) => {
-        try { return [{ file, settings: JSON.parse(readFileSync(file, "utf8")) }]; } catch { return []; }
+        let text;
+        try { text = readFileSync(file, "utf8"); } catch { return []; }
+        try { return [{ file, settings: JSON.parse(text) }]; } catch { return [{ file, unparsable: true }]; }
       });
       return findRecorderSettingsProblems(files);
     },
