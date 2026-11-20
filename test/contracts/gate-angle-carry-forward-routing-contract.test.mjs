@@ -129,6 +129,8 @@ test("copilot-pr-followup SKILL's Phase 3 step's writer invocation derives prove
   assert.match(line, /write-gate-findings-log\.mjs[^`]*--findings-file <enriched-ledger-path>/, `${SKILL} Phase 3 writer must read the judge-pass --ledger-out file`);
   const sanctioned = (await readRepo(SUB_LOOP_CONTRACT)).split("`GATE-EXEC-DISPOSITION-LEDGER`: Every gate pass")[1].match(/```sh\n([\s\S]*?)```/)[1];
   assert.match(sanctioned, /write-gate-findings-log\.mjs/);
+  assert.match(sanctioned, /--judge-verdict <verdict-path>/);
+  assert.doesNotMatch(sanctioned, /--execution-mode/);
   assert.doesNotMatch(sanctioned.replace(/\\\n/g, " ").replace(/#.*$/gm, ""), /--(provenance|emit-plan|verdict)\b/);
 });
 

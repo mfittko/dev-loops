@@ -4009,6 +4009,8 @@ test("3297: a fanout_fanin write without --judge-verdict refuses when a judge pl
     const headSha = "c9".repeat(20);
     const base = { repo: "o/n", pr: 28, gate: "draft_gate", headSha, verdict: "clean", tmpRoot: tmpDir, findings: JSON.stringify([]) };
     assert.equal((await writeGateFindingsLog(base)).ok, true, "no judge plan");
+    const provenance = JSON.stringify({ distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "r1" }, { angle: "holistic", reviewer: "r2" }] });
+    assert.equal((await writeGateFindingsLog({ ...base, pr: 29, executionMode: "fanout_fanin", provenance })).ok, true, "no judge plan, fanout_fanin");
     const judgeDir = path.resolve(buildGateArtifactPath({ repo: "o/n", pr: 28, gate: "draft_gate", headSha, tmpRoot: tmpDir, dir: "gate-judge" }));
     await mkdir(judgeDir, { recursive: true });
     await writeFile(path.join(judgeDir, "judge-emit-plan.json"), JSON.stringify({ roundId: "j5000-ab" }), "utf8");
