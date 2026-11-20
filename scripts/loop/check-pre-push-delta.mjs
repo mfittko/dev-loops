@@ -428,6 +428,7 @@ function fetchAndResolveBase(worktree, base, { revParse, fetchBase }) {
   try { revParse(worktree, `origin/${base}`); } catch { throw new Error(`reviewer-only: origin/${base} does not exist in ${worktree}; run \`git fetch origin ${base}\` and rerun`); }
 }
 // The PR-own commit count of baseline..head under the reviewer-only rules: non-merge commits origin/<base> lacks plus non-base-only merges whose remerge diff names a path.
+// A clean merge whose parents overlap adds review paths but no PR-own commit, so it is excluded from this count.
 // The body-only converged post (ADR 0271) asks the same question, so it calls this instead of counting on its own.
 export async function countPrOwnCommits(worktree, baseline, head, base, { revParse = gitRevParse, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, fetchBase = defaultFetchOrigin, isAncestor = gitIsAncestor } = {}) {
   fetchAndResolveBase(worktree, base, { revParse, fetchBase });
@@ -461,11 +462,13 @@ async function reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyM
       const [, p1, p2] = parents.stdout.trim().split(" ");
       const mb = spawnSync("git", ["-C", repoRoot, "merge-base", p1, p2], { encoding: "utf8", env: gitEnvNoDirOverrides() });
       const sideNames = (tip) => {
-        const r = spawnSync("git", ["-C", repoRoot, "diff", "--no-renames", "--name-only", "-z", mb.stdout.trim(), tip], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+        const r = spawnSync("git", ["-C", repoRoot, "diff", "--no-renames", "--no-relative", "--no-ext-diff", "--ignore-submodules=none", "--name-only", "-z", mb.stdout.trim(), tip], { encoding: "utf8", env: gitEnvNoDirOverrides() });
         if (r.status !== 0) throw new Error(`non_base_only_merge: cannot read the paths merge ${merge} brought in (${(r.stderr ?? "").trim()}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
         return r.stdout.split("\0").filter(Boolean);
       };
-      if (mb.status === 0 && mb.stdout.trim()) { const main = new Set(sideNames(p2)); resolvedPaths.push(...sideNames(p1).filter((f) => main.has(f))); }
+      if (mb.status !== 0 || !mb.stdout.trim()) throw new Error(`non_base_only_merge: cannot read the merge base of merge ${merge} (${(mb.stderr ?? "").trim()}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
+      const main = new Set(sideNames(p2));
+      resolvedPaths.push(...sideNames(p1).filter((f) => main.has(f)));
       continue;
     }
     resolvedPaths.push(...paths);

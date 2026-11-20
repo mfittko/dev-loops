@@ -1152,3 +1152,33 @@ test("AC2: a locally_clear reviewer-only delta over a clean merge that overlaps 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("AC3: a clean base merge with no overlap keeps the base-only carry and needs no delta", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "extend-cap-no-overlap-"));
+  try {
+    initGitFixture(root, { commit: null });
+    runGitFixture(root, ["config", "commit.gpgsign", "false"]);
+    const M0 = await commit(root, { ".gitignore": "tmp/\n", "src/f.mjs": "f\n", "src/g.mjs": "g\n" }, "base");
+    runGitFixture(root, ["update-ref", "refs/remotes/origin/main", M0]);
+    runGitFixture(root, ["checkout", "-q", "-b", "pr"]);
+    const A = await commit(root, { "src/f.mjs": "pr-f\n" }, "feat: pr");
+    runGitFixture(root, ["checkout", "-q", "-b", "base-side", M0]);
+    const M1 = await commit(root, { "src/g.mjs": "main-g\n" }, "base moves g");
+    runGitFixture(root, ["update-ref", "refs/remotes/origin/main", M1]);
+    runGitFixture(root, ["checkout", "-q", "pr"]);
+    runGitFixture(root, ["merge", "-q", "--no-ff", "-m", "refresh base", M1]);
+    const merge = String(runGitFixture(root, ["rev-parse", "HEAD"])).trim();
+    const dir = path.join(root, "tmp", "gate-findings", "owner-repo", `pr-${PR}`);
+    await mkdir(dir, { recursive: true });
+    for (const [i, head] of ["1".repeat(40), "2".repeat(40), "3".repeat(40), A].entries()) {
+      await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
+        repo: REPO, pr: PR, gate: "draft_gate", headSha: head, verdict: "clean", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: [], provenance: { perAngle: [{ angle: "correctness" }] },
+      }), "utf8");
+    }
+    const result = await extend(root, merge);
+    assert.equal(result.action, "chain_extended", JSON.stringify(result));
+    assert.ok(await proof(root, merge), "the chain reaches the merge head with no delta record");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
