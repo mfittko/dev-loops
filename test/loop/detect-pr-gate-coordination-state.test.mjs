@@ -4665,6 +4665,11 @@ test("3309: a base-only merge head keeps the cap-round body-only list of the cap
     const list = await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 1, baseOnlyMerge: merge(true) });
     assert.deepEqual(list, { headSha: fixture.headSha, carriedToHead: merged, openActCount: 1, blockers: [], bodyOnly: true });
     assert.deepEqual(seen, [fixture.headSha]);
+    // Merge-then-post: the detector's list plus the findings_present marker still at the cap head A name the post at the merge head (the marker never carries).
+    const marker = { visible: true, headSha: fixture.headSha, verdict: "findings_present", contractComplete: true };
+    const result = evaluatePrGateCoordination({ pr: 10, repo: "owner/repo", currentHeadSha: merged, prDraft: true, lifecycleState: "pr_draft", loopDisposition: "action_required", ciStatus: "success", mergeStateStatus: "CLEAN", mergeable: "MERGEABLE", draftGate: marker, draftGateMarker: marker, draftRoundRefused: true, draftCapRoundFailure: "no_clearing_record", draftOpenActList: list });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+    assert.match(result.agentRemedy.command, new RegExp(`--head-sha ${fixture.headSha} .*fixerCommit \\(${fixture.headSha}\\)`));
     assert.equal(await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 1, baseOnlyMerge: merge(false) }), null);
   } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
 });

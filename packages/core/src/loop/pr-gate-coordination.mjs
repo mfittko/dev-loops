@@ -1344,7 +1344,11 @@ function evaluatePrGateCoordinationCore(input = {}) {
 
   // Issue 3105 AC15 (ADR 0288): the open draft_gate act list at the current head; the fixer route below consumes it.
   const actList = input.draftOpenActList;
-  const headActList = !draftReady && draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"
+  // A carried list (a base-only merge of the cap head A) keeps its findings_present marker at A: findings_present markers never carry across a merge.
+  const carriedMarker = normalizeGateComment(input.draftGateMarker);
+  const markerAtCarriedList = trimmedOrNull(actList?.carriedToHead)?.toLowerCase() === currentHeadSha?.toLowerCase() && carriedMarker.visible && carriedMarker.contractComplete
+    && carriedMarker.verdict === "findings_present" && carriedMarker.headSha !== null && String(actList.headSha ?? "").toLowerCase().startsWith(carriedMarker.headSha.toLowerCase());
+  const headActList = !draftReady && (markerAtCarriedList || (draftGate.currentHead && draftGate.contractComplete && draftGate.verdict === "findings_present"))
     && /^[0-9a-f]{40,64}$/i.test(currentHeadSha ?? "") && [actList?.headSha, actList?.carriedToHead].some((h) => String(h ?? "").toLowerCase() === currentHeadSha.toLowerCase())
     && Number.isInteger(actList.openActCount) && actList.openActCount > 0
     // At the cap, AC15 replaces only the no_clearing_record refusal; an unknown (null) cap-round failure fails closed.

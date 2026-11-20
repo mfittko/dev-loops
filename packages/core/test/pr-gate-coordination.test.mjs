@@ -4836,7 +4836,7 @@ test("3309: a cap-round body-only act list routes to the converged post, never t
   assert.equal(behind.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS, behind.reason);
   // At the base-merge head the carried list (the cap head A) names the post with --head-sha A and fixerCommit A.
   const merged = "cd".repeat(20);
-  const carried = evaluatePrGateCoordination({ ...base, currentHeadSha: merged, draftGate: { ...verdict, headSha: merged }, draftGateMarker: { ...verdict, headSha: merged }, draftOpenActList: { headSha: head, carriedToHead: merged, openActCount: 2, blockers: [], bodyOnly: true } });
+  const carried = evaluatePrGateCoordination({ ...base, currentHeadSha: merged, draftOpenActList: { headSha: head, carriedToHead: merged, openActCount: 2, blockers: [], bodyOnly: true } });
   assert.equal(carried.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, carried.reason);
   assert.match(carried.agentRemedy.command, new RegExp(`--head-sha ${head} .*\\{ fixerCommit \\(${head}\\), actList, bodyOnly: true \\}`));
   assert.match(result.agentRemedy.summary, /^Edit the PR body through scripts\/github\/edit-pr\.mjs, then post the body-only converged draft_gate verdict/);

@@ -31,7 +31,7 @@ import {
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
-import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
+import { convergedCarryAccepts } from "../github/_carried-verdict.mjs";
 import { countCompletedRounds, readClosedPriorRoundLogs, resolveCapRoundFixed, resolveDraftCapRoundFact } from "../github/write-gate-context.mjs";
 import { isPastRoundCap, listOpenActItems, normalizeSeverity, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
@@ -1302,7 +1302,7 @@ export async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = pr
  * `blockers` are the GATE-EXEC-SOFT-CAP blockers of the cap round; below the cap every act item goes to the fixer.
  * A hand-edited sealed ledger throws OUT_OF_BAND_WRITE.
  */
-export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnlyMerge = isBaseOnlyMergeSince }) {
+export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnlyMerge = ({ fromHead, head, mainRef, repoRoot: root }) => convergedCarryAccepts({ originHead: fromHead, headSha: head, baseRef: mainRef, repoRoot: root }) }) {
   const head = String(context.currentHeadSha ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{40,64}$/.test(head)) return null;
   const options = { repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: head };
