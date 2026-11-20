@@ -1,4 +1,4 @@
-# 0295. The base-merge verdict carry re-gates only for paths that can change a gate outcome
+# 0296. The base-merge verdict carry re-gates only for paths that can change a gate outcome
 
 ## Status
 

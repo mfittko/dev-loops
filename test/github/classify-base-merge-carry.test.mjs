@@ -296,7 +296,7 @@ test("git: base-side conflict-resolved merge still carries", async () => {
   assert.equal(ev.decision, "carry_verdict");
 });
 
-// ADR 0295: only paths that can change a gate outcome re-gate.
+// ADR 0296: only paths that can change a gate outcome re-gate.
 const OUTCOME_PATHS = [
   "agents/review.agent.md", "agents/judge.agent.md", "agents/gate-coordinator.agent.md", ".claude/agents/judge.md",
   "skills/docs/gate-review-sub-loop-contract.md", ".claude/skills/docs/judge-contract.md", "skills/docs/pre-pr-review-contract.md",

@@ -16,7 +16,7 @@ import { isDevLoopConfigSourcePath } from "../analysis/diff-analyzer.mjs";
 
 export const BASE_MERGE_CARRY_DECISIONS = Object.freeze(["carry_verdict", "full_regate", "fallback_full"]);
 
-// Paths that can change a gate outcome (ADR 0295, amends ADR 0096 and ADR 0156): .devloops config
+// Paths that can change a gate outcome (ADR 0296, amends ADR 0096 and ADR 0156): .devloops config
 // (isDevLoopConfigSourcePath), reviewer, judge, gate-coordinator and docs agents with their .claude mirror,
 // the gate, judge, review, acceptance-criteria, structural-quality, validation-policy, spec-authority and copilot-loop-operations contracts, the copilot-pr-followup, review, dev-loop and local-implementation skills,
 // core config (angle, persona, prompt and judge-track resolution), spec-authority.mjs (judge disposition rules), build-adjacent-bundle.mjs (reviewer input), the scripts (at any depth) and core loop modules

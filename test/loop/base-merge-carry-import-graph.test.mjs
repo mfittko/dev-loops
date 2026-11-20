@@ -6,7 +6,7 @@ import { test } from "bun:test";
 
 import { isGateToolingPath } from "@dev-loops/core/loop/base-merge-verdict-carry";
 
-// ADR 0295: a file that a gate-tooling file imports can change a gate outcome too. Starting at the fan-in,
+// ADR 0296: a file that a gate-tooling file imports can change a gate outcome too. Starting at the fan-in,
 // judge and fan-out entry scripts, the walk follows relative and @dev-loops/core imports through gate-tooling
 // files. Every file it reaches under scripts/ or packages/core/src/ must be gate tooling or allowlisted.
 // shortcut: the walk reports a non-tooling file and does not expand it, because a full transitive closure
@@ -77,7 +77,7 @@ function reachedFiles() {
   return [...seen].sort();
 }
 
-test("every file a gate-tooling file imports is gate tooling or allowlisted (ADR 0295)", () => {
+test("every file a gate-tooling file imports is gate tooling or allowlisted (ADR 0296)", () => {
   const reached = reachedFiles();
   assert.ok(reached.length > entries.length, "the import walk reached more than the entry files");
   for (const e of entries) assert.equal(isGateToolingPath(e), true, e);

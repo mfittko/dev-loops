@@ -138,7 +138,7 @@ test("buildPreMergeGateCheck passes with a carried marker and fails with an unca
   assert.equal(buildPreMergeGateCheck(evidence(marker(origin)), 0).ok, false);
 });
 
-// ADR 0295: a base delta that used to count as gate tooling (a lockfile, a non-outcome script) now carries and merge accepts it.
+// ADR 0296: a base delta that used to count as gate tooling (a lockfile, a non-outcome script) now carries and merge accepts it.
 test("buildPreMergeGateCheck accepts a carry whose base delta touches a formerly-tooling path", async () => {
   for (const file of ["package-lock.json", "scripts/github/edit-pr.mjs"]) {
     const s = setup();
