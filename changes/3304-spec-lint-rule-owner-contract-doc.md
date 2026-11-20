@@ -1,3 +1,3 @@
 ### Fixed
 
-- `loop spec-lint` flags a contract doc that owns a rule ID cited in an AC / DoD matrix row when no row names the doc in backticks, so the ADR-tripwire waiver precondition is satisfiable before the first gate (#3304)
+- `loop spec-lint` flags a contract doc that owns a rule ID cited in the AC / DoD matrix when no row names the doc, so the ADR waiver stays satisfiable (#3304)
