@@ -232,6 +232,50 @@ test("timeout-wrapped sanctioned commands are denied for every Claude actor", as
   });
 });
 
+test("OPERATOR-DECISION-RECORDER: only the plain canonical spelling from the main agent passes the hook", async () => {
+  await withManagedRepo(async (root) => {
+    const tail = "decision record --repo o/n --target pr 5 --kind accept --head x --operator-answer-file a.json --body-file b.md";
+    const plain = `dev-loops-run cli/index.mjs ${tail}`;
+    assert.equal(bash(root, plain, undefined).decision, "allow", "the plain prefix form as the main agent");
+    for (const agentType of ACTORS.filter((a) => a !== undefined)) {
+      const { decision, reason } = bash(root, plain, agentType);
+      assert.equal(decision, "deny", `${plain} as ${agentType}`);
+      assert.match(reason, /OPERATOR-DECISION-RECORDER/);
+    }
+  });
+});
+
+// The --repo-root ask pattern stays unverified in a live session (ADR 0295), so that spelling is denied for every actor.
+// Each command is its own test for its own timeout budget.
+const RECORDER_TAIL = "decision record --repo o/n --target pr 5 --kind accept --head x --operator-answer-file a.json --body-file b.md";
+for (const command of [
+  `dev-loops-run --repo-root /w/x cli/index.mjs ${RECORDER_TAIL}`,
+  `node cli/index.mjs ${RECORDER_TAIL}`,
+  `bun cli/index.mjs ${RECORDER_TAIL}`,
+  `bun run cli/index.mjs ${RECORDER_TAIL}`,
+  `.claude/bin/dev-loops-run cli/index.mjs ${RECORDER_TAIL}`,
+  `dev-loops ${RECORDER_TAIL}`,
+  `dev-loops-run decision record --kind accept`,
+  `FOO=1 dev-loops-run cli/index.mjs ${RECORDER_TAIL}`,
+  `cd /w && node /w/cli/index.mjs ${RECORDER_TAIL}`,
+  "dev-loops-run scripts/github/record-operator-decision.mjs --repo o/n",
+  "dev-loops-run --repo-root /w scripts/github/record-operator-decision.mjs --repo o/n",
+  "node scripts/github/record-operator-decision.mjs --repo o/n",
+  "bun scripts/github/record-operator-decision.mjs --repo o/n",
+  `dev-loops-run cli/index.mjs decision "record" --repo o/n`,
+  `dev-loops-run cli/index.mjs 'decision' record --repo o/n`,
+  `dev-loops-run cli/index.mjs dec""ision record --repo o/n`,
+  "dev-loops-run cli/index.mjs decision \\\nrecord --repo o/n",
+  `dev-loops-run  cli/index.mjs ${RECORDER_TAIL}`,
+  `dev-loops-run\tcli/index.mjs ${RECORDER_TAIL}`,
+]) {
+  test(`OPERATOR-DECISION-RECORDER: denied for every Claude actor: ${command}`, async () => {
+    await withManagedRepo(async (root) => {
+      denyForEveryActor(root, command, /OPERATOR-DECISION-RECORDER/);
+    });
+  });
+}
+
 test("both denies stay scoped to a managed repo, and the resolved-slug API form is covered", async () => {
   const bodyWrite = "gh api -X PATCH repos/acme/widgets/pulls/5 -f body=x";
   const timeoutWrap = "timeout 300 dev-loops-run scripts/github/merge-pr.mjs --repo acme/widgets --pr 5";

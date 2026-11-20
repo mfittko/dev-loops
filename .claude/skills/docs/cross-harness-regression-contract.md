@@ -87,6 +87,12 @@ The module is pure, so each caller injects the facts its rules read — `command
 
 Three further Bash-gate denials carry no registered rule ID, so they stay out of `BASH_GATE_RULES`: the unresolve owner allowlist (only the main agent and the dev-loop coordinator may run `scripts/github/unresolve-review-thread.mjs`, issue 2577), the `timeout`-wrapped sanctioned-command deny and the subagent ad-hoc external-write deny. Their message names no registry rule, so listing them would mint rule IDs the rule registry (`skills/docs/required-rules.json`) does not own. All three live in the shared module, so every adapter applies the same bodies on the same facts; each rule's actor scope is its own: the `timeout`-wrapped deny is actor-independent, the ad-hoc external-write deny fires only from a subagent context (`role` non-null), and the unresolve owner allowlist exempts the main agent and the dev-loop coordinator.
 
+A fourth inline deny, `OPERATOR-DECISION-RECORDER` (registered in `skills/docs/decision-record-contract.md`, ADR 0295), also stays out of `BASH_GATE_RULES` and carries `ruleId: null`: it denies `decision record` from any subagent (`role` non-null) and every spelling other than the plain prefix form `dev-loops-run` followed by `cli/index.mjs decision record ...` (the `--repo-root` form is denied until a live session verifies its ask pattern, ADR 0295).
+
+### Operator decision recorder on Pi
+
+The recorder rests on a per-call permission prompt, which is a Claude Code feature: the shipped `permissions.ask` rules in `.claude/settings.json` prompt the operator before every call, in default and auto mode. Pi has no permission prompt and no Bash hook (issue 3033). The recorder therefore runs only when `CLAUDECODE=1` is set (`CLAUDE_HARNESS_MARKER`). Under Pi it refuses with `reason: harness_without_permission_prompt` and names the fallback: the operator posts the decision comment by hand, as before. This is the one path where a skill or contract may tell the operator to post by hand. The Pi path stays manual until Pi has a per-call approval surface. A Pi session can set `CLAUDECODE=1` itself, so the check guards against accident and is not a security boundary. `test/github/record-operator-decision.test.mjs` runs the recorder under both environments.
+
 ### Claude-edge Bash-gate rules outside the shared module
 
 The Claude PreToolUse seam keeps two Bash-gate rules the shared module does not own, because they key on Claude role machinery with no equivalent outside that seam:

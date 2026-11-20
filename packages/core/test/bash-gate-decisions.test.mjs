@@ -177,6 +177,11 @@ const INLINE_FIXTURES = [
     reason: "Do not wrap sanctioned dev-loops commands in `timeout N`: the wrapper hides the `dev-loops-run` head from operator allow rules. Run the command bare. Wait/probe tools bound themselves with `--timeout <seconds>`; other commands rely on the harness tool-call timeout.",
   },
   {
+    name: "decision recorder from a subagent or a non-canonical spelling",
+    facts: { ...BASE, role: "developer", command: "dev-loops-run cli/index.mjs decision record --repo o/n --target pr 5 --kind accept" },
+    reason: "OPERATOR-DECISION-RECORDER: `decision record` runs only from the main agent as `dev-loops-run cli/index.mjs decision record ...` from the checkout, the plain prefix the operator's permission prompt matches. A subagent returns the needed decision in its hand-back, and the orchestrator asks the operator and runs the recorder. The `--repo-root` spelling, `node`, `bun`, the `scripts/github/record-operator-decision.mjs` path, `.claude/bin/dev-loops-run`, bare `dev-loops`, quoted or escaped words and extra whitespace are denied. If the command only quotes the recorder as data, rephrase it or move the text into a file.",
+  },
+  {
     name: "subagent ad-hoc external write",
     facts: { ...BASE, role: "developer", command: "gh issue comment 5 --body hi" },
     reason: "Ad-hoc GitHub issue/PR creation, comments, and edits from a subagent are blocked. Use the sanctioned node wrappers instead — gate-verdict comments via scripts/github/upsert-checkpoint-verdict.mjs, review-thread replies via scripts/github/reply-resolve*.mjs, board sync, issue comments via scripts/github/comment-issue.mjs, or issue-body edits via scripts/github/edit-issue.mjs. Direct `gh issue create` is reserved for the main agent / operator.",
@@ -320,6 +325,18 @@ const INLINE_ORDER_PAIRS = [
     below: {
       id: "SUBISSUE-NO-ADHOC-BYPASS",
       command: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation && gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6",
+    },
+  },
+  {
+    name: "decision recorder from a subagent or a non-canonical spelling",
+    facts: { ...BASE, role: "developer" },
+    above: {
+      id: "COPILOT-FOLLOWUP-WAIT-TOOLS",
+      command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 & dev-loops-run cli/index.mjs decision record --kind accept",
+    },
+    below: {
+      id: "SUBISSUE-NO-ADHOC-BYPASS",
+      command: "dev-loops-run cli/index.mjs decision record --kind accept && gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6",
     },
   },
   {
@@ -555,4 +572,74 @@ test("a readyGate probe whose `error` is an empty string is refused naming ready
   assert.ok(decision, "an empty `error` must deny instead of degrading to 'not probed'");
   assert.equal(decision.ruleId, null);
   assert.match(decision.reason, /supplied no valid readyGate fact/);
+});
+
+const RECORDER_TAIL = "decision record --repo o/n --target pr 5 --kind accept --head x --operator-answer-file a.json --body-file b.md";
+const RECORDER_SPELLINGS = [
+  `dev-loops-run --repo-root /w cli/index.mjs ${RECORDER_TAIL}`,
+  `dev-loops-run scripts/github/record-operator-decision.mjs --repo o/n`,
+  `dev-loops-run --repo-root /w scripts/github/record-operator-decision.mjs --repo o/n`,
+  `node scripts/github/record-operator-decision.mjs --repo o/n`,
+  `bun /w/scripts/github/record-operator-decision.mjs --repo o/n`,
+  `dev-loops-run cli/index.mjs decision "record" --repo o/n`,
+  `dev-loops-run cli/index.mjs 'decision' record --repo o/n`,
+  `dev-loops-run cli/index.mjs dec""ision record --repo o/n`,
+  `dev-loops-run cli/index.mjs de\\cision record --repo o/n`,
+  "dev-loops-run cli/index.mjs decision \\\nrecord --repo o/n",
+  `dev-loops-run  cli/index.mjs ${RECORDER_TAIL}`,
+  `dev-loops-run\tcli/index.mjs ${RECORDER_TAIL}`,
+  `dev-loops-run cli/index.mjs decision  record --repo o/n`,
+];
+
+test("every non-canonical recorder spelling is denied, with and without a subagent role", () => {
+  for (const command of RECORDER_SPELLINGS) {
+    for (const role of [null, "developer"]) {
+      const decision = decideBashGateDeny({ ...BASE, role, command });
+      assert.ok(decision, `${command} (role ${role})`);
+      assert.match(decision.reason, /^OPERATOR-DECISION-RECORDER/);
+    }
+  }
+});
+
+test("the canonical spelling passes for the main agent and is denied for a subagent", () => {
+  const command = `dev-loops-run cli/index.mjs ${RECORDER_TAIL}`;
+  assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null);
+  assert.match(decideBashGateDeny({ ...BASE, role: "developer", command }).reason, /^OPERATOR-DECISION-RECORDER/);
+});
+
+const SHELL_BUILT_RECORDER_SPELLINGS = [
+  `dev-loops-run cli/index.mjs decision$IFS record --repo o/n`,
+  `dev-loops-run cli/index.mjs $'decision' record --repo o/n`,
+  `dev-loops-run cli/index.mjs \${x:-decision} record --repo o/n`,
+  `dev-loops-run cli/index.mjs {decision,} record --repo o/n`,
+  `dev-loops-run cli/index.mjs $(echo decision) record --repo o/n`,
+  `dev-loops-run scripts/github/record-operator-decision.m?s --repo o/n`,
+  `dev-loops-run scripts/github/record-operator-*.mjs --repo o/n`,
+];
+
+test("a shell-built or globbed recorder word is denied, with and without a subagent role", () => {
+  for (const command of SHELL_BUILT_RECORDER_SPELLINGS) {
+    for (const role of [null, "developer"]) {
+      const decision = decideBashGateDeny({ ...BASE, role, command });
+      assert.ok(decision, `${command} (role ${role})`);
+      assert.match(decision.reason, /^OPERATOR-DECISION-RECORDER/);
+    }
+  }
+});
+
+test("scripts that only have `decision` in their name are not affected", () => {
+  for (const command of ["dev-loops-run scripts/loop/check-judge-decision.mjs --file x.json", "dev-loops-run scripts/*/validate-decision-records.mjs"]) {
+    assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, command);
+  }
+});
+
+test("the canonical recorder inside a multi-segment command is denied", () => {
+  for (const command of [`eval "x; dev-loops-run cli/index.mjs ${RECORDER_TAIL}"`, `bash -c "true; dev-loops-run cli/index.mjs ${RECORDER_TAIL}"`]) {
+    assert.match(decideBashGateDeny({ ...BASE, role: null, command }).reason, /^OPERATOR-DECISION-RECORDER/, command);
+  }
+});
+
+test("the recorder deny tells a quoting command to rephrase", () => {
+  const { reason } = decideBashGateDeny({ ...BASE, role: null, command: `node scripts/github/record-operator-decision.mjs --repo o/n` });
+  assert.match(reason, /If the command only quotes the recorder as data, rephrase it or move the text into a file\./);
 });

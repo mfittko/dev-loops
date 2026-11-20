@@ -46,6 +46,9 @@
       "id": "OPERATOR-OWNED-LINE"
     },
     {
+      "id": "OPERATOR-DECISION-RECORDER"
+    },
+    {
       "id": "ADR-WORTHY-PERSIST",
       "enforcement": "doc"
     },

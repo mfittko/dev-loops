@@ -1868,3 +1868,57 @@ const VITEST_RE = new RegExp(`^${VERIFY_EXEC_PREFIX}(?:(?:npx|bunx)\\s+|bun\\s+x
 export function commandContainsCodeVerificationEntrypoint(command) {
   return shellSegments(command).some((segment) => PACKAGE_MANAGER_VERIFY_RUN_RE.test(segment) || VITEST_RE.test(segment));
 }
+
+/**
+ * Decision-recorder classification (OPERATOR-DECISION-RECORDER). Fails closed. A segment names the recorder when,
+ * after quotes and backslashes are stripped and backslash-newline continuations are joined, it holds a word ending
+ * in `record-operator-decision.mjs`, or the words `decision record` next to a launcher word (`dev-loops`,
+ * `dev-loops-run`, or a `cli/index.mjs` entrypoint under any runner). `canonical` is true only for a raw segment
+ * that starts byte for byte with `dev-loops-run cli/index.mjs decision record ` (single spaces, no continuation).
+ * The `--repo-root` spelling is never canonical: its `permissions.ask` pattern is unverified in a live session.
+ * Returns null when no segment names the recorder.
+ * shortcut: a quoted `decision record` data word beside a launcher word counts as a mention, so a note that quotes
+ * the command is denied too; judging quotes would need the full tokenizer.
+ * @param {string} command @returns {{canonical: boolean}|null}
+ */
+export function classifyDecisionRecorderCommand(command) {
+  const continued = /\\\r?\n/.test(command);
+  const segments = shellSegments(command.replace(/\\\r?\n/g, ""));
+  let found = null;
+  for (const segment of segments) {
+    const raw = segment.split(/\s+/);
+    const words = segment.replace(/['"\\]/g, "").split(/\s+/);
+    const script = words.some((w) => w.endsWith("record-operator-decision.mjs"));
+    const at = words.findIndex((w, i) => w === "decision" && words[i + 1] === "record");
+    const cli = at >= 0 && words.slice(0, at).some((w) => /(?:^|\/)(?:dev-loops(?:-run)?|index\.mjs)$/.test(w));
+    if (!script && !cli && !hasUnreadableLauncherWord(raw)) continue;
+    const canonical = !script && !continued && segments.length === 1 && segment.startsWith("dev-loops-run cli/index.mjs decision record ");
+    found = { canonical: found?.canonical !== false && canonical };
+  }
+  return found;
+}
+
+/**
+ * Whether a `dev-loops-run` segment has a script word, or namespace and action words after `cli/index.mjs`, that the
+ * shell could expand to the recorder: a word outside `^[A-Za-z0-9_./-]+$` (`decision$IFS record`, `$'decision' record`,
+ * `{decision,} record`) or a glob that matches the recorder script or the words `decision` and `record`
+ * (`record-operator-*.mjs`). A glob that cannot match them (`scripts/*\/validate-decision-records.mjs`) stays allowed.
+ */
+function hasUnreadableLauncherWord(raw) {
+  const at = raw.findIndex((w) => /(?:^|\/)dev-loops-run$/.test(w));
+  if (at < 0) return false;
+  let i = at + 1;
+  if (raw[i] === "--repo-root") i += 2;
+  const hides = (w, target) => {
+    if (w === undefined || /^[A-Za-z0-9_./-]+$/.test(w)) return false;
+    if (!/^[A-Za-z0-9_./*?[\]-]+$/.test(w)) return true;
+    try {
+      return new RegExp(`${w.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(target);
+    } catch {
+      return true;
+    }
+  };
+  if (raw[i] === undefined) return false;
+  if (hides(raw[i], "scripts/github/record-operator-decision.mjs")) return true;
+  return raw[i].endsWith("cli/index.mjs") && (hides(raw[i + 1], "decision") || hides(raw[i + 2], "record"));
+}

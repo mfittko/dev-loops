@@ -43,6 +43,7 @@ import {
   commandContainsRawPrBodyApiWrite,
   commandContainsDetachedWaitTool,
   commandContainsTimeoutWrappedSanctionedTool,
+  classifyDecisionRecorderCommand,
   commandContainsInlineInterpreter,
   inlineInterpreterDenyDetail,
   commandContainsCodeVerificationEntrypoint,
@@ -343,6 +344,22 @@ export function decideBashGateDeny(facts = {}) {
         "Do not wrap sanctioned dev-loops commands in `timeout N`: the wrapper hides the " +
         "`dev-loops-run` head from operator allow rules. Run the command bare. Wait/probe tools bound " +
         "themselves with `--timeout <seconds>`; other commands rely on the harness tool-call timeout.",
+    };
+  }
+
+  // OPERATOR-DECISION-RECORDER: the recorder runs only through its `permissions.ask` rules, which match
+  // one spelling (`dev-loops-run cli/index.mjs decision record ...`). A subagent never
+  // runs it (the operator's approval prompt is for the main agent's call), and any other spelling would
+  // skip the ask rule. Inline deny with no registered rule ID (see BASH_GATE_RULES).
+  const recorder = classifyDecisionRecorderCommand(command);
+  if (recorder !== null && (typeof role === "string" || !recorder.canonical)) {
+    return {
+      ruleId: null,
+      reason:
+        "OPERATOR-DECISION-RECORDER: `decision record` runs only from the main agent as " +
+        "`dev-loops-run cli/index.mjs decision record ...` from the checkout, the plain prefix the operator's permission prompt matches. " +
+        "A subagent returns the needed decision in its hand-back, and the orchestrator asks the operator and runs the recorder. " +
+        "The `--repo-root` spelling, `node`, `bun`, the `scripts/github/record-operator-decision.mjs` path, `.claude/bin/dev-loops-run`, bare `dev-loops`, quoted or escaped words and extra whitespace are denied. If the command only quotes the recorder as data, rephrase it or move the text into a file.",
     };
   }
 
