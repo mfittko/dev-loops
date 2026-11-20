@@ -1922,14 +1922,18 @@ function hasUnreadableLauncherWord(raw) {
     // The value is one shell word: a quoted value spans to its closing quote, so a checkout path with a space stays one word.
     let end = i + 1;
     const quote = /^["']/.test(raw[end] ?? "") ? raw[end][0] : null;
-    if (quote && !(raw[end].length > 1 && raw[end].endsWith(quote))) {
-      while (end < raw.length - 1 && !raw[++end].endsWith(quote));
+    if (quote && !raw[end].includes(quote, 1)) {
+      // The closing quote may sit inside a word (`"/a b"/r`); no closing word before the end is unreadable, so deny.
+      while (end < raw.length - 1 && !raw[++end].includes(quote));
+      if (!raw[end].includes(quote, end === i + 1 ? 1 : 0)) return true;
     }
     i = end + 1;
   }
   const hides = (w, target) => {
     if (w === undefined || /^[A-Za-z0-9_./-]+$/.test(w)) return false;
     if (!/^[A-Za-z0-9_./*?[\]-]+$/.test(w)) return true;
+    // A bare `*.ext` glob has no literal stem, so it is data for the program, not the recorder.
+    if (/^[*?]+\.[A-Za-z?*]+$/.test(w)) return false;
     try {
       return new RegExp(`(?:^|/)${w.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(target);
     } catch {
