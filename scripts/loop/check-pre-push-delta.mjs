@@ -232,10 +232,10 @@ export function parseCheckPrePushDeltaArgs(argv) {
   };
 }
 
-// The operator focus of the canonical pulled commit_only threads plan for this baseline (PRE-PUSH-DELTA-PUSH-AUTHORITY). An unreadable plan yields none; any other plan refuses.
+// The operator focus of the canonical pulled commit_only threads plan for this baseline (PRE-PUSH-DELTA-PUSH-AUTHORITY). An unreadable or non-JSON plan and any other plan refuse.
 function planOperatorFocus(fixerPlan, baselineSha, worktree) {
   let plan;
-  try { plan = JSON.parse(readFileSync(fixerPlan, "utf8")); } catch { return undefined; }
+  try { plan = JSON.parse(readFileSync(fixerPlan, "utf8")); } catch (error) { throw new Error(`Delta coverage binding: --fixer-plan ${fixerPlan} is unreadable or not JSON (${error.code ?? error.name}); pass the pulled plan`); }
   const order = plan?.workOrder;
   const canonical = fixerPlanPath(plan?.workOrderRef, realpathSync(resolveGateArtifactTmpRoot(worktree)));
   if (!canonical || realpathSync(fixerPlan) !== path.resolve(canonical) || order?.role !== "fixer" || order.phase !== "commit_only" || order.source !== "threads"

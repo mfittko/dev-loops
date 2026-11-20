@@ -405,7 +405,7 @@ test("baseline equality refuses invocations that cannot authenticate input-only 
   for (const extra of [[], ["--fixer-plan", "missing.json"], ["--fixer-plan", "missing.json", "--site-coverage", "missing.json", "--result", result, "--invocation", "1"]]) {
     const seam = headAt(A);
     const marker = writeSequenceMarker({ tmpRoot: seam.tmpRoot, baselineHead: A, branch: "issue-1" });
-    await assert.rejects(runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", A, "--spec-identity", "s", ...(extra.includes("--result") ? [] : ["--result-path", path.join(os.tmpdir(), "r.json")]), ...extra], seam), /no delta review applies \(worktree HEAD \w+, baseline \w+, \d+ item\(s\)\)/);
+    await assert.rejects(runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", A, "--spec-identity", "s", ...(extra.includes("--result") ? [] : ["--result-path", path.join(os.tmpdir(), "r.json")]), ...extra], seam), extra.includes("missing.json") ? /--fixer-plan missing\.json is unreadable or not JSON/ : /no delta review applies \(worktree HEAD \w+, baseline \w+, \d+ item\(s\)\)/);
     assert.equal(fs.existsSync(marker), true);
     assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`)), false);
     const deltaDir = path.join(seam.tmpRoot, "gate-delta");
@@ -2013,6 +2013,8 @@ test("--threads-file with no unresolved thread builds the act set from the canon
   const handWritten = path.join(dir, "plan.json");
   fs.writeFileSync(handWritten, JSON.stringify({ ...JSON.parse(fs.readFileSync(planPath, "utf8")), workOrder: { operatorFocus: { round: "fix a typo" } } }));
   await assert.rejects(runCli(threadArgs(threadsFile, "--spec-identity", "spec@1", "--fixer-plan", handWritten, "--worktree", coverageRepo), headAt(B)), /not the canonical commit_only threads plan/);
+  const missing = path.join(dir, "missing-plan.json");
+  await assert.rejects(runCli(threadArgs(threadsFile, "--spec-identity", "spec@1", "--fixer-plan", missing, "--worktree", coverageRepo), headAt(B)), (error) => error.message.includes(`--fixer-plan ${missing} is unreadable or not JSON`) && !/no operator focus round/.test(error.message));
 });
 
 test("a zero-thread focus sequence whose fixer hands back the baseline closes as no_commit and clears its marker", async () => {

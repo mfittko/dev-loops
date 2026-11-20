@@ -323,6 +323,20 @@ ${JSON.stringify(workOrder, null, 2)}
 
 const itemPairs = (items) => [...new Set((Array.isArray(items) ? items : []).map((item) => `${JSON.stringify(item?.ref)}:${JSON.stringify(item?.status)}`))].sort().join("\n");
 
+// PRE-PUSH-DELTA-PUSH-AUTHORITY: the zero-thread focus must be the round the fixer received in the canonical plan for this baseline.
+// The plan is the commit_only order, or the full order a first full emission renamed over it (same source, baseline and focus digest), so a re-emission stays possible.
+function assertIssuedFocus({ tmpRoot, headSha, repo, pr, operatorFocus, next }) {
+  let plan;
+  try { plan = JSON.parse(readFileSync(path.join(buildFixerDir({ repo, pr, tmpRoot }), PLAN_FILE), "utf8")); } catch { plan = undefined; }
+  const issued = plan?.workOrder;
+  if (!issued || !["commit_only", "full"].includes(issued.phase) || issued.source !== "threads" || issued.headSha !== headSha || workOrderDigest(issued) !== plan.workOrderDigest) {
+    throw new Refusal(`--phase full refused: the canonical work order for ${headSha} is missing, altered or not a threads order of this baseline; re-emit --phase commit_only; ${next}`);
+  }
+  if (issued.operatorFocusDigest !== operatorFocusDigestEntry(operatorFocus).operatorFocusDigest) {
+    throw new Refusal(`--phase full refused: this operator focus round is not the one in the canonical commit_only work order for ${headSha}; pass the --operator-focus-file of that emission; ${next}`);
+  }
+}
+
 // The commit_only phase commits unpushed; the delta review then decides whether `full` may push.
 // `delta` is the parsed --delta-result (act-list route); `threads` the unresolved threads (thread route).
 export function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidateHead, coverageBinding, operatorFocus, repo, pr }) {
@@ -367,12 +381,7 @@ export function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, c
     if (focusItems.length === 0 || record.actSetId !== startDeltaSequence({ reviewBaselineHead: headSha, actList: focusItems }).actSetId) {
       throw new Refusal(`--phase full refused: the delta record ${recordPath} was not reviewed against this operator focus round (pass the --operator-focus-file the delta review used); ${next}`);
     }
-    // PRE-PUSH-DELTA-PUSH-AUTHORITY: the focus must also be the round the fixer received in the canonical commit_only work order for this baseline.
-    let issued;
-    try { issued = JSON.parse(readFileSync(path.join(buildFixerDir({ repo, pr, tmpRoot }), PLAN_FILE), "utf8")).workOrder; } catch { issued = undefined; }
-    if (!issued || issued.phase !== "commit_only" || issued.source !== "threads" || issued.headSha !== headSha || issued.operatorFocusDigest !== operatorFocusDigestEntry(operatorFocus).operatorFocusDigest) {
-      throw new Refusal(`--phase full refused: this operator focus round is not the one in the canonical commit_only work order for ${headSha}; pass the --operator-focus-file of that emission; ${next}`);
-    }
+    assertIssuedFocus({ tmpRoot, headSha, repo, pr, operatorFocus, next });
   }
   const threadIds = new Set(threads.length > 0 ? threads.map((thread) => thread.threadId) : operatorFocusActItems(operatorFocus).map((item) => item.ref));
   const refs = (Array.isArray(record.items) ? record.items : []).map((item) => item?.ref);
@@ -966,6 +975,8 @@ async function emitPlan({
       if (oldPlan) await rejectSupersedingFullPlan({ capture, originalBytes, cwd, repo, pr, headSha, tmpRoot });
       // PRE-PUSH-DELTA-PUSH-AUTHORITY: a full emission that skips the delta check never overwrites an ungranted commit_only sequence at this head.
       if (phase === "full" && (reviewId || ciFile) && readSequenceMarker(markerRoot, headSha)?.fullGranted === false) throw new Refusal(`a commit_only sequence is active at ${headSha} and its candidate has no delta review; a ${ciFile ? "--ci-file" : "--review-id"} full emission would grant the push of that unreviewed candidate. Run the delta review and emit the full phase of that sequence, or close it with scripts/loop/close-gate-sequence.mjs, then re-emit`);
+      // A concurrent commit_only re-emission with another focus round must not be superseded by a grant checked against the older plan.
+      if (phase === "full" && threadsFile && source.parsed.threads.length === 0) assertIssuedFocus({ tmpRoot, headSha, repo, pr, operatorFocus, next: "re-emit --phase commit_only, run the delta review, then emit --phase full" });
       await rename(tempPath, livePlanPath);
       if (!appendOnly) writeSequenceMarker({ tmpRoot: markerRoot, baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName, execution: { executionIdentity, workOrderRef: identityTriple.workOrderRef, outputRef } });
     });
