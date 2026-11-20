@@ -56,6 +56,7 @@ Optional (either mode):
 Output (stdout, JSON):
   { "ok": true, "snapshot": {..., "copilotReviewRoundCount": N}, "state": "...", "allowedTransitions": [...], "nextAction": "...",
     "autoRerequestEligible": true|false, "sameHeadCleanConverged": true|false,
+    "copilotUnavailableReason": "request_not_observable"|null,
     "loopDisposition": "...", "terminal": true|false }
 Error output (stderr, JSON):
   Argument/usage errors:

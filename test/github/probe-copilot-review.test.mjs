@@ -307,7 +307,7 @@ test("probe-copilot-review capped call returns pending, the re-issue keeps the b
     assert.equal(first.status, "timeout");
     assert.equal(first.outcome, "pending");
     assert.equal(first.remainingTimeoutSeconds, 430);
-    assert.match(first.reissue, /^dev-loops-run --repo-root \S+ scripts\/github\/probe-copilot-review\.mjs --repo owner\/repo --pr 17 --baseline-ids '\{.*"r-1".*\}' --timeout 430$/);
+    assert.match(first.reissue, /^dev-loops-run --repo-root \S+ scripts\/github\/probe-copilot-review\.mjs --repo owner\/repo --pr 17 --baseline-ids '\{.*"r-1".*\}' --total-timeout-ms 600000 --timeout 430$/);
     const concise = sink();
     await runCli(["--repo", "owner/repo", "--pr", "17", "--timeout", "600", "--concise"], { stdout: concise, ...deps(env) });
     assert.match(concise.text(), /outcome:\s+pending \(430 s left\)/);
@@ -317,7 +317,7 @@ test("probe-copilot-review capped call returns pending, the re-issue keeps the b
     const tail = first.reissue.split(" ").slice(4).join(" ");
     const split = spawnSync("sh", ["-c", 'eval "set -- $1"; printf "%s\\0" "$@"', "_", tail], { encoding: "utf8" });
     const resumed = split.stdout.split("\0").slice(0, -1);
-    assert.equal(resumed.length, 8);
+    assert.equal(resumed.length, 10);
     const env2 = await writeGhStub(await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-resume-")), [{ stdout: JSON.stringify(later) + "\n" }]);
     const second = sink();
     await runCli(resumed, { stdout: second, ...deps(env2) });
@@ -497,7 +497,8 @@ test("probe-copilot-review warns on stderr for deprecated --timeout-ms", () => {
   assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
 });
 
-async function runFinalChunkTimeout({ headCall }) {
+// A fake clock lets a full-cap probe finish instantly.
+async function runFinalChunkTimeout({ headCall, args = ["--timeout", "170"], readOnlyDir = false }) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-probe-record-"));
   const checkpointDir = path.join(tempDir, "checkpoint");
   const file = path.join(checkpointDir, "unobservable-review-requests.json");
@@ -509,17 +510,43 @@ async function runFinalChunkTimeout({ headCall }) {
     `echo '${JSON.stringify(createActivityPayload())}'`,
   ].join("\n"), "utf8");
   await chmod(path.join(tempDir, "gh"), 0o755);
+  if (readOnlyDir) await chmod(checkpointDir, 0o555);
   const env = { ...process.env, PATH: `${tempDir}${path.delimiter}${process.env.PATH}`, DEV_LOOPS_GH_STUB: "1" };
   let out = "";
+  let clock = 0;
   try {
-    await runCli(["--repo", "owner/repo", "--pr", "17", "--timeout", "1"], {
+    await runCli(["--repo", "owner/repo", "--pr", "17", ...args], {
       stdout: { write: (c) => { out += c; return true; } }, env, ghCommand: "gh", checkpointDir,
+      delayImpl: async (ms) => { clock += ms; }, now: () => clock,
     });
     return { result: JSON.parse(out), record: JSON.parse(await readFile(file, "utf8")) };
   } finally {
+    await chmod(checkpointDir, 0o755);
     await rm(tempDir, { recursive: true, force: true });
   }
 }
+
+test("probe-copilot-review does not count a short --timeout probe, and a pending first chunk does not count", async () => {
+  const headCall = `echo '{"headRefOid":"abc"}'; exit 0`;
+  const short = await runFinalChunkTimeout({ headCall, args: ["--timeout", "1"] });
+  assert.equal(short.result.status, "timeout");
+  assert.equal(short.record.timedOutProbes, 0);
+  const firstChunk = await runFinalChunkTimeout({ headCall, args: ["--timeout", "600"] });
+  assert.equal(firstChunk.result.outcome, "pending");
+  assert.equal(firstChunk.record.timedOutProbes, 0);
+  assert.match(firstChunk.result.reissue, /--total-timeout-ms 600000 --timeout 430$/);
+});
+
+test("probe-copilot-review counts the final chunk of a long probe through the carried total", async () => {
+  const resumed = await runFinalChunkTimeout({ headCall: `echo '{"headRefOid":"abc"}'; exit 0`, args: ["--timeout", "5", "--total-timeout-ms", "600000"] });
+  assert.equal(resumed.record.timedOutProbes, 1);
+});
+
+test("probe-copilot-review warns when the timed-out probe record cannot be written", async () => {
+  const { result, record } = await runFinalChunkTimeout({ headCall: `echo '{"headRefOid":"abc"}'; exit 0`, readOnlyDir: true });
+  assert.match(result.warning, /could not record the timed-out probe/);
+  assert.equal(record.timedOutProbes, 0);
+});
 
 test("probe-copilot-review counts a final-chunk timeout on the head of an earlier unobservable request", async () => {
   const { result, record } = await runFinalChunkTimeout({ headCall: `echo '{"headRefOid":"abc"}'; exit 0` });

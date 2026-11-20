@@ -4999,3 +4999,24 @@ test("copilot_unavailable CI reasons name the unavailability, not the round cap"
     assert.doesNotMatch(result.reason, /round[ _]cap/i);
   }
 });
+
+test("copilot_unavailable with failing CI blocks on the operator, and with credibly green CI names a runnable wait-pr-checks remedy", () => {
+  const failing = evaluatePrGateCoordination({ ...unavailableInput, ciStatus: "failure" });
+  assert.equal(failing.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.equal(failing.blockedOn, BLOCKED_ON.OPERATOR_DECISION);
+  const green = evaluatePrGateCoordination({ ...unavailableInput, repo: "owner/repo", ciStatus: "crediblyGreen" });
+  assert.equal(green.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.match(green.agentRemedy.command, /wait-pr-checks\.mjs --repo owner\/repo --pr 10/);
+});
+
+test("the raw copilotRequestNotObservable flag never bypasses an observable Copilot request or review", () => {
+  for (const [label, overrides] of [
+    ["requested", { copilotReviewRequestStatus: "requested", lifecycleState: STATE.WAITING_FOR_COPILOT_REVIEW }],
+    ["already-requested", { copilotReviewRequestStatus: "already-requested", lifecycleState: STATE.WAITING_FOR_COPILOT_REVIEW }],
+    ["current-head review", { copilotReviewOnCurrentHead: true, copilotReviewPresent: true, lifecycleState: STATE.WAITING_FOR_COPILOT_REVIEW }],
+  ]) {
+    const result = evaluatePrGateCoordination({ ...unavailableInput, ...overrides });
+    assert.ok(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), label);
+    assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE, label);
+  }
+});

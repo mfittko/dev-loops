@@ -310,7 +310,9 @@ function defaultDetectEvidence({ repo, pr, env, cwd, baseRefName, readOnly, patc
 // latest Copilot review converged on an earlier head, whatever the delta);
 // the round cap is exhausted (round-cap clean fallback); in strict mode, the
 // same predicate carries the prior review across a docs-only or
-// integrate-only delta (docs-only suppression); last, an internal-only PR
+// integrate-only delta (docs-only suppression); Copilot is unavailable (the
+// per-head unobservable-request record reached its threshold and no review is
+// outstanding: copilot_unavailable); last, an internal-only PR
 // (the loop's reviewMode internal_only, which skips the Copilot cycle) maps
 // to copilot_gate_disabled. Returns `{ kind, headSha }` pinned to the current
 // head, plus `carriedConvergence` (the source review and its commit) for
@@ -360,8 +362,10 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
     if (docsOnly) return docsOnly;
   }
   // Copilot accepted review requests on this head that never became observable
-  // (the loop's copilot_unavailable); no review can ever land on it.
-  if (await readRequestNotObservable({ repo, pr, headSha: currentHeadSha }, { checkpointDir: runtime.checkpointDir })) {
+  // (the loop's copilot_unavailable); no review can ever land on it. A request
+  // that became observable later is a normal round, so an outstanding review refuses.
+  if (await readRequestNotObservable({ repo, pr, headSha: currentHeadSha }, { checkpointDir: runtime.checkpointDir })
+    && !(await isCopilotReviewOutstanding({ repo, pr, currentHeadSha, rawReviews }, runtime))) {
     return pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.COPILOT_UNAVAILABLE);
   }
   return (await isInternalOnlyPr({ repo, pr, patterns: config?.internalPathPatterns }, runtime)) ? pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.COPILOT_GATE_DISABLED) : null;

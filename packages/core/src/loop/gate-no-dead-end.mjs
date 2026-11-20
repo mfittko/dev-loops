@@ -6,7 +6,7 @@ export const KNOWN_GAPS = [
   {
     id: "copilot-cap-ci",
     slice: "9",
-    matches: (_input, result) => result.reason.startsWith("round_cap_reached at") || result.reason.startsWith("copilot_unavailable ("),
+    matches: (_input, result) => result.reason.startsWith("round_cap_reached at"),
   },
   {
     id: "unmappable-state-default",

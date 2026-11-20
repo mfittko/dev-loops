@@ -2173,6 +2173,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
         reason: buildRoundCapCiRemedyReason({ ciStatus, copilotReviewRoundCount, maxCopilotRounds, currentHeadSha, copilotUnavailable }),
+        ...(copilotUnavailable ? ciAgentRemedy(input, ciStatus) : {}),
         mergeStateStatus,
         conflictFiles,
           refinementArtifact,
