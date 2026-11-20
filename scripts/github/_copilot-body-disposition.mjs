@@ -343,7 +343,9 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
         dispositionRequired: {
           reviewId: currentReviewId ?? null,
           reviewCommitSha: headSha,
-          reason: "the current-head Copilot review carries body feedback with no trusted copilot-body-disposition record; after the gate judge disposes the finding as defer or reject, an agent-writable reject=<gate> or defer=<gate> record clears it",
+          reason: currentReviewId
+            ? "the current-head Copilot review carries body feedback with no trusted copilot-body-disposition record; after the gate judge disposes the finding as defer or reject, an agent-writable reject=<gate> or defer=<gate> record clears it"
+            : "two or more tied current-head Copilot reviews carry body feedback, so no single copilot-body-disposition record can clear it",
           ...(record.reasonCode ? { reasonCode: record.reasonCode, reason: record.reason } : {}),
           markerLine: currentReviewId ? markerLineFor(currentReviewId, headSha) : null,
         },

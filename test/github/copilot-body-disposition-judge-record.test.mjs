@@ -160,6 +160,13 @@ describe("resolveCurrentHeadBodyFeedback with a judge-bound record", () => {
     assert.match(result.dispositionRequired.reason, /reject=<gate> or defer=<gate>/);
     assert.match(result.dispositionRequired.markerLine, / operator -->$/);
   });
+  test("a tied current-head finding names no clearing record", async () => {
+    const tied = { ...summary, bodyFindingReviewId: null, effectiveCopilotReviews: [review, { ...review, id: "PRR_tied" }] };
+    const result = await resolveCurrentHeadBodyFeedback({ repo: REPO, pr: PR, headSha: HEAD, reviewSummary: tied, reviewThreads }, runtimeFor([record()], await checkoutWith([finding()])));
+    assert.equal(result.copilotBodyFeedbackUnresolved, true);
+    assert.equal(result.dispositionRequired.markerLine, null);
+    assert.doesNotMatch(result.dispositionRequired.reason, /reject=<gate>/);
+  });
   test("a cleared operator record leaves no judge finding", async () => {
     const operator = { ...record(), body: `<!-- dev-loops:copilot-body-disposition review=${REVIEW} head=${HEAD} operator -->` };
     const result = await feedback(operator, await checkoutWith(null));
