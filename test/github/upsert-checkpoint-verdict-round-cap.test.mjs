@@ -64,7 +64,7 @@ async function seedPrior(root, heads, { extraNames = [], unreadable = [] } = {})
   for (const name of extraNames) await writeFile(path.join(dir, name), "[]", "utf8");
 }
 
-function makeRunChild(posted, { isDraft = true, state = "OPEN", calls = [], body = DEFAULT_TEST_PR_BODY, conclusion = "SUCCESS", status = "COMPLETED" } = {}) {
+function makeRunChild(posted, { isDraft = true, state = "OPEN", calls = [], body = DEFAULT_TEST_PR_BODY, conclusion = "SUCCESS", status = "COMPLETED", issueComments = [] } = {}) {
   const prJson = JSON.stringify({
     number: 17, state, isDraft, headRefOid: HEAD, baseRefName: "main", body,
     closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status, conclusion, name: "ci" }],
@@ -81,7 +81,7 @@ function makeRunChild(posted, { isDraft = true, state = "OPEN", calls = [], body
     if (a.includes("api") && a.includes("user")) return { code: 0, stdout: '{"login":"gate-bot"}\n', stderr: "" };
     if (a.includes("graphql") && a.includes("reviewThreads")) return { code: 0, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}\n', stderr: "" };
     if (a.includes("graphql")) return { code: 0, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n', stderr: "" };
-    if (a.includes("issues/17/comments")) return { code: 0, stdout: "[]\n", stderr: "" };
+    if (a.includes("issues/17/comments")) return { code: 0, stdout: JSON.stringify(issueComments.length ? [issueComments] : []) + "\n", stderr: "" };
     if (a.includes("pulls/17/reviews")) return { code: 0, stdout: "[]\n", stderr: "" };
     if (a.includes("pulls/17/files")) return { code: 0, stdout: "[]\n", stderr: "" };
     if (a.includes("--json") && a.includes("headRefOid") && !a.includes("state") && !a.includes("statusCheckRollup")) return { code: 0, stdout: JSON.stringify({ headRefOid: HEAD }) + "\n", stderr: "" };
@@ -432,7 +432,7 @@ test("the closure round line renders a normalized full SHA and refuses a short, 
 
 // A clean cap round whose post was refused at its own head posts there once the PR head has moved on.
 const CAP_HEAD = "4".repeat(40);
-async function postCleanCapRound(tempDir, { capHead = CAP_HEAD, sealedVerdict = "clean", ancestor = true, headSha = capHead, prState = {}, extraArgs = [], calls = [], postedOverrides = {}, proven = false, checkBaseFreshness, gate = "draft_gate", sealedHead = capHead } = {}) {
+async function postCleanCapRound(tempDir, { capHead = CAP_HEAD, sealedVerdict = "clean", ancestor = true, headSha = capHead, prState = {}, extraArgs = [], calls = [], postedOverrides = {}, proven = false, checkBaseFreshness, gate = "draft_gate", sealedHead = capHead, issueComments = [] } = {}) {
   await seedPrior(repoRoot, priorHeads);
   const deltaDir = path.join(repoRoot, "tmp", "gate-delta");
   await rm(deltaDir, { recursive: true, force: true });
@@ -449,7 +449,7 @@ async function postCleanCapRound(tempDir, { capHead = CAP_HEAD, sealedVerdict = 
   const ledger = path.join(tempDir, "cap-ledger.json");
   await writeFile(ledger, JSON.stringify({ ...sealed, ...postedOverrides }), "utf8");
   const posted = [];
-  const inner = makeRunChild(posted, { ...prState, calls });
+  const inner = makeRunChild(posted, { ...prState, calls, issueComments });
   const runChild = async (cmd, args = [], ...rest) => (cmd === "git" && args.includes("merge-base") ? { code: ancestor ? 0 : 1, stdout: "", stderr: "" } : inner(cmd, args, ...rest));
   try {
     const options = parseUpsertCheckpointVerdictCliArgs([
@@ -506,13 +506,15 @@ test("a cap-round head the PR head does not descend from is refused", async () =
 test("a clean cap round posts on a ready PR whose draft gate reads as satisfied, without a draft conversion", async () => {
   await withTempDir(async (tempDir) => {
     const calls = [];
-    const out = await postCleanCapRound(tempDir, { prState: { isDraft: false }, proven: true, calls });
+    // A visible prior draft_gate verdict at another head: without the !capRoundHead guard the supersede sweep would run.
+    const priorVerdict = { id: 99, user: { login: "gate-bot" }, author_association: "OWNER", body: `### Gate review: \`draft_gate\`\n\n**Reviewed head SHA:** \`${priorHeads[0]}\`\n**Verdict:** findings_present\n\n**Findings summary:** prior round\n\n**Next action:** fix`, html_url: "https://github.com/owner/repo/pull/17#issuecomment-99", updated_at: "2026-05-30T17:00:00Z" };
+    const out = await postCleanCapRound(tempDir, { prState: { isDraft: false }, proven: true, calls, issueComments: [priorVerdict] });
     assert.equal(out.error, undefined);
     assert.equal(verdictOf(out), "clean");
     assert.match(out.body, /round[=: ]+4\b/i);
     assert.ok(out.body.includes(CAP_HEAD.slice(0, 7)));
     assert.equal(calls.some((c) => /pr ready|convertPullRequestToDraft/.test(c)), false);
-    assert.equal(calls.some((c) => /minimize/i.test(c)), false);
+    assert.equal(calls.some((c) => /minimize|reviews\(first:100\)/i.test(c)), false);
   }, { prefix: "dev-loops-round-cap-ready-" });
 });
 
