@@ -8142,6 +8142,45 @@ test("upsert-checkpoint-verdict --findings-ledger accepts a pr_body act finding,
   }
 });
 
+// #3309: the ledger-label merge copies pr_body onto a locatable ledger finding only when every same-fingerprint act match is pr_body.
+// Observable seam: --converged-json compares the ledger's PR-body items (isDeltaBodyItem) with its actList, so a wrong label shows as a PR-body disagreement.
+test("upsert-checkpoint-verdict --findings-ledger labels a ledger finding pr_body only when every act match is pr_body (#3309)", async () => {
+  const locatable = { ...BODY_FILED_FINDING, files: ["src/a.mjs"] };
+  const cases = [
+    // All pr_body: the ledger finding gains pr_body, so it is a PR-body item and matches the pr_body actList item.
+    { name: "all", ledger: [locatable], remedies: ["pr_body"], actRemedyKind: "pr_body" },
+    // Mixed: no label, so both locatable ledger findings stay code items and match an actList with no remedyKind.
+    { name: "mixed", ledger: [locatable, { ...locatable }], remedies: ["pr_body", "evidence_only"], actRemedyKind: undefined },
+  ];
+  for (const { name, ledger, remedies, actRemedyKind } of cases) {
+    await withTempDir(async (tempDir) => {
+      const ledgerPath = await writeSingleSurfaceLedger(tempDir, ledger);
+      const findingsPath = path.join(tempDir, "findings.json");
+      const base = { severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary, files: ["src/a.mjs"], judgeDisposition: "act" };
+      await writeFile(findingsPath, JSON.stringify([
+        { angle: "coverage", verdict: "findings_present", findings: remedies.map((remedyKind) => ({ ...base, remedyKind })) },
+      ]), "utf8");
+      const convergedPath = path.join(tempDir, "converged.json");
+      const item = { severity: base.severity, summary: base.summary, files: base.files, ...(actRemedyKind ? { remedyKind: actRemedyKind } : {}) };
+      await writeFile(convergedPath, JSON.stringify({ fixerCommit: SINGLE_SURFACE_HEAD, actList: ledger.map(() => item) }), "utf8");
+      const { runChild } = makeGhMock(singleSurfaceLeadingEntries());
+      const err = await upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "draft_gate",
+        headSha: SINGLE_SURFACE_HEAD,
+        verdict: "clean",
+        findingsJson: findingsPath,
+        findingsLedger: ledgerPath,
+        convergedJson: convergedPath,
+        nextAction: "stay draft and fix",
+        executionMode: "fanout_fanin",
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }).then(() => null, (e) => e);
+      assert.doesNotMatch(String(err?.message ?? ""), /disagree on which items are PR-body items/, name);
+    }, { prefix: `dev-loops-upsert-pr-body-label-${name}-` });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // #2263: inlineSeverityFloor — locatable low/nit findings fold into the
 // verdict body's collapsed <details> block instead of posting inline, at the
