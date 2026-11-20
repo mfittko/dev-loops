@@ -303,13 +303,17 @@ export function lintContractDocsInMatrix(body) {
 export async function lintRuleOwnerDocsInMatrix(body, repoRoot) {
   const matrix = detectAcDodMatrix(body);
   if (!matrix.found || !matrix.valid) return [];
-  const cited = new Set(matrix.rows.flatMap((row) => stripFencedCode(`${row.criterion}\n${row.evidence}`).match(RULE_ID_SHAPE_RE) ?? []));
+  const cited = new Set(matrix.rows.flatMap((row) => `${row.criterion}\n${row.evidence}`.match(RULE_ID_CITATION_RE) ?? []));
   if (cited.size === 0) return [];
   const owners = await ruleOwnerIndex(repoRoot);
   const byDoc = new Map();
-  for (const id of cited) {
-    const doc = owners.get(id)?.doc;
-    if (doc && CONTRACT_DOC_RE.test(doc)) byDoc.set(doc, byDoc.get(doc) ?? id);
+  for (const token of cited) {
+    // Mirror lintRuleIds: the whole token first, the rule-shaped matches inside it only when the token has no owner.
+    const ids = owners.has(token) ? [token] : token.match(RULE_ID_SHAPE_RE) ?? [];
+    for (const id of ids) {
+      const doc = owners.get(id)?.doc;
+      if (doc && CONTRACT_DOC_RE.test(doc)) byDoc.set(doc, byDoc.get(doc) ?? id);
+    }
   }
   const { missing } = pathsMissingFromMatrix([...byDoc.keys()], body);
   return missing.map((doc) => ({ kind: "contract_doc_not_in_matrix", id: doc, detail: { reason: `rule \`${byDoc.get(doc)}\` is cited in the AC / DoD matrix and owned by contract doc \`${doc}\`, but no matrix row names that doc in backticks` } }));

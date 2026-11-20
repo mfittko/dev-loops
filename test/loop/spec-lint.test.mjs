@@ -10,7 +10,7 @@ import { afterEach, test } from "bun:test";
 
 import { runCli } from "../../cli/index.mjs";
 import { pathsMissingFromMatrix } from "../../scripts/github/waive-adr-tripwire.mjs";
-import { indexDecisionRecords, lintContractDocsInMatrix, lintSimplestDesign, lintSizeForecast, lintSpec, main } from "../../scripts/loop/spec-lint.mjs";
+import { indexDecisionRecords, lintContractDocsInMatrix, lintRuleOwnerDocsInMatrix, lintSimplestDesign, lintSizeForecast, lintSpec, main } from "../../scripts/loop/spec-lint.mjs";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const tempDirs = [];
@@ -520,14 +520,22 @@ test("size band: spec-lint prints the resolved band, shipped fallbacks and .devl
 const ruleMatrix = (row) => `## AC / DoD matrix\n\n| Acceptance criterion | Completion evidence |\n| --- | --- |\n| Row. | ${row} |\n`;
 
 test("contract_doc_not_in_matrix: a cited rule ID owned by a contract doc needs the doc in a matrix row", async () => {
-  const owner = "skills/docs/main-agent-contract.md";
-  const kinds = async (body) => (await lintSpec({ body, repoRoot })).findings.filter((f) => f.kind === "contract_doc_not_in_matrix");
-  const missing = await kinds(ruleMatrix("`MAIN-AGENT-FILING-BLOCKER-ONLY` holds."));
+  const root = await fixtureRepo();
+  const owner = "skills/docs/x-contract.md";
+  await writeFile(path.join(root, owner), "# X\n\n<!-- rule: XXX-YYY-ZZZ -->\nText.\n\n<!-- rule: XXX-A-ZZZ -->\nText.\n");
+  await writeFile(path.join(root, "skills", "docs", "y.md"), "# Y\n\n<!-- rule: YYY-OTHER-ONE -->\nText.\n");
+  const kinds = (body) => lintRuleOwnerDocsInMatrix(body, root);
+  const missing = await kinds(ruleMatrix("`XXX-YYY-ZZZ` holds."));
   assert.deepEqual(missing.map((f) => f.id), [owner]);
-  assert.ok(missing[0].detail.reason.includes("MAIN-AGENT-FILING-BLOCKER-ONLY") && missing[0].detail.reason.includes(owner));
-  const fixed = ruleMatrix(`\`MAIN-AGENT-FILING-BLOCKER-ONLY\` holds in \`${owner}\`.`);
+  assert.ok(missing[0].detail.reason.includes("XXX-YYY-ZZZ") && missing[0].detail.reason.includes(owner));
+  const fixed = ruleMatrix(`\`XXX-YYY-ZZZ\` holds in \`${owner}\`.`);
   assert.deepEqual(await kinds(fixed), []);
   assert.deepEqual(pathsMissingFromMatrix([owner], fixed), { matrixInvalid: false, missing: [] });
-  assert.deepEqual(await kinds(ruleMatrix("`DESIGN-SIMPLEST-FIRST` holds.")), []);
-  assert.deepEqual(await kinds("`MAIN-AGENT-FILING-BLOCKER-ONLY` holds."), []);
+  assert.deepEqual(await kinds(ruleMatrix("`YYY-OTHER-ONE` holds.")), []);
+  assert.deepEqual(await kinds("`XXX-YYY-ZZZ` holds."), []);
+  assert.deepEqual((await kinds(ruleMatrix("`XXX-A-ZZZ` holds."))).map((f) => f.id), [owner]);
+  // Wiring and dedup: the forecast finding and the rule-cite finding for one doc collapse to one.
+  const body = `${ruleMatrix("`XXX-YYY-ZZZ` holds.")}${FORECAST.replace("files=a.mjs", `files=${owner}`)}`;
+  const found = (await lintSpec({ body, repoRoot: root })).findings.filter((f) => f.kind === "contract_doc_not_in_matrix");
+  assert.deepEqual(found.map((f) => f.id), [owner]);
 });
