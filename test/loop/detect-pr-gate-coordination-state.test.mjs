@@ -4685,6 +4685,23 @@ test("3309: the base-only merge carry reads the cap head's live ledger, never a 
   } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
 });
 
+test("3309: the base-only merge carry picks the newest prior head, so an older all-PR-body head never wins and a mixed newest head carries nothing", async () => {
+  const olderHead = "dc".repeat(20);
+  for (const { name, newest, expected } of [
+    { name: "all-PR-body", newest: [BODY_ACT], expected: "newest" },
+    { name: "mixed", newest: [BODY_ACT, ACT], expected: null },
+  ]) {
+    const fixture = await actListFixture({ "": { findings: newest, loggedAt: "2026-11-16T00:00:00.000Z" } });
+    try {
+      await writeSealed(path.join(fixture.findingsDir, `draft_gate-${olderHead}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: olderHead, verdict: "findings_present", loggedAt: "2026-11-15T00:00:00.000Z", findings: [BODY_ACT] }));
+      const context = { repo: "owner/repo", pr: 10, currentHeadSha: "fe".repeat(20), prData: { baseRefName: "main" } };
+      // Two completed rounds (older head, then newest head): the newest head is the cap round.
+      const list = await resolveDraftOpenActList(context, { repoRoot: fixture.tempDir, cap: 2, baseOnlyMerge: async () => true });
+      assert.equal(list?.headSha ?? null, expected === "newest" ? fixture.headSha : null, name);
+    } finally { await rm(fixture.tempDir, { recursive: true, force: true }); }
+  }
+});
+
 // #3309: the cap-round body-only list carries every blocker the body-only poster refuses (isBlockedActItem), so coordination never names a refused remedy.
 test("3309: a cap-round all-PR-body act list blocks on a high item with a judgeFix and on a security-angle item", async () => {
   const resolve = async (findings) => {

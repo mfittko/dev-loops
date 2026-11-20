@@ -8147,11 +8147,11 @@ test("upsert-checkpoint-verdict --findings-ledger labels a ledger finding pr_bod
   const locatable = { ...BODY_FILED_FINDING, files: ["src/a.mjs"] };
   const cases = [
     // All pr_body: the ledger finding gains pr_body, so it is a PR-body item and matches the pr_body actList item.
-    { name: "all", ledger: [locatable], remedies: ["pr_body"], actRemedyKind: "pr_body" },
+    { name: "all", ledger: [locatable], remedies: ["pr_body"], actRemedyKind: "pr_body", reached: /no unclaimed gh fixture matched: pr view 17 --repo owner\/repo --json body/ },
     // Mixed: no label, so both locatable ledger findings stay code items and match an actList with no remedyKind.
-    { name: "mixed", ledger: [locatable, { ...locatable }], remedies: ["pr_body", "evidence_only"], actRemedyKind: undefined },
+    { name: "mixed", ledger: [locatable, { ...locatable }], remedies: ["pr_body", "evidence_only"], actRemedyKind: undefined, reached: /converged\.fixerCommit must be a full sha different from the reviewed head/ },
   ];
-  for (const { name, ledger, remedies, actRemedyKind } of cases) {
+  for (const { name, ledger, remedies, actRemedyKind, reached } of cases) {
     await withTempDir(async (tempDir) => {
       const ledgerPath = await writeSingleSurfaceLedger(tempDir, ledger);
       const findingsPath = path.join(tempDir, "findings.json");
@@ -8176,6 +8176,8 @@ test("upsert-checkpoint-verdict --findings-ledger labels a ledger finding pr_bod
         executionMode: "fanout_fanin",
       }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }).then(() => null, (e) => e);
       assert.doesNotMatch(String(err?.message ?? ""), /disagree on which items are PR-body items/, name);
+      // The refusal that follows the PR-body comparison proves the label merge ran first.
+      assert.match(String(err?.message ?? ""), reached, name);
     }, { prefix: `dev-loops-upsert-pr-body-label-${name}-` });
   }
 });

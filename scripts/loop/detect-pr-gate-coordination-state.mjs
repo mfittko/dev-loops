@@ -1317,10 +1317,13 @@ export async function resolveDraftOpenActList(context, { repoRoot, cap, baseOnly
   if (open.length === 0 && baseRefName) {
     // Only a head's live ledger (its latest round) counts: it sorts after its retained `.round-N` siblings, so the last entry per head wins.
     const latestPerHead = new Map(logs.map((entry) => [String(entry.headSha).trim().toLowerCase(), entry]));
-    for (const [from, prior] of latestPerHead) {
+    // Newest head first (logs sort oldest first): a later ledger supersedes an older one, so only the newest accepted head decides and a mixed list there carries nothing.
+    for (const [from, prior] of [...latestPerHead].reverse()) {
       const priorOpen = listOpenActItems(prior.findings);
-      if (from === head || priorOpen.length === 0 || !priorOpen.every(isDeltaBodyItem)) continue;
-      if (await baseOnlyMerge({ fromHead: from, head, mainRef: `origin/${baseRefName}`, repoRoot })) { log = prior; open = priorOpen; ledgerHead = from; break; }
+      if (from === head || priorOpen.length === 0) continue;
+      if (!(await baseOnlyMerge({ fromHead: from, head, mainRef: `origin/${baseRefName}`, repoRoot }))) continue;
+      if (priorOpen.every(isDeltaBodyItem)) { log = prior; open = priorOpen; ledgerHead = from; }
+      break;
     }
   }
   if (open.length === 0) return null;
