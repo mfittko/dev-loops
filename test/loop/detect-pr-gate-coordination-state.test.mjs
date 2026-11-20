@@ -4863,7 +4863,6 @@ describe("GATE-EXEC-BASE-REFRESH coordination", () => {
     assert.equal(result.baseFreshness.status, "base_fetch_failed");
   });
 
-  // ADR 0295 decision 2: the merge-path route. declare_merge_ready is only ever a forbidden action in the evaluator, so no fixture reaches it as a next action.
   it("stale head at await_final_human_approval routes to resolve_merge_conflicts", async () => {
     const baseline = await runBaseFreshnessFixture({ isDraft: false, withCleanDraftGate: true, withCleanPreApproval: true, checkBaseFreshness: async () => ({ ok: true, status: "base_current", base: "main" }) });
     assert.equal(baseline.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
