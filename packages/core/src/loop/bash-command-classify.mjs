@@ -1868,6 +1868,9 @@ export function commandContainsCodeVerificationEntrypoint(command) {
   return shellSegments(command).some((segment) => PACKAGE_MANAGER_VERIFY_RUN_RE.test(segment) || VITEST_RE.test(segment));
 }
 
+// Env assignments (a quoted value may hold spaces) and env/command/exec wrappers a recorder launch can follow.
+const LEADING_LAUNCH_WRAPPERS = /^\s*(?:(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)|env(?:\s+-\S+)*|command|exec)\s+)*/;
+
 /**
  * Decision-recorder classification (OPERATOR-DECISION-RECORDER). Fails closed. A segment names the recorder when,
  * after quotes and backslashes are stripped and backslash-newline continuations are joined, it holds a word ending
@@ -1885,7 +1888,7 @@ export function classifyDecisionRecorderCommand(command) {
   const segments = shellSegments(command.replace(/\\\r?\n/g, ""));
   let found = null;
   for (const segment of segments) {
-    const raw = segment.split(/\s+/);
+    const raw = segment.replace(LEADING_LAUNCH_WRAPPERS, "").split(/\s+/);
     const words = segment.replace(/['"\\]/g, "").split(/\s+/);
     const script = words.some((w) => w.endsWith("record-operator-decision.mjs"));
     const at = words.findIndex((w, i) => w === "decision" && words[i + 1] === "record");
@@ -1904,9 +1907,8 @@ export function classifyDecisionRecorderCommand(command) {
  * (`record-operator-*.mjs`). A glob that cannot match them (`scripts/*\/validate-decision-records.mjs`) stays allowed.
  */
 function hasUnreadableLauncherWord(raw) {
-  // Only a segment head counts (after env assignments), so quoted prose that mentions a launcher stays allowed.
-  const at = raw.findIndex((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
-  if (at < 0) return false;
+  // Only a segment head counts (callers strip env assignments and env/command/exec wrappers), so quoted prose that mentions a launcher stays allowed.
+  const at = 0;
   const head = raw[at];
   const isRunner = /(?:^|\/)(?:node|bun)$/.test(head);
   const isRun = /(?:^|\/)dev-loops-run$/.test(head);
@@ -1914,6 +1916,10 @@ function hasUnreadableLauncherWord(raw) {
   if (!isRunner && !isRun && !isBare) return false;
   let i = at + 1;
   if (isRun && raw[i] === "--repo-root") i += 2;
+  // shortcut: a runner option's value is skipped only for the flags listed here; upgrade to BUN_VALUE_FLAGS if more are needed.
+  while (isRunner && raw[i] !== undefined && (raw[i] === "run" || raw[i].startsWith("-"))) {
+    i += /^(?:--env-file|--cwd|--import|--require|-r)$/.test(raw[i]) ? 2 : 1;
+  }
   const hides = (w, target) => {
     if (w === undefined || /^[A-Za-z0-9_./-]+$/.test(w)) return false;
     if (!/^[A-Za-z0-9_./*?[\]-]+$/.test(w)) return true;
