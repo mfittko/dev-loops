@@ -112,9 +112,10 @@ function validateFindingsArray(parsed, flagLabel) {
     }
     // Preserve the judge's relevance-based dispositions: without this,
     // the judge suffix in renderFindingsCommentBody is unreachable dead code.
+    if (f.remedyKind !== undefined && f.remedyKind !== "evidence_only" && f.remedyKind !== "pr_body") throw parseError(`${flagLabel}[${i}].remedyKind must be one of: evidence_only, pr_body`);
     if (typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0) {
       entry.judgeDisposition = f.judgeDisposition.trim();
-      if (f.remedyKind === "evidence_only") entry.remedyKind = "evidence_only";
+      if (f.remedyKind !== undefined) entry.remedyKind = f.remedyKind;
     }
     if (typeof f.judgeRationale === "string" && f.judgeRationale.trim().length > 0) {
       entry.judgeRationale = f.judgeRationale.trim();
