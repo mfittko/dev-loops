@@ -689,6 +689,12 @@ const SHELL_BUILT_RECORDER_SPELLINGS = [
   `node /Users/x/repo/cli/ind*.mjs decision record --repo o/n`,
   `node tmp/worktrees/w/cli/i*x.mjs decision record --repo o/n`,
   `node /abs/scripts/github/record-operator-*.mjs --repo o/n`,
+  `node ~/repo/cli/ind*.mjs decision record --repo o/n`,
+  `node $HOME/repo/cli/ind*.mjs decision record --repo o/n`,
+  `node $E decision record --repo o/n`,
+  `bun ${'$'}{E} decision record --repo o/n`,
+  `node ~/repo/scripts/github/record-operator-*.mjs --repo o/n`,
+  `dev-loops-run ./scripts/github/record-operator-*.mjs --repo o/n`,
 ];
 
 test("a many-wildcard launcher word is denied in linear time", () => {
@@ -717,6 +723,9 @@ test("quoted prose that mentions dev-loops-run and plain runner commands are not
     `node --test *.mjs`,
     `node cli/*.mjs gate resolve-validation`,
     `node scripts/*/validate-decision-records.mjs`,
+    `node ~/tools/build.mjs`,
+    `dev-loops-run cli/index.mjs loop tmp/*`,
+    `bun test packages/core/test/*decision*`,
   ]) {
     assert.equal(decideBashGateDeny({ ...BASE, role: null, command }), null, command);
   }

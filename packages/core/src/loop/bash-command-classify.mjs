@@ -1902,14 +1902,11 @@ export function classifyDecisionRecorderCommand(command) {
 
 /**
  * Whether a `*`/`?` glob matches `target` or a `/`-suffix of it, in linear time (no backtracking RegExp, so no ReDoS).
- * The glob is also tried without its leading wildcard-free path segments (`./`, `/abs/repo/`), which only a path prefix of the target could satisfy.
- * A tail that is a bare `*.ext` glob stays out, since it would match any script.
  */
 function globMatchesSuffix(glob, target) {
   const starts = [0, ...[...target].flatMap((c, i) => (c === "/" ? [i + 1] : []))];
-  const tail = glob.replace(/^(?:[^*?[/]*\/)+/, "");
-  const globs = /^[*?]+\.[A-Za-z?*]+$/.test(tail) ? [glob] : [glob, tail];
-  return globs.some((gl) => starts.some((start) => {
+  return starts.some((start) => {
+    const gl = glob;
     const t = target.slice(start);
     let g = 0, i = 0, star = -1, mark = 0;
     while (i < t.length) {
@@ -1920,7 +1917,7 @@ function globMatchesSuffix(glob, target) {
     }
     while (gl[g] === "*") g++;
     return g === gl.length;
-  }));
+  });
 }
 
 /**
@@ -1960,24 +1957,30 @@ function hasUnreadableLauncherWord(rawWords) {
     // A bracket class could match the recorder word, so it fails closed.
     return w.includes("[") || globMatchesSuffix(w, target);
   };
-  // A glob that could expand to `cli/index.mjs` is the entrypoint too (fail closed).
-  // A path prefix before a literal `cli/` (`./cli/*.mjs`, `/abs/repo/cli/*.mjs`) is dropped too, since the bare `*.mjs` tail alone is not tried.
-  const isCli = (w) => w.endsWith("cli/index.mjs") || (/[*?[]/.test(w) && /^[A-Za-z0-9_./*?[\]-]+$/.test(w) && [w, w.replace(/^.*\/(?=cli\/)/, "")].some((x) => hides(x, "cli/index.mjs")));
+  // Any word outside `^[A-Za-z0-9_./-]+$` (a glob, `~`, `$E`) may expand to `cli/index.mjs`, so it is the entrypoint (fail closed). Only a following `decision record` denies it.
+  const isCli = (w) => w.endsWith("cli/index.mjs") || (!w.startsWith("-") && !/^[A-Za-z0-9_./-]+$/.test(w));
+  // A glob that could expand to the recorder script, after dropping a `~`, `$HOME` or absolute prefix before a literal `scripts/` segment.
+  const hitsScript = (w) => {
+    const s = w.replace(/^.*\/(?=scripts\/)/, "");
+    return /[*?[]/.test(s) && /^[A-Za-z0-9_./*?[\]-]+$/.test(s) && hides(s, "scripts/github/record-operator-decision.mjs");
+  };
   if (isRunner) {
-    // Scan to the first word that is a cli/index.mjs entrypoint or a glob matching the recorder script, so runner flag values need no grammar. An inline-code flag, a `bun x` package binary or another script word ends the scan: what follows is data for that program.
+    // Scan to the first word that is a cli/index.mjs entrypoint or a glob or unreadable word, so runner flag values need no grammar. An inline-code flag, a `bun x` package binary or another script word ends the scan: what follows is data for that program.
     let entry = -1;
     for (let j = at + 1; j < raw.length; j++) {
       const w = raw[j];
       if (/^(?:-[ep]|--eval|--print)$/.test(w) || (w === "x" && raw[j - 1] === head)) break;
-      if (isCli(w) || (/[*?[]/.test(w) && /^[A-Za-z0-9_./*?[\]-]+$/.test(w) && hides(w, "scripts/github/record-operator-decision.mjs"))) { entry = j; break; }
+      if (isCli(w) || hitsScript(w)) { entry = j; break; }
       // A script word right after a flag is that flag's value (`--loader ./l.mjs`), so the scan goes on.
       if (/\.[cm]?[jt]s$/.test(w) && !/^-/.test(raw[j - 1])) break;
     }
     if (entry < 0) return false;
     i = entry;
+    if (hitsScript(raw[i])) return true;
+    return isCli(raw[i]) && (hides(raw[i + 1], "decision") || hides(raw[i + 2], "record") || (raw[i + 1] === "decision" && raw[i + 2] === "record"));
   }
   if (raw[i] === undefined) return false;
   if (isBare) return hides(raw[i], "decision") || (raw[i] === "decision" && hides(raw[i + 1], "record"));
-  if (hides(raw[i], "scripts/github/record-operator-decision.mjs")) return true;
+  if (hides(raw[i], "scripts/github/record-operator-decision.mjs") || hitsScript(raw[i])) return true;
   return isCli(raw[i]) && (hides(raw[i + 1], "decision") || hides(raw[i + 2], "record") || (raw[i + 1] === "decision" && raw[i + 2] === "record"));
 }
