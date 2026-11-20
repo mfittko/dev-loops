@@ -74,6 +74,9 @@ export async function recordDecision(o, { env = process.env, ghCommand = "gh", r
   if (!isClaudeHarness(env)) {
     return refuse("harness_without_permission_prompt", "this harness has no per-call permission prompt, so the recorder does not run; the operator posts the decision comment by hand");
   }
+  // The exported entry re-validates what parseRecordCliArgs checks, so a direct caller cannot post an unsupported kind.
+  try { assertSupportedKind(o.kind); } catch (e) { return refuse("kind_unsupported", e.message); }
+  if (o.target !== "pr" && o.target !== "issue") return refuse("target_invalid", "target must be pr or issue");
   const isPr = o.target === "pr";
   if (isPr && o.head === undefined) return refuse("head_required", "a PR target needs --head <40-hex>");
   if (!isPr && o.head !== undefined) return refuse("head_forbidden", "an issue target has no head; drop --head");

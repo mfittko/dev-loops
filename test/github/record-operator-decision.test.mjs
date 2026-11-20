@@ -44,6 +44,18 @@ test("posts one comment per record-only kind on a PR and on an issue, header rou
   });
 });
 
+test("a direct call with an unsupported kind or target refuses with no GitHub call", async () => {
+  await withTempDir(async (dir) => {
+    const files = await fixture(dir);
+    for (const over of [{ kind: "approve-merge" }, { target: "repo" }]) {
+      const stub = makeGhStub([]);
+      const r = await recordDecision(pr(files, over), { env: CLAUDE, run: stub.run });
+      assert.equal(r.refused, true);
+      assert.equal(stub.calls.length, 0);
+    }
+  });
+});
+
 test("refusals", async () => {
   await withTempDir(async (dir) => {
     const files = await fixture(dir);

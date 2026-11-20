@@ -587,6 +587,11 @@ const RECORDER_SPELLINGS = [
   `dev-loops-run  cli/index.mjs ${RECORDER_TAIL}`,
   `dev-loops-run\tcli/index.mjs ${RECORDER_TAIL}`,
   `dev-loops-run cli/index.mjs decision  record --repo o/n`,
+  `dev-loops-run scripts/github/Record-Operator-Decision.mjs --repo o/n`,
+  `dev-loops-run scripts/github/RECORD-OPERATOR-DECISION.MJS --repo o/n`,
+  `dev-loops-run CLI/Index.mjs decision record --repo o/n`,
+  `node scripts/github/Record-Operator-Decision.mjs --repo o/n`,
+  `dev-loops-run cli/index.mjs Decision Record --repo o/n`,
 ];
 
 test("every non-canonical recorder spelling is denied, with and without a subagent role", () => {

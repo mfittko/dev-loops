@@ -1888,7 +1888,8 @@ export function classifyDecisionRecorderCommand(command) {
   let found = null;
   for (const segment of segments) {
     const stripped = [stripLeadingWrappers(segment), stripLeadingWrappers(segment, LAUNCHER_FLAG_TARGETS)];
-    const words = segment.replace(/['"\\]/g, "").split(/\s+/);
+    // Lowercase: a case-insensitive filesystem runs `Record-Operator-Decision.mjs` or `CLI/Index.mjs`. Only `canonical` below stays byte-exact.
+    const words = segment.replace(/['"\\]/g, "").toLowerCase().split(/\s+/);
     const script = words.some((w) => w.endsWith("record-operator-decision.mjs"));
     const at = words.findIndex((w, i) => w === "decision" && words[i + 1] === "record");
     const cli = at >= 0 && words.slice(0, at).some((w) => /(?:^|\/)(?:dev-loops(?:-run)?|index\.mjs)$/.test(w));
@@ -1922,7 +1923,8 @@ function globMatchesSuffix(glob, target) {
  * `{decision,} record`) or a glob that matches the recorder script or the words `decision` and `record`
  * (`record-operator-*.mjs`). A glob that cannot match them (`scripts/*\/validate-decision-records.mjs`) stays allowed.
  */
-function hasUnreadableLauncherWord(raw) {
+function hasUnreadableLauncherWord(rawWords) {
+  const raw = rawWords.map((w) => w.toLowerCase());
   // Only a segment head counts (callers strip env assignments and launch wrappers with stripLeadingWrappers), so quoted prose that mentions a launcher stays allowed.
   const at = 0;
   const head = raw[at];
