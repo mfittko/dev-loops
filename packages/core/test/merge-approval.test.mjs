@@ -636,6 +636,13 @@ test("evaluateCopilotConvergence: an error review as the only current-head revie
   assert.equal(disposed.disposition, "converged_once");
 });
 
+test("evaluateCopilotConvergence: a quota-refusal review is no_current_head_review", () => {
+  const body = readFileSync(new URL("./fixtures/copilot-overview/review-error-quota.md", import.meta.url), "utf8");
+  const res = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [copilotReview({ body })] });
+  assert.equal(res.ok, false, JSON.stringify(res));
+  assert.equal(res.state, COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW);
+});
+
 test("evaluateCopilotConvergence: an earlier-head clean review never covers a current-head error review", () => {
   const res = evaluateCopilotConvergence({
     currentHeadSha: HEAD,

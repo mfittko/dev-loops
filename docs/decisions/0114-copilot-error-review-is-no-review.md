@@ -6,6 +6,8 @@ Accepted — 2026-09-28 ([issue 2549](https://github.com/mfittko/dev-loops/issue
 
 Amends [ADR 0090](./0090-copilot-converged-once-default.md): that record lists a headerless Copilot review body as converged. This record excludes one headerless body, the Copilot error text, from every Copilot review rule.
 
+Amended 2026-11-20 by [issue 3323](https://github.com/mfittko/dev-loops/issues/3323): the classifier also treats a headerless body that starts with "Copilot was unable to review this pull request" (an observed quota refusal) as `review_error`, per the Consequences line of this record.
+
 ## Context
 
 On PR 2547, Copilot posted a `COMMENTED` review with 0 threads on the current head. The body was "Copilot encountered an error and was unable to review this pull request. You can try again by re-requesting a review." The body has no disposition header, so `classifyCopilotReviewBodyDisposition` returned `none`. `evaluateCopilotConvergence` read `none` as `current_head_clean`, the loop reported `clean_converged`, and `merge-pr` merged. No Copilot review took place. The same review also counted as a completed Copilot round and could be carried to a later head as `converged_once`.

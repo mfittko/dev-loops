@@ -1593,8 +1593,8 @@ test("buildSnapshotFromPrFacts yields currentHeadSha null when headRefOid is mis
 // ---------------------------------------------------------------------------
 
 const ERROR_HEAD = "e".repeat(40);
-const errorReviewSnapshot = (errorCount, extraReviews = []) => {
-  const body = readFileSync(new URL("./fixtures/copilot-overview/review-error.md", import.meta.url), "utf8");
+const errorReviewSnapshot = (errorCount, extraReviews = [], fixture = "review-error.md") => {
+  const body = readFileSync(new URL(`./fixtures/copilot-overview/${fixture}`, import.meta.url), "utf8");
   const reviews = Array.from({ length: errorCount }, (_, i) => ({
     id: `R_err${i}`,
     author: { login: "copilot-pull-request-reviewer" },
@@ -1621,6 +1621,23 @@ test("one current-head Copilot error review allows one same-head re-request", ()
   assert.equal(result.state, STATE.READY_TO_REREQUEST_REVIEW);
   assert.equal(result.sameHeadCleanConverged, false);
   assert.equal(result.autoRerequestEligible, true);
+});
+
+test("a quota-refusal review on the current head is no round and never a clean cap fallback", () => {
+  const priorClean = {
+    id: "R_clean1",
+    author: { login: "copilot-pull-request-reviewer" },
+    state: "COMMENTED",
+    body: "### 🟢 Approval recommended\n\nNo issues found.",
+    commit: { oid: "d".repeat(40) },
+    submittedAt: "2026-09-27T20:00:00Z",
+  };
+  const snapshot = errorReviewSnapshot(1, [priorClean], "review-error-quota.md");
+  assert.equal(snapshot.copilotErrorReviewCountOnCurrentHead, 1);
+  assert.equal(snapshot.copilotReviewRoundCount, 1);
+  const result = interpretLoopState(snapshot, { maxCopilotRounds: 2 });
+  assert.equal(result.state, STATE.READY_TO_REREQUEST_REVIEW);
+  assert.notEqual(result.loopDisposition, "round_cap_clean_fallback");
 });
 
 test("two current-head Copilot error reviews block for an operator decision", () => {

@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
+import { readFileSync } from "node:fs";
+
+import { summarizeCopilotReviews } from "../src/github/copilot-helpers.mjs";
 
 import {
   BLOCKED_ON,
@@ -12,7 +15,7 @@ import {
   buildSizeBudgetField,
   isCleanDraftVerdict,
 } from "../src/loop/pr-gate-coordination.mjs";
-import { DISPOSITION, interpretLoopState, STATE } from "../src/loop/copilot-loop-state.mjs";
+import { buildSnapshotFromPrFacts, DISPOSITION, interpretLoopState, STATE } from "../src/loop/copilot-loop-state.mjs";
 
 function gate({ visible = false, headSha = null, verdict = null, contractComplete = false } = {}) {
   return {
@@ -1022,6 +1025,49 @@ test("round_cap_clean_fallback routes a post-cap clean head to pre_approval_gate
   assert.equal(result.draftGateAlreadySatisfied, true);
   assert.match(result.reason, /round limit is exhausted/i);
   assert.match(result.reason, /pre_approval_gate/i);
+});
+
+test("a quota-refusal review on the current head after one real round never coordinates as round_cap_clean_fallback (#3323, PR 3314 shape)", () => {
+  const head = "e".repeat(40);
+  const copilot = { login: "copilot-pull-request-reviewer" };
+  const reviews = [
+    { id: "R_clean1", author: copilot, state: "COMMENTED", body: "### 🟢 Approval recommended\n\nNo issues found.", commit: { oid: "d".repeat(40) }, submittedAt: "2026-11-20T10:00:00Z" },
+    {
+      id: "R_quota",
+      author: copilot,
+      state: "COMMENTED",
+      body: readFileSync(new URL("./fixtures/copilot-overview/review-error-quota.md", import.meta.url), "utf8"),
+      commit: { oid: head },
+      submittedAt: "2026-11-20T11:00:00Z",
+    },
+  ];
+  const summary = summarizeCopilotReviews(reviews, { headSha: head });
+  const snapshot = buildSnapshotFromPrFacts({
+    prData: { number: 3314, state: "OPEN", headRefOid: head, reviews },
+    prNumber: 3314,
+    copilotReviewPresent: summary.copilotReviewPresent,
+    copilotReviewOnCurrentHead: summary.hasSubmittedReviewOnCurrentHead,
+    copilotReviewRoundCount: summary.completedCopilotReviewRounds,
+    ciStatus: "success",
+  });
+  const interpretation = interpretLoopState(snapshot, { maxCopilotRounds: 2 });
+  const result = evaluatePrGateCoordination({
+    pr: 3314,
+    currentHeadSha: head,
+    prDraft: false,
+    lifecycleState: interpretation.state,
+    loopDisposition: interpretation.loopDisposition,
+    sameHeadCleanConverged: interpretation.sameHeadCleanConverged,
+    ciStatus: "success",
+    copilotReviewRoundCount: snapshot.copilotReviewRoundCount,
+    maxCopilotRounds: 2,
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+  assert.equal(snapshot.copilotReviewRoundCount, 1);
+  assert.notEqual(interpretation.loopDisposition, "round_cap_clean_fallback");
+  assert.notEqual(result.lifecycleState, STATE.ROUND_CAP_CLEAN_FALLBACK);
+  assert.notEqual(result.loopDisposition, "round_cap_clean_fallback");
 });
 
 // #1472: same reachable branch as the test above (ROUND_CAP_CLEAN_FALLBACK,

@@ -1306,6 +1306,13 @@ test("classifyCopilotReviewBodyDisposition: the captured Copilot error body clas
   );
 });
 
+test("classifyCopilotReviewBodyDisposition: the Copilot quota refusal body classifies review_error", () => {
+  assert.equal(
+    classifyCopilotReviewBodyDisposition("COMMENTED", readOverviewFixture("review-error-quota.md")),
+    COPILOT_DISPOSITION.REVIEW_ERROR,
+  );
+});
+
 test("classifyCopilotReviewBodyDisposition: a disposition header wins over a quoted error sentence", () => {
   const body = `### 🟢 Approval recommended\n\n${readOverviewFixture("review-error.md")}`;
   assert.equal(classifyCopilotReviewBodyDisposition("COMMENTED", body), COPILOT_DISPOSITION.CLEAN);
@@ -1336,7 +1343,10 @@ test("summarizeCopilotReviews: a current-head error review is present but is no 
 
 test("classifyCopilotReviewBodyDisposition: error-body edge cases", () => {
   const error = "Copilot encountered an error and was unable to review this pull request.";
+  const quota = "Copilot was unable to review this pull request because your quota is exhausted.";
   const cases = [
+    ["COMMENTED", `\r\n  ${quota}\r\nTry again later.\r\n`, COPILOT_DISPOSITION.REVIEW_ERROR],
+    ["COMMENTED", "Copilot was unable to review this pull request because of an internal error.", COPILOT_DISPOSITION.REVIEW_ERROR],
     ["COMMENTED", `${error}\r\nYou can try again by re-requesting a review.\r\n`, COPILOT_DISPOSITION.REVIEW_ERROR],
     ["COMMENTED", `\n\n  ${error}`, COPILOT_DISPOSITION.REVIEW_ERROR],
     ["COMMENTED", null, COPILOT_DISPOSITION.NONE],
