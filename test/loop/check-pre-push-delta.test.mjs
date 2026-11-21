@@ -2207,3 +2207,125 @@ test("--threads-file with no unresolved thread records a locally_clear result ag
   assert.deepEqual(record.items, [{ ref: "operator-focus", status: "resolved" }]);
   assert.equal(record.nextStep, "push");
 });
+
+// Issue 3364: a residue with no site (a PR-body item) clears on a PR body edit or a siteless skip; a code-site residue still needs a commit or a site-matched skip.
+test("issue 3364: a siteless residue is cleared by a PR body edit after the sealed result; a code-site residue still refuses", async () => {
+  const { prBodySha256 } = await import("../../scripts/github/write-gate-context.mjs");
+  const sealedBody = "tradeoff: snapshot-sourced";
+  const siteless = { severity: "low", summary: "body tradeoff stale", evidence: "pr body", residueOf: "act-1" };
+  const target = ["--repo", "o/r", "--pr", "7"];
+  const calls = [];
+  const withBody = (body) => ({ ...headAt(B), fetchPr: async (t) => { calls.push(t); if (body instanceof Error) throw body; return { body }; } });
+  const fx = openRecordFixture([siteless]);
+  const recordPath = gateDeltaRecordPath(fx.tmpRoot, A);
+  const sealedWith = (findings) => writeSealedGateDeltaRecord(fx.tmpRoot, A, { ...JSON.parse(fs.readFileSync(recordPath, "utf8")), findings, bodySha256: prBodySha256(sealedBody), bodyTarget: { repo: "o/r", pr: 7 } });
+  sealedWith([siteless]);
+  const atC = fx.handback(B);
+  await assert.rejects(fx.run(atC, ["--handback", ...target], withBody(sealedBody)), /open task[^]*edit the PR body/);
+  await assert.rejects(fx.run(atC, ["--handback", ...target], withBody(new Error("gh offline"))), /open task/);
+  await assert.rejects(fx.run(atC, ["--handback"], withBody("edited")), /open task/);
+  // A handback naming another PR than the sealed target keeps the residue open, whatever that PR's body holds (the mismatch is refused before any fetch).
+  const before = calls.length;
+  await assert.rejects(fx.run(atC, ["--handback", "--repo", "o/r", "--pr", "8"], withBody("tradeoff: fixed")), /open task/);
+  assert.equal(calls.length, before);
+  calls.length = 0;
+  assert.ok((await fx.run(atC, ["--handback", ...target], withBody("tradeoff: fixed"))).ok);
+  assert.deepEqual(calls, [{ repo: "o/r", pr: 7 }]);
+  // A case variant of the sealed repo is the same target.
+  assert.ok((await fx.run(atC, ["--handback", "--repo", "O/R", "--pr", "7"], withBody("tradeoff: fixed"))).ok);
+  // A code-site residue keeps refusing after a body edit.
+  sealedWith([RESIDUE_FINDING]);
+  await assert.rejects(fx.run(atC, ["--handback", ...target], withBody("tradeoff: fixed")), /open task/);
+});
+
+test("issue 3364: --repo and --pr are validated together on the ACT route", async () => {
+  const base = ["--act-list", "a.json", "--baseline", A, "--spec-identity", "s", "--handback", "--site-coverage", "c.json"];
+  const ok = parseCheckPrePushDeltaArgs([...base, "--repo", "o/r", "--pr", "7"]);
+  assert.deepEqual([ok.repo, ok.pr], ["o/r", 7]);
+  assert.equal(parseCheckPrePushDeltaArgs(base).repo, null);
+  for (const extra of [["--repo", "o/r", "--pr", "abc"], ["--repo", "o/r", "--pr", "0"], ["--repo", "o/r"], ["--pr", "7"]]) assert.throws(() => parseCheckPrePushDeltaArgs([...base, ...extra]), /passed together/, extra.join(" "));
+});
+
+test("issue 3364: a siteless residue is cleared by a recorded skip reason that carries no site", async () => {
+  const fx = openRecordFixture([{ severity: "low", summary: "body tradeoff stale", evidence: "pr body", residueOf: "act-1" }]);
+  const skipped = fx.handback(B, [{ fingerprint: ACT.fingerprint ?? FP, returnedSites: [], noSitesReason: "query empty", sitelessSkipReason: "a PR-body item with no code site", sites: [] }]);
+  assert.ok((await fx.run(skipped, ["--handback"])).ok);
+});
+
+test("issue 3364: noSitesReason alone does not clear a siteless residue at the handback", async () => {
+  const fx = openRecordFixture([{ severity: "low", summary: "body tradeoff stale", evidence: "pr body", residueOf: "act-1" }]);
+  const noSites = fx.handback(B, [{ fingerprint: ACT.fingerprint ?? FP, returnedSites: [], noSitesReason: "the query returned nothing", sites: [] }]);
+  await assert.rejects(fx.run(noSites, ["--handback"]), /open task/);
+});
+
+test("issue 3364: a sealed record with no bodySha256 names the --result re-run as the remedy", async () => {
+  const fx = openRecordFixture([{ severity: "low", summary: "body tradeoff stale", evidence: "pr body", residueOf: "act-1" }]);
+  await assert.rejects(fx.run(fx.handback(B), ["--handback", "--repo", "o/r", "--pr", "7"]), /no bodySha256[^]*seals the current body[^]*sitelessSkipReason or edit the body again/);
+});
+
+test("issue 3364: the coordinator input run reads the PR target from --fixer-plan when --repo and --pr are absent", async () => {
+  const { prBodySha256 } = await import("../../scripts/github/write-gate-context.mjs");
+  const fx = openRecordFixture([{ severity: "low", summary: "body tradeoff stale", evidence: "pr body", residueOf: "act-1" }]);
+  const recordPath = gateDeltaRecordPath(fx.tmpRoot, A);
+  writeSealedGateDeltaRecord(fx.tmpRoot, A, { ...JSON.parse(fs.readFileSync(recordPath, "utf8")), bodySha256: prBodySha256("old body"), bodyTarget: { repo: "o/r", pr: 7 } });
+  const plan = path.join(path.dirname(fx.tmpRoot), "issue-3364-plan.json");
+  fs.writeFileSync(plan, JSON.stringify({ workOrder: { target: { repo: "o/r", pr: 7 } } }));
+  const atC = fx.handback(B);
+  const calls = [];
+  const withBody = (body) => ({ ...headAt(B), fetchPr: async (t) => { calls.push(t); return { body }; } });
+  await assert.rejects(fx.run(atC, ["--fixer-plan", plan, "--findings-log", logFor(A)], withBody("old body")), /open task/);
+  assert.deepEqual(calls, [{ repo: "o/r", pr: 7 }]);
+  // An edited body clears the guard; the run then fails on the unauthenticated plan, not on open work.
+  await assert.rejects(fx.run(atC, ["--fixer-plan", plan, "--findings-log", logFor(A)], withBody("new body")), (error) => !/open task/.test(error.message));
+  assert.deepEqual(calls, [{ repo: "o/r", pr: 7 }, { repo: "o/r", pr: 7 }]);
+  // An explicit pair that differs from the plan target is refused before any body read.
+  await assert.rejects(fx.run(atC, ["--fixer-plan", plan, "--findings-log", logFor(A), "--repo", "o/r", "--pr", "8"], withBody("old body")), (error) => /target_mismatch/.test(error.message) && !/Delta coverage binding/.test(error.message));
+  assert.equal(calls.length, 2);
+});
+
+test("issue 3364: the --result run seals the live body digest for a siteless residue and records none when the body is unreadable", async () => {
+  const { prBodySha256 } = await import("../../scripts/github/write-gate-context.mjs");
+  const { dir, threadsFile, planPath } = await focusEmission("tighten the summary wording");
+  const sequence = startDeltaSequence({ reviewBaselineHead: A, actList: [{ ref: "operator-focus", angle: "operator-focus", summary: "tighten the summary wording", judgeDisposition: "act" }] });
+  const result = path.join(dir, "siteless-result.json");
+  fs.writeFileSync(result, JSON.stringify({
+    reviewBaselineHead: A, candidateHead: B, actSetId: sequence.actSetId,
+    actionableItems: [{ ref: "operator-focus", status: "resolved", evidence: ["e"] }],
+    newFindings: [{ severity: "low", summary: "body tradeoff stale", evidence: ["pr body"], residueOf: "operator-focus" }], widenedReads: [], outcome: "needs_fix",
+  }));
+  const run = async (fetchPr) => {
+    const seam = { ...headAt(B), fetchPr };
+    await runCli(threadArgs(threadsFile, "--result", result, "--invocation", "1", "--fixer-plan", planPath), seam);
+    return JSON.parse(fs.readFileSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`), "utf8"));
+  };
+  const sealed = await run(async (t) => { assert.deepEqual(t, { repo: "o/r", pr: 7 }); return { baseRefName: "main", body: "live body" }; });
+  assert.equal(sealed.bodySha256, prBodySha256("live body"));
+  assert.deepEqual(sealed.bodyTarget, { repo: "o/r", pr: 7 });
+  assert.equal((await run(async () => { throw new Error("gh offline"); })).bodySha256, undefined);
+});
+
+// The ACT route: the --result run without --repo/--pr takes the body target from the authenticated --fixer-plan target.
+test("issue 3364: the ACT --result run without --repo/--pr seals the live body digest and the plan target; a code-site-only residue seals none", async () => {
+  const { prBodySha256 } = await import("../../scripts/github/write-gate-context.mjs");
+  const { dir, actList, result } = fixture();
+  const finding = (extra) => ({ severity: "low", summary: "residue", evidence: ["e"], residueOf: "act-1", ...extra });
+  const run = async (newFindings) => {
+    const file = path.join(dir, `act-result-${Math.random()}.json`);
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(result, "utf8")), newFindings, outcome: "needs_fix" }));
+    const calls = [];
+    const seam = { ...headAt(B), fetchPr: async (t) => { calls.push(t); return { body: "live body" }; } };
+    await runCli(["--act-list", actList, "--baseline", A, "--result", file, "--invocation", "1"], seam);
+    return { record: JSON.parse(fs.readFileSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`), "utf8")), calls };
+  };
+  const siteless = await run([finding()]);
+  assert.equal(siteless.record.bodySha256, prBodySha256("live body"));
+  assert.deepEqual(siteless.record.bodyTarget, { repo: "o/r", pr: 7 });
+  assert.deepEqual(siteless.calls, [{ repo: "o/r", pr: 7 }]);
+  const coded = await run([finding({ site: "src/a.mjs:10" })]);
+  assert.equal(coded.record.bodySha256, undefined);
+  assert.deepEqual(coded.calls, []);
+  // An explicit --repo/--pr that differs from the authenticated plan target is refused.
+  const file = path.join(dir, "act-result-mismatch.json");
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(result, "utf8")), newFindings: [finding()], outcome: "needs_fix" }));
+  await assert.rejects(runCli(["--act-list", actList, "--baseline", A, "--result", file, "--invocation", "1", "--repo", "o/r", "--pr", "8"], { ...headAt(B), fetchPr: async () => ({ body: "x" }) }), /target_mismatch|Delta coverage binding: wrong role, target/);
+});

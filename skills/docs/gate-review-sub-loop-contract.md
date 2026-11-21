@@ -1168,7 +1168,7 @@ and the delta input carries the entries. The fixer fixes every site the
 query returns, or records a skip reason for each skipped site (`returnedSites[]` and `sites[]`).
 Site coverage is keyed by act-item fingerprint in `siteCoverage[]`, which the `commit_only` and
 `full` handoffs both carry, so a threadless act item is covered too. A query that returns no site records a
-non-empty `noSitesReason` in place of `returnedSites[]`. A doc_lag item needs a fixed or skipped
+non-empty `noSitesReason` in place of `returnedSites[]`. An optional non-empty `sitelessSkipReason` skips a PR-body residue finding that has no site (`PRE-PUSH-DELTA-RESIDUE`); `noSitesReason` never does. A doc_lag item needs a fixed or skipped
 site for every `statedSurfaces[]` entry. A matcher item needs one
 `input_form` site per listed accepted and rejected form. `verify-fixer-disposition.mjs` and the
 pre-push delta check fail a record that leaves a returned site neither fixed nor skipped with a
