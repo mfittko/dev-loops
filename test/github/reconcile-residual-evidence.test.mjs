@@ -69,8 +69,10 @@ async function fixture(fn, harness = "pi", alterReads) {
       alterReads(bundle.artifact.requiredReads);
       await put(path.join(root, bundle.path), bundle.artifact);
     }
+    const ciFile = path.join(root, "tmp/green-ci.json");
+    await put(ciFile, { ok: true, status: "success", settled: true, ciStatus: "success", headSha: HEAD });
     execFileSync(process.execPath, [new URL("../../scripts/github/emit-fanout-dispatch.mjs", import.meta.url).pathname,
-      "--repo", "o/r", "--pr", "7", "--gate", "draft_gate", "--head-sha", HEAD], { cwd: root });
+      "--repo", "o/r", "--pr", "7", "--gate", "draft_gate", "--head-sha", HEAD, "--ci-file", ciFile], { cwd: root });
     const plan = JSON.parse(await readFile(planPath)), units = plan.units;
     const rootBody = act.map((a) => `<!-- dev-loops:finding ${a.fingerprint} -->`).join("\n");
     const assessment = { ...TARGET, reviewBaselineHead: BASE, actSetId: sequence.actSetId,
