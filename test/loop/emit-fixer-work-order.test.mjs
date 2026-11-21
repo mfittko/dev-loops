@@ -2316,7 +2316,7 @@ test("complete THREAD runs the emitted --construct, normal and --check against a
 
 test("commit_only rendering matches the approved base renderer byte for byte and full differs only in the task region", async () => {
   const checkout = fileURLToPath(new URL("../../", import.meta.url));
-  const source = execFileSync("git", ["-C", checkout, "show", "c1ce5892ecda03e0516d87b88c7d1d83bc379eae:scripts/loop/emit-fixer-work-order.mjs"], { encoding: "utf8", env: gitFreeEnv() });
+  const source = execFileSync("git", ["-C", checkout, "show", "c1ce5892ecda03e0516d87b88c7d1d83bc379eae:scripts/loop/emit-fixer-work-order.mjs"], { encoding: "utf8", env: gitFreeEnv() }).replaceAll("ruleCitations?, noSitesReason? }", "ruleCitations?, noSitesReason?, sitelessSkipReason? }"); // issue 3364 widens the record shape on purpose
   const start = source.indexOf("export function renderWorkOrder(");
   const end = source.indexOf("\n// The commit_only phase", start);
   const { runInNewContext } = await import("node:vm");
