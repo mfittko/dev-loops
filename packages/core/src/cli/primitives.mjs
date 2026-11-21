@@ -156,7 +156,7 @@ export function parseAllowedRefsCsv(value, flag, parseError = null) {
 // injected runner — every gh call in a script can route through the ONE
 // runChild its tests already stub.
 // `timeoutMs` is optional and additive: when set, spawn kills the child at the bound, so the close handler settles with a signal exit.
-// Every default-runner `gh` call takes a gh-throttle slot first;.
+// Every default-runner `gh` call takes a gh-throttle slot first.
 // A secondary rate limit backs off once, retakes a slot and retries; a second one throws RATE_LIMITED.
 // `sleep` is a test seam. gh-throttle and gh are imported lazily to avoid an import cycle.
 export async function runChild(command, args, env = process.env, stdinText = undefined, { timeoutMs, sleep } = {}) {
