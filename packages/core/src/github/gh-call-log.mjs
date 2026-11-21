@@ -9,6 +9,8 @@ import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { parseMainWorktreePath } from "../loop/worktree-guard.mjs";
+import { withSecondaryLimitBackoff } from "./gh.mjs";
+import { ghExecFileSync, takeGhSlot } from "./gh-throttle.mjs";
 
 export const GH_CALL_LOG_ENV = "DEVLOOPS_GH_CALL_LOG";
 const GIT_TIMEOUT_MS = 5000;
@@ -100,17 +102,22 @@ export function recordGhCall(args, { durationMs, status, stderr = "", script = p
   } catch { /* swallow */ }
 }
 
-/** `execFileSync("gh", args, options)` that records the call. Rethrows the original error. */
-export function ghSync(args, options = {}) {
+// The spawn itself: one `execFileSync("gh")` per attempt, recorded with its own outcome.
+function recordedExecFileSync(command, args, options) {
   const started = Date.now();
   try {
-    const out = execFileSync("gh", args, options);
+    const out = execFileSync(command, args, options);
     recordGhCall(args, { durationMs: Date.now() - started, status: 0 });
     return out;
   } catch (err) {
     recordGhCall(args, { durationMs: Date.now() - started, status: typeof err?.status === "number" ? err.status : 1, stderr: err?.stderr ?? null });
     throw err;
   }
+}
+
+/** Throttled (slot, one secondary-limit backoff) `execFileSync("gh", args, options)`; each spawn is recorded. Rethrows the original error. */
+export function ghSync(args, options = {}) {
+  return ghExecFileSync("gh", args, options, { execFile: recordedExecFileSync });
 }
 
 /** Command-aware `execFileSync` default for seams that take a command: records only `gh` calls. */
@@ -120,17 +127,20 @@ export function execFileSyncRecorded(command, args, options) {
 
 const execFileAsync = promisify(execFile);
 
-/** `execFile("gh", args, options)` that records the call; resolves `{ stdout, stderr }`, rethrows the original error. */
-export async function ghAsync(args, options = {}) {
-  const started = Date.now();
-  try {
-    const out = await execFileAsync("gh", args, options);
-    recordGhCall(args, { durationMs: Date.now() - started, status: 0 });
-    return out;
-  } catch (err) {
-    recordGhCall(args, { durationMs: Date.now() - started, status: typeof err?.code === "number" ? err.code : 1, stderr: err?.stderr ?? null });
-    throw err;
-  }
+/** Throttled (slot, one secondary-limit backoff) `execFile("gh", args, options)`; each spawn is recorded. Resolves `{ stdout, stderr }`, rethrows the original error. */
+export function ghAsync(args, options = {}) {
+  return withSecondaryLimitBackoff(async () => {
+    await takeGhSlot({ env: options.env, cwd: options.cwd });
+    const started = Date.now();
+    try {
+      const out = await execFileAsync("gh", args, options);
+      recordGhCall(args, { durationMs: Date.now() - started, status: 0 });
+      return out;
+    } catch (err) {
+      recordGhCall(args, { durationMs: Date.now() - started, status: typeof err?.code === "number" ? err.code : 1, stderr: err?.stderr ?? null });
+      throw err;
+    }
+  });
 }
 
 const STDERR_TAIL_CHARS = 4096;

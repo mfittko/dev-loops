@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { ghSync } from "@dev-loops/core/github/gh-call-log";
+import { ghCommandFailed } from "@dev-loops/core/github/gh";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -84,12 +85,12 @@ function validateRepo(repo) {
   }
 }
 
-function ghJson(args, cwd) {
+export function ghJson(args, cwd, exec = ghSync) {
   try {
-    const stdout = ghSync(args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const stdout = exec(args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     return JSON.parse(stdout);
   } catch (err) {
-    throw new Error(`gh command failed: ${err instanceof Error ? err.message : String(err)}`);
+    throw ghCommandFailed(err);
   }
 }
 

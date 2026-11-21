@@ -86,7 +86,7 @@ test("runChild logs a gh call and skips a non-gh command", async () => {
   await withTempDir(async (dir) => {
     const logPath = path.join(dir, "log.jsonl");
     process.env[GH_CALL_LOG_ENV] = logPath;
-    const env = fakeGhEnv(dir, { code: 1, stderr: "secondary rate limit" });
+    const env = fakeGhEnv(dir, { code: 1, stderr: "API rate limit exceeded" }); // a secondary limit would back off and retry (2 records)
     const result = await runChild("gh", ["api", "graphql"], env);
     assert.equal(result.code, 1);
     await runChild("true", [], env);
