@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-11-03 ([issue 2500](https://github.com/mfittko/dev-loops/issues/2500), slice 2).
+Superseded by [0297](0297-subagent-may-run-merge-test-files.md) — 2026-11-03 ([issue 2500](https://github.com/mfittko/dev-loops/issues/2500), slice 2).
 
 ## Context
 
