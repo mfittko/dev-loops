@@ -2278,6 +2278,9 @@ test("issue 3364: the coordinator input run reads the PR target from --fixer-pla
   // An edited body clears the guard; the run then fails on the unauthenticated plan, not on open work.
   await assert.rejects(fx.run(atC, ["--fixer-plan", plan, "--findings-log", logFor(A)], withBody("new body")), (error) => !/open task/.test(error.message));
   assert.deepEqual(calls, [{ repo: "o/r", pr: 7 }, { repo: "o/r", pr: 7 }]);
+  // An explicit pair that differs from the plan target is refused before any body read.
+  await assert.rejects(fx.run(atC, ["--fixer-plan", plan, "--findings-log", logFor(A), "--repo", "o/r", "--pr", "8"], withBody("old body")), (error) => /target_mismatch/.test(error.message) && !/Delta coverage binding/.test(error.message));
+  assert.equal(calls.length, 2);
 });
 
 test("issue 3364: the --result run seals the live body digest for a siteless residue and records none when the body is unreadable", async () => {

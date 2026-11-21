@@ -73,7 +73,7 @@ import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { cliError, renderCliText } from "@dev-loops/core/loop/cli-command";
 
-const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --result-path <path> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
+const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --result-path <path> --fixer-plan <path> --site-coverage <path> [--repo <owner/name> --pr <n>] [--worktree <dir>]
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --handback --site-coverage <path> [--repo <owner/name> --pr <n>] [--worktree <dir>]   (fixer handbackCheck run)
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --result <path> --invocation <1-3> --fixer-plan <path> --site-coverage <path> [--repo <owner/name> --pr <n>] [--worktree <dir>]
        check-pre-push-delta.mjs --threads-file <path> --repo <owner/name> --pr <n> --baseline <sha> ...   (thread route: replaces --act-list; with no unresolved thread the --fixer-plan's operator focus round is the one act item)
@@ -85,8 +85,8 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --act-list <path>       The judge-pass --out act list the fix resolves. An act item that names no file or carries remedyKind pr_body (a PR-body item) leaves the act set and is printed as bodyItems, a top-level field of the input-run output that is present only when at least one act item was dropped; edit the PR body through scripts/github/edit-pr.mjs and the next gate round verifies it. An act list of only such items refuses delta_body_only_act_set, except on the --reviewer-only route, where it yields an empty code act set and prints bodyItems
   --threads-file <path>   Thread route, in place of --act-list: successful list-review-threads --unresolved-only
                           output, or a github-sourced capture-review-threads --unresolved --bodies file, for --repo/--pr. Each unresolved thread is one act item; its ref is the threadId.
-  --repo <owner/name>     Required with --threads-file and --reviewer-only; optional on the ACT --result and --handback runs, where it sets the PR body target (pass it with --pr)
-  --pr <n>                Required with --threads-file and --reviewer-only; optional on the ACT --result and --handback runs, where it sets the PR body target (pass it with --repo)
+  --repo <owner/name>     Required with --threads-file and --reviewer-only; optional on the ACT input, --result and --handback runs, where it sets the PR body target (pass it with --pr)
+  --pr <n>                Required with --threads-file and --reviewer-only; optional on the ACT input, --result and --handback runs, where it sets the PR body target (pass it with --repo)
   --baseline <sha>        reviewBaselineHead: the head the gate round reviewed (hex SHA)
   --pr-head <sha>         The PR head just read from GitHub; the check fails closed when it differs from --baseline (with --reviewer-only it must equal the worktree HEAD and differ from --baseline)
   --spec-identity <id>    Current spec identity passed to the reviewer (required without --result)
