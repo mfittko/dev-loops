@@ -300,8 +300,8 @@ export function lintContractDocsInMatrix(body) {
     .map((doc) => ({ kind: "contract_doc_not_in_matrix", id: doc, detail: { reason: `contract doc \`${doc}\` is in the Size forecast files but no AC / DoD matrix row names it in backticks` } }));
 }
 
-const STATE_RE = /\b(?:lock(?:file)?|sentinel|receipt|cache|marker file|plan file)s?\b/i;
-const REFUSAL_RE = /\bfail-closed\b/i;
+const STATE_RE = /\b(?:lock(?:file)?|sentinel|receipt|cache|marker file|plan)s?\b/i;
+const REFUSAL_RE = /\b(?:fail-closed|fails? closed)\b/i;
 const RECOVERY_ROW_RES = [
   ["crash", /\bcrash/i],
   ["rebuild at the same head", /\bsame[- ]head\b/i],

@@ -554,9 +554,19 @@ test("state_recovery_rows_missing: a spec adding a lock file without recovery ro
 });
 
 test("state_recovery_rows_missing: plurals and lockfile trigger the state check", () => {
-  for (const word of ["locks", "receipts", "marker files", "caches", "sentinels", "a lockfile"]) {
+  for (const word of ["locks", "receipts", "marker files", "caches", "sentinels", "a lockfile", "plan files", "a carry-forward plan"]) {
     const ids = lintStateRecoveryRows(recoverySpec([`The loop writes ${word}`, "unit test"])).map((f) => f.id);
     assert.equal(ids.length, 3, word);
+  }
+});
+
+test("state_recovery_rows_missing: fail-closed, fails closed and fail closed trigger the named-recovery check", () => {
+  for (const phrase of ["fail-closed", "fails closed", "fail closed"]) {
+    const ids = lintStateRecoveryRows(recoverySpec([`The writer ${phrase} on a stale head`, "unit test"])).map((f) => f.id);
+    assert.deepEqual(ids, ["named recovery"], phrase);
+  }
+  for (const phrase of ["fail open", "closed", "failsafe"]) {
+    assert.deepEqual(lintStateRecoveryRows(recoverySpec([`The writer is ${phrase} on a stale head`, "unit test"])), [], phrase);
   }
 });
 
