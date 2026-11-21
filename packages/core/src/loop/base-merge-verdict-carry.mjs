@@ -14,8 +14,9 @@
  * - resolution_delta: the merge hand-resolved conflicts. `rerunPaths` lists the resolution files plus any
  *   changed file whose hunk digest differs; the delta review covers the resolution hunks and the other
  *   angles carry (issue 3284).
- * - full_regate: a PR hunk changed, a changed file has no digest, gate tooling in the base delta, or the
- *   base delta overlaps the PR paths without a blob change.
+ * - full_regate: a PR hunk changed, a changed file has no digest (also on a conflict merge), gate tooling in the
+ *   base delta, or the base delta overlaps the PR paths and no file shifted. When a file shifted, an overlapped
+ *   path with an unchanged blob joins `rerunPaths` in partial_carry and resolution_delta.
  * - fallback_full: any detection failure or malformed input.
  */
 import { isDevLoopConfigSourcePath } from "../analysis/diff-analyzer.mjs";
@@ -89,8 +90,8 @@ export function classifyBaseMergeCarry(input = {}, { ignoreGateTooling = false }
   // The issue 3284 keys appear only when nonempty, so a carry_verdict record stays byte-identical to the older shape (its evidenceDigest is unchanged).
   const done = (decision, reason) => ({
     ...evidence, decision, reason,
-    ...(resolutionPaths.length > 0 ? { resolutionPaths } : {}),
-    ...(prHunkDigests && Object.keys(prHunkDigests).length > 0 ? { prHunkDigests } : {}),
+    ...(Array.isArray(resolutionPaths) && resolutionPaths.length > 0 ? { resolutionPaths } : {}),
+    ...(prHunkDigests && typeof prHunkDigests === "object" && Object.keys(prHunkDigests).length > 0 ? { prHunkDigests } : {}),
     ...(rerunPaths.length > 0 ? { rerunPaths } : {}),
   });
 
@@ -112,21 +113,28 @@ export function classifyBaseMergeCarry(input = {}, { ignoreGateTooling = false }
   const before = new Map(prBlobsBefore.map((e) => [entryPath(e), e]));
   const after = new Map(prBlobsAfter.map((e) => [entryPath(e), e]));
   const changed = evidence.prDiffPaths.filter((p) => before.get(p) !== after.get(p));
+  // Own keys only: a file named __proto__ or constructor must not read an inherited value.
+  const digestOf = (p) => (Object.hasOwn(prHunkDigests, p) ? prHunkDigests[p] : undefined);
   // A changed file carries only when the base delta touched it and both heads show the same PR hunks.
   const sameHunks = (p) => {
-    const d = prHunkDigests[p];
+    const d = digestOf(p);
     return baseDeltaPaths.includes(p) && typeof d?.before === "string" && d.before === d.after;
   };
   const shifted = changed.filter(sameHunks);
   const moved = changed.filter((p) => !sameHunks(p));
+  // A base-overlapped PR path whose blob is equal at both heads (a merge that kept the PR side) still re-runs: the base moved under it.
+  const keptOverlap = evidence.pathIntersection.filter((p) => !changed.includes(p));
+  // A changed file with no sound digest (binary, non-ASCII path) is a full re-gate, also on a conflict merge.
+  const noDigest = changed.some((p) => typeof digestOf(p)?.before !== "string" || typeof digestOf(p)?.after !== "string");
   if (conflictResolutionHunks) {
     if (resolutionPaths.length === 0) return done("full_regate", "merge carries conflict-resolution hunks without resolution paths");
-    rerunPaths = [...new Set([...resolutionPaths, ...moved, ...shifted])].sort();
+    if (noDigest) return done("full_regate", "changed file has no sound hunk digest");
+    rerunPaths = [...new Set([...resolutionPaths, ...moved, ...shifted, ...keptOverlap])].sort();
     return done("resolution_delta", "merge carries conflict-resolution hunks; delta review of the resolution hunks, other angles carry");
   }
   if (moved.length > 0) return done("full_regate", "PR hunk changed between heads");
   if (shifted.length > 0) {
-    rerunPaths = shifted;
+    rerunPaths = [...new Set([...shifted, ...keptOverlap])].sort();
     return done("partial_carry", "PR hunks identical at both heads; base edits in the same file only shift or surround them");
   }
   if (evidence.pathIntersection.length > 0) return done("full_regate", "base delta overlaps PR paths");

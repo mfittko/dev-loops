@@ -95,7 +95,8 @@ export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRo
     // Check every merge commit on the PR branch line (--first-parent) in prevHead..headSha; merges that arrived from the base side are not the PR's own.
     let conflictResolutionHunks = false;
     const resolutionPaths = new Set();
-    const prHunkDigests = {};
+    // Object.fromEntries below: a plain {} would turn a file named __proto__ into a prototype, not an own key.
+    const digestEntries = [];
     const merges = lines(await git(runGit, repoRoot, ["rev-list", "--merges", "--first-parent", `${prevHead}..${headSha}`]));
     const changedPaths = prBlobPaths(prBlobsBefore, prBlobsAfter);
     if (merges.length > 0 || changedPaths.length > 0) {
@@ -122,13 +123,13 @@ export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRo
         // Config-independent same-file method (issue 3284): a sha256 of the PR's own -U0 hunk bodies per changed file,
         // so a base edit that only shifts line numbers leaves the digest equal. No patch-id, no context lines.
         for (const p of changedPaths) {
-          prHunkDigests[p] = { before: await hunkDigest(bareGit, mbA, prevHead, p), after: await hunkDigest(bareGit, mbB, headSha, p) };
+          digestEntries.push([p, { before: await hunkDigest(bareGit, mbA, prevHead, p), after: await hunkDigest(bareGit, mbB, headSha, p) }]);
         }
       } finally { await rm(bare, { recursive: true, force: true }); }
     }
     return classifyBaseMergeCarry({
       sourceHead: prevHead, newHead: headSha, prBlobsBefore, prBlobsAfter,
-      baseDeltaPaths, conflictResolutionHunks, resolutionPaths: [...resolutionPaths].sort(), prHunkDigests,
+      baseDeltaPaths, conflictResolutionHunks, resolutionPaths: [...resolutionPaths].sort(), prHunkDigests: Object.fromEntries(digestEntries),
     }, { ignoreGateTooling });
   } catch (error) {
     return classifyBaseMergeCarry({ sourceHead: prevHead, newHead: headSha, detectionError: error instanceof Error ? error.message : String(error) });

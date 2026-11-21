@@ -218,7 +218,7 @@ export const REVIEWER_VERIFIED_ITEMS_INSTRUCTION = "Verified items: in the findi
  *   computed budget (computeReviewerUnitBudget); the floor when absent
  * @returns {string}
  */
-export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = [], budget = REVIEWER_UNIT_BUDGET, operatorFocus = null, unitBound = REVIEWER_UNIT_MAX_ANGLES) {
+export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = [], budget = REVIEWER_UNIT_BUDGET, operatorFocus = null, unitBound = REVIEWER_UNIT_MAX_ANGLES, resolutionPaths = []) {
   if (typeof scope !== "string" || scope.length === 0) {
     throw new TypeError(`buildAngleNamingSuffix requires a non-empty scope string, got ${JSON.stringify(scope)}`);
   }
@@ -231,6 +231,10 @@ export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unit
   const scopeLine = `Dispatch scope: pass \`--scope ${scope}\` verbatim to the mandatory \`verify-fresh-review-context.mjs\` sentinel named in the briefing prefix above — this is your dispatch unit's exact emitted scope, never composed from the unit name.`;
   const reads = unitReads.length > 0
     ? `Unit required read. It REPLACES the shared \`evidence\` read of the prefix's \`## Required reads\` for this unit: read this scoped evidence IN FULL instead of the shared evidence file, and verify its sha256 before judgment. Every other prefix read still applies:\n${unitReads.map((read) => renderRequiredReadLine(read, process.cwd())).join("\n")}\n\n`
+    : "";
+  // resolution_delta (issue 3284): the merge hand-resolved these files, so review their resolution hunks, not the whole diff of the carried surface.
+  const resolutionScope = resolutionPaths.length > 0
+    ? `Resolution scope: this round re-reviews a base merge that hand-resolved conflicts. Review the resolution hunks of these files (${resolutionPaths.map((p) => JSON.stringify(p)).join(", ")}) first and report findings in them. Widen only per the Widening rule below.\n\n`
     : "";
   const writeTool = "with the file-write tool (the `write` builtin, `Write` on Claude Code), never a shell write (redirect, heredoc, `tee`, or an inline script)";
   const body = single
@@ -251,7 +255,7 @@ Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is
 Prohibited: ${prohibited}.
 Widening: ${REVIEWER_WIDENING_RULE}.
 ${verifiedItemsLine}If you exceed this budget (more than ${budget.maxModelTurns} model turns or ${budget.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --max-model-turns ${budget.maxModelTurns} --max-tool-calls ${budget.maxToolCalls}${unitBound !== REVIEWER_UNIT_MAX_ANGLES ? ` --unit-bound ${unitBound}` : ""} --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
-  return `${header}\n\n${scopeLine}\n\n${renderOperatorFocusSection(operatorFocus)}${reads}${body}\n\n${instructions}\n\n${contract}\n`;
+  return `${header}\n\n${scopeLine}\n\n${renderOperatorFocusSection(operatorFocus)}${resolutionScope}${reads}${body}\n\n${instructions}\n\n${contract}\n`;
 }
 
 /**
@@ -539,6 +543,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // literal) so a future lifecycle gate is guarded automatically rather than
   // silently falling open — the same load-bearing derivation _gate-names.mjs
   // uses for GATE_NAMES.
+  let resolutionDeltaPaths = [];
   if (LIFECYCLE_GATES.includes(gate)) {
     const priorHeads = await listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRoot: ledgerTmpRoot });
     if (priorHeads.size > 0) {
@@ -568,6 +573,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
         && String(plan.repo ?? "").trim().toLowerCase() === repo.trim().toLowerCase()
         && String(plan.pr ?? "") === String(pr)
         && priorHeads.has(String(plan.prevHead ?? "").trim().toLowerCase());
+      if (planOk && Array.isArray(plan.resolutionDeltaPaths)) resolutionDeltaPaths = plan.resolutionDeltaPaths.filter((p) => typeof p === "string" && p.length > 0);
       if (!planOk) {
         return finish({ ok: false, error: `GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED: refusing — a prior gate findings-log for ${gate} exists at an earlier head (this is a re-gate), but no valid carry-forward plan artifact (keyed to this repo/pr/gate/head with a prevHead naming a real prior round) is recorded at the current head ${headSha}. Run scripts/github/resolve-angle-carry-forward.mjs --repo ${repo} --pr ${pr} --gate ${gate} --prev-head <A> --head-sha ${headSha} from the current-head worktree before dispatch — the resolver records the plan this step requires.` }, false);
       }
@@ -770,7 +776,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {
       await mkdir(path.dirname(suffixPath), { recursive: true });
-      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus, unitBound), "utf8");
+      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus, unitBound, resolutionDeltaPaths), "utf8");
     } catch (err) {
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;

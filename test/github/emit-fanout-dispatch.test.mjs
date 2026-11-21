@@ -1862,6 +1862,14 @@ test("buildAngleNamingSuffix names the Secret leaks check as an exception to the
   assert.match(suffix, /it is never an unassigned angle/);
 });
 
+test("buildAngleNamingSuffix delivers the resolution_delta resolution paths to the re-run reviewer and adds nothing otherwise (#3284)", () => {
+  const unit = { name: "coverage", angles: ["coverage"] };
+  const none = buildAngleNamingSuffix(unit, "draft-gate-coverage");
+  assert.doesNotMatch(none, /Resolution scope/);
+  const scoped = buildAngleNamingSuffix(unit, "draft-gate-coverage", [], [], undefined, null, undefined, ["src/foo.mjs"]);
+  assert.match(scoped, /Resolution scope: .*\("src\/foo\.mjs"\)/);
+});
+
 test("buildAngleNamingSuffix requires the file-write tool for single-angle and grouped units and keeps the blocked invocation (#2510)", () => {
   const single = buildAngleNamingSuffix({ name: "acceptance-criteria", angles: ["acceptance-criteria"] }, "pre-approval-gate-acceptance-criteria");
   const group = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] }, "pre-approval-gate-group-design-simplicity");
