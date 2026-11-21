@@ -595,13 +595,13 @@ test("wait-pr-checks clamps a poll interval above the cap so a check-less head s
 
 // Secondary limit: GraphQL `pr view` fails `failures` times with `message`, while
 // `api rate_limit` shows every primary budget with headroom (or core exhausted).
-function secondaryLimitedRunChild({ failures = 1, message = "GraphQL: You have exceeded a secondary rate limit.", messages = [], coreRemaining = 4767, limitsReadable = true } = {}) {
+function secondaryLimitedRunChild({ failures = 1, message = "GraphQL: You have exceeded a secondary rate limit.", messages = [], coreRemaining = 4767, coreReset = 2_000_000_000, limitsReadable = true } = {}) {
   let prViews = 0;
   const runChild = async (_command, args) => {
     const argv = args.join(" ");
     if (argv === "api rate_limit" && !limitsReadable) return { code: 1, stdout: "", stderr: "boom" };
     if (argv === "api rate_limit") {
-      return { code: 0, stdout: JSON.stringify({ resources: { graphql: { remaining: 3056, reset: 2_000_000_000 }, core: { remaining: coreRemaining, reset: 2_000_000_000 } } }), stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ resources: { graphql: { remaining: 3056, reset: 2_000_000_000 }, core: { remaining: coreRemaining, reset: coreReset } } }), stderr: "" };
     }
     if (argv.startsWith("pr view")) {
       prViews += 1;
@@ -652,13 +652,30 @@ test("wait-pr-checks returns RATE_LIMITED budget secondary when the backoff cann
   assert.ok(!("status" in result));
   assert.match(stderr, /RATE_LIMITED/);
   assert.equal(result.resetAt, new Date(1_000_000_000_000 + 90_000).toISOString());
+  assert.match(result.error, /secondary rate limit/);
+});
+
+test("wait-pr-checks returns RATE_LIMITED with resetAt null for an absurd retry-after", async () => {
+  const runChild = secondaryLimitedRunChild({ failures: 99, message: "GraphQL: You have exceeded a secondary rate limit. retry-after: 99999999999999" });
+  const { code, result } = await runSecondary(runChild, { timeout: "60" });
+  assert.equal(code, 1);
+  assert.equal(result.code, "RATE_LIMITED");
+  assert.equal(result.budget, "secondary");
+  assert.equal(result.resetAt, null);
+});
+
+test("wait-pr-checks keeps the summed secondary backoff within the timeout and ends pending", async () => {
+  const { code, delays, result } = await runSecondary(secondaryLimitedRunChild({ failures: 99 }), { timeout: "300", random: () => 0 });
+  assert.equal(code, 2);
+  assert.equal(result.outcome, "pending");
+  assert.ok(delays.reduce((a, b) => a + b, 0) <= 170_000, `waited ${delays.join(",")}`);
 });
 
 test("wait-pr-checks keeps the exponential step as the floor when retry-after is 0", async () => {
   const runChild = secondaryLimitedRunChild({ failures: 3, message: "GraphQL: You have exceeded a secondary rate limit. retry-after: 0" });
   const { code, delays } = await runSecondary(runChild, { random: () => 0 });
   assert.equal(code, 0);
-  // The heartbeat wait slices each sleep at 45 s, so the third step (60 s at the jitter floor of 45 s) shows as 45 s.
+  // The heartbeat wait slices each sleep at 45 s, so the third step is 120 s at a 60 s jitter floor, which the 45 s heartbeat slice shows as 45 s first.
   assert.deepEqual(delays.slice(0, 3), [15_000, 30_000, 45_000]);
 });
 
@@ -706,6 +723,13 @@ test("wait-pr-checks returns primary_core at once with the core reset", async ()
   assert.equal(result.budget, "primary_core");
   assert.equal(result.resetAt, new Date(2_000_000_000 * 1000).toISOString());
   assert.equal(delays.length, 0);
+});
+
+test("wait-pr-checks returns primary_core with resetAt null for an absurd core reset", async () => {
+  const { code, result } = await runSecondary(secondaryLimitedRunChild({ failures: 99, coreRemaining: 0, coreReset: 1e17 }));
+  assert.equal(code, 1);
+  assert.equal(result.budget, "primary_core");
+  assert.equal(result.resetAt, null);
 });
 
 test("wait-pr-checks names primary_graphql in the RATE_LIMITED budget", async () => {

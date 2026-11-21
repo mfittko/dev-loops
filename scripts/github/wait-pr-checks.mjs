@@ -64,6 +64,7 @@ Diagnostic output (stderr):
 Rate limit (JSON, exit 1):
   { "ok": false, "code": "RATE_LIMITED", "error": "...", "resetAt": "<ISO 8601>"|null,
     "budget": "primary_graphql"|"primary_core"|"secondary" }
+For budget "secondary", resetAt is the earliest retry time the backoff computed (null when out of range), not a GitHub reset.
 "budget" names the limit that was hit, read from \`gh api rate_limit\`: GraphQL
 remaining 0 is "primary_graphql", core remaining 0 is "primary_core" (returned at
 once with the core reset as resetAt), anything else is a "secondary" burst limit.
@@ -184,6 +185,9 @@ export function exitCodeForWaitResult(result) {
   return 2;
 }
 
+// An out-of-range time is an invalid Date whose toISOString throws; map it to null.
+const isoOrNull = (ms) => { const d = new Date(ms); return Number.isNaN(d.getTime()) ? null : d.toISOString(); };
+
 export async function runCli(
   argv = process.argv.slice(2),
   {
@@ -271,7 +275,7 @@ export async function runCli(
     if (limits?.graphql?.remaining === 0) budget = "primary_graphql";
     else if (limits?.core?.remaining === 0) budget = "primary_core";
     if (budget === "primary_core") {
-      const resetAt = Number.isFinite(limits.core.reset) ? new Date(limits.core.reset * 1000).toISOString() : null;
+      const resetAt = Number.isFinite(limits.core.reset) ? isoOrNull(limits.core.reset * 1000) : null;
       result = { ...rateLimitedResult(Object.assign(new Error(`GitHub core rate limit exhausted; retry after ${resetAt ?? "unknown reset"}`), { resetAt })), budget };
       stderr.write(`${JSON.stringify(result)}\n`);
       break;
@@ -279,11 +283,12 @@ export async function runCli(
     let resetAt = error.resetAt;
     let resetInMs = Date.parse(resetAt ?? "") - now();
     if (budget === "secondary") {
+      // gh does not print retry-after today, so the plain exponential step applies unless the error text carries one.
       const retryAfter = /retry-after:?\s*(\d+)/i.exec(lastLimitText);
       const stepMs = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** backoffStep);
       resetInMs = Math.max(retryAfter ? Number(retryAfter[1]) * 1000 : 0, stepMs * (0.5 + random() * 0.5));
       backoffStep += 1;
-      resetAt = new Date(now() + resetInMs).toISOString();
+      resetAt = isoOrNull(now() + resetInMs);
       if (resetInMs <= remainingMs()) {
         await waitResetWithHeartbeat(resetInMs);
         continue;
@@ -297,7 +302,9 @@ export async function runCli(
       pendingRemainingMs = requested.timeoutMs - (now() - startedAt);
       break;
     } else {
-      result = { ...rateLimitedResult(error), ...(budget === "secondary" ? { resetAt } : {}), budget };
+      result = budget === "secondary"
+        ? { ...rateLimitedResult(Object.assign(new Error(`GitHub secondary rate limit hit; earliest retry ${resetAt ?? "unknown"}`), { resetAt })), budget }
+        : { ...rateLimitedResult(error), budget };
       // --jq/--silent would filter the envelope away; always keep code/resetAt on stderr.
       stderr.write(`${JSON.stringify(result)}\n`);
       break;

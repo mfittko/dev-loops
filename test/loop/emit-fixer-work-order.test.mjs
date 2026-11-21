@@ -4635,13 +4635,13 @@ test("Claude fixer dispatch payload carries the resolved model only when non-nul
   assert.throws(() => assertFixerDispatchPayload({ harness: "claude", payload: buildFixerDispatchPayload({ harness: "claude", plan: { ...plan, dispatchPrompt: buildDispatchPointer(unit) } }), plan: unit, model: "sonnet" }), (err) => err.refusal === "dispatch_payload_mismatch");
 });
 
-test("full-phase step 3 hands back ci_unknown, never ci_failed, when the wait exits 1 with RATE_LIMITED", async () => {
+test("full-phase step 3 hands back ci_pending or ci_unknown, never ci_failed, when the wait exits 1 with RATE_LIMITED", async () => {
   await withFixture(async ({ emit, files, writeRecord }) => {
     await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_T1" }] }));
     await writeRecord({ items: [{ ref: "PRRT_T1", status: "resolved" }] });
     const plan = await emit({ ...threadsOnly, threadsFile: files.threads });
     const step3 = /3\. Run `[^`]*wait-pr-checks[^\n]*/.exec(await readFile(plan.promptPath, "utf8"))[0];
-    // Only a red `failure` result reaches ci_failed; an exit 1 error (RATE_LIMITED) resolves no thread and hands back ci_unknown.
+    // Only a red `failure` result reaches ci_failed; an exit 1 error (RATE_LIMITED) resolves no thread and hands back ci_pending (ci_unknown when unreadable).
     assert.equal(step3.match(/ci_failed/g).length, 1);
     assert.match(step3, /If CI is red \(`failure`\), [^.]*`ci_failed`/);
     assert.match(step3, /exits 1 with an error, resolve no thread, run no verifier step, and hand back `ci_pending` \(`ci_unknown` when the checks cannot be read\)/);

@@ -302,7 +302,7 @@ async function fetchHeadCiState(
     !fetchError &&
     checkRunsCount === 0 &&
     statusesCount === 0 &&
-    // null = expected checks unknown (REST head read before any GraphQL read): stay pending.
+    // null = expected checks unknown (every REST head read leaves them unknown): stay pending.
     prVisibleCheckNames !== null &&
     !(nonLoopDerivedPrVisibleNames?.length > 0);
   // Zero-allocation stall (#1631): at least one real check-run, ALL of them
