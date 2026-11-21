@@ -26,6 +26,7 @@ import { readSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { assertDeltaClearsFullPhase, assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
+import { DEFAULT_MAX_ATTEMPTS } from "../../scripts/github/rerun-failed-ci.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { addLocalOrigin, ensureOriginHead, makeGhMock, runIdFreeEnv, withTempDir, withoutClaudeCode } from "../_helpers.mjs";
 import { TOOLCHAIN_ROOT, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
@@ -3730,6 +3731,73 @@ test("issue 2787 C11: --ci-file emits a ci-failure order that names the failing 
     assert.equal(JSON.parse(await readFile(path.join(fx.root, "tmp", "gate-delta", `${fx.head}.sequence`), "utf8")).fullGranted, true);
     assert.equal(unit.joinRef, workOrder.outputRefs[0]);
     assert.equal(pull(unit, fx.root).status, 0);
+  });
+});
+
+test("issue 3251: a smoke-only red head whose failed jobs carry GitHub timeout annotations routes to the re-run script, any other failure keeps the fixer", async () => {
+  await withFixture(async (fx) => {
+    // Real CI shape: a failed smoke job always fails the `verify` aggregator too, so failedChecks lists both.
+    const smokeOnly = ciFailureFor(fx.head, { failedChecks: [{ name: "viewer-smoke" }, { name: "verify" }] });
+    const gh = (jobs, annotations) => makeGhMock([
+      { assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", attempt: 1 }]) },
+      { assertArgs: ["view", "7"], stdout: JSON.stringify({ jobs: [...jobs, { databaseId: 12, name: "verify", conclusion: "failure" }] }) },
+      ...annotations.map((a) => ({ assertArgs: ["api"], stdout: JSON.stringify([{ annotation_level: "failure", message: a }]) })),
+    ]);
+    const ghCalls = (mock) => mock.calls.filter((c) => c.command === "gh").length;
+    const timedOut = gh([{ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }], ["The action 'Run inspect-run viewer WebKit smoke' has timed out after 10 minutes."]);
+    await assert.rejects(emitCi(fx, { runChild: timedOut.runChild }, smokeOnly), /timed-out smoke job.*rerun-failed-ci\.mjs/);
+    const realFailure = gh([{ databaseId: 11, name: "viewer-smoke", conclusion: "failure" }], ["Process completed with exit code 1."]);
+    assert.equal((await emitCi(fx, { runChild: realFailure.runChild }, smokeOnly)).workOrder.source, "ci-failure");
+    // list, view and one annotations read for viewer-smoke; verify annotations are never read.
+    assert.equal(ghCalls(realFailure), 3);
+    // A non-smoke failed check never reads GitHub, even beside verify.
+    for (const failedChecks of [[{ name: "viewer-smoke" }, { name: "build (24)" }], [{ name: "verify-suite" }, { name: "verify" }], [{ name: "verify-suite" }]]) {
+      const mixed = makeGhMock([]);
+      assert.equal((await emitCi(fx, { runChild: mixed.runChild }, ciFailureFor(fx.head, { failedChecks }))).workOrder.source, "ci-failure");
+      assert.equal(ghCalls(mixed), 0, JSON.stringify(failedChecks));
+    }
+    // A job-level timeout concludes `cancelled`, so wait-pr-checks lists only `verify`: the live read still routes to the re-run script.
+    const loneVerify = ciFailureFor(fx.head, { failedChecks: [{ name: "verify" }] });
+    const jobTimeout = gh([{ databaseId: 11, name: "viewer-smoke", conclusion: "cancelled" }], ["The job has exceeded the maximum execution time of 45m0s"]);
+    await assert.rejects(emitCi(fx, { runChild: jobTimeout.runChild }, loneVerify), /timed-out smoke job.*rerun-failed-ci\.mjs/);
+    // A lone failed verify with no failed smoke job keeps the fixer route after the live read.
+    const loneVerifyOther = makeGhMock([
+      { assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", attempt: 1 }]) },
+      { assertArgs: ["view", "7"], stdout: JSON.stringify({ jobs: [{ databaseId: 12, name: "verify", conclusion: "failure" }] }) },
+    ]);
+    assert.equal((await emitCi(fx, { runChild: loneVerifyOther.runChild }, loneVerify)).workOrder.source, "ci-failure");
+    assert.equal(ghCalls(loneVerifyOther), 2);
+    // A re-run already started (attempt 2 in progress): emit nothing until CI settles.
+    const inProgress = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "in_progress", attempt: 2 }]) }]);
+    await assert.rejects(emitCi(fx, { runChild: inProgress.runChild }, smokeOnly), /in_progress, not completed.*rerun-failed-ci\.mjs/);
+    assert.equal(ghCalls(inProgress), 1);
+    // The re-run completed green: the red ci file is stale, so no fixer order.
+    const green = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", conclusion: "success", attempt: 2 }]) }]);
+    await assert.rejects(emitCi(fx, { runChild: green.runChild }, smokeOnly), /completed green.*stale/);
+    assert.equal(ghCalls(green), 1);
+    // A run with no numeric attempt fails closed to the fixer route and never reads the jobs.
+    const noAttempt = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed" }]) }]);
+    assert.equal((await emitCi(fx, { runChild: noAttempt.runChild }, smokeOnly)).workOrder.source, "ci-failure");
+    assert.equal(ghCalls(noAttempt), 1);
+  });
+});
+
+test("issue 3251: a timed-out smoke run at the re-run cap, or a failed live read, falls through to the fixer route", async () => {
+  await withFixture(async (fx) => {
+    const smokeOnly = ciFailureFor(fx.head, { failedChecks: [{ name: "viewer-smoke" }] });
+    // At the cap the re-run script would refuse, so the emitter keeps the fixer route and never reads the jobs.
+    const atCap = makeGhMock([{ assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", attempt: DEFAULT_MAX_ATTEMPTS }]) }]);
+    assert.equal((await emitCi(fx, { runChild: atCap.runChild }, smokeOnly)).workOrder.source, "ci-failure");
+    assert.equal(atCap.calls.filter((c) => c.command === "gh").length, 1);
+    // A gh failure in the live read never blocks the fixer.
+    const ghDown = makeGhMock([{ assertArgs: ["list"], exitCode: 1, stdout: "", stderr: "HTTP 502" }]);
+    assert.equal((await emitCi(fx, { runChild: ghDown.runChild }, smokeOnly)).workOrder.source, "ci-failure");
+    // A failed jobs read after a successful list also keeps the fixer route.
+    const viewDown = makeGhMock([
+      { assertArgs: ["list"], stdout: JSON.stringify([{ databaseId: 7, status: "completed", attempt: 1 }]) },
+      { assertArgs: ["view", "7"], exitCode: 1, stdout: "", stderr: "HTTP 502" },
+    ]);
+    assert.equal((await emitCi(fx, { runChild: viewDown.runChild }, smokeOnly)).workOrder.source, "ci-failure");
   });
 });
 
