@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
@@ -44,6 +44,7 @@ const runNode = async (args = [], options = {}) => {
       repoRoot: options.cwd ?? process.cwd(),
       runChild: runner,
       syncBoardStatus: async () => ({ ok: true, skipped: true, reason: "test seam" }),
+      coordinationSnapshotRoot: options.coordinationSnapshotRoot,
     });
     return { code: 0, stdout: `${JSON.stringify(result)}\n`, stderr: "" };
   } catch (error) {
@@ -311,6 +312,33 @@ test("succeeds when draft gate evidence exists and CI is green", async () => {
     const calls = await readGhCalls(ghLogPath);
     const readyCall = calls.find((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready");
     assert.ok(readyCall, `gh pr ready should have been called. Calls: ${JSON.stringify(calls)}`);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("a ready flip deletes the pull-request coordination snapshot", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-snapshot-"));
+  try {
+    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir);
+    const snapshotFile = path.join(tempDir, "snapshots", "gate-coordination", "owner-repo", "pr-17", "context-snapshot.json");
+    await mkdir(path.dirname(snapshotFile), { recursive: true });
+    await writeFile(snapshotFile, "{}");
+    const verdict = `Gate review: draft_gate\nReviewed head SHA: ${headSha}\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review`;
+    const comment = (id) => ({ body: verdict, id, html_url: `https://github.com/owner/repo/pull/17#issuecomment-${id}`, created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z" });
+    const { env } = await writeGhStub(tempDir, [
+      { stdout: JSON.stringify({ data: { repository: { pullRequest: { id: "PR_abc123", isDraft: true, headRefOid: headSha, baseRefName: baseBranch, state: "OPEN", mergeStateStatus: "CLEAN" } } } }) },
+      { stdout: JSON.stringify([{ name: "test", state: "success", bucket: "pass" }]) },
+      { stdout: JSON.stringify([comment(101), comment(102)]) },
+      ...gateCloseStubs(),
+      { stdout: "" }, // gh pr ready
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir, coordinationSnapshotRoot: path.join(tempDir, "snapshots") });
+
+    assert.equal(result.code, 0, `Stderr: ${result.stderr}`);
+    assert.equal(JSON.parse(result.stdout).action, "marked_ready");
+    assert.equal(await readFile(snapshotFile, "utf8").catch(() => null), null);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

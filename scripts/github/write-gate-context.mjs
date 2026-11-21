@@ -55,7 +55,7 @@ import { buildAdjacentBundle, decodeGitDiffPathToken } from "./build-adjacent-bu
 import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
 import { capRoundExit, foldDraftGateSatisfied, isCleanDraftVerdict } from "@dev-loops/core/loop/pr-gate-coordination";
-import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
+import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContextReusingSnapshot } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
@@ -4280,7 +4280,9 @@ export async function main(
     // (Copilot-cycle / internal-only / lightweight) diverge from the verdict
     // post. Consuming only the raw ordering facts is what keeps this check
     // impossible-to-false-block.
-    loadCoordination = (opts) => loadPrGateCoordinationContext(opts, { runChild: run, repoRoot, cwd: repoRoot }),
+    // The default reuses the gate-coordination pre-flight snapshot when it matches the `--head-sha` head.
+    loadCoordination = async (opts, reuse) => (await loadPrGateCoordinationContextReusingSnapshot(opts, { runChild: run, repoRoot, cwd: repoRoot, coordinationSnapshotRoot }, reuse)).context,
+    coordinationSnapshotRoot,
     checkBaseFreshness = checkBaseFreshnessDefault,
     resolveCapRoundFixed: resolveCapRoundFixedSeam = resolveCapRoundFixed,
   } = {},
@@ -4318,7 +4320,7 @@ export async function main(
     if ((options.gate === "pre_approval_gate" || options.gate === "draft_gate") && !options.prefixFile) {
       let coordination = null;
       try {
-        coordination = await loadCoordination({ repo: options.repo, pr: options.pr });
+        coordination = await loadCoordination({ repo: options.repo, pr: options.pr }, { expectedHeadSha: options.headSha, matchLightweight: false });
       } catch {
         coordination = null;
       }

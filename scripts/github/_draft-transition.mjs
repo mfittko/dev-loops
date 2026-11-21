@@ -17,6 +17,7 @@
 // around it with retries or a load timeout.
 import { parseJsonText } from "../_core-helpers.mjs";
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
+import { deletePrGateCoordinationSnapshot } from "../loop/detect-pr-gate-coordination-state.mjs";
 const CONVERT_TO_DRAFT_MUTATION = [
   "mutation($pullRequestId:ID!) {",
   "  convertPullRequestToDraft(input: {pullRequestId: $pullRequestId}) {",
@@ -60,7 +61,7 @@ async function resolvePrNodeId({ repo, pr }, { env, ghCommand, runChild = defaul
   }
   return { id: prData.id, isDraft: prData.isDraft };
 }
-export async function convertPrToDraft({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
+export async function convertPrToDraft({ repo, pr }, { env, ghCommand, runChild = defaultRunChild, repoRoot, coordinationSnapshotRoot }) {
   const resolvedPr = await resolvePrNodeId({ repo, pr }, { env, ghCommand, runChild });
   if (resolvedPr.isDraft === true) {
     return {
@@ -85,12 +86,14 @@ export async function convertPrToDraft({ repo, pr }, { env, ghCommand, runChild 
   if (converted?.isDraft !== true) {
     throw new Error(`PR #${pr} was not set to draft state after mutation`);
   }
+  // The snapshot recorded the pre-flip draft state; the next reader must load fresh.
+  await deletePrGateCoordinationSnapshot({ repo, pr }, { repoRoot, runChild, coordinationSnapshotRoot });
   return {
     ...converted,
     alreadyDraft: false,
   };
 }
-export async function markPrReady({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
+export async function markPrReady({ repo, pr }, { env, ghCommand, runChild = defaultRunChild, repoRoot, coordinationSnapshotRoot }) {
   const result = await runChild(ghCommand, [
     "pr", "ready", String(pr),
     "--repo", repo,
@@ -100,5 +103,6 @@ export async function markPrReady({ repo, pr }, { env, ghCommand, runChild = def
       `Failed to mark PR #${pr} ready: ${result.stderr.trim() || `exit code ${result.code}`}`
     );
   }
+  await deletePrGateCoordinationSnapshot({ repo, pr }, { repoRoot, runChild, coordinationSnapshotRoot });
   return true;
 }

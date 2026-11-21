@@ -68,6 +68,7 @@ import {
 import { CAP_ROUND_REFUSAL, evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { DISPOSITION, STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
+import { writePrGateCoordinationSnapshot } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { readSealedGateDeltaRecord, writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
@@ -2474,6 +2475,38 @@ test("CLI tripwire (real resolver): the DEFAULT coordination path refuses a prem
   } finally {
     process.stderr.write = origErr;
     process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI tripwire: the DEFAULT coordination path reuses the pre-flight snapshot for the same head and refetches for another head", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const snapshotRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-wgc-snapshot-"));
+  const options = { repo: "owner/repo", pr: 2 };
+  await writePrGateCoordinationSnapshot(options, { coordinationSnapshotRoot: snapshotRoot }, { currentHeadSha: headSha, prData: { isDraft: true }, gateEvidence: { draftGateSatisfied: false } });
+  const runWith = async (expectedHeadSha) => {
+    const { runChild, calls } = makeGhMock([], { defaultStdout: "{}\n" });
+    const priorExitCode = process.exitCode;
+    const origErr = process.stderr.write;
+    const stderrChunks = [];
+    process.stderr.write = (chunk) => { stderrChunks.push(String(chunk)); return true; };
+    try {
+      await main(["--repo", "owner/repo", "--pr", "2", "--gate", "pre_approval_gate", "--head-sha", expectedHeadSha, "--angles", '["scope"]', "--base", baseSha], { repoRoot, run: runChild, coordinationSnapshotRoot: snapshotRoot });
+      return { calls, stderr: stderrChunks.join("") };
+    } finally {
+      process.stderr.write = origErr;
+      process.exitCode = priorExitCode;
+    }
+  };
+  try {
+    const reused = await runWith(headSha);
+    assert.equal(reused.calls.some((c) => c.args.includes("closingIssuesReferences,reviews") || c.args.join(" ").includes("--json number,state")), false, "no coordination refetch");
+    assert.match(reused.stderr, /run_draft_gate/);
+    const other = "f".repeat(40);
+    const fresh = await runWith(other);
+    assert.equal(fresh.calls.some((c) => c.args.join(" ").includes("--json number,state")), true, "a different head fetches fresh");
+  } finally {
+    await rm(snapshotRoot, { recursive: true, force: true });
     await rm(repoRoot, { recursive: true, force: true });
   }
 });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -65,6 +65,23 @@ test("converts a ready PR to draft", async () => {
   assert.deepEqual(result, { ok: true, action: "converted", alreadyDraft: false, repo: "owner/repo", pr: 17, isDraft: true });
   const ghCalls = calls.filter((c) => c.command === "gh");
   assert.equal(ghCalls.length, 2, `expected resolve + convert mutation calls, got ${JSON.stringify(ghCalls)}`);
+});
+
+test("a draft flip deletes the pull-request coordination snapshot", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-convert-snapshot-"));
+  try {
+    const snapshotFile = path.join(root, "gate-coordination", "owner-repo", "pr-17", "context-snapshot.json");
+    await mkdir(path.dirname(snapshotFile), { recursive: true });
+    await writeFile(snapshotFile, "{}");
+    const { runChild } = makeGhMock([
+      readyPrGraphqlStub({ isDraft: false }),
+      { assertArgContains: ["convertPullRequestToDraft"], stdout: JSON.stringify({ data: { convertPullRequestToDraft: { pullRequest: { id: "PR_kwDOScHU78000017", isDraft: true } } } }) },
+    ]);
+    await convertToDraft({ repo: "owner/repo", pr: 17 }, { env: {}, ghCommand: "gh", runChild, coordinationSnapshotRoot: root });
+    assert.equal(await readFile(snapshotFile, "utf8").catch(() => null), null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("is idempotent when the PR is already draft (no mutation call)", async () => {
