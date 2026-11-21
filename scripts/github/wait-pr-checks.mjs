@@ -241,7 +241,7 @@ export async function runCli(
   let backoffStep = 0;
   for (;;) try {
     lastLimitText = "";
-    result =await withGraphqlRateLimitWait(
+    result = await withGraphqlRateLimitWait(
       () => {
         // The retry after a rate-limit wait only gets the remaining budget. The
         // floor of 1 keeps it a real watch: timeoutMs 0 would switch to

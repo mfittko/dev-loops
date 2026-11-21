@@ -362,7 +362,7 @@ test("wait-pr-checks waits for the GraphQL reset inside its --timeout budget, he
   let code;
   try {
     code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "300"], {
-      stdout, stderr: makeStream(), env: {}, runChild, delayImpl, now: () => clock,
+      stdout, stderr: makeStream(), env: {}, runChild, ensureOwnershipImpl: async () => ({ ok: true }), delayImpl, now: () => clock,
     });
   } finally {
     process.stderr.write = originalWrite;
@@ -487,7 +487,7 @@ test("wait-pr-checks returns pending with a re-issue, not RATE_LIMITED, when the
   const stdout = makeStream();
   const stderr = makeStream();
   const code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "600"], {
-    stdout, stderr, env: {}, runChild, delayImpl: async (ms) => { clock += ms; }, now: () => clock,
+    stdout, stderr, env: {}, runChild, ensureOwnershipImpl: async () => ({ ok: true }), delayImpl: async (ms) => { clock += ms; }, now: () => clock,
   });
   const result = JSON.parse(stdout.text());
   assert.equal(code, 2);
