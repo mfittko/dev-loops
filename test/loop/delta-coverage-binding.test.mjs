@@ -48,6 +48,11 @@ test("authenticated no_commit and foreign-head exits close only their own sequen
       fs.writeFileSync(fixture.output, outputBytes);
       fs.writeFileSync(markerFile, markerBytes);
     }
+    // A renderer edit after emit: the recorded bytes no longer equal the current render, and the closure still authenticates.
+    fs.writeFileSync(fixture.unit.promptPath, Buffer.concat([Buffer.from("renderer text edited by the fix\n"), fs.readFileSync(fixture.unit.promptPath)]));
+    const editedHash = sha256Hex(fs.readFileSync(fixture.unit.promptPath));
+    for (const file of [fixture.unit.planPath, fixture.pulled.receiptPath]) { const v = JSON.parse(fs.readFileSync(file)); v.materializationHash = editedHash; fs.writeFileSync(file, JSON.stringify(v)); }
+    fs.writeFileSync(fixture.output, fs.readFileSync(fixture.output));
     const result = await runCli(fixture.args, options);
     assert.equal(result.outcome, outcome);
     assert.equal(result.nextStep, "push_to_gate");
@@ -129,6 +134,7 @@ test("pulled coverage binding preserves raw identity through the input, result a
     wrongBaseline: () => planEdit((p) => { p.workOrder.headSha = B; }),
     wrongBranch: () => planEdit((p) => { p.workOrder.mutationAuthority.branch = "other"; }),
     localFieldMutation: () => planEdit((p) => { p.workOrder.executionRules.contract = "/different/agents/fixer.agent.md"; }),
+    wrongPlanMaterialization: () => planEdit((p) => { p.materializationHash = `sha256:${"0".repeat(64)}`; }),
     changedMaterialization: () => fs.appendFileSync(fixture.unit.promptPath, "changed"),
     changedSource: () => fs.appendFileSync(actPath, " "),
     changedSourceAuthority: () => planEdit((p) => { p.workOrder.authority.sourceDigest = "0".repeat(64); }),
@@ -137,25 +143,28 @@ test("pulled coverage binding preserves raw identity through the input, result a
     wrongReceiptUnit: () => receiptEdit((r) => { r.workOrderRef = "fixer:other/repo#1"; }),
     wrongReceiptExecution: () => receiptEdit((r) => { r.executionIdentity = "f1-00000000"; }),
     wrongReceiptDigest: () => receiptEdit((r) => { r.workOrderDigest = `sha256:${"0".repeat(64)}`; }),
-    wrongReceiptMaterialization: () => receiptEdit((r) => { r.materializationHash = `sha256:${"0".repeat(64)}`; }),
-    wrongReceiptTarget: () => receiptEdit((r) => { r.subject.pr++; }),
-    wrongReceiptPhase: () => receiptEdit((r) => { r.subject.phase = "full"; }),
-    wrongReceiptBranch: () => receiptEdit((r) => { r.subject.branch = "other"; }),
-    wrongReceiptBaseline: () => receiptEdit((r) => { r.subject.headSha = B; }),
-    wrongReceiptPlan: () => receiptEdit((r) => { r.subject.planPath = actPath; }),
+    // The handback is rewritten after the receipt edit so the refusal is the materialization one, not result_predates_pull.
+    wrongReceiptMaterialization: () => { receiptEdit((r) => { r.materializationHash = `sha256:${"0".repeat(64)}`; }); fs.writeFileSync(fixture.output, originals[2]); },
+    wrongReceiptTarget: () => { receiptEdit((r) => { r.subject.pr++; }); fs.writeFileSync(fixture.output, originals[2]); },
+    wrongReceiptPhase: () => { receiptEdit((r) => { r.subject.phase = "full"; }); fs.writeFileSync(fixture.output, originals[2]); },
+    wrongReceiptBranch: () => { receiptEdit((r) => { r.subject.branch = "other"; }); fs.writeFileSync(fixture.output, originals[2]); },
+    wrongReceiptBaseline: () => { receiptEdit((r) => { r.subject.headSha = B; }); fs.writeFileSync(fixture.output, originals[2]); },
+    wrongReceiptPlan: () => { receiptEdit((r) => { r.subject.planPath = actPath; }); fs.writeFileSync(fixture.output, originals[2]); },
     beforePull: () => fs.utimesSync(fixture.output, new Date(0), new Date(0)),
     byteMutation: () => fs.appendFileSync(fixture.output, "\n"),
     coverageMutation: () => edit(fixture.output, (r) => { r.siteCoverage[0].sites[0].reason = "changed"; }),
     candidateMutation: () => edit(fixture.output, (r) => { r.headSha = A; }),
     unrelatedCandidate: () => { edit(fixture.output, (r) => { r.headSha = unrelated; }); edit(result, (r) => { r.candidateHead = unrelated; }); },
   };
+  const bytesRefusal = /materialization differs from actual bytes, plan or receipt/;
+  const specific = { wrongPlanMaterialization: bytesRefusal, changedMaterialization: bytesRefusal, wrongReceiptMaterialization: bytesRefusal, ...Object.fromEntries(["Target", "Phase", "Branch", "Baseline", "Plan"].map((k) => [`wrongReceipt${k}`, /wrong original pull subject/])), localFieldMutation: /materialization differs from the plan's work order/ };
   for (const [label, mutate] of Object.entries(cases)) {
     for (let i = 0; i < files.length; i++) fs.writeFileSync(files[i], originals[i]);
     // Restoring the report after its receipt preserves the genuine after-pull ordering.
     fs.writeFileSync(fixture.output, originals[2]);
     mutate();
     const before = fs.readFileSync(decisionPath);
-    await assert.rejects(runCli([...resultArgs.slice(0, -1), "3"], options), undefined, label);
+    await assert.rejects(runCli([...resultArgs.slice(0, -1), "3"], options), specific[label], label);
     assert.deepEqual(fs.readFileSync(decisionPath), before, label);
   }
   for (let i = 0; i < files.length; i++) fs.writeFileSync(files[i], originals[i]);
@@ -174,6 +183,34 @@ test("pulled coverage binding preserves raw identity through the input, result a
   const copiedAct = path.join(coverageRepo, "copied-act.json"); fs.writeFileSync(copiedAct, JSON.stringify([...JSON.parse(originals[4]), { ...JSON.parse(originals[4])[0], summary: "altered" }]));
   const sourceArgs = [...resultArgs]; sourceArgs[sourceArgs.indexOf("--act-list") + 1] = copiedAct;
   await assert.rejects(runCli(sourceArgs, options), /changed ACT source/);
+});
+
+test("a renderer edit between emit and the delta check keeps the input and result runs passing", async () => {
+  const act = { severity: "low", angle: "correctness", summary: "renderer edit", file: "src/a.mjs", judgeDisposition: "act", siteQuery: "git grep x" };
+  act.fingerprint = fingerprintFinding(act);
+  const actPath = path.join(coverageRepo, "act-r.json"), coverage = path.join(coverageRepo, "coverage-r.json"), log = path.join(coverageRepo, "log-r.json");
+  const siteCoverage = [{ fingerprint: act.fingerprint, returnedSites: ["a.mjs"], sites: [{ site: "a.mjs", kind: "site", status: "fixed", reason: "" }] }];
+  fs.writeFileSync(actPath, JSON.stringify([act]));
+  fs.writeFileSync(coverage, JSON.stringify({ headSha: B, siteCoverage }));
+  fs.writeFileSync(log, JSON.stringify({ headSha: A, provenance: { perAngle: [{ angle: "correctness" }] } }));
+  const fixture = await boundArgs(["--act-list", actPath, "--baseline", A, "--site-coverage", coverage, "--spec-identity", "s", "--findings-log", log]);
+  // The recorded bytes now differ from renderWorkOrder(plan.workOrder), as after a fix that edits the renderer.
+  // Prepended so the Work order JSON suffix that later emissions authenticate stays intact.
+  fs.writeFileSync(fixture.unit.promptPath, Buffer.concat([Buffer.from("renderer text edited by the fix\n"), fs.readFileSync(fixture.unit.promptPath)]));
+  const newHash = sha256Hex(fs.readFileSync(fixture.unit.promptPath));
+  const plan = JSON.parse(fs.readFileSync(fixture.unit.planPath)); plan.materializationHash = newHash;
+  fs.writeFileSync(fixture.unit.planPath, JSON.stringify(plan));
+  const receipt = JSON.parse(fs.readFileSync(fixture.pulled.receiptPath)); receipt.materializationHash = newHash;
+  fs.writeFileSync(fixture.pulled.receiptPath, JSON.stringify(receipt));
+  fs.writeFileSync(fixture.output, fs.readFileSync(fixture.output)); // the handback stays newer than the pull receipt
+  const options = { stdout: { write() {} }, staleSurface: () => [], tmpRoot: fixture.tmpRoot };
+  const { input } = await runCli(fixture.args, options);
+  const result = path.join(coverageRepo, "delta-r.json");
+  fs.writeFileSync(result, JSON.stringify({ ...input.resultShape, actionableItems: [{ ref: act.fingerprint, status: "resolved", evidence: ["tested"] }], newFindings: [], widenedReads: [], outcome: "locally_clear" }));
+  const resultArgs = [...fixture.args.filter((arg, i, all) => arg !== "--result-path" && all[i - 1] !== "--result-path"), "--result", result, "--invocation", "1"];
+  sealDeltaFixture(fixture.tmpRoot, result);
+  const out = await runCli(resultArgs, options);
+  assert.equal(out.nextStep, "push");
 });
 
 test("THREAD cannot opt into the ACT coverage protocol", async () => {
