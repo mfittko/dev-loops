@@ -61,7 +61,7 @@ Every projected PR MUST carry the following fields:
 |---|---|
 | PR title | `[{TRACKER_ID}] {tracker item title}` — bracketed tracker identifier followed by the item title verbatim |
 | PR body — Tracker section | Required. Must include the tracker item ID and a direct link to the item. |
-| PR body — Summary section | Required. Brief description of the change implemented in this PR. |
+| PR body — Objective and In scope sections | Required. Brief description of the change implemented in this PR. |
 | PR body — Acceptance Criteria section | Required. Copied or linked from the tracker item's acceptance criteria. |
 | Labels | Required: `tracker:{TRACKER_ID}`. Optional reference labels: `epic:{EPIC_ID}`, `prd:{PRD_ID}` when references are present. |
 | Draft state | PR MUST start as a draft. It MUST NOT be marked ready-for-review until development work is complete. |

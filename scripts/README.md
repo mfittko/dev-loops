@@ -774,22 +774,22 @@ Use `--force` only after the user explicitly authorizes ignoring the current-hea
 Marks each exported Copilot review thread as matched or Copilot-only against the local gate-finding round files, classifies the Copilot-only ones by keyword, and names the `draft_gate` angles that should have caught each class. Reads local files only; makes no GitHub call.
 
 Required:
-- `--threads <jsonl>` — one JSON thread per line; uses `pr` (integer), `path` (string) and `body`; other fields such as `isResolved` and `mergedAt` are ignored
+- `--threads <jsonl>` — one JSON thread per line; uses `pr` (integer), `path` (string), `author` and `body`; only lines whose `author` is the Copilot reviewer login are read; other fields are ignored
 - `--repo <owner/name>` — selects the default findings dir `tmp/gate-findings/<owner-name>/` (not needed with `--findings-root`)
 
 Optional:
-- `--findings-root <dir>` — directory holding `pr-<N>/*.json` round files
+- `--findings-root <dir>` — directory holding `pr-<N>/draft_gate-*.json` round files (other files are ignored; a malformed one is skipped and counted in `summary.skippedRoundFiles`)
 - `--repo-root <dir>` — base for the default findings dir (default: cwd)
 
 Matching rule:
 - a thread is matched when a finding of the same PR lists the thread path in `files[]` (or the singular `file`); the export has no line, so line is never compared and the Copilot-only count is a lower bound
 
 Success output shape (stdout):
-- `{ "threads": [{ "pr", "path", "matched", "matchedAngles", "class", "shouldHaveCaughtAngles" }], "summary": { "total", "copilotOnly", "byClass", "byAngle" } }`
-- `class` is one of `docs-help-description`, `tests`, `input-validation-edge-case`, `other` (first keyword match wins in that order)
+- `{ "threads": [{ "pr", "path", "matched", "matchedAngles", "class", "shouldHaveCaughtAngles" }], "summary": { "total", "copilotOnly", "byClass", "byAngle", "skippedRoundFiles" } }`
+- `class` is one of `edge-case-input-validation`, `docs-help-description`, `tests`, `other`, the `COPILOT_BUCKETS` table of `gate-finding-classes.mjs` (first keyword match wins in that order)
 
 Failure behavior:
-- unknown flags, a missing required flag, an unreadable input, malformed JSONL, a thread without an integer `pr` and string `path`, or a malformed round file emit `{ "ok": false, "error": "...", ... }` on stderr and exit `2`
+- unknown flags, a missing required flag, an unreadable input, malformed JSONL, a thread without an integer `pr` and string `path` emit `{ "ok": false, "error": "...", ... }` on stderr and exit `2`
 
 ### `scripts/loop/run-refinement-audit.mjs`
 

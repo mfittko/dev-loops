@@ -14,11 +14,12 @@ import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { COPILOT_AUTHOR, COPILOT_BUCKETS } from "./gate-finding-classes.mjs";
 
 const USAGE = `Usage: match-copilot-threads-to-gate-findings.mjs --threads <jsonl> --repo <owner/name> [--findings-root <dir>] [--repo-root <dir>]
 
 Required:
-  --threads <jsonl>       JSONL export; one thread per line; uses pr (integer), path (string) and body; other fields (isResolved, mergedAt) are ignored
+  --threads <jsonl>       JSONL export; one thread per line; uses pr (integer), path (string), author and body; only lines whose author is the Copilot reviewer login are read; other fields are ignored
   --repo <owner/name>     Selects the default findings dir tmp/gate-findings/<owner-repo>/ (not needed with --findings-root)
 
 Optional:
@@ -31,32 +32,26 @@ the thread path in files[]. The export has no line, so line is never compared.
 
 Output (stdout, JSON):
   { "threads": [{ pr, path, matched, matchedAngles, class, shouldHaveCaughtAngles }],
-    "summary": { total, copilotOnly, byClass, byAngle } }
+    "summary": { total, copilotOnly, byClass, byAngle, skippedRoundFiles } }
+Only draft_gate-*.json round files are read; a malformed one is skipped and counted.
 
 ${JQ_OUTPUT_USAGE}
 `;
 
 const parseError = buildParseError(USAGE);
 
-// Draft_gate angle names from packages/core/src/config/extension-defaults.yaml.
+// Real draft_gate angle names (packages/core/src/config/extension-defaults.yaml), keyed by the class names of COPILOT_BUCKETS.
 export const CLASS_ANGLES = {
-  "input-validation-edge-case": ["input-validation", "correctness", "coverage"],
-  "docs-help-description": ["docs", "contract-surface", "pr-description"],
+  "edge-case-input-validation": ["input-validation", "correctness", "state-concurrency", "determinism"],
+  "docs-help-description": ["contract-surface", "pr-description", "link-check"],
   tests: ["coverage"],
   other: ["correctness", "holistic"],
 };
 
-// shortcut: first matching class wins on plain keywords (docs and tests before edge cases), upgrade when the classes need weighting.
-const CLASS_PATTERNS = [
-  ["docs-help-description", /\b(docs?|documentation|help|usage|description|readme|comment|wording|typo)\b/i],
-  ["tests", /\b(tests?|assert\w*|fixtures?|coverage|spec)\b/i],
-  ["input-validation-edge-case", /(?:\b(?:null|empty|undefined|malformed|wrapped|split|resume[sd]?|blank|whitespace|invalid)\b|\bmissing (?:value|input|argument|field)s?\b)/i],
-];
-
+// The same bucket table as gate-finding-classes.mjs, so the brief and this report give one class per thread.
 export function classifyThreadBody(body) {
   const text = String(body ?? "");
-  for (const [name, pattern] of CLASS_PATTERNS) if (pattern.test(text)) return name;
-  return "other";
+  return COPILOT_BUCKETS.find(([, pattern]) => pattern.test(text))?.[0] ?? "other";
 }
 
 export function parseArgsList(argv) {
@@ -111,7 +106,8 @@ export async function readThreads(file) {
     } catch {
       throw parseError(`Malformed JSONL at ${file}:${index + 1}`);
     }
-    if (!thread || typeof thread !== "object" || !Number.isInteger(thread.pr) || typeof thread.path !== "string") {
+    if (typeof thread?.author !== "string" || !COPILOT_AUTHOR.test(thread.author)) return [];
+    if (!Number.isInteger(thread.pr) || typeof thread.path !== "string") {
       throw parseError(`Thread at ${file}:${index + 1} needs an integer pr and a string path`);
     }
     return [thread];
@@ -123,7 +119,7 @@ function findingFiles(finding) {
   return files.filter((entry) => typeof entry === "string");
 }
 
-/** Map of pr -> Map(path -> Set(angle)) from every object-shaped round file under <root>/pr-<N>/. */
+/** { index, skipped }: index is pr -> Map(path -> Set(angle)) from every draft_gate-*.json round file under <root>/pr-<N>/; skipped counts unreadable or non-object ones. */
 export async function readFindingIndex(root) {
   let dirs;
   try {
@@ -132,20 +128,22 @@ export async function readFindingIndex(root) {
     throw parseError(`Cannot read --findings-root ${root}: ${error.message}`);
   }
   const index = new Map();
+  let skipped = 0;
   for (const dir of dirs) {
     const match = /^pr-(\d+)$/.exec(dir.name);
     if (!dir.isDirectory() || !match) continue;
     const byPath = new Map();
     for (const name of await readdir(path.join(root, dir.name))) {
-      if (!name.endsWith(".json")) continue;
+      if (!/^draft_gate-.+\.json$/.test(name)) continue;
       const file = path.join(root, dir.name, name);
       let round;
       try {
         round = JSON.parse(await readFile(file, "utf8"));
       } catch {
-        throw parseError(`Malformed round file ${file}`);
+        skipped += 1;
+        continue;
       }
-      if (!round || typeof round !== "object" || Array.isArray(round)) continue;
+      if (!round || typeof round !== "object" || Array.isArray(round)) { skipped += 1; continue; }
       for (const finding of Array.isArray(round.findings) ? round.findings : []) {
         for (const rawPath of findingFiles(finding)) {
           const filePath = rawPath.trim();
@@ -156,10 +154,10 @@ export async function readFindingIndex(root) {
     }
     index.set(Number(match[1]), byPath);
   }
-  return index;
+  return { index, skipped };
 }
 
-export function matchThreads(threads, index) {
+export function matchThreads(threads, { index, skipped = 0 }) {
   const results = threads.map((thread) => {
     const angles = index.get(thread.pr)?.get(thread.path.trim());
     const matched = angles !== undefined;
@@ -173,7 +171,7 @@ export function matchThreads(threads, index) {
       shouldHaveCaughtAngles: matched ? [] : CLASS_ANGLES[klass],
     };
   });
-  const summary = { total: results.length, copilotOnly: 0, byClass: {}, byAngle: {} };
+  const summary = { total: results.length, copilotOnly: 0, byClass: {}, byAngle: {}, skippedRoundFiles: skipped };
   for (const r of results) {
     if (r.matched) continue;
     summary.copilotOnly += 1;
@@ -190,8 +188,7 @@ export async function runCli(argv = process.argv.slice(2)) {
     return { ok: true, help: true };
   }
   const threads = await readThreads(options.threads);
-  const index = await readFindingIndex(options.findingsRoot);
-  const result = matchThreads(threads, index);
+  const result = matchThreads(threads, await readFindingIndex(options.findingsRoot));
   const { jq, silent, fields } = options.jqOutput;
   emitResult(result, { jq, silent, fields });
   return result;
