@@ -137,35 +137,42 @@ export function pathsMissingFromMatrix(paths, issueBody) {
   return { matrixInvalid: false, missing };
 }
 
-const DOC_TOKEN = "`skills/docs/[A-Za-z0-9._-]*-contract\\.md`";
-const PATH_WORD_RE = new RegExp(`^\\(?${DOC_TOKEN}[),;.:]*$`, "u");
+const PATH_WORD_RE = /^\(?`([^`\s]+)`[),;.:]*$/u;
 const PUNCT_WORD_RE = /^[(),;.:]+$/u;
 const CONNECTOR_RE = /^(?:in|and|see)$/u;
 
-/** True when `cur` is `prior` plus extra words: backticked skills/docs/*-contract.md paths, the connectors `in`, `and`, `see` directly next to an added path, and `( ) , ; . :` words. */
-function onlyAddsPathWords(prior, cur) {
+/**
+ * True when `cur` is `prior` plus one contiguous run of extra words that adds at least one backticked trigger path.
+ * The run sits at the start or end of the string or directly after an existing backticked path.
+ * Inside the run, the connectors `in`, `and`, `see` and the `( ) , ; . :` words must touch an added trigger path.
+ */
+function onlyAddsPathWords(prior, cur, triggerPaths) {
   const words = (t) => normalizeCriterionText(t).split(/\s+/u).filter(Boolean);
   const want = words(prior);
   const have = words(cur);
   let i = 0;
-  const extra = new Set();
+  const extra = [];
   have.forEach((w, k) => {
     if (i < want.length && w === want[i]) i++;
-    else extra.add(k);
+    else extra.push(k);
   });
   if (i !== want.length) return false;
-  return [...extra].every((k) => {
-    const w = have[k];
-    if (PATH_WORD_RE.test(w) || PUNCT_WORD_RE.test(w)) return true;
-    return CONNECTOR_RE.test(w) && [k - 1, k + 1].some((n) => extra.has(n) && PATH_WORD_RE.test(have[n]));
-  });
+  if (extra.length === 0) return true;
+  const start = extra[0];
+  if (extra.some((k, n) => k !== start + n)) return false;
+  if (start !== 0 && start + extra.length !== have.length && !PATH_WORD_RE.test(have[start - 1])) return false;
+  const isAddedPath = (k) => extra.includes(k) && triggerPaths.has(PATH_WORD_RE.exec(have[k])?.[1]);
+  if (!extra.some(isAddedPath)) return false;
+  return extra.every((k) => isAddedPath(k) || ((CONNECTOR_RE.test(have[k]) || PUNCT_WORD_RE.test(have[k])) && (isAddedPath(k - 1) || isAddedPath(k + 1))));
 }
 
 /**
- * ADR 0301: true when `currentBody` differs from `priorBody` only by backticked skills/docs/*-contract.md
- * paths, with the connectors `in`, `and`, `see`, added to existing AC / DoD matrix rows. Row count and non-goals must be equal.
+ * ADR 0301: true when `currentBody` differs from `priorBody` only by backticked trigger paths (`triggerPaths`, the skills/docs/*-contract.md
+ * paths that fired the tripwire), with the connectors `in`, `and`, `see` and `( ) , ; . :` next to them, added as one run per spec string.
+ * Row count and non-goals must be equal.
  */
-export function isMatrixPathOnlySpecChange(priorBody, currentBody) {
+export function isMatrixPathOnlySpecChange(priorBody, currentBody, triggerPaths) {
+  const trigger = new Set(triggerPaths);
   const prior = detectAcDodMatrix(priorBody);
   const current = detectAcDodMatrix(currentBody);
   if (!prior.valid || !current.valid || prior.rows.length !== current.rows.length) return false;
@@ -176,7 +183,7 @@ export function isMatrixPathOnlySpecChange(priorBody, currentBody) {
   try {
     const a = specStrings(priorBody);
     const b = specStrings(currentBody);
-    if (a.length !== b.length || !a.every((t, i) => onlyAddsPathWords(t, b[i]))) return false;
+    if (a.length !== b.length || !a.every((t, i) => onlyAddsPathWords(t, b[i], trigger))) return false;
   } catch { return false; }
   return true;
 }
@@ -328,15 +335,19 @@ export async function waiveAdrTripwire(options, {
   } catch (error) {
     return refuse("spec_unreadable", `cannot derive the spec digest of issue #${issue}: ${error instanceof Error ? error.message : String(error)}`);
   }
-  // ADR 0301: a history fetch failure keeps the refusal (fail closed).
+  // ADR 0301: a history fetch failure keeps the refusal (fail closed) and names the fetch error.
+  let historyError = "";
   const matrixPathOnlyEditSince = async (recordedDigest) => {
     try {
       for (const prior of await fetchIssueBodyHistory({ repo, issue }, gh)) {
         let digest;
         try { digest = computeSpecDigest(requireSpecFromBody(prior)); } catch { continue; }
-        if (digest === recordedDigest) return isMatrixPathOnlySpecChange(prior, issueBody) ? "ok" : "edit_goes_beyond";
+        if (digest === recordedDigest) return isMatrixPathOnlySpecChange(prior, issueBody, paths) ? "ok" : "edit_goes_beyond";
       }
-    } catch { /* fail closed */ }
+    } catch (error) {
+      historyError = error instanceof Error ? error.message : String(error);
+      return "history_unavailable";
+    }
     return "no_prior_revision";
   };
   let digestRefusal = null;
@@ -347,7 +358,7 @@ export async function waiveAdrTripwire(options, {
     const since = recorded !== null ? await matrixPathOnlyEditSince(recorded) : null;
     if (since === "ok") { matched = true; break; }
     // A recorded-but-stale digest outranks an unrecorded one in the refusal.
-    if (recorded !== null) digestRefusal = refuse("spec_digest_mismatch", `the ${name} recorded specDigest ${recorded}, but issue #${issue} now yields ${currentSpecDigest} (${since === "edit_goes_beyond" ? "the edit goes beyond added matrix contract-doc paths" : "no prior issue body revision has that digest"})`);
+    if (recorded !== null) digestRefusal = refuse("spec_digest_mismatch", `the ${name} recorded specDigest ${recorded}, but issue #${issue} now yields ${currentSpecDigest} (${since === "edit_goes_beyond" ? "the edit goes beyond added matrix trigger contract-doc paths" : since === "history_unavailable" ? `the issue edit history could not be fetched: ${historyError}` : "no prior issue body revision has that digest"})`);
     else digestRefusal ??= refuse("spec_digest_unrecorded", `the ${name} for head ${(head ?? headSha).slice(0, 7)} recorded no specDigest`);
   }
   if (!matched) return digestRefusal;
