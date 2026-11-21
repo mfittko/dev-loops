@@ -55,8 +55,8 @@ create-pr.mjs refuse a hand-written one. It applies the waiver only when:
     the linked issue's current body. A differing digest is also accepted when the
     issue's edit history holds the body that digest was computed from and the two
     bodies differ only by added backticked trigger skills/docs/*-contract.md paths as one contiguous run
-    (at the start or end of a spec string, or directly after an existing backticked path), with the words in, and, see and the punctuation ( ) , ; . :
-    only next to an added path (ADR 0301); any other difference refuses spec_digest_mismatch.
+    (at the start or end of a spec string, or directly after an existing backticked repo path, one containing /), with the words in, and, see and the punctuation ( ) , ; . :
+    only next to an added path, and a ( also directly before see when see directly precedes an added path (ADR 0301); any other difference refuses spec_digest_mismatch.
 Otherwise it refuses with a typed reason and leaves the body unchanged. It never
 waives an extension-defaults.yaml trigger, a rule-modality reversal or removal,
 an unresolvable scan, a standingAuthorizations change, or any other approval.
