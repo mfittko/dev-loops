@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { refreshDepsIfChanged } from "../../scripts/loop/_worktree-deps.mjs";
+import { ensureDeps, refreshDepsIfChanged } from "../../scripts/loop/_worktree-deps.mjs";
 
 function setup() {
   const dir = mkdtempSync(path.join(tmpdir(), "worktree-deps-"));
@@ -21,6 +21,19 @@ test("refreshDepsIfChanged: editing only a workspace package.json triggers an in
     assert.equal(refreshDepsIfChanged(dir, () => ({ ok: true })).ran, true);
     assert.equal(refreshDepsIfChanged(dir, () => assert.fail("unchanged fingerprint must not install")).ran, false);
     writeFileSync(path.join(dir, "packages", "a", "package.json"), '{"v":2}');
+    let installs = 0;
+    assert.equal(refreshDepsIfChanged(dir, () => { installs += 1; return { ok: true }; }).ran, true);
+    assert.equal(installs, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ensureDeps: a { ran: false, ok: true } installer leaves no stamp, so the next refresh installs", () => {
+  const dir = setup();
+  try {
+    assert.equal(ensureDeps(dir, () => ({ ran: false, ok: true })).ran, false);
+    assert.equal(existsSync(path.join(dir, "node_modules", ".dev-loops-deps-stamp")), false);
     let installs = 0;
     assert.equal(refreshDepsIfChanged(dir, () => { installs += 1; return { ok: true }; }).ran, true);
     assert.equal(installs, 1);

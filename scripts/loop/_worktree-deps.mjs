@@ -68,6 +68,7 @@ export function ensureDeps(worktreePath, installDeps = defaultInstallDeps) {
       warn(`bun install --frozen-lockfile failed (continuing): ${result.reason ?? ""}`);
       return { ran: true, ...result };
     }
+    if (result.ran === false) return { ran: true, ...result }; // a no-op installer leaves node_modules unchanged, so it earns no stamp
     if (fingerprint === undefined) return { ran: true, ...result, stampWritten: false };
     try {
       mkdirSync(path.join(worktreePath, "node_modules"), { recursive: true });
