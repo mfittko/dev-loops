@@ -45,7 +45,7 @@ export async function scanPrePrStaleSurface({ cwd, base, bodyFile, issue, staleS
     const { matrixInvalid, missing } = pathsMissingFromMatrix(contractDocs, issueBody);
     // An invalid matrix is already one issue-body/issue-matrix hit from the comparison above.
     if (!matrixInvalid) {
-      for (const p of missing) staleSurfaceHits.push({ kind: "pr-body", side: "issue", needle: `${p} is changed but no row of the issue's AC / DoD matrix names it in backticks`, file: "issue-body/issue-matrix", line: 0, site: `issue-body/issue-matrix:${p}` });
+      for (const p of missing) staleSurfaceHits.push({ kind: "pr-body", side: "issue", needle: `${p} is changed but no row of the issue's AC / DoD matrix names it in backticks`, file: `issue-body/issue-matrix:${p}`, line: 0, site: `issue-body/issue-matrix:${p}` });
     }
   }
   return { ok: true, head, base, staleSurfaceHits, staleSurfaceTruncated: found.truncated === true, truncatedNeedles: found.truncatedNeedles ?? [] };

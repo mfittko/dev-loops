@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
+import { unaddressedStaleSurfaceHits } from "../../packages/core/src/loop/pre-push-delta-review.mjs";
 import { validatePrePrReview } from "../../scripts/loop/_pre-pr-review-record.mjs";
 import { runCli } from "../../scripts/loop/record-pre-pr-review.mjs";
 import { runGitFixture } from "../_helpers.mjs";
@@ -183,3 +184,11 @@ test("a contract doc renamed out of the surface is reported by its original path
   assert.ok(out.staleSurfaceHits.some((h) => h.site === "issue-body/issue-matrix:skills/docs/r-contract.md"));
   rmSync(body);
 }));
+
+test("a skip of the reported matrix site addresses its hit and a skip of another matrix path does not", () => {
+  const site = "issue-body/issue-matrix:skills/docs/x-contract.md";
+  const hits = [{ file: site, line: 0, site }];
+  const skip = (s) => [{ sites: [{ site: s, status: "skipped", reason: "r" }] }];
+  assert.deepEqual(unaddressedStaleSurfaceHits(hits, { siteCoverage: skip(site) }), []);
+  assert.equal(unaddressedStaleSurfaceHits(hits, { siteCoverage: skip("issue-body/issue-matrix:skills/docs/y-contract.md") }).length, 1);
+});
