@@ -9,7 +9,8 @@ const USAGE = `Usage:
 Read-only summary of the shared gh call log: calls per script, per PR and per
 minute, the GraphQL share and the rate-limit refusals. Prints JSON.
 Optional:
-  --log <path>  Log file (default: <main checkout>/tmp/gh-calls.jsonl, or DEVLOOPS_GH_CALL_LOG)
+  --log <path>  Log file; a relative path resolves against the main checkout and needs a git checkout
+                (default: <main checkout>/tmp/gh-calls.jsonl, or DEVLOOPS_GH_CALL_LOG)
   --help, -h    Show this help
 
 ${JQ_OUTPUT_USAGE}
@@ -34,6 +35,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   if (values.log !== undefined && values.log.trim() === "") throw parseError("--log requires a non-empty path");
   // A relative --log resolves against the main checkout, like DEVLOOPS_GH_CALL_LOG.
   const logPath = values.log === undefined ? undefined : resolveGhCallLogPath(process.cwd(), { [GH_CALL_LOG_ENV]: values.log.trim() });
+  if (values.log !== undefined && logPath === null) throw parseError(`--log ${values.log.trim()} is relative and no git checkout resolves it; run inside a git checkout or pass an absolute path`);
   process.exitCode = emitResult({ ok: true, ...summarizeGhCallLog(logPath) }, { jq: values.jq, silent: values.silent, stdout, stderr });
 }
 

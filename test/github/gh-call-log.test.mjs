@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, test } from "bun:test";
@@ -335,11 +335,35 @@ test("gh-calls CLI prints help and rejects an unknown flag", async () => {
   await assert.rejects(runCli(["--bogus"], { stdout: { write() {} } }));
 });
 
-test("gh-calls CLI rejects an empty --log and resolves a relative --log against the main checkout", async () => {
+test("gh-calls CLI rejects an empty --log", async () => {
   for (const bad of ["", "  "]) await assert.rejects(runCli(["--log", bad], { stdout: { write() {} } }));
-  let out = "";
-  await runCli(["--log", "tmp/does-not-exist-3338.jsonl"], { stdout: { write: (s) => { out += s; } } });
-  assert.equal(JSON.parse(out).total, 0);
+});
+
+test("gh-calls CLI resolves a relative --log against the main checkout, not cwd", async () => {
+  await withTempDir(async (dir) => {
+    const repo = realpathSync(dir);
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    mkdirSync(path.join(repo, "tmp"));
+    mkdirSync(path.join(repo, "sub"));
+    recordGhCall(["pr", "list"], { durationMs: 1, status: 0, script: "s.mjs", logPath: path.join(repo, "tmp", "x.jsonl") });
+    const prev = process.cwd();
+    process.chdir(path.join(repo, "sub"));
+    try {
+      let out = "";
+      await runCli(["--log", "tmp/x.jsonl"], { stdout: { write: (s) => { out += s; } } });
+      assert.equal(JSON.parse(out).total, 1);
+    } finally { process.chdir(prev); }
+  });
+});
+
+test("gh-calls CLI rejects a relative --log outside a git checkout", async () => {
+  await withTempDir(async (dir) => {
+    const prev = process.cwd();
+    process.chdir(realpathSync(dir));
+    try {
+      await assert.rejects(runCli(["--log", "./gh-calls.jsonl"], { stdout: { write() {} } }), /relative and no git checkout/u);
+    } finally { process.chdir(prev); }
+  });
 });
 
 test("gh-calls CLI trims a padded --log before resolving it", async () => {
