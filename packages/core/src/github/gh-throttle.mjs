@@ -21,6 +21,8 @@ import { GH_STUB_ATTESTATION_ENV } from "./test-mode-write-guard.mjs";
 
 export const DEFAULT_GH_MIN_INTERVAL_MS = 500;
 const LOCK_TIMEOUT_MS = 10_000;
+// A stored slot further ahead than any legitimate queue (60 callers at the 10000 ms maximum interval) is stale.
+const MAX_QUEUE_HORIZON_MS = 600_000;
 const STALE_LOCK_MS = 5_000;
 const LOCK_POLL_MS = 20;
 const GIT_TIMEOUT_MS = 10_000;
@@ -154,7 +156,7 @@ export async function acquireSlot({
     try {
       const parsed = Number(String(await readFile(slotPath, "utf8")).trim());
       // A value beyond any legitimate queue (a backward clock step or a corrupt write) is no reservation.
-      if (Number.isFinite(parsed) && parsed <= now() + intervalMs + lockTimeoutMs) next = parsed;
+      if (Number.isFinite(parsed) && parsed <= now() + MAX_QUEUE_HORIZON_MS) next = parsed;
     } catch (error) {
       if (error.code !== "ENOENT") throw unavailable(`cannot read ${slotPath}: ${error.message}`, error);
     }

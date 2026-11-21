@@ -101,6 +101,13 @@ describe("gh-throttle", () => {
     assert.equal(Number(await readFile(slotFile(), "utf8")), before + 500);
   });
 
+  test("a queue of callers at the maximum interval all get distinct slots", async () => {
+    const waits = [];
+    const caller = () => acquireSlot({ root, intervalMs: 10_000, now, sleep: async (ms) => { waits.push(ms); } });
+    for (let i = 0; i < 30; i += 1) await caller();
+    assert.deepEqual(waits, Array.from({ length: 29 }, (_, i) => (i + 1) * 10_000));
+  });
+
   test("interval 0 skips the lock and the state dir", async () => {
     await acquireSlot({ root, intervalMs: 0, now, sleep });
     await assert.rejects(() => readFile(slotFile()), { code: "ENOENT" });

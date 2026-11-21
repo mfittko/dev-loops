@@ -1,4 +1,4 @@
-# 0305. Machine-wide gh throttle
+# 0305. Per-checkout gh throttle
 
 ## Status
 
@@ -10,7 +10,7 @@ Several dev-loops processes run on one machine and each shells out to `gh`. Para
 
 ## Decision
 
-Every `gh` call takes a slot from one throttle before it starts (`packages/core/src/github/gh-throttle.mjs`). Pacing is shared per main checkout. Processes that resolve the same main checkout (the parent of the cwd's git common dir) share one `next-slot` file under its `tmp/gh-throttle/`, guarded by an exclusive-create lock. Separate clones do not share pacing, and a process whose cwd is outside a git checkout fails closed with `GH_THROTTLE_UNAVAILABLE`. A lock is stolen only when its mtime is stale and the holder pid in its token is gone, and only when the token is unchanged. A stored slot further ahead than one interval plus the lock timeout (a backward clock step or a corrupt value) counts as no reservation.
+Every `gh` call takes a slot from one throttle before it starts (`packages/core/src/github/gh-throttle.mjs`). Pacing is shared per main checkout. Processes that resolve the same main checkout (the parent of the cwd's git common dir) share one `next-slot` file under its `tmp/gh-throttle/`, guarded by an exclusive-create lock. Separate clones do not share pacing, and a process whose cwd is outside a git checkout fails closed with `GH_THROTTLE_UNAVAILABLE`. A lock is stolen only when its mtime is stale and the holder pid in its token is gone, and only when the token is unchanged. A stored slot more than ten minutes ahead (a backward clock step or a corrupt value) counts as no reservation. The horizon covers 60 queued callers at the maximum interval.
 
 The default runner `runChild` paces each `gh` call. Direct call sites use `takeGhSlot({ env })` (async) or `ghExecFileSync` (sync, which runs a short child process in the call's env and cwd to take the slot). An injected runner stays unpaced.
 
