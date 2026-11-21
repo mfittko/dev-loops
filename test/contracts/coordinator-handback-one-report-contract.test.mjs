@@ -77,7 +77,7 @@ test("MAIN-AGENT-COORDINATOR-REPORT-READ has three harness-neutral bullets", asy
   const bullets = text.split("\n").filter((l) => l.startsWith("- Every harness:"));
   assert.equal(bullets.length, 3);
   assert.match(bullets[0], /hand-back or pause that lists children in flight and names no run-ending case is interim, whether or not it says so.*status, not a result.*re-dispatch a listed child.*next report/s);
-  assert.match(bullets[1], /names a run-ending case.*Unit coordinator boundaries.*`units_stalled` or `round_retired` hand-back under `GATE-EXEC-HARNESS-JOIN`.*final even when it lists children.*treats each listed child as still running.*hand-back that states it is interim under `GATE-EXEC-HARNESS-JOIN` and whose packet status names no run-ending case is interim.*names a run-ending case.*ended the reporter's run.*final.*waits for no further report/s);
+  assert.match(bullets[1], /names a run-ending case.*Unit coordinator boundaries.*`units_stalled`, `round_retired` or `ci_not_green` hand-back under `GATE-EXEC-HARNESS-JOIN`.*final even when it lists children.*treats each listed child as still running.*hand-back that states it is interim under `GATE-EXEC-HARNESS-JOIN` and whose packet status names no run-ending case is interim.*names a run-ending case.*ended the reporter's run.*final.*waits for no further report/s);
   assert.match(bullets[2], /second hand-back that repeats the report.*already consumed.*first line and child list.*same coordinator.*run state unchanged.*duplicate.*interim reports too.*precedence over the interim bullet.*packet status names a run-ending case is never a duplicate of a consumed report that named none.*reads the state.*acts on nothing.*relays nothing/s);
 });
 
