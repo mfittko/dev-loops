@@ -521,7 +521,7 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
   const promptBytes = readFileSync(expectedPrompt), renderedHash = materializationHash(promptBytes);
   // The emit-time plan hash and the pull-time receipt hash bind the bytes; a re-render would refuse any fix that edits the renderer.
   refuse(renderedHash === plan.materializationHash && renderedHash === pull.receipt.materializationHash, "materialization differs from actual bytes, plan or receipt");
-  // The trailing Work order JSON block binds the plan's local fields (sha256, outputRefs, promptPath) that the semantic digest drops.
+  // The trailing Work order JSON block binds the plan's local fields (the LOCAL_MATERIAL_KEYS fields and absolute-path strings such as `executionRules.contract`) that the semantic digest drops.
   refuse(promptEndsWithWorkOrder(promptBytes, order), "materialization differs from the plan's work order");
   const sourcePath = options.threadsFile ?? options.actList;
   const actRead = order.requiredReads?.find((read) => read.kind === order.source);

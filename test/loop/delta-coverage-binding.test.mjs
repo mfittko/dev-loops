@@ -145,11 +145,11 @@ test("pulled coverage binding preserves raw identity through the input, result a
     wrongReceiptDigest: () => receiptEdit((r) => { r.workOrderDigest = `sha256:${"0".repeat(64)}`; }),
     // The handback is rewritten after the receipt edit so the refusal is the materialization one, not result_predates_pull.
     wrongReceiptMaterialization: () => { receiptEdit((r) => { r.materializationHash = `sha256:${"0".repeat(64)}`; }); fs.writeFileSync(fixture.output, originals[2]); },
-    wrongReceiptTarget: () => receiptEdit((r) => { r.subject.pr++; }),
-    wrongReceiptPhase: () => receiptEdit((r) => { r.subject.phase = "full"; }),
-    wrongReceiptBranch: () => receiptEdit((r) => { r.subject.branch = "other"; }),
-    wrongReceiptBaseline: () => receiptEdit((r) => { r.subject.headSha = B; }),
-    wrongReceiptPlan: () => receiptEdit((r) => { r.subject.planPath = actPath; }),
+    wrongReceiptTarget: () => { receiptEdit((r) => { r.subject.pr++; }); fs.writeFileSync(fixture.output, originals[2]); },
+    wrongReceiptPhase: () => { receiptEdit((r) => { r.subject.phase = "full"; }); fs.writeFileSync(fixture.output, originals[2]); },
+    wrongReceiptBranch: () => { receiptEdit((r) => { r.subject.branch = "other"; }); fs.writeFileSync(fixture.output, originals[2]); },
+    wrongReceiptBaseline: () => { receiptEdit((r) => { r.subject.headSha = B; }); fs.writeFileSync(fixture.output, originals[2]); },
+    wrongReceiptPlan: () => { receiptEdit((r) => { r.subject.planPath = actPath; }); fs.writeFileSync(fixture.output, originals[2]); },
     beforePull: () => fs.utimesSync(fixture.output, new Date(0), new Date(0)),
     byteMutation: () => fs.appendFileSync(fixture.output, "\n"),
     coverageMutation: () => edit(fixture.output, (r) => { r.siteCoverage[0].sites[0].reason = "changed"; }),
@@ -157,7 +157,7 @@ test("pulled coverage binding preserves raw identity through the input, result a
     unrelatedCandidate: () => { edit(fixture.output, (r) => { r.headSha = unrelated; }); edit(result, (r) => { r.candidateHead = unrelated; }); },
   };
   const bytesRefusal = /materialization differs from actual bytes, plan or receipt/;
-  const specific = { wrongPlanMaterialization: bytesRefusal, changedMaterialization: bytesRefusal, wrongReceiptMaterialization: bytesRefusal, localFieldMutation: /materialization differs from the plan's work order/ };
+  const specific = { wrongPlanMaterialization: bytesRefusal, changedMaterialization: bytesRefusal, wrongReceiptMaterialization: bytesRefusal, ...Object.fromEntries(["Target", "Phase", "Branch", "Baseline", "Plan"].map((k) => [`wrongReceipt${k}`, /wrong original pull subject/])), localFieldMutation: /materialization differs from the plan's work order/ };
   for (const [label, mutate] of Object.entries(cases)) {
     for (let i = 0; i < files.length; i++) fs.writeFileSync(files[i], originals[i]);
     // Restoring the report after its receipt preserves the genuine after-pull ordering.
