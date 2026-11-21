@@ -39,6 +39,7 @@
  * (skills/docs/gate-review-sub-loop-contract.md).
  */
 import { loadCommentTrustConfigOrExit } from "../github/_comment-trust-config.mjs";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
@@ -65,7 +66,7 @@ import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-teleme
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 
-const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>] [--emit-plan <path>]
+const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist clean] [--carried-angles <json> (--carry-forward-plan <json> | --carry-forward-plan-file <path>)] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>] [--emit-plan <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
 --findings-dir into the JSON shapes write-gate-findings-log.mjs, post-gate-findings.mjs
 (--findings / --findings-file), and upsert-checkpoint-verdict.mjs (--findings-json) accept.
@@ -162,6 +163,8 @@ Optional:
                                  --carry-forward-plan's own "carried" list — refusing to manufacture
                                  GitHub-visible "reviewed at this head" evidence for an angle nothing
                                  actually proved was carried.
+  --carry-forward-plan-file <path>  the same plan read from a file (the keyed <gate>-<headSha>.carry-forward-plan.json),
+                                 so carried finding text stays off the command line; mutually exclusive with --carry-forward-plan
   --carry-forward-plan <json>    resolve-angle-carry-forward.mjs's own JSON result, any object with its
                                  "carried" field, or a bare JSON array of carried entries:
                                  [{ angle, carriedFromHead, reason?, reviewer?, dispatchId?, model?,
@@ -619,6 +622,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       "pr-checklist": { type: "string" },
       "carried-angles": { type: "string" },
       "carry-forward-plan": { type: "string" },
+      "carry-forward-plan-file": { type: "string" },
       "resolved-angles": { type: "string" },
       "repo-root": { type: "string" },
       "expected-dispatch-units": { type: "string" },
@@ -632,6 +636,7 @@ export function parseConsolidateFaninCliArgs(argv) {
     strict: false,
     tokens: true,
   });
+  let planFlagSeen = false;
   for (const token of tokens) {
     if (token.kind === "positional") {
       throw parseError(`Unknown argument: ${token.value}`);
@@ -693,13 +698,24 @@ export function parseConsolidateFaninCliArgs(argv) {
       options.carriedAngles = parseCarriedAnglesJsonArray(requireTokenValue(token, parseError), parseError);
       continue;
     }
-    if (token.name === "carry-forward-plan") {
-      const raw = requireTokenValue(token, parseError);
+    if (token.name === "carry-forward-plan" || token.name === "carry-forward-plan-file") {
+      if (planFlagSeen) {
+        throw parseError("--carry-forward-plan and --carry-forward-plan-file are mutually exclusive. Recovery: pass only --carry-forward-plan-file <keyed carry-forward-plan.json path>");
+      }
+      planFlagSeen = true;
+      let raw = requireTokenValue(token, parseError);
+      if (token.name === "carry-forward-plan-file") {
+        try {
+          raw = readFileSync(raw, "utf8");
+        } catch (err) {
+          throw parseError(`--carry-forward-plan-file could not be read: ${err.message}. Recovery: pass the keyed <gate>-<headSha>.carry-forward-plan.json path written by resolve-angle-carry-forward.mjs`);
+        }
+      }
       let parsed;
       try {
         parsed = JSON.parse(raw);
       } catch {
-        throw parseError("--carry-forward-plan must be JSON");
+        throw parseError(`--${token.name} must be JSON`);
       }
       try {
         options.carryForwardPlan = validateCarryForwardPlanShape(parsed);

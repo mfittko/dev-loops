@@ -1810,6 +1810,37 @@ test("parseConsolidateFaninCliArgs parses --carried-angles + --carry-forward-pla
   assert.deepEqual(result.carryForwardPlan.map((e) => e.angle), ["correctness", "docs"]);
 });
 
+test("parseConsolidateFaninCliArgs reads --carry-forward-plan-file like the inline flag, with multi-finding carried text off the command line", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "carry-plan-file-"));
+  try {
+    const findings = [
+      { severity: "low", summary: "Long `backtick` \"quoted\" text ".repeat(40) },
+      { severity: "high", summary: "Second finding with $(subshell) and {a,b} braces" },
+    ];
+    const planFile = path.join(dir, "plan.json");
+    await writeFile(planFile, findingsPresentCarryForwardPlanJson("config-drift", findings), "utf8");
+    const argv = ["--findings-dir", "/tmp/x", "--gate", "draft_gate", "--carried-angles", '["config-drift"]', "--carry-forward-plan-file", planFile];
+    assert.ok(!argv.join(" ").includes("backtick"));
+    const fromFile = parseConsolidateFaninCliArgs(argv);
+    const inline = parseConsolidateFaninCliArgs([...argv.slice(0, -2), "--carry-forward-plan", findingsPresentCarryForwardPlanJson("config-drift", findings)]);
+    assert.deepEqual(fromFile.carryForwardPlan, inline.carryForwardPlan);
+    assert.equal(fromFile.carryForwardPlan[0].findings.length, 2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseConsolidateFaninCliArgs refuses both plan flags and an unreadable plan file, naming a recovery", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan", carryForwardPlanJson(["docs"]), "--carry-forward-plan-file", "/tmp/x"]),
+    /mutually exclusive.*Recovery:/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carry-forward-plan-file", "/nonexistent/plan.json"]),
+    /could not be read.*Recovery:/,
+  );
+});
+
 test("parseConsolidateFaninCliArgs rejects unparseable/non-array/empty-string --carried-angles", () => {
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--carried-angles", "not json"]),

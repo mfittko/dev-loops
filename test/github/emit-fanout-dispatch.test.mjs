@@ -294,7 +294,14 @@ test("all-carried rounds consume the real emitter's keyed zero-unit plan through
     contextOptions.fanoutDispatch = fanout;
     await writeGateContext(contextOptions, { repoRoot });
     const contextDir = path.join(repoRoot, "tmp", "gate-context", "o-r", "pr-7");
-    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan", JSON.stringify(plan)], { cwd: repoRoot });
+    // The plan file input and the both-flags conflict (issue 3415).
+    const planFile = path.join(repoRoot, "carry-plan-input.json");
+    await writeFile(planFile, JSON.stringify(plan), "utf8");
+    const both = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", planFile, "--carry-forward-plan", JSON.stringify(plan)], { cwd: repoRoot });
+    assert.notEqual(both.status, 0);
+    assert.match(both.stdout + both.stderr, /mutually exclusive/);
+    assert.match(both.stdout + both.stderr, /recovery/);
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", planFile], { cwd: repoRoot });
     assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
     const emitPlan = path.join(contextDir, `${gate}-${HEAD_SHA}.emit-plan.json`);
     const payload = JSON.parse(await readFile(emitPlan, "utf8"));
