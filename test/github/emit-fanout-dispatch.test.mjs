@@ -305,7 +305,36 @@ test("all-carried rounds consume the real emitter's keyed zero-unit plan through
     contextOptions.fanoutDispatch = fanout;
     await writeGateContext(contextOptions, { repoRoot });
     const contextDir = path.join(repoRoot, "tmp", "gate-context", "o-r", "pr-7");
-    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan", JSON.stringify(plan)], { cwd: repoRoot });
+    // The plan file input and the both-flags conflict (issue 3415).
+    const planFile = path.join(repoRoot, "carry-plan-input.json");
+    await writeFile(planFile, JSON.stringify(plan), "utf8");
+    const both = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", planFile, "--carry-forward-plan", JSON.stringify(plan)], { cwd: repoRoot });
+    assert.notEqual(both.status, 0);
+    assert.match(both.stdout + both.stderr, /mutually exclusive/);
+    assert.match(both.stdout + both.stderr, /recovery/);
+    // Fail-closed plan file reads: unreadable, relative, and bound to another head.
+    const staleFile = path.join(repoRoot, "carry-plan-stale.json");
+    await writeFile(staleFile, JSON.stringify({ ...plan, headSha: "d".repeat(40) }), "utf8");
+    for (const [label, badPath, expected] of [
+      ["unreadable", path.join(repoRoot, "does-not-exist.json"), /zero-unit carry proof refused/],
+      ["relative", "carry-plan-input.json", /must be an absolute path/],
+      ["empty", "", /must be an absolute path/],
+      ["another head", staleFile, /does not match this round/],
+    ]) {
+      const refused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", badPath], { cwd: repoRoot });
+      assert.notEqual(refused.status, 0, label);
+      const out = refused.stdout + refused.stderr;
+      assert.match(out, /zero-unit carry proof refused/, label);
+      assert.match(out, expected, label);
+      assert.match(out, /recovery/, label);
+    }
+    // A malformed plan file names the file flag, not the inline one.
+    const shapeFile = path.join(repoRoot, "carry-plan-shape.json");
+    await writeFile(shapeFile, JSON.stringify({ carried: "x" }), "utf8");
+    const shapeRefused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", shapeFile], { cwd: repoRoot });
+    assert.notEqual(shapeRefused.status, 0);
+    assert.match(shapeRefused.stdout + shapeRefused.stderr, /--carry-forward-plan-file must have a .{1,3}carried.{1,3} array/);
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", planFile], { cwd: repoRoot });
     assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
     const emitPlan = path.join(contextDir, `${gate}-${HEAD_SHA}.emit-plan.json`);
     const payload = JSON.parse(await readFile(emitPlan, "utf8"));
@@ -1014,6 +1043,37 @@ test("--pending emits only the pendingGroups subset", async () => {
     const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
     const persisted = JSON.parse(await readFile(planPath, "utf8"));
     assert.equal(persisted.pending, true);
+  });
+});
+
+test("--pending with pending units refuses a missing --carry-forward-plan-file before any unit is emitted (issue 3415)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", path.join(tmpDir, "does-not-exist.json")],
+      { cwd: tmpDir },
+    );
+    assert.notEqual(result.status, 0);
+    const out = result.stdout + result.stderr;
+    assert.match(out, /carry-forward plan file refused/);
+    assert.match(out, /recovery/);
+    assert.doesNotMatch(out, /"units"/);
+  });
+});
+
+test("--pending with pending units refuses a malformed --carry-forward-plan-file shape before any unit is emitted (issue 3415)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const shapeFile = path.join(tmpDir, "carry-plan-shape.json");
+    await writeFile(shapeFile, JSON.stringify({ carried: "x" }), "utf8");
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan-file", shapeFile],
+      { cwd: tmpDir },
+    );
+    assert.notEqual(result.status, 0);
+    const out = result.stdout + result.stderr;
+    assert.match(out, /--carry-forward-plan-file must have a .{1,3}carried.{1,3} array/);
+    assert.doesNotMatch(out, /"units"/);
   });
 });
 
