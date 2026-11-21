@@ -464,9 +464,9 @@ async function reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyM
       // Criss-cross history has several best bases (the ort merge used a virtual base of all of them): union the overlap over every one.
       const mb = spawnSync("git", ["-C", repoRoot, "merge-base", "--all", p1, p2], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: gitEnvNoDirOverrides() });
       const fail = (why) => new Error(`non_base_only_merge: cannot read the paths merge ${merge} brought in (${why}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
-      // The PR side is listed with rename detection, as the ort merge applies main's edit of a renamed file to its destination.
-      const prSide = (mergeBase) => {
-        const r = spawnSync("git", ["-C", repoRoot, "diff", "-M", "--no-relative", "--no-ext-diff", "--ignore-submodules=none", "--name-status", "-z", mergeBase, p1], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: gitEnvNoDirOverrides() });
+      // Each side is listed with rename detection, as the ort merge applies one side's edit of a renamed file to its destination.
+      const sideNames = (mergeBase, tip) => {
+        const r = spawnSync("git", ["-C", repoRoot, "diff", "-M", "--no-relative", "--no-ext-diff", "--ignore-submodules=none", "--name-status", "-z", mergeBase, tip], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: gitEnvNoDirOverrides() });
         if (r.status !== 0) throw fail((r.stderr ?? "").trim() || r.error?.message);
         const fields = r.stdout.split("\0").filter(Boolean), names = [], renames = [];
         for (let i = 0; i < fields.length;) {
@@ -480,11 +480,11 @@ async function reviewerOnlyRange(worktree, baseline, head, { revParse, baseOnlyM
       if (mb.status !== 0 || !mb.stdout.trim()) throw new Error(`non_base_only_merge: cannot read the merge base of merge ${merge} (${(mb.stderr ?? "").trim() || mb.error?.message}); the reviewer-only route fails closed. Only the replacement-PR restart remains: ${replacementRemedy()}`);
       const overlap = new Set();
       for (const mergeBase of mb.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
-        let main;
-        try { main = new Set(gitChangedPaths(repoRoot, mergeBase, p2)); } catch (error) { throw fail(error.message); }
-        const { names, renames } = prSide(mergeBase);
-        for (const f of names) if (main.has(f)) overlap.add(f);
-        for (const [from, to] of renames) if (main.has(from)) overlap.add(to);
+        const pr = sideNames(mergeBase, p1), main = sideNames(mergeBase, p2);
+        const mainSet = new Set(main.names), prSet = new Set(pr.names);
+        for (const f of pr.names) if (mainSet.has(f)) overlap.add(f);
+        for (const [from, to] of pr.renames) if (mainSet.has(from)) overlap.add(to);
+        for (const [from, to] of main.renames) if (prSet.has(from)) overlap.add(to);
       }
       resolvedPaths.push(...overlap);
       if (overlap.size > 0) overlapMerges += 1;

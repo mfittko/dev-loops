@@ -14,7 +14,7 @@ PR 3350 deadlocked ([issue 3356](https://github.com/mfittko/dev-loops/issues/335
 
 ## Decision
 
-A clean merge (an empty `git show --remerge-diff`) that is not base-only adds the paths that both parents changed since every merge base (`git merge-base --all`, so a criss-cross history is covered). A PR path renamed since the merge base counts by its destination when its source is in the main-side set, because the merge applies main's edit of the old path to the renamed file. Those overlap paths join the PR-own paths, so the cumulative patch holds the files where main and the PR meet. A change that both parents made identically is not an overlap of two different changes: a merge whose parents differ only by an identical change stays a base-only carry.
+A clean merge (an empty `git show --remerge-diff`) that is not base-only adds the paths that both parents changed since every merge base (`git merge-base --all`, so a criss-cross history is covered). A path renamed on either side since the merge base counts by its destination when its source is in the other side's set, because the merge applies the other side's edit of the old path to the renamed file. Those overlap paths join the PR-own paths, so the cumulative patch holds the files where main and the PR meet. A change that both parents made identically is not an overlap of two different changes: a merge whose parents differ only by an identical change stays a base-only carry.
 
 The refusal for a range with no PR-own commit now also requires an empty overlap: it applies only when the range has no PR-own commit, no resolution path and no overlap path. `countPrOwnCommits` counts a clean merge with a non-empty overlap as a PR-own commit.
 
