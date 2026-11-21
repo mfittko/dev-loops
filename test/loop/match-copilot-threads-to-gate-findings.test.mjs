@@ -13,6 +13,7 @@ import {
   readFindingIndex,
   readThreads,
 } from "../../scripts/loop/match-copilot-threads-to-gate-findings.mjs";
+import { runGitFixture } from "../_helpers.mjs";
 
 async function fixture() {
   const dir = await mkdtemp(path.join(os.tmpdir(), "match-threads-"));
@@ -22,7 +23,12 @@ async function fixture() {
     findings: [{ angle: "docs", files: ["a.md"], line: 3, summary: "x" }],
   }));
   await writeFile(path.join(root, "pr-7", "draft_gate-a.seal"), "not json");
-  await writeFile(path.join(root, "pr-7", "draft_gate-list.json"), JSON.stringify([{ findings: [{ angle: "kiss", files: ["b.mjs"] }] }]));
+  await writeFile(path.join(root, "pr-7", "draft_gate-b1.json"), JSON.stringify([{ findings: [{ angle: "kiss", files: ["b.mjs"] }] }]));
+  await writeFile(path.join(root, "pr-7", "draft_gate-a.round-2.json"), JSON.stringify({ findings: [{ angle: "docs", files: ["r2.md"] }] }));
+  // Derived artifacts that share the prefix: ignored, never read as a round and never counted as skipped.
+  for (const suffix of ["consolidated", "act-list", "fanin-out", "judged-ledger"]) {
+    await writeFile(path.join(root, "pr-7", `draft_gate-a.${suffix}.json`), JSON.stringify(suffix === "act-list" ? [] : { findings: [{ angle: "x", files: ["derived.md"] }] }));
+  }
   return { dir, root };
 }
 
@@ -88,7 +94,7 @@ test("every class angle exists in extension-defaults.yaml", async () => {
 test("accepts singular file, skips non-string files and trims paths", async () => {
   const { dir, root } = await fixture();
   try {
-    await writeFile(path.join(root, "pr-7", "draft_gate-single.json"), JSON.stringify({
+    await writeFile(path.join(root, "pr-7", "draft_gate-c1.json"), JSON.stringify({
       findings: [{ angle: "scope", file: " c.md " }, { angle: "x", files: [5, null, "d.md"] }, { files: ["e.md"] }],
     }));
     const index = await readFindingIndex(root);
@@ -121,7 +127,7 @@ test("empty threads file yields total 0 and wrong-shape lines error", async () =
 test("skips and counts a malformed round file and ignores a pre_approval_gate file", async () => {
   const { dir, root } = await fixture();
   try {
-    await writeFile(path.join(root, "pr-7", "draft_gate-broken.json"), "{");
+    await writeFile(path.join(root, "pr-7", "draft_gate-d1.json"), "{");
     await writeFile(path.join(root, "pr-7", "pre_approval_gate-x.json"), JSON.stringify({ findings: [{ angle: "kiss", files: ["z.md"] }] }));
     const result = await readFindingIndex(root);
     assert.equal(result.skipped, 2); // the broken file and the array-shaped fixture file
@@ -191,12 +197,12 @@ test("default findings root is main-anchored; --repo is validated like buildLogP
   const { dir } = await fixture();
   try {
     assert.equal(parseArgsList(["--threads", "t", "--repo", "owner/name", "--repo-root", dir]).findingsRoot, path.join(dir, "tmp", "gate-findings", "owner-name"));
-    const main = Bun.spawnSync(["git", "init", "-q", "-b", "main", "main"], { cwd: dir });
-    assert.equal(main.exitCode, 0);
     const mainDir = path.join(dir, "main");
-    Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i"], { cwd: mainDir });
+    await mkdir(mainDir);
+    runGitFixture(mainDir, ["init", "-q", "-b", "main"]);
+    runGitFixture(mainDir, ["commit", "-q", "--allow-empty", "-m", "i"]); // throws on a non-zero exit
     const linked = path.join(dir, "linked");
-    assert.equal(Bun.spawnSync(["git", "worktree", "add", "-q", "-b", "b", linked], { cwd: mainDir }).exitCode, 0);
+    runGitFixture(mainDir, ["worktree", "add", "-q", "-b", "b", linked]);
     const root = parseArgsList(["--threads", "t", "--repo", "owner/name", "--repo-root", linked]).findingsRoot;
     assert.match(root, new RegExp(`${path.basename(mainDir)}/tmp/gate-findings/owner-name$`));
     assert.ok(!root.includes("linked"));

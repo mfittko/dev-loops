@@ -40,7 +40,7 @@ has no line, the file match alone counts.
 Output (stdout, JSON):
   { "threads": [{ pr, path, matched, matchedAngles, class, shouldHaveCaughtAngles }],
     "summary": { total, copilotOnly, byClass, byAngle, skippedRoundFiles } }
-Only draft_gate-*.json round files are read; a malformed one is skipped and counted.
+Only draft_gate-<sha>.json and draft_gate-<sha>.round-<N>.json round files are read; a malformed one is skipped and counted.
 
 ${JQ_OUTPUT_USAGE}
 `;
@@ -144,7 +144,7 @@ export async function readFindingIndex(root) {
     if (!dir.isDirectory() || !match) continue;
     const byPath = new Map();
     for (const name of await readdir(path.join(root, dir.name))) {
-      if (!/^draft_gate-.+\.json$/.test(name)) continue;
+      if (!/^draft_gate-[0-9a-f]+(?:\.round-\d+)?\.json$/.test(name)) continue; // the ledger writer's names only: derived .consolidated/.act-list/... files are not rounds
       const file = path.join(root, dir.name, name);
       let round;
       try {

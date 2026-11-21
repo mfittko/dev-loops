@@ -1,7 +1,7 @@
 // Leaf module (PRE-PR-DEVELOPER-SELF-CHECK): the constraint ids the brief emits and the record writer requires.
 // The writer never imports the brief, so the shared id derivation lives here.
 import { execFileSync } from "node:child_process";
-import { loadDevLoopConfig, loadDevLoopConfigStrict, resolveGateAngles, resolveGateAnglesDynamic, resolveReviewerRole } from "@dev-loops/core/config";
+import { findAngleEntry, loadDevLoopConfig, loadDevLoopConfigStrict, resolveGateAngles, resolveGateAnglesDynamic } from "@dev-loops/core/config";
 import { PRE_PR_SELF_CHECK_MISSING } from "./_pre-pr-review-record.mjs";
 import { gitEnvNoDirOverrides } from "./_repo-root-resolver.mjs";
 
@@ -54,7 +54,7 @@ export async function resolveSelfCheckAngles(root, paths, { strict = false, conf
   try {
     const config = loaded ?? await loadConfig(root, strict);
     const names = await selectedAngleNames(config, paths);
-    return names.slice(0, MAX_ANGLE_LINES).map((angle) => ({ id: `${ANGLE_ID_PREFIX}${angle}`, angle, constraint: condenseAnglePrompt(resolveReviewerRole(config, angle).prompt, angle) }));
+    return names.slice(0, MAX_ANGLE_LINES).map((angle) => ({ id: `${ANGLE_ID_PREFIX}${angle}`, angle, constraint: condenseAnglePrompt(findAngleEntry(config, angle)?.prompt, angle) })); // the raw entry prompt: the rendered one ends in the checklist block
   } catch (error) { if (strict) throw configFailed(error); return []; }
 }
 
