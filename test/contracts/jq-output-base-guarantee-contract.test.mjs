@@ -120,6 +120,10 @@ const EXCLUDED = new Map([
     "Git pre-push hook helper: its contract is the exit code (1 refuses the push) with a one-line stderr reason; stdout carries nothing, and JSON.stringify appears only inside a thrown error message, so --jq/--silent have no payload to apply to.",
   ],
   [
+    "loop/check-refusal-recovery.mjs",
+    "CI checker: its contract is the exit code with a stderr violation list and a one-line stdout status; JSON.stringify only formats the committed baseline file under --write-baseline, so --jq/--silent have no tool-result payload to apply to.",
+  ],
+  [
     "pages/render-article.mjs",
     "Derived-artifact generator (npm run articles:render): emits HTML files; JSON.stringify appears only inside thrown error messages, and stdout is a one-line human status — nothing for a caller to filter with --jq.",
   ],
