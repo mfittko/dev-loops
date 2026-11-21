@@ -5,7 +5,7 @@
 // so the debt pipeline can feed into the existing dev-loop execution path.
 // ============================================================================
 
-import { execFileSync } from "node:child_process";
+import { ghSync } from "../github/gh-call-log.mjs";
 import { RemediationItemSchema } from "./debt-finding.mjs";
 
 // ============================================================================
@@ -99,7 +99,7 @@ export function createRemediationIssue(remediationItem, repo) {
       args.push("--label", label);
     }
 
-    const result = execFileSync("gh", args, {
+    const result = ghSync(args, {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
     }).trim();
