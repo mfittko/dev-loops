@@ -12,6 +12,7 @@ import {
   resolveAdditiveChangelog,
   resolvePrConflicts,
 } from "../../scripts/loop/resolve-pr-conflicts.mjs";
+import { refreshDepsIfChanged } from "../../scripts/loop/_worktree-deps.mjs";
 
 describe("parseResolvePrConflictsCliArgs", () => {
   test("rejects unknown flags (typos like --no-verfy)", () => {
@@ -460,45 +461,58 @@ describe("resolvePrConflicts (real git)", () => {
     }
   });
 
-  test("a base merge that changes bun.lock installs once in the worktree before verification", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-pr-conflicts-deps-"));
-    const remoteDir = path.join(tempDir, "remote.git");
-    const workDir = path.join(tempDir, "work");
-    try {
-      git(tempDir, ["init", "-q", "--bare", remoteDir]);
-      git(tempDir, ["clone", "-q", remoteDir, workDir]);
-      git(workDir, ["config", "commit.gpgsign", "false"]);
-      git(workDir, ["checkout", "-q", "-b", "main"]);
-      await writeFile(path.join(workDir, "bun.lock"), "v1\n", "utf8");
-      git(workDir, ["add", "."]);
-      git(workDir, ["commit", "-q", "-m", "base"]);
-      git(workDir, ["push", "-q", "-u", "origin", "main"]);
-      git(workDir, ["checkout", "-q", "-b", "feature"]);
-      git(workDir, ["checkout", "-q", "main"]);
-      await writeFile(path.join(workDir, "bun.lock"), "v2\n", "utf8");
-      git(workDir, ["commit", "-q", "-am", "bump lock"]);
-      git(workDir, ["push", "-q", "origin", "main"]);
-      git(workDir, ["checkout", "-q", "feature"]);
+  for (const { title, lockChanged } of [
+    { title: "a base merge that changes bun.lock installs once in the worktree before verification", lockChanged: true },
+    { title: "a base merge that leaves bun.lock unchanged does not install", lockChanged: false },
+  ]) {
+    test(title, async () => {
+      const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-pr-conflicts-deps-"));
+      const remoteDir = path.join(tempDir, "remote.git");
+      const workDir = path.join(tempDir, "work");
+      try {
+        git(tempDir, ["init", "-q", "--bare", remoteDir]);
+        git(tempDir, ["clone", "-q", remoteDir, workDir]);
+        git(workDir, ["config", "commit.gpgsign", "false"]);
+        git(workDir, ["checkout", "-q", "-b", "main"]);
+        await writeFile(path.join(workDir, "bun.lock"), "v1\n", "utf8");
+        await writeFile(path.join(workDir, ".gitignore"), "node_modules/\n", "utf8");
+        git(workDir, ["add", "."]);
+        git(workDir, ["commit", "-q", "-m", "base"]);
+        git(workDir, ["push", "-q", "-u", "origin", "main"]);
+        // Seed the install stamp for the base lockfile so only a real lockfile change triggers an install.
+        assert.equal(refreshDepsIfChanged(workDir, () => ({ ok: true })).ran, true);
+        git(workDir, ["checkout", "-q", "-b", "feature"]);
+        git(workDir, ["checkout", "-q", "main"]);
+        await writeFile(path.join(workDir, lockChanged ? "bun.lock" : "other.txt"), "v2\n", "utf8");
+        git(workDir, ["add", "."]);
+        git(workDir, ["commit", "-q", "-m", "base moves"]);
+        git(workDir, ["push", "-q", "origin", "main"]);
+        git(workDir, ["checkout", "-q", "feature"]);
 
-      const calls = [];
-      const installDeps = (cwd) => {
-        calls.push(`install @ ${cwd}`);
-        return { ok: true };
-      };
-      const runVerification = async () => {
-        calls.push("verify");
-        return { code: 0, stdout: "", stderr: "" };
-      };
-      const result = await resolvePrConflicts({ repoRoot: workDir, base: "main", verify: true, push: false }, { env: GIT_ENV, runVerification, installDeps });
-      const root = realpathSync(workDir);
-      assert.equal(calls.length, 2);
-      assert.equal(realpathSync(calls[0].slice("install @ ".length)), root);
-      assert.equal(calls[1], "verify");
-      assert.equal(result.deps.ran, true);
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
-  });
+        const calls = [];
+        const installDeps = (cwd) => {
+          calls.push(`install @ ${cwd}`);
+          return { ok: true };
+        };
+        const runVerification = async () => {
+          calls.push("verify");
+          return { code: 0, stdout: "", stderr: "" };
+        };
+        const result = await resolvePrConflicts({ repoRoot: workDir, base: "main", verify: true, push: false }, { env: GIT_ENV, runVerification, installDeps });
+        if (lockChanged) {
+          assert.equal(calls.length, 2);
+          assert.equal(realpathSync(calls[0].slice("install @ ".length)), realpathSync(workDir));
+          assert.equal(calls[1], "verify");
+          assert.equal(result.deps.ran, true);
+        } else {
+          assert.deepEqual(calls, ["verify"]);
+          assert.equal(result.deps, undefined);
+        }
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+  }
 });
 
 describe("merge commit identity (#2832)", () => {

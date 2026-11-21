@@ -100,7 +100,7 @@ Output (stdout, JSON):
                      // remote's best-effort fetch failed (offline, unknown
                      // remote, ...) — branch resolution above still ran,
                      // just against whatever was already fetched
-    "deps"?: { "ok": bool, "ran": bool, "reason"?, "exitCode"? },
+    "deps"?: { "ok": bool, "ran": bool, "reason"?, "exitCode"?, "stampWritten"? },
                      // the fail-soft bun install --frozen-lockfile result
                      // (ran:false when no bun.lock). On reuse it is present
                      // only when the install ran. stampWritten:false means

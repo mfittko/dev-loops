@@ -31,10 +31,11 @@ Options:
 Output (stdout, JSON with --json):
   { "ok": true, "action": "clean_merge"|"resolved",
     "base": "main", "resolvedFiles": ["CHANGELOG.md"], "pushed": false,
-    "verified": true }
+    "verified": true, "deps"?: { "ok": bool, "ran": bool, "reason"?, "exitCode"?, "stampWritten"? } }
   ("clean_merge" covers an already-up-to-date branch; "resolved" is the
    auto-resolved additive-CHANGELOG case. "verified" is true when post-resolve
-   verification ran; it is absent with --no-verify.)
+   verification ran; it is absent with --no-verify. "deps" is present only when the
+   base merge changed the lockfile and the dependency install ran.)
 Error output:
   { "ok": false, "error": "...", "conflictFiles": ["..."] }
 

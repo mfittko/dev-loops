@@ -55,7 +55,7 @@ export function ensureDeps(worktreePath, installDeps = defaultInstallDeps) {
     }
     let result;
     try {
-      result = installDeps(worktreePath);
+      result = installDeps(worktreePath) ?? { ok: false, reason: "installDeps returned nothing" };
     } catch (err) {
       result = { ok: false, reason: err?.message ?? String(err) };
     }
