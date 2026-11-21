@@ -865,6 +865,7 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
     overallVerdict: overallVerdictRaw !== undefined ? overallVerdictRaw : null,
     executionMode: parsed.executionMode,
     verifiedItems: verifiedItems === undefined ? [] : verifiedItems.map((item) => item.trim()),
+    prBodySha256: BODY_DIGEST_RE.test(parsed.prBodySha256) ? parsed.prBodySha256 : null,
   };
 }
 
@@ -1554,6 +1555,7 @@ async function collectLocalJudgeDispositionMatches({ dir, filenames, repo, pr, g
         reason,
         ...(finding.remedyKind === "evidence_only" || finding.remedyKind === "pr_body" ? { remedyKind: finding.remedyKind } : {}),
         verdictHeadSha: typeof parsed.headSha === "string" ? parsed.headSha : null,
+        bodySha256: BODY_DIGEST_RE.test(parsed.prBodySha256) ? parsed.prBodySha256 : null,
         loggedAtMs: Number.isFinite(loggedAtMs) ? loggedAtMs : null,
       });
     }
@@ -1562,9 +1564,15 @@ async function collectLocalJudgeDispositionMatches({ dir, filenames, repo, pr, g
 }
 
 // The verdict head (the ledger's own headSha) of the matched candidates; omitted unless every candidate names the same one, so a pr-body baseline is never guessed.
+// The ledger-recorded pr-body digest of the disposing round rides only when every candidate records the same one.
+const BODY_DIGEST_RE = /^[0-9a-f]{64}$/;
 const verdictHeadOf = (candidates) => {
   const heads = new Set(candidates.map((m) => m.verdictHeadSha));
-  return heads.size === 1 && [...heads][0] ? { headSha: [...heads][0] } : {};
+  const digests = new Set(candidates.map((m) => m.bodySha256));
+  return {
+    ...(heads.size === 1 && [...heads][0] ? { headSha: [...heads][0] } : {}),
+    ...(digests.size === 1 && [...digests][0] ? { bodySha256: [...digests][0] } : {}),
+  };
 };
 
 /**

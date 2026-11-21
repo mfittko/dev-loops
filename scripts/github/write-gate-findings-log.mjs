@@ -19,7 +19,7 @@ import { REVIEWER_UNIT_MAX_ANGLES, resolveReviewerUnitBound } from "@dev-loops/c
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateConfig, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { capClosedFor } from "@dev-loops/core/loop/gate-fanin";
-import { isInRoundRewrite, listPriorActItems, resolveDraftRoundCap } from "./write-gate-context.mjs";
+import { isInRoundRewrite, listPriorActItems, readReviewedBodySha256, resolveDraftRoundCap } from "./write-gate-context.mjs";
 import { raiseVerdictForActedCopilotBlock, withPinnedCopilotBodyCluster, withoutCopilotBodyDecision } from "./_copilot-body-disposition.mjs";
 import { clusterFindings, clustersFromStampedIds, projectClusterDisposition } from "@dev-loops/core/loop/finding-cluster";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
@@ -1242,6 +1242,9 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   const angleCoverage = provenance !== undefined
     ? await checkProvenanceAngleCoverage(provenance, options.gate, { repoRoot })
     : { warning: null };
+  // The round's own pr-body digest (GATE-EXEC-THREAD-DISPOSITION PR-body act): a later same-head context rebuild cannot rewrite it.
+  // An unreadable or ambiguous context records none, and the closer then falls back to the context path.
+  const prBodyDigest = await readReviewedBodySha256({ repo: options.repo, pr: options.pr, gate: options.gate, contextTmpRoot: options.contextTmpRoot }, options.headSha, repoRoot).catch(() => null);
   const log = {
     repo: options.repo,
     pr: options.pr,
@@ -1249,6 +1252,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     headSha: options.headSha,
     verdict: persistedVerdict,
     loggedAt: new Date().toISOString(),
+    ...(typeof prBodyDigest === "string" && /^[0-9a-f]{64}$/.test(prBodyDigest) ? { prBodySha256: prBodyDigest } : {}),
     // Record the round's real execution mode: a fanout_fanin verdict
     // must never persist a null/absent executionMode. No merge-time reader
     // consumes this field: detect-checkpoint-evidence reads executionMode

@@ -2802,11 +2802,11 @@ const BODY_NEW = "pr body after the edit";
 const prBodyFinding = (summary, extra = {}) => ({ severity: "worth-fixing-now", angle: "perf", summary, judgeDisposition: "act", remedyKind: "pr_body", judgeRationale: "state it in the body", ...extra });
 
 // Replays the PR 3368 shape: the cap-round ledger (the one passed in) carries none of the findings; the round-1 prior ledger holds them as pr_body acts; the round-1 context records the old pr-body digest.
-async function writePrBodyActFixture(repoRoot, findings, { recordedBody = BODY_OLD } = {}) {
+async function writePrBodyActFixture(repoRoot, findings, { recordedBody = BODY_OLD, ledgerBody = null } = {}) {
   const verdictHead = nthHeadSha(1);
   const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
   await mkdir(findingsDir, { recursive: true });
-  await writeFile(path.join(findingsDir, `draft_gate-${verdictHead}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: verdictHead, verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings }), "utf8");
+  await writeFile(path.join(findingsDir, `draft_gate-${verdictHead}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: verdictHead, verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", ...(ledgerBody ? { prBodySha256: prBodySha256(ledgerBody) } : {}), findings }), "utf8");
   if (recordedBody !== null) {
     const contextFile = path.join(repoRoot, buildGateContextPath({ repo: REPO, pr: PR, gate: "draft_gate", headSha: verdictHead, tmpRoot: "tmp" }));
     await mkdir(path.dirname(contextFile), { recursive: true });
@@ -2879,6 +2879,46 @@ test("a pr_body act thread stays open with a body_read_unrecorded failure when a
       assert.equal(result.prBodyActClosed, 0);
       assert.equal(result.unresolvedGateThreadCount, 1);
       assert.match(result.dispositionFailures[0].error, /body_read_unrecorded: the context at .* was rebuilt at the same head/);
+    },
+  ));
+});
+
+// The same-head body-only rerun (GATE-EXEC-BODY-ONLY-RERUN) rebuilds the context at the verdict head after the body edit: the disposing ledger's own digest is the baseline.
+async function rebuildContextAtVerdictHead(repoRoot) {
+  const contextFile = path.join(repoRoot, buildGateContextPath({ repo: REPO, pr: PR, gate: "draft_gate", headSha: nthHeadSha(1), tmpRoot: "tmp" }));
+  await writeFile(contextFile, JSON.stringify({ requiredReads: [{ kind: "pr-body", sha256: prBodySha256(BODY_NEW) }], prBodyBaselineSha256: prBodySha256(BODY_OLD) }), "utf8");
+}
+
+test("a pr_body act thread closes after a same-head context rebuild when the disposing ledger recorded the old body digest and the live body changed", async () => {
+  const findings = [prBodyFinding("first body edit")];
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: findings.map(prBodyThread) }),
+      livePrBodyEntry(BODY_NEW),
+      postReplyEntry(6100, { id: 7100 }),
+      resolveThreadEntry("THREAD_B0"),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      await writePrBodyActFixture(repoRoot, findings, { ledgerBody: BODY_OLD });
+      await rebuildContextAtVerdictHead(repoRoot);
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.prBodyActClosed, 1);
+      assert.equal(result.dispositionFailures, undefined);
+    },
+  ));
+});
+
+test("a pr_body act thread stays open with no failure after a same-head context rebuild while the live body equals the ledger-recorded digest", async () => {
+  const findings = [prBodyFinding("first body edit")];
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: findings.map(prBodyThread) }), livePrBodyEntry(BODY_OLD)],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      await writePrBodyActFixture(repoRoot, findings, { ledgerBody: BODY_OLD });
+      await rebuildContextAtVerdictHead(repoRoot);
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.prBodyActClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+      assert.equal(result.dispositionFailures, undefined);
     },
   ));
 });

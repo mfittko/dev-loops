@@ -44,7 +44,7 @@ that disagree, also skips) is never
 selected, at any severity and round (ADR 0089): it gets no
 stamp, no reply, no resolve, and no deferral entry, and stays open until the fixer
 replies with the fixing commit or a decline reason and resolves it. Three exceptions: (1) a thread whose markers are all judge \`act\`
-with remedyKind evidence_only is closed with an evidence-only reply (evidenceOnlyClosed); (2) a thread whose markers are all judge \`act\` with remedyKind pr_body is closed with a reply citing the PR-body change by its two digest prefixes (no commit) once the live PR body digest differs from the digest the gate context recorded at each marker's verdict head (prBodyActClosed; an unchanged digest leaves it open, an unrecorded or ambiguous digest records body_read_unrecorded and a failed live body read records body_read_failed in dispositionFailures); (3) a nit member
+with remedyKind evidence_only is closed with an evidence-only reply (evidenceOnlyClosed); (2) a thread whose markers are all judge \`act\` with remedyKind pr_body is closed with a reply citing the PR-body change by its two digest prefixes (no commit) once the live PR body digest differs from the digest the disposing ledger recorded (else the gate context's digest at each marker's verdict head) (prBodyActClosed; an unchanged digest leaves it open; for a ledger with no recorded digest, a missing, unreadable or ambiguous context digest, a context rebuilt at the same head, a digest found only in a non-reviewed checkout or an unknown verdict head records body_read_unrecorded; a failed live body read records body_read_failed, both in dispositionFailures); (3) a nit member
 of a judge-deferred mixed cluster closes with the cluster rationale ("Closed at gate close"),
 with no stamp and no filing. Otherwise only a thread whose every marker the judge
 disposed \`defer\` is replied-to + resolved ("deferred at gate close"), whatever its
@@ -575,7 +575,7 @@ function findingFingerprintMatches(finding, fp) {
 // ambiguity tier 2 already flagged would reject-close a thread that this
 // pass cannot actually resolve on the merits. A plain `null` (no matching
 // prior ledger at all) is a genuine cache miss and still falls through.
-async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate, headSha, tmpRoot, repoRoot, allowRendered = true }) {
+async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate, headSha, tmpRoot, repoRoot, allowRendered = true, currentBodySha256 = null }) {
   // Fingerprint match FIRST, independent of whether judgeDisposition is
   // present — a current-ledger finding this round already knows about (by
   // fingerprint) is never a tier-2/3 cache miss, even when the judge hasn't
@@ -608,7 +608,7 @@ async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate,
       : null;
     const reason = typeof current.judgeReason === "string" && current.judgeReason.trim().length > 0 ? current.judgeReason.trim() : null;
     const remedyKind = ["evidence_only", "pr_body"].find((kind) => currentMatches.every((f) => f.remedyKind === kind)) ?? null;
-    return { disposition: dispositions[0], rationale, reason, headSha, ...(remedyKind ? { remedyKind } : {}) };
+    return { disposition: dispositions[0], rationale, reason, headSha, ...(currentBodySha256 ? { bodySha256: currentBodySha256 } : {}), ...(remedyKind ? { remedyKind } : {}) };
   }
   const prior = await findJudgeDispositionForFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp });
   if (prior?.ambiguous) return null;
@@ -627,7 +627,7 @@ async function resolveThreadDisposition(wanted, { fp, threadBody, remedyKind = "
   const fps = new Set([fp]);
   collectFingerprints(threadBody, fps);
   let primary = null;
-  const verdictHeads = new Set();
+  const verdicts = new Map(); // One entry per distinct head and ledger-recorded digest.
   for (const memberFp of fps) {
     // The rendered header suffix (tier 3) carries only the primary's disposition, so a
     // non-primary member never reads it: with no ledger evidence the thread stays open.
@@ -635,10 +635,11 @@ async function resolveThreadDisposition(wanted, { fp, threadBody, remedyKind = "
     if (judgement?.disposition !== wanted) return null;
     // An act owns a closing thread only as the wanted remedy (evidence-only by default); any open act keeps the thread open.
     if (wanted === "act" && judgement.remedyKind !== remedyKind) return null;
-    verdictHeads.add(judgement.headSha ?? ""); // "" marks a marker with no recorded verdict head
+    // An empty head marks a marker with no recorded verdict head; a null digest marks a ledger that recorded none.
+    verdicts.set(`${judgement.headSha ?? ""} ${judgement.bodySha256 ?? ""}`, { head: judgement.headSha ?? "", digest: judgement.bodySha256 ?? null });
     primary ??= judgement;
   }
-  return primary && { ...primary, verdictHeads: [...verdictHeads] };
+  return primary && { ...primary, verdicts: [...verdicts.values()] };
 }
 
 // True when ledger evidence for any marker on the thread carries a disposition other than defer.
@@ -712,7 +713,7 @@ async function readRecordedBodyDigest(options, verdictHead, repoRoot) {
 // with remedyKind pr_body closes once the live PR body digest differs from the pr-body digest the gate context recorded at
 // that marker's verdict head. The changed digest is the evidence (ADR 0271); the reply cites both digests and no commit.
 // An unchanged digest leaves the thread open silently; an unrecorded or unreadable baseline fails closed in dispositionFailures.
-async function runPrBodyActClosePass({ repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, ledgerPath, allowedRefs = [] }, { env, ghCommand, runChild }) {
+async function runPrBodyActClosePass({ repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, ledgerPath, currentBodySha256 = null, allowedRefs = [] }, { env, ghCommand, runChild }) {
   let prBodyActClosed = 0;
   const dispositionFailures = [];
   let liveDigest;
@@ -723,15 +724,16 @@ async function runPrBodyActClosePass({ repo, pr, gate, headSha, round, threads, 
     if (!marker) continue;
     const failure = (error) => dispositionFailures.push({ commentId: thread.commentId, threadId: thread.threadId, severity: marker.severity, angle: marker.angle, error: error instanceof Error ? error.message : String(error) });
     try {
-      const judgement = await resolveThreadDisposition("act", { fp: marker.fp, threadBody: thread.body, remedyKind: "pr_body", findings, repo, pr, gate, headSha, tmpRoot, repoRoot });
+      const judgement = await resolveThreadDisposition("act", { fp: marker.fp, threadBody: thread.body, remedyKind: "pr_body", findings, repo, pr, gate, headSha, tmpRoot, repoRoot, currentBodySha256 });
       if (!judgement) continue;
       if (!Number.isInteger(thread.commentId) || thread.commentId <= 0) {
         failure(`PR-body act thread ${thread.threadId} has no valid root commentId (${String(thread.commentId)}); left open`);
         continue;
       }
       const recorded = [];
-      for (const verdictHead of judgement.verdictHeads) {
-        const digest = verdictHead ? await readRecordedBodyDigest({ repo, pr, gate, findingsLedger: ledgerPath }, verdictHead, repoRoot) : null;
+      for (const { head: verdictHead, digest: ledgerDigest } of judgement.verdicts) {
+        // The disposing ledger's own digest wins; the context path (with its fail-closed refusals) serves only a ledger that recorded none.
+        const digest = ledgerDigest ?? (verdictHead ? await readRecordedBodyDigest({ repo, pr, gate, findingsLedger: ledgerPath }, verdictHead, repoRoot) : null);
         if (!digest) throw new Error(`body_read_unrecorded: no pr-body digest is recorded for the verdict head of thread ${thread.threadId} (${verdictHead || "unknown head"}); left open`);
         recorded.push(digest);
       }
@@ -913,7 +915,7 @@ export function parseCloseGateFindingsCliArgs(argv) {
 // ---------------------------------------------------------------------------
 
 export async function closeGateFindings(options, { env = process.env, ghCommand = "gh", runChild, repoRoot = process.cwd() } = {}) {
-  const { repo, pr, gate, headSha, findings } = await readGateFindingsLedger(options.ledgerPath, { errorFactory: parseError });
+  const { repo, pr, gate, headSha, findings, prBodySha256: ledgerBodySha256 } = await readGateFindingsLedger(options.ledgerPath, { errorFactory: parseError });
   // The findings-log ledger (resolveGateRound's local-count cross-check) is
   // anchored at the MAIN worktree; default there so a close running
   // inside a linked worktree still counts the centralized prior-round ledgers.
@@ -991,7 +993,7 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // way deferredResolved does: both passes reply+resolve a thread this count
   // would otherwise still include.
   const { prBodyActClosed, dispositionFailures: prBodyActFailures } = await runPrBodyActClosePass(
-    { repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, ledgerPath: options.ledgerPath, allowedRefs: options.allowedRefs ?? [] },
+    { repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, ledgerPath: options.ledgerPath, currentBodySha256: ledgerBodySha256, allowedRefs: options.allowedRefs ?? [] },
     gh,
   );
   const unresolvedGateThreadCount = countUnresolvedGateAuthoredThreads(threads, login) - deferredResolved - rejectClosed - evidenceOnlyClosed - prBodyActClosed;
