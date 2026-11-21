@@ -48,7 +48,9 @@ Not-yet-registered-check race guard:
   The watcher requires either an observed check/status, or a stable empty
   result across two consecutive polls, before treating the head as genuinely
   check-less. A repo with no CI at all still settles after that grace instead
-  of hanging to timeout.
+  of hanging to timeout. Exception: when the GraphQL head read is rate limited,
+  the head is read over REST, expected checks are unknown, and a check-less head
+  stays pending (no grace settle).
 Output (stdout, JSON, the final per-check summary):
   { "ok": true, "status": "success"|"failure"|"pending"|"timeout"|"changed"|"stuck",
     "settled": bool, "ciStatus": "success"|"failure"|"pending"|"none",
@@ -83,7 +85,8 @@ past the cap (see below). When the reset falls past this call's ~${WAIT_CAP_MS /
 cap but inside the requested budget, it sleeps within the cap and returns
 status "timeout" with outcome "pending", ciStatus "pending", the baseline
 headSha (null when none was read yet), "rateLimitResetAt" (ISO 8601) and a
-"reissue" command; run that command unchanged.
+"reissue" command; run that command unchanged. On a secondary limit the reissue
+retries at once and starts a fresh backoff; rateLimitResetAt is advisory.
 ${JQ_OUTPUT_USAGE}
 Exit codes (default output, no --jq/--silent):
   0  Green (status "success")

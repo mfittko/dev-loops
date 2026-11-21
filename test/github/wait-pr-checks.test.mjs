@@ -745,5 +745,5 @@ test("wait-pr-checks names primary_graphql in the RATE_LIMITED budget", async ()
 test("wait-pr-checks --help documents the secondary backoff and the budget field", async () => {
   const stdout = makeStream();
   assert.equal(await runCli(["--help"], { stdout }), 0);
-  for (const text of ["budget", "primary_core", "secondary", "retry-after", "jitter"]) assert(stdout.text().includes(text), text);
+  for (const text of ["budget", "primary_core", "secondary", "retry-after", "jitter", "over REST", "fresh backoff"]) assert(stdout.text().includes(text), text);
 });

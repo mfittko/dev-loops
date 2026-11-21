@@ -72,6 +72,9 @@ No-checks rule (grace, race-safe):
   is pending (checks expected, not yet reported), never none. A gh-api / parse
   failure is never treated as empty — it forces pending so the watch keeps
   polling, and a persistent error settles as "timeout", never fabricated green.
+  Exception: when the GraphQL head read is rate limited, the head is read over
+  REST, expected checks are unknown, and a check-less head stays pending (no
+  grace settle and no --timeout 0 settle).
   (--timeout 0 single check has no waiting budget, so a clean no-checks head
   settles immediately.)
 Diagnostic output (stderr):
