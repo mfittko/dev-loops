@@ -9272,6 +9272,28 @@ test("#1808: --gate review on a CLEAN ledger renders with no blocking-severity l
   }, { prefix: "dev-loops-upsert-review-gate-clean-" });
 });
 
+test("#2926: --gate review on a zero-finding ledger with --judge-spec-source renders the spec line and no judge-skipped line", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      ...reviewGateFindingSurfaceEntries({ files: null }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["**Judge spec:** none"],
+        assertStdinNotIncludes: ["**Judge:** skipped, the round has no findings to dispose"],
+        stdout: '{"id":904,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-904"}\n',
+      },
+    ];
+    const { runChild } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath, judgeSpecSource: "none", executionMode: "fanout_fanin",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.ok, true);
+  }, { prefix: "dev-loops-upsert-review-gate-spec-skip-" });
+});
+
 // AC6: the call site passes the unjudged flag into deriveEffectiveNextAction; a clean ledger holding an
 // unjudged finding must not render "no change requested" beside it.
 test("--gate review with --judge-spec-source none and a clean ledger holding one unjudged finding renders 'read the findings, none was judged'", async () => {

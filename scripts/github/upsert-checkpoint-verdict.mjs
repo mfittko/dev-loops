@@ -1730,7 +1730,7 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     ...(staleBaseNote ? [`**Base freshness:** stale; ${staleBaseNote}`] : []),
     ...(Array.isArray(gateBlockers) && gateBlockers.length > 0 ? [`**Gate blockers:** ${formatGateBlockerCounts(gateBlockers)}`] : []),
     ...(judgeSpecSource ? [judgeSpecSource === "unavailable" ? JUDGE_UNAVAILABLE_LINES[judgeUnavailableReason] : JUDGE_SPEC_LINES[judgeSpecSource]] : []),
-    ...(judgeSkippedNoFindings ? ["**Judge:** skipped, the round has no findings to dispose"] : []),
+    ...(judgeSkippedNoFindings && !judgeSpecSource ? ["**Judge:** skipped, the round has no findings to dispose"] : []),
     ...renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy }),
     // GATE-EXEC-LOW-NIT-CONVERGENCE: rendered only for a validated converged draft_gate post.
     ...(gate === "draft_gate" && verdict === "clean" && converged ? [`**Converged:** fixer \`${converged.fixerCommit}\` delta \`${converged.deltaDigest}\``] : []),
