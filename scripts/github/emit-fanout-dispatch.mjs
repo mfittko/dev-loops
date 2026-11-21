@@ -505,7 +505,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   if (ciFileArg !== null) {
     const ci = await readFile(ciFileArg, "utf8").then((text) => JSON.parse(text), () => null);
     const stop = preFanoutCiObservation(ci, headSha);
-    if (stop) return finish({ ok: false, refusal: stop.observation, ...stop, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: current-head CI is ${stop.ciStatus}, not settled green; stop and route ${stop.nextAction}` }, false);
+    if (stop) return finish({ ok: false, refusal: stop.observation, ...stop, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing: current-head CI is ${stop.ciStatus}, not settled green; stop and route ${stop.nextAction}`, recovery: `route ${stop.nextAction}, then re-run this fan-out with a fresh --ci-file once CI is settled green at --head-sha` }, false);
   }
 
   // The same config write-gate-context resolved against (this step runs in that
