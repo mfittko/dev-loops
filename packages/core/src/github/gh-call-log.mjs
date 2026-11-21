@@ -19,7 +19,7 @@ const GRAPHQL_GROUPS = new Set(["pr", "issue", "project", "repo", "release"]);
 const mainCheckoutByCwd = new Map();
 
 /**
- * Log path: env override (trimmed; blank is unset; relative paths resolve against the main checkout),
+ * Log path: absolute env override (trimmed; blank or relative is ignored),
  * else `<main checkout>/tmp/gh-calls.jsonl`. Returns null when no main checkout resolves and no absolute override is set.
  */
 export function resolveGhCallLogPath(cwd = process.cwd(), env = process.env) {
@@ -34,7 +34,7 @@ export function resolveGhCallLogPath(cwd = process.cwd(), env = process.env) {
     mainCheckoutByCwd.set(cwd, mainCheckout);
   }
   if (mainCheckout === null) return null;
-  return override ? path.resolve(mainCheckout, override) : path.join(mainCheckout, "tmp", "gh-calls.jsonl");
+  return path.join(mainCheckout, "tmp", "gh-calls.jsonl");
 }
 
 /** Classify a `gh` argv as `graphql` or `rest`. */
@@ -79,11 +79,11 @@ function describeGhCall(args) {
 }
 
 /** Append one record. Swallows every error: logging must never affect the `gh` call. */
-export function recordGhCall(args, { durationMs, status, stderr = "", script = process.argv[1], logPath, now = new Date() } = {}) {
+export function recordGhCall(args, { durationMs, status, stderr = "", script = process.argv[1], logPath } = {}) {
   try {
     const { subcommand, pr } = describeGhCall(args);
     const record = {
-      timestamp: now.toISOString(),
+      timestamp: new Date().toISOString(),
       script: script ? path.basename(script) : null,
       pr,
       kind: classifyGhCall(args),

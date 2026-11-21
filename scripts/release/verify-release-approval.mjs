@@ -26,6 +26,8 @@
  * jq-output.mjs).
  */
 import { execFileSync } from "node:child_process";
+import { appendFileSync, mkdirSync } from "node:fs";
+import path from "node:path";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { resolveNpmDistTag } from "./resolve-npm-dist-tag.mjs";
 import { isDirectCliRun } from "../lib/direct-run.mjs";
@@ -276,8 +278,42 @@ export function resolveApprovalState({ version, operator, comments, releaseRef }
   return { applies: true, approved: false, refusal };
 }
 
+/**
+ * Append one record to the shared gh call log (same path and fields as @dev-loops/core's recordGhCall).
+ * Zero-dependency copy: this script runs before `npm ci`. Swallows every error.
+ */
+export function recordGhCall(args, { durationMs, status }) {
+  try {
+    const override = String(process.env.DEVLOOPS_GH_CALL_LOG ?? "").trim();
+    let file = override && path.isAbsolute(override) ? override : null;
+    if (file === null) {
+      const listing = execFileSync("git", ["worktree", "list", "--porcelain"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 });
+      const main = /^worktree (.+)$/mu.exec(listing)?.[1];
+      if (!main) return;
+      file = path.join(main, "tmp", "gh-calls.jsonl");
+    }
+    const subcommand = args.slice(0, 3).filter((a) => !a.startsWith("-")).join(" ");
+    mkdirSync(path.dirname(file), { recursive: true });
+    appendFileSync(file, `${JSON.stringify({ timestamp: new Date().toISOString(), script: path.basename(process.argv[1] ?? ""), pr: null, kind: args[0] === "api" && args[1] !== "graphql" ? "rest" : "graphql", subcommand, durationMs, status, rateLimited: status === 0 ? false : null })}\n`);
+  } catch { /* swallow */ }
+}
+
+/** `execFileSync` that records `gh` calls. Rethrows the original error. */
+function execFileSyncRecorded(command, args, options) {
+  if (command !== "gh") return execFileSync(command, args, options);
+  const started = Date.now();
+  try {
+    const out = execFileSync(command, args, options);
+    recordGhCall(args, { durationMs: Date.now() - started, status: 0 });
+    return out;
+  } catch (err) {
+    recordGhCall(args, { durationMs: Date.now() - started, status: typeof err?.status === "number" ? err.status : 1 });
+    throw err;
+  }
+}
+
 /** Run a bounded `gh` call; throws (fail closed) on any non-zero exit. */
-function runGh(args, { ghCommand = "gh", runChild = execFileSync } = {}) {
+function runGh(args, { ghCommand = "gh", runChild = execFileSyncRecorded } = {}) {
   const stdout = runChild(ghCommand, args, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
   return stdout;
 }
@@ -363,7 +399,7 @@ export function resolveReleaseCommitDate({ override = null, gitCommand = "git", 
   return date;
 }
 
-export function verifyReleaseApproval({ version, repo, operator = null, releaseCommitDate = null, ghCommand = "gh", runChild = execFileSync, runGit = execFileSync } = {}) {
+export function verifyReleaseApproval({ version, repo, operator = null, releaseCommitDate = null, ghCommand = "gh", runChild = execFileSyncRecorded, runGit = execFileSync } = {}) {
   version = version.trim();
   const distTag = resolveNpmDistTag(version); // throws on garbage -> usage error upstream
   if (distTag !== "latest") {

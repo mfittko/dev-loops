@@ -6,7 +6,10 @@ import { fileURLToPath } from "node:url";
 import { afterEach, test } from "bun:test";
 import { runChild } from "@dev-loops/core/cli/primitives";
 import { classifyGhCall, execFileSyncRecorded, ghAsync, ghSync, GH_CALL_LOG_ENV, recordGhCall, resolveGhCallLogPath, spawnRecorded, summarizeGhCallLog, summarizeGhCalls } from "@dev-loops/core/github/gh-call-log";
+import { EventEmitter } from "node:events";
 import { runCli } from "../../scripts/loop/gh-calls.mjs";
+import { verifyReleaseApproval } from "../../scripts/release/verify-release-approval.mjs";
+import { postGateVerdictViaGh } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
 import { readdirSync, statSync } from "node:fs";
 import { withTempDir } from "../_helpers.mjs";
 
@@ -139,8 +142,7 @@ export function hasUnrecordedGhCall(source) {
     return RAW_SPAWNERS.test(body) && !body.includes("recordGhCall(");
   });
 }
-// verify-release-approval and post-gate-verdict-fallback run without @dev-loops/core installed, so they cannot import the recorder and stay unrecorded.
-const ALLOWED_SPAWNERS = new Set(["packages/core/src/github/gh-call-log.mjs", "packages/core/src/cli/primitives.mjs", "scripts/release/verify-release-approval.mjs", "skills/dev-loop/scripts/post-gate-verdict-fallback.mjs"]);
+const ALLOWED_SPAWNERS = new Set(["packages/core/src/github/gh-call-log.mjs", "packages/core/src/cli/primitives.mjs"]);
 
 function sourceFiles(dir) {
   return readdirSync(path.join(REPO_ROOT, dir)).flatMap((name) => {
@@ -273,9 +275,8 @@ test("recordGhCall extracts the PR number per command kind", async () => {
   });
 });
 
-test("the log path env override resolves against the main checkout when relative", () => {
-  assert.equal(resolveGhCallLogPath(REPO_ROOT, { [GH_CALL_LOG_ENV]: "/abs/x.jsonl" }), "/abs/x.jsonl");
-  assert.ok(path.isAbsolute(resolveGhCallLogPath(REPO_ROOT, { [GH_CALL_LOG_ENV]: "rel/x.jsonl" })));
+test("a relative log path env override is ignored", () => {
+  assert.equal(resolveGhCallLogPath(REPO_ROOT, { [GH_CALL_LOG_ENV]: "rel/x.jsonl" }), resolveGhCallLogPath(REPO_ROOT, {}));
 });
 
 test("recordGhCall flags the secondary submission refusal as rate limited", async () => {
@@ -339,29 +340,16 @@ test("gh-calls CLI rejects an empty --log", async () => {
   for (const bad of ["", "  "]) await assert.rejects(runCli(["--log", bad], { stdout: { write() {} } }));
 });
 
-test("gh-calls CLI resolves a relative --log against the main checkout, not cwd", async () => {
+test("gh-calls CLI resolves a relative --log against cwd", async () => {
   await withTempDir(async (dir) => {
     const repo = realpathSync(dir);
-    execFileSync("git", ["init", "-q"], { cwd: repo });
-    mkdirSync(path.join(repo, "tmp"));
-    mkdirSync(path.join(repo, "sub"));
-    recordGhCall(["pr", "list"], { durationMs: 1, status: 0, script: "s.mjs", logPath: path.join(repo, "tmp", "x.jsonl") });
+    recordGhCall(["pr", "list"], { durationMs: 1, status: 0, script: "s.mjs", logPath: path.join(repo, "x.jsonl") });
     const prev = process.cwd();
-    process.chdir(path.join(repo, "sub"));
+    process.chdir(repo);
     try {
       let out = "";
-      await runCli(["--log", "tmp/x.jsonl"], { stdout: { write: (s) => { out += s; } } });
+      await runCli(["--log", "x.jsonl"], { stdout: { write: (s) => { out += s; } } });
       assert.equal(JSON.parse(out).total, 1);
-    } finally { process.chdir(prev); }
-  });
-});
-
-test("gh-calls CLI rejects a relative --log outside a git checkout", async () => {
-  await withTempDir(async (dir) => {
-    const prev = process.cwd();
-    process.chdir(realpathSync(dir));
-    try {
-      await assert.rejects(runCli(["--log", "./gh-calls.jsonl"], { stdout: { write() {} } }), /relative and no git checkout/u);
     } finally { process.chdir(prev); }
   });
 });
@@ -400,5 +388,46 @@ test("gh-calls CLI summarizes a fixture log and treats a missing log as empty", 
     out = "";
     await runCli(["--log", path.join(dir, "missing.jsonl")], { stdout: { write: (s) => { out += s; } } });
     assert.equal(JSON.parse(out).total, 0);
+  });
+});
+
+test("verify-release-approval appends one record per gh call", async () => {
+  await withTempDir(async (dir) => {
+    const logPath = path.join(dir, "log.jsonl");
+    const saved = { PATH: process.env.PATH, log: process.env[GH_CALL_LOG_ENV] };
+    process.env[GH_CALL_LOG_ENV] = logPath;
+    process.env.PATH = fakeGhEnv(dir).PATH;
+    try {
+      try { verifyReleaseApproval({ version: "1.2.3", repo: "o/r", operator: "op", releaseCommitDate: "2026-01-01T00:00:00Z" }); } catch { /* the fake gh output is not a real search result */ }
+    } finally {
+      process.env.PATH = saved.PATH;
+      if (saved.log === undefined) delete process.env[GH_CALL_LOG_ENV]; else process.env[GH_CALL_LOG_ENV] = saved.log;
+    }
+    const records = readLog(logPath);
+    assert.equal(records.length, 1);
+    assert.equal(records[0].status, 0);
+  });
+});
+
+test("post-gate-verdict-fallback appends one record for its gh api call", async () => {
+  await withTempDir(async (dir) => {
+    const logPath = path.join(dir, "log.jsonl");
+    const saved = process.env[GH_CALL_LOG_ENV];
+    process.env[GH_CALL_LOG_ENV] = logPath;
+    const spawnImpl = () => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.stdin = { end() { child.stdout.emit("data", '{"id":1,"html_url":"https://x"}'); child.emit("close", 0); } };
+      return child;
+    };
+    try {
+      await postGateVerdictViaGh({ repo: "o/r", pr: 1, body: "ok", spawnImpl });
+    } finally {
+      if (saved === undefined) delete process.env[GH_CALL_LOG_ENV]; else process.env[GH_CALL_LOG_ENV] = saved;
+    }
+    const records = readLog(logPath);
+    assert.equal(records.length, 1);
+    assert.equal(records[0].subcommand, "api POST");
   });
 });

@@ -23,7 +23,9 @@
 // the gate-comment requirement.
 
 import { readFile } from "node:fs/promises";
-import { spawn as defaultSpawn } from "node:child_process";
+import { execFileSync, spawn as defaultSpawn } from "node:child_process";
+import { appendFileSync, mkdirSync } from "node:fs";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const GATE_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
@@ -492,6 +494,26 @@ async function resolveFindingsSummary(options, { parseError }) {
   throw parseError("post-gate-verdict-fallback requires either --findings-summary or --findings-file");
 }
 
+/**
+ * Append one record to the shared gh call log (same path and fields as @dev-loops/core's recordGhCall).
+ * Zero-dependency copy: this fallback ships in the plugin without @dev-loops/core. Swallows every error.
+ */
+export function recordGhCall(args, { durationMs, status, stderr = "" }) {
+  try {
+    const override = String(process.env.DEVLOOPS_GH_CALL_LOG ?? "").trim();
+    let file = override && path.isAbsolute(override) ? override : null;
+    if (file === null) {
+      const listing = execFileSync("git", ["worktree", "list", "--porcelain"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 });
+      const main = /^worktree (.+)$/mu.exec(listing)?.[1];
+      if (!main) return;
+      file = path.join(main, "tmp", "gh-calls.jsonl");
+    }
+    const subcommand = args.slice(0, 3).filter((a) => !a.startsWith("-")).join(" ");
+    mkdirSync(path.dirname(file), { recursive: true });
+    appendFileSync(file, `${JSON.stringify({ timestamp: new Date().toISOString(), script: path.basename(process.argv[1] ?? ""), pr: null, kind: "rest", subcommand, durationMs, status, rateLimited: status !== 0 && /rate limit|was submitted too quickly/iu.test(stderr) })}\n`);
+  } catch { /* swallow */ }
+}
+
 export async function postGateVerdictViaGh({
   repo,
   pr,
@@ -506,11 +528,9 @@ export async function postGateVerdictViaGh({
     guardFallbackBodyNoIssuePrIds(body, "gate verdict comment");
     guardFallbackBodyNoOperatorOwnedLine(body, "gate verdict comment");
     const payload = JSON.stringify({ body });
-    const child = spawnImpl(
-      ghCommand,
-      ["api", "--method", "POST", "-H", "Content-Type: application/json", "--input", "-", `repos/${repo}/issues/${pr}/comments`],
-      { env, stdio: ["pipe", "pipe", "pipe"] },
-    );
+    const ghArgs = ["api", "--method", "POST", "-H", "Content-Type: application/json", "--input", "-", `repos/${repo}/issues/${pr}/comments`];
+    const started = Date.now();
+    const child = spawnImpl(ghCommand, ghArgs, { env, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => {
@@ -523,6 +543,7 @@ export async function postGateVerdictViaGh({
       reject(new Error(`gh api failed to spawn: ${err instanceof Error ? err.message : String(err)}`));
     });
     child.on("close", (code) => {
+      recordGhCall(ghArgs, { durationMs: Date.now() - started, status: code ?? 1, stderr });
       if (code !== 0) {
         const detail = stderr.trim() || `exit code ${code}`;
         reject(new Error(`gh api failed to post gate verdict comment for ${repo}#${pr}: ${detail}`));
