@@ -756,7 +756,7 @@ test("watchCopilotRunUntilComplete retries with the remaining budget and throws 
       return { status: "completed" };
     };
     const sleep = async (ms) => { clock += ms; };
-    return { budgets, result: watchCopilotRunUntilComplete({ repo: "o/r", runId: 1, timeoutMs: 540_000 }, { env: { DEV_LOOPS_GH_STUB: "1" }, spawn, sleep, now: () => clock, takeSlot: async () => {} }) };
+    return { budgets, result: watchCopilotRunUntilComplete({ repo: "o/r", runId: 1, timeoutMs: 540_000 }, { env: { DEV_LOOPS_GH_STUB: "1" }, spawn, sleep, now: () => clock }) };
   };
   let out = run(100_000);
   assert.deepEqual(await out.result, { status: "completed" });

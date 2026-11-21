@@ -483,11 +483,11 @@ describe("secondary rate limit backoff", () => {
 
   test("withSecondaryLimitBackoff retries a thrown or resolved secondary limit once, then throws RATE_LIMITED", async () => {
     const sleeps = [];
-    const opts = { backoffMs: 7, sleep: async (ms) => { sleeps.push(ms); } };
+    const opts = { sleep: async (ms) => { sleeps.push(ms); } };
     const thrown = () => Object.assign(new Error("Command failed"), { stderr: "You have exceeded a secondary rate limit" });
     let runs = 0;
     assert.equal(await withSecondaryLimitBackoff(async () => { runs += 1; if (runs === 1) throw thrown(); return "ok"; }, opts), "ok");
-    assert.deepEqual(sleeps, [7]);
+    assert.deepEqual(sleeps, [30000]);
     runs = 0;
     await assert.rejects(() => withSecondaryLimitBackoff(async () => { runs += 1; throw thrown(); }, opts), { code: "RATE_LIMITED" });
     assert.equal(runs, 2);
@@ -502,7 +502,7 @@ describe("secondary rate limit backoff", () => {
       let runs = 0;
       const sleeps = [];
       let thrown;
-      try { await withSecondaryLimitBackoff(async () => { runs += 1; throw error; }, { backoffMs: 7, sleep: async (ms) => { sleeps.push(ms); } }); } catch (e) { thrown = e; }
+      try { await withSecondaryLimitBackoff(async () => { runs += 1; throw error; }, { sleep: async (ms) => { sleeps.push(ms); } }); } catch (e) { thrown = e; }
       return { runs, sleeps, thrown };
     };
     const stderrForm = await run(Object.assign(new Error("Command failed: gh x"), { stderr: "You have exceeded a secondary rate limit. Please wait a few minutes before you try again." }));

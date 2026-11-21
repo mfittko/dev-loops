@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, test } from "bun:test";
 
 import { resetThrottleCache, ghExecFileSync } from "@dev-loops/core/github/gh-throttle";
 import { EventEmitter } from "node:events";
+import { runChild } from "../../scripts/_cli-primitives.mjs";
 import { runChildWithInput } from "../../scripts/github/_review-thread-mutations.mjs";
 import { watchWorkflowRun } from "../../scripts/loop/run-watch-cycle.mjs";
 import { unresolveReviewThread } from "../../scripts/github/unresolve-review-thread.mjs";
@@ -66,6 +67,16 @@ describe("direct gh call sites take a throttle slot", () => {
     };
     await watchWorkflowRun({ repo: "o/r", runId: 1 }, { env: process.env, ghCommand: "gh", spawnImpl });
     assert.ok(existsSync(slotFile()));
+  });
+
+  test("default runChild takes a slot for gh", async () => {
+    await runChild("gh", ["api", "x"], process.env);
+    assert.ok(existsSync(slotFile()));
+  });
+
+  test("default runChild takes no slot for another command", async () => {
+    await runChild("true", [], process.env);
+    assert.ok(!existsSync(slotFile()));
   });
 
   test("a call env that attests a gh stub takes no slot at an async site", async () => {

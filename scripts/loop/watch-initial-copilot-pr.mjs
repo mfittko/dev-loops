@@ -69,7 +69,7 @@ function rejectRemovedFlag(token) {
 }
 export async function watchCopilotRunUntilComplete(
   { repo, runId, timeoutMs = null },
-  { env = process.env, ghCommand = "gh", spawn: spawnImpl = spawnWatch, now = Date.now, sleep, takeSlot = takeGhSlot } = {},
+  { env = process.env, ghCommand = "gh", spawn: spawnImpl = spawnWatch, now = Date.now, sleep } = {},
 ) {
   // One deadline for all attempts: a retry after the backoff gets the remaining budget, never a fresh timeoutMs.
   const deadline = Number.isInteger(timeoutMs) && timeoutMs >= 0 ? now() + timeoutMs : null;
@@ -80,7 +80,7 @@ export async function watchCopilotRunUntilComplete(
     if (attempts > 1 && deadline !== null && remaining <= 0) {
       throw rateLimitedError("gh command failed", "secondary rate limit; the watch budget was spent during the backoff");
     }
-    if (ghCommand === "gh") await takeSlot({ env });
+    if (ghCommand === "gh") await takeGhSlot({ env });
     return spawnImpl({ repo, runId, timeoutMs: remaining }, { env, ghCommand });
   };
   return ghCommand === "gh" ? withSecondaryLimitBackoff(attempt, { sleep }) : attempt();

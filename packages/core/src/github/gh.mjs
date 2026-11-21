@@ -10,7 +10,7 @@
  * (fetch-ci-logs shape) — always carrying `code: "GH_API_ERROR"`, plus the
  * inline `Invalid JSON from gh: <stdout|<empty>>` malformed-stdout shape
  * (probe-ci-status). The one exception to `GH_API_ERROR` is a second secondary
- * rate limit: after one `backoffMs` backoff (default 30000) and one retry, both
+ * rate limit: after one 30 s backoff and one retry, both
  * helpers throw `code: "RATE_LIMITED"` with `resetAt: null` and their own message
  * prefix. An injected `runChild` runs once with no retry.
  * `ghGraphql` reproduces scripts/projects/add-queue-item.mjs's
@@ -82,12 +82,12 @@ function isSecondaryLimited(outcome) {
  * retries, and a second one throws RATE_LIMITED. Streaming sites that inherit
  * stderr cannot see the limit and stay paced only.
  */
-export async function withSecondaryLimitBackoff(attempt, { backoffMs = SECONDARY_RATE_LIMIT_BACKOFF_MS, sleep = realSleep } = {}) {
+export async function withSecondaryLimitBackoff(attempt, { sleep = realSleep } = {}) {
   const settle = async () => { try { return { value: await attempt() }; } catch (error) { return { error }; } };
   const unwrap = ({ value, error }) => { if (error) throw error; return value; };
   let outcome = await settle();
   if (!isSecondaryLimited(outcome.error ?? outcome.value)) return unwrap(outcome);
-  await sleep(backoffMs);
+  await sleep(SECONDARY_RATE_LIMIT_BACKOFF_MS);
   outcome = await settle();
   if (isSecondaryLimited(outcome.error ?? outcome.value)) {
     const limited = outcome.error ?? outcome.value;

@@ -211,7 +211,7 @@ const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),
  * rate limit backs off once and retries, and a second one throws `RATE_LIMITED`.
  * The last argument is a test seam.
  */
-export function ghExecFileSync(command, args, options, { execFile = execFileSync, takeSlotSync = takeGhSlotSync, backoff = sleepSync, backoffMs = SECONDARY_RATE_LIMIT_BACKOFF_MS } = {}) {
+export function ghExecFileSync(command, args, options, { execFile = execFileSync, takeSlotSync = takeGhSlotSync, backoff = sleepSync } = {}) {
   const attempt = () => {
     if (command === "gh" && !isUnpaced(options?.env)) takeSlotSync({ env: options?.env, cwd: options?.cwd });
     return execFile(command, args, options);
@@ -223,7 +223,7 @@ export function ghExecFileSync(command, args, options, { execFile = execFileSync
     // stderr only: error.message carries the whole argv, so argument text must not read as a limit.
     if (!isSecondaryRateLimitError(String(error.stderr ?? ""))) throw error;
   }
-  backoff(backoffMs);
+  backoff(SECONDARY_RATE_LIMIT_BACKOFF_MS);
   try {
     return attempt();
   } catch (error) {

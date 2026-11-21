@@ -211,9 +211,9 @@ describe("gh-throttle", () => {
     const limited = () => { throw Object.assign(new Error("failed"), { stderr: "You have exceeded a secondary rate limit" }); };
     const backoffs = [];
     let runs = 0;
-    const deps = (impl) => ({ execFile: () => { runs += 1; return impl(runs); }, takeSlotSync: () => {}, backoff: (ms) => backoffs.push(ms), backoffMs: 7 });
+    const deps = (impl) => ({ execFile: () => { runs += 1; return impl(runs); }, takeSlotSync: () => {}, backoff: (ms) => backoffs.push(ms) });
     assert.equal(ghExecFileSync("gh", ["x"], {}, deps((n) => (n === 1 ? limited() : "ok"))), "ok");
-    assert.deepEqual(backoffs, [7]);
+    assert.deepEqual(backoffs, [30000]);
     runs = 0;
     assert.throws(() => ghExecFileSync("gh", ["x"], {}, deps(limited)), { code: "RATE_LIMITED", message: /secondary rate limit/ });
     assert.equal(runs, 2);
@@ -223,7 +223,7 @@ describe("gh-throttle", () => {
     const run = (error) => {
       let runs = 0;
       const backoffs = [];
-      const deps = { execFile: () => { runs += 1; throw error; }, takeSlotSync: () => {}, backoff: (ms) => backoffs.push(ms), backoffMs: 7 };
+      const deps = { execFile: () => { runs += 1; throw error; }, takeSlotSync: () => {}, backoff: (ms) => backoffs.push(ms) };
       let thrown;
       try { ghExecFileSync("gh", ["x"], {}, deps); } catch (e) { thrown = e; }
       return { runs, backoffs, thrown };
