@@ -1552,13 +1552,20 @@ async function collectLocalJudgeDispositionMatches({ dir, filenames, repo, pr, g
         disposition: finding.judgeDisposition.trim(),
         rationale,
         reason,
-        ...(finding.remedyKind === "evidence_only" ? { remedyKind: "evidence_only" } : {}),
+        ...(finding.remedyKind === "evidence_only" || finding.remedyKind === "pr_body" ? { remedyKind: finding.remedyKind } : {}),
+        verdictHeadSha: typeof parsed.headSha === "string" ? parsed.headSha : null,
         loggedAtMs: Number.isFinite(loggedAtMs) ? loggedAtMs : null,
       });
     }
   }
   return matches;
 }
+
+// The verdict head (the ledger's own headSha) of the matched candidates; omitted unless every candidate names the same one, so a pr-body baseline is never guessed.
+const verdictHeadOf = (candidates) => {
+  const heads = new Set(candidates.map((m) => m.verdictHeadSha));
+  return heads.size === 1 && [...heads][0] ? { headSha: [...heads][0] } : {};
+};
 
 /**
  * Tier 2 of the reject-close judge-disposition lookup (close-gate-findings.mjs,
@@ -1618,14 +1625,14 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
     // At least one candidate ledger carries no usable loggedAt: "greatest" is
     // undecidable across the full set. Safe to proceed only when every
     // candidate already agrees on the disposition regardless of order.
-    return allAgree ? { disposition: matches[0].disposition, rationale: matches[0].rationale, reason: matches[0].reason, ...(matches[0].remedyKind ? { remedyKind: matches[0].remedyKind } : {}) } : { ambiguous: true };
+    return allAgree ? { disposition: matches[0].disposition, rationale: matches[0].rationale, reason: matches[0].reason, ...(matches[0].remedyKind ? { remedyKind: matches[0].remedyKind } : {}), ...verdictHeadOf(matches) } : { ambiguous: true };
   }
   const maxLoggedAtMs = Math.max(...timestamped.map((m) => m.loggedAtMs));
   const winners = timestamped.filter((m) => m.loggedAtMs === maxLoggedAtMs);
   if (winners.length > 1 && !winners.every((m) => same(m, winners[0]))) {
     return { ambiguous: true }; // Tied on the greatest loggedAt, and those tied candidates disagree.
   }
-  return { disposition: winners[0].disposition, rationale: winners[0].rationale, reason: winners[0].reason, ...(winners[0].remedyKind ? { remedyKind: winners[0].remedyKind } : {}) };
+  return { disposition: winners[0].disposition, rationale: winners[0].rationale, reason: winners[0].reason, ...(winners[0].remedyKind ? { remedyKind: winners[0].remedyKind } : {}), ...verdictHeadOf(winners) };
 }
 
 // Tier 3 (last-resort) of the reject-close judge-disposition lookup: parses
