@@ -40,6 +40,12 @@ test("resolveSelfCheckAngles falls back to the shipped defaults, capped at 8 lin
   assert.ok(angles.every((a) => a.id === `angle:${a.angle}` && a.constraint.length <= ANGLE_LINE_MAX));
 });
 
+test("a prompt-less angle entry with a developer-checklist yields the fallback constraint, not the checklist text", async () => {
+  const config = { gates: { draft: { angles: [{ name: "x", persona: "review", "developer-checklist": ["X1: Check the thing"] }] } } };
+  const [angle] = await resolveSelfCheckAngles("/nonexistent-issue-3396-root", ["a.mjs"], { strict: true, config });
+  assert.equal(angle.constraint, "Apply the x review angle while writing.");
+});
+
 test("strict resolvers throw pre_pr_self_check_missing on a config load error", async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "issue-3395-strict-"));
   try {

@@ -1,8 +1,8 @@
-## Summary
+## Objective
 
 <!-- Concise description of what changed and why. -->
 
-## Scope / context
+## In scope
 
 <!-- What is in scope and what is intentionally out of scope. -->
 

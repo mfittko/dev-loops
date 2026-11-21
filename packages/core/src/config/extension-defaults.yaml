@@ -57,8 +57,9 @@ gates:
             package.json engines, and documented requirements.
       - name: contract-surface
         developer-checklist:
-          - "CS1: When behavior changes but names stay, grep the rule ID and function name in skills/docs, docs/decisions and JSDoc; fix each sentence describing the old behavior."
+          - "CS1: When behavior changes but names stay, grep the rule ID and function name in skills/docs, docs/decisions, exit-code tables and JSDoc; fix each sentence describing the old behavior."
           - "CS2: When a flag, exit code, output key or refusal changes, update USAGE and the rule list; run each documented command and remedy."
+          - "A4: Trace each refusal remedy and documented command through the target CLI parser; flag a remedy that reproduces the same refusal or uses an unaccepted flag."
         persona: review
         prompt: Review this change for public contract-surface drift. Check whether documented schema fields, state/sentinel names, runtime values, tests, and CLI output agree. Verify CLI --help usage matches accepted flags. Compare stdout JSON success shape and stderr JSON error shape against documented examples. Flag optional fields documented as always emitted but conditionally omitted, or fields emitted but undocumented. Stay repo-agnostic; cite concrete changed files and give minimal fixes.
       - name: link-check
@@ -114,7 +115,7 @@ gates:
       - name: input-validation
         developer-checklist:
           - "I1: For each new catch or gh/git call, rethrow or return a typed error instead of a default value, and pass a timeout to every spawned child."
-          - "I2: Before writing a matcher or tokenizer, list every form the real consumer accepts; add one accept and reject test each."
+          - "I2: Before writing a matcher or tokenizer, list every form the real consumer accepts (quoting, continuations, substitutions, abbreviations, nesting, case); add one accept and reject test each."
         persona: review
         prompt: Review this change for input-validation drift. Check repo slug, issue number, host, SHA, whitespace, and sentinel normalization. Prefer shared parsers/helpers over ad hoc validation. Flag malformed inputs that slip through, confusing errors, path traversal-like segments, and inconsistent trimming/normalization across CLI/API entrypoints. Recommend minimal tests for accepted and rejected forms.
       - name: threat-model
@@ -130,12 +131,15 @@ gates:
       - name: state-concurrency
         developer-checklist:
           - "S1: For each state file or ref you read, name the copy that wins (live, retained, remote) in a comment; write state via temp file plus rename."
+          - "A3: For every artifact or ref lookup, check retained versus live copies, interrupted writes, symlinks and stale remote refs; flag a decision made from the wrong copy."
         persona: review
         prompt: Review this change for state concurrency and locking risks. Check state-file read/modify/write paths, lock acquisition/release, stale lock handling, concurrent invocations, atomic writes, managed process cleanup, and stderr/error capture. Flag races that can clobber state or leave orphaned locks/processes. Before any destructive write (delete, overwrite, close, merge, push), check that it re-verifies a precondition a concurrent change could have invalidated. Check that every proof of ownership or completion is bound to the owning repo, PR or execution; a matching name or number alone is insufficient. Flag code that treats elapsed time as proof that a process stopped. Recommend narrow deterministic concurrency or cleanup tests.
       - name: renderer-security
         persona: review
         prompt: Review this change for renderer security. Check HTML text escaping, URL encoding, attribute encoding, JSON/script embedding, and rendering of user-controlled content. Treat titles, names, URLs, statuses, errors, and external payload fields as untrusted. Flag raw interpolation into HTML or attributes and tests that expect unsafe output.
       - name: determinism
+        developer-checklist:
+          - "A6: Flag behavior that changes with caller cwd, a checkout subdirectory, relative path arguments, inherited GIT_* env vars or private-repo auth."
         persona: review
         prompt: Review this change for determinism. Check ordering, tie-breakers, localeCompare use, time/random/environment dependence, polling/count assumptions, and mocks/stubs that allow unexpected extra calls. Require stable sorting, strict stubs, deterministic fixture data, and tests independent of locale, timezone, filesystem order, and network timing.
       - name: pr-comments
@@ -146,6 +150,8 @@ gates:
             issues
           - Unresolved review threads that raise implementation concerns Flag any unresolved comment that identifies a concrete implementation problem as a blocking finding (severity: high or medium). Do not flag: - Resolved threads - Style nits, formatting suggestions, or cosmetic feedback - Comments from non-collaborators or bots - Outdated comments that were already addressed in a later commit If no unresolved implementation concerns exist, return clean.
       - name: contradiction-lens
+        developer-checklist:
+          - "A8: Check each new instruction against agents/*.agent.md and other contracts governing the same actor or step, and against stated numeric budgets."
         persona: review
         prompt: "Apply STYLE-CONTRADICTION-LENS when the repo defines it (dev-loops: skills/docs/contract-style-guide.md): check every added or changed normative rule (MUST/SHOULD/MAY) against the repo's rule registry for opposing modality or a weaker restatement. Also flag statements in the diff, the PR body, touched contracts, or accepted decision records (for example docs/decisions/) that contradict each other. Cite both sides of each contradiction with file:line."
       - name: code-conformance
@@ -160,10 +166,10 @@ gates:
           - "P2: After the last commit, check In scope and changelog against git diff --name-only base...HEAD; on a partial slice write Refs #N, not Closes."
         mandatory: true
         persona: review
-        prompt: 'Review the PR description for completeness, contract fitness, and checkbox formatting before this PR is marked ready for review. The PR body is the implementation contract — it must have: - A Summary section explaining what changed and why - A Scope and context section defining the boundary of the change - An Acceptance criteria section with the linked issue acceptance criteria - A Definition of done section - A Non-goals section - A Validation command section describing exactly how to verify the change - The "Closes #N" line must match the linked issue; flag changes that alter or remove the operator-intended close target Checkboxes (`- [ ]` / `- [x]`, or `* [ ]` / `* [x]`) must appear inside genuine Markdown list items. Flag any checkbox marker used outside a list item (including table cells) as a medium finding. Flag any checkbox marker wrapped in backticks (e.g. `` `[x]` ``) as a medium finding. Flag PRs where the body is a single sentence or lacks any of these sections. Do not block on formatting preferences other than checkbox correctness.'
+        prompt: 'Review the PR description for completeness, contract fitness, and checkbox formatting before this PR is marked ready for review. The PR body is the implementation contract — it must have: - An Objective section explaining what changed and why - An In scope section defining the boundary of the change - An Acceptance criteria section with the linked issue acceptance criteria - A Definition of done section - A Non-goals section - A Validation command section describing exactly how to verify the change - The "Closes #N" line must match the linked issue; flag changes that alter or remove the operator-intended close target Checkboxes (`- [ ]` / `- [x]`, or `* [ ]` / `* [x]`) must appear inside genuine Markdown list items. Flag any checkbox marker used outside a list item (including table cells) as a medium finding. Flag any checkbox marker wrapped in backticks (e.g. `` `[x]` ``) as a medium finding. Flag PRs where the body is a single sentence or lacks any of these sections. Do not block on formatting preferences other than checkbox correctness.'
       - name: holistic
         developer-checklist:
-          - "K2: For each new output field, state or route, find a reader beyond `importers` (validator, router, CI step) and add a test feeding it."
+          - "K2: For each new output field, state or route, find a reader beyond `importers` (validator, router, CI step) and add a test feeding it; confirm it accepts exactly what the producer now emits."
         mandatory: true
         persona: review
         prompt: >-
