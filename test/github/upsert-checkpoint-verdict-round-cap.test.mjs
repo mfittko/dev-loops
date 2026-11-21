@@ -672,6 +672,6 @@ test("--post-sealed-cap-round refuses a sealed findings_present cap round and po
     const calls = [];
     const out = await postCleanCapRound(tempDir, { bare: true, sealedVerdict: "findings_present", calls, sealedExtra: { provenance: SEALED_PROVENANCE, findings: [finding("low", "act")] } });
     assert.match(out.error ?? "", /no sealed clean draft_gate cap round/);
-    assert.equal(out.posted, undefined);
+    assert.equal(calls.some((c) => /-X (POST|PATCH|PUT)/.test(c)), false);
   }, { prefix: "dev-loops-round-cap-post-sealed-act-" });
 });
